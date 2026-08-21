@@ -231,6 +231,157 @@ func TestStopReportsFailureAndKeepsHandleForRetry(t *testing.T) {
 	}
 }
 
+// TestStopFailureStillReleasesDuckAndAllowsRetry verifies that a failed
+// Engine.Stop must not strand a ducked background session at duck gain
+// for the rest of the night: the duck this session imposed is released
+// once its own stop was attempted, regardless of whether the engine
+// confirmed it, and a retried Stop still succeeds against the preserved
+// handle.
+func TestStopFailureStillReleasesDuckAndAllowsRetry(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	m.GainSet(ctx, "bg", "inv-bg-gain", 3, pkgaudio.Gain(0.8))
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	bg, _ := m.get("bg")
+	bg.mu.Lock()
+	_, duckedByAnn := bg.duckedByAll["ann"]
+	bg.mu.Unlock()
+	if !duckedByAnn {
+		t.Fatal("precondition: bg should be ducked by ann before ann is stopped")
+	}
+
+	ann, ok := m.get("ann")
+	if !ok {
+		t.Fatal("ann session was not created")
+	}
+	ann.mu.Lock()
+	handle := ann.handle
+	ann.mu.Unlock()
+
+	fake, ok := m.engine.(*FakeEngine)
+	if !ok {
+		t.Fatalf("test manager's engine is %T, want *FakeEngine", m.engine)
+	}
+	fake.InjectFailure(handle, pkgaudio.ErrEnginePipelineCrash)
+
+	r := m.Stop(ctx, "ann", "inv-ann-stop-1", 3)
+	if r.Outcome == pkgaudio.OutcomeStopped {
+		t.Fatalf("Stop reported Stopped despite Engine.Stop failing: %+v", r)
+	}
+
+	bg.mu.Lock()
+	_, stillDuckedByAnn := bg.duckedByAll["ann"]
+	bgGain := *bg.desired.Gain
+	bgHandle := bg.handle
+	bg.mu.Unlock()
+	if stillDuckedByAnn {
+		t.Fatal("bg is still ducked by ann after ann's failed stop; a stuck duck plays silence all night")
+	}
+	if bgGain != pkgaudio.Gain(0.8) {
+		t.Fatalf("bg gain after ann's failed stop = %v, want restored 0.8", bgGain)
+	}
+	// bg.desired.Gain is this package's own bookkeeping; only the
+	// engine's own evidence proves the SetGain call that restores it
+	// actually reached the engine.
+	bgObs, err := m.engine.Observe(ctx, bgHandle)
+	if err != nil {
+		t.Fatalf("Observe(bg): %v", err)
+	}
+	if bgObs.Gain != pkgaudio.Gain(0.8) {
+		t.Fatalf("engine-reported bg gain after ann's failed stop = %v, want restored 0.8", bgObs.Gain)
+	}
+
+	ann.mu.Lock()
+	annState := ann.state
+	annHandleLoaded := ann.handleLoaded
+	ann.mu.Unlock()
+	if annState != pkgaudio.StateStopping {
+		t.Fatalf("ann state after failed stop = %q, want stopping (visible, not silently lost)", annState)
+	}
+	if !annHandleLoaded {
+		t.Fatal("ann's handle was released despite the failed stop; a retry has nothing to address")
+	}
+
+	// Retry: the handle is still there, so a second Stop can still
+	// address it and this time nothing is armed to fail. The outward
+	// outcome stays Unconfirmable (this test's engine always reports
+	// unavailable, per gateAvailability), so success is checked against
+	// the session's own internal state, the same pattern
+	// TestManagerNeverReportsSuccessWithFakeEngine uses.
+	r2 := m.Stop(ctx, "ann", "inv-ann-stop-2", 4)
+	if r2.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("retried Stop outcome = %+v, must never be refused", r2)
+	}
+	ann.mu.Lock()
+	defer ann.mu.Unlock()
+	if ann.state != pkgaudio.StateStopped || ann.handleLoaded {
+		t.Fatalf("ann after retried stop: state=%q handleLoaded=%v, want stopped and released", ann.state, ann.handleLoaded)
+	}
+}
+
+// TestWatchTickResolvesStuckStoppingSession verifies that a session left
+// in StateStopping by a failed Engine.Stop is not abandoned there
+// forever: once the engine's own evidence later shows playback actually
+// stopped, RunWatcher's tick must notice and finalize the session
+// itself, releasing its handle.
+func TestWatchTickResolvesStuckStoppingSession(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	handle := s.handle
+	s.mu.Unlock()
+
+	fake, ok := m.engine.(*FakeEngine)
+	if !ok {
+		t.Fatalf("test manager's engine is %T, want *FakeEngine", m.engine)
+	}
+	fake.InjectFailure(handle, pkgaudio.ErrEnginePipelineCrash)
+	m.Stop(ctx, id, "inv-stop", 3)
+
+	s.mu.Lock()
+	if s.state != pkgaudio.StateStopping {
+		s.mu.Unlock()
+		t.Fatalf("precondition: session state = %q, want stopping", s.state)
+	}
+	s.mu.Unlock()
+
+	// Simulate the engine actually reaching Stopped on its own — a
+	// retried transport succeeding underneath, out from under the failed
+	// call above — without going back through Manager.Stop.
+	if _, err := fake.Stop(ctx, handle); err != nil {
+		t.Fatalf("fake.Stop: %v", err)
+	}
+
+	m.watchTick(ctx)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != pkgaudio.StateStopped {
+		t.Fatalf("session state after watchTick observed the engine stopped = %q, want stopped", s.state)
+	}
+	if s.handleLoaded {
+		t.Fatal("session handle still loaded after watchTick resolved the stop")
+	}
+}
+
 // TestStartRefusesNegativeBookmarkPosition verifies that a
 // negative bookmark position must never reach Engine.Start — it is
 // refused visibly and the bookmark is cleared so a subsequent Start is
@@ -256,6 +407,10 @@ func TestStartRefusesNegativeBookmarkPosition(t *testing.T) {
 		t.Fatal("precondition: pause should have set a bookmark")
 	}
 	s.bookmark.Position = -5 * time.Second
+	// Force out of Paused so the paused-session guard on Start (which
+	// refuses before ever consulting the bookmark) does not intercept
+	// this call before resolveBookmarkPositionLocked runs.
+	s.state = pkgaudio.StateReady
 	s.mu.Unlock()
 
 	r := m.Start(ctx, id, "inv-start-2", 4)
@@ -303,6 +458,10 @@ func TestStartRefusesStalePlaylistBookmark(t *testing.T) {
 	// after an Apply lands a new playlist revision between pause and the
 	// next Start.
 	s.bookmark.PlaylistRevision = playlist.OwnerRevision + 1
+	// Force out of Paused so the paused-session guard on Start (which
+	// refuses before ever consulting the bookmark) does not intercept
+	// this call before resolveBookmarkPositionLocked runs.
+	s.state = pkgaudio.StateReady
 	s.mu.Unlock()
 
 	r := m.Start(ctx, id, "inv-start-2", 4)
@@ -314,6 +473,67 @@ func TestStartRefusesStalePlaylistBookmark(t *testing.T) {
 	defer s.mu.Unlock()
 	if s.bookmark != nil {
 		t.Fatalf("bookmark = %+v, want cleared after being refused as stale", s.bookmark)
+	}
+}
+
+// TestStartOnPausedSessionIsRefused verifies that Start on a session
+// still paused on the same item it was paused on is refused rather than
+// reusing the pause-time bookmark: under the known pause-fidelity
+// limitation the engine's own position may have moved on since the
+// pause, so Start would seek it backwards. The engine must never be
+// touched, and the session must stay Paused so a subsequent Resume still
+// works.
+func TestStartOnPausedSessionIsRefused(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start-1", 2)
+	c.advance(500 * time.Millisecond)
+	if r := m.Pause(ctx, id, "inv-pause", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("pause unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	handle := s.handle
+	s.mu.Unlock()
+	before, err := m.engine.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe before the refused Start: %v", err)
+	}
+
+	r := m.Start(ctx, id, "inv-start-2", 4)
+	if r.Outcome != pkgaudio.OutcomeRefused {
+		t.Fatalf("outcome = %+v, want Refused for Start on a paused session", r)
+	}
+	if r.Reason == "" {
+		t.Fatal("refusal must state that Resume, not Start, is the way to continue a paused session")
+	}
+
+	s.mu.Lock()
+	state := s.state
+	bookmark := s.bookmark
+	s.mu.Unlock()
+	if state != pkgaudio.StatePaused {
+		t.Fatalf("state after the refused Start = %q, want still Paused", state)
+	}
+	if bookmark == nil {
+		t.Fatal("bookmark was cleared by the refused Start; a later Resume needs it")
+	}
+
+	after, err := m.engine.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe after the refused Start: %v", err)
+	}
+	if after.State != before.State || after.Position != before.Position {
+		t.Fatalf("engine moved from %+v to %+v; a refused Start must never reach the engine at all", before, after)
 	}
 }
 

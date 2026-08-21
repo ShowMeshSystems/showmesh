@@ -1,0 +1,5 @@
+pad-added fired, link result: PadLinkOK
+waitState ret: StatePlaying
+branch position query 1: 4643990930 true query 2: 4643990930 true delta ns: 0
+buffers reached sink: 465
+RESULT f: PASS - decodebin pad-added(element, pad) closure links a file-decode branch into a running mixer

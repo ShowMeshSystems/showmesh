@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -22,6 +23,12 @@ import (
 // other always-sensitive configuration kind in this package.
 
 const maxAudioSettingsConfigRequestBodyBytes = 4 * 1024
+
+// audioConfigPushTimeout bounds a single node's best-effort
+// audio.node/audio.settings push (pushAudioSettingsToAllNodes here, and
+// handlePutAudioNode's own push in audionode.go), so one unreachable node
+// cannot hold its push goroutine open indefinitely.
+const audioConfigPushTimeout = 5 * time.Second
 
 // resolveAudioSettings reads the audio.settings configuration kind's
 // current value, mirroring resolveRenderSettings exactly.
@@ -179,10 +186,49 @@ func (h *handlers) handlePutAudioSettingsConfig(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// ADR-039/ADR-036: audio.settings is engine-wide, so every node in
+	// inventory is pushed the new revision without waiting for its next
+	// hello — best-effort per node, matching handlePutAudioNode.
+	h.pushAudioSettingsToAllNodes(ctx, now)
+
 	jsonWrite(w, mapAudioSettingsConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.AudioSettingsConfigKind, ID: config.AudioSettingsConfigObjectID,
 		CurrentRevision: nextRevisionNo, UpdatedAt: now,
 	}, payload))
+}
+
+// pushAudioSettingsToAllNodes best-effort pushes the current
+// audio.settings revision to every node currently in inventory. A node
+// this coordinator does not yet know about (never sent a hello) is
+// reached instead by its own hello-triggered push once it does — this
+// call never fails the write that triggered it.
+//
+// Each node's push runs in its own goroutine on a context detached from
+// the request (context.WithoutCancel) and individually bounded by
+// audioConfigPushTimeout: fanned out concurrently, not serially, so one
+// slow or unreachable node cannot delay every other node's push behind
+// it, and this function returns without waiting for any push to finish,
+// so a client that disconnects mid-request no longer determines how many
+// of N nodes get pushed (ADR-036's "applies without a restart" with no
+// window this write would otherwise leave for the remaining nodes).
+func (h *handlers) pushAudioSettingsToAllNodes(ctx context.Context, now time.Time) {
+	if h.deps.Nodes == nil {
+		return
+	}
+	views, err := h.deps.Nodes.Snapshot(ctx, now)
+	if err != nil {
+		h.logWarn("failed to list nodes for audio.settings push", "error", err)
+		return
+	}
+	detached := context.WithoutCancel(ctx)
+	for _, nv := range views {
+		nodeID := nv.NodeID
+		go func() {
+			pushCtx, cancel := context.WithTimeout(detached, audioConfigPushTimeout)
+			defer cancel()
+			audioconfigpush.BestEffort(pushCtx, h.deps.Config, h.deps.RenderPublisher, h.now, nodeID, h.logger)
+		}()
+	}
 }
 
 func mapAudioSettingsPayload(p config.AudioSettingsPayload) v1.ConfigAudioSettingsPayload {

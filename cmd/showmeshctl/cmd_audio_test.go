@@ -117,7 +117,7 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"render-01","revision":1,
-			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","clockDomain":"single-interface","clockDomainProvenance":"one interface"},
+			"payload":{"programRoute":"hw:0,0","ltcRoute":"hw:0,0","programChannels":[1,2],"ltcChannel":3,"clockDomain":"single-interface","clockDomainProvenance":"one interface"},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -126,6 +126,7 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 	code := cmdAudio([]string{
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "3",
 		"--clock-domain", "single-interface", "--clock-domain-provenance", "one interface",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
@@ -136,10 +137,107 @@ func TestCmdAudioNodeSetSendsAllFlags(t *testing.T) {
 	if gotMethod != http.MethodPut || gotPath != "/api/v1/config/audio.node/render-01" {
 		t.Fatalf("request = %s %s, want PUT /api/v1/config/audio.node/render-01", gotMethod, gotPath)
 	}
-	for _, want := range []string{`"programRoute":"hw:0,0"`, `"ltcRoute":"hw:0,0"`, `"clockDomain":"single-interface"`, `"clockDomainProvenance":"one interface"`} {
+	for _, want := range []string{
+		`"programRoute":"hw:0,0"`, `"ltcRoute":"hw:0,0"`, `"programChannels":[1,2]`, `"ltcChannel":3`,
+		`"clockDomain":"single-interface"`, `"clockDomainProvenance":"one interface"`,
+	} {
 		if !strings.Contains(string(gotBody), want) {
 			t.Errorf("PUT body missing %q; body: %s", want, gotBody)
 		}
+	}
+	if !strings.Contains(stdout.String(), "Program channels:       [1 2]") || !strings.Contains(stdout.String(), "LTC channel:            3") {
+		t.Errorf("printed detail missing program/LTC channels:\n%s", stdout.String())
+	}
+}
+
+// TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel proves the two
+// new flags are required exactly like the four original ones: a missing
+// --program-channels or --ltc-channel is refused locally, before any
+// request.
+func TestCmdAudioNodeSetRequiresProgramChannelsAndLTCChannel(t *testing.T) {
+	var requestSeen bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestSeen = true
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--ltc-channel", "3",
+		"--clock-domain", "d", "--clock-domain-provenance", "p",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage", code)
+	}
+	if requestSeen {
+		t.Fatal("no request should have been made with a missing required flag")
+	}
+}
+
+// TestCmdAudioNodeSetLTCChannelZeroReachesServer proves --ltc-channel=0
+// is sent to the coordinator rather than refused locally: the CLI is not
+// the authority on whether 0 is a valid channel index, the coordinator
+// is. Before this fix, ltcChannel's int zero value was indistinguishable
+// from "flag not passed", so an operator who typed --ltc-channel=0 got a
+// local "required flags missing" usage refusal and the request was never
+// sent — this asserts the request IS sent, which is the one thing a
+// coordinator-side 400 (also exitUsage, so the exit code alone cannot
+// distinguish the two cases) cannot prove by itself.
+func TestCmdAudioNodeSetLTCChannelZeroReachesServer(t *testing.T) {
+	var requestSeen bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestSeen = true
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"type":"about:blank","title":"Invalid parameter","status":400,"detail":"ltcChannel must be positive"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	_ = cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "0",
+		"--clock-domain", "d", "--clock-domain-provenance", "p",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if !requestSeen {
+		t.Fatal("--ltc-channel=0 was refused locally instead of being sent to the coordinator")
+	}
+}
+
+// TestCmdAudioNodeSetRejectsUnparseableProgramChannels proves a malformed
+// --program-channels value is refused locally with a clear reason rather
+// than sent to the server as garbage.
+func TestCmdAudioNodeSetRejectsUnparseableProgramChannels(t *testing.T) {
+	var requestSeen bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestSeen = true
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,two", "--ltc-channel", "3",
+		"--clock-domain", "d", "--clock-domain-provenance", "p",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage", code)
+	}
+	if requestSeen {
+		t.Fatal("no request should have been made with an unparseable --program-channels")
+	}
+	if !strings.Contains(stderr.String(), "not a whole number") {
+		t.Fatalf("stderr does not explain the parse failure: %s", stderr.String())
 	}
 }
 
@@ -186,6 +284,7 @@ func TestCmdAudioNodeSetSurfacesRefusalMessage(t *testing.T) {
 	code := cmdAudio([]string{
 		"node", "set",
 		"--program-route", "hw:0,0", "--ltc-route", "hw:0,0",
+		"--program-channels", "1,2", "--ltc-channel", "3",
 		"--clock-domain", "d", "--clock-domain-provenance", "p",
 		"--server", ts.URL, "--token", "t",
 		"render-01",
@@ -195,6 +294,36 @@ func TestCmdAudioNodeSetSurfacesRefusalMessage(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "probe evidence") {
 		t.Fatalf("stderr does not surface the coordinator's refusal reason: %s", stderr.String())
+	}
+}
+
+// TestCmdAudioNodeSetSurfacesRouteMismatchRefusal proves the
+// programRoute/ltcRoute equality refusal round-trips through the typed
+// CLI client, not just the raw handler: a client whose typed struct
+// silently coerced the payload could make this refusal unreachable.
+func TestCmdAudioNodeSetSurfacesRouteMismatchRefusal(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/audio-node-route-mismatch","title":"Invalid parameter","status":400,
+			"detail":"ltcRoute: ltcRoute \"hw:1,0\" must name the same route as programRoute \"hw:0,0\"; program and LTC leave through one interface in one clock domain"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:0,0", "--ltc-route", "hw:1,0",
+		"--program-channels", "1,2", "--ltc-channel", "3",
+		"--clock-domain", "d", "--clock-domain-provenance", "p",
+		"--server", ts.URL, "--token", "t",
+		"render-01",
+	}, &stdout, &stderr, time.Now)
+	if code == exitOK {
+		t.Fatalf("exit code = %d, want a failure code", code)
+	}
+	if !strings.Contains(stderr.String(), "must name the same route") {
+		t.Fatalf("stderr does not surface the route-mismatch refusal: %s", stderr.String())
 	}
 }
 

@@ -3695,9 +3695,13 @@ paths:
         whose advertisement does not include the named route, is refused
         with `400` naming what evidence was missing (or, when the node has
         advertised nothing at all, that no probe evidence exists for it).
-        `clockDomain` and `clockDomainProvenance` are operator-declared and
-        never inferred: no software call on this platform proves two
-        outputs share a hardware clock.
+        `programRoute` and `ltcRoute` must also name the SAME route, refused
+        at decode time before evidence is even consulted. `programChannels`
+        (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based,
+        never a member of `programChannels`) are checked structurally, not
+        against evidence. `clockDomain` and `clockDomainProvenance` are
+        operator-declared and never inferred: no software call on this
+        platform proves two outputs share a hardware clock.
       parameters:
         - name: id
           in: path
@@ -6701,8 +6705,8 @@ components:
           type: object
           description: >-
             Operation-specific fields the node validates, not this
-            coordinator: apply's sourceRole/media/playlist/outputs,
-            seek's positionMs. Opaque here by design — see this
+            coordinator: apply's sourceRole/media/playlist/outputs/
+            mixPolicy, seek's positionMs. Opaque here by design — see this
             operation's own description for what it accepts.
     AudioSessionCommandResponse:
       type: object
@@ -8790,15 +8794,32 @@ components:
         non-empty), and the "payload" member of GET
         /config/audio.node/{id}'s response. `programRoute` and `ltcRoute`
         name discovered output routes (device identities the node itself
-        reported); `clockDomain` and `clockDomainProvenance` are the
-        operator's own declaration of which hardware clock the two routes
-        share, never inferred.
-      required: [programRoute, ltcRoute, clockDomain, clockDomainProvenance]
+        reported) and MUST name the same route: program and LTC leave
+        through one interface in one clock domain, so two different route
+        names are refused. `programChannels` is the ordered, distinct,
+        1-based channel indices on that route carrying program audio
+        ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the
+        1-based index carrying LTC and must not appear in `programChannels`.
+        `clockDomain` and `clockDomainProvenance` are the operator's own
+        declaration of which hardware clock the two routes share, never
+        inferred.
+      required:
+        [programRoute, ltcRoute, programChannels, ltcChannel, clockDomain,
+         clockDomainProvenance]
       properties:
         programRoute:
           type: string
         ltcRoute:
           type: string
+        programChannels:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            minimum: 1
+        ltcChannel:
+          type: integer
+          minimum: 1
         clockDomain:
           type: string
         clockDomainProvenance:
@@ -8914,7 +8935,13 @@ components:
         addition: "action-invoke-refused-audit-unavailable"
         (POST /actions/{id}/invocations' own ADR-024 decision 11
         fail-closed default for an action whose stored safetyClass is
-        "none").
+        "none"). Three are Track C's own additions, all scoped to
+        PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a
+        channel index reused within programChannels, or repeated within
+        ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a
+        channel already claimed by programChannels), and
+        "audio-node-route-mismatch" (programRoute and ltcRoute naming the
+        same device route).
       required: [type, title, status, detail, serverTime]
       properties:
         type:
@@ -8955,6 +8982,9 @@ components:
             - https://showmesh.dev/problems/action-invoke-refused-audit-unavailable
             - https://showmesh.dev/problems/storage-full
             - https://showmesh.dev/problems/asset-target-required
+            - https://showmesh.dev/problems/audio-node-channel-duplicate
+            - https://showmesh.dev/problems/audio-node-channel-overlap
+            - https://showmesh.dev/problems/audio-node-route-mismatch
         title:
           type: string
         status:

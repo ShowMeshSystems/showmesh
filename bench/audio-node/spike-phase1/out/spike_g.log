@@ -1,0 +1,12 @@
+decodebin element name: dec
+msg type: MessageType(MessageStateChanged|MessageAny)
+msg type: MessageType(MessageStateChanged|MessageAny)
+msg type: MessageType(MessageStateChanged|MessageAny)
+msg type: MessageType(MessageStateChanged|MessageAny)
+msg type: MessageType(MessageStateChanged|MessageAny)
+msg type: MessageType(MessageStreamStatus|MessageAny)
+msg type: MessageType(MessageStreamStatus|MessageAny)
+msg type: MessageType(MessageStateChanged|MessageAny)
+msg type: MessageType(MessageStateChanged|MessageAny)
+msg type: MessageType(MessageError|MessageDeviceRemoved|MessagePropertyNotify|MessageRedirect|MessageDeviceChanged|MessageAny)
+error text: ../subprojects/gstreamer/plugins/elements/gsttypefindelement.c(1186): gst_type_find_element_loop (): /GstPipeline:pipeline0/GstDecodeBin:dec/GstTypeFindElement:typefind gerr: Could not determine type of stream. src chain: [typefind dec pipeline0]

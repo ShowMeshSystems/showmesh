@@ -2,6 +2,7 @@
 
 Status: Accepted  
 Date: 2026-08-10
+Amended: 2026-08-19 — SM-78 clarified that channels 1–2/3 are the stereo reference layout and explicit non-overlapping channel indices also permit mono program plus LTC.
 
 ## Context
 
@@ -13,11 +14,13 @@ The reference installation makes this a live risk rather than a theoretical one.
 
 Program audio and LTC must be generated from, and leave through, one clock domain wherever their timing relationship matters — which, for a show driving Resolume from LTC, is always.
 
-The preferred deployment puts program audio and LTC on one hardware interface and therefore one hardware clock:
+The preferred reference deployment puts program audio and LTC on one hardware interface and therefore one hardware clock:
 
 - channels 1–2: stereo program;
 - channel 3: LTC, on a discrete physical output, never mixed into audience-facing program audio;
 - a fourth channel reserved where practical for future routing or monitoring.
+
+The numbered layout is the stereo reference, not the only valid configuration. The target `audio.node` shape requires explicit program and LTC channel indices; the current object still names routes only, so adding and enforcing those indices remains implementation work under SM-78's resolved policy. A mono installation may place program on channel 1 and LTC on channel 2. Every layout must keep the LTC channel outside the program channel set and keep both on the same interface and clock domain.
 
 If both signals eventually run over Dante they must be in the same Dante clock domain. The arrangement explicitly excluded is program audio on one interface and LTC on an independent one — a USB interface for program with LTC on Dante, or the reverse.
 
@@ -25,7 +28,7 @@ ShowMesh models three distinct clocks and never assumes they are the same: the s
 
 ## Consequences
 
-- **This is a hardware purchasing constraint, not only a configuration one.** The audio interface must provide at least three usable output channels from one clock. Choosing a stereo interface and adding LTC elsewhere later would violate this decision after the money is spent.
+- **This is a hardware purchasing constraint, not only a configuration one.** A stereo-program installation needs at least three usable output channels from one clock; a deliberately mono installation needs at least two. Choosing an interface without one additional independently addressable LTC channel and adding LTC elsewhere later would violate this decision after the money is spent.
 - Clock relationship becomes an input to capability placement. `audio.output.ltc` and the program output must land on the same interface, which can pin both to one node even when other nodes could otherwise host one of them. Placement logic must treat this as a hard constraint rather than a preference.
 - Dante cannot be a required transport for basic Audio Engine operation, because making it required would force the LTC path onto the network clock. Dante remains an additional output.
 - The Windows Dante bridge sketched for deployments where Dante needs Windows is constrained by this decision: bridging program audio to a separate Dante node introduces the second independent clock domain this ADR exists to prevent, and is therefore deferred rather than available (AUDIO-ENGINE §12).

@@ -14,6 +14,11 @@ import (
 // handled. A single session's restore failure is logged and does not
 // stop the rest — see [Manager.restoreOne].
 func (m *Manager) RestoreAll(ctx context.Context) error {
+	// A prior RestoreAll that failed partway through can leave ownership
+	// pointing at a session this run is about to rebuild from scratch;
+	// nothing else ever clears it, so a re-run must start from "free".
+	m.ltc.resetForRestore()
+
 	ids, err := m.store.List()
 	if err != nil {
 		return fmt.Errorf("audio: list persisted sessions: %w", err)
@@ -57,6 +62,25 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		return nil
 	}
 
+	// A redundant restore (a second startup after a crash mid-restore, or
+	// a hot reload) must not leak the previous in-memory session's engine
+	// handle, or risk two Session objects both driving the same handle
+	// identity — release it before this call's own Session, and its own
+	// Load, replaces it.
+	// A redundant restore (a second startup after a crash mid-restore, or
+	// a hot reload) must not leak the previous in-memory session's engine
+	// handle, or risk two Session objects both driving the same handle
+	// identity — release it before this call's own Session, and its own
+	// Load, replaces it.
+	m.mu.Lock()
+	previous, hadPrevious := m.sessions[id]
+	m.mu.Unlock()
+	if hadPrevious {
+		previous.mu.Lock()
+		previous.releaseEngineLocked(ctx)
+		previous.mu.Unlock()
+	}
+
 	s := newSession(id, m)
 	s.desired = rec.Desired
 	s.revState = pkgaudio.RestoreRevisionState(id, rec.Revision, rec.Decisions)
@@ -86,6 +110,12 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 	}
 	s.preDuckGain = rec.PreDuckGain
+	if len(rec.InterruptedByAll) > 0 {
+		s.interruptedByAll = make(map[pkgaudio.SessionID]struct{}, len(rec.InterruptedByAll))
+		for _, id := range rec.InterruptedByAll {
+			s.interruptedByAll[id] = struct{}{}
+		}
+	}
 	s.fault = rec.Fault
 	if s.fault == "" {
 		s.fault = pkgaudio.FaultNone
@@ -95,9 +125,18 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 	s.lastProbe = rec.LastProbe
 	s.fadePending = rec.FadePending
 	s.fadeInvocation = rec.FadeInvocation
+	// The handle reloaded below has never been given this fade.
+	s.fadeHandleNeverFaded = rec.FadePending
 	s.fadeState = rec.FadeState
 	if s.fadeState == "" {
 		s.fadeState = FadeStateNone
+	}
+	s.gapKnown = rec.GapKnown
+	s.gap = rec.Gap
+	s.gapReason = rec.GapReason
+	s.gapObservedAt = rec.GapObservedAt
+	if !s.gapKnown && s.gapReason == "" {
+		s.gapReason = gapReasonNeverAdvanced
 	}
 
 	m.mu.Lock()
@@ -132,16 +171,19 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			s.state = pkgaudio.StateFailed
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = false
+		m.startLTCLocked(ctx, s, position)
 		s.persistBestEffortLocked("state change")
 	case pkgaudio.StatePaused:
 		// prepareLocked only reaches a freshly-Loaded engine handle (Ready),
@@ -156,6 +198,7 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			s.state = pkgaudio.StateFailed
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
@@ -177,15 +220,19 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
 		if _, err := m.engine.Pause(ctx, s.handle); err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
+		// The handle ends Paused, never Playing, so no LTC run belongs
+		// to this branch.
 		s.state = pkgaudio.StatePaused
 		s.timingKnown = false
 		s.persistBestEffortLocked("state change")
@@ -209,19 +256,33 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		duckers = append(duckers, id)
 	}
 	for _, duckerID := range duckers {
-		if !m.duckerStillActiveOnDisk(duckerID) {
+		if !m.sourceStillActiveOnDisk(duckerID) {
 			m.removeDuckerLocked(ctx, s, duckerID)
+		}
+	}
+
+	// Same restore-boundary reasoning, and the same
+	// [Manager.removeInterrupterLocked] exactly-once membership check,
+	// for a session left suspended by an interrupting announcement that
+	// did not itself survive to Playing/Preparing.
+	interrupters := make([]pkgaudio.SessionID, 0, len(s.interruptedByAll))
+	for id := range s.interruptedByAll {
+		interrupters = append(interrupters, id)
+	}
+	for _, interrupterID := range interrupters {
+		if !m.sourceStillActiveOnDisk(interrupterID) {
+			m.removeInterrupterLocked(ctx, s, interrupterID)
 		}
 	}
 	return nil
 }
 
-// duckerStillActiveOnDisk reports whether id's persisted record shows a
+// sourceStillActiveOnDisk reports whether id's persisted record shows a
 // session that is still (or will again be, once restored) Playing —
-// i.e. one that legitimately still owns an active duck. Reads the
-// store directly rather than the in-memory session map because restore
-// order across sessions is unspecified.
-func (m *Manager) duckerStillActiveOnDisk(id pkgaudio.SessionID) bool {
+// i.e. one that legitimately still owns an active duck or interrupt.
+// Reads the store directly rather than the in-memory session map because
+// restore order across sessions is unspecified.
+func (m *Manager) sourceStillActiveOnDisk(id pkgaudio.SessionID) bool {
 	rec, ok, err := m.store.Load(id)
 	if err != nil || !ok {
 		return false
@@ -262,6 +323,7 @@ func (m *Manager) watchTick(ctx context.Context) {
 	for _, s := range sessions {
 		s.mu.Lock()
 		s.checkFadeCompletionLocked(ctx)
+		s.checkStopCompletionLocked(ctx)
 		if s.state == pkgaudio.StatePlaying && s.handleLoaded {
 			obsCtx, cancel := boundedObserveContext(ctx)
 			obs, err := m.engine.Observe(obsCtx, s.handle)
@@ -275,7 +337,7 @@ func (m *Manager) watchTick(ctx context.Context) {
 			} else {
 				s.lastObservedAt = obs.ObservedAt
 				if obs.State == pkgaudio.StateCompleted {
-					s.advanceLocked(ctx, false)
+					s.advanceLocked(ctx, false, obs.ObservedAt)
 				}
 			}
 		}
@@ -285,10 +347,11 @@ func (m *Manager) watchTick(ctx context.Context) {
 		s.mu.Unlock()
 	}
 
-	// restoreDucked locks OTHER sessions, so it must run after every
-	// session's own mu from the loop above is released — see
-	// [Manager.duckLowerPriority]'s doc comment.
+	// restoreDucked/restoreInterrupted lock OTHER sessions, so they must
+	// run after every session's own mu from the loop above is released —
+	// see [Manager.duckLowerPriority]'s doc comment.
 	for _, id := range completed {
 		m.restoreDucked(ctx, id)
+		m.restoreInterrupted(ctx, id)
 	}
 }
