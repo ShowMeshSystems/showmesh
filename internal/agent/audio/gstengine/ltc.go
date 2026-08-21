@@ -5,6 +5,7 @@ package gstengine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,11 +83,15 @@ type ltcChannel struct {
 	stopFeed    chan struct{}
 	feedDone    chan struct{}
 
-	// feedAnchor and feedSamples are owned exclusively by the feeder
-	// goroutine: the running-time each buffer's PTS is computed from by
-	// adding an exact sample count, never by re-reading the pipeline
-	// clock per buffer, so the LTC stream stays gapless.
+	// feedAnchor, anchorKnown and feedSamples are owned exclusively by the
+	// feeder goroutine: the running-time each buffer's PTS is computed
+	// from by adding an exact sample count, never by re-reading the
+	// pipeline clock per buffer, so the LTC stream stays gapless.
+	// anchorKnown is false until a genuine (non-ClockTimeNone) running
+	// time has been read; until then feedAnchor is not a real anchor and
+	// no confirmed emission may be reported as [agentaudio.LTCRunning].
 	feedAnchor  gst.ClockTime
+	anchorKnown bool
 	feedSamples uint64
 }
 
@@ -152,6 +157,20 @@ func newLTCChannel(bin gst.Bin, sampleRate int) (*ltcChannel, error) {
 // against. Called once buildPipeline has a live gst.Pipeline value.
 func (ch *ltcChannel) bindPipeline(p gst.Pipeline) {
 	ch.pipeline = p
+}
+
+// resolveFeedAnchor sets feedAnchor from the pipeline's current running
+// time, once, the first time that value is not [gst.ClockTimeNone].
+// Called only from the feeder goroutine, which is the sole owner of
+// feedAnchor and anchorKnown.
+func (ch *ltcChannel) resolveFeedAnchor() {
+	if ch.anchorKnown || ch.pipeline == nil {
+		return
+	}
+	if t := ch.pipeline.GetCurrentRunningTime(); t != gst.ClockTimeNone {
+		ch.feedAnchor = t
+		ch.anchorKnown = true
+	}
 }
 
 func (ch *ltcChannel) observe(now time.Time) agentaudio.LTCObservation {
@@ -274,11 +293,36 @@ func (e *Engine) ObserveLTC(ctx context.Context) agentaudio.LTCObservation {
 // when a push is not accepted at all.
 func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 	defer close(ch.feedDone)
-
-	if ch.pipeline != nil {
-		if t := ch.pipeline.GetCurrentRunningTime(); t != gst.ClockTimeNone {
-			ch.feedAnchor = t
+	// A subsystem problem must never stop the show: a cgo call failing
+	// under memory pressure (see pushLTCSamples) panics rather than
+	// returning an error, and an unrecovered panic on this goroutine
+	// would kill the whole agent process, program audio included.
+	defer func() {
+		if r := recover(); r != nil {
+			ch.mu.Lock()
+			ch.obs = agentaudio.LTCObservation{
+				State:  agentaudio.LTCFailed,
+				Reason: fmt.Sprintf("LTC feeder recovered from a panic: %v", r),
+			}
+			ch.mu.Unlock()
+			slog.Error("gstengine: LTC feeder recovered from a panic; LTC output stopped, program audio unaffected", "panic", r)
 		}
+	}()
+
+	// The pipeline's PLAYING transition can still be pending here on a
+	// real, asynchronous sink, so this may not resolve yet. Never block
+	// on gst.Pipeline.GetState to wait it out: that call waits on the
+	// whole pipeline's state, shared with every other branch, and can
+	// starve interleave's LTC sink pad long enough to drag program audio
+	// down with it. The per-iteration retry below is the non-blocking path.
+	ch.resolveFeedAnchor()
+	if !ch.anchorKnown {
+		ch.mu.Lock()
+		ch.obs = agentaudio.LTCObservation{
+			State:  agentaudio.LTCFailed,
+			Reason: "pipeline running time not yet known; LTC PTS anchor not yet established",
+		}
+		ch.mu.Unlock()
 	}
 
 	for {
@@ -286,6 +330,10 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 		case <-ch.stopFeed:
 			return
 		default:
+		}
+
+		if !ch.anchorKnown {
+			ch.resolveFeedAnchor()
 		}
 
 		var raw []byte
@@ -333,7 +381,7 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 		}
 
 		ch.mu.Lock()
-		if pushed && ch.generation == gen && ch.active && ch.emittedGeneration.Load() == gen {
+		if pushed && ch.generation == gen && ch.active && ch.anchorKnown && ch.emittedGeneration.Load() == gen {
 			ch.lastConfirmed = e.cfg.now()
 			ch.obs = agentaudio.LTCObservation{
 				State:          agentaudio.LTCRunning,
@@ -368,6 +416,9 @@ func (ch *ltcChannel) waitBeforeRetry() bool {
 // see the capsfilter pad probe in [newLTCChannel].
 func (e *Engine) pushLTCSamples(ch *ltcChannel, raw []byte, gen uint64) bool {
 	buf := gst.NewBufferAllocate(nil, uint(len(raw)), nil)
+	if buf == nil {
+		return false
+	}
 	mapped, ok := buf.Map(gst.MapWrite)
 	if !ok {
 		return false

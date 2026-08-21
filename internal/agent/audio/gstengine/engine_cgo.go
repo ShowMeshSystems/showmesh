@@ -162,6 +162,12 @@ const closedReason = "engine was closed and released its output device"
 // the outgoing pipeline keeps the device open until it does. Idempotent.
 func (e *Engine) Close() error {
 	e.closeOnce.Do(func() {
+		// markBroken's first-write-wins guard is what makes this
+		// deterministic: recording closedReason before any teardown step
+		// runs guarantees it beats any bus error that step goes on to
+		// cause (an unindexed branch mid-teardown, the shared topology
+		// during SetState(NULL)), rather than racing watchBus for it.
+		e.markBroken(closedReason)
 		close(e.done)
 		e.mu.Lock()
 		branches := make([]*branch, 0, len(e.handles))
@@ -186,7 +192,6 @@ func (e *Engine) Close() error {
 		if e.ltc != nil {
 			close(e.ltc.stopFeed)
 		}
-		e.markBroken(closedReason)
 		if e.pipeline != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
 			err := boundedCall(ctx, func() error {
@@ -420,14 +425,17 @@ func (e *Engine) watchBus() {
 // returning the branch it belongs to, or nil when the error is not
 // attributable to any live branch (a fault in the shared output topology
 // itself, e.g. the sink or a channel mixer).
+// e.mu is taken only around each individual map read, never across
+// obj.GetParent() — a cgo call that can walk arbitrary depth into
+// decodebin's internal decoder chain — so a slow or deep walk never
+// blocks every other handle-addressed engine call behind it.
 func (e *Engine) branchForSource(src gst.Object) *branch {
-	if src == nil {
-		return nil
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	for obj := src; obj != nil; obj = obj.GetParent() {
-		if b, ok := e.elementIndex[obj.GetName()]; ok {
+		name := obj.GetName()
+		e.mu.Lock()
+		b, ok := e.elementIndex[name]
+		e.mu.Unlock()
+		if ok {
 			return b
 		}
 	}

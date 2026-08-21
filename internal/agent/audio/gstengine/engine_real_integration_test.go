@@ -404,11 +404,15 @@ func TestFadeReachesTargetGain(t *testing.T) {
 	_ = e.Release(context.Background(), "f1")
 }
 
-// TestFadeCompletesAcrossPause proves FadeActive still clears when Pause
-// interrupts a fade: decode keeps running while frozen, so the ramp
-// itself (anchored to the branch's own local clock) keeps advancing and
-// reaches its target.
-func TestFadeCompletesAcrossPause(t *testing.T) {
+// TestFadeActiveClearsDuringPauseBecauseDecodeKeepsRunning proves
+// FadeActive clears during a held Pause today, but only as a consequence
+// of "paused" audio not actually being frozen: decode keeps running while
+// the branch is marked frozen, so the fade's own ramp (anchored to the
+// branch's local clock) keeps advancing and reaches its target while the
+// operator believes playback is held. This is not a proof that fading
+// through a pause is the wanted behavior; once a held Pause actually
+// stops decode, this test's premise is gone and it must be re-derived.
+func TestFadeActiveClearsDuringPauseBecauseDecodeKeepsRunning(t *testing.T) {
 	const fadeDuration = 300 * time.Millisecond
 
 	e := newTestEngine(t)
@@ -750,12 +754,17 @@ func TestLateJoiningBranchPlaysFromOwnStartPosition(t *testing.T) {
 	// under load) and well below engineUptime (what the regression folds in).
 	const passBound = 2 * time.Second
 
+	// Both cases exercise the same program-audio late-join property; the
+	// second only proves that property is unaffected by an LTC channel
+	// also being configured. Neither case starts or observes an LTC run,
+	// so neither is evidence about LTC's own late-join or anchoring
+	// behavior — see ltc_real_integration_test.go for that.
 	cases := []struct {
 		name string
 		cfg  func(AssetResolver) Config
 	}{
 		{"LTCChannel unset", testConfig},
-		{"LTCChannel configured", ltcTestConfig},
+		{"LTCChannel also configured, program late-join only", ltcTestConfig},
 	}
 
 	for _, tc := range cases {

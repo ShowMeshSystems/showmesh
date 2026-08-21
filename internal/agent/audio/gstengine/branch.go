@@ -321,7 +321,9 @@ func (b *branch) pipelineRunningTime() time.Duration {
 // running time rather than in GstAudioAggregator's past, which keeps
 // advancing in real time regardless of whether this branch is playing.
 // Callers run this synchronously, before the state change that resumes
-// data flow.
+// data flow. atPos is a value the caller already committed to (a seek
+// target, or a position sampled immediately before calling this), so
+// only pipelineRunningTime is read here.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
 	offset := int64(b.pipelineRunningTime()) - b.localRunningTime(atPos).Nanoseconds()
 	for _, pad := range b.channelMixerPads {
@@ -329,6 +331,27 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 			pad.SetOffset(offset)
 		}
 	}
+}
+
+// resyncMixerPadsToLivePosition re-anchors exactly as resyncMixerPads,
+// but for a caller that has no target position of its own: it reads the
+// branch's live decode position and the pipeline's running time as the
+// two back-to-back statements below, with no lock, no branch, and no
+// other cgo call between them. Two independent clock reads can never be
+// truly atomic across a cgo boundary, so a scheduling stall between these
+// two lines is still possible; this is the smallest gap this API allows
+// between them, and it is the only ordering this package uses for a live
+// double-read. Returns the position it anchored to.
+func (b *branch) resyncMixerPadsToLivePosition() time.Duration {
+	running := b.pipelineRunningTime()
+	atPos := b.queryPosition()
+	offset := int64(running) - b.localRunningTime(atPos).Nanoseconds()
+	for _, pad := range b.channelMixerPads {
+		if pad != nil {
+			pad.SetOffset(offset)
+		}
+	}
+	return atPos
 }
 
 func (b *branch) currentGain() pkgaudio.Gain {
