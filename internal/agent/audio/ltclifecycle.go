@@ -46,6 +46,14 @@ func (o *ltcOwner) release(id pkgaudio.SessionID) bool {
 	return true
 }
 
+// resetForRestore unconditionally clears ownership, regardless of who
+// currently holds it — see [Manager.RestoreAll]'s doc comment.
+func (o *ltcOwner) resetForRestore() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.id, o.owned = "", false
+}
+
 // isShowSessionLocked reports whether s's desired source role is
 // [pkgaudio.SourceRoleShow] — the only role that ever drives LTC.
 // Background, announcement, and manual sessions never start, realign, or

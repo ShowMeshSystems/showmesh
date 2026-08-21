@@ -252,6 +252,27 @@ func (s *Session) resolveFadeInterruptedByRestartLocked() {
 	s.persistBestEffortLocked("state change")
 }
 
+// resolveFadePendingStrandedLocked resolves a still-pending fade to
+// Unconfirmable with reason when the session leaves Playing for a reason
+// other than the fade's own completion — [Session.advanceLocked]'s two
+// no-successor-item branches, where a fade dispatched on the last item
+// would otherwise never reach a terminal outcome. Caller holds s.mu.
+func (s *Session) resolveFadePendingStrandedLocked(reason string) {
+	if !s.fadePending {
+		return
+	}
+	if s.fadeInvocation != "" {
+		s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(pkgaudio.OutcomeResult{
+			Outcome: pkgaudio.OutcomeUnconfirmable,
+			Reason:  reason,
+		}))
+	}
+	s.fadePending = false
+	s.fadeInvocation = ""
+	s.fadeHandleNeverFaded = false
+	s.fadeState = FadeStateNone
+}
+
 // gainEpsilon bounds how far an engine's reported gain may sit from a
 // fade's target and still count as having reached it. A real backend
 // computes a ramp in floating point, so exact equality would report a

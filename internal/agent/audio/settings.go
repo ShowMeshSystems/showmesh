@@ -1,6 +1,8 @@
 package audio
 
 import (
+	"fmt"
+
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
@@ -46,13 +48,68 @@ var DefaultSettings = Settings{
 	LTCDefaultStartOffset:    pkgaudio.LTCTimecode("00:00:00:00"),
 }
 
+// invalidSettingsFields validates s field by field against every wire
+// boundary this package independently reproduces — the coordinator
+// validates the same values on write, but that does not exempt this
+// package from checking what actually arrives over MQTT. Returns one
+// message per field that failed, naming the field and why.
+func invalidSettingsFields(s Settings) []string {
+	var issues []string
+	if s.DefaultFadeDurationMs <= 0 {
+		issues = append(issues, fmt.Sprintf("DefaultFadeDurationMs %d is not positive", s.DefaultFadeDurationMs))
+	}
+	if err := s.DefaultFadeCurve.Validate(); err != nil {
+		issues = append(issues, "DefaultFadeCurve: "+err.Error())
+	}
+	if err := s.DefaultMaxBackgroundGain.Validate(); err != nil {
+		issues = append(issues, "DefaultMaxBackgroundGain: "+err.Error())
+	}
+	if err := s.LTCFrameRate.Validate(); err != nil {
+		issues = append(issues, "LTCFrameRate: "+err.Error())
+	}
+	if err := s.LTCDefaultStartOffset.Validate(); err != nil {
+		issues = append(issues, "LTCDefaultStartOffset: "+err.Error())
+	}
+	return issues
+}
+
 // SetSettings replaces m's current Settings — [internal/agent]'s
 // audio.settings.configure operation is the only caller. Safe to call
 // concurrently with any session dispatch.
+//
+// A field that fails its own wire-boundary validation is never accepted
+// as given — every other field an operator actually set still lands, and
+// only the bad one falls back to [DefaultSettings]'s value for that
+// field. The fallback is never silent: it is logged and retained for
+// [Manager.SettingsValidationIssues], because a substitution nobody can
+// observe is indistinguishable from acceptance.
 func (m *Manager) SetSettings(s Settings) {
 	s.Configured = true
+	issues := invalidSettingsFields(s)
+	if len(issues) > 0 {
+		if s.DefaultFadeDurationMs <= 0 {
+			s.DefaultFadeDurationMs = DefaultSettings.DefaultFadeDurationMs
+		}
+		if s.DefaultFadeCurve.Validate() != nil {
+			s.DefaultFadeCurve = DefaultSettings.DefaultFadeCurve
+		}
+		if s.DefaultMaxBackgroundGain.Validate() != nil {
+			s.DefaultMaxBackgroundGain = DefaultSettings.DefaultMaxBackgroundGain
+		}
+		if s.LTCFrameRate.Validate() != nil {
+			s.LTCFrameRate = DefaultSettings.LTCFrameRate
+		}
+		if s.LTCDefaultStartOffset.Validate() != nil {
+			s.LTCDefaultStartOffset = DefaultSettings.LTCDefaultStartOffset
+		}
+		for _, issue := range issues {
+			m.logf("audio settings: rejected invalid value, using default instead: %s", issue)
+		}
+	}
+
 	m.settingsMu.Lock()
 	m.settings = s
+	m.settingsIssues = issues
 	m.settingsMu.Unlock()
 }
 
@@ -62,4 +119,15 @@ func (m *Manager) SettingsSnapshot() Settings {
 	m.settingsMu.RLock()
 	defer m.settingsMu.RUnlock()
 	return m.settings
+}
+
+// SettingsValidationIssues returns the field-level problems the most
+// recent [Manager.SetSettings] call found, or nil once a call arrives
+// with none. Each entry names the field that fell back to its
+// [DefaultSettings] value and why — the observable half of "not
+// silent" that SetSettings's own doc comment requires.
+func (m *Manager) SettingsValidationIssues() []string {
+	m.settingsMu.RLock()
+	defer m.settingsMu.RUnlock()
+	return m.settingsIssues
 }

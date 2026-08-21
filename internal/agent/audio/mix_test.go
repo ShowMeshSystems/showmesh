@@ -69,13 +69,18 @@ func TestApplyRefusesUnsupportedMixPolicy(t *testing.T) {
 // desired state rather than being refused.
 func TestApplyAcceptsInterruptMixPolicy(t *testing.T) {
 	c := newClock(time.Now())
-	m := newTestManager(t, c)
+	dir := t.TempDir()
+	// availableFakeEngine, not newTestManager's FakeEngine: under a
+	// permanently-unavailable engine every accepted Apply reads as
+	// Unconfirmable too, which would make this test pass whether or not
+	// MixPolicyInterrupt was actually accepted.
+	m := NewManager(availableFakeEngine{NewFakeEngine(c.now)}, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
 	ctx := context.Background()
 	req := pkgaudio.ApplyRequest{MixPolicy: pkgaudio.SetField(pkgaudio.MixPolicyInterrupt)}
 
 	r := m.Apply(ctx, "ann", "inv-1", 1, req)
-	if r.Outcome == pkgaudio.OutcomeRefused {
-		t.Fatalf("outcome = %+v, want interrupt accepted", r)
+	if r.Outcome != pkgaudio.OutcomePosition {
+		t.Fatalf("outcome = %+v, want Position (accepted)", r)
 	}
 }
 
@@ -755,11 +760,81 @@ func TestFadeDispatchedAfterRestartResolvesNormally(t *testing.T) {
 		t.Fatal("session was not restored")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if !s.fadePending {
+		s.mu.Unlock()
 		t.Fatal("the fade dispatched after the restore was resolved by the restart guard rather than left in progress")
 	}
 	if s.fadeState != FadeStateInProgress {
-		t.Fatalf("fade state = %q, want %q", s.fadeState, FadeStateInProgress)
+		fadeState := s.fadeState
+		s.mu.Unlock()
+		t.Fatalf("fade state = %q, want %q", fadeState, FadeStateInProgress)
+	}
+	handle := s.handle
+	s.mu.Unlock()
+
+	// fadePending is this package's own bookkeeping; it would still read
+	// true if the dispatcher skipped the engine.Fade call entirely. Only
+	// the engine's own evidence proves the call actually reached it.
+	obs, err := m2.engine.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !obs.FadeActive {
+		t.Fatal("engine reports no fade in progress; engine.Fade was never dispatched")
+	}
+}
+
+// TestFadePendingResolvedWhenSessionCompletesNaturally verifies that a
+// fade still pending when a single-item session reaches natural
+// completion is resolved to a terminal outcome, not left stranded:
+// [Session.advanceLocked]'s no-successor-item branch must clear
+// fadePending itself, since nothing else ever will once the handle it
+// would have polled is released.
+func TestFadePendingResolvedWhenSessionCompletesNaturally(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c) // staticDecoder reports a 2s duration
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, id, fadeInvocation, 3, pkgaudio.FadeCurveLinear, 5*time.Second, pkgaudio.Gain(0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("fade unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	if !s.fadePending {
+		s.mu.Unlock()
+		t.Fatal("precondition: fade should be pending")
+	}
+	s.mu.Unlock()
+
+	// The item's own 2s duration elapses well before the 5s fade would
+	// have finished, so natural completion reaches advanceLocked while
+	// the fade is still in progress.
+	c.advance(3 * time.Second)
+	m.watchTick(ctx)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != pkgaudio.StateCompleted {
+		t.Fatalf("state = %q, want Completed", s.state)
+	}
+	if s.fadePending {
+		t.Fatal("fadePending is still true after the session completed; it will never reach a terminal outcome")
+	}
+	result, ok := s.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("the fade's own invocation has no recorded outcome")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome after being stranded by completion = %+v, want Unconfirmable", result)
 	}
 }
