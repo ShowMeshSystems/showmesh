@@ -46,13 +46,16 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Fallbacks so the job is well-defined under any trigger: inputs.* is
+    # empty for every event other than workflow_dispatch.
+    env:
+      FPP_REF: ${{ inputs.fpp_ref || '9.5.3' }}
+      FPP_COMMIT: ${{ inputs.fpp_commit || '7979a4bb0bb9068fea71f3b447e273d5c0ea01e3' }}
+      IMAGE_TAG: ${{ inputs.image_tag || '9.5.3-build1' }}
     steps:
       # Inputs reach the shell through env, never through ${{ }}
       # interpolation into the script body.
       - name: Verify fpp_commit matches fpp_ref upstream
-        env:
-          FPP_REF: ${{ inputs.fpp_ref }}
-          FPP_COMMIT: ${{ inputs.fpp_commit }}
         run: |
           resolved="$(git ls-remote https://github.com/FalconChristmas/fpp.git "refs/tags/${FPP_REF}^{}" | cut -f1)"
           if [ -z "$resolved" ]; then
@@ -77,29 +80,26 @@ jobs:
         id: build
         uses: docker/build-push-action@v7
         with:
-          context: https://github.com/FalconChristmas/fpp.git#${{ inputs.fpp_commit }}
+          context: https://github.com/FalconChristmas/fpp.git#${{ env.FPP_COMMIT }}
           file: Docker/Dockerfile
           build-args: |
-            FPPBRANCH=${{ inputs.fpp_ref }}
+            FPPBRANCH=${{ env.FPP_REF }}
           platforms: linux/amd64
           push: true
           provenance: false
           sbom: false
-          tags: ghcr.io/showmeshsystems/showmesh-fpp-test:${{ inputs.image_tag }}
+          tags: ghcr.io/showmeshsystems/showmesh-fpp-test:${{ env.IMAGE_TAG }}
           labels: |
             org.opencontainers.image.title=showmesh-fpp-test
             org.opencontainers.image.description=Unmodified FPP build used as ShowMesh's CI integration test fixture
             org.opencontainers.image.source=https://github.com/ShowMeshSystems/showmesh
             org.opencontainers.image.url=https://github.com/FalconChristmas/fpp
-            org.opencontainers.image.version=${{ inputs.fpp_ref }}
-            org.opencontainers.image.revision=${{ inputs.fpp_commit }}
+            org.opencontainers.image.version=${{ env.FPP_REF }}
+            org.opencontainers.image.revision=${{ env.FPP_COMMIT }}
             org.opencontainers.image.licenses=See https://github.com/FalconChristmas/fpp/blob/master/LICENSE (LGPL-2.1 core, GPL-2.0 general code and channel outputs, CC-BY-ND for src/non-gpl)
 
       - name: Summary
         env:
-          FPP_REF: ${{ inputs.fpp_ref }}
-          FPP_COMMIT: ${{ inputs.fpp_commit }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           {
