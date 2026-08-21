@@ -1,6 +1,5 @@
 name: Feature request
 description: Describe a user problem or outcome that ShowMesh should support.
-title: ""
 labels:
   - enhancement
 body:

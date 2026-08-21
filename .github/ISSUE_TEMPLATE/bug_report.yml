@@ -1,6 +1,5 @@
 name: Bug report
 description: Report behavior that does not match what ShowMesh should do.
-title: ""
 labels:
   - bug
 body:
