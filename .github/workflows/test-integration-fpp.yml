@@ -99,21 +99,22 @@ jobs:
             golang:1.25.0-trixie \
             bash -euxo pipefail -c '
               apt-get update -o Acquire::Retries=2
+              # The cgo build dependencies go in their own apt call and are
+              # verified afterwards. A single large install has been seen to
+              # exit 0 having silently not installed libgstreamer1.0-dev,
+              # which then fails much later as an unresolved pkg-config.
               apt-get install -y --no-install-recommends \
-                pkg-config gstreamer1.0-tools gstreamer1.0-plugins-base \
+                pkg-config libgstreamer1.0-dev \
+                libgstreamer-plugins-base1.0-dev libltc-dev
+              pkg-config --modversion gstreamer-1.0
+              pkg-config --modversion ltc
+              pkg-config --atleast-version=1.26.0 gstreamer-1.0
+              apt-get install -y --no-install-recommends \
+                gstreamer1.0-tools gstreamer1.0-plugins-base \
                 gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
                 gstreamer1.0-plugins-base-apps gstreamer1.0-alsa \
-                libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-                libltc-dev docker-cli docker-compose curl jq
-              # Debian's docker-compose is Compose v2 and installs the CLI
-              # plugin, so the script's `docker compose` subcommand works.
+                docker-cli docker-compose curl jq
               docker compose version
-              echo "PKG_CONFIG_PATH=[${PKG_CONFIG_PATH:-unset}]"
-              echo "PKG_CONFIG_LIBDIR=[${PKG_CONFIG_LIBDIR:-unset}]"
-              command -v pkg-config || true
-              dpkg -l libgstreamer1.0-dev | tail -2 || true
-              ls -l /usr/lib/*/pkgconfig/gstreamer-1.0.pc || true
-              pkg-config --modversion gstreamer-1.0 || echo "pkg-config could not resolve gstreamer-1.0"
               git config --global --add safe.directory "*"
               make test-integration-fpp
             '
