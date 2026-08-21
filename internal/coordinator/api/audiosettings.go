@@ -24,6 +24,12 @@ import (
 
 const maxAudioSettingsConfigRequestBodyBytes = 4 * 1024
 
+// audioConfigPushTimeout bounds a single node's best-effort
+// audio.node/audio.settings push (pushAudioSettingsToAllNodes here, and
+// handlePutAudioNode's own push in audionode.go), so one unreachable node
+// cannot hold its push goroutine open indefinitely.
+const audioConfigPushTimeout = 5 * time.Second
+
 // resolveAudioSettings reads the audio.settings configuration kind's
 // current value, mirroring resolveRenderSettings exactly.
 func resolveAudioSettings(ctx context.Context, cs ConfigStore) (payload config.AudioSettingsPayload, configured bool, err error) {
@@ -196,6 +202,15 @@ func (h *handlers) handlePutAudioSettingsConfig(w http.ResponseWriter, r *http.R
 // this coordinator does not yet know about (never sent a hello) is
 // reached instead by its own hello-triggered push once it does — this
 // call never fails the write that triggered it.
+//
+// Each node's push runs in its own goroutine on a context detached from
+// the request (context.WithoutCancel) and individually bounded by
+// audioConfigPushTimeout: fanned out concurrently, not serially, so one
+// slow or unreachable node cannot delay every other node's push behind
+// it, and this function returns without waiting for any push to finish,
+// so a client that disconnects mid-request no longer determines how many
+// of N nodes get pushed (ADR-036's "applies without a restart" with no
+// window this write would otherwise leave for the remaining nodes).
 func (h *handlers) pushAudioSettingsToAllNodes(ctx context.Context, now time.Time) {
 	if h.deps.Nodes == nil {
 		return
@@ -205,8 +220,14 @@ func (h *handlers) pushAudioSettingsToAllNodes(ctx context.Context, now time.Tim
 		h.logWarn("failed to list nodes for audio.settings push", "error", err)
 		return
 	}
+	detached := context.WithoutCancel(ctx)
 	for _, nv := range views {
-		audioconfigpush.BestEffort(ctx, h.deps.Config, h.deps.RenderPublisher, h.now, nv.NodeID, h.logger)
+		nodeID := nv.NodeID
+		go func() {
+			pushCtx, cancel := context.WithTimeout(detached, audioConfigPushTimeout)
+			defer cancel()
+			audioconfigpush.BestEffort(pushCtx, h.deps.Config, h.deps.RenderPublisher, h.now, nodeID, h.logger)
+		}()
 	}
 }
 

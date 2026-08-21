@@ -109,6 +109,41 @@ func TestOpenAPIAudioNodePlacementRefusalMatchesProblemSchema(t *testing.T) {
 	assertMatchesSchema(t, c, "Problem", putBody)
 }
 
+// TestShowConfigProblemTypesAreDeclaredInOpenAPI is the contract half
+// TestShowConfigValidationCodesAllMapToDistinctProblemTypes
+// (showconfig_test.go) does not cover: that test proves every
+// [config.ValidationError.Code] maps to its own distinct URI in Go; this
+// one proves every URI showConfigValidationProblemTypes actually produces
+// is declared in api/openapi.yaml's own Problem.type enum. Reading the
+// enum from the document rather than asserting a fixed string list means
+// a URI added to the map without a matching enum entry fails here, and
+// a stale enum entry left behind after a code is renamed does not — the
+// review finding this closes was exactly the code and the contract
+// silently drifting apart, so the test has to read both sides live.
+func TestShowConfigProblemTypesAreDeclaredInOpenAPI(t *testing.T) {
+	doc := loadOpenAPIDocument(t)
+	docMap, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("openapi document root is %T, want map[string]any", doc)
+	}
+	schemas := navMap(t, docMap, "components", "schemas")
+	problem := navMap(t, schemas, "Problem")
+	properties := navMap(t, problem, "properties")
+	typeProp := navMap(t, properties, "type")
+	enum := stringSlice(t, typeProp["enum"], "components.schemas.Problem.properties.type.enum")
+
+	declared := make(map[string]bool, len(enum))
+	for _, uri := range enum {
+		declared[uri] = true
+	}
+
+	for code, uri := range showConfigValidationProblemTypes {
+		if !declared[uri] {
+			t.Errorf("showConfigValidationProblemTypes[%q] = %q, not declared in api/openapi.yaml's Problem.type enum", code, uri)
+		}
+	}
+}
+
 // canonicalResourceKinds is [observation.ResourceKind]'s own complete
 // vocabulary — the single source of truth
 // TestResourceKindAcceptedSetMatchesOpenAPIEnum cross-checks the handler

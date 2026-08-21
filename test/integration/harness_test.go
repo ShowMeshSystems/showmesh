@@ -243,7 +243,7 @@ func TestMain(m *testing.M) {
 			return m.Run() // every test skips itself via requireBroker
 		}
 
-		agentBin, agentCleanup, err := buildBinary("showmesh-agent", "./cmd/showmesh-agent")
+		agentBin, agentCleanup, err := buildBinary("showmesh-agent", "./cmd/showmesh-agent", true)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "integration: failed to build the showmesh-agent binary: %v\n", err)
 			return 1
@@ -251,7 +251,7 @@ func TestMain(m *testing.M) {
 		agentBinPath = agentBin
 		cleanupFuncs = append(cleanupFuncs, agentCleanup)
 
-		coordBin, coordCleanup, err := buildBinary("showmesh-coordinator", "./cmd/showmesh-coordinator")
+		coordBin, coordCleanup, err := buildBinary("showmesh-coordinator", "./cmd/showmesh-coordinator", false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "integration: failed to build the showmesh-coordinator binary: %v\n", err)
 			return 1
@@ -259,7 +259,7 @@ func TestMain(m *testing.M) {
 		coordinatorBinPath = coordBin
 		cleanupFuncs = append(cleanupFuncs, coordCleanup)
 
-		showmeshctlBin, ctlCleanup, err := buildBinary("showmeshctl", "./cmd/showmeshctl")
+		showmeshctlBin, ctlCleanup, err := buildBinary("showmeshctl", "./cmd/showmeshctl", false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "integration: failed to build the showmeshctl binary: %v\n", err)
 			return 1
@@ -402,7 +402,16 @@ func moduleRoot() (string, error) {
 // removes it. Shared by every binary this package execs (the agent, the
 // coordinator, and showmeshctl — acceptance criterion (a) requires the
 // latter run as a real subprocess too).
-func buildBinary(name, pkgPath string) (path string, cleanup func(), err error) {
+//
+// cgoEnabled sets CGO_ENABLED explicitly rather than inheriting whatever
+// the runner's ambient environment happens to provide: ADR-042's agent
+// needs cgo to link the real GStreamer/libltc engine, and building it
+// under an environment that happens to have CGO_ENABLED=0 would silently
+// swap in the fake engine, making "the real cgo backend" a claim about
+// the runner rather than the code. ADR-012 requires the coordinator build
+// CGo-free, so its own build here is pinned to 0 for the same reason in
+// the opposite direction.
+func buildBinary(name, pkgPath string, cgoEnabled bool) (path string, cleanup func(), err error) {
 	root, err := moduleRoot()
 	if err != nil {
 		return "", nil, err
@@ -417,7 +426,7 @@ func buildBinary(name, pkgPath string) (path string, cleanup func(), err error) 
 	bin := filepath.Join(dir, name)
 	cmd := exec.Command("go", "build", "-o", bin, pkgPath)
 	cmd.Dir = root
-	cmd.Env = os.Environ() // the build itself needs a normal Go toolchain environment
+	cmd.Env = buildEnvWithCGO(cgoEnabled)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -425,6 +434,25 @@ func buildBinary(name, pkgPath string) (path string, cleanup func(), err error) 
 		return "", nil, fmt.Errorf("go build -o %s %s: %w\n%s", bin, pkgPath, err, out)
 	}
 	return bin, cleanup, nil
+}
+
+// buildEnvWithCGO returns os.Environ() with any inherited CGO_ENABLED
+// replaced by an explicit value, so the resulting build's cgo linkage
+// never depends on what happened to be set before this process started.
+func buildEnvWithCGO(cgoEnabled bool) []string {
+	ambient := os.Environ()
+	env := make([]string, 0, len(ambient)+1)
+	for _, e := range ambient {
+		if strings.HasPrefix(e, "CGO_ENABLED=") {
+			continue
+		}
+		env = append(env, e)
+	}
+	val := "0"
+	if cgoEnabled {
+		val = "1"
+	}
+	return append(env, "CGO_ENABLED="+val)
 }
 
 // uniqueSuffix returns a per-process-unique, lowercase-alphanumeric string

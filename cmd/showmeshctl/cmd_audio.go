@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -519,7 +520,19 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 		return exitUsage
 	}
 	id := rest[0]
-	if programRoute == "" || ltcRoute == "" || programChannels == "" || ltcChannel == 0 || clockDomain == "" || clockDomainProvenance == "" {
+	// --ltc-channel's presence, not its value, decides whether it was
+	// passed: fs.Visit walks only flags the operator actually set on this
+	// invocation, so "--ltc-channel 0" (a value the coordinator alone is
+	// the authority on rejecting, mirroring assets settings set's
+	// identical fs.Visit-over-zero-value pattern) is sent through rather
+	// than refused here as if it had been omitted.
+	ltcChannelSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "ltc-channel" {
+			ltcChannelSet = true
+		}
+	})
+	if programRoute == "" || ltcRoute == "" || programChannels == "" || !ltcChannelSet || clockDomain == "" || clockDomainProvenance == "" {
 		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --program-route, --ltc-route, --program-channels, --ltc-channel, --clock-domain, and --clock-domain-provenance are all required")
 		return exitUsage
 	}
