@@ -1,246 +1,180 @@
-# ShowMesh
-
-ShowMesh is an open-source orchestration and observation layer for holiday light displays built around FPP (Falcon Player), xLights, and Resolume Arena. It coordinates these systems without replacing their scheduling, sequencing, mapping, or playback roles.
-
-## The system goal (owner, 2026-08-15)
-
-ShowMesh has one overriding goal: **the show keeps running even when individual pieces fail, misbehave, or need ugly real-world workarounds.** Reliability does not mean proving every component perfect in isolation, exhaustively testing every edge before integration, or following an old specification literally after new evidence shows it is wrong. It means building the complete system early enough to test it as a system, understanding its actual failure modes, and designing graceful degradation, recovery, bypasses, and manual fallbacks around what happens in reality.
-
-- FPP, Resolume, media nodes, audio, projectors, the coordinator, and the UI are components of the show, not sacred dependencies. A crash, an unavailable service, a broken API, or a known upstream bug is contained wherever practical rather than allowed to stop the rest of the show.
-- The UI and the higher-level control plane must never become the critical path. Native and manual controls stay available where useful, and **`showmeshctl` must be able to control substantially all of the system at near feature parity with the UI.** Every API capability gets CLI coverage in the step that adds it, not in a later cleanup pass, because the CLI is the "the show is broken and the UI is down" path.
-- **And the capability must have an API in the first place** (ADR-039, owner, 2026-08-17). The parity rule above is conditioned on an endpoint existing, so **a capability with zero surfaces is in perfect parity with every other surface** and passes every check this project had. That is not hypothetical: Resolume Arena, one of the three founding problems, shipped its observability, its action vocabulary, its crash recovery and its UI, and the one step that has to happen before any of it works, telling ShowMesh where Arena is, was an environment variable and a container restart. Anything an operator must set for a subsystem to function is store-backed configuration with an endpoint, a CLI verb, and a UI control. The environment carries only what must be true before the process can start. **The test is temporal: can the coordinator read this value from its own store? Then it belongs in the store.**
-- Known upstream defects (the Arena crash is the standing example) are engineered around, never allowed to stall the project in pursuit of theoretical correctness.
-- The specification is a record of the best-known design, not scripture. Implementation, bench testing, research, and newly discovered behavior feed back into it, and ADRs are superseded when reality provides better information.
-- Security, unit testing, validation, and clean architecture serve the system rather than becoming the system. **The priority during the build is to assemble the integrated system, test it under realistic show conditions, identify the failures that actually matter, and harden those paths iteratively.**
-- Bench testing generally happens once enough of ShowMesh exists for meaningful system-level testing. The exception is explicitly identified blocking research (RES-002/MultiSync, the Linux NDI question) where the result directly decides an architecture question.
-
-Reliability is evaluated at the system level: does the show continue, degrade gracefully, recover cleanly, and stay manually controllable under realistic conditions.
-
-## Current state
-
-Implementation started 2026-08-10. The design package remains authoritative: docs distinguish accepted architecture from unverified hypotheses, and that boundary must be respected in all work, including in code and code comments.
-
-**Read `docs/build/BUILD-LOG.md` first in any new session.** Its "Current state" block is the latest build narrative and says what the most recent session observed. `docs/build/BUILD-PLAN.md` holds roadmap order. Linear alone owns the current work queue and next action.
-
-**Linear is the authoritative work queue.** If the session is attached to an `SM-*` issue, read that issue, its comments, and its blocking/related issues before changing code or documents. The repository records architecture, research evidence, and build history; Linear records actionable work, ownership, priority, dependencies, and current status.
-
-Module path is `github.com/showmeshsystems/showmesh`. Steps 0 (foundation), 1 (`pkg/multisync` plus the bench probe), 2 (control plane skeleton: shared models, agent advertisement with Last Will and heartbeat, coordinator SQLite inventory and liveness), 3 (read-only FPP observability, the observation model, event history, the versioned public API and its SSE change stream, and `showmeshctl`), and 4 (the read-only Operator UI in `ui/`, its own container, same-origin proxy per ADR-022) are complete.
-
-**Step 7 ended the read-only era.** As of 2026-08-12 this system can change three things: its own FPP endpoint configuration, its own node declarations, and one playback state on an FPP host via FPP's own `Stop Now` command. Every write needs an authenticated principal holding the named scope; reads stay open by default. Any document that still describes this API as read-only is stale, and several were.
-
-**Resting mode and the operating-night loop are specified, not implemented (owner, 2026-08-16; optional site-control posture clarified 2026-08-17).** Read [RESTING-MODE](docs/architecture/RESTING-MODE.md), [ADR-038](docs/decisions/ADR-038-fpp-authorizes-night-sessions.md), and [Track F](docs/build/TRACK-F-resting-mode.md) before changing scheduler, playlist, background-audio, projection-transition, or presentation-power behavior. FPP owns calendar entries and authorizes the session; the exact deployed resting FSEQ supplies inter-show duration; ShowMesh owns relative transitions and individual cycles inside the session. Power, Home Assistant, thermal evidence, cooldowns, and other interlocks are optional configuration. A configured interlock guards only its declared phase. Configured power-off bindings declare their power domain, provenance, and immediate-safe or ordered-prerequisite removal policy. Where used, Home Assistant owns continuous enclosure heating/cooling, and ShowMesh never powers the environmental group off with presentation equipment.
-
-Step 5 (real FPP signals on the dashboard: pixel current, playback state, controller and network health, FPP MQTT ingestion) is **complete, and is the first work in this project exercised against real show hardware.** The deployed fleet in `docs/reference-installation.md` is the operator's live display and its broker is their live home-automation broker: **read-only, never a write, a command, a restart, or a settings change, and never an MQTT publish on any topic**, because `falcon/player/<host>/command/run` is a topic FPP acts on.
-
-Three Step 5 lessons that generalize past FPP. **GET-only is not read-only**: FPP invokes commands over GET, so an unset `CheckRedirect` would have walked the collector's own GET onto another host's `/api/command/...` via a 302. **A JSON `null` is not an absent key**: `encoding/json` unmarshals it as a no-op with no error, so `"ma": null` produced a measured 0 mA on a blind port and `"powerBad": null` contributed *healthy*. And **duplication found the bug in the code that replaced it**: two decoders written independently against one spec disagreed, and the throwaway one was right.
-
-Beyond Step 5 the sequencing was structural: **every remaining roadmap item that does something rather than shows something is a write operation**, and ADR-021 rule 5 barred the first write endpoint. [ADR-024](docs/decisions/ADR-024-identity-authorization-and-audit.md) lifted that bar, Step 6 implemented it, and **Step 7 spent it on 2026-08-12**: the configuration write surface, node discovery and declaration, and one native FPP lifecycle command. Both Step 6 obligations closed. RES-008 and RES-015 were researched the same day and both moved to L1; RES-002's bench capture and `pkg/pjlink` remain available in parallel. **Step 8 shipped the primitive command vocabulary on 2026-08-13**: eight FPP primitives, each confirmed through a signal the collector already collects on evidence post-dating its own dispatch. **Step 9 (macros plus the FPP plugin) shipped on 2026-08-15**: ShowMesh runs show macros, a run always runs every step, and dispatch configuration applies without a restart. BUILD-LOG's Current state block is the latest build narrative; Linear is authoritative for the current work queue and next action. Primitives came first because a macro is a sequence of primitives and there was exactly one; the alternative ordering ends with the primitives being built inside the macro step, which is exactly how Step 7 went from one write to three.
-
-**Five Step 7 lessons that generalize past this step**, all in LESSONS.md and all found by running something rather than reading or testing it.
-
-**Confirming that a value equals what you wanted is not evidence that anything happened.** Confirmation compared the current observation to the desired value without checking that the evidence post-dated the dispatch, and observations stay `current` for 45 seconds. Measured live: a command reported `confirmed` **179 microseconds** after its own dispatch. Because FPP starts playlists on its own schedule, that means a stop dispatched into a running show could report success off a pre-dispatch `idle` reading. ADR-003 wants evidence that observed state *moved*.
-
-**A client that gives up before the server answers deletes an outcome from existence.** The server held an unconfirmed response for 20 seconds while the CLI timed out at 10 and the browser at 15, so `unconfirmed` was unreachable by both shipped clients, and the operator was told a transport failure for a successful conversation with a healthy coordinator. That is ADR-024 decision 7's inversion in a fourth disguise. Two timeouts on opposite sides of one contract are a single decision.
-
-**A shared rule is only shared where it is called.** `precedence.go` resolves two collector sources reporting one signal, and its own comment claims that resolving there makes the rule impossible to apply inconsistently. The command confirmation path, one file over, took the first matching row instead, which was a nondeterministic coin flip in both directions.
-
-**`complete: true` is the licence to assert absence, so it has to be earned.** A discovery run treated ambiguous liveness as "not observed" and finished complete anyway, so a 40 second broker outage could flip an entire installation to `not_seen`. The code correctly refused to delete anything and still manufactured absence. That is the fourth subsystem in which this project has decided that absence of evidence is not evidence of absence.
-
-**Fail-closed protects the operator from an unaccountable actor, so where there is no actor it protects nobody** (found and fixed 2026-08-13). The `SHOWMESH_FPP_ENDPOINTS` migration wrote its config revision and its audit entry in one transaction per ADR-024 decision 11, and exited 1 when the audit append failed. Under the bundle's `restart: unless-stopped` that is a restart loop with no API, no change stream and no dashboard, reachable only on the first boot after an existing deployment upgrades into Step 7. A startup migration has no principal, so there was no actor to hold accountable. Constraint 23 and decision 7 scope an identity or audit failure to "you cannot act", never "you cannot see". Before applying a fail-closed rule, name the actor it holds accountable, then check what the refusal actually removes. **The review of that fix found its own sharper half:** removing the exit made a state reachable that had been impossible, and two surfaces still asserted things that were now false, one of them a `409` whose documented remedy would have discarded the operator's only copy of the endpoint list. When you turn a fatal path into a survivable one, enumerate what becomes reachable and re-read what every existing surface says about it.
-
-**And the recurring one, twice in one step:** an absent JSON key is not an empty value. A configuration `PUT` with no `endpoints` key wiped every endpoint and returned `200`, reachable by following the CLI's own documented round trip; a second `declare` with no label erased the operator's label. Absent, `null`, and explicitly empty are three different things on any write surface.
-
-**Step 6's own lesson, and it is not about authentication.** Three features shipped that compiled, passed tests, and could not be reached by anything: `ClaimBootstrap` (so no first principal could be created), `IssueToken` (so no machine credential could exist, making the FPP and CLI story unusable), and `CreatePrincipal`, whose only caller hardcoded `admin` (so the `scheduler` principal the design is built around could not be provisioned). Each was found by someone trying to *use* the system, never by a test. **A test suite cannot tell you that nothing calls the function.** When a step adds a capability, check that a path to invoke it exists end to end before calling it done.
-
-**One lesson from writing ADR-024 generalizes past authentication.** The record's first draft argued that an identity failure leaves the operator "in the same position as a coordinator outage, which the architecture requires to be survivable", and used that in two places. It is false: a coordinator outage is a **transport** failure, which is what a fallback detects, while a `403` is a successful conversation with a healthy coordinator, which fires nothing. Two independent reviews also caught a second version of the same error, where an audit-write failure refusing every command was justified as "the show survives it" while the command being refused was blackout. The shape is: **an argument that degradation is safe, made against the wrong failure direction.** This architecture degrades toward the show continuing; that is not the same as degrading toward the operator staying in control, and the two need separate arguments.
-
-The API is a public contract, not a UI convenience (ADR-014). `api/openapi.yaml` is its machine-readable form and is conformance-tested against real responses. `cmd/showmeshctl` exists to keep that honest: it is forbidden by an enforced import-graph test from importing any coordinator package, so a JSON tag rename breaks it rather than silently renaming the field on both sides. If Step 4's UI becomes the only client that ever calls the API, the contract has stopped being public and nobody decided that.
-
-RES-002 is **L2 for protocol semantics** and **L1 for anything hardware- or network-dependent**, a deliberate split. A containerized `fppd` (`bench/fpp-multisync/`) proved the wire protocol; clock drift and switch IGMP behavior are unreachable by any container and still require the physical rig. **L2 here means safe to keep building against, not trustworthy in a live show**: show readiness needs L4, and that has not happened.
-
-The repository is **public** at `github.com/ShowMeshSystems/showmesh` (corrected 2026-08-14; it was previously described here as private) and CI runs on a real GitHub runner. Public means anything committed is published permanently, so `docs/private/` stays gitignored and secrets never enter a commit, a test fixture, or an example. Two lessons from CI worth carrying: its first run caught a Linux-only `SO_REUSEADDR` behavior that passes on macOS, so a socket claim verified only on macOS is not verified for this project; and `make test-integration` runs the control plane against a real Mosquitto with the agent as a real subprocess, which on its first run caught three defects the unit suite passed over, including one where the unit test asserted the correct ordering against a fake while the real wiring did the opposite. **A test that passes whether or not the bug is present is worse than no test, because it also reports success.**
-
-## Repository map
-
-- `docs/build/BUILD-LOG.md` — running session log and current state. Start here.
-- `docs/build/BUILD-PLAN.md` — the ordered implementation steps that deliver the roadmap phases, with status.
-- `docs/build/IDENTIFIER-REGISTER.md` — the authoritative register for every scarce identifier except ADR numbers: exit codes, configuration kinds, scopes, collector ids, MQTT topics, schema versions. Reserve before building, never at merge.
-- `docs/architecture/ARCHITECTURE.md` — the architecture baseline (vision, components, sync model, state/command models, roadmap phases 0–4; Phase 0 is read-only observability).
-- `docs/architecture/OBSERVABILITY.md` — observability/alerting spec: signal model, collectors, dashboard, preview wall, pixel-current diagnostics, readiness evidence, alert model, phases O1–O5. **Owns what the operator surface must display.**
-- `docs/architecture/OPERATOR-UI.md` — the browser client architecture: isolation, API contract, real-time updates, staleness, information architecture, controls, responsiveness. **Owns how the client is built, never what it displays** — that split exists to stop the two documents drifting.
-- `docs/architecture/AUDIO-ENGINE.md` — the audio subsystem: authority model, playback sessions, drift policy, clock domains, buses/routing, output adapters, mixing, failure behavior. Entirely unverified design intent; RES-007 is the work queue.
-- `docs/architecture/RESTING-MODE.md` — the accepted but unimplemented night-session lifecycle: FPP commands, exact-FSEQ timing, transition cues, final-show behavior, and power/thermal boundaries. Track F is its implementation queue.
-- `docs/decisions/`: ADRs. The register now runs past ADR-037 and **has no ADR-034**, deliberately: two parallel branches issued colliding numbers on 2026-08-14 and the renumbering left 034 unused so an older reference is never ambiguous. `docs/decisions/README.md` holds the authoritative status column, including supersessions (ADR-021 by ADR-024; ADR-022 decision 4 narrowed by ADR-024; ADR-009's `checksummed` by ADR-025; ADR-031 decision 2's default and its decision 5 by ADR-035; later supersessions recorded there). New durable constraints require a new ADR; superseding evidence requires a superseding ADR, and superseding is normal, not a failure.
-- `docs/research/`: research records RES-001..016 with an evidence ladder (L0 assumption → L1 source-verified → L2 bench → L3 integrated → L4 resilient). Empty evidence sections are work queues, not conclusions. RES-016 preserves the generic third-party synchronized-audio boundary at L0: files are provisioned in advance for possible server-side transcoding, while formats, upload API, acknowledgement, readiness, timing, and mix behavior remain unverified. FPP-recognized audio formats are only the initial owner-selected test corpus.
-- `docs/reference-installation.md` — the concrete reference show topology that anchors test matrices.
-- `deploy/` — the Compose bundle (coordinator plus Mosquitto) and its operator documentation.
-- `api/openapi.yaml` — the machine-readable form of the public control API (ADR-014, ADR-020). Conformance-tested against real handler responses, so it cannot drift from the implementation in either direction. Step 4 generates or verifies its TypeScript types from it rather than hand-maintaining them twice (ADR-015).
-- `bench/fpp-multisync/` — bench scaffolding only, never the product. A real containerized `fppd` for RES-002 captures and for the FPP collector's integration tests. Its image is a full source build, so it stays out of default CI and off the fast path.
-
-### Human documentation boundary
-
-Human-facing operator, user, integration, troubleshooting, public reference, and contributor guides live in the separate `ShowMeshSystems/showmesh-docs` repository. This repository remains authoritative for code, tests, the OpenAPI contract, engineering specifications, ADRs, research evidence, build state, and agent guidance. Public docs may translate or summarize those sources but never supersede them, and this repository's `docs/` tree must not be mirrored into the public site.
-
-When updating human documentation, verify claims against code, tests that actually constrain the behavior, `api/openapi.yaml`, compiled CLI help, and captured running-system evidence. Treat prose in this repository as a lead when sources conflict. Do not add linked-PR enforcement, release gates, or an automated documentation-update workflow until the first release process defines them.
-
-## Non-negotiable design constraints (from accepted ADRs)
-
-1. **FPP is the authoritative calendar scheduler** (ADR-001 as narrowed by ADR-038). Lifecycle actions are exposed as native FPP commands. FPP opens and closes the operating window; ShowMesh advances content-driven rest/show cycles inside that authorized session using only relative command timing. ShowMesh core has no date, weekday, time-zone, cron, or wall-clock schedule.
-2. **Nodes are modeled by capabilities**, not hardware types (ADR-002). Namespaced, versioned capability IDs with attributes.
-3. **Desired and observed state are separate** (ADR-003). A command is not successful because it was sent; success requires evidence.
-4. **Primitives + show macros + reduced local fallback** (ADR-004). Every critical macro defines what runs locally when the coordinator is unreachable. Narrowed twice: a controlled device holds no fallback, so steps touching a coordinator-hosted provider are labelled coordinator-required (ADR-016), and audio output failure's reduced local behavior is silence, not a handover (ADR-019).
-5. **Media transport is pluggable** (ADR-005). NDI and HDMI/capture are adapters; nothing in the core may assume one transport.
-6. **The coordinator is never in the real-time timing or media path.** A running show must survive coordinator loss — and broker loss (ADR-008).
-7. **Go for coordinator and agent** (ADR-006). One repo, shared packages; keep Go out of the per-frame media path. The Operator UI is the one exception and is TypeScript (ADR-015) — this is not a licence for a polyglot backend.
-8. **Media runs in GStreamer** (ADR-007). The agent builds/supervises pipelines; ShowMesh code owns sync, supervision, and health — never codecs or per-frame rendering. This includes audio: mixing, fades, ducking, interleave, and LTC generation are GStreamer, never a Go sample path.
-9. **Control plane is MQTT/Mosquitto** (ADR-008). Versioned JSON payloads; retained topics for state; LWT for liveness; QoS 1 + idempotency keys for commands. Timing never traverses MQTT — MultiSync is the timing path.
-10. **Storage is SQLite (WAL) with YAML export bundles** (ADR-009). Revisions immutable; agents cache a checksummed JSON fallback subset; stale nodes never overwrite coordinator state.
-11. **License is Apache-2.0** (ADR-010). Never vendor or link NDI runtime binaries; dlopen only.
-12. **Health and alerts are context-aware** (ADR-011). Evidence has provenance and freshness; stale = `unknown`, never healthy; lifecycle/maintenance context changes alert meaning; monitoring is read-only before it controls anything.
-13. **Docker is the primary coordinator deployment** (ADR-012). Agents stay native because they need GPU/HDMI/audio/EDID/NDI access; the Operator UI is its own container per ADR-014. The coordinator must build CGo-free (static, distroless, clean arm64 cross-compile), so pure-Go dependencies only: `modernc.org/sqlite`, never `mattn/go-sqlite3`. Nothing at the deployment layer may reintroduce a dependency the architecture forbids; the coordinator must start and stay up with no broker reachable.
-14. **Never share UDP 32320 with a running fppd** (ADR-013). `SO_REUSEPORT` load-balances unicast datagrams by 4-tuple hash, so a co-located listener can silently steal FPP's own unicast sync stream and desync a live show. Port sharing defaults to off and a bind conflict must fail loudly. Where co-location is unavoidable, use FPP's plugin callback boundary, not a second socket.
-15. **The Operator UI is one client, not the system** (ADR-014). The control API is a public versioned contract usable without any UI; the UI holds no orchestration behavior, reaches ShowMesh only through that API and its change stream — never SQLite, MQTT, config files, or node-local state — ships as its own container, and is optional. The test: if every browser disappeared right now, the show continues correctly.
-16. **The Operator UI is a TypeScript SPA** (ADR-015). Static assets, no runtime CDN dependency, offline-capable. API payload types are generated from or verified against the Go types, never hand-maintained twice.
-17. **External devices are controlled devices driven by providers** (ADR-016). Projectors, relays, amps and the like are a resource class distinct from nodes — no agent, no advertisement, no local fallback, no LWT. Providers declare their configuration, actions, and telemetry as metadata; surfaces are built from that, not from per-device frontend code. Providers never enter the timing path, but device control *is* show-affecting: because a controlled device holds no fallback, any macro step touching a coordinator-hosted provider must be labelled coordinator-required per constraint 4. The metadata contract itself is unresearched (RES-014).
-18. **ShowMesh owns audience-facing audio; nodes play local media** (ADR-017). FPP stays the scheduler and sequence authority, but ShowMesh owns audio sessions, routing, mixing, and placement, and FPP's own audio output goes unused. Nodes play complete local files on their own audio clock — never a PCM/sample-position stream. Drift is measured and corrected discretely at track boundaries, never by continuous rate manipulation: audio deliberately does NOT follow the MultiSync slew/jump model, and that divergence must not be "fixed".
-19. **Program audio and LTC share one clock domain** (ADR-018). Minimum 3 output channels from one interface: 1–2 program, 3 LTC on a discrete output, never mixed into program. Never program on USB with LTC on Dante. This is a hardware purchasing constraint and a hard capability-placement constraint. **It is not a Track C implementation prerequisite:** build against runtime-discovered Linux audio capabilities, use virtual/null/loopback devices and any available Linux-supported interface for device-independent work, and let per-device commissioning block only that interface's placement and Day-0 readiness.
-20. **Audio device loss fails silent** (ADR-019). Stop the failed output, keep session state, mark critical, alert, continue other outputs. NEVER auto-fall back to FPP audio — uncontrolled routing/gain into an FM transmitter is worse than silence. Node failover only after verifying media, output capabilities, physical routing, and health; operator-initiated until the roadmap's deferred failover item lands. This is a deliberate, recorded exception to constraint 4.
-
-21. **The control API is versioned REST plus a Server-Sent Events change stream** (ADR-020). Major version in the path; SSE deliberately, because a contract you cannot inspect with `curl` drifts towards private. The stream is **not resumable**: no `id:` field, per-connection sequence numbers, and an authoritative snapshot re-fetch after any interruption, because a gap in the stream is indistinguishable from a quiet system. Absent evidence is stated with a state and a reason, never omitted, since a missing field renders as blank and blank reads as fine. Payloads carry absolute timestamps and a `serverTime`, never a precomputed age. Within a major version the contract is additive-only and clients must ignore unknown fields.
-22. **The UI container serves the API same-origin and never holds a credential** (ADR-022). It serves the built assets and forwards `/api/*` to the coordinator, so the browser sees one origin and no CORS allow-list or runtime base-URL document exists to misconfigure. The proxy **forwards** credentials and never holds, injects, mints, validates, or refreshes one; it does no rewriting, aggregation, retry, or API-response caching, and must not buffer `text/event-stream`. The test is that removing the proxy and pointing a client straight at the coordinator changes nothing except the origin. ShowMesh terminates no TLS.
-23. **Writes require an authenticated principal; reads stay open by default** (ADR-024, superseding ADR-021 and ADR-022 decision 4). Coordinator-local principals in two credential forms, session and API token, with kind not restricting form. Roles are named scope bundles, so §10.4 is satisfied for **action** and explicitly **not** for target. Reads stay open because a credential problem must never cost the operator visibility of the show: the phone renders health with no session, and the failure is scoped to "you cannot act". `SHOWMESH_API_TOKEN` is retired and a coordinator that still sees it refuses to start, because the alternative is a closed read API silently reopening on upgrade.
-24. **An authorization refusal is not coordinator loss** (ADR-024 decision 7). A coordinator outage is a transport failure, which is what fires an ADR-004 local fallback; a `403` is a successful conversation with a healthy coordinator, which fires nothing. So a bad token on the FPP host means the macro's coordinator-required steps *and* its locally executable steps both fail to run, which is worse than the outage. `401` and `403` must be defined fallback triggers, distinguishable in evidence. Related: the browser session is an HttpOnly cookie sliding on any cookie-bearing request including reads, revocation closes an open change stream rather than announcing itself as a new event kind, a stale scope list renders `unknown` and never permissive, no state change is reachable by `GET`, and blackout/stop/power-off are never refused for want of an audit write, because every other degradation in this architecture points at the show continuing and an unqualified audit gate points at the operator being unable to stop it.
-
-25. **The agent's fallback cache is signed, and its verifying key is pinned at enrollment** (ADR-025, superseding ADR-009's `checksummed`). The keypair is per deployment and generated by the coordinator; the private key never leaves its data volume. **No boot path may fetch a key from the coordinator**, because the cache exists for the case where the coordinator is unreachable and a boot-time dependency would fail it precisely then. The verifying key must not be writable by anything compromising the agent alone would grant: **a key the agent could rewrite is checksum-level protection wearing a signature's clothes**, which is the easiest wrong implementation and is invisible to tests. Verification failure discards the cache and reports it as evidence; it never executes unverified content and never refuses to start, because that would make signing a new way to stop a show. The threat is operational before it is adversarial: a cloned SD card, a wrong restore, or a cache from another installation each produce a file that is intact, passes a checksum, and is not ours.
-
-26. **The renderer models logical surfaces, not physical projectors, and NDI is the reference transport** (ADR-026, narrowing ADR-005). A surface owns its canvas, its virtual-matrix channel extraction, and its output; **no projector object exists in the renderer model**, because a surface may feed one projector or a combined surface may feed a pair, and that mapping is deployment configuration. Show data arrives as files ahead of playback: FPP Connect uploads the sequence and FSEQ, each surface extracts locally, and **nothing may introduce a live matrix stream**, because a node holding its own FSEQ renders through a partition and a node pulling frames cannot. The architecture expresses `N` surfaces per node and v1 implements `N=1`, a scope limit that must not reach schema, wire types, or capability attributes. NDI is the v1/reference transport with HDMI a supported alternate, selected per node and per surface from advertised capabilities, and **support for one transport is never evidence for the other**. A missing NDI runtime degrades the node and never stops it, the same rule ADR-025 settled for a failed cache verification. **All of ADR-026 is L0 design intent**: the day-0 profile of one surface at 40 fps over NDI on OptiPlex 7040-class hardware is a target to validate, not a supported profile, and RES-004 treats pixel count as a test parameter so the number is not even a complete claim yet. Anything stating that profile states it with that qualifier.
-
-27. **xLights owns timeline authoring; ShowMesh owns system configuration** (ADR-027). A `Show` is a first-class object and a **namespace, not a container**: surfaces, actions and macros are their own configuration objects carrying a show reference, because a container shape means editing one clip binding revisions the whole show and a history where every entry says "the show changed" answers nothing. The **active show is configuration**, revisioned and audited, so that programming Christmas cannot accidentally break Halloween. Surfaces map from **named xLights models where metadata exists, and manual channel ranges are a permanent first-class path**, not an escape hatch, since manual is the only path that exists until FPP Connect compatibility lands. **xLights is an authoring-time dependency and never a runtime one**: no running node parses an xLights project. ShowMesh must never grow a sequence editor.
-28. **A filename is not an asset identity** (ADR-028). xLights renders a different FSEQ per target and gives every one the same name, so three artifacts share one filename and a store keyed on it makes a node render another node's content. Identity is show plus sequence plus target plus content hash, with the runtime filename preserved separately. **One asset store and one sync service for every node type.** Storage is pluggable (volume, mount, SMB, or a storage-capable node) with **metadata in SQLite and bytes never in it**. **Playback is always from node-local storage and no playback path may reach the store**, which is what keeps survive-coordinator-loss true. Integrity is a **content hash, not a signature**, deliberately unlike ADR-025: that cache is configuration the agent acts on so origin matters, while an FSEQ is data that gets rendered. Sync runs on upload and on a timer, **never at showtime**. Many ingestion paths, one internal model; an asset's origin is provenance, never a runtime dependency.
-29. **Macros invoke logical actions, never protocol commands** (ADR-029). Operators bind named actions like `Countdown` or `Blackout` to integration targets, and the adapter owns the protocol *and* how that protocol reports success. No OSC address, MQTT topic, or raw path appears in an ordinary macro. Raw protocol access exists and is deliberately inconvenient. **An action whose effect cannot be observed reports as unconfirmable with a reason, never as success**, because a macro step that always reports success is worse than no step: the operator stops reading it.
-30. **The Operator UI is the authoring surface without becoming the system** (ADR-030, extending ADR-014). Every authoring capability exists in the API first and `showmeshctl` must be able to drive it, because **the CLI is the "the show is broken and the UI is down" path**, which makes it a fully tested emergency path rather than contract hygiene. The UI holds no authoring logic; validation is server-side and the browser may only mirror it. Manual configuration is presented as first-class. Uploads state progress and failure rather than inferring them, a partial upload registers nothing, and target selection is mandatory because the target is part of the asset's identity.
-31. **Operator configuration is store-backed; the environment holds only what precedes it** (ADR-039). Anything an operator must set for a subsystem to function is a configuration kind under ADR-009's revision model, reachable through a versioned endpoint, a `showmeshctl` verb, and a UI control. The environment carries bind address, data directory, the control-plane broker URL and its credential, and log level. Nothing else. **`SHOWMESH_DATA_DIR` is the worked example of the boundary** (it is where the store lives, so it cannot come from the store) and a Resolume host URL fails that test in every direction. Six rules travel with the constraint, each already paid for once: a migration off a retired variable **never exits non-zero when its audit append fails**, because a startup migration has no principal to hold accountable and the refusal is a restart loop with no API and no dashboard; a `409` refusing a write while the retired variable is still set **may never have a remedy that discards the operator's only copy of the value**; absent, `null`, and empty are three different things on every write; every kind applies without a restart per ADR-036, and **the transition that must work is zero to one and back to zero**, because that is what first-time setup performs and what a path built against an already-populated list never exercises; a credential in a payload is write-only, reported as presence on `GET`, with the revision history holding a reference and not the secret; and the boundary is enforced by a test over `SHOWMESH_*` and a second test over `api/openapi.yaml`'s non-`GET` paths, because **the parity rule was previously honoured by discipline alone, which is how `showmeshctl` came to be unable to write a macro definition the UI can write.** Neither test can reach the UI, so UI coverage stays a review obligation and that asymmetry is deliberate rather than overlooked.
-
-**Work is organised into parallel tracks, not only numbered steps.** See BUILD-PLAN's "Delivery tracks and the day-0 schedule": Track A is FPP control (Steps 8 and 9), Track B nodes and projection, Track C the audio node, Track D Resolume, Track E show authoring and assets, Track F resting mode and night-session control, and **Track G operator surface parity** ([TRACK-G-surface-parity.md](docs/build/TRACK-G-surface-parity.md), ADR-039, owner-scheduled ahead of Track B on 2026-08-17 after Resolume proved unconnectable from any operator surface). **Day-0 is mid-September 2026** and the Halloween show opens 17 October. Three founding problems decide what may never be cut: virtual-matrix generation (B), Resolume control (D), and FPP's scheduler (A).
-
-**Track D's seam D-1 shipped 2026-08-14**: `internal/coordinator/collector/resolume` holds a REST client, a WebSocket held purely as a change signal, an object-id resolver, and two signals (`resolume.reachable`, `resolume.product`), verified against the operator's running Arena. **No OSC anywhere, in either direction. Object ids only — no positional addressing, including internally. No observed value is ever read out of a WebSocket message; a message means "read again now". Parameter ids are minted at composition load, die on every restart, and are never persisted — `ParameterID.MarshalJSON` returns an error so that rule is structural rather than documented.** **Seam D-2 (the observations) and seam D-3 (the seven-action vocabulary, its `resolume:action` scope and its `showmeshctl` coverage) closed 2026-08-15**, so ShowMesh can now act on Resolume; the no-OSC and no-positional-addressing rules are now enforced by AST and import guards rather than by this paragraph. **D-2 and D-3 were driven against a real Arena on 2026-08-15**, thirteen checks passed and none failed, recorded in `docs/bench/TRACK-D-LIVE-VERIFICATION.md` §6 including the steady-state traffic property counted through a proxy rather than asserted against a fake. **That run was on the development laptop, which is not the playout machine**, so it is evidence about ShowMesh's behaviour and not about how Arena behaves on the show host. **The build order is ADR-037 seam B, then D-3a crash recovery, then D-4 the Operator UI (owner, 2026-08-16).** **[ADR-037](docs/decisions/ADR-037-resolume-references-are-names-not-ids.md) is first; its decision 7 is implemented and decisions 1 through 6 and 8 are not**: every operator-facing Resolume reference becomes a name rather than an object id, because the ids are not something an operator can find and because re-authoring a composition mints new ones and would silently break every stored binding. **D-3a is specified with no owner decisions outstanding** and two of its 2026-08-16 answers moved its scope: the restore covers only the layers ShowMesh drove explicitly and not the timeline, because the composition survey never runs on a timer and LTC launches the timeline clips, and the recovery toggle's UI switch ships in D-3a rather than waiting for D-4. **A refusal is not a null action**: three guards shipped in D-3 that refused `blackout` for want of ShowMesh's own evidence, which ADR-024 decision 7 makes strictly worse than the coordinator being switched off, so the exempt safety class now dispatches and reports `unconfirmable` instead.
-
-**D-1 found an Arena crash, and the crash story was corrected twice before settling (capture §14, ADR-032, BUILD-LOG 2026-08-14).** The measurements stand: `GET /composition` crashed Arena 7.23.2 in as few as two reads while 209,916 targeted `by-id` reads moving 6.5 GB did not, and Arena later crashed with **zero** composition reads while only `/product` polling and one held WebSocket were attached. The corrections are what changed the conclusion. **First: every crash occurred on the development laptop, which is not the playout machine and is not properly supported hardware for Arena; the real playout host ran the same composition untouched for over a month without incident.** Second: the mechanism is a **use-after-free in Arena's own HTTP response serialiser** (Boost.Beast, established symbol-level across all ten crash reports), so the discriminant is serialiser pointer lifetime and connection churn, not the `/composition` path as such. The adapter's warm-connection and body-draining behaviour is the right mitigation and must not be "fixed" back to a fresh client per request. **The vendor report and the show-length soak are both struck (owner decision, 2026-08-14)**: 7.23.2 is a subscription-expired build no fix can reach before the show, and no build decision hangs on a crash count. Before recording a needed bench, name the decision its result would change. What replaced them is a crash-recovery build item after D-3: ShowMesh notices Arena is gone, says so, and restores the playing layers once Arena is back, however it got back. Nothing automates relaunching the Arena process; the operator owns the process, ShowMesh owns the show state.
-
-**[ADR-032](docs/decisions/ADR-032-resolume-composition-configuration-from-file.md) is still the right answer and it is an owner decision: the composition id map is configuration parsed from an uploaded `.avc` file, and no runtime path may call `GET /composition` at all.** The file is plain XML carrying every clip, layer, group, column and deck id with names, positions, source media paths and `TransportType`, at 407 KB against 2.26 MB, plus the canvas size and the writing Arena's version, neither of which the API exposes, plus **all three decks** where the API returns only the selected one. Live state is read `by-id`; `/product` remains the reachability probe. This is ADR-027's xLights rule in a second vendor: an authoring-time dependency, never a runtime one. **ShowMesh never reads a `.avc` off the Resolume host and never writes one; upload is the only ingestion path**, and the Operator UI ships a working upload control rather than a documented intention.
-
-**Two capture corrections came out of verifying that, and one changes what an action may assume.** **`by-id` is NOT deck-independent for clips**: a clip id resolves only while its own deck is selected, measured 30/30 against 0/10. Layers are deck-independent. So a `404` on a stored clip id is **not** by itself a stale reference, and ADR-032 decision 6 requires every stored clip reference to carry its deck. And the capture's unexplained "clip positions 1 and 2 are identical on all three decks" is closed: they are `PersistentClips`, four clips living outside any deck, which is also why the single deck-independence test passed.
-
-**Three lessons generalize past this and are in LESSONS.md.** **A resolver keyed to a transport event resolves before the subject exists** (the WebSocket is accepted ~1.5 s after Arena launches; the composition loads at ~4.9 s, and the resolver held Arena's empty default for 90 seconds while the real show was loaded). **When a device misbehaves while your new code is attached, reproduce it with `curl` before believing either explanation**, and run the controls, because "reading it is dangerous" and "this one endpoint is dangerous" build very different systems. And **a single confirming observation proves the rule only for the case it sampled**: the deck-independence claim was tested once, on the one clip class that is exempt from it.
-
-## Working conventions
-
-- The evidence ladder (L0 through L4) measures confidence attained, never permission to proceed. Building against an L0/L1 claim is normal and expected; L*n* means safe to keep building against, not trustworthy in a live show, and show readiness needs L4. What must never happen is *claiming* verification that has not occurred. Only explicitly named blocking research gates build work (RES-002/MultiSync, the Linux NDI question), and only because its result decides an architecture question.
-- **Code comments are scarce.** Prefer names, types, small functions, and tests that make the code understandable without narration. An ordinary comment is one or two short lines and explains only a non-obvious invariant, edge condition, or reason the code cannot express; it does not paraphrase the next statement or walk through control flow.
-- Exported declarations get the shortest useful API contract. Additional paragraphs are justified only by caller-visible semantics such as errors, side effects, concurrency, security, or wire compatibility—not by implementation history.
-- A comment longer than three lines is presumed to belong in tracked documentation. The narrow exceptions are package overviews, exact wire-format facts, safety constraints the type system cannot enforce (for example the ADR-013 socket rule and live-broker never-publish rule), and measured platform behavior. Even an exception states only the operative constraint and links to its source instead of retelling it.
-- Rationale essays, bug stories, review findings, step numbers, change history, ADR summaries, test narration, future-work notes, and verification claims belong in ADRs, specifications, issues, `LESSONS.md`, or the build log—not in production code or tests. Do not use a long comment to avoid simplifying confusing code. When touching a block, remove or shorten nearby comments that violate these rules (owner, strengthened 2026-08-17).
-- **NEVER put a Linear issue reference in production code, tests, or `api/openapi.yaml`.** No `SM-123`, no issue URL, no "finding 3", no ticket number in any form. This repository is **public**; Linear is not. A ticket number in a shipped comment leaks internal process to everyone who clones the repo, and in `openapi.yaml` it reaches operators through the generated API documentation, which is worse. It is also useless to the only reader who matters: someone reading the code a year from now cannot open the ticket and does not care which ticket produced the line. **The only permitted places are a changelog entry recording a resolved issue, and untracked internal documents under `docs/private/`.** The same rule applies to ADR numbers used as citations rather than as the one operative constraint, and to seam, step, and PR numbers. **The enforcing test covers the tracker-id half only** — issue keys in any case, wrapped across a comment break, and bare tracker URLs — because that half is a bright line needing no judgement. The ADR, seam, step and PR half stays a review obligation, and that asymmetry is deliberate rather than overlooked: `finding N`, `Step N`, `seam` and `ADR-N` each appear in the hundreds or thousands of shipped lines, most of them legitimate, so a mechanical rule there would be wrong more often than right. Do not disable the test (owner, 2026-08-19, after 47 references shipped to `main`, three of them in the public API contract).
-- **A code comment is not documentation.** The name is literal. Write the minimum a reader needs to understand *this code*, and nothing else: no ADR quotes, no research notes, no issue references, no design history. If it explains why the project made a choice, it belongs in an ADR. If it explains what was measured, it belongs in a research record. If it explains what changed, it belongs in the build log. If it explains what this function does that its name and types do not already say, and only then, it belongs here (owner, 2026-08-19).
-- When research changes a durable constraint, write or supersede an ADR — don't silently edit the architecture spec.
-- Research records must keep facts, assumptions, and hypotheses separate, with citations (URL + access date) for L1 claims and recorded versions/topology for L2+.
-- Statuses: `unresearched` → `planned` → `testing` → `verified`/`rejected`/`blocked`; material environment changes move conclusions to `stale`.
-- Normative language: **must**/**should**/**may** per RFC-2119 spirit.
-- Keep the research tracker table (`docs/research/README.md`) in sync with individual record statuses.
-- `docs/private/` holds local working notes that are deliberately untracked and gitignored. Nothing moves out of it into tracked documentation, and nothing it discusses is published as established until there is something source-verified to record. Do not add it to version control.
-
-## Build workflow
-
-Implementation sessions are orchestrated rather than written end to end by one context:
-
-- The orchestrating session writes the step specification, naming the ADRs and standing constraints the work is bound by, and does not implement.
-- Implementation is delegated to subagents on the faster model, one per independent seam, running in parallel where they touch disjoint files.
-- Review is delegated to subagents on the stronger model, given the diff plus the named ADRs, and instructed to hunt for constraint violations rather than style.
-- Findings are folded back by the orchestrator, which owns every edit under `docs/`; in multi-track sessions it may delegate drafting to the docs agent per the rules below while retaining review. Builders never write the build log.
-
-This split exists because review is where the value landed early. The Step 0 and Step 1 passes caught defects unit tests could not: broker health exposed as a bare boolean against ADR-011, a Compose `depends_on` that reintroduced the broker dependency ADR-008 forbids, and a discover-ping responder that replied to an ephemeral source port and so could never have worked. **Since then, running the assembled system has found more than review has**: Step 6's three unreachable features, Step 7's 179-microsecond confirmation, Step 8's `nextPlaylistItem`, Step 9's endpoint-removed-mid-run. Review is cheap insurance on a diff; integration finds what the diff was wrong about. When they compete for time, integrate.
-
-**Multi-track orchestration sessions (owner, 2026-08-15).** One session may advance several tracks at once, including unattended while the owner is away. The single-step workflow above still governs each seam; these rules are what make the parallel, owner-absent version safe. Several exist because this project already paid for their absence once.
-
-- **Each track builds in its own git worktree.** The orchestrator merges to `main` one track at a time and runs the full gate suite after each fold. Two parallel branches minting numbers independently on 2026-08-14 is why there is no ADR-034.
-- **The orchestrator alone mints scarce identifiers**: ADR numbers, schema versions, `showmeshctl` exit codes, configuration kinds, collector and instance ids, scope names, MQTT topics. Builders request; the orchestrator assigns before the work begins, not at merge, because assigning at merge is assigning after both branches have written the value into code, tests, help text and docs. **The authoritative registers are [`docs/decisions/README.md`](docs/decisions/README.md) for ADR numbers and [`docs/build/IDENTIFIER-REGISTER.md`](docs/build/IDENTIFIER-REGISTER.md) for everything else**, which exists because until 2026-08-17 only the first one did: that is why there is no ADR-034 and why exit codes 11 and 12 were issued twice. A reserved identifier is as taken as a shipped one, and reserving costs nothing while a collision costs a rename across a whole branch.
-- **Documentation is drafted by the docs agent** (`.claude/agents/showmesh-docs.md`), which is never a builder. It writes from evidence: the diff, gate output actually captured, and review findings, never from a builder's claim of success, and it records only gates actually run. The orchestrator reviews and folds its output.
-- **Decisions only the owner can make are tracked in Linear**, with the `Needs decision` label, evidence, concrete options, recommendation, what each answer unblocks, and relations to affected work. Do not prefix the title with `OWNER DECISION:` or `OPERATOR DECISION:`. The title must state the exact question in plain language so the owner can tell immediately what they are being asked to decide; avoid unexplained architecture jargon and do not make the owner interrogate the agent to discover the question. `docs/private/DECISION-QUEUE.md` may retain detailed local context, but it is not the active queue and every open decision must have an `SM-*` issue. The seam is marked blocked and work continues elsewhere. An unattended session never accepts, authors, or supersedes an ADR; it drafts one for the owner to rule on.
-- **An owner decision is never ready work until the owner rules.** Keep the `Needs decision` label while the ruling is open and do not move the issue to `Ready for work`. Once the ruling is recorded in the issue, remove `Needs decision`; move the issue to `Ready for work` only when implementation remains, otherwise close it with the evidence that the decision itself resolved the issue.
-- **Verification that needs hardware or the owner is tracked in Linear.** Use `Bench` when closure evidence must come from Eric using real ShowMesh hardware or the deployed show environment, including a real device, host, browser connected to a live service, or physical show chain. Add `Punch List` only when the issue is a substantial multi-step operator commissioning or acceptance task; a multi-step hardware gate uses both. `docs/private/PUNCH-LIST.md` is a legacy migration source, not an active tracker: do not add new items there or use it to determine current status.
-- **Every seam ends with the running-binary gates actually executed**, not just unit tests: `make check`, `make test-integration`, and the FPP integration suite where FPP is touched. Unattended, nobody is present to notice a claim outrunning its evidence, so the claim standard rises rather than relaxes.
-- **`make test-integration` is not safe to run concurrently across worktrees, or repeatedly without cleanup, on one host** (Track G, 2026-08-17, confirmed independently by two seams). It collides on the Mosquitto container name and port and on any shared `showmesh-bench-fpp-master` container, and the failures it produces are **plausible, unrelated to the diff, and different on each run**: FPP timing and broker tests, the exact profile of a real defect. One seam's first two runs failed this way and its third passed clean; another saw four to five failures on a back-to-back rerun and 100% on either side of it. **Before believing an integration failure in a parallel session, isolate the Mosquitto container name and port, remove leftover containers, and re-run.** A flake that moves between runs is the tell.
-- **The live-fleet prohibition and the unpublished-release rule are absolute in an unattended session.** The recorded exceptions to both are owner actions, and the owner is not there.
-
-### Linear issue workflow
-
-The mandatory issue-writing and Linear operating standard is [docs/ISSUE-TRACKING.md](docs/ISSUE-TRACKING.md). Read it before creating or materially editing an issue; this section supplies repository-specific constraints.
-
-Use the **ShowMesh** team (`SM`). Put work in its bounded project when one owns the outcome; use **ShowMesh Core** when no more specific active project applies. Linear is connected through its app tools; use those tools rather than maintaining a parallel Markdown task list.
-
-- **Read before writing.** Fetch the issue, comments, and relations for any named `SM-*` issue. Search existing issues before creating one. Extend or relate an existing issue when it already owns the outcome; never create a duplicate merely because a finding appeared in a new session.
-- **Create durable work, not session notes.** Create an issue when actionable work, owner input, external coordination, research, or hardware verification will remain after the current session. Do not create issues for transient subtasks, investigation steps, retries, commits, review passes, or an agent's private execution plan; keep those as a checklist or material-finding comment on the issue that owns the outcome. The description states the evidence/current state, the required outcome, acceptance evidence, and known blockers. Choose the project and labels under the shared standard. Use `Bench` when closure evidence must come from Eric using real ShowMesh hardware or the deployed show environment, and add `Punch List` only for a substantial multi-step operator gate. Set priority from actual show risk and critical-path impact; do not invent an assignee, cycle, or due date, and preserve existing values unless the work changes them.
-- **Keep relationships explicit.** Use `blockedBy`, `blocks`, and `relatedTo` so build work, owner decisions, research, and real-host gates form one navigable chain. Split automated implementation from owner/hardware acceptance when either can finish independently; a merged implementation is not grounds to close its real-host gate.
-- **Use statuses literally.** `Backlog` is captured and not yet reviewed; `Backlog - Reviewed` is valid work Eric has reviewed but not staged; `Todo` is Eric's up-next staging area and is not cleared for autonomous pickup; `Ready for work` is approved, actionable, and safe for an agent to claim; `In Progress` means work is actively happening; `In Review` means implementation is complete and awaiting review or acceptance; `On Hold` requires a recorded unblock condition; `Done` requires the issue's stated evidence. Use `Canceled` or `Duplicate` when that is the actual outcome, with a comment naming the replacement or reason. An agent starts autonomous work only from `Ready for work`, claims one issue by moving it to `In Progress`, and never moves work into `Todo` or promotes its own work into `Ready for work` without an explicit owner ruling or orchestrator handoff that records that ruling. Until the approved Linear rename is applied, treat `Backlog - HOLD` as `Backlog - Reviewed`.
-- **Update as the truth changes.** Move the status when work starts or reaches a gate. Edit the description when durable scope or acceptance criteria change. Add a comment for material findings, owner decisions, verification output, changed blockers, or handoff state. Preserve the distinction between built, bench-verified, and real-host verified.
-- **Reconcile before ending the session.** The issue must say what changed, which checks actually ran, what remains unverified, and the next blocking dependency. Add or update related issues discovered during the work. Do not leave completed work `In Progress`, and do not mark an issue `Done` while named acceptance evidence remains open.
-- **If Linear is unavailable, fail visibly.** Do not silently fall back to `docs/private/PUNCH-LIST.md`. Report that tracking could not be updated and retain issue-ready text in the handoff so it can be entered when the connection returns.
-
-## Key external facts (L1, researched 2026-08-10 — see research records for citations)
-
-- FPP MultiSync is an open, stable UDP protocol (port 32320, multicast 239.70.80.80), documented in `docs/ControlProtocol.txt` in the FPP repo; third-party listeners (ESPixelStick, xSchedule, Falcon firmware) interoperate without modifying FPP.
-- The NDI SDK officially supports Linux amd64/arm64; open-source projects use MIT headers + `dlopen` of the user-installed runtime (never bundle/link the proprietary lib). Licensing details in RES-006.
-- Resolume **Arena** (not Avenue) accepts SMPTE only as audio LTC, configured per clip; clip launch is NOT driven by timecode. REST API (7.8+, port 8080, `/api/v1`) + WebSocket give confirmable state; OSC gives low-latency triggers. Timecode-loss behavior is undocumented (holds last frame per forums) — bench test before relying on it.
-- Previews: every NDI sender publishes a ~640-wide proxy stream; `ndisrc bandwidth=0` requests it, making six preview tiles cheap. Arena outputs NDI per Advanced-Output screen. Delivery candidates: GStreamer → WHIP → MediaMTX (WebRTC), or JPEG-over-one-WebSocket fallback. See RES-010.
-- Pixel current: both primary deployed Kulp boards (K16-Max and the eFuse-variant K16A-B, operator-confirmed) report per-string current via eFuses; the standby K16-Pro is blade-fused only. FPP exposes `GET /api/fppd/ports`, MQTT `port_status`, and an `EFUSE_TRIGGERED` preset hook. Deployed smart receivers are pre-V5 (no per-branch telemetry — treat as blind spots until upgraded). Normalize on FPP's port schema; keep current telemetry an optional capability. **Probed live 2026-08-11: `/api/fppd/ports` returns a heterogeneous array**, 16 real ports carrying `{bank, col, enabled, ma, name, row, status}` plus smart-receiver positions carrying only `{col, name, row, smartReceivers}` with **no `ma` key**, so one struct for all elements is wrong and a missing `ma` must never decode to a plausible-looking 0 mA. `pixelCount` was absent everywhere; the pixel-count operation has never been run on these hosts, so treat the field as optional, never assumed. Every `ma` read 0 with the display de-energized, which confirms shape and type and is **not** evidence that current telemetry works. See RES-011.
-- Projectors: all deployed projectors support PJLink (purchased for it; per-model class still to be probed via `CLSS?`). PJLink = TCP 4352, Class 1 covers power/input/mute/errors/lamp, Class 2 adds freeze/resolution; no mature Go lib — write `pkg/pjlink`. UniFi has an official API-key Integration API, but per-port PoE/error data still comes from the classic API (unpoller's Go lib). UPS = NUT. Env sensors arrive via MQTT (ESPHome/Zigbee2MQTT/ecowitt2mqtt). See RES-012.
-
-## Interoperability versus impersonation
-
-**Owner's decision, 2026-08-13, and it applies beyond the case that raised it.** Implementing another project's protocol so ShowMesh can talk to their devices is ordinary interoperability and is what this project does everywhere. **Serving content that claims ShowMesh *is* another vendor's product is not, and may never ship in a release.**
-
-The case that raised it: xLights classifies a device as FPP only if `GET /config.php` returns a title containing the substring `"Falcon Player"` (RES-003 §9.7b). Faking that string is the cheapest way to be accepted as an upload target. It is permitted **in development and on the bench only**, to prove the path, and must be recognisable as scaffolding. **A release ships the real identity or does not ship the integration.**
-
-The legitimate route is to be listed as a real vendor: xLights loads one `.xcontroller` file per manufacturer from `resources/controllers/`, so this is an upstream question rather than an imitation question. **It is unresearched**, it is flagged in RES-003 §9.7b, and it needs its own pass before any release depends on it.
-
-## Licensing caution
-
-NDI runtime redistribution is restricted; any repo license choice (GPL vs Apache/MIT) must account for the dlopen pattern. FFmpeg removed NDI over a GPL dispute. Do not vendor NDI binaries.
-
-## Build phase guidance
-
-Stack is decided (ADR-006..010, ADR-012, ADR-014..019): Go, GStreamer, MQTT/Mosquitto, SQLite, Apache-2.0, Docker for the coordinator, a TypeScript SPA Operator UI in its own container over a public versioned control API, and a Linux audio node owning audience audio. Do not relitigate these; supersede with a new ADR if evidence demands it.
-
-Repo layout (now in place, do not reorganize without reason):
-
-- `cmd/showmesh-coordinator/`, `cmd/showmesh-agent/`, `cmd/showmeshctl/` — binaries. `showmeshctl` is the API's independent client and must never import a coordinator package; an import-graph test enforces it.
-- `internal/` — coordinator and agent internals. `internal/coordinator/api/` holds the versioned wire types, handlers, and SSE hub; `internal/coordinator/collector/` holds the source-neutral collector shape and the FPP REST collector.
-- `pkg/multisync/` — FPP MultiSync wire protocol (see RES-002 evidence for exact packet layout; port 32320, 'FPPD' header, little-endian sync fields). Imported only by the bench probe; the coordinator never opens a MultiSync socket (ADR-013).
-- `pkg/capability/`, `pkg/command/`, `pkg/mqttproto/` — shared models matching ARCHITECTURE §6–8 and ADR-008 topic conventions.
-- `pkg/observation/` — the OBSERVABILITY §4.1 observation model: provenance, freshness, the six-state evidence vocabulary, and the health states. `ObservedAt` is a pointer and `nil` means the time is genuinely unknown. Never default it to the collection time; that is the ADR-011 defect this project has now caught three times in different disguises.
-
-Build order (walking skeleton first). `docs/build/BUILD-PLAN.md` is the authoritative, status-tracked version of this list.
-
-**Step numbers are 0-indexed and match BUILD-PLAN exactly.** They are written out below rather than left to an ordered list, because this list previously started at 1 while BUILD-PLAN started at 0, so every step had two different numbers and "Step 5" meant two different things depending on which file you were reading. If a step number here ever disagrees with BUILD-PLAN, BUILD-PLAN is right.
-
-- **Step 0.** Foundation: scaffold, Docker image, Compose bundle, CI, minimal coordinator binary. **Done 2026-08-10.**
-- **Step 1.** `pkg/multisync` listener parsing START/STOP/SYNC/OPEN + ping/discover, with unit tests against hand-built packets from the RES-002 byte layout. **Done 2026-08-10.** Bench-verify against the real FPP player is still outstanding and is what moves RES-002 off L1 (RES-002 open items).
-- **Step 2.** Agent: capability advertisement over MQTT (retained hello, LWT), health heartbeat; coordinator inventory + desired/observed state in SQLite. **Done 2026-08-10.**
-- **Step 3.** Read-only FPP observability: collector, observation model with provenance and freshness, event history, plus the versioned public read API and change stream that ADR-014 requires. **Done 2026-08-11.** The API was designed and shipped before any UI existed, which is what keeps ADR-014 real.
-- **Step 4.** Read-only Operator UI: TypeScript SPA in its own container, dashboard, node and capability views, desired vs. observed, disconnect/staleness handling, responsive down to a phone. **Done 2026-08-11.** Two defects survived 99 unit tests and three reviews and were found only by loading the page in a real browser: `fetch` called with the wrong receiver (fatal in a browser, invisible to Node), and evidence ages frozen at the last response's `serverTime` so a disconnected panel read "observed just now" indefinitely.
-- **Step 5.** Real FPP signals on the dashboard: pixel current, playback state, controller and network health, and FPP MQTT ingestion as a second collector behind one interface. **Done 2026-08-11**, and the first work in this project exercised against real show hardware, read-only against all three deployed FPP hosts and the operator's live broker. The phone layout was verified on a real device in the follow-through.
-- **Step 6.** Identity, authorization, and audit (ADR-024). Principals, roles as scope bundles, sessions, audit, MQTT authorization with `allow_anonymous false`. **Done 2026-08-12.** Adds no write endpoint; builds the mechanism that permits one.
-- **Step 7.** The first write endpoints, and Operator UI controls over them. **Done 2026-08-12**, in four seams: the atomic audit variant plus schema v6 and strict login CSRF, the configuration write surface, node discovery and declaration, and one native FPP lifecycle command. Both Step 6 obligations closed. ADR-024 decision 7's fallback trigger did **not** close and moves to the first macro, because no macro shipped.
-- **Step 8.** The primitive command vocabulary. **Done 2026-08-13.** Eight primitives: `startPlaylist`, `stopPlaylist`, `stopPlaylistGracefully`, `pausePlaylist`, `resumePlaylist`, `nextPlaylistItem`, `prevPlaylistItem`, `setVolume`. The capture came first and is [docs/bench/fpp-command-vocabulary.md](docs/bench/fpp-command-vocabulary.md), which also carries the exclusion register for the 43 captured commands that did not ship. **This is the first step whose direction reverses**: `startPlaylist` is the first thing ShowMesh can do whose failure mode is the display running when it should not be, and it refuses by default rather than interrupting a running show.
-- **Step 9.** Show macros and the FPP plugin, which ship together because RES-015 establishes that ADR-024 decision 7 cannot be discharged without ShowMesh code on an FPP host. The RES-008 prerequisite was discharged 2026-08-13. **Done: built and acceptance-run 2026-08-14, merged to `main` 2026-08-15**, all 22 criteria evidenced against a running coordinator and the bench `fppd`. Three owner decisions came out of it, two as ADRs: **a run always runs every step ([ADR-035](docs/decisions/ADR-035-a-run-always-runs-every-step.md))**, which removed both the audit submission gate and the abort-on-failure default, so the API never refuses a run because the audit store is unwritable and a failed step never suppresses the rest; **dispatch configuration applies without a restart ([ADR-036](docs/decisions/ADR-036-dispatch-configuration-applies-without-a-restart.md))**; and the CSRF Origin fallback amendment to ADR-024 decision 6, which is what makes the browser session work off `localhost`. ADR-024 decision 7 is discharged. **Those two ADRs were issued as 033 and 034 on the branch and renumbered on merge**, because Track D issued ADR-033 (show mode) the same day; there is deliberately no ADR-034, and `showmeshctl`'s exit codes 11 and 12 collided the same way and became 14 and 15. **Not proved on real hardware**: the plugin ran against the bench `fppd` by standing owner decision and RES-015 stays L1. RES-018 now specifies the approved three-repository target: `showmesh` owns coordinator surfaces, `fpp-showmesh` is the thin Plugin Manager package, and the not-yet-created `showmesh-fpp-plugin` owns the Go helper, C++ brightness runtime, tests, and release assets. Release publication remains gated on the first real-host install (SM-14); implementation is tracked by SM-63.
-- **Track B carries the renderer path and it is integration work, not a bench step.** Agent: GStreamer pipeline supervision for a test pattern → NDI sink into Resolume. The one genuinely gating question is the Linux NDI runtime/distribution answer (RES-006, Track B's B0 spike), because it decides the transport design. Pipeline supervision and health reporting do not depend on that answer; they are assembled against the real path, and the frame-rate, pacing, and alignment numbers land in RES-004/RES-005 as measurements produced by the integrated run, not as preconditions for starting it.
-
-Standing rules while building: unit tests never raise a research record above L1; a capture against a real instance of the external system does, and per BUILD-PLAN's verification section (owner decision, 2026-08-13) the containerized `fppd` counts as real for core FPP behavior. Raising a record is bookkeeping about confidence, never a precondition for the next step. Never write a doc comment, log line, or document that claims verification that has not happened.
-
-Step 4 added a third, and it is the sharpest version of the project's recurring lesson. **A test environment that differs from the deployment environment reports success on exactly that difference.** The UI's entire suite passed, including tests driving a real HTTP server with real SSE bytes, while the app could not issue a single request in a browser: `fetch` was called with the client as its receiver, which Node accepts and a browser rejects. The closer a harness gets to real, the more convincing its false success looks. Acceptance criteria get verified against the running stack, not against the suite.
-
-And a fourth, from the same step. **A test can be a coin flip that passes or fails regardless of whether the code is correct, and platform is the usual disguise.** `TestSlowSSEConsumerGetsResetAndDisconnected` was 15% failing on Linux and 0% on macOS. The cause was not slowness and not socket buffers: it was **frames per render pass**, since an MQTT burst arrives one message at a time and each poke of the hub renders separately, and the two kernels schedule that differently. Related and worth knowing before designing any back-pressure test: **"the client stops reading" barely creates back-pressure at all**, measured at 4.0 MB into the kernel on Linux and 1.5 MB on macOS before one write blocks. When a test needs an overflow, construct it structurally; do not race a kernel and do not grow the burst until it usually works.
-
-Two more earned in Step 3, both from review findings rather than from theory. **Absent evidence is stated, never omitted**: a field the system cannot report carries a state and a reason, because a missing field renders as blank and blank reads as fine. And **a test's name is a claim**: before trusting one, break the behavior it names and confirm it fails. Step 3's review broke production code to check, and found three tests that passed with the behavior they asserted removed, one of them sitting on an acceptance criterion.
-
-Follow FPP remote sync semantics **for the lighting timeline**: free-run through sync silence, slew ≤4 frames, jump when >0.5 s behind, STOP then ~5-frame blank delay. Audio deliberately does not use this model — see constraint 18.
+# ShowMesh Claude guidance
+
+## Scope
+
+`AGENTS.md` is the public, cross-agent contributor contract. Follow it first.
+This file adds only Claude-specific operating guidance. Repository architecture,
+safety rules, and public contribution rules override any private workflow or
+personal preference supplied outside the repository.
+
+ShowMesh is an open-source orchestration and observation layer for displays
+built around FPP, xLights, and Resolume Arena. Its overriding system property is
+that the show continues, degrades safely, recovers cleanly, and remains manually
+controllable when individual components fail.
+
+## Work from the repository, not from remembered status
+
+- Use `README.md` and `CONTRIBUTING.md` for public project and contribution
+  guidance.
+- Use `docs/build/BUILD-LOG.md` for the latest recorded build state and
+  `docs/build/BUILD-PLAN.md` for delivery order. Treat either as recorded
+  history until the relevant code, branch, or pull request is checked.
+- Use `docs/decisions/README.md` and the accepted ADRs for durable architecture.
+  Do not relitigate an accepted decision during implementation. New evidence
+  may justify a superseding ADR; it does not justify silently contradicting one.
+- Use `docs/research/README.md` and individual RES records for researched facts,
+  hypotheses, evidence levels, and remaining experiments.
+- Use `api/openapi.yaml` as the public API contract and verify it against the
+  implementation when an API surface changes.
+- Do not require a public contributor to know about or access a private tracker.
+  GitHub issues and pull requests are the public collaboration surface.
+
+## Use judgment and keep the process proportional
+
+These instructions are guardrails, not a checklist to perform on every task.
+
+- Implement a small, well-scoped change directly. Do not create a plan,
+  subagent, issue, ADR, or broad review pass unless the work actually needs it.
+- For multi-file, architectural, ambiguous, or risky work, inspect the affected
+  code and present a concrete plan before editing.
+- Treat settled decisions as settled. Ask only when a genuine contradiction,
+  destructive action, missing credential, or scope-changing choice cannot be
+  resolved from the repository and the user request.
+- Decide reversible implementation details and continue. Do not stop merely
+  because several reasonable implementations exist.
+- Preserve unrelated worktree changes. Never use destructive Git operations or
+  force-push unless the user explicitly authorizes the exact action.
+- Stop after two materially similar failed attempts. Change the approach or
+  report the observed blocker; do not loop.
+
+## Evidence and verification
+
+Claims must match the evidence actually obtained.
+
+- Say what was observed, what is inferred, and what remains unverified.
+- A sent command, successful HTTP response, compiling package, or passing unit
+  test is not automatically evidence that the user-visible behavior worked.
+- When behavior changes, exercise the affected path at the closest practical
+  level and try the original failure and a relevant error path.
+- Keep facts, assumptions, and hypotheses distinct in research records. Unit
+  tests do not raise a research record above L1; use the evidence ladder defined
+  in `docs/research/README.md`.
+- Do not claim hardware, browser, deployment, third-party runtime, or live-show
+  verification that was not performed.
+- Never write to the deployed show fleet, publish on its broker, change a live
+  service, publish a release, or expose a credential without explicit authority.
+
+## Choose gates from the change, not from habit
+
+Classify the final diff before choosing verification.
+
+### Documentation-only changes
+
+A change is documentation-only when every changed file is prose or a research,
+decision, build-history, contributor, or agent-guidance Markdown file and the
+diff does not change executable code, tests, generated artifacts, dependency or
+build metadata, workflows, scripts, deployment configuration, or
+`api/openapi.yaml`.
+
+- Review the rendered prose, links, internal consistency, evidence wording, and
+  any indexes or status tables the document requires.
+- Run a repository documentation or link checker if one exists and applies.
+- Do not run `make check`, integration suites, hardware gates, or unrelated code
+  tests merely because they exist.
+- Do not wait for CI before pushing. CI can evaluate only commits that have
+  already been pushed.
+- When the user has asked to merge the documentation change, merge after the
+  applicable documentation review and any checks GitHub actually requires. If
+  required checks are still pending, enable auto-merge when available and
+  authorized; otherwise report the real repository gate. Do not invent a build
+  risk or an additional waiting period for a prose-only RES update.
+
+Files that look like documentation but define executable contracts or tooling,
+including `api/openapi.yaml`, GitHub workflow files, issue-form YAML, generated
+artifacts, and configuration examples consumed by tests or deployment, are not
+documentation-only for this rule.
+
+### Code or executable-contract changes
+
+- Run the narrow tests that exercise the changed behavior.
+- Run `make check` before delivery when the change can affect the build, tests,
+  generated output, API contract, or shipped binaries.
+- Run integration targets only when the changed subsystem or acceptance
+  criteria require them. Do not run `make test-integration` concurrently across
+  worktrees sharing its broker or container resources.
+- Run the FPP integration suite when FPP behavior is changed and that suite is
+  the applicable running-system gate.
+- Hardware, deployed-environment, browser, and third-party runtime checks are
+  separate acceptance evidence. Record them as unverified when unavailable;
+  their absence does not block unrelated implementation or branch publication.
+
+## Delivery is part of implementation
+
+For a task that changes repository files, local completion is not delivery.
+
+- Commit coherent completed work after the applicable gates pass.
+- Push the current task branch in the same session. This is standing authority
+  for ordinary task-branch publication; do not ask again merely because pushing
+  is outward-facing.
+- If the branch has no upstream, use a safe current-branch push such as
+  `git push -u origin HEAD`.
+- Never claim delivery while session-created commits remain only local.
+- If push is rejected, authentication fails, the branch diverged, or repository
+  policy blocks publication, report the exact failure and reconcile only with a
+  non-destructive approach. Never force-push as a shortcut.
+- Do not develop directly on `main`. When a requested integration or merge must
+  update `main`, use the repository's pull-request or merge-queue policy. Merge
+  only when the task includes that authority.
+- Do not wait silently for optional checks. Push first, then observe required
+  checks. If a requested merge is waiting only on required CI, use auto-merge
+  when available and authorized.
+
+## Durable repository rules
+
+- The API is a public contract, not a UI implementation detail. Operator
+  capabilities are API-first and must remain usable through `showmeshctl` at
+  practical parity with the UI.
+- The coordinator and UI are not the real-time timing or media path. A running
+  show must survive their loss and broker loss as specified by the accepted
+  ADRs.
+- Desired and observed state remain separate. Report success only from evidence
+  that post-dates the action.
+- Preserve manual and reduced local fallback paths. Degradation must not turn a
+  control-plane failure into a stopped show or remove operator visibility.
+- Do not put private tracker identifiers, URLs, owner-only priorities, private
+  notes, credentials, or deployment secrets in committed code, tests, API
+  descriptions, documentation, commits, issues, or pull requests.
+- Human-facing operator and integration documentation belongs in
+  `ShowMeshSystems/showmesh-docs`. This repository owns code, tests, engineering
+  specifications, ADRs, research evidence, build state, the OpenAPI contract,
+  and contributor-agent guidance.
+- Implementing another project's protocol is interoperability. Shipping content
+  that falsely identifies ShowMesh as another vendor's product is prohibited.
+- ShowMesh is Apache-2.0. Do not vendor or link NDI runtime binaries; use the
+  runtime-loading boundary established by the accepted licensing decision.
+
+## Code and documentation conventions
+
+- Prefer names, types, small functions, and tests over explanatory comments.
+  Comments state a non-obvious invariant, caller-visible contract, or safety
+  reason that code cannot express; they do not preserve issue history, review
+  narration, or implementation chronology.
+- Put durable design rationale in ADRs, measurements in research records,
+  current build history in the build log, and user-facing behavior in the
+  appropriate documentation.
+- When research changes a durable constraint, add or supersede an ADR instead
+  of silently editing the architecture.
+- Keep relevant ADR and research indexes synchronized when their records change.
+- Keep `docs/private/` untracked. Nothing from a private overlay becomes public
+  fact until it is independently suitable and verified for the public record.
+
+## Private maintainer overlays
+
+A private overlay may add internal issue workflow, current priorities, owner
+decisions, private hardware context, and personal operating preferences. It must
+live outside the repository and must not be required for a public contribution.
+
+The overlay may narrow personal workflow, but it may not override repository
+architecture, safety, security, evidence standards, contribution rules, or the
+prohibition on publishing private information. Never copy private identifiers
+or private tracker context into a public artifact.
