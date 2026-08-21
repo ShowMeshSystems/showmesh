@@ -2,10 +2,10 @@
 
 [Documentation index](../README.md) · [Architecture specification](ARCHITECTURE.md) · [Observability specification](OBSERVABILITY.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md)
 
-Status: Architecture baseline — fake-backed scaffolding merged; real engine, production LTC, and assembled-path verification remain open
+Status: Architecture baseline. The real GStreamer engine is merged and is what the agent constructs; production LTC generation is built on an unmerged branch; assembled-path verification against real hardware remains open
 Audience: Maintainers, audio-node contributors, show operators
 
-Track C has exercised GStreamer graph behavior in a container and merged session, configuration, command, telemetry, and fake-engine scaffolding. Production still wires an unavailable fake engine, and the owner-selected linked-libltc path is not implemented. [RES-007](../research/RES-007-audio-node-architecture.md) is L2 only for the recorded container graph behavior and remains L0 for physical routing, real-device alignment, drift, loss, and recovery.
+Track C has exercised GStreamer graph behavior in a container and merged session, configuration, command, telemetry, and the real go-gst engine the agent now constructs. The owner-selected linked-libltc path is built on a branch and not yet merged. Nothing in Track C has produced sound: every test sink is a non-hardware sink. [RES-007](../research/RES-007-audio-node-architecture.md) is L2 only for the recorded container graph behavior and remains L0 for physical routing, real-device alignment, drift, loss, and recovery.
 
 ## 1. Purpose and scope
 
@@ -110,7 +110,7 @@ Logical buses are defined independently of physical outputs, and channel counts 
 
 **Program bus** — the stereo audience-facing mix, containing show music, background audio, announcements, and any other audience-facing source.
 
-**LTC bus** — mono timecode. Never mixed into program audio, on its own discrete physical output.
+**LTC bus** — mono timecode. Never mixed into program audio, on its own discrete physical output. The reference layout is stereo program on channels 1 and 2 with LTC on 3; a mono installation may run program on channel 1 with LTC on 2. The channel indices are explicit configuration, not a fixed layout.
 
 The reference stereo layout is channels 1–2 for program and channel 3 for LTC, with a fourth channel reserved where practical. The target `audio.node` configuration must express program and LTC channel indices explicitly; the current route-only object does not yet implement that resolved policy. A mono deployment may use program channel 1 and LTC channel 2. Every valid layout preserves the invariant that LTC occupies a discrete channel outside the program set and both leave through one clock domain.
 
