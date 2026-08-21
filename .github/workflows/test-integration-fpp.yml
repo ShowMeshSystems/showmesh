@@ -1,19 +1,14 @@
 name: FPP Integration (bench fppd)
 
-# Deliberately its own workflow, not a job in ci.yml (BUILD-PLAN Step 7,
-# decided 2026-08-12): bench/fpp-multisync's fpp-master is a full FPP
-# source build (see that directory's own docker-compose.yml comment), so
-# running it on every push would either slow the fast path or teach
-# people to skip it. This is the first work in this project that
-# genuinely depends on `make test-integration-fpp`, which is why the
-# decision is made here rather than deferred again — see
-# docs/build/BUILD-PLAN.md's Step 7 "Decisions settled before the step
-# starts".
+# Deliberately its own workflow, not a job in ci.yml: it depends on a real
+# fppd, which the other integration jobs don't need. fpp-master comes from
+# a prebuilt, digest-pinned GHCR fixture (bench/fpp-multisync/docker-
+# compose.prebuilt.yml) rather than a source build, published separately by
+# build-fpp-test-image.yml -- see bench/fpp-multisync/README.md.
 #
 # Triggered on changes to the two packages this proves (the FPP REST
-# collector, and Step 7 seam C's FPP command client) plus a nightly run,
-# so a regression in either is caught within a day even on a quiet
-# branch, without paying the full source build on every unrelated push.
+# collector, and the FPP command client) plus a nightly run, so a
+# regression in either is caught within a day even on a quiet branch.
 
 on:
   push:
@@ -30,6 +25,7 @@ on:
       - "test/integration/fpp_command_test.go"
       - "test/integration/macro_run_submit_timeout_test.go"
       - ".github/workflows/test-integration-fpp.yml"
+      - ".github/workflows/build-fpp-test-image.yml"
   pull_request:
     paths:
       - "internal/coordinator/collector/fpp/**"
@@ -43,6 +39,7 @@ on:
       - "test/integration/fpp_command_test.go"
       - "test/integration/macro_run_submit_timeout_test.go"
       - ".github/workflows/test-integration-fpp.yml"
+      - ".github/workflows/build-fpp-test-image.yml"
   schedule:
     # 05:00 UTC nightly, offset from no other scheduled job in this repo
     # (there are none today) — an arbitrary off-peak hour, not a measured
@@ -52,6 +49,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -60,32 +58,56 @@ concurrency:
 jobs:
   test-integration-fpp:
     runs-on: ubuntu-latest
-    # A full FPP source build (bench/fpp-multisync/docker-compose.yml's own
-    # comment: "a first build is a full FPP source build and can take
-    # several minutes") plus the test run itself; generous headroom over
-    # the other integration jobs' 10 minutes for exactly that reason.
+    env:
+      COMPOSE_BASE: bench/fpp-multisync/docker-compose.yml
+      COMPOSE_PREBUILT: bench/fpp-multisync/docker-compose.prebuilt.yml
+    # The fixture pull, the apt install of the cgo build dependencies, and
+    # both suites.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
-      # ubuntu-latest ships Docker (with Compose v2) already, usable
-      # without sudo. `make test-integration-fpp` (scripts/test-integration-fpp.sh)
-      # builds and starts bench/fpp-multisync's fpp-master itself — a real
-      # fppd, never a fake — plus its own throwaway Mosquitto for
-      # TestFPPSuccessPathThroughRealCoordinator, exactly as a developer
-      # running it locally does; this job supplies no bespoke CI-only
-      # config.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No fallback: docker-compose.prebuilt.yml removes fpp-master's build
+      # config outright, so a failure here is the end of the job rather than
+      # a silent return to the source build this replaced.
+      - name: Pull the pinned FPP test fixture
+        run: |
+          resolved="$(docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" config --images fpp-master)"
+          echo "pinned fpp-master image: $resolved"
+          if ! docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" pull fpp-master; then
+            echo "::error::could not pull $resolved. A pull request from a fork gets a GITHUB_TOKEN scoped to the fork, which cannot read this private package; a fork PR cannot run this job." >&2
+            exit 1
+          fi
+
+      # `make test-integration-fpp` (scripts/test-integration-fpp.sh) starts
+      # bench/fpp-multisync's fpp-master itself -- a real fppd, never a fake
+      # -- plus its own throwaway Mosquitto for
+      # TestFPPSuccessPathThroughRealCoordinator. SHOWMESH_FPP_TEST_PREBUILT
+      # makes it recreate fpp-master from the fixture just pulled above
+      # instead of source-building it. Compose comes from the container's
+      # own docker-compose package, which must support `!reset` (>= 2.24.4),
+      # not from the runner.
       - name: Integration tests (real fppd, bench container)
+        env:
+          SHOWMESH_FPP_TEST_PREBUILT: "1"
         # This suite compiles the whole test/integration package, which
         # reaches the agent's cgo audio engine, and it runs go test -race,
         # which requires cgo. The engine needs GStreamer 1.26 and
         # ubuntu-latest ships 1.24, so the suite runs inside Debian 13.
-        # Not a `container:` job: the script builds and starts the bench
-        # fppd through docker compose and reaches it on localhost, which
+        # Not a `container:` job: the script starts the bench fppd
+        # through docker compose and reaches it on localhost, which
         # needs the host socket and host networking, and GitHub's
         # container: field cannot express --network. Workspace mounted at
         # its own absolute path with TMPDIR inside it, so any bind mount
         # the script hands the host daemon resolves the same on both sides.
+        # The runner's docker config is mounted so a compose pull inside the
+        # container authenticates to GHCR instead of failing anonymously.
         run: |
           set -eux
           mkdir -p "$GITHUB_WORKSPACE/.ci-tmp"
@@ -96,6 +118,8 @@ jobs:
             -w "$GITHUB_WORKSPACE" \
             -e TMPDIR="$GITHUB_WORKSPACE/.ci-tmp" \
             -e HOME=/tmp \
+            -e SHOWMESH_FPP_TEST_PREBUILT \
+            -v "$HOME/.docker":/tmp/.docker:ro \
             golang:1.25.0-trixie \
             bash -euxo pipefail -c '
               apt-get update -o Acquire::Retries=2
@@ -118,3 +142,16 @@ jobs:
               git config --global --add safe.directory "*"
               make test-integration-fpp
             '
+
+      # Independent of SHOWMESH_FPP_TEST_PREBUILT, so dropping or
+      # misspelling that variable fails here instead of quietly restoring
+      # the source build and reporting green.
+      - name: Verify the bench container ran the pinned fixture
+        run: |
+          pinned="$(docker image inspect -f '{{.Id}}' "$(docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" config --images fpp-master)")"
+          running="$(docker inspect -f '{{.Image}}' showmesh-bench-fpp-master)"
+          if [ "$running" != "$pinned" ]; then
+            echo "::error::showmesh-bench-fpp-master ran $running, not the pinned fixture $pinned" >&2
+            exit 1
+          fi
+          echo "confirmed: showmesh-bench-fpp-master ran the pinned fixture $pinned"

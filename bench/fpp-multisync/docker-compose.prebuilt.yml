@@ -1,0 +1,13 @@
+# Override for CI: replaces fpp-master's source build with the prebuilt,
+# digest-pinned GHCR fixture published by .github/workflows/build-fpp-test-image.yml.
+# `build: !reset null` structurally removes the build config so Compose
+# cannot fall back to a source build even if the image is missing.
+#
+# Local development is unaffected: docker-compose.yml alone still
+# source-builds by default. See ../README.md for how to publish a new
+# fixture and how to point CI at it (two separate, deliberate steps).
+
+services:
+  fpp-master:
+    build: !reset null
+    image: ${SHOWMESH_FPP_TEST_IMAGE:-ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:94c38cd2168ae9d5da820a678360a55837685915ffc4deb1a283604e5f01d1ff}

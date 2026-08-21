@@ -30,6 +30,12 @@
 # collide if run at the same time), and tears THAT one down on exit. The
 # fpp-master asymmetry above is unchanged: only the broker this script adds
 # is throwaway.
+#
+# SHOWMESH_FPP_TEST_PREBUILT=1 layers docker-compose.prebuilt.yml on top of
+# the base compose file, so fpp-master comes from CI's pinned GHCR image
+# instead of a source build. That mode recreates the bench container from
+# that image, replacing a source-built one if it is running. Unset (the
+# default) this script's behavior is unchanged.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,21 +58,52 @@ COMPOSE_FILE="bench/fpp-multisync/docker-compose.yml"
 CONTAINER_NAME="showmesh-bench-fpp-master"
 FPP_URL="${SHOWMESH_TEST_FPP_URL:-http://localhost:8090}"
 
-echo "test-integration-fpp: checking for a running $CONTAINER_NAME"
-if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-  # --force-recreate, not a plain `up -d`: verified live, this image
-  # crash-loops (an apache/php pid file left in the container's own
-  # writable layer trips up its entrypoint on a second start of the SAME
-  # container) if it is merely started/recreated-in-place after having
-  # been stopped rather than removed. --force-recreate discards that
-  # writable-layer state while keeping the already-built image (no
-  # rebuild) and the named media volume (so a previously-set
-  # MultiSyncEnabled value survives). See
-  # internal/coordinator/collector/fpp/integration_test.go's cleanup for
-  # the same finding, hit the same way, during this collector's own
-  # development.
-  echo "test-integration-fpp: not running; starting it (a first build is a full FPP source build and can take several minutes)"
-  docker compose -f "$COMPOSE_FILE" up -d --force-recreate fpp-master
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
+  PREBUILT_OVERRIDE="$ROOT_DIR/bench/fpp-multisync/docker-compose.prebuilt.yml"
+  COMPOSE_ARGS+=(-f "$PREBUILT_OVERRIDE")
+  export SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE="$PREBUILT_OVERRIDE"
+fi
+
+# In prebuilt mode the container is recreated whether or not one is already
+# running: an already-running container may have been source-built, and the
+# destructive test's own --force-recreate would then swap it for the pinned
+# image mid-suite. Recreating up front makes provenance unambiguous, and it
+# is why prebuilt mode replaces whatever bench container is running.
+if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
+  echo "test-integration-fpp: prebuilt mode; recreating $CONTAINER_NAME from the pinned image"
+  docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fpp-master
+else
+  echo "test-integration-fpp: checking for a running $CONTAINER_NAME"
+  if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
+    # --force-recreate, not a plain `up -d`: verified live, this image
+    # crash-loops (an apache/php pid file left in the container's own
+    # writable layer trips up its entrypoint on a second start of the SAME
+    # container) if it is merely started/recreated-in-place after having
+    # been stopped rather than removed. --force-recreate discards that
+    # writable-layer state while keeping the already-built image (no
+    # rebuild) and the named media volume (so a previously-set
+    # MultiSyncEnabled value survives). See
+    # internal/coordinator/collector/fpp/integration_test.go's cleanup for
+    # the same finding, hit the same way, during this collector's own
+    # development.
+    echo "test-integration-fpp: not running; starting it (a first build is a full FPP source build and can take several minutes)"
+    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fpp-master
+  fi
+fi
+
+# Prebuilt mode asserts what is RUNNING, not what is configured: a dropped
+# or misspelled SHOWMESH_FPP_TEST_PREBUILT would otherwise source-build and
+# still report green.
+if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
+  pinned_ref="$(docker compose "${COMPOSE_ARGS[@]}" config --images fpp-master)"
+  pinned_id="$(docker image inspect -f '{{.Id}}' "$pinned_ref")"
+  running_id="$(docker inspect -f '{{.Image}}' "$CONTAINER_NAME")"
+  if [ "$running_id" != "$pinned_id" ]; then
+    echo "test-integration-fpp: $CONTAINER_NAME is running image $running_id, not the pinned $pinned_ref ($pinned_id)" >&2
+    exit 1
+  fi
+  echo "test-integration-fpp: $CONTAINER_NAME confirmed running the pinned image $pinned_ref"
 fi
 
 echo "test-integration-fpp: waiting for $FPP_URL to answer /api/fppd/status"
