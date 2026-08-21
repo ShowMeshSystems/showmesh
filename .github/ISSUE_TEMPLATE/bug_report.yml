@@ -71,8 +71,8 @@ body:
       description: Did this work in an earlier version or commit?
       options:
         - Unknown
-        - No
-        - Yes
+        - "No"
+        - "Yes"
     validations:
       required: true
 
