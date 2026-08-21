@@ -161,8 +161,9 @@ Local development is unaffected and still source-builds by default:
 docker compose -f docker-compose.yml up -d --build fpp-master
 ```
 
-CI's path, which you can reproduce locally if you have access to the
-package:
+Prebuilt mode locally, if you have access to the package. CI runs the same
+two commands but the second inside a container carrying GStreamer 1.26 and
+libltc, which `test/integration`'s cgo audio engine needs to compile:
 
 ```
 docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull fpp-master

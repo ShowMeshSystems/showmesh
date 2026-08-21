@@ -21,6 +21,16 @@ import (
 // from anything else this package already reports.
 const noAlignmentMeasurementReason = "no program-to-LTC alignment measurement is implemented; nothing in this seam can measure it"
 
+// ltcFrameRateAbsentReason states why a node reports no frame rate, which
+// differs between a node that cannot generate LTC at all and one that
+// simply has not run it.
+func ltcFrameRateAbsentReason(generatorState string) string {
+	if generatorState == "unsupported" {
+		return "this node cannot generate LTC, so no frame rate is in effect"
+	}
+	return "no LTC run has reported a frame rate on this node"
+}
+
 // Collector implements collector.Collector; enforced at compile time so a
 // signature drift is caught here, matching noderender.Collector's identical
 // assertion.
@@ -168,7 +178,7 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	if p.LTCFrameRateKnown {
 		obs = append(obs, buildValue(nodeID, SignalLTCFrameRate, p.LTCFrameRate, observedAt, rep))
 	} else {
-		obs = append(obs, notCollected(res, SignalLTCFrameRate, source, "no generator has ever been started on this node", rep.receivedAt))
+		obs = append(obs, notCollected(res, SignalLTCFrameRate, source, ltcFrameRateAbsentReason(p.LTCGeneratorState), rep.receivedAt))
 	}
 
 	if p.LTCTimecodeKnown {
@@ -289,6 +299,22 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		obs = append(obs, buildSessionValue(res, source, SignalSessionFaultReason, sess.FaultReason, observedAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
+	}
+
+	if sess.GapKnown {
+		obs = append(obs,
+			buildSessionValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),
+			buildSessionValue(res, source, SignalSessionItemGapReason, sess.ItemGapReason, sess.ItemGapObservedAt, rep),
+		)
+	} else {
+		gapReason := sess.ItemGapReason
+		if gapReason == "" {
+			gapReason = "node reported no gap measurement and no reason"
+		}
+		obs = append(obs,
+			notCollected(res, SignalSessionItemGapMs, source, gapReason, rep.receivedAt),
+			notCollected(res, SignalSessionItemGapReason, source, gapReason, rep.receivedAt),
+		)
 	}
 
 	return obs

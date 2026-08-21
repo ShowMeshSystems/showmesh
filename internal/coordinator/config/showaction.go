@@ -193,6 +193,84 @@ const (
 	// same posture, matching what api/openapi.yaml's conformance-test
 	// overlay already treats these payloads as (closed objects).
 	ValidationCodeFieldUnknownKey = "field-unknown-key"
+
+	// The Codes below are Track F seam F1's own additions (nightsession.go),
+	// for night.session/night.session.active rules that are not "one
+	// field, one problem" any more than ValidationCodeStepsEmpty/
+	// StepIDDuplicate were for show.macro. Defined here rather than in
+	// nightsession.go for the same reason ValidationCodeLocalFallbackReduced
+	// is defined here rather than in showmacro.go: every Code in this
+	// closed set lives in one place. (Deliberately no exact count in this
+	// comment — review found the count already wrong once, at "five" for
+	// six Codes; a number here is a claim this comment cannot keep honest
+	// on its own the next time one is added.)
+
+	// ValidationCodeCalendarFieldRejected means the payload carried a key
+	// named "at", "cron", "schedule", "time", "date", "weekday", or
+	// "timezone" anywhere in the object tree — ADR-038 decision 1: FPP is
+	// the authoritative calendar scheduler, so no ShowMesh object may
+	// carry a wall-clock or dated value, and this is a validation rule
+	// rather than a naming convention an author could still work around.
+	ValidationCodeCalendarFieldRejected = "calendar-field-rejected"
+
+	// ValidationCodeDuplicateRestDuration means the payload restated the
+	// resting FSEQ's own length under a key like "restDuration" or
+	// "restSeconds", anywhere in the object tree. RESTING-MODE.md §6.1:
+	// the FSEQ is the only duration authority, so a second, hand-entered
+	// number for the same fact is a value that can silently disagree with
+	// it the day someone changes the FSEQ and forgets the field.
+	ValidationCodeDuplicateRestDuration = "duplicate-rest-duration"
+
+	// ValidationCodeNotImplemented means the payload carried a
+	// "siteControl" or "interlocks" block — RESTING-MODE.md §10 specifies
+	// both, but Track F F6 has not shipped an enforcement path for
+	// either, and accepting configuration nothing enforces is a surface
+	// asserting something false (owner decision, TRACK-F-F1 seam spec).
+	ValidationCodeNotImplemented = "not-implemented"
+
+	// ValidationCodeBackgroundAudioItemsEmpty means
+	// resting.backgroundAudio.items was present but held zero entries —
+	// AUDIO-ENGINE.md §3 requires at least one item for a playlist to
+	// mean anything.
+	ValidationCodeBackgroundAudioItemsEmpty = "background-audio-items-empty"
+
+	// ValidationCodeItemIDDuplicate means two entries of
+	// resting.backgroundAudio.items declared the same itemId. Mirrors
+	// ValidationCodeStepIDDuplicate: pkg/audio.PlaylistItem identifies an
+	// item by ItemID, not position, so a duplicate id is ambiguous the
+	// moment the list is reordered.
+	ValidationCodeItemIDDuplicate = "item-id-duplicate"
+
+	// ValidationCodeCueNameDuplicate means two cues in the same
+	// enterShow.cues or enterResting.cues list declared the same name.
+	ValidationCodeCueNameDuplicate = "cue-name-duplicate"
+
+	// ValidationCodeCrossShowReference means a cue's action, the resting
+	// timeline asset, or a backgroundAudio item named an object belonging
+	// to a DIFFERENT show than this night.session's own "show" field.
+	// ADR-027 makes Show a namespace precisely so that programming
+	// Christmas cannot accidentally break Halloween (owner ruling,
+	// 2026-08-18 review): every cross-object reference this payload
+	// carries is checked against the session's own show, not merely
+	// checked for existence.
+	ValidationCodeCrossShowReference = "cross-show-reference"
+	// ValidationCodeAudioNodeChannelDuplicate: audionode.go's own rule.
+	// programChannels lists the SAME physical route's channel indices, so a
+	// repeated index is a distinct refusal from an ordinary out-of-range
+	// value.
+	ValidationCodeAudioNodeChannelDuplicate = "audio-node-channel-duplicate"
+
+	// ValidationCodeAudioNodeChannelOverlap: audionode.go's own rule.
+	// ltcChannel named an index already claimed by programChannels — ADR-018
+	// requires LTC on a channel discrete from program, so this is a
+	// placement conflict, not merely a bad number.
+	ValidationCodeAudioNodeChannelOverlap = "audio-node-channel-overlap"
+
+	// ValidationCodeAudioNodeRouteMismatch: audionode.go's own rule.
+	// programRoute and ltcRoute named different routes — program and LTC
+	// leave through one interface in one clock domain (ADR-018), so two
+	// different route names can never be satisfied together.
+	ValidationCodeAudioNodeRouteMismatch = "audio-node-route-mismatch"
 )
 
 // --- show.action's own vocabulary. ---

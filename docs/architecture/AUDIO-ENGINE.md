@@ -2,10 +2,10 @@
 
 [Documentation index](../README.md) · [Architecture specification](ARCHITECTURE.md) · [Observability specification](OBSERVABILITY.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) · [ADR-019](../decisions/ADR-019-audio-device-loss-fails-silent.md)
 
-Status: Draft architecture baseline — design intent, not implemented and not verified  
+Status: Architecture baseline. The real GStreamer engine is merged and is what the agent constructs; production LTC generation is built on an unmerged branch; assembled-path verification against real hardware remains open
 Audience: Maintainers, audio-node contributors, show operators
 
-Nothing in this document has been prototyped. The central viability questions — whether GStreamer delivers click-free ducking and sample-aligned LTC from one clock, and what drift a free-running audio node actually accumulates over a show — are open bench items in [RES-007](../research/RES-007-audio-node-architecture.md), which is critical-risk and currently at L0.
+Track C has exercised GStreamer graph behavior in a container and merged session, configuration, command, telemetry, and the real go-gst engine the agent now constructs. The owner-selected linked-libltc path is built on a branch and not yet merged. Nothing in Track C has produced sound: every test sink is a non-hardware sink. [RES-007](../research/RES-007-audio-node-architecture.md) is L2 only for the recorded container graph behavior and remains L0 for physical routing, real-device alignment, drift, loss, and recovery.
 
 ## 1. Purpose and scope
 
@@ -110,9 +110,9 @@ Logical buses are defined independently of physical outputs, and channel counts 
 
 **Program bus** — the stereo audience-facing mix, containing show music, background audio, announcements, and any other audience-facing source.
 
-**LTC bus** — mono timecode. Never mixed into program audio, on its own discrete physical output.
+**LTC bus** — mono timecode. Never mixed into program audio, on its own discrete physical output. The reference layout is stereo program on channels 1 and 2 with LTC on 3; a mono installation may run program on channel 1 with LTC on 2. The channel indices are explicit configuration, not a fixed layout.
 
-The minimum physical output requirement for an initial deployment is therefore channels 1–2 for stereo program and channel 3 for LTC, with a fourth channel reserved where practical for future routing or monitoring.
+The reference stereo layout is channels 1–2 for program and channel 3 for LTC, with a fourth channel reserved where practical. The target `audio.node` configuration must express program and LTC channel indices explicitly; the current route-only object does not yet implement that resolved policy. A mono deployment may use program channel 1 and LTC channel 2. Every valid layout preserves the invariant that LTC occupies a discrete channel outside the program set and both leave through one clock domain.
 
 Future optional buses the architecture must permit without redesign: independent local speaker zones, an independent FM mix, monitor and cue outputs, alternate language or program feeds, additional timecode, and Dante destinations.
 
@@ -316,7 +316,7 @@ This feeds the desired-versus-observed model directly. Two rules from [ADR-011](
 
 ## 16. Initial scope
 
-**Day-0 / mid-September:** a Linux audio node; local-file playback from exact Track E assets; FPP show-state synchronization and discontinuity handling; a stable independent playback clock; the stereo program bus and mono LTC bus; physical multichannel output and FM transmitter routing; background and announcement sessions; loop/resume policy; gain ceilings, ducking and fades with observable completion; playback/readiness telemetry; and safe audio-device-loss handling plus manual recovery. These are required because Day-0 controls a real show and supplies Track D's LTC and Track F's audio primitives.
+**Day-0 / mid-September:** a Linux audio node; local-file playback from exact Track E assets; FPP show-state synchronization and discontinuity handling; a stable independent playback clock; the configured program bus (stereo reference, mono permitted) and mono LTC bus; physical multichannel output and FM transmitter routing; background and announcement sessions; loop/resume policy; gain ceilings, ducking and fades with observable completion; playback/readiness telemetry; and safe audio-device-loss handling plus manual recovery. These are required because Day-0 controls a real show and supplies Track D's LTC and Track F's audio primitives.
 
 **After the core session engine, not a Day-0 gate:** the generic synchronized-remote-output contract exercised against a deterministic mock destination, including advance provisioning and absent-readiness behavior. A real third-party adapter, its upload protocol, remote processing status, and phone playback are integration research and do not block the local/FM/LTC show path.
 
@@ -327,6 +327,6 @@ Deferred beyond the initial release: Dante as a required transport, real-time PC
 - **GStreamer viability** for click-free ducking, gapless playback, and LTC sample-aligned to program on one clock. [RES-007](../research/RES-007-audio-node-architecture.md), first bench item.
 - **Tolerable drift**, both the perceptual threshold against lighting and what a free-running node actually accumulates over a show. RES-007.
 - **Audio interface commissioning.** No specific product gates Track C. The selected interface must expose the channel and clock properties ADR-018 requires and pass the physical separation test; software-reported channel count alone is insufficient.
-- **LTC frame rate configuration** and its relationship to the Resolume input configuration ([RES-001](../research/RES-001-resolume-smpte-behavior.md)).
-- **Announcement policy** — whether announcements ever interrupt show audio or only duck it, which is a show-design decision with a technical consequence.
+- **29.97 drop-frame behavior** remains unresolved against Resolume ([RES-001](../research/RES-001-resolume-smpte-behavior.md)). The configured frame-rate vocabulary is resolved as 24, 25, 29.97, and 30; the current contract ships non-drop explicitly.
+- **Announcement implementation** follows the resolved policy: `duck`, `mix`, and `interrupt` are configurable per announcement, and interrupt uses the existing resume/restart policy. The open work is implementing and verifying interrupt against the real engine, not deciding whether it exists.
 - **Third-party provisioning and playout surfaces.** The generic contract is fixed above, but upload protocols, acknowledgements, processing status, format support, timing, and mix reproduction remain integration-specific research in [RES-016](../research/RES-016-third-party-synchronized-audio-output.md).

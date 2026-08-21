@@ -152,6 +152,68 @@ func TestSessionStateReasonDrawsPlayingClaimDistinction(t *testing.T) {
 	}
 }
 
+// TestSessionItemGapReportedWhenKnown proves the measured-gap pair reports
+// a genuine value on both signal ids when the node reports one, with the
+// successor's own engine-clock evidence time, never this call's own time.
+func TestSessionItemGapReportedWhenKnown(t *testing.T) {
+	gapAt := time.Date(2026, 8, 20, 3, 0, 0, 0, time.UTC)
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		GapKnown: true, ItemGapMs: 137, ItemGapReason: "", ItemGapObservedAt: &gapAt,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	ms := findSessionObs(t, obs, SignalSessionItemGapMs)
+	if ms.Absence != "" {
+		t.Errorf("item_gap_ms absence = %q, want a real value", ms.Absence)
+	}
+	if ms.Value != int64(137) {
+		t.Errorf("item_gap_ms value = %v, want 137", ms.Value)
+	}
+	if ms.ObservedAt == nil || !ms.ObservedAt.Equal(gapAt) {
+		t.Errorf("item_gap_ms observedAt = %v, want %v", ms.ObservedAt, gapAt)
+	}
+
+	reason := findSessionObs(t, obs, SignalSessionItemGapReason)
+	if reason.Absence != "" {
+		t.Errorf("item_gap.reason absence = %q, want a real value since the gap is known", reason.Absence)
+	}
+}
+
+// TestSessionItemGapNotCollectedWhenUnknown proves the not-collected case:
+// both signal ids report [observation.StateNotCollected] with the node's
+// stated reason, never zero and never omitted.
+func TestSessionItemGapNotCollectedWhenUnknown(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		GapKnown: false, ItemGapReason: "session is stopped",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	ms := findSessionObs(t, obs, SignalSessionItemGapMs)
+	if ms.Absence != observation.StateNotCollected {
+		t.Errorf("item_gap_ms absence = %q, want %q", ms.Absence, observation.StateNotCollected)
+	}
+	if ms.Reason != "session is stopped" {
+		t.Errorf("item_gap_ms reason = %q, want %q", ms.Reason, "session is stopped")
+	}
+	if ms.Value != nil {
+		t.Errorf("item_gap_ms value = %v, want nil, never a fabricated zero", ms.Value)
+	}
+
+	reason := findSessionObs(t, obs, SignalSessionItemGapReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("item_gap.reason absence = %q, want %q", reason.Absence, observation.StateNotCollected)
+	}
+	if reason.Reason != "session is stopped" {
+		t.Errorf("item_gap.reason reason = %q, want %q", reason.Reason, "session is stopped")
+	}
+}
+
 // TestClockAlignmentAlwaysNotCollected proves nothing in this
 // seam ever reports program-to-LTC alignment as measured, regardless of
 // program/LTC bus state.

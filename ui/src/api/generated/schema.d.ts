@@ -1209,7 +1209,7 @@ export interface paths {
         get: operations["getAudioNode"];
         /**
          * Write a new audio.node revision (ADR-018)
-         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: every field is required on every write. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) — never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `clockDomain` and `clockDomainProvenance` are operator-declared and never inferred: no software call on this platform proves two outputs share a hardware clock.
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: every field is required on every write. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) — never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `programRoute` and `ltcRoute` must also name the SAME route, refused at decode time before evidence is even consulted. `programChannels` (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based, never a member of `programChannels`) are checked structurally, not against evidence. `clockDomain` and `clockDomainProvenance` are operator-declared and never inferred: no software call on this platform proves two outputs share a hardware clock.
          */
         put: operations["putAudioNode"];
         post?: never;
@@ -1761,6 +1761,191 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/night.session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate night.session objects (Track F seam F1)
+         * @description Object ids with label, show (the parent show id), and current revision number, NOT the full payloads. Same read posture as GET /config/show/GET /config/show.macro (show:macro:run OR config:write). `?node=` is not a supported filter for this kind.
+         */
+        get: operations["listNightSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One night.session object's active revision (Track F seam F1) */
+        get: operations["getNightSession"];
+        /**
+         * Write a new night.session revision (Track F seam F1)
+         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteControl`/`interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present — the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one.
+         */
+        put: operations["putNightSession"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** night.session revision history, newest first (Track F seam F1) */
+        get: operations["listNightSessionRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session/{id}/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One past night.session revision's full payload (Track F seam F1)
+         * @description Revisions are immutable (ADR-009); this may not be the currently active one. No other config kind in this coordinator exposes this route yet — a gap for a future seam to close on those kinds, not a reason to withhold it here.
+         */
+        get: operations["getNightSessionRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session.active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The active-night-session pointer (Track F seam F1, ADR-039)
+         * @description 404 `resourceNotFoundProblem` when nothing has ever been activated, matching what GET /config/show.active already answers for "nothing configured yet".
+         */
+        get: operations["getNightSessionActive"];
+        /**
+         * Activate a night session, or clear the pointer (Track F seam F1, ADR-039 rule 4)
+         * @description Requires `config:write` (admin only). `session` is a REQUIRED key but may be the empty string, which explicitly clears the pointer back to unset — the zero-to-one-and-back-to-zero transition ADR-039 rule 4 requires. A non-empty value must name an existing night.session object. This is a singleton: the underlying object id is a fixed constant, never derived from `session`, so activating a different session (or clearing it) accumulates as a new revision of the SAME object rather than orphaning the previous history.
+         */
+        put: operations["putNightSessionActive"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/night.session.active/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** night.session.active revision history, newest first (Track F seam F1) */
+        get: operations["listNightSessionActiveRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/night/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The current night-session lifecycle state (Track F seam F2, RESTING-MODE.md, ADR-038)
+         * @description Never gated by any scope — reads stay open by default (ADR-024 constraint 23): a credential problem must never cost the operator sight of the lifecycle state. Distinct from `/config/night.session/{id}` (the AUTHORED definition a session pins): this is the RUNNING controller's own persisted state, a dedicated closed state machine, never observed evidence and never a general workflow.
+         *
+         *     If no session has ever been created (the coordinator has never seen `prepare-site`), this still answers `200` with `session.state` = `"inactive"` and every identity field empty, rather than `404` — "no session yet" is itself a real, renderable state.
+         */
+        get: operations["getCurrentNightSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/night/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One specific night session by its own id (Track F seam F2)
+         * @description Same open-read posture as `/night/session`. Every session that has ever been created remains reachable by id (a new `prepare-site` after `stopped` creates a NEW session/epoch; this is how a prior night's own record stays inspectable).
+         */
+        get: operations["getNightSessionByID"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/night/commands/{command}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch a night-session lifecycle command (Track F seam F2, ADR-038)
+         * @description Behind `night:command`. The seven ADR-038 commands (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `request-final-show`, `fade-out-night`, `power-down-presentation`) plus `end-session`, a PROVISIONAL operator-recovery action not yet part of ADR-038's own closed vocabulary (owner decision pending). Answers `202`, never `200`: accepted and applied, or recognized as an idempotent duplicate — this layer holds no downstream confirmation loop.
+         *
+         *     `fade-out-night`, `power-down-presentation`, `request-final-show`, and `end-session` are exempt from the degraded-session gate and never refused for want of an audit write (ADR-024 decision 11): all four are direction-safe. The other four fail closed on an unwritable audit store (`503`, see below) and refuse while the session is degraded and non-terminal.
+         *
+         *     `idempotencyKey` (optional request body field) is honored only by `prepare-site`, the one command that creates something new; a repeat with the same key returns the original session. The other six commands are already idempotent by lifecycle state and ignore the field.
+         */
+        post: operations["dispatchNightCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets": {
         parameters: {
             query?: never;
@@ -2252,7 +2437,7 @@ export interface components {
             revision: number;
             /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` — see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
             idempotencyKey?: string;
-            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs, seek's positionMs. Opaque here by design — see this operation's own description for what it accepts. */
+            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs/ mixPolicy, seek's positionMs. Opaque here by design — see this operation's own description for what it accepts. */
             params?: Record<string, never>;
         };
         /** @description The body of a successful (200) response from any of the nine audio.session.* dispatch endpoints. */
@@ -2661,7 +2846,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3064,10 +3249,12 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
-        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement — every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported); `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. */
+        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement — every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. */
         ConfigAudioNode: {
             programRoute: string;
             ltcRoute: string;
+            programChannels: number[];
+            ltcChannel: number;
             clockDomain: string;
             clockDomainProvenance: string;
         };
@@ -3090,14 +3277,14 @@ export interface components {
          *
          *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) — a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision — the macro was edited between two submissions under one key, 409) — minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit — Review fix 5, 2026-08-15 — because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action — every action except `blackout` and `clearLayer` — `503`, mirroring "fpp-command-refused-audit-unavailable" exactly, for a second vendor's command surface). One is Track E seam E7-1's own addition: "action-invoke-refused-audit-unavailable" (POST /actions/{id}/invocations' own ADR-024 decision 11 fail-closed default for an action whose stored safetyClass is "none").
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit — Review fix 5, 2026-08-15 — because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action — every action except `blackout` and `clearLayer` — `503`, mirroring "fpp-command-refused-audit-unavailable" exactly, for a second vendor's command surface). One is Track E seam E7-1's own addition: "action-invoke-refused-audit-unavailable" (POST /actions/{id}/invocations' own ADR-024 decision 11 fail-closed default for an action whose stored safetyClass is "none"). Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (programRoute and ltcRoute naming the same device route).
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch";
             title: string;
             status: number;
             detail: string;
@@ -3170,12 +3357,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/night.session, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "audio.node";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "night.session" | "audio.node";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
@@ -3637,6 +3824,295 @@ export interface components {
             createdByPrincipalName: string | null;
             /** @enum {string} */
             source: "api";
+        };
+        /** @description Names an FPP-owned playlist: referenced, never created (Track F seam F1, RESTING-MODE.md §6.1). fppInstanceId must name a configured FPP instance (server-side; not expressible here). */
+        ConfigNightSessionFPPPlaylist: {
+            fppInstanceId: string;
+            playlist: string;
+        };
+        /** @description ADR-028's asset identity as a night.session needs to name one: show, sequence, and target. target names the rendering/playout target (a node id); the implied targetKind is always "node". Must resolve to a current asset (server-side; not expressible here). */
+        ConfigNightSessionAssetRef: {
+            show: string;
+            sequence: string;
+            target: string;
+        };
+        /** @description One entry of resting.backgroundAudio.items. itemId is stable and operator-visible (pinned against pkg/audio.PlaylistItem on Track C's branch, Track F seam F1): unlike position in the array, it survives a reorder. Must be unique within the list. */
+        ConfigNightSessionBackgroundAudioItem: {
+            itemId: string;
+            show: string;
+            sequence: string;
+            target: string;
+        };
+        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. */
+        ConfigNightSessionBackgroundAudio: {
+            items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
+            /** @enum {string} */
+            repeat: "none" | "item" | "playlist";
+            /** @enum {string} */
+            resume: "resume" | "restart";
+            /** @enum {string} */
+            itemTransition: "sequential" | "gapless" | "crossfade";
+            crossfadeMs?: number;
+            maxGainDb: number;
+        };
+        /** @description night.session.resting (Track F seam F1, RESTING-MODE.md §6-8). endOfNightPlaylist defaults to playlist when absent (server-side). */
+        ConfigNightSessionResting: {
+            fppInstanceId: string;
+            playlist: string;
+            endOfNightPlaylist: string;
+            timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
+            endOfNightRepeat: boolean;
+            backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudio"];
+        };
+        /** @description One entry of enterShow.cues or enterResting.cues (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the anchor — negative means before it. action must name an existing show.action object in the same show (server-side; not expressible here). onFailure defaults to "continue" (ADR-035) when absent. */
+        ConfigNightSessionCue: {
+            name: string;
+            /** @enum {string} */
+            role: "lighting" | "projection" | "audio" | "announcement" | "other";
+            action: string;
+            offsetMs: number;
+            fadeDurationMs?: number;
+            barrier: boolean;
+            /** @enum {string} */
+            onFailure: "continue" | "abort";
+        };
+        /** @description night.session.enterShow (RESTING-MODE.md §7.1). */
+        ConfigNightSessionEnterShow: {
+            cues: components["schemas"]["ConfigNightSessionCue"][];
+            blackoutHoldMs: number;
+        };
+        /** @description night.session.enterResting (RESTING-MODE.md §7.2). */
+        ConfigNightSessionEnterResting: {
+            cues: components["schemas"]["ConfigNightSessionCue"][];
+            blackoutAfterShowMs: number;
+        };
+        /** @description The WRITE shape of one entry of enterShow.cues/enterResting.cues: the body PUT /config/night.session/{id} accepts inside its cue lists. Identical to ConfigNightSessionCue except that barrier and onFailure are not required — an absent barrier takes its documented default of false, and an absent onFailure takes its documented default of "continue" (ADR-035). The response always stores and returns the resolved ConfigNightSessionCue shape, never this one. */
+        ConfigNightSessionCueWrite: {
+            name: string;
+            /** @enum {string} */
+            role: "lighting" | "projection" | "audio" | "announcement" | "other";
+            action: string;
+            offsetMs: number;
+            fadeDurationMs?: number;
+            barrier?: boolean;
+            /** @enum {string} */
+            onFailure?: "continue" | "abort";
+        };
+        /** @description The WRITE shape of night.session.enterShow: identical to ConfigNightSessionEnterShow except that cues carries ConfigNightSessionCueWrite entries (barrier/onFailure optional). */
+        ConfigNightSessionEnterShowWrite: {
+            cues: components["schemas"]["ConfigNightSessionCueWrite"][];
+            blackoutHoldMs: number;
+        };
+        /** @description The WRITE shape of night.session.enterResting: identical to ConfigNightSessionEnterResting except that cues carries ConfigNightSessionCueWrite entries. */
+        ConfigNightSessionEnterRestingWrite: {
+            cues: components["schemas"]["ConfigNightSessionCueWrite"][];
+            blackoutAfterShowMs: number;
+        };
+        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required — an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). */
+        ConfigNightSessionBackgroundAudioWrite: {
+            items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
+            /** @enum {string} */
+            repeat?: "none" | "item" | "playlist";
+            /** @enum {string} */
+            resume: "resume" | "restart";
+            /** @enum {string} */
+            itemTransition: "sequential" | "gapless" | "crossfade";
+            crossfadeMs?: number;
+            maxGainDb: number;
+        };
+        /** @description The WRITE shape of night.session.resting: identical to ConfigNightSessionResting except that endOfNightPlaylist and endOfNightRepeat are not required. endOfNightPlaylist, when present, must be non-empty (an explicit "" is refused, not collapsed into "absent" — RESTING-MODE.md's absent/null/empty distinction); when absent it defaults to `playlist`. endOfNightRepeat defaults to false when absent. backgroundAudio carries the ConfigNightSessionBackgroundAudioWrite shape. */
+        ConfigNightSessionRestingWrite: {
+            fppInstanceId: string;
+            playlist: string;
+            endOfNightPlaylist?: string;
+            timelineAsset: components["schemas"]["ConfigNightSessionAssetRef"];
+            endOfNightRepeat?: boolean;
+            backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudioWrite"];
+        };
+        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, and enterResting carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a- documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one — matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks refusal, the same-show rule) applies identically here. */
+        ConfigNightSessionWrite: {
+            show: string;
+            label: string;
+            showPlaylist: components["schemas"]["ConfigNightSessionFPPPlaylist"];
+            resting: components["schemas"]["ConfigNightSessionRestingWrite"];
+            enterShow: components["schemas"]["ConfigNightSessionEnterShowWrite"];
+            enterResting: components["schemas"]["ConfigNightSessionEnterRestingWrite"];
+        };
+        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seam F1, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} — never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) — this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present. Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
+        ConfigNightSession: {
+            show: string;
+            label: string;
+            showPlaylist: components["schemas"]["ConfigNightSessionFPPPlaylist"];
+            resting: components["schemas"]["ConfigNightSessionResting"];
+            enterShow: components["schemas"]["ConfigNightSessionEnterShow"];
+            enterResting: components["schemas"]["ConfigNightSessionEnterResting"];
+        };
+        /** @description The body of GET and PUT /config/night.session/{id}, and of GET /config/night.session/{id}/revisions/{revision} (one past, immutable revision's full payload). */
+        NightSessionConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "night.session";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigNightSession"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description The "night.session.active" singleton configuration kind's decoded payload (Track F seam F1, ADR-039 rule 4): the body PUT /config/night.session.active accepts, and the "payload" member of GET /config/night.session.active's response. session is REQUIRED as a key but may be the empty string, which explicitly clears the pointer back to unset (the zero-to-one-and-back-to-zero transition) — a non-empty value must name an existing night.session object (server-side; not expressible here). */
+        ConfigNightSessionActive: {
+            session: string;
+        };
+        /** @description The body of GET and PUT /config/night.session.active. */
+        NightSessionActiveConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "night.session.active";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigNightSessionActive"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape — exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) — the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass — but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed. */
+        NightReadinessCheck: {
+            name: string;
+            /**
+             * @description pkg/observation's Health vocabulary, plus not_verifiable for a check that is structurally incapable of ever reporting anything else — excluded from the aggregate outcome but always listed. Missing evidence is always "unknown".
+             * @enum {string}
+             */
+            state: "healthy" | "degraded" | "failed" | "unknown" | "not_verifiable";
+            reason: string;
+        };
+        /** @description The current session's most recent run-readiness result, or its explicit absence, stated with a state and a reason rather than omitted (ADR-020). No precomputed age field (ADR-020 decision 6): compare `completedAt` against the envelope's own `serverTime`. `outcome`/`epochId`/`completedAt` are present only when `state` is `"recorded"`. `outcome` never withholds `start-night` by itself in this build; only the epoch/freshness gate does. */
+        NightReadiness: {
+            /** @enum {string} */
+            state: "recorded" | "unknown" | "not_configured" | "not_available";
+            /** @description Distinguishes "no result recorded yet" from "the store could not be read" from "the result exists but its checks payload failed to decode" — never a single collapsed reason for all three. */
+            reason: string;
+            /** @enum {string} */
+            outcome?: "ready" | "not_ready" | "unknown";
+            epochId?: string;
+            /** Format: date-time */
+            completedAt?: string;
+            sameEpoch: boolean;
+            fresh: boolean;
+            checks: components["schemas"]["NightReadinessCheck"][];
+        };
+        /** @description One optional or not-yet-implemented section, stated with a state and a reason rather than omitted. */
+        NightPhaseEvidence: {
+            /** @enum {string} */
+            state: "recorded" | "unknown" | "not_configured" | "not_available";
+            reason: string;
+        };
+        /** @description One configured cue's outbox detail for the session's current cycle. `state` "not_dispatched" means no outbox row exists for this cycle. `state` and `outcome` are never collapsed into one field: a dispatched-but-unconfirmed cue reports `state` "resolved", `outcome` "unconfirmed" — never "failed". */
+        NightCue: {
+            name: string;
+            /**
+             * @description `fadeOut` replays the `enterShow` cue definitions while the session is fading out, under its own outbox identity. Rows in that phase are listed only once they exist.
+             * @enum {string}
+             */
+            phase: "enterShow" | "enterResting" | "fadeOut";
+            role: string;
+            action: string;
+            actionRevision: number | null;
+            /** @enum {string} */
+            state: "not_dispatched" | "pending" | "dispatched" | "resolved" | "ambiguous";
+            /** @enum {string} */
+            outcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "refused" | "ambiguous";
+            reason?: string;
+            /** Format: date-time */
+            dispatchedAt: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+        };
+        /** @description The current cycle's per-cue detail, or the stated reason it could not be read — never a silently empty list for either "no cues configured" or "read failed". */
+        NightCues: {
+            /** @enum {string} */
+            state: "recorded" | "unknown" | "not_configured" | "not_available";
+            reason: string;
+            cues: components["schemas"]["NightCue"][];
+        };
+        /** @description The night-session lifecycle controller's own persisted state — a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
+        NightSessionState: {
+            id: string;
+            configObjectId: string;
+            configRevision: number;
+            /**
+             * @description RESTING-MODE.md §3's ten states, exactly.
+             * @enum {string}
+             */
+            state: "inactive" | "preparing" | "preshow" | "transition-to-show" | "live" | "transition-to-resting" | "resting-intershow" | "end-of-night-resting" | "fading-out" | "stopped";
+            /** Format: date-time */
+            stateEnteredAt: string;
+            cycle: number;
+            finalShowRequested: boolean;
+            /** Format: date-time */
+            finalShowRequestedAt: string | null;
+            admissionClosed: boolean;
+            /** Format: date-time */
+            admissionClosedAt: string | null;
+            /** @enum {string} */
+            shutdownIntent: "" | "fade-out" | "power-down";
+            armedShowId: string;
+            showCommitted: boolean;
+            readiness: components["schemas"]["NightReadiness"];
+            powerPhase: components["schemas"]["NightPhaseEvidence"];
+            transition: components["schemas"]["NightPhaseEvidence"];
+            cues: components["schemas"]["NightCues"];
+            degraded: boolean;
+            degradedReason?: string;
+            /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11), or when an autonomous dispatch ran with no authorizing principal recorded. Never cleared once true. */
+            attributionDegraded: boolean;
+            authorization: components["schemas"]["NightAuthorization"];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Who authorized this session, recorded for provenance and surviving a coordinator restart. The night controller performs autonomous actions as its own session-scoped system actor and never as this principal, so this is a record of authority rather than a live credential. State is "unknown" when nothing has been attributed yet; autonomous actions still run in that case, and the session carries attributionDegraded. */
+        NightAuthorization: {
+            /** @enum {string} */
+            state: "recorded" | "unknown";
+            reason?: string;
+            principalId?: string;
+            principalName?: string;
+            /** @description The lifecycle command that established this attribution. */
+            command?: string;
+            /** Format: date-time */
+            recordedAt: string | null;
+        };
+        /** @description The body of GET /night/session and GET /night/sessions/{id}. */
+        NightSessionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            session: components["schemas"]["NightSessionState"];
+        };
+        /** @description The optional body of POST /night/commands/{command}. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. */
+        NightCommandRequest: {
+            idempotencyKey?: string;
+        };
+        /** @description What POST /night/commands/{command} accepted, and how — `idempotent_no_op` is a real, distinct outcome from `applied`. */
+        NightCommandResult: {
+            command: string;
+            /** @enum {string} */
+            outcome: "applied" | "idempotent_no_op";
+            reason?: string;
+            attributionDegraded: boolean;
+        };
+        /** @description The 202 body of POST /night/commands/{command}: acceptance plus the resulting session state, never a held connection waiting on a downstream outcome. */
+        NightCommandResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["NightCommandResult"];
+            session: components["schemas"]["NightSessionState"];
         };
         /** @description One row of the coordinator's asset metadata store (Track E seam E3/E4, ADR-028): an artifact's identity, never its bytes. `target` mirrors the store's own TargetID — empty when `targetKind` is "show". `runtimeFilename` is preserved but carries no identity of its own: two different Asset values may share the same `runtimeFilename` (ADR-028 decision 1 — a filename is not an asset identity). */
         Asset: {
@@ -7311,6 +7787,332 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    listNightSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putNightSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigNightSessionWrite"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listNightSessionRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSessionRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSessionActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionActiveConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putNightSessionActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigNightSessionActive"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionActiveConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listNightSessionActiveRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCurrentNightSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNightSessionByID: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchNightCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                command: "prepare-site" | "run-readiness" | "start-preshow" | "start-night" | "request-final-show" | "fade-out-night" | "power-down-presentation" | "end-session";
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["NightCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NightCommandResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+            /** @description `prepare-site`, `run-readiness`, `start-preshow`, or `start-night` only: its audit entry could not be written, so the whole command was refused rather than applied without one (`night-command-refused-audit-unavailable`). Nothing was dispatched and nothing was recorded. */
+            503: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     listAssets: {

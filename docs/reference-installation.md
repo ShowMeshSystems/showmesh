@@ -64,7 +64,7 @@ Pointing FPP at a ShowMesh-owned broker instead would be a settings write to a l
 
 ## Audio
 
-- Audio interface(s) (model, channel count, driver): Model intentionally unselected. Any Linux-supported multichannel interface is a candidate if runtime discovery and commissioning prove at least three independently addressable outputs from one clock domain; no model gates Track C.
+- Audio interface(s) (model, channel count, driver): Model intentionally unselected. Any Linux-supported multichannel interface is a candidate if runtime discovery and commissioning prove independently addressable outputs for the configured program channel set plus one non-overlapping LTC channel from one clock domain. The stereo reference needs at least three outputs; a mono installation needs at least two. No model gates Track C.
 - LTC output path (dedicated channel? Dante?): Dedicated output from the same clock domain as program. A particular physical or Dante route is selected only after its capabilities and clock relationship are verified.
 - Program audio path (FM transmitter? speakers?): FM transmitter. A third-party listener application is also in use on the FPP host; its integration is being discussed with its developer and is deliberately not specified here.
 - Dante devices and clock master, if applicable: Dante master is a BSS BLU-DAN

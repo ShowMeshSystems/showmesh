@@ -29,6 +29,18 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[pkgaudio.SessionID]*Session
 
+	// settingsMu and settings back [Manager.SetSettings]/
+	// [Manager.SettingsSnapshot] — see settings.go. Its own mutex, not
+	// m.mu: a settings read/write must never contend with session
+	// dispatch.
+	settingsMu     sync.RWMutex
+	settings       Settings
+	settingsIssues []string
+
+	// ltc tracks which session, if any, currently owns this node's one
+	// LTC run — see ltclifecycle.go.
+	ltc ltcOwner
+
 	// corruptSessions is [Manager.RestoreAll]'s record of every persisted
 	// file it could not decode into a real session — never
 	// addressable by a command, but reported by [Manager.Snapshot] so it
@@ -43,6 +55,69 @@ func NewManager(engine Engine, store SessionStore, assetDir string, decoder Deco
 	return &Manager{
 		engine: engine, store: store, assetDir: assetDir, decoder: decoder, now: now, logger: logger,
 		sessions: make(map[pkgaudio.SessionID]*Session),
+		settings: DefaultSettings,
+	}
+}
+
+// RebindReasonEngineRebind is the [pkgaudio.FaultRouteChanged] reason
+// recorded on every session [Manager.RebindEngine] invalidates.
+const RebindReasonEngineRebind = "audio output configuration changed; this session's engine handle is no longer valid"
+
+// RebindEngine invalidates every session with an active engine handle
+// (never a silent drop: each is set to StateFailed with
+// [pkgaudio.FaultRouteChanged] and persisted, see
+// [Manager.invalidateActiveSessionsLocked]), then swaps m.engine's
+// backing implementation via engine.Set — in that order, so a session in
+// flight is failed visibly against the OLD binding before any call can
+// reach the new one with a handle the new engine has never heard of.
+// engine must be the same [*SwitchableEngine] this Manager was
+// constructed with; a caller that passes any other Engine here defeats
+// this method's whole reason to exist, since m.engine itself never
+// changes identity.
+func (m *Manager) RebindEngine(engine *SwitchableEngine, next Engine, reason string) Engine {
+	m.invalidateActiveSessions(reason)
+	return engine.Set(next)
+}
+
+// invalidateActiveSessions fails every session currently in a state that
+// implies a live engine handle. Called before [SwitchableEngine.Set]
+// swaps the backing engine out from under every existing handle.
+func (m *Manager) invalidateActiveSessions(reason string) {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+
+	for _, s := range sessions {
+		s.mu.Lock()
+		if sessionStateImpliesHandleLocked(s.state) {
+			s.state = pkgaudio.StateFailed
+			s.setFaultLocked(pkgaudio.FaultRouteChanged, reason)
+			s.handle = ""
+			s.handleLoaded = false
+			s.timingKnown = false
+			// The outgoing engine is discarded whole, so only the new
+			// engine's state matters: it starts with no owner.
+			m.ltc.release(s.id)
+			s.persistBestEffortLocked("engine rebind")
+		}
+		s.mu.Unlock()
+	}
+}
+
+// sessionStateImpliesHandleLocked reports whether state is one this
+// package only ever reaches with a loaded (or loading) engine handle
+// behind it — the set [Manager.invalidateActiveSessions] must fail
+// rather than leave silently pointing at a handle the new engine has
+// never heard of.
+func sessionStateImpliesHandleLocked(state pkgaudio.State) bool {
+	switch state {
+	case pkgaudio.StatePreparing, pkgaudio.StateReady, pkgaudio.StatePlaying, pkgaudio.StatePaused:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -149,11 +224,10 @@ func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkg
 		if err != nil {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
 		}
-		// interrupt is declared and refused, never silently downgraded to
-		// duck: whether announcements ever interrupt show audio is an
-		// open owner decision.
-		if merged.MixPolicy != nil && *merged.MixPolicy == pkgaudio.MixPolicyInterrupt {
-			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: `mix policy "interrupt" is not supported; use "mix" or "duck"`}
+		// "unsupported" only ever appears in an adapter's own capability
+		// report (AUDIO-ENGINE section 9): a session may never desire it.
+		if merged.MixPolicy != nil && *merged.MixPolicy == pkgaudio.MixPolicyUnsupported {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: `mix policy "unsupported" cannot be requested; it only appears in adapter capability reports`}
 		}
 		s.desired = merged
 		if s.currentIndex < 0 {
@@ -187,6 +261,10 @@ func (m *Manager) Prepare(ctx context.Context, id pkgaudio.SessionID, invocation
 		if !ok {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to prepare"}
 		}
+		// Prepare never leaves a session Playing (it ends Ready or
+		// Failed), so any LTC run it owned from before must stop
+		// regardless of which of those two this call reaches.
+		m.stopLTCLocked(ctx, s)
 		s.releaseEngineLocked(ctx)
 		obs, err := s.prepareLocked(ctx, item)
 		if err != nil {
@@ -214,6 +292,16 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		if !ok {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to start"}
 		}
+		// A paused session whose bookmark still names the item currently
+		// loaded is a Resume, not a Start: under the known pause-fidelity
+		// limitation the engine's own position may have moved on since the
+		// pause, so replaying the bookmark here would seek it backwards
+		// rather than continue it. A bookmark for a different item (an
+		// Apply landed while paused) is not this case and falls through to
+		// the ordinary stale-handle handling below.
+		if s.state == pkgaudio.StatePaused && s.bookmark != nil && s.bookmark.Identity == itemIdentity(item) {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is paused; use Resume to continue this item, not Start"}
+		}
 		// A handle loaded for a now-superseded item identity (a media or
 		// playlist revision landed via Apply between Prepare and Start) is
 		// as stale as no handle at all: starting it would play the OLD
@@ -222,6 +310,7 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 			s.releaseEngineLocked(ctx)
 			if _, err := s.prepareLocked(ctx, item); err != nil {
 				s.state = pkgaudio.StateFailed
+				m.stopLTCLocked(ctx, s)
 				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 			}
 		}
@@ -239,19 +328,22 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		if err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePlaying
 		s.timingKnown = true
 		s.bookmark = nil
 		s.lastObservedAt = obs.ObservedAt
+		m.startLTCLocked(ctx, s, position)
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
 
-	// duck resolution needs to lock OTHER sessions, so it must run after
-	// s.mu is released — see [Manager.duckLowerPriority]'s doc comment on
-	// why this can never hold two sessions' locks at once.
+	// duck/interrupt resolution needs to lock OTHER sessions, so it must
+	// run after s.mu is released — see [Manager.duckLowerPriority]'s doc
+	// comment on why this can never hold two sessions' locks at once.
 	duck := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyDuck
+	interrupt := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
 	var role pkgaudio.SourceRole
 	if s.desired.SourceRole != nil {
 		role = *s.desired.SourceRole
@@ -260,6 +352,9 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 
 	if duck {
 		m.duckLowerPriority(ctx, id, role)
+	}
+	if interrupt {
+		m.interruptLowerPriority(ctx, id, role)
 	}
 	return res.outcome
 }
@@ -292,6 +387,7 @@ func (m *Manager) Pause(ctx context.Context, id pkgaudio.SessionID, invocation p
 		}
 		s.timingKnown = true
 		s.lastObservedAt = obs.ObservedAt
+		m.stopLTCLocked(ctx, s)
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePaused, pkgaudio.OutcomePosition, obs, dispatchedAt))
 	})
 	return res.outcome
@@ -310,6 +406,9 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 		if !s.handleLoaded || s.state != pkgaudio.StatePaused {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is not paused"}
 		}
+		if len(s.interruptedByAll) > 0 {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is suspended by an interrupting announcement; it resumes on its own once that ends"}
+		}
 		s.timingKnown = false
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Resume(ctx, s.handle)
@@ -321,6 +420,7 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 		s.bookmark = nil
 		s.timingKnown = true
 		s.lastObservedAt = obs.ObservedAt
+		m.startLTCLocked(ctx, s, obs.Position)
 		return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 	})
 	return res.outcome
@@ -355,6 +455,13 @@ func (m *Manager) Seek(ctx context.Context, id pkgaudio.SessionID, invocation pk
 				s.bookmark.PlaylistRevision = s.desired.Playlist.OwnerRevision
 			}
 		}
+		// A seek is the realignment case: while playing, LTC must jump to
+		// the new position's timecode too, never keep emitting the
+		// pre-seek one. A seek while paused has no running LTC to
+		// realign.
+		if s.state == pkgaudio.StatePlaying {
+			m.startLTCLocked(ctx, s, obs.Position)
+		}
 		return m.gateAvailability(confirmLocked(obs.State, pkgaudio.OutcomePosition, obs, dispatchedAt))
 	})
 	return res.outcome
@@ -374,7 +481,7 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 	defer s.mu.Unlock()
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
-		return m.gateAvailability(s.advanceLocked(ctx, true))
+		return m.gateAvailability(s.advanceLocked(ctx, true, time.Time{}))
 	})
 	return res.outcome
 }
@@ -389,7 +496,9 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 // — so a retried Stop can still address it, and the outcome is
 // Unconfirmable with the failure's reason, the same "declared, not
 // refused, not fabricated" shape ADR-024 decision 7's other exempt
-// safety actions use.
+// safety actions use. A duck this session imposed on others is released
+// once the stop is attempted, engine confirmation or not; a session left
+// in StateStopping is re-resolved by [Session.checkStopCompletionLocked].
 func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -401,9 +510,15 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		if !s.handleLoaded {
 			s.state = pkgaudio.StateStopped
 			s.bookmark = nil
+			s.setGapUnknownLocked("session is stopped")
+			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 		}
 		s.state = pkgaudio.StateStopping
+		// Stopped on the attempt, not on confirmation — the same
+		// "declared, not refused, not fabricated" rule this method's own
+		// doc comment states for the ducks it releases.
+		m.stopLTCLocked(ctx, s)
 		_, stopErr := s.mgr.engine.Stop(ctx, s.handle)
 		var releaseErr error
 		if stopErr == nil {
@@ -421,13 +536,17 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
 		s.bookmark = nil
+		s.setGapUnknownLocked("session is stopped")
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
-	reachedStopped := res.executed && s.state == pkgaudio.StateStopped
+	// Released on the attempt, not on confirmation: a stuck duck is
+	// audible all night, and the outcome carries the engine evidence.
+	attempted := res.executed
 	s.mu.Unlock()
 
-	if reachedStopped {
+	if attempted {
 		m.restoreDucked(ctx, id)
+		m.restoreInterrupted(ctx, id)
 	}
 	return res.outcome
 }
@@ -442,18 +561,21 @@ func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation p
 	}
 	s.mu.Lock()
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
+		m.stopLTCLocked(ctx, s)
 		s.releaseEngineLocked(ctx)
 		s.desired = pkgaudio.SessionDesiredState{}
 		s.state = pkgaudio.StateStopped
 		s.currentIndex = -1
 		s.currentItemID = ""
 		s.bookmark = nil
+		s.setGapUnknownLocked("session was cleared")
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeStopped})
 	})
 	s.mu.Unlock()
 
 	if res.executed {
 		m.restoreDucked(ctx, id)
+		m.restoreInterrupted(ctx, id)
 		if err := m.store.Delete(id); err != nil {
 			m.logf("audio session %s: failed to delete persisted state on clear: %v", id, err)
 		}

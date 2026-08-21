@@ -1,0 +1,13 @@
+{
+  "name": "trackf-cadence",
+  "mainPlaylist": [
+    {
+      "type": "sequence",
+      "enabled": 1,
+      "playOnce": 0,
+      "sequenceName": "trackf-cadence.fseq"
+    }
+  ],
+  "leadIn": [],
+  "leadOut": []
+}

@@ -1,0 +1,14 @@
+{
+  "name": "trackf-resting-with-audio",
+  "mainPlaylist": [
+    {
+      "type": "both",
+      "enabled": 1,
+      "playOnce": 0,
+      "sequenceName": "trackf-resting.fseq",
+      "mediaName": "trackf-fake.mp3"
+    }
+  ],
+  "leadIn": [],
+  "leadOut": []
+}

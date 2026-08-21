@@ -2,7 +2,9 @@
 
 [Track C](../build/TRACK-C-audio-node.md) · [RES-007](../research/RES-007-audio-node-architecture.md) · [AUDIO-ENGINE](../architecture/AUDIO-ENGINE.md) · [ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md) · [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md)
 
-Status: **run 2026-08-18**, on `track-c/audio-node` at `526c32a`. This is the capture record for C0a-1, RES-007's first bench item.
+Status: **run 2026-08-18**, on `track-c/audio-node` at `526c32a`. This is the capture record for C0a-1, RES-007's first bench item. A second, distinct bench (the `gstengine` phase 1 spike, real GStreamer on macOS arm64, 2026-08-20) is recorded in its own section below; the two must not be conflated.
+
+The LTC measurements in this record use a pre-rendered file produced by the one-shot `bench/audio-node/ltcgen.c` helper. They validate that candidate's captured graph behavior only. The production decision now recorded in SM-69 is live libltc generation linked into the agent through cgo and fed into the go-gst engine; this bench did not exercise that design and supplies no evidence for it.
 
 ## Environment
 
@@ -72,3 +74,21 @@ A real `alsasink` negotiated, prerolled, played, and reached EOS against the use
 - Whether `gst-device-monitor-1.0` should be added to the shipped audio node image, or whether C1's capability advertisement should be built against `aplay -L`/ALSA APIs directly instead.
 - Whether the sub-millisecond start/restart/track-change/seek offsets measured here hold once a real interface's own driver latency is in the path — none of it was measured against real hardware.
 - Whether `new_absolute()` (this bench's fix) is the binding convention the eventual C3 engine should standardize on everywhere a controller drives a `volume`-or-similar 0..N range property.
+
+## Phase 1 spike (`internal/agent/audio/gstengine`), run 2026-08-20, distinct from the run above
+
+This is a **separate bench, on a separate platform**, and the two must not be conflated. The record above is real GStreamer **1.26.2 on Debian 13.6, in a container**, against a null ALSA PCM device. This section is real GStreamer **1.28.6 on macOS arm64, on the bare development machine, through the `go-gst` bindings**, with no container involved. **Neither is hardware**, and neither is Linux evidence for the `gstengine` Go package specifically: this spike's platform is not the audio node's target OS, kernel, or audio stack, and it has no ALSA at all.
+
+**Purpose:** answer five design questions for `internal/agent/audio/gstengine`'s topology (one continuously running pipeline, one `audiomixer` per program channel into one `interleave`, a permanent silence branch per unclaimed channel, and a per-session decode branch) before writing the production package against them. Committed as its own Go module at `bench/audio-node/spike-phase1/`, with captured logs.
+
+**Environment:** macOS arm64, GStreamer 1.28.6, `go-gst` (pinned at the `v0.0.2` tag in the production package; the spike module may differ). No container, no ALSA, no `/dev/snd` equivalent: this is the development laptop's native GStreamer install.
+
+**Findings, each answered by observation against a real running pipeline:**
+
+1. **A branch can be added to and removed from a running `audiomixer` with no stall.** Buffer count observed climbing 51 → 101 → 150 across an add/remove cycle.
+2. **One branch can be paused while the mix continues**, using `ignore-inactive-pads=true` on the mixer plus a pad-blocking probe on the branch to pause. Observed: the blocked branch froze at 22 buffers while the mixer's own buffer count continued climbing, reaching 72.
+3. **A `GstController` ramp reads back accurately**, and the bench's own earlier `new()`-versus-`new_absolute()` hazard (recorded above, R4) did not reproduce when the absolute binding is used: a ramp from 1.0 to 0.3 over 500 ms read 0.9998 near the start, 0.6747 mid-ramp, and 0.3000 after completion.
+4. **Per-branch end of media is distinguishable from pipeline EOS.** A branch's own `EventEOS` fired while the pipeline bus never emitted `MessageEOS`, confirming a finished session does not need to (and must not) end the shared output pipeline.
+5. **`interleave` places content on chosen channel indices by sink pad request order, not by any per-pad property.** Sink pads must be requested in the exact order intended for the output channel layout; there is no property that fixes the mapping independently of request order. This is the fact `gstengine`'s "interleave sink pad requested in ascending 1-based order" topology rule is built on.
+
+**What this spike does not answer, and does not claim to:** anything about a physical audio interface, ALSA, Linux driver behavior, real multichannel hardware, or sound actually produced. No sound was produced or heard in this spike; every measurement came from buffer counts, event names, and read-back property values on a synthetic pipeline.

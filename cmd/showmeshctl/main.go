@@ -66,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdShow(rest, stdout, stderr, clock)
 	case "surface":
 		return cmdSurface(rest, stdout, stderr, clock)
+	case "night":
+		return cmdNight(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
 	case "render":
@@ -166,6 +168,14 @@ Commands:
   surface get <id>                    show one surface's full definition
   surface set <id>                    write a new surface revision (write, full replacement)
   surface revisions <id>              list surface revision history, newest first
+  night list                          enumerate night.session objects
+  night get <id>                      show one night session's full definition
+  night set <id>                      write a new night.session revision (write, full replacement)
+  night revisions <id>                list night.session revision history, newest first
+  night revision <id> <n>             show one past revision's full payload
+  night active                        print the currently active night session (404 if none set)
+  night activate <id>                 make <id> the active night session (write, full replacement)
+  night deactivate                    clear the active night session back to unset (write)
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports
@@ -393,6 +403,20 @@ Exit codes:
      pipeline is in its "failed" state — distinct from exit 9, which
      covers every other unconfirmed case, including a deadline that
      simply elapsed with no evidence either way)
+  26 night session not ready (a "night <verb>" lifecycle command only: a
+     precondition it needs is not yet met — no open preparation epoch, or
+     no fresh readiness result from the CURRENT epoch; see stderr for the
+     specific missing prerequisite)
+  27 night command rejected by current state (a "night <verb>" lifecycle
+     command only: the command's own closed state table refuses it from
+     the session's current lifecycle state, not merely because it is
+     early — e.g. start-night after the session has already reached
+     end-of-night-resting)
+  28 night session degraded (every "night <verb>" lifecycle command except
+     fade-out, power-down, request-final-show, and end-session: the
+     session is degraded after an ambiguous restart and requires
+     "showmeshctl night end-session" followed by "prepare-site" before any
+     further command can proceed)
 `)
 }
 

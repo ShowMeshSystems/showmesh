@@ -219,10 +219,16 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, now func() t
 	// evidence tables (see migrations.go), and busy_timeout so a momentary
 	// writer conflict blocks briefly instead of surfacing as SQLITE_BUSY to
 	// the caller.
+	// _txlock=immediate makes every [Store.InTx]/[Tx] transaction issue
+	// BEGIN IMMEDIATE rather than SQLite's default deferred BEGIN — Track F
+	// seam F2 review finding 2: a transaction that defers its write lock
+	// can still interleave reads from a concurrent caller before either
+	// commits, which is exactly the read-decide-write race this fixes.
 	dsn := "file:" + dbPath + "?" + url.Values{
 		"_journal_mode": {"WAL"},
 		"_foreign_keys": {"on"},
 		"_busy_timeout": {"5000"},
+		"_txlock":       {"immediate"},
 	}.Encode()
 
 	db, err := sql.Open("sqlite", dsn)

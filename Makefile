@@ -23,6 +23,16 @@ build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(SHOWMESHCTL) ./cmd/showmeshctl
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(FPP_PLUGIN) ./cmd/showmesh-fpp-plugin
 
+# The agent built by `build` is CGo-free and therefore carries no audio
+# engine: internal/agent/audio/gstengine compiles to its !cgo variant,
+# which reports itself unavailable. An agent that must play audio is built
+# here instead, natively, and needs the GStreamer development headers plus
+# the plugins carrying audiomixer.
+.PHONY: build-agent-native
+build-agent-native:
+	mkdir -p $(BIN_DIR)
+	CGO_ENABLED=1 go build -ldflags "$(LDFLAGS)" -o $(AGENT)-native ./cmd/showmesh-agent
+
 .PHONY: test
 test:
 	go test -count=1 ./...

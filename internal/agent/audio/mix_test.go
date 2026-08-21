@@ -43,14 +43,17 @@ func startPlaying(t *testing.T, m *Manager, ctx context.Context, id pkgaudio.Ses
 	}
 }
 
-// mutation target: Manager.Apply's interrupt refusal. Flip the equality
-// check to always-false (or delete it) and this test starts passing on
-// an accepted apply instead of a refusal.
-func TestApplyRefusesInterruptMixPolicy(t *testing.T) {
+// mutation target: Manager.Apply's "unsupported" mix policy refusal. Flip
+// the equality check to always-false (or delete it) and this test starts
+// passing on an accepted apply instead of a refusal. "unsupported" only
+// ever appears in an adapter's own capability report; a session may never
+// desire it, unlike duck/mix/interrupt, which are all real, requestable
+// policies now.
+func TestApplyRefusesUnsupportedMixPolicy(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
-	req := pkgaudio.ApplyRequest{MixPolicy: pkgaudio.SetField(pkgaudio.MixPolicyInterrupt)}
+	req := pkgaudio.ApplyRequest{MixPolicy: pkgaudio.SetField(pkgaudio.MixPolicyUnsupported)}
 
 	r := m.Apply(ctx, "ann", "inv-1", 1, req)
 	if r.Outcome != pkgaudio.OutcomeRefused {
@@ -58,6 +61,26 @@ func TestApplyRefusesInterruptMixPolicy(t *testing.T) {
 	}
 	if r.Reason == "" {
 		t.Fatal("refusal must carry a reason")
+	}
+}
+
+// mutation target: Manager.Apply must accept all three real mix policies.
+// This is the negative space of the refusal above: interrupt must reach
+// desired state rather than being refused.
+func TestApplyAcceptsInterruptMixPolicy(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	// availableFakeEngine, not newTestManager's FakeEngine: under a
+	// permanently-unavailable engine every accepted Apply reads as
+	// Unconfirmable too, which would make this test pass whether or not
+	// MixPolicyInterrupt was actually accepted.
+	m := NewManager(availableFakeEngine{NewFakeEngine(c.now)}, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+	req := pkgaudio.ApplyRequest{MixPolicy: pkgaudio.SetField(pkgaudio.MixPolicyInterrupt)}
+
+	r := m.Apply(ctx, "ann", "inv-1", 1, req)
+	if r.Outcome != pkgaudio.OutcomePosition {
+		t.Fatalf("outcome = %+v, want Position (accepted)", r)
 	}
 }
 
@@ -638,6 +661,57 @@ func TestFadeSupervisionSurvivesRestart(t *testing.T) {
 	}
 }
 
+// TestFadeSupervisionRestartDoesNotJumpGainUpward verifies the sharper
+// half of the restart finding: a restored session's first supervision
+// tick must never infer a fade's completion from a freshly loaded engine
+// handle that was never actually driven through that fade. A pre-crash
+// desired gain of 0.4 mid-fade toward 0 must not become the new handle's
+// default unity gain once RestoreAll and a watchTick run.
+func TestFadeSupervisionRestartDoesNotJumpGainUpward(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+	m.GainSet(ctx, id, "inv-gain", 3, pkgaudio.Gain(0.4))
+	m.GainFade(ctx, id, "inv-fade", 4, pkgaudio.FadeCurveLinear, time.Second, pkgaudio.Gain(0))
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	preCrashGain := *s.desired.Gain
+	s.mu.Unlock()
+	if preCrashGain != pkgaudio.Gain(0.4) {
+		t.Fatalf("precondition: pre-crash desired gain = %v, want 0.4", preCrashGain)
+	}
+
+	// "Restart": a fresh Manager and engine over the same store, with no
+	// intervening watchTick — the crash TestFadeSupervisionSurvivesRestart
+	// also uses. The new engine handle this creates has never been given
+	// the fade that was in flight when the store was last written.
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	m2.watchTick(ctx)
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s2.mu.Lock()
+	defer s2.mu.Unlock()
+	if s2.desired.Gain == nil {
+		t.Fatal("desired gain is nil after restore")
+	}
+	if *s2.desired.Gain > preCrashGain {
+		t.Fatalf("desired gain after restart = %v, want it not to exceed the pre-crash gain %v (a virgin handle's default must never be read as this fade's outcome)", *s2.desired.Gain, preCrashGain)
+	}
+}
+
 // TestFadeCompletionToleratesFloatingPointDrift proves a fade whose
 // engine-reported gain differs from its target only by floating-point
 // error still reports fade_complete. Exact equality here would report a
@@ -654,5 +728,113 @@ func TestFadeCompletionToleratesFloatingPointDrift(t *testing.T) {
 	}
 	if gainsEqual(pkgaudio.Gain(0.3), target) {
 		t.Fatal("gainsEqual(0.3, 0.2) = true, want false: the tolerance must not accept a gain that genuinely missed its target")
+	}
+}
+
+// TestFadeDispatchedAfterRestartResolvesNormally guards the restart guard
+// itself: it is armed by a restore and must be disarmed by the next fade
+// actually dispatched, or a fade issued between the restore and the first
+// supervision tick is answered as one interrupted by a restart it was
+// never part of.
+func TestFadeDispatchedAfterRestartResolvesNormally(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	m := newTestManagerInDir(dir, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+	m.GainFade(ctx, id, "inv-fade", 3, pkgaudio.FadeCurveLinear, time.Second, pkgaudio.Gain(0))
+
+	m2 := newTestManagerInDir(dir, c)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	m2.GainFade(ctx, id, "inv-fade-2", 4, pkgaudio.FadeCurveLinear, time.Second, pkgaudio.Gain(0.2))
+	m2.watchTick(ctx)
+
+	s, ok := m2.get(id)
+	if !ok {
+		t.Fatal("session was not restored")
+	}
+	s.mu.Lock()
+	if !s.fadePending {
+		s.mu.Unlock()
+		t.Fatal("the fade dispatched after the restore was resolved by the restart guard rather than left in progress")
+	}
+	if s.fadeState != FadeStateInProgress {
+		fadeState := s.fadeState
+		s.mu.Unlock()
+		t.Fatalf("fade state = %q, want %q", fadeState, FadeStateInProgress)
+	}
+	handle := s.handle
+	s.mu.Unlock()
+
+	// fadePending is this package's own bookkeeping; it would still read
+	// true if the dispatcher skipped the engine.Fade call entirely. Only
+	// the engine's own evidence proves the call actually reached it.
+	obs, err := m2.engine.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !obs.FadeActive {
+		t.Fatal("engine reports no fade in progress; engine.Fade was never dispatched")
+	}
+}
+
+// TestFadePendingResolvedWhenSessionCompletesNaturally verifies that a
+// fade still pending when a single-item session reaches natural
+// completion is resolved to a terminal outcome, not left stranded:
+// [Session.advanceLocked]'s no-successor-item branch must clear
+// fadePending itself, since nothing else ever will once the handle it
+// would have polled is released.
+func TestFadePendingResolvedWhenSessionCompletesNaturally(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c) // staticDecoder reports a 2s duration
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, id, fadeInvocation, 3, pkgaudio.FadeCurveLinear, 5*time.Second, pkgaudio.Gain(0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("fade unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	if !s.fadePending {
+		s.mu.Unlock()
+		t.Fatal("precondition: fade should be pending")
+	}
+	s.mu.Unlock()
+
+	// The item's own 2s duration elapses well before the 5s fade would
+	// have finished, so natural completion reaches advanceLocked while
+	// the fade is still in progress.
+	c.advance(3 * time.Second)
+	m.watchTick(ctx)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != pkgaudio.StateCompleted {
+		t.Fatalf("state = %q, want Completed", s.state)
+	}
+	if s.fadePending {
+		t.Fatal("fadePending is still true after the session completed; it will never reach a terminal outcome")
+	}
+	result, ok := s.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("the fade's own invocation has no recorded outcome")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome after being stranded by completion = %+v, want Unconfirmable", result)
 	}
 }

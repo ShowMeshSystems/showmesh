@@ -1,6 +1,9 @@
 package audio
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLTCFrameRateValidateAcceptsEveryReservedRate(t *testing.T) {
 	for _, r := range []LTCFrameRate{LTCFrameRate24, LTCFrameRate25, LTCFrameRate2997, LTCFrameRate30} {
@@ -99,5 +102,66 @@ func TestApplyRequestMergeNullClearsLTCStartOffset(t *testing.T) {
 	}
 	if got.LTCStartOffset != nil {
 		t.Errorf("LTCStartOffset = %v, want nil after an explicit null", got.LTCStartOffset)
+	}
+}
+
+func TestLTCTimecodeFrameCountRoundTrip(t *testing.T) {
+	cases := []struct {
+		tc    LTCTimecode
+		rate  LTCFrameRate
+		count int64
+	}{
+		{"00:00:00:00", LTCFrameRate30, 0},
+		{"00:00:01:00", LTCFrameRate25, 25},
+		{"01:00:00:00", LTCFrameRate24, 86400},
+		{"00:10:30:17", LTCFrameRate2997, (10*60+30)*30 + 17},
+	}
+	for _, c := range cases {
+		got, err := c.tc.FrameCount(c.rate)
+		if err != nil {
+			t.Fatalf("%s at %s: %v", c.tc, c.rate, err)
+		}
+		if got != c.count {
+			t.Errorf("%s at %s: FrameCount = %d, want %d", c.tc, c.rate, got, c.count)
+		}
+		if back := LTCTimecodeFromFrameCount(got, c.rate); back != c.tc {
+			t.Errorf("%s at %s: round trip = %s", c.tc, c.rate, back)
+		}
+	}
+}
+
+// TestLTCTimecodeFrameCountRejectsFrameAboveRate proves the frame field is
+// bounded by the rate it is read at, which [LTCTimecode.Validate]
+// deliberately does not check.
+func TestLTCTimecodeFrameCountRejectsFrameAboveRate(t *testing.T) {
+	if _, err := LTCTimecode("00:00:00:27").FrameCount(LTCFrameRate25); err == nil {
+		t.Error("frame 27 at 25 fps was accepted, want an error")
+	}
+}
+
+// TestLTCTimecodeAdvanceAtNonIntegerRate proves 29.97 non-drop timecode
+// runs slower than wall time: one wall-clock hour advances the timecode by
+// 107892 frames, 108 short of the 108000 a 30 fps hour would count.
+func TestLTCTimecodeAdvanceAtNonIntegerRate(t *testing.T) {
+	got, err := LTCTimecode("00:00:00:00").Advance(time.Hour, LTCFrameRate2997)
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	count, err := got.FrameCount(LTCFrameRate2997)
+	if err != nil {
+		t.Fatalf("FrameCount: %v", err)
+	}
+	if count != 107892 {
+		t.Errorf("one hour at 29.97 advanced %d frames (%s), want 107892", count, got)
+	}
+}
+
+// TestLTCTimecodeFromFrameCountWrapsAtOneDay proves the count wraps the
+// way SMPTE timecode itself does rather than producing an hour field
+// above 23.
+func TestLTCTimecodeFromFrameCountWrapsAtOneDay(t *testing.T) {
+	perDay := int64(30 * 60 * 60 * 24)
+	if got := LTCTimecodeFromFrameCount(perDay+30, LTCFrameRate30); got != "00:00:01:00" {
+		t.Errorf("one day plus one second = %s, want 00:00:01:00", got)
 	}
 }

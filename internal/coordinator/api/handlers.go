@@ -70,6 +70,10 @@ type handlers struct {
 	fppCommandConfirmDeadline time.Duration
 	fppCommandPollInterval    time.Duration
 
+	// nightReadinessMaxAge backs Track F seam F2's nightsessioncontrol.go
+	// — see [Options.NightReadinessMaxAge]'s doc comment in api.go.
+	nightReadinessMaxAge time.Duration
+
 	// discoveryRunInFlight serializes POST /api/v1/discovery/runs
 	// (discovery.go's handleStartDiscoveryRun): a second concurrent run is
 	// refused with a 409, never queued — see that handler's own doc
@@ -80,6 +84,12 @@ type handlers struct {
 	// constructed per [New] call and tests build several independent APIs
 	// in one process.
 	discoveryRunInFlight atomic.Bool
+
+	// nightCueHooks is Track F seam F4's own crash-injection seam for
+	// RESTING-MODE.md §7.1.1's commit/dispatch boundary — see
+	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero
+	// value is a no-op; only a test ever sets it.
+	nightCueHooks nightCueDispatchHooks
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

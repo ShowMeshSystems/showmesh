@@ -372,6 +372,41 @@ type CommandStore interface {
 	GetCommand(ctx context.Context, id string) (store.CommandRecord, error)
 }
 
+// NightSessionStore is Track F seam F2's own store dependency: the
+// night_sessions / night_readiness_results rows underneath the lifecycle
+// controller (nightsessioncontrol.go). Declared directly in terms of
+// internal/coordinator/store's own record types, matching [CommandStore]'s
+// identical departure from this file's shadow-type convention and for the
+// identical reason: schemaV10 is fixed by this same seam, not by an
+// independent parallel effort. *store.Store already satisfies this with
+// no adapter needed.
+type NightSessionStore interface {
+	CreateNightSession(ctx context.Context, rec store.NightSessionRecord, now time.Time) error
+	GetNightSession(ctx context.Context, id string) (store.NightSessionRecord, error)
+	GetCurrentNightSession(ctx context.Context) (store.NightSessionRecord, bool, error)
+	GetNightSessionByIdempotencyKey(ctx context.Context, key string) (store.NightSessionRecord, error)
+	UpdateNightSession(ctx context.Context, rec store.NightSessionRecord, now time.Time) error
+
+	CreateNightReadiness(ctx context.Context, rec store.NightReadinessRecord) error
+	GetLatestNightReadiness(ctx context.Context, sessionID string) (store.NightReadinessRecord, error)
+
+	// The four methods below are Track F seam F4's own addition, over the
+	// night_cue_outbox table schemaV10 already created (store/migrations.go).
+	// InsertNightCueOutboxRow's [Tx] form is what makes RESTING-MODE.md
+	// §7.1.1's atomic commit possible: the session's own show_committed
+	// flag and the first outward-facing cue's outbox row are written
+	// together, inside one InTx call, before either is ever acted on.
+	InsertNightCueOutboxRow(ctx context.Context, rec store.NightCueOutboxRecord, now time.Time) error
+	GetNightCueOutboxRow(ctx context.Context, sessionID string, cycle int64, phase, cueName string) (store.NightCueOutboxRecord, error)
+	ListNightCueOutboxRows(ctx context.Context, sessionID string, cycle int64) ([]store.NightCueOutboxRecord, error)
+	UpdateNightCueOutboxRow(ctx context.Context, rec store.NightCueOutboxRecord) error
+
+	// InTx runs fn inside one BEGIN IMMEDIATE transaction, so a lifecycle
+	// command's read, decision, and write share one atomic unit. *store.
+	// Store already satisfies this with no adapter.
+	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
+}
+
 // FPPPollNudger requests an out-of-band poll of one FPP instance's
 // collector, ASAP rather than waiting out its own cadence — the owner's
 // 2026-08-13 fix for the FPP REST collector's DefaultPollInterval (15s)

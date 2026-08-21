@@ -1,0 +1,4 @@
+waitState ret: StatePlaying
+branch-level EOS event observed on mix.sink_0 at 2026-08-20T01:18:23.89838-05:00
+branchEOS: true pipelineEOS: false mix buffers grew after branch EOS: 40
+RESULT d: PASS - one branch's EOS is observable per-pad, distinct from any pipeline-wide EOS, and the mix keeps running on the surviving branch

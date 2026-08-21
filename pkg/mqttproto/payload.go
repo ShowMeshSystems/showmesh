@@ -899,6 +899,19 @@ type AudioSessionReport struct {
 	AssetProbeState  string `json:"assetProbeState"`
 	AssetProbeReason string `json:"assetProbeReason"`
 
+	// GapKnown, ItemGapMs, ItemGapReason, and ItemGapObservedAt are the
+	// measured interval between the previous playlist item's natural
+	// completion and this item's confirmed start
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.item_gap_ms) —
+	// never derived from a requested transition or a known duration.
+	// ItemGapReason is required whenever GapKnown is false.
+	// ItemGapObservedAt is the successor's own engine-clock evidence
+	// time, non-nil only when GapKnown is true.
+	GapKnown          bool       `json:"gapKnown"`
+	ItemGapMs         int64      `json:"itemGapMs"`
+	ItemGapReason     string     `json:"itemGapReason"`
+	ItemGapObservedAt *time.Time `json:"itemGapObservedAt"`
+
 	// Fault is "none" or one of the six named AUDIO-ENGINE section 11.4
 	// fault classes; FaultReason is required whenever Fault != "none".
 	Fault       string `json:"fault"`

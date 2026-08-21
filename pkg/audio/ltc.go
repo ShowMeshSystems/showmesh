@@ -2,7 +2,9 @@ package audio
 
 import (
 	"fmt"
+	"math"
 	"regexp"
+	"time"
 )
 
 // LTCFrameRate is the closed vocabulary this project authorizes: exactly
@@ -74,4 +76,85 @@ func atoi2(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// Nominal is how many frames one timecode second counts at r: 24, 25, or
+// 30. At 29.97 it is 30, because this project ships non-drop timecode at
+// every rate (see [LTCTimecode]), so the fields count 30 frames per
+// timecode second while wall time advances at 29.97 frames per second.
+func (r LTCFrameRate) Nominal() int {
+	switch r {
+	case LTCFrameRate24:
+		return 24
+	case LTCFrameRate25:
+		return 25
+	default:
+		return 30
+	}
+}
+
+// Rate is r's real frame rate in frames per wall-clock second: 30000/1001
+// at 29.97, the integer rate otherwise.
+func (r LTCFrameRate) Rate() float64 {
+	switch r {
+	case LTCFrameRate24:
+		return 24
+	case LTCFrameRate25:
+		return 25
+	case LTCFrameRate2997:
+		return 30000.0 / 1001.0
+	default:
+		return 30
+	}
+}
+
+// Fields returns t's four numeric components. It fails for a timecode
+// [LTCTimecode.Validate] would reject.
+func (t LTCTimecode) Fields() (hh, mm, ss, ff int, err error) {
+	if err := t.Validate(); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	m := ltcTimecodePattern.FindStringSubmatch(string(t))
+	return atoi2(m[1]), atoi2(m[2]), atoi2(m[3]), atoi2(m[4]), nil
+}
+
+// FrameCount returns how many frames t is past 00:00:00:00 at r. It fails
+// for a malformed t, or one whose frame field is not below r's own
+// [LTCFrameRate.Nominal] count.
+func (t LTCTimecode) FrameCount(r LTCFrameRate) (int64, error) {
+	hh, mm, ss, ff, err := t.Fields()
+	if err != nil {
+		return 0, err
+	}
+	if n := r.Nominal(); ff >= n {
+		return 0, fmt.Errorf("%w: audio.LTCTimecode %q has frame %d, which is not below %d at %s", ErrUnknownVocabularyMember, t, ff, n, r)
+	}
+	return int64(((hh*60+mm)*60+ss)*r.Nominal() + ff), nil
+}
+
+// LTCTimecodeFromFrameCount is [LTCTimecode.FrameCount]'s inverse,
+// wrapping at 24 hours the way SMPTE timecode itself does, and treating a
+// negative count as 00:00:00:00.
+func LTCTimecodeFromFrameCount(frames int64, r LTCFrameRate) LTCTimecode {
+	n := int64(r.Nominal())
+	perDay := n * 60 * 60 * 24
+	if frames < 0 {
+		frames = 0
+	}
+	frames %= perDay
+	ff := frames % n
+	total := frames / n
+	return LTCTimecode(fmt.Sprintf("%02d:%02d:%02d:%02d", total/3600, (total/60)%60, total%60, ff))
+}
+
+// Advance returns the timecode d of wall-clock time past t at r, rounding
+// to the nearest whole frame. A negative d moves backwards, floored at
+// 00:00:00:00. This is what turns a session's playhead position into the
+// timecode LTC must be emitting for it.
+func (t LTCTimecode) Advance(d time.Duration, r LTCFrameRate) (LTCTimecode, error) {
+	base, err := t.FrameCount(r)
+	if err != nil {
+		return "", err
+	}
+	return LTCTimecodeFromFrameCount(base+int64(math.Round(d.Seconds()*r.Rate())), r), nil
 }
