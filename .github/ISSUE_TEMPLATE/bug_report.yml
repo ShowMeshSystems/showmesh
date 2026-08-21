@@ -1,0 +1,104 @@
+name: Bug report
+description: Report behavior that does not match what ShowMesh should do.
+title: ""
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please share enough detail for someone else to reproduce it. Do not include passwords, tokens, private keys, or other secrets.
+
+  - type: input
+    id: component
+    attributes:
+      label: Affected component
+      description: Which part of ShowMesh is affected? For example, coordinator, agent, CLI, Operator UI, or FPP integration. Use the documentation-report link for public documentation.
+      placeholder: Coordinator API
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: What release, image tag, or Git commit were you using?
+      placeholder: v0.1.0 or abc1234
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and topology
+      description: Describe the relevant operating system, deployment method, FPP version, network layout, and connected equipment. Include only details relevant to the problem.
+      placeholder: |
+        macOS 15, Docker Compose, FPP 8.4, coordinator and FPP on the same LAN
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest sequence of steps that reliably shows the problem. Include a command or request when useful.
+      placeholder: |
+        1. Start the Compose bundle.
+        2. Open ...
+        3. Select ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect ShowMesh to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Include the visible error or the result you observed.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is this a regression?
+      description: Did this work in an earlier version or commit?
+      options:
+        - Unknown
+        - No
+        - Yes
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or recordings
+      description: Paste the smallest relevant log excerpt or drag in screenshots. Redact secrets and unrelated personal information. Include timestamps when they help establish what happened.
+      render: text
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Operational impact
+      description: What does this prevent or make harder? Say whether it blocks a show, a setup step, a test, or only a cosmetic detail.
+      placeholder: Prevents the coordinator from showing the current FPP state; no live show was affected.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Privacy and security check
+      options:
+        - label: I removed passwords, tokens, private keys, and other secrets from this report.
+          required: true
+        - label: This report does not contain a security vulnerability. If it does, I will use the private security reporting link instead.
+          required: true

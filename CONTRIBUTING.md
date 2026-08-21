@@ -30,9 +30,19 @@ CI runs on Go 1.25.0 and 1.26.5 across Linux and macOS with the race detector, b
 
 ## Before you write code
 
-Read [`docs/build/BUILD-LOG.md`](docs/build/BUILD-LOG.md) first. Its "Current state" block says what actually works right now and what the next action is. [`docs/build/BUILD-PLAN.md`](docs/build/BUILD-PLAN.md) holds the ordered steps and their status.
+Read [`docs/build/BUILD-LOG.md`](docs/build/BUILD-LOG.md) first. Its "Current state" block is the latest build narrative and records what the most recent session observed. [`docs/build/BUILD-PLAN.md`](docs/build/BUILD-PLAN.md) holds roadmap order. Linear is the internal source of truth for the current work queue and next action.
 
 Then check whether an accepted ADR already binds the work. [`docs/decisions/README.md`](docs/decisions/README.md) lists ADR-001 through ADR-022, all Accepted. The summary of the non-negotiable ones is in [`CLAUDE.md`](CLAUDE.md); the ADRs themselves are the authority.
+
+## Reporting a problem or requesting a feature
+
+Search the existing [ShowMesh issues](https://github.com/ShowMeshSystems/showmesh/issues) before opening a new report. Use the issue form that best matches the problem and include the smallest useful example. Bug reports should include the affected component, version or commit, environment, reproduction steps, expected and actual behavior, and operational impact. Feature requests should explain the user problem and desired outcome; an implementation design is not required.
+
+Documentation issues belong in the [showmesh-docs issue tracker](https://github.com/ShowMeshSystems/showmesh-docs/issues/new/choose). Security vulnerabilities must follow the private process in [`SECURITY.md`](SECURITY.md), not a public issue. General support questions should use the project's established support channel when one is provided; do not put credentials or other secrets in any public report.
+
+Public GitHub issues are used for contributor discussion and intake. They may be mirrored into the project's private Linear tracker for internal planning and ownership. Internal Linear identifiers, links, and discussion must not be copied into public issues, pull requests, or documentation.
+
+After submission, a maintainer will check whether the report has enough information, look for duplicates, and route it to the appropriate internal work queue. A report may be asked for clarification, linked to a fix, or closed as a duplicate, out of scope, or already resolved. Creating an issue does not promise a particular implementation or release date.
 
 ## The two conventions
 
