@@ -11,6 +11,14 @@ name: Build FPP test image
 # workflow.
 
 on:
+  # TEMPORARY BOOTSTRAP TRIGGER, removed before this branch is final.
+  # workflow_dispatch is only dispatchable once this file is on the default
+  # branch, so the very first fixture publish is triggered by a push to this
+  # branch instead.
+  push:
+    branches: [codex/fpp-test-image]
+    paths:
+      - ".github/workflows/build-fpp-test-image.yml"
   workflow_dispatch:
     inputs:
       fpp_ref:
