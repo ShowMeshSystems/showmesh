@@ -104,10 +104,19 @@ and was computed before this parser ever ran.
 Given an accepted observation for instance `U`, the coordinator resolves it in
 this order and stops at the first refusal:
 
-1. **Locate the binding.** Find the active Show's `show.playlist` objects
+1. **Locate the binding.** Find every `show.playlist` object, in any Show,
    whose runner is `fpp` and whose `fpp.instanceUuid` is `U`. When there is
    none, the observation is `unbound`: no ShowMesh output was ever authorized
    by this instance, so there is nothing to hold.
+
+   Searching every Show rather than only the active one is deliberate, and an
+   earlier draft of this document had it wrong. Restricting the search to the
+   active Show makes step 5 unreachable by construction, and turns the exact
+   case Track H exists to catch into the blandest possible answer: Christmas
+   active while FPP plays the Halloween playlist would report `unbound`,
+   which reads as "nothing here concerns ShowMesh", when what actually
+   happened is that FPP is playing another Show's content. It must report
+   `cross-show`.
 2. **Compare the hash.** When the observation's `playlistHash` differs from
    the binding's, the state is `stale-import`. The old binding is held, not
    remapped. This is the FPP-playlist-edited case, and it is the one the entry
@@ -121,9 +130,9 @@ this order and stops at the first refusal:
    state is `evidence-mismatch`. The filenames never select the entry; they
    only contradict it.
 5. **Check the Show.** A binding whose Show is not the active Show is
-   `cross-show`, and this check runs even though step 1 searched only the
-   active Show's playlists, because the active Show can change between
-   resolution and use.
+   `cross-show`. The active Show is re-read here rather than carried from
+   step 1, so a binding that was in the active Show when the search ran and
+   is not by the time this step runs is still caught.
 6. **Resolved.** The observation names exactly one Playlist, entry, and Cue,
    pinned to the Playlist and Cue revisions stored at that moment.
 

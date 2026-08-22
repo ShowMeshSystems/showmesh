@@ -9,22 +9,25 @@ import (
 )
 
 // TestFPPPlaylistEntryObservationSchemaVersionIsV14 pins this seam's own
-// migration number against a hardcoded expectation (not just "agrees with
-// maxMigrationVersion()", which store_test.go's general tests already
-// cover): versions 11 through 13 are reserved by other, not-yet-merged
-// branches per docs/build/IDENTIFIER-REGISTER.md, so this fails loudly if
-// schemaV14's entry is ever renumbered to close that gap.
+// migration number against a hardcoded expectation (not just "exists in
+// [migrations]", which store_test.go's general tests already cover):
+// versions 11 through 13 are reserved by other, not-yet-merged branches
+// per docs/build/IDENTIFIER-REGISTER.md, so this fails loudly if
+// schemaV14's entry is ever renumbered to close that gap. It no longer
+// asserts schemaV14 is the newest migration — Track H seam H2 took v15
+// on top of it (see fppplaylistdefinitions_test.go's identical pin) — a
+// database's stamped user_version is a maximum over every migration that
+// has ever shipped, not this one seam's own number.
 func TestFPPPlaylistEntryObservationSchemaVersionIsV14(t *testing.T) {
-	st := openTestStore(t, nil)
-	var version int
-	if err := st.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
-		t.Fatalf("read user_version: %v", err)
+	found := false
+	for _, m := range migrations {
+		if m.version == 14 {
+			found = true
+			break
+		}
 	}
-	if version != 14 {
-		t.Fatalf("user_version = %d, want 14", version)
-	}
-	if got := maxMigrationVersion(); got != 14 {
-		t.Fatalf("maxMigrationVersion() = %d, want 14", got)
+	if !found {
+		t.Fatal("no migration entry has version 14 — schemaV14 was renumbered")
 	}
 }
 

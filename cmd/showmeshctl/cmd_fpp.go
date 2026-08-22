@@ -30,12 +30,35 @@ var fppWriteSubcommands = map[string]func(args []string, stdout, stderr io.Write
 	"next-playlist-item":       cmdFPPNextPlaylistItem,
 	"prev-playlist-item":       cmdFPPPrevPlaylistItem,
 	"set-volume":               cmdFPPSetVolume,
+	// reset-observation-sequence (TRACK-H-H2-SPEC.md §5.1) is not one of
+	// docs/bench/fpp-command-vocabulary.md section 4's eight primitives —
+	// it never dispatches an FPP command at all, it clears coordinator-
+	// side evidence — but it shares this map's dispatch shape (a single
+	// write subcommand keyed by verb name) and its own fpp:command scope.
+	"reset-observation-sequence": cmdFPPResetObservationSequence,
 }
 
 func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	if len(args) > 0 {
 		if handler, ok := fppWriteSubcommands[args[0]]; ok {
 			return handler(args[1:], stdout, stderr, clock)
+		}
+		// "playlist-definitions" is read-only (FPP-PLUGIN-COORDINATOR-CONTRACTS.md
+		// §3.6, TRACK-H-H2-SPEC.md §4 step 2): its own three
+		// sub-subcommands (list/get/entries) live in
+		// cmd_fpp_playlist_definition.go, dispatched here rather than
+		// through fppWriteSubcommands because that map's own doc comment
+		// scopes it to the eight write primitives.
+		if args[0] == "playlist-definitions" {
+			return cmdFPPPlaylistDefinitions(args[1:], stdout, stderr, clock)
+		}
+		// "playlist-entry-observations" is read-only (FPP-PLUGIN-COORDINATOR-CONTRACTS.md
+		// §1.1, TRACK-H-H2-SPEC.md §5): its own two sub-subcommands
+		// (list/reconciliation) live in
+		// cmd_fpp_playlist_entry_observations.go, dispatched here for the
+		// identical reason "playlist-definitions" is one line up.
+		if args[0] == "playlist-entry-observations" {
+			return cmdFPPPlaylistEntryObservations(args[1:], stdout, stderr, clock)
 		}
 	}
 
@@ -55,6 +78,16 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "  next-playlist-item         <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "  prev-playlist-item         <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "  set-volume                 <instance-id> <volume 0-100>")
+		_, _ = fmt.Fprintln(stderr, "  reset-observation-sequence --confirm <instance-id>  (TRACK-H-H2-SPEC.md §5.1)")
+		_, _ = fmt.Fprintln(stderr, "\n<verb> playlist-definitions dispatches FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3's")
+		_, _ = fmt.Fprintln(stderr, "read-only playlist definition surface:")
+		_, _ = fmt.Fprintln(stderr, "  playlist-definitions list")
+		_, _ = fmt.Fprintln(stderr, "  playlist-definitions get     <instance-id> <playlist-hash>")
+		_, _ = fmt.Fprintln(stderr, "  playlist-definitions entries <instance-id> <playlist-hash>")
+		_, _ = fmt.Fprintln(stderr, "\n<verb> playlist-entry-observations dispatches TRACK-H-H2-SPEC.md §5's")
+		_, _ = fmt.Fprintln(stderr, "read-only observation and reconciliation surface:")
+		_, _ = fmt.Fprintln(stderr, "  playlist-entry-observations list")
+		_, _ = fmt.Fprintln(stderr, "  playlist-entry-observations reconciliation <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "\nEach <verb> above RAISES the global --timeout to its own, larger minimum")
 		_, _ = fmt.Fprintln(stderr, "(currently 35s) when given a smaller value, and says so on stderr: the")
 		_, _ = fmt.Fprintln(stderr, "coordinator holds a dispatched command's response open for its own")

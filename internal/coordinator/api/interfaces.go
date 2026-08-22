@@ -423,6 +423,24 @@ type FPPObservationStore interface {
 	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
 }
 
+// FPPPlaylistDefinitionStore is the playlist definition publication
+// contract's store dependency (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3,
+// TRACK-H-H2-SPEC.md §3): store/fppplaylistdefinitions.go.
+// *store.Store already satisfies this with no adapter needed, matching
+// [FPPObservationStore]'s identical pattern.
+//
+// InTx is required for the same reason [FPPObservationStore]'s is: the
+// POST handler's idempotency check ("is this key already held") and its
+// write (or, per contract §3.4 step 8's "the first report of a given
+// content is the one with provenance", its no-op) must share one
+// transaction, and a successful insert's retention prune (H2 spec §3)
+// belongs in that same transaction too.
+type FPPPlaylistDefinitionStore interface {
+	GetFPPPlaylistDefinition(ctx context.Context, instanceUUID, playlistHash string) (store.FPPPlaylistDefinitionRecord, error)
+	ListFPPPlaylistDefinitions(ctx context.Context) ([]store.FPPPlaylistDefinitionRecord, error)
+	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
+}
+
 // FPPPollNudger requests an out-of-band poll of one FPP instance's
 // collector, ASAP rather than waiting out its own cadence — the owner's
 // 2026-08-13 fix for the FPP REST collector's DefaultPollInterval (15s)

@@ -457,6 +457,14 @@ type Dependencies struct {
 	// POST refuses with an internal error, matching this struct's
 	// standing "an unwired dependency is not this API failing" posture.
 	FPPObservations FPPObservationStore
+
+	// FPPPlaylistDefinitions is the playlist definition publication store
+	// dependency — see [FPPPlaylistDefinitionStore]. A nil field is
+	// replaced by [noFPPPlaylistDefinitionStore], under which GET reports
+	// an empty list/not-found and POST refuses with an internal error,
+	// matching this struct's standing "an unwired dependency is not this
+	// API failing" posture.
+	FPPPlaylistDefinitions FPPPlaylistDefinitionStore
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -477,6 +485,10 @@ var _ AssetStore = (*store.Store)(nil)
 // compile-time assertion — *store.Store's Get/List/InTx already satisfy
 // it with no adapter needed.
 var _ FPPObservationStore = (*store.Store)(nil)
+
+// storeSatisfiesFPPPlaylistDefinitionStore is [FPPPlaylistDefinitionStore]'s
+// identical compile-time assertion.
+var _ FPPPlaylistDefinitionStore = (*store.Store)(nil)
 
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
@@ -568,6 +580,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.FPPObservations == nil {
 		d.FPPObservations = noFPPObservationStore{}
 	}
+	if d.FPPPlaylistDefinitions == nil {
+		d.FPPPlaylistDefinitions = noFPPPlaylistDefinitionStore{}
+	}
 	return d
 }
 
@@ -588,6 +603,22 @@ func (noFPPObservationStore) ListFPPPlaylistEntryObservations(context.Context) (
 
 func (noFPPObservationStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
 	return fmt.Errorf("api: fpp observation store not wired in")
+}
+
+// noFPPPlaylistDefinitionStore is [Dependencies.FPPPlaylistDefinitions]'s
+// nil-safe default, mirroring [noFPPObservationStore]'s identical posture.
+type noFPPPlaylistDefinitionStore struct{}
+
+func (noFPPPlaylistDefinitionStore) GetFPPPlaylistDefinition(context.Context, string, string) (store.FPPPlaylistDefinitionRecord, error) {
+	return store.FPPPlaylistDefinitionRecord{}, store.ErrFPPPlaylistDefinitionNotFound
+}
+
+func (noFPPPlaylistDefinitionStore) ListFPPPlaylistDefinitions(context.Context) ([]store.FPPPlaylistDefinitionRecord, error) {
+	return nil, nil
+}
+
+func (noFPPPlaylistDefinitionStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
+	return fmt.Errorf("api: fpp playlist definition store not wired in")
 }
 
 // noNightSessionStore is [Dependencies.NightSessions]'s nil-safe default:
@@ -1634,6 +1665,35 @@ func New(deps Dependencies, opts Options) *API {
 	// matching every other FPP read surface.
 	mux.HandleFunc("POST /api/v1/integrations/fpp/playlist-entry-observations", h.writeGuard(&scopeFPPObserve, h.handlePostFPPPlaylistEntryObservation))
 	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-entry-observations", h.readGuard(identity.ScopeObservationRead, h.handleListFPPPlaylistEntryObservations))
+
+	// TRACK-H-H2-SPEC.md §5.1: the sequence-reset recovery route. Guarded
+	// by fpp:command, deliberately NOT fpp:observe — see
+	// handleDeleteFPPPlaylistEntryObservation's own doc comment
+	// (fppobservations.go) for why clearing evidence and manufacturing it
+	// are different powers.
+	mux.HandleFunc("DELETE /api/v1/integrations/fpp/playlist-entry-observations/{instanceUuid}",
+		h.writeGuard(&scopeFPPCommand, h.handleDeleteFPPPlaylistEntryObservation))
+
+	// TRACK-H-H2-SPEC.md §5, §7: the reconciliation read route, open under
+	// observation:read like every other FPP read surface — see
+	// fppreconciliation.go's own doc comment.
+	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation",
+		h.readGuard(identity.ScopeObservationRead, h.handleGetFPPPlaylistEntryReconciliation))
+
+	// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3-4: playlist definition
+	// publication. POST shares fpp:observe with the observation route
+	// above (§3: "The same principal, the same credential, and the same
+	// fpp:observe scope as section 1."), never fpp:command — publishing a
+	// definition grants no execution authority either. The two GETs stay
+	// open under observation:read, matching every other FPP read surface
+	// (§3.6), including the entries preview route H2 spec §4 step 2 adds
+	// on top of the contract's own two.
+	mux.HandleFunc("POST /api/v1/integrations/fpp/playlist-definitions", h.writeGuard(&scopeFPPObserve, h.handlePostFPPPlaylistDefinition))
+	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-definitions", h.readGuard(identity.ScopeObservationRead, h.handleListFPPPlaylistDefinitions))
+	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}",
+		h.readGuard(identity.ScopeObservationRead, h.handleGetFPPPlaylistDefinition))
+	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}/entries",
+		h.readGuard(identity.ScopeObservationRead, h.handleGetFPPPlaylistDefinitionEntries))
 
 	// --- Track E: the asset store ---
 	//

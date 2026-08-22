@@ -2090,6 +2090,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/integrations/fpp/playlist-definitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Metadata for every stored FPP playlist definition (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6)
+         * @description Open under `observation:read`, matching every other FPP read surface. Metadata only, newest received first — no definition payload, so an operator can choose a playlist to import without downloading every definition on the host.
+         */
+        get: operations["listFPPPlaylistDefinitions"];
+        put?: never;
+        /**
+         * Publish one FPP playlist definition (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3)
+         * @description Behind `fpp:observe`, the same principal, credential, and scope as `POST /integrations/fpp/playlist-entry-observations`. Publishing a definition grants no execution authority, exactly like ingesting an observation.
+         *
+         *     The body is bounded at 1048576 bytes, refused with `413` before parsing. The load-bearing check: the coordinator canonicalizes the received `definition` and refuses when its SHA-256 disagrees with the declared `playlistHash`. The definition is stored under the hash the COORDINATOR computed, never the caller's bare claim. A repeat of an already-held (`instanceUuid`, `playlistHash`) is an idempotent `200` that stores nothing.
+         */
+        post: operations["postFPPPlaylistDefinition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One stored FPP playlist definition (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6)
+         * @description Open under `observation:read`. Returns the definition as the coordinator canonicalized and stored it.
+         */
+        get: operations["getFPPPlaylistDefinition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Parsed entries of one stored FPP playlist definition (TRACK-H-H2-SPEC.md §4 step 2)
+         * @description Open under `observation:read`. Reads `leadIn`, `mainPlaylist`, and `leadOut`, in that order; each section is positioned from zero independently. Import evidence for authoring a `show.playlist` binding — this route selects nothing on its own.
+         */
+        get: operations["getFPPPlaylistDefinitionEntries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/fpp/playlist-entry-observations/{instanceUuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Clear one instance's stored observation and sequence anchor (TRACK-H-H2-SPEC.md §5.1)
+         * @description Behind `fpp:command`, deliberately NOT `fpp:observe`: clearing wedged evidence and manufacturing it are different powers, and `fpp:observe` stays out of the operator bundle so an operator credential cannot forge plugin evidence. This is the only path that clears a stored observation and its sequence anchor (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5: "the stored per-instance sequence is cleared only by an explicit, authenticated operator action"). Exists because a single observation carrying a wildly high sequence otherwise refuses every later legitimate observation for that instance permanently. Idempotent and audited: whether or not a row existed, the post-condition (no stored observation for this instance) is the same, so this always succeeds rather than 404ing on a caller unsure whether the instance is actually wedged.
+         */
+        delete: operations["deleteFPPPlaylistEntryObservation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve one instance's latest accepted observation against configured show.playlist bindings (TRACK-H-H2-SPEC.md §5)
+         * @description Open under `observation:read`, matching every other FPP read surface. Renders what this coordinator currently makes of the latest accepted observation for this instance: which Playlist, entry, and Cue it resolves to, or the exact refusal reason (`unbound`, `stale-import`, `unknown-entry`, `evidence-mismatch`, `cross-show`) and observed evidence when it does not. An `unavailable` observation resolves to `identity-unavailable` and is never matched against any entry. Read-only: this route never activates anything.
+         */
+        get: operations["getFPPPlaylistEntryReconciliation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets": {
         parameters: {
             query?: never;
@@ -3940,6 +4046,105 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             observation: components["schemas"]["FPPPlaylistEntryObservation"];
+        };
+        /** @description The body of GET /integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation (TRACK-H-H2-SPEC.md §5): what this coordinator currently makes of the latest accepted observation for one instance. Only the fields relevant to `outcome` are populated; the rest are the JSON zero value. */
+        FPPPlaylistEntryReconciliationResponse: {
+            instanceUuid: string;
+            /** @enum {string} */
+            outcome: "identity-unavailable" | "unbound" | "stale-import" | "unknown-entry" | "evidence-mismatch" | "cross-show" | "resolved";
+            reason: string;
+            observedPlaylistHash?: string;
+            observedEntryKey?: string;
+            observedSection?: string;
+            observedPosition?: number;
+            observedSequenceFilename?: string;
+            observedMediaFilename?: string;
+            observedAction?: string;
+            observedUnavailable?: string;
+            playlistId?: string;
+            playlistRevision?: number;
+            show?: string;
+            bindingPlaylistHash?: string;
+            bindingPlaylistName?: string;
+            entryId?: string;
+            cueId?: string;
+            cueRevision?: number;
+            /** @description Whether a definition is stored for the hash this result matched against. Populated only for outcomes that reach entry-key derivation (`unknown-entry`, `evidence-mismatch`, `cross-show`, `resolved`); `false` and not meaningful for `identity-unavailable`, `unbound`, and `stale-import`. */
+            definitionAvailable: boolean;
+            /** Format: date-time */
+            serverTime: string;
+        };
+        /** @description The body of POST /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.3), schema version 1. definition is the complete playlist definition as a parsed JSON value, no member removed; the coordinator canonicalizes what it received and refuses the request when the result does not hash to the declared playlistHash. */
+        FPPPlaylistDefinitionPublishRequest: {
+            /** @description Currently 1. Any other value is refused. */
+            schemaVersion: number;
+            instanceUuid: string;
+            playlistName: string;
+            /** @description SHA-256 over the canonicalization of definition. Lowercase hex. */
+            playlistHash: string;
+            /** @description The complete playlist definition, as a parsed JSON value. */
+            definition: Record<string, never>;
+            /** @description When the plugin read this definition, epoch milliseconds. */
+            capturedAtMillis: number;
+        };
+        /** @description The 200 response of POST /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.4 step 8). stored is true only when this call actually inserted a new row; idempotent is its inverse. playlistHash always echoes the hash the coordinator computed, never the caller's bare claim. */
+        FPPPlaylistDefinitionPublishResponse: {
+            schemaVersion: number;
+            instanceUuid: string;
+            playlistHash: string;
+            stored: boolean;
+            idempotent: boolean;
+            /** Format: date-time */
+            serverTime: string;
+        };
+        /** @description One row of GET /integrations/fpp/playlist-definitions (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no definition payload. referenced is true when some stored show.playlist object's active revision names this (instanceUuid, playlistHash). */
+        FPPPlaylistDefinitionMetadata: {
+            instanceUuid: string;
+            playlistName: string;
+            playlistHash: string;
+            /** Format: date-time */
+            capturedAt: string;
+            /** Format: date-time */
+            receivedAt: string;
+            entryCount: number;
+            referenced: boolean;
+        };
+        /** @description The body of GET /integrations/fpp/playlist-definitions: every stored definition's metadata, newest received first. */
+        FPPPlaylistDefinitionsListResponse: {
+            definitions: components["schemas"]["FPPPlaylistDefinitionMetadata"][];
+            /** Format: date-time */
+            serverTime: string;
+        };
+        /** @description The body of GET /integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash} (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): the stored definition itself, as the coordinator canonicalized it. */
+        FPPPlaylistDefinitionResponse: {
+            instanceUuid: string;
+            playlistName: string;
+            playlistHash: string;
+            definition: Record<string, never>;
+            /** Format: date-time */
+            capturedAt: string;
+            /** Format: date-time */
+            receivedAt: string;
+            /** Format: date-time */
+            serverTime: string;
+        };
+        /** @description One parsed playlist entry (TRACK-H-H2-SPEC.md §4.1). type, sequenceName, and mediaName may all be empty — an entry with no filenames is still an entry and is listed. */
+        FPPPlaylistDefinitionEntry: {
+            /** @enum {string} */
+            section: "leadIn" | "mainPlaylist" | "leadOut";
+            /** @description Zero-based position within the section, positioned independently per section. */
+            position: number;
+            type: string;
+            sequenceName: string;
+            mediaName: string;
+        };
+        /** @description The body of GET /integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}/entries (TRACK-H-H2-SPEC.md §4 step 2): leadIn, then mainPlaylist, then leadOut, in that fixed order. */
+        FPPPlaylistDefinitionEntriesResponse: {
+            instanceUuid: string;
+            playlistHash: string;
+            entries: components["schemas"]["FPPPlaylistDefinitionEntry"][];
+            /** Format: date-time */
+            serverTime: string;
         };
         /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container — this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. */
         ConfigShow: {
@@ -8746,6 +8951,214 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listFPPPlaylistDefinitions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPlaylistDefinitionsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    postFPPPlaylistDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FPPPlaylistDefinitionPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPlaylistDefinitionPublishResponse"];
+                };
+            };
+            /** @description Malformed body, unknown field, trailing content, or a duplicate member name (`invalid-parameter`), a missing or malformed identity field (`invalid-parameter`), an unsupported `schemaVersion` (`unsupported-definition-schema-version`), or a definition whose canonicalized SHA-256 disagrees with the declared `playlistHash` (`definition-hash-mismatch`). */
+            400: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description The request body exceeds this endpoint's 1048576 byte limit. Shares `type` `payload-too-large` with `POST /integrations/fpp/playlist-entry-observations`. */
+            413: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPPlaylistDefinition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceUuid: string;
+                playlistHash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPlaylistDefinitionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description No stored definition for this (instanceUuid, playlistHash). */
+            404: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPPlaylistDefinitionEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceUuid: string;
+                playlistHash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPlaylistDefinitionEntriesResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description No stored definition for this (instanceUuid, playlistHash). */
+            404: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteFPPPlaylistEntryObservation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No stored observation remains for this instance. */
+            204: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPPlaylistEntryReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceUuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPlaylistEntryReconciliationResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description No accepted playlist-entry observation for this instanceUuid. */
+            404: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

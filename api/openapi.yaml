@@ -5891,6 +5891,272 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /integrations/fpp/playlist-definitions:
+    post:
+      operationId: postFPPPlaylistDefinition
+      summary: Publish one FPP playlist definition (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3)
+      description: >-
+        Behind `fpp:observe`, the same principal, credential, and scope
+        as `POST /integrations/fpp/playlist-entry-observations`.
+        Publishing a definition grants no execution authority, exactly
+        like ingesting an observation.
+
+
+        The body is bounded at 1048576 bytes, refused with `413` before
+        parsing. The load-bearing check: the coordinator canonicalizes
+        the received `definition` and refuses when its SHA-256 disagrees
+        with the declared `playlistHash`. The definition is stored under
+        the hash the COORDINATOR computed, never the caller's bare claim.
+        A repeat of an already-held (`instanceUuid`, `playlistHash`) is
+        an idempotent `200` that stores nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FPPPlaylistDefinitionPublishRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistDefinitionPublishResponse"
+        "400":
+          description: >-
+            Malformed body, unknown field, trailing content, or a
+            duplicate member name (`invalid-parameter`), a missing or
+            malformed identity field (`invalid-parameter`), an
+            unsupported `schemaVersion`
+            (`unsupported-definition-schema-version`), or a definition
+            whose canonicalized SHA-256 disagrees with the declared
+            `playlistHash` (`definition-hash-mismatch`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          description: >-
+            The request body exceeds this endpoint's 1048576 byte limit.
+            Shares `type` `payload-too-large` with
+            `POST /integrations/fpp/playlist-entry-observations`.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: listFPPPlaylistDefinitions
+      summary: Metadata for every stored FPP playlist definition (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6)
+      description: >-
+        Open under `observation:read`, matching every other FPP read
+        surface. Metadata only, newest received first — no definition
+        payload, so an operator can choose a playlist to import without
+        downloading every definition on the host.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistDefinitionsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}:
+    get:
+      operationId: getFPPPlaylistDefinition
+      summary: One stored FPP playlist definition (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6)
+      description: >-
+        Open under `observation:read`. Returns the definition as the
+        coordinator canonicalized and stored it.
+      parameters:
+        - name: instanceUuid
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: playlistHash
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistDefinitionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No stored definition for this (instanceUuid, playlistHash).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}/entries:
+    get:
+      operationId: getFPPPlaylistDefinitionEntries
+      summary: Parsed entries of one stored FPP playlist definition (TRACK-H-H2-SPEC.md §4 step 2)
+      description: >-
+        Open under `observation:read`. Reads `leadIn`, `mainPlaylist`,
+        and `leadOut`, in that order; each section is positioned from
+        zero independently. Import evidence for authoring a
+        `show.playlist` binding — this route selects nothing on its own.
+      parameters:
+        - name: instanceUuid
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: playlistHash
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistDefinitionEntriesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No stored definition for this (instanceUuid, playlistHash).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /integrations/fpp/playlist-entry-observations/{instanceUuid}:
+    delete:
+      operationId: deleteFPPPlaylistEntryObservation
+      summary: Clear one instance's stored observation and sequence anchor (TRACK-H-H2-SPEC.md §5.1)
+      description: >-
+        Behind `fpp:command`, deliberately NOT `fpp:observe`: clearing
+        wedged evidence and manufacturing it are different powers, and
+        `fpp:observe` stays out of the operator bundle so an operator
+        credential cannot forge plugin evidence. This is the only path
+        that clears a stored observation and its sequence anchor
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5: "the stored
+        per-instance sequence is cleared only by an explicit,
+        authenticated operator action"). Exists because a single
+        observation carrying a wildly high sequence otherwise refuses
+        every later legitimate observation for that instance permanently.
+        Idempotent and audited: whether or not a row existed, the
+        post-condition (no stored observation for this instance) is the
+        same, so this always succeeds rather than 404ing on a caller
+        unsure whether the instance is actually wedged.
+      parameters:
+        - name: instanceUuid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No stored observation remains for this instance.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation:
+    get:
+      operationId: getFPPPlaylistEntryReconciliation
+      summary: Resolve one instance's latest accepted observation against configured show.playlist bindings (TRACK-H-H2-SPEC.md §5)
+      description: >-
+        Open under `observation:read`, matching every other FPP read
+        surface. Renders what this coordinator currently makes of the
+        latest accepted observation for this instance: which Playlist,
+        entry, and Cue it resolves to, or the exact refusal reason
+        (`unbound`, `stale-import`, `unknown-entry`, `evidence-mismatch`,
+        `cross-show`) and observed evidence when it does not. An
+        `unavailable` observation resolves to `identity-unavailable` and
+        is never matched against any entry. Read-only: this route never
+        activates anything.
+      parameters:
+        - name: instanceUuid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistEntryReconciliationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No accepted playlist-entry observation for this instanceUuid.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /assets:
     get:
       operationId: listAssets
@@ -11057,6 +11323,227 @@ components:
           format: date-time
         observation:
           $ref: "#/components/schemas/FPPPlaylistEntryObservation"
+    FPPPlaylistEntryReconciliationResponse:
+      type: object
+      description: >-
+        The body of GET /integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation
+        (TRACK-H-H2-SPEC.md §5): what this coordinator currently makes of
+        the latest accepted observation for one instance. Only the
+        fields relevant to `outcome` are populated; the rest are the JSON
+        zero value.
+      required: [instanceUuid, outcome, reason, definitionAvailable, serverTime]
+      properties:
+        instanceUuid:
+          type: string
+        outcome:
+          type: string
+          enum:
+            - identity-unavailable
+            - unbound
+            - stale-import
+            - unknown-entry
+            - evidence-mismatch
+            - cross-show
+            - resolved
+        reason:
+          type: string
+        observedPlaylistHash:
+          type: string
+        observedEntryKey:
+          type: string
+        observedSection:
+          type: string
+        observedPosition:
+          type: integer
+        observedSequenceFilename:
+          type: string
+        observedMediaFilename:
+          type: string
+        observedAction:
+          type: string
+        observedUnavailable:
+          type: string
+        playlistId:
+          type: string
+        playlistRevision:
+          type: integer
+        show:
+          type: string
+        bindingPlaylistHash:
+          type: string
+        bindingPlaylistName:
+          type: string
+        entryId:
+          type: string
+        cueId:
+          type: string
+        cueRevision:
+          type: integer
+        definitionAvailable:
+          type: boolean
+          description: >-
+            Whether a definition is stored for the hash this result
+            matched against. Populated only for outcomes that reach
+            entry-key derivation (`unknown-entry`, `evidence-mismatch`,
+            `cross-show`, `resolved`); `false` and not meaningful for
+            `identity-unavailable`, `unbound`, and `stale-import`.
+        serverTime:
+          type: string
+          format: date-time
+    FPPPlaylistDefinitionPublishRequest:
+      type: object
+      description: >-
+        The body of POST /integrations/fpp/playlist-definitions
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.3), schema version 1.
+        definition is the complete playlist definition as a parsed JSON
+        value, no member removed; the coordinator canonicalizes what it
+        received and refuses the request when the result does not hash
+        to the declared playlistHash.
+      required: [schemaVersion, instanceUuid, playlistName, playlistHash, definition, capturedAtMillis]
+      properties:
+        schemaVersion:
+          type: integer
+          description: Currently 1. Any other value is refused.
+        instanceUuid:
+          type: string
+        playlistName:
+          type: string
+        playlistHash:
+          type: string
+          description: SHA-256 over the canonicalization of definition. Lowercase hex.
+        definition:
+          type: object
+          description: The complete playlist definition, as a parsed JSON value.
+        capturedAtMillis:
+          type: integer
+          description: When the plugin read this definition, epoch milliseconds.
+    FPPPlaylistDefinitionPublishResponse:
+      type: object
+      description: >-
+        The 200 response of POST /integrations/fpp/playlist-definitions
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.4 step 8). stored is true
+        only when this call actually inserted a new row; idempotent is
+        its inverse. playlistHash always echoes the hash the coordinator
+        computed, never the caller's bare claim.
+      required: [schemaVersion, instanceUuid, playlistHash, stored, idempotent, serverTime]
+      properties:
+        schemaVersion:
+          type: integer
+        instanceUuid:
+          type: string
+        playlistHash:
+          type: string
+        stored:
+          type: boolean
+        idempotent:
+          type: boolean
+        serverTime:
+          type: string
+          format: date-time
+    FPPPlaylistDefinitionMetadata:
+      type: object
+      description: >-
+        One row of GET /integrations/fpp/playlist-definitions
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata only, no
+        definition payload. referenced is true when some stored
+        show.playlist object's active revision names this
+        (instanceUuid, playlistHash).
+      required: [instanceUuid, playlistName, playlistHash, capturedAt, receivedAt, entryCount, referenced]
+      properties:
+        instanceUuid:
+          type: string
+        playlistName:
+          type: string
+        playlistHash:
+          type: string
+        capturedAt:
+          type: string
+          format: date-time
+        receivedAt:
+          type: string
+          format: date-time
+        entryCount:
+          type: integer
+        referenced:
+          type: boolean
+    FPPPlaylistDefinitionsListResponse:
+      type: object
+      description: >-
+        The body of GET /integrations/fpp/playlist-definitions: every
+        stored definition's metadata, newest received first.
+      required: [definitions, serverTime]
+      properties:
+        definitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/FPPPlaylistDefinitionMetadata"
+        serverTime:
+          type: string
+          format: date-time
+    FPPPlaylistDefinitionResponse:
+      type: object
+      description: >-
+        The body of GET /integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}
+        (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): the stored definition
+        itself, as the coordinator canonicalized it.
+      required: [instanceUuid, playlistName, playlistHash, definition, capturedAt, receivedAt, serverTime]
+      properties:
+        instanceUuid:
+          type: string
+        playlistName:
+          type: string
+        playlistHash:
+          type: string
+        definition:
+          type: object
+        capturedAt:
+          type: string
+          format: date-time
+        receivedAt:
+          type: string
+          format: date-time
+        serverTime:
+          type: string
+          format: date-time
+    FPPPlaylistDefinitionEntry:
+      type: object
+      description: >-
+        One parsed playlist entry (TRACK-H-H2-SPEC.md §4.1). type,
+        sequenceName, and mediaName may all be empty — an entry with no
+        filenames is still an entry and is listed.
+      required: [section, position, type, sequenceName, mediaName]
+      properties:
+        section:
+          type: string
+          enum: [leadIn, mainPlaylist, leadOut]
+        position:
+          type: integer
+          description: Zero-based position within the section, positioned independently per section.
+        type:
+          type: string
+        sequenceName:
+          type: string
+        mediaName:
+          type: string
+    FPPPlaylistDefinitionEntriesResponse:
+      type: object
+      description: >-
+        The body of GET /integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}/entries
+        (TRACK-H-H2-SPEC.md §4 step 2): leadIn, then mainPlaylist, then
+        leadOut, in that fixed order.
+      required: [instanceUuid, playlistHash, entries, serverTime]
+      properties:
+        instanceUuid:
+          type: string
+        playlistHash:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/FPPPlaylistDefinitionEntry"
+        serverTime:
+          type: string
+          format: date-time
     ConfigShow:
       type: object
       description: >-

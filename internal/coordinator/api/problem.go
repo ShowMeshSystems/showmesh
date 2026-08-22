@@ -166,6 +166,23 @@ const (
 	// error (contract §1.3: "a disagreement...is a blocker...never a
 	// unilateral change on either side").
 	ProblemTypeObservationEntryKeyMismatch = problemBaseURI + "observation-entry-key-mismatch"
+
+	// ProblemTypeUnsupportedDefinitionSchemaVersion is
+	// FPP-PLUGIN-COORDINATOR-CONTRACTS.md's own §3.4 step 5 refusal:
+	// POST /api/v1/integrations/fpp/playlist-definitions' schemaVersion is
+	// not 1. Mirrors [ProblemTypeUnsupportedObservationSchemaVersion]'s
+	// identical reasoning for the sibling route.
+	ProblemTypeUnsupportedDefinitionSchemaVersion = problemBaseURI + "unsupported-definition-schema-version"
+
+	// ProblemTypeDefinitionHashMismatch is FPP-PLUGIN-COORDINATOR-CONTRACTS.md's own
+	// §3.4 step 7 refusal, the load-bearing one: the coordinator
+	// canonicalized the submitted `definition` and its SHA-256 disagreed
+	// with the declared `playlistHash`. Distinct from
+	// [ProblemTypeInvalidParameter] for the same reason
+	// [ProblemTypeObservationEntryKeyMismatch] is: a client needs to tell
+	// "the definition does not match its own declared hash" apart from an
+	// ordinary malformed field.
+	ProblemTypeDefinitionHashMismatch = problemBaseURI + "definition-hash-mismatch"
 )
 
 // supportedAPIVersions is the fixed, single-element list this coordinator
