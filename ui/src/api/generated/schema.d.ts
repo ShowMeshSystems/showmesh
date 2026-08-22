@@ -2196,6 +2196,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/integrations/fpp/playlists/{playlistId}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report whether one FPP-backed Playlist is ready (TRACK-H-H2-SPEC.md §6)
+         * @description Open under `observation:read`, matching the reconciliation route above. Reports whether every one of §6's five ordered conditions holds (a definition is stored for the binding's (instanceUuid, playlistHash), every entry's (section, position) exists in that definition with matching filenames, every referenced Cue exists and belongs to the same Show, and the latest accepted observation (when one exists) carries the same playlistHash), and the exact failing one when it does not. Refuses with `400` for a playlist whose runner is not `fpp`: §6 readiness is an FPP-specific concept. Read-only: this route never activates anything.
+         */
+        get: operations["getFPPPlaylistReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/assets": {
         parameters: {
             query?: never;
@@ -4071,6 +4091,17 @@ export interface components {
             cueRevision?: number;
             /** @description Whether a definition is stored for the hash this result matched against. Populated only for outcomes that reach entry-key derivation (`unknown-entry`, `evidence-mismatch`, `cross-show`, `resolved`); `false` and not meaningful for `identity-unavailable`, `unbound`, and `stale-import`. */
             definitionAvailable: boolean;
+            /** Format: date-time */
+            serverTime: string;
+        };
+        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set only for the non-fatal form of the observation-hash check (no observation received yet, "the normal afternoon state, not a fault"), never alongside a non-empty `failingCondition`. */
+        FPPPlaylistReadinessResponse: {
+            playlistId: string;
+            ready: boolean;
+            /** @enum {string} */
+            failingCondition?: "definition-missing" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "observation-hash-mismatch";
+            reason?: string;
+            warning?: string;
             /** Format: date-time */
             serverTime: string;
         };
@@ -9149,6 +9180,52 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             /** @description No accepted playlist-entry observation for this instanceUuid. */
+            404: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPPlaylistReadiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                playlistId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPPlaylistReadinessResponse"];
+                };
+            };
+            /** @description The playlist is not fpp-runner. */
+            400: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description No show.playlist object with this id has an active revision. */
             404: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

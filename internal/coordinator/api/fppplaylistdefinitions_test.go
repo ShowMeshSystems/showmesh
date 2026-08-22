@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -330,6 +331,141 @@ func TestFPPPlaylistDefinitionPostRefusedHashMismatch400(t *testing.T) {
 	}
 }
 
+// TestFPPPlaylistDefinitionPostRefusedNegativeCapturedAtMillis400 is
+// review fix item 8's first untested §3.4 step 6 case.
+func TestFPPPlaylistDefinitionPostRefusedNegativeCapturedAtMillis400(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	def, hash := simpleDefinitionAndHash(t, "p1")
+	body := fppPlaylistDefinitionPublishBody(t, "instance-1", "p1", def, hash, -1)
+	resp, m := mustPostPlaylistDefinition(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+// TestFPPPlaylistDefinitionPostRefusedDefinitionNotAnObject400 is review
+// fix item 8's second case: definition present but a JSON array, not an
+// object.
+func TestFPPPlaylistDefinitionPostRefusedDefinitionNotAnObject400(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","playlistName":"p1",` +
+		`"playlistHash":"` + playlistHash64 + `","definition":[1,2,3],"capturedAtMillis":1}`
+	resp, m := mustPostPlaylistDefinition(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+// TestFPPPlaylistDefinitionPostRefusedDefinitionAbsent400 is review fix
+// item 8's third case: definition missing entirely, not merely empty.
+func TestFPPPlaylistDefinitionPostRefusedDefinitionAbsent400(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","playlistName":"p1",` +
+		`"playlistHash":"` + playlistHash64 + `","capturedAtMillis":1}`
+	resp, m := mustPostPlaylistDefinition(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
+	}
+}
+
+// TestFPPPlaylistDefinitionPostRefusedInvalidUTF8IsAudited is review fix
+// items 4 and 8 together: invalid UTF-8 inside "definition" is refused by
+// the whole-body canonicalize check that runs before schemaVersion is
+// even checked (item 4's deliberate deviation), and, unlike contract
+// §3.4's own "step 5 onward" audit line, IS audited anyway.
+func TestFPPPlaylistDefinitionPostRefusedInvalidUTF8IsAudited(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	body := "{\"schemaVersion\":1,\"instanceUuid\":\"instance-1\",\"playlistName\":\"p1\"," +
+		"\"playlistHash\":\"" + playlistHash64 + "\",\"definition\":{\"mainPlaylist\":[{\"sequenceName\":\"a\xffb\"}]}," +
+		"\"capturedAtMillis\":1}"
+	resp, m := mustPostPlaylistDefinition(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
+	}
+	entries := fppPlaylistDefinitionAuditEntries(t, setup.svc)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries for %s = %d, want 1 (item 4's deliberate deviation)", auditActionFPPPublishPlaylistDefinition, len(entries))
+	}
+}
+
+// TestFPPPlaylistDefinitionPostRefusedExcessiveNestingIsAudited is review
+// fix items 4 and 8's excessive-nesting case, and proves item 4's other
+// claim: a definition array nested to the exact depth limit is a BODY one
+// level deeper (because it sits inside the request object's "definition"
+// member), so step 7's own per-definition canonicalize/hash check never
+// gets a chance to be the one that refuses it: the whole-body check
+// above (audited) always gets there first.
+func TestFPPPlaylistDefinitionPostRefusedExcessiveNestingIsAudited(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	// 250 levels comfortably exceeds fppidentity's own 200-level maxDepth
+	// (pkg/fppidentity/canonical_test.go's TestNestingDepthBoundary), and
+	// does so however the embedding is counted.
+	nestedArray := strings.Repeat("[", 250) + "1" + strings.Repeat("]", 250)
+	body := `{"schemaVersion":1,"instanceUuid":"instance-1","playlistName":"p1",` +
+		`"playlistHash":"` + playlistHash64 + `","definition":` + nestedArray + `,"capturedAtMillis":1}`
+	resp, m := mustPostPlaylistDefinition(t, api, body, token)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %v", resp.StatusCode, m)
+	}
+	if m["type"] != ProblemTypeInvalidParameter {
+		t.Errorf("type = %v, want %v", m["type"], ProblemTypeInvalidParameter)
+	}
+	entries := fppPlaylistDefinitionAuditEntries(t, setup.svc)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries for %s = %d, want 1 (item 4's deliberate deviation)", auditActionFPPPublishPlaylistDefinition, len(entries))
+	}
+}
+
+// TestFPPPlaylistDefinitionPostRefusesUnauthenticatedBeforeParsingBody is
+// review fix item 8's last case: a missing credential refuses before an
+// oversized or malformed body is ever read, let alone parsed; steps 1-2
+// run before step 3's size bound and step 4's decode.
+func TestFPPPlaylistDefinitionPostRefusesUnauthenticatedBeforeParsingBody(t *testing.T) {
+	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger(), CloseReads: true})
+
+	// Both oversized (over maxFPPPlaylistDefinitionRequestBodyBytes) AND
+	// malformed (not valid JSON): if either check ran before
+	// authentication, this body would trip it instead of 401.
+	oversizedMalformed := strings.Repeat("{not json", maxFPPPlaylistDefinitionRequestBodyBytes)
+	resp, m := mustPostPlaylistDefinition(t, api, oversizedMalformed, "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (before body is parsed); body: %v", resp.StatusCode, m)
+	}
+}
+
 // TestFPPPlaylistDefinitionRefusalsAreAuditedWithReason exercises §3.4's
 // "every refusal from step 5 onward is audited," mirroring
 // fppobservations_test.go's identical structure for its own sibling rule.
@@ -448,9 +584,24 @@ func TestFPPPlaylistDefinitionIdempotentRepeatStoresNothingAndKeepsFirstProvenan
 
 // --- retention (H2 spec §3) ---
 
+// TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition also
+// covers review fix item 10: retention orders by received_at DESC (store's
+// pruneFPPPlaylistDefinitions), so a fixed clock gives every unreferenced
+// row the SAME received_at and this test's old count-only assertion
+// ("17 survive") would pass however SQLite happened to break that tie;
+// it would never actually prove the NEWEST 16 are the ones kept. An
+// incrementing clock gives each POST a distinct, later received_at, so
+// the test can name exactly which hashes must survive (the 16 posted
+// LAST) and which must not (the 4 posted first, after the referenced
+// seed).
 func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testing.T) {
 	setup := newFPPPlaylistDefinitionTestSetup(t, fixedClock(testNow))
-	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	tick := 0
+	incrementingClock := func() time.Time {
+		tick++
+		return testNow.Add(time.Duration(tick) * time.Second)
+	}
+	api := New(setup.deps(), Options{Clock: incrementingClock, Logger: testLogger()})
 	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
 	token := mustIssueToken(t, setup.svc, scheduler.ID)
 
@@ -461,10 +612,14 @@ func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testi
 	}
 	mustBindShowPlaylist(t, setup.st, "playlist-1", "instance-1", hash0)
 
-	// 20 more unreferenced definitions, exceeding the 16-newest bound.
+	// 20 more unreferenced definitions, posted in order, each with a
+	// strictly later received_at than the last (incrementingClock above),
+	// exceeding the 16-newest bound.
+	hashes := make([]string, 20)
 	for i := 0; i < 20; i++ {
 		name := "p" + string(rune('A'+i))
 		def, hash := simpleDefinitionAndHash(t, name)
+		hashes[i] = hash
 		body := fppPlaylistDefinitionPublishBody(t, "instance-1", name, def, hash, int64(1000+i))
 		if resp, m := mustPostPlaylistDefinition(t, api, body, token); resp.StatusCode != http.StatusOK {
 			t.Fatalf("post %d: status = %d, want 200; body: %v", i, resp.StatusCode, m)
@@ -473,6 +628,20 @@ func TestFPPPlaylistDefinitionRetentionNeverEvictsAReferencedDefinition(t *testi
 
 	if _, err := setup.st.GetFPPPlaylistDefinition(context.Background(), "instance-1", hash0); err != nil {
 		t.Errorf("referenced definition was evicted: %v", err)
+	}
+
+	// The 4 posted FIRST (oldest) must be pruned; the 16 posted LAST
+	// (newest) must survive: the actual claim "newest 16," not merely
+	// "16 survive."
+	for i := 0; i < 4; i++ {
+		if _, err := setup.st.GetFPPPlaylistDefinition(context.Background(), "instance-1", hashes[i]); err == nil {
+			t.Errorf("oldest unreferenced definition %d (hash %s) survived retention, want pruned", i, hashes[i])
+		}
+	}
+	for i := 4; i < 20; i++ {
+		if _, err := setup.st.GetFPPPlaylistDefinition(context.Background(), "instance-1", hashes[i]); err != nil {
+			t.Errorf("newest unreferenced definition %d (hash %s) was pruned, want kept: %v", i, hashes[i], err)
+		}
 	}
 
 	all, err := setup.st.ListFPPPlaylistDefinitionsByInstance(context.Background(), "instance-1")

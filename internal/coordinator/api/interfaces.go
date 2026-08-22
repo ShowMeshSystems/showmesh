@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -439,6 +441,32 @@ type FPPPlaylistDefinitionStore interface {
 	GetFPPPlaylistDefinition(ctx context.Context, instanceUUID, playlistHash string) (store.FPPPlaylistDefinitionRecord, error)
 	ListFPPPlaylistDefinitions(ctx context.Context) ([]store.FPPPlaylistDefinitionRecord, error)
 	InTx(ctx context.Context, fn func(ctx context.Context, tx *store.Tx) error) error
+}
+
+// FPPReconciliationStore is what handleGetFPPPlaylistEntryReconciliation
+// and handleGetFPPPlaylistReadiness (fppreconciliation.go) need against
+// the fppreconcile package, TRACK-H-H2-SPEC.md §5 and §6. Both methods
+// are declared verb-shaped, not as a narrower read surface, because
+// [fppreconcile.Reconcile] and [fppreconcile.PlaylistReadiness], and
+// assetsync.ResolveActiveShow (which Reconcile calls twice), take a
+// concrete *store.Store, the identical reason [Dependencies.AssetManifests]'s
+// own doc comment gives for why NO interface can stand in for that
+// dependency. Wrapping the calls behind these two methods is what lets
+// THIS field, unlike AssetManifests, carry a genuine nil-safe refusing
+// default: [noFPPReconciliationStore] returns a "not wired in" error
+// instead of ever calling either fppreconcile function against a nil
+// store, and TestEveryRefusingDependencyIsWired
+// (apidependencywiring_test.go) can see that refusal because it is a
+// plain error return, not a nil-pointer dereference.
+type FPPReconciliationStore interface {
+	ReconcileFPPPlaylistEntryObservation(ctx context.Context, obs store.FPPPlaylistEntryObservationRecord) (fppreconcile.Result, error)
+	// PlaylistReadinessForFPPPlaylist reports TRACK-H-H2-SPEC.md §6
+	// readiness for one already-resolved fpp-runner show.playlist
+	// binding (object id, current revision, decoded payload): the
+	// caller (handleGetFPPPlaylistReadiness) is the one that fetches
+	// those through [ConfigStore], matching [fppreconcile.PlaylistReadiness]'s
+	// own "already resolved by the caller" contract.
+	PlaylistReadinessForFPPPlaylist(ctx context.Context, playlistID string, revision int64, p config.ShowPlaylistPayload) (fppreconcile.Report, error)
 }
 
 // FPPPollNudger requests an out-of-band poll of one FPP instance's

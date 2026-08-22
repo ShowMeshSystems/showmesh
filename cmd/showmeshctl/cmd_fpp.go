@@ -60,6 +60,13 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		if args[0] == "playlist-entry-observations" {
 			return cmdFPPPlaylistEntryObservations(args[1:], stdout, stderr, clock)
 		}
+		// "playlist-readiness" is read-only (TRACK-H-H2-SPEC.md §6, §7):
+		// its own single command lives in cmd_fpp_playlist_readiness.go,
+		// dispatched here for the identical reason the two entries above
+		// are.
+		if args[0] == "playlist-readiness" {
+			return cmdFPPPlaylistReadiness(args[1:], stdout, stderr, clock)
+		}
 	}
 
 	fs, g := newFlagSet("showmeshctl fpp", stderr)
@@ -88,6 +95,9 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "read-only observation and reconciliation surface:")
 		_, _ = fmt.Fprintln(stderr, "  playlist-entry-observations list")
 		_, _ = fmt.Fprintln(stderr, "  playlist-entry-observations reconciliation <instance-id>")
+		_, _ = fmt.Fprintln(stderr, "\n<verb> playlist-readiness dispatches TRACK-H-H2-SPEC.md §6's")
+		_, _ = fmt.Fprintln(stderr, "read-only readiness surface:")
+		_, _ = fmt.Fprintln(stderr, "  playlist-readiness <playlist-id>")
 		_, _ = fmt.Fprintln(stderr, "\nEach <verb> above RAISES the global --timeout to its own, larger minimum")
 		_, _ = fmt.Fprintln(stderr, "(currently 35s) when given a smaller value, and says so on stderr: the")
 		_, _ = fmt.Fprintln(stderr, "coordinator holds a dispatched command's response open for its own")

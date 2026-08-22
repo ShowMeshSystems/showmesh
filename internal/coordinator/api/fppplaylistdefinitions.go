@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -109,10 +110,6 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 		writeProblem(w, h.logger, now, invalidParameterProblem("malformed request body: trailing content after the JSON value"))
 		return
 	}
-	if _, err := fppidentity.Canonicalize(raw); err != nil {
-		writeProblem(w, h.logger, now, invalidParameterProblem("request body could not be canonicalized: "+err.Error()))
-		return
-	}
 
 	auditRefusal := func(reason string) {
 		entry := identity.AuditEntry{
@@ -130,6 +127,23 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 		if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 			h.logWarn("failed to audit fpp playlist definition refusal", "instanceUuid", req.InstanceUUID, "error", err)
 		}
+	}
+
+	// Deliberate deviation from contract §3.4's "every refusal from step
+	// 5 onward is audited": this whole-body canonicalization runs before
+	// step 5 and IS audited anyway. Without it, invalid UTF-8 or
+	// excessive nesting inside "definition" would refuse here silently,
+	// AND would do so one nesting level shallower than step 7's own
+	// per-definition canonicalize/hash check (fppidentity.HashCanonical
+	// below), because "definition" sits one object level deeper inside
+	// the whole request body than it does alone, making step 7's own
+	// canonicalizer-refusal branch unreachable for depth-limited input. A
+	// plugin posting a malformed definition must leave a trail either
+	// way, so this route audits from here rather than from step 5.
+	if _, err := fppidentity.Canonicalize(raw); err != nil {
+		auditRefusal("request body could not be canonicalized: " + err.Error())
+		writeProblem(w, h.logger, now, invalidParameterProblem("request body could not be canonicalized: "+err.Error()))
+		return
 	}
 
 	// Step 5: schemaVersion.
@@ -155,12 +169,17 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 		writeProblem(w, h.logger, now, invalidParameterProblem("playlistHash must be 64 lowercase hex characters"))
 		return
 	}
-	if len(req.Definition) == 0 || !json.Valid(req.Definition) {
+	if len(req.Definition) == 0 {
 		auditRefusal("missing definition")
 		writeProblem(w, h.logger, now, invalidParameterProblem("definition is required"))
 		return
 	}
 	{
+		// json.Unmarshal below is the actual JSON-validity check
+		// (json.Valid immediately followed by an Unmarshal that fails on
+		// the same malformed input is redundant); this block's own job
+		// is only telling "not valid JSON" apart from "valid JSON, wrong
+		// shape" for the audit reason and problem detail.
 		var probe any
 		if err := json.Unmarshal(req.Definition, &probe); err != nil {
 			auditRefusal("definition is not valid JSON")
@@ -298,9 +317,15 @@ type configReferenceReader interface {
 
 // referencedFPPPlaylistHashesForInstance reports, for one FPP instance,
 // which playlist hashes are named by that instance's fpp binding in some
-// stored show.playlist object's ACTIVE revision.
+// stored show.playlist object's ACTIVE revision. It is the retention
+// prune's only caller and therefore reads STRICT
+// (referencedFPPPlaylistHashesByInstance's strict=true): unlike the list
+// handler's "referenced" column, a wrong answer here is not a mislabeled
+// column, it is permission for PruneFPPPlaylistDefinitions to DELETE a row.
+// An unreadable reference set must abort the prune, not be read as "this
+// playlist references nothing."
 func referencedFPPPlaylistHashesForInstance(ctx context.Context, r configReferenceReader, instanceUUID string) (map[string]bool, error) {
-	all, err := referencedFPPPlaylistHashesByInstance(ctx, r)
+	all, err := referencedFPPPlaylistHashesByInstance(ctx, r, true)
 	if err != nil {
 		return nil, err
 	}
@@ -310,12 +335,30 @@ func referencedFPPPlaylistHashesForInstance(ctx context.Context, r configReferen
 // referencedFPPPlaylistHashesByInstance is
 // [referencedFPPPlaylistHashesForInstance]'s all-instances form, shared
 // with the list handler's own "referenced" column so both read the same
-// show.playlist objects once per call rather than once per row. A
-// payload that fails to decode (a malformed or non-fpp-runner
-// show.playlist) is treated as "names nothing", never as an error: a
-// broken or unrelated show.playlist object must not make retention (or
-// the list response) fail for every FPP instance.
-func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenceReader) (map[string]map[string]bool, error) {
+// show.playlist objects once per call rather than once per row.
+//
+// strict controls what happens when one show.playlist object's active
+// revision cannot be read or decoded:
+//   - strict=false (the list handler): treated as "names nothing". Getting
+//     this wrong mislabels one column of a read-only response, so a broken
+//     or unrelated show.playlist object must not fail the list for every
+//     other FPP instance.
+//   - strict=true (the retention prune, via
+//     [referencedFPPPlaylistHashesForInstance]): the whole call fails
+//     instead. The result here gates a DELETE; degrading an unreadable
+//     reference set to "references nothing" would hand the prune
+//     permission to evict a definition that is, for all this function
+//     could tell, still referenced.
+//
+// Only obj.CurrentRevision (the ACTIVE revision) is read below, so
+// retention protects only a hash a show.playlist's active revision
+// references, never a draft or a rolled-back-from revision. There is no
+// draft or rollback surface for show.playlist today, so this is
+// unreachable in practice, but H6 or a rollback surface would make it
+// live, at which point this function (not the prune query itself) is
+// where a fix belongs: reading every stored revision, not just the
+// active one.
+func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenceReader, strict bool) (map[string]map[string]bool, error) {
 	objs, err := r.ListConfigObjects(ctx, config.ShowPlaylistConfigKind)
 	if err != nil {
 		return nil, err
@@ -327,14 +370,17 @@ func referencedFPPPlaylistHashesByInstance(ctx context.Context, r configReferenc
 		}
 		rev, err := r.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, obj.ID, obj.CurrentRevision)
 		if err != nil {
-			if errors.Is(err, store.ErrConfigRevisionNotFound) {
+			if !strict && errors.Is(err, store.ErrConfigRevisionNotFound) {
 				continue
 			}
 			return nil, err
 		}
 		var payload config.ShowPlaylistPayload
 		if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
-			continue
+			if !strict {
+				continue
+			}
+			return nil, fmt.Errorf("api: decode show.playlist %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
 		}
 		if payload.Runner != config.ShowPlaylistRunnerFPP || payload.FPP == nil {
 			continue
@@ -361,7 +407,7 @@ func (h *handlers) handleListFPPPlaylistDefinitions(w http.ResponseWriter, r *ht
 		h.writeInternalError(w, now, "list fpp playlist definitions", err)
 		return
 	}
-	referenced, err := referencedFPPPlaylistHashesByInstance(ctx, h.deps.Config)
+	referenced, err := referencedFPPPlaylistHashesByInstance(ctx, h.deps.Config, false)
 	if err != nil {
 		h.writeInternalError(w, now, "resolve fpp playlist definition references", err)
 		return

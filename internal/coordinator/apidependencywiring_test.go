@@ -394,8 +394,7 @@ func collectPostLiteralFieldAssignments(f *ast.File, varName string) map[string]
 // such gap: it reads every nil-check in that method directly, so it cannot
 // miss a field withDefaults itself defaults.
 func TestEveryRefusingDependencyIsWired(t *testing.T) {
-	apiFset, apiFiles := collectAPINonTestFiles(t)
-	_ = apiFset
+	_, apiFiles := collectAPINonTestFiles(t)
 
 	refusalVarNames := collectRefusalVarNames(apiFiles)
 	if len(refusalVarNames) < 5 {

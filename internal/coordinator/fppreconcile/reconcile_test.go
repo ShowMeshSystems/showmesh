@@ -149,6 +149,44 @@ func TestReconcileIdentityUnavailable(t *testing.T) {
 	}
 }
 
+// TestReconcileIdentityUnavailableNeverFallsBackToFilenameMatchingEvenWhenABindingExists
+// is review fix item 9: TestReconcileIdentityUnavailable alone runs
+// against an empty store, so an implementation that quietly fell back to
+// matching by filename whenever SOME binding existed for the instance
+// would still pass it. This is the sharper test the fixlist calls for: a
+// real, active-show binding IS present, and its entry's expected
+// filenames are made to equal the unavailable observation's own reported
+// filenames exactly (the strongest possible temptation to "just match
+// it"), and it must still resolve to nothing.
+func TestReconcileIdentityUnavailableNeverFallsBackToFilenameMatchingEvenWhenABindingExists(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "seq.fseq", "media.mp4")
+	putPlaylist(t, st, "playlist-1", p)
+
+	obs := baseObservation("inst-1")
+	obs.Unavailable = string(fppidentity.UnavailableMissingInstanceUUID)
+	// Deliberately equal to the stored binding's own expected filenames:
+	// contracts §1.4's forbidden fallback is exactly "match this
+	// observation to that entry because the filenames agree."
+	obs.SequenceFilename = "seq.fseq"
+	obs.MediaFilename = "media.mp4"
+
+	result, err := Reconcile(context.Background(), st, obs)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.Outcome != OutcomeIdentityUnavailable {
+		t.Fatalf("Outcome = %q, want %q (an unavailable observation must NEVER fall back to filename matching, even with a matching binding present)", result.Outcome, OutcomeIdentityUnavailable)
+	}
+	if result.EntryID != "" || result.CueID != "" || result.PlaylistID != "" {
+		t.Fatalf("Result = %+v, want no Playlist/Entry/Cue populated for an identity-unavailable observation", result)
+	}
+}
+
 func TestReconcileUnboundNoActiveShow(t *testing.T) {
 	st := openTestStore(t)
 	obs := baseObservation("inst-1")
@@ -319,6 +357,57 @@ func TestReconcileCrossShow(t *testing.T) {
 	}
 	if result.Outcome != OutcomeCrossShow {
 		t.Fatalf("Outcome = %q, want %q", result.Outcome, OutcomeCrossShow)
+	}
+}
+
+// TestReconcileTwoBindingsOnOneInstanceChoosesByHashThenActiveShow proves
+// item 1 of the H2 review fix list: when two show.playlist objects (in two
+// different shows) bind the SAME fpp instanceUuid, the candidate whose
+// playlistHash matches the observation and whose show is active must win,
+// even when the OTHER candidate sorts first by object id and the
+// observation's playlistName does not disambiguate. Before the fix, the
+// tiebreak was playlist-name-then-smallest-object-id, which would have
+// picked "playlist-a" here: the stale-hash, non-active-show binding.
+func TestReconcileTwoBindingsOnOneInstanceChoosesByHashThenActiveShow(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putShow(t, st, "show-2", "Show Two")
+	putActiveShow(t, st, "show-2")
+
+	staleHash := hash64("stale")
+	activeHash := hash64("active")
+
+	// "playlist-a" sorts first by object id, lives in the INACTIVE show,
+	// and binds a hash the observation does NOT report.
+	pA := singleEntryPlaylist(t, st, "show-1", "inst-1", "Alpha", staleHash, "cue-a", "mainPlaylist", 0, "", "")
+	putPlaylist(t, st, "playlist-a", pA)
+
+	// "playlist-b" sorts second, lives in the ACTIVE show, and binds the
+	// hash the observation actually reports.
+	pB := singleEntryPlaylist(t, st, "show-2", "inst-1", "Beta", activeHash, "cue-b", "mainPlaylist", 0, "", "")
+	putPlaylist(t, st, "playlist-b", pB)
+
+	obs := baseObservation("inst-1")
+	// Deliberately not "Alpha" or "Beta": the playlistName tiebreak must
+	// not be what resolves this, so the fix is what is under test.
+	obs.PlaylistName = "Unrelated"
+	obs.PlaylistHash = activeHash
+	obs.Section = "mainPlaylist"
+	obs.Position = 0
+	obs.EntryKey = entryKeyFor(t, pB, "entry-1")
+
+	result, err := Reconcile(context.Background(), st, obs)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.Outcome != OutcomeResolved {
+		t.Fatalf("Outcome = %q, want %q (reason: %s)", result.Outcome, OutcomeResolved, result.Reason)
+	}
+	if result.PlaylistID != "playlist-b" {
+		t.Fatalf("PlaylistID = %q, want %q: the hash-matching, active-show binding", result.PlaylistID, "playlist-b")
+	}
+	if result.CueID != "cue-b" {
+		t.Fatalf("CueID = %q, want %q", result.CueID, "cue-b")
 	}
 }
 

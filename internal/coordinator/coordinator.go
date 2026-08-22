@@ -556,6 +556,11 @@ func Run() int {
 		// interface (see that field's own doc comment for why), wired the
 		// same *st already used for Config/Assets/Commands/Discovery above.
 		AssetManifests: st,
+		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
+		// is the adapter api.FPPReconciliationStore's own doc comment
+		// describes, needed only so that field can carry a nil-safe
+		// refusing default (unlike AssetManifests above).
+		FPPReconciliation: api.StoreFPPReconciliation{Store: st},
 		// AssetSettings is Track G seam G-4's live, no-restart view of the
 		// assets.settings configuration kind (ADR-039 decision 6): the SAME
 		// *assetsync.Service constructed above straight in. It already

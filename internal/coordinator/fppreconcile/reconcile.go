@@ -95,9 +95,15 @@ type Result struct {
 	// OutcomeIdentityUnavailable, where ObservedPlaylistHash and
 	// ObservedEntryKey are always empty by contract (contracts section
 	// 1.4) and must never be read as identity.
-	ObservedPlaylistHash     string
-	ObservedEntryKey         string
-	ObservedSection          string
+	ObservedPlaylistHash string
+	ObservedEntryKey     string
+	// ObservedSection is a pointer for the same reason ObservedPosition
+	// is: the empty string is a real FPP section (the common default
+	// one), so a resolved observation reporting it must render
+	// distinguishably from "no section reported" (nil). Set exactly when
+	// ObservedPosition is: non-nil whenever obs.Unavailable is empty,
+	// nil for OutcomeIdentityUnavailable.
+	ObservedSection          *string
 	ObservedPosition         *int
 	ObservedSequenceFilename string
 	ObservedMediaFilename    string
@@ -154,7 +160,6 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 		InstanceUUID:             obs.InstanceUUID,
 		ObservedPlaylistHash:     obs.PlaylistHash,
 		ObservedEntryKey:         obs.EntryKey,
-		ObservedSection:          obs.Section,
 		ObservedSequenceFilename: obs.SequenceFilename,
 		ObservedMediaFilename:    obs.MediaFilename,
 		ObservedAction:           obs.Action,
@@ -163,6 +168,8 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	if obs.Unavailable == "" {
 		pos := int(obs.Position)
 		result.ObservedPosition = &pos
+		section := obs.Section
+		result.ObservedSection = &section
 	}
 
 	// Section 1.4 / H2 spec section 5's closing rule: an unavailable
@@ -203,12 +210,20 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	// instanceUuid; it does not say what happens when more than one
 	// show.playlist (in any show) binds the SAME instance (an unusual,
 	// but not forbidden, authoring choice). This is the narrower, safer
-	// reading of a spec silence: prefer the candidate whose bound
-	// playlistName matches the observation's own reported name (real
-	// evidence the observation already carries), and fall back to the
-	// lexicographically smallest object id for a fully deterministic
-	// result when that still does not narrow to one.
-	binding := chooseCandidateBinding(candidates, obs.PlaylistName)
+	// reading of a spec silence: narrow to candidates whose bound
+	// playlistHash equals the observation's own hash (real evidence the
+	// observation carries, and the thing step 2 would otherwise refuse
+	// on for the wrong candidate); if that still leaves more than one
+	// candidate, or none, prefer the active show's; then fall back to
+	// the playlist-name and lexicographically-smallest-object-id
+	// tiebreak for a fully deterministic result. This early read of the
+	// active show is only a preference among ambiguous candidates; step
+	// 5 below re-reads it fresh and is the sole authoritative gate.
+	preferredShow, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return Result{}, fmt.Errorf("fppreconcile: resolve active show for candidate tiebreak: %w", err)
+	}
+	binding := chooseCandidateBinding(candidates, obs.PlaylistHash, obs.PlaylistName, preferredShow)
 	result.PlaylistID = binding.objectID
 	result.PlaylistRevision = binding.revision
 	result.Show = binding.payload.Show
@@ -326,21 +341,51 @@ func fppRunnerBindingsForInstance(ctx context.Context, st *store.Store, instance
 }
 
 // chooseCandidateBinding is documented on [Reconcile]'s own step-1 comment:
-// prefer a playlistName match against the observation's own reported name,
-// else fall back to the lexicographically smallest object id.
-func chooseCandidateBinding(candidates []candidateBinding, observedPlaylistName string) candidateBinding {
-	if len(candidates) == 1 {
-		return candidates[0]
+// narrow to a playlistHash match against the observation's own reported
+// hash, then to the active show, then to a playlistName match, else fall
+// back to the lexicographically smallest object id. Each narrowing step
+// only applies when it actually narrows the pool to fewer candidates;
+// otherwise the pool is left as it was and the next step tries.
+func chooseCandidateBinding(candidates []candidateBinding, observedPlaylistHash, observedPlaylistName string, preferredShow assetsync.ActiveShow) candidateBinding {
+	pool := candidates
+	if hashMatches := filterCandidates(pool, func(c candidateBinding) bool {
+		return c.payload.FPP.PlaylistHash == observedPlaylistHash
+	}); len(hashMatches) > 0 && len(hashMatches) < len(pool) {
+		pool = hashMatches
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].objectID < candidates[j].objectID })
+	if len(pool) == 1 {
+		return pool[0]
+	}
+	if preferredShow.Configured {
+		if showMatches := filterCandidates(pool, func(c candidateBinding) bool {
+			return c.payload.Show == preferredShow.ShowID
+		}); len(showMatches) > 0 && len(showMatches) < len(pool) {
+			pool = showMatches
+		}
+	}
+	if len(pool) == 1 {
+		return pool[0]
+	}
+	sort.Slice(pool, func(i, j int) bool { return pool[i].objectID < pool[j].objectID })
 	if observedPlaylistName != "" {
-		for _, c := range candidates {
+		for _, c := range pool {
 			if c.payload.FPP.PlaylistName == observedPlaylistName {
 				return c
 			}
 		}
 	}
-	return candidates[0]
+	return pool[0]
+}
+
+// filterCandidates returns the subset of candidates matching keep.
+func filterCandidates(candidates []candidateBinding, keep func(candidateBinding) bool) []candidateBinding {
+	var out []candidateBinding
+	for _, c := range candidates {
+		if keep(c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // matchEntryByKey derives every fpp-bound entry's key and returns the one

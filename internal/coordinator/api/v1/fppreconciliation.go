@@ -20,14 +20,18 @@ type FPPPlaylistEntryReconciliationResponse struct {
 	Outcome      string `json:"outcome"`
 	Reason       string `json:"reason"`
 
-	ObservedPlaylistHash     string `json:"observedPlaylistHash,omitempty"`
-	ObservedEntryKey         string `json:"observedEntryKey,omitempty"`
-	ObservedSection          string `json:"observedSection,omitempty"`
-	ObservedPosition         *int   `json:"observedPosition,omitempty"`
-	ObservedSequenceFilename string `json:"observedSequenceFilename,omitempty"`
-	ObservedMediaFilename    string `json:"observedMediaFilename,omitempty"`
-	ObservedAction           string `json:"observedAction,omitempty"`
-	ObservedUnavailable      string `json:"observedUnavailable,omitempty"`
+	ObservedPlaylistHash string `json:"observedPlaylistHash,omitempty"`
+	ObservedEntryKey     string `json:"observedEntryKey,omitempty"`
+	// ObservedSection is a pointer, not omitempty string: the empty
+	// string is a real FPP section (the common default one), so it must
+	// render distinguishably from "no section reported" (a nil/absent
+	// member). See ObservedPosition's identical reasoning.
+	ObservedSection          *string `json:"observedSection,omitempty"`
+	ObservedPosition         *int    `json:"observedPosition,omitempty"`
+	ObservedSequenceFilename string  `json:"observedSequenceFilename,omitempty"`
+	ObservedMediaFilename    string  `json:"observedMediaFilename,omitempty"`
+	ObservedAction           string  `json:"observedAction,omitempty"`
+	ObservedUnavailable      string  `json:"observedUnavailable,omitempty"`
 
 	PlaylistID          string `json:"playlistId,omitempty"`
 	PlaylistRevision    int64  `json:"playlistRevision,omitempty"`
@@ -42,4 +46,25 @@ type FPPPlaylistEntryReconciliationResponse struct {
 	DefinitionAvailable bool `json:"definitionAvailable"`
 
 	ServerTime string `json:"serverTime"`
+}
+
+// FPPPlaylistReadinessResponse is GET
+// /integrations/fpp/playlists/{playlistId}/readiness's body,
+// TRACK-H-H2-SPEC.md §6: whether one FPP-backed Playlist is ready, and
+// which of the five ordered conditions fails first when it is not. A
+// read-only projection of internal/coordinator/fppreconcile.Report.
+// FailingCondition is one of "definition-missing",
+// "entry-not-in-definition", "entry-filename-mismatch",
+// "cue-not-ready", or "observation-hash-mismatch"
+// (fppreconcile.ReadinessCondition's wire spellings), empty when Ready.
+// Warning is set only for the non-fatal form of the fifth condition
+// (§6's own "the normal afternoon state, not a fault" case), never
+// alongside a non-empty FailingCondition.
+type FPPPlaylistReadinessResponse struct {
+	PlaylistID       string `json:"playlistId"`
+	Ready            bool   `json:"ready"`
+	FailingCondition string `json:"failingCondition,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	Warning          string `json:"warning,omitempty"`
+	ServerTime       string `json:"serverTime"`
 }

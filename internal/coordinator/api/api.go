@@ -14,6 +14,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -465,6 +466,18 @@ type Dependencies struct {
 	// matching this struct's standing "an unwired dependency is not this
 	// API failing" posture.
 	FPPPlaylistDefinitions FPPPlaylistDefinitionStore
+
+	// FPPReconciliation is the reconciliation read route's own dependency:
+	// see [FPPReconciliationStore]. Unlike AssetManifests, which is a
+	// bare *store.Store because no interface can stand in for it, this
+	// field IS an interface specifically so it can carry a nil-safe
+	// refusing default: a nil field is replaced by
+	// [noFPPReconciliationStore], under which the reconciliation GET
+	// refuses with an internal error naming the missing wiring, matching
+	// this struct's standing "an unwired dependency is not this API
+	// failing" posture, and covered by
+	// TestEveryRefusingDependencyIsWired (apidependencywiring_test.go).
+	FPPReconciliation FPPReconciliationStore
 }
 
 // storeSatisfiesCommandStore is a compile-time assertion that
@@ -489,6 +502,14 @@ var _ FPPObservationStore = (*store.Store)(nil)
 // storeSatisfiesFPPPlaylistDefinitionStore is [FPPPlaylistDefinitionStore]'s
 // identical compile-time assertion.
 var _ FPPPlaylistDefinitionStore = (*store.Store)(nil)
+
+// storeFPPReconciliationSatisfiesFPPReconciliationStore is
+// [FPPReconciliationStore]'s compile-time assertion. Unlike the ones
+// above, this is against [StoreFPPReconciliation], the adapter, not
+// *store.Store directly, because *store.Store itself has no
+// ReconcileFPPPlaylistEntryObservation method (see that interface's own
+// doc comment for why).
+var _ FPPReconciliationStore = StoreFPPReconciliation{}
 
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
@@ -583,6 +604,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.FPPPlaylistDefinitions == nil {
 		d.FPPPlaylistDefinitions = noFPPPlaylistDefinitionStore{}
 	}
+	if d.FPPReconciliation == nil {
+		d.FPPReconciliation = noFPPReconciliationStore{}
+	}
 	return d
 }
 
@@ -619,6 +643,20 @@ func (noFPPPlaylistDefinitionStore) ListFPPPlaylistDefinitions(context.Context) 
 
 func (noFPPPlaylistDefinitionStore) InTx(context.Context, func(context.Context, *store.Tx) error) error {
 	return fmt.Errorf("api: fpp playlist definition store not wired in")
+}
+
+// noFPPReconciliationStore is [Dependencies.FPPReconciliation]'s nil-safe
+// default: it never calls [fppreconcile.Reconcile] against a nil store,
+// it just returns the refusal; see [FPPReconciliationStore]'s own doc
+// comment for why this field can have one when AssetManifests cannot.
+type noFPPReconciliationStore struct{}
+
+func (noFPPReconciliationStore) ReconcileFPPPlaylistEntryObservation(context.Context, store.FPPPlaylistEntryObservationRecord) (fppreconcile.Result, error) {
+	return fppreconcile.Result{}, fmt.Errorf("api: fpp reconciliation store not wired in")
+}
+
+func (noFPPReconciliationStore) PlaylistReadinessForFPPPlaylist(context.Context, string, int64, config.ShowPlaylistPayload) (fppreconcile.Report, error) {
+	return fppreconcile.Report{}, fmt.Errorf("api: fpp reconciliation store not wired in")
 }
 
 // noNightSessionStore is [Dependencies.NightSessions]'s nil-safe default:
@@ -1679,6 +1717,12 @@ func New(deps Dependencies, opts Options) *API {
 	// fppreconciliation.go's own doc comment.
 	mux.HandleFunc("GET /api/v1/integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation",
 		h.readGuard(identity.ScopeObservationRead, h.handleGetFPPPlaylistEntryReconciliation))
+
+	// TRACK-H-H2-SPEC.md §6, §7: the readiness read route, open under
+	// observation:read like the reconciliation route above: "readiness
+	// nobody can see is not readiness."
+	mux.HandleFunc("GET /api/v1/integrations/fpp/playlists/{playlistId}/readiness",
+		h.readGuard(identity.ScopeObservationRead, h.handleGetFPPPlaylistReadiness))
 
 	// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3-4: playlist definition
 	// publication. POST shares fpp:observe with the observation route

@@ -6157,6 +6157,62 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /integrations/fpp/playlists/{playlistId}/readiness:
+    get:
+      operationId: getFPPPlaylistReadiness
+      summary: Report whether one FPP-backed Playlist is ready (TRACK-H-H2-SPEC.md §6)
+      description: >-
+        Open under `observation:read`, matching the reconciliation route
+        above. Reports whether every one of §6's five ordered conditions
+        holds (a definition is stored for the binding's
+        (instanceUuid, playlistHash), every entry's (section, position)
+        exists in that definition with matching filenames, every
+        referenced Cue exists and belongs to the same Show, and the
+        latest accepted observation (when one exists) carries the same
+        playlistHash), and the exact failing one when it does not. Refuses
+        with `400` for a playlist whose runner is not `fpp`: §6 readiness
+        is an FPP-specific concept. Read-only: this route never activates
+        anything.
+      parameters:
+        - name: playlistId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPPlaylistReadinessResponse"
+        "400":
+          description: The playlist is not fpp-runner.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No show.playlist object with this id has an active revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /assets:
     get:
       operationId: listAssets
@@ -11387,6 +11443,37 @@ components:
             entry-key derivation (`unknown-entry`, `evidence-mismatch`,
             `cross-show`, `resolved`); `false` and not meaningful for
             `identity-unavailable`, `unbound`, and `stale-import`.
+        serverTime:
+          type: string
+          format: date-time
+    FPPPlaylistReadinessResponse:
+      type: object
+      description: >-
+        The body of GET /integrations/fpp/playlists/{playlistId}/readiness
+        (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is
+        ready, and which condition fails first when it is not.
+        `warning` is set only for the non-fatal form of the
+        observation-hash check (no observation received yet, "the
+        normal afternoon state, not a fault"), never alongside a
+        non-empty `failingCondition`.
+      required: [playlistId, ready, serverTime]
+      properties:
+        playlistId:
+          type: string
+        ready:
+          type: boolean
+        failingCondition:
+          type: string
+          enum:
+            - definition-missing
+            - entry-not-in-definition
+            - entry-filename-mismatch
+            - cue-not-ready
+            - observation-hash-mismatch
+        reason:
+          type: string
+        warning:
+          type: string
         serverTime:
           type: string
           format: date-time
