@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [ADR-043](../decisions/ADR-043-show-scoped-cues-and-playlist-authority.md) · [Track B](TRACK-B-nodes-and-projection.md) · [Track C](TRACK-C-audio-node.md) · [Track F](TRACK-F-resting-mode.md) · [RES-018](../research/RES-018-fpp-brightness-control.md) · [SM-63 handoff](SM-63-FPP-PLUGIN-HANDOFF.md)
 
-Status: not started. Specified 2026-08-20 from ADR-043 and the owner-approved FPP-plus-ShowMesh-audio operating model. The FPP plugin foundation remains SM-63; the first real-host plugin gate remains SM-14.
+Status: H0 closed and H1 and H2 specified, 2026-08-22. Specified 2026-08-20 from ADR-043 and the owner-approved FPP-plus-ShowMesh-audio operating model. The FPP plugin foundation remains SM-63; the first real-host plugin gate remains SM-14.
 
 ## Goal
 
@@ -45,7 +45,188 @@ These dependencies do not block H0 and H1. H2 may build against a recorded plugi
 - Define resource claims for program-audio routes, announcement sessions, render surfaces, and LTC outputs. The known FPP-plus-background-audio case is permitted; two active Cues may not own the same exclusive resource.
 - Record every owner decision in the Track document or a narrowing ADR before dependent code starts.
 
+#### Decisions closed 2026-08-22
+
+ADR-043's four follow-up questions and the H0 seam list are closed here. These
+are narrowing decisions inside an accepted ADR, not new architecture. Nothing
+below permits a cross-show activation, and nothing below adds a scheduler.
+
+##### H0.1 Identifiers are already reserved
+
+`show.cue` and `show.playlist` were reserved in
+[IDENTIFIER-REGISTER](IDENTIFIER-REGISTER.md) before this seam opened, together
+with the rule that an FPP playlist name, index, filename, or imported hash
+lives inside the `show.playlist` runner binding and never becomes a global
+kind or a Cue id. H0 adds no further reservation.
+
+##### H0.2 Held-output policy when FPP contradicts the active Show
+
+**Decision: the policy is authored on the FPP-backed Playlist, it defaults to
+`hold`, and `safeCue` must name a same-show Cue.**
+
+`show.playlist.mismatchPolicy` takes one of three values:
+
+| Value | Effect while the mismatch stands |
+|---|---|
+| `hold` (default) | No new Cue is activated. Every output already authorized by the last good activation keeps running unchanged. The renderer holds its current sequence, audio keeps its current asset, LTC keeps advancing from the Cue it was already following. |
+| `blackAndSilence` | The renderer blacks its surfaces and ShowMesh-owned audio silences. LTC stops. FPP itself is untouched. |
+| `safeCue` | The named same-show Cue is activated in place of the mismatched entry. `safeCueRef` is required, must belong to the same Show, and must pass readiness with the rest of the catalog. |
+
+`hold` is the default because it is the only one of the three that cannot make
+a running show worse than the observation that triggered it. A mismatch is
+usually an authoring error found while something else is playing correctly;
+blacking the wall converts an operator-visible binding problem into an
+audience-visible failure. Both louder policies remain available because a
+site that would rather go dark than show the wrong content must be able to say
+so.
+
+The policy applies to a contradicting FPP observation of any kind: an entry
+bound to a non-active Show, an unknown entry key, an ambiguous binding, a
+changed playlist hash, or an event-sequence regression. The state is
+`mismatched` in every case and carries the observed evidence, so the three
+policies differ only in what the outputs do, never in what the operator is
+told.
+
+The policy is resolved from the active Show's `fpp`-runner Playlist bound to
+the reporting FPP instance. When no such Playlist exists, no ShowMesh output
+was ever authorized by that instance, so there is nothing to hold and the
+observation is recorded as unbound.
+
+Cross-show fallback is not an option under any of the three, and no policy may
+search another Show's namespace for a Cue, an asset, or a surface.
+
+##### H0.3 LTC start offset stays on the Cue
+
+**Decision: day 0 has exactly one LTC offset field and it lives on the Cue.**
+
+This confirms ADR-043 decision 2 and its follow-up question 2 with no change.
+No same-Cue/different-time-range requirement has been recorded, and a
+Playlist-entry override added now would create two competing sources for one
+value before anything reads either. When a concrete requirement appears, the
+override is additive: an absent entry override means the Cue's offset, which
+is the behavior shipped here.
+
+SM-145 asks a different question, whether LTC restarts per playlist item or
+continues across the playlist. The Cue offset is what answers it either way:
+per-item restart is offset `0` on each Cue, and a continuous timeline is an
+increasing offset per Cue. Track H ships the field and the arithmetic
+(`Cue LTC start offset + current Cue position`); it does not decide the show's
+authoring convention.
+
+##### H0.4 Day-0 Cue outputs
+
+**Decision: a Cue declares at most four outputs, and entry/exit Actions and
+Macros are not among them.**
+
+| Output | What it declares |
+|---|---|
+| `render` | The logical sequence whose target-specific FSEQ the participating render nodes select. |
+| `audio` | The audience-audio asset and its playback policy. |
+| `ltc` | The LTC start offset, emitted from the program-audio clock domain. |
+| `announcement` | The duck, mix, or interrupt policy an announcement Cue applies to the active background-audio session. |
+
+An `announcement` Cue is a Cue that declares the `announcement` output. It is
+directly activatable and is not required to be a Playlist entry.
+
+Entry and exit Actions and Macros are deliberately absent. ADR-043 makes them
+conditional on "a later decision", and the decision they need is a failure
+policy, not a field: a Macro that fails on Cue entry has to either hold the
+Cue, run it anyway, or abort the entry, and each of those is a different
+runtime contract. SM-48's open question about action idempotency is the same
+gap seen from Track F. Adding the field before that policy exists would ship
+an unspecified failure direction into the activation path.
+
+##### H0.5 Resource claims
+
+**Decision: claims are derived from a Cue's declared outputs, never authored
+by hand, and exclusivity is checked at authoring, activation, and dispatch.**
+
+| Claim | Derived from | Exclusivity |
+|---|---|---|
+| `program-audio-route:<node>:<route>` | `audio` output | Exclusive. One Cue owns the program route. |
+| `render-surface:<surfaceId>` | `render` output, expanded through the Show's surfaces | Exclusive per surface. |
+| `ltc-output:<node>:<route>` | `ltc` output | Exclusive. |
+| `announcement-session:<node>` | `announcement` output | Exclusive. One announcement at a time. |
+
+An announcement Cue claims only `announcement-session`. It does not claim
+`program-audio-route`, because its declared duck, mix, or interrupt policy is
+a relationship with whoever holds that route rather than a seizure of it. That
+is what lets an announcement play over background music without either Cue
+being refused.
+
+**An announcement Cue still declares `audio`, and that is not a contradiction.**
+The `audio` output says what the announcement plays; the `announcement` output
+says it plays through the announcement session rather than the program route.
+So the rule the claim derivation implements is: a Cue claims
+`program-audio-route` when it declares `audio` and does not declare
+`announcement`. Reading the claim off `audio` alone would make every
+announcement collide with the background music it is supposed to duck, which
+is the one case this table exists to permit.
+
+FPP's own lighting and sequence playback is not a ShowMesh claim. This is the
+whole point of the model: FPP running a resting sequence while a
+`showmesh-audio` Playlist runs background music is two independent authorities
+with a disjoint claim set, so it is permitted by construction rather than by
+exception.
+
+A refused claim names both Cues and the exact claim string. Nothing is
+silently preempted, and a claim conflict is a readiness failure before
+showtime rather than a runtime surprise.
+
+##### H0.6 Where these decisions are enforced
+
+Recorded here so H1 through H5 do not each re-derive the boundary:
+
+- **Authoring** rejects cross-show references, a `safeCue` outside the Show,
+  and two same-show Cues that a single Playlist could make concurrently active
+  with a colliding exclusive claim.
+- **Readiness** rejects stale imports, missing assets, a node without the
+  authorized catalog revision, and conflicting claims across the Playlists a
+  Show can run concurrently.
+- **Activation** rejects an inactive Show, a stale active-show generation, an
+  unknown or ambiguous entry key, and a sequence regression.
+- **Dispatch and node execution** reject the same set again against the
+  catalog the node actually holds. Asset presence grants no authority.
+
+##### H0.7 Switching the active Show
+
+**Decision: a switch revokes the previous Show's authority immediately.
+ShowMesh-owned audio stops, rendering holds but is reported as superseded,
+and nothing restores the previous Show's output after a restart.**
+
+This is a different situation from H0.2's mismatch and takes a different
+answer. A mismatch is one contradicting observation inside a Show that is
+still authorized, and reconciling it is a live possibility. A Show switch is
+an operator deciding that the previous Show may no longer affect anything, so
+there is nothing to hold open for.
+
+| Output | On switch |
+|---|---|
+| ShowMesh-owned auxiliary audio and announcements | Stop, using the configured default fade. Their content belongs to a Show that is no longer authorized. |
+| LTC | Stops with the audio it was emitted from. |
+| Rendering | Holds its current output, reported as `superseded` with the Show and generation that authorized it. It is never reported as current or healthy. |
+| FPP | Untouched. FPP is not ShowMesh's to stop, and ADR-001 as narrowed by ADR-043 leaves its playback where it is. |
+
+Rendering holds rather than blacking for H0.2's reason: an operator switching
+Shows during setup should not see the wall go dark as a side effect of an
+authoring action. Holding is also not an activation. The node continues
+something that was authorized when it started and says so honestly; it does
+not select anything new.
+
+**A held output is never restored.** A node that restarts, or whose render
+pipeline restarts, comes up cleared rather than re-applying a persisted
+assignment whose authorization tuple no longer matches the active Show and
+generation. This is the case that would otherwise bite hardest, because the
+render agent already resumes its last persisted assignment at boot: without
+this rule, rebooting a node in November would put Halloween back on the wall.
+
+The newly active Show's Cues cannot run until its catalog is deployed and
+acknowledged, which is H3. Asset presence on the node grants nothing.
+
+
 ### H1. Versioned Cue and Playlist configuration
+
+Specified in detail in [TRACK-H-H1-SPEC](TRACK-H-H1-SPEC.md).
 
 Add `show.cue` and `show.playlist` through the store, public API, OpenAPI, `showmeshctl`, export/import, audit, revision history, and copy guards before adding a UI.
 
@@ -54,6 +235,8 @@ A Cue carries a required Show reference, stable id, readiness metadata, and type
 Validation refuses cross-show references, duplicate entry ids, missing Cues, unsupported runner fields, conflicting resource claims, invalid LTC offsets, and a Cue output the selected nodes cannot execute. Updating a Cue or Playlist creates a new revision; an active run pins exact Cue and Playlist revisions.
 
 ### H2. FPP import, reconciliation, and entry identity
+
+Specified in detail in [TRACK-H-H2-SPEC](TRACK-H-H2-SPEC.md). Its plugin-facing half is frozen as section 3 of [FPP plugin coordinator contracts](FPP-PLUGIN-COORDINATOR-CONTRACTS.md), so the plugin repository can build against it without reading this track.
 
 Provide an authoring flow that reads an FPP playlist definition, stores its canonical revision, and maps each entry to a Cue. Import never makes a filename the Cue identity.
 
@@ -64,6 +247,8 @@ Reconciliation refuses a changed playlist hash, an unknown entry, ambiguous dupl
 Independent FPP MQTT topics remain corroboration and health evidence. They are never assembled into a synthetic atomic transition.
 
 ### H3. Active-show generation and resolved Cue catalogs
+
+Specified in detail in [TRACK-H-H3-SPEC](TRACK-H-H3-SPEC.md).
 
 Define an active-show generation that changes whenever `show.active` changes or its authorization is deliberately reissued. Every Cue activation and node assignment carries the Show id, active-show generation, Playlist revision, entry id, Cue id, and Cue revision that authorized it.
 
