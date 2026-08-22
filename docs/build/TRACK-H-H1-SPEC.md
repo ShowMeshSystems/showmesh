@@ -33,7 +33,19 @@ Object id is operator-chosen. Payload:
 ```
 
 - `show` is required and must name an existing `show` object. It is the
-  ADR-027 namespace and is immutable in the same way `show.surface`'s is.
+  ADR-027 namespace, and this seam enforces that a later write may not change
+  it: a `PUT` whose `show` differs from the stored revision's is refused,
+  naming both. Moving a Cue to another Show would otherwise convert every
+  Playlist entry referencing it into exactly the cross-show reference section
+  4 refuses at write time, and it would surface at activation on show night
+  rather than at the edit that caused it. An operator who wants this Cue in
+  another Show authors one there.
+
+  Checked 2026-08-22: `show.surface` does **not** enforce this, and neither
+  does any other show-scoped kind. Its `PUT` is a full replacement that never
+  compares the incoming `show` against the stored one. That is a real gap, it
+  predates Track H, and fixing it belongs to whoever owns that kind rather
+  than to this seam.
 - `name` is required, bounded at 200 runes, and is operator-facing only.
 - `outputs` is required and must declare at least one output. A Cue that
   declares nothing is an authoring mistake, not an empty-but-valid Cue.
