@@ -285,6 +285,20 @@ const (
 	// distinct, separately-detected case here.
 	ValidationCodePowerOffPrerequisiteCycle = "power-off-prerequisite-cycle"
 
+	// ValidationCodeInterlockShutdownPhaseRequiresOverride means a "block"
+	// rule declared on phase fade-out-night or power-down-presentation set
+	// overridePolicy "none": those two phases end the night, and a guard
+	// on either one must always have a human exit (RESTING-MODE.md
+	// §10.4, orchestrator ruling from this seam's own safety review).
+	ValidationCodeInterlockShutdownPhaseRequiresOverride = "interlock-shutdown-phase-requires-override"
+
+	// ValidationCodeInterlockSignalNoFalseAnswer means a "block" rule's
+	// signal action uses an mqtt expect kind that can never report a
+	// negative answer ("text", or "number" with no comparison value), so
+	// the rule could only ever withhold via onUnavailable, never via a
+	// real condition-false reading.
+	ValidationCodeInterlockSignalNoFalseAnswer = "interlock-signal-no-false-answer"
+
 	// ValidationCodeBackgroundAudioItemsEmpty means
 	// resting.backgroundAudio.items was present but held zero entries —
 	// AUDIO-ENGINE.md §3 requires at least one item for a playlist to

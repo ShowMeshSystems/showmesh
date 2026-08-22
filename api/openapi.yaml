@@ -5434,21 +5434,36 @@ paths:
         `start-preshow`, `start-night`, `fade-out-night`, or
         `power-down-presentation` can withhold that same command with a
         `409` (`night-not-ready`) naming the rule, unless a valid override
-        is supplied. `prepare-site` and `run-readiness` dispatch that
-        rule's own evidence LIVE, at the instant the command runs; the
-        other four gate on the most recent readiness result instead,
+        is supplied. `prepare-site`, `run-readiness`, `fade-out-night`,
+        and `power-down-presentation` dispatch that rule's own evidence
+        LIVE, at the instant the command runs. `start-preshow` and
+        `start-night` gate on the most recent readiness result instead,
         which is at most as fresh as the last `run-readiness` call; see
         RESTING-MODE.md §10.1 and this seam's own build report for why
-        those are different freshness guarantees. `request-final-show`
-        and `end-session` declare no interlock phase and consult no gate
-        at all: `end-session` in particular is never withheld by any
-        interlock, by construction, so a misconfigured "block" rule with
-        `overridePolicy: none` and an unavailable source can never make
-        the night impossible to end, only impossible to end through
-        `fade-out-night`/`power-down-presentation` specifically.
-        `projector-strike`, `enter-resting`, and `presentation-power-on`
-        are validated and shown on readiness but have no command of their
-        own to gate in this build.
+        those are different freshness guarantees, and for why
+        fade-out-night and power-down-presentation moved from a stored
+        gate to a live one: a night runs for hours and run-readiness
+        typically runs once, near the start, so a stored gate on either
+        shutdown phase almost always found no trusted result at all by
+        the time it mattered and silently made `onUnavailable: allow`
+        the only condition it could ever report.
+
+
+        `fade-out-night` and `power-down-presentation` are also the two
+        phases where PUT /config/night.session/{id} refuses a "block"
+        rule that declares `overridePolicy: "none"`
+        (`interlock-shutdown-phase-requires-override`): a guard on a
+        phase that ends the night must always have a human exit, so
+        every such rule is guaranteed an authorized-operator override
+        path. `request-final-show` and `end-session` declare no
+        interlock phase and consult no gate at all: `end-session` in
+        particular is never withheld by any interlock, by construction,
+        so it always reaches "stopped" even for a caller who cannot
+        supply a valid override, though only `fade-out-night` and
+        `power-down-presentation` themselves actually issue FPP's own
+        stop. `projector-strike`, `enter-resting`, and
+        `presentation-power-on` are validated and shown on readiness but
+        have no command of their own to gate in this build.
       parameters:
         - name: command
           in: path
@@ -9579,6 +9594,8 @@ components:
             - https://showmesh.dev/problems/show-config-domain-provenance-refused
             - https://showmesh.dev/problems/show-config-prerequisites-empty
             - https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle
+            - https://showmesh.dev/problems/interlock-shutdown-phase-requires-override
+            - https://showmesh.dev/problems/interlock-signal-no-false-answer
             - https://showmesh.dev/problems/macro-run-already-in-flight
             - https://showmesh.dev/problems/macro-run-idempotency-macro-conflict
             - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
@@ -11517,6 +11534,18 @@ components:
         freshnessSeconds:
           type: integer
           minimum: 0
+          description: >-
+            Bounds how old the evidence this rule consults may be before
+            it is treated as unavailable (server-side enforced). For a
+            phase whose evidence is dispatched live at the instant the
+            command runs (prepare-site, run-readiness, fade-out-night,
+            power-down-presentation), evidence is always current and this
+            has no effect. For a phase gated against a stored readiness
+            result instead (start-preshow, start-night), the stricter of
+            this value and the coordinator's own configured readiness
+            max age is enforced; with no trusted result at all, or one
+            older than either bound, this rule is evidence-unavailable
+            regardless of what its stored check reports.
         failureText:
           type: string
           minLength: 1
@@ -12068,7 +12097,8 @@ components:
     NightCommandRequest:
       type: object
       description: >-
-        The optional body of POST /night/commands/{command}.
+        The optional body of POST /night/commands/{command}. Decoded
+        strictly: an unrecognized key is refused, not silently ignored.
         `idempotencyKey` is honored only by `prepare-site`; every other
         command is already idempotent by lifecycle state and ignores it.
         `interlockOverrides` (Track F seam F6) is consulted by
@@ -12077,7 +12107,8 @@ components:
         the "block" interlock rules declared for that command's own
         phase, described in full on `POST /night/commands/{command}`
         itself. `request-final-show` and `end-session` consult no
-        interlock at all.
+        interlock at all and REFUSE a non-empty `interlockOverrides`
+        rather than silently ignoring it.
       properties:
         idempotencyKey:
           type: string

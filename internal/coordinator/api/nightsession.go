@@ -104,14 +104,18 @@ func (h *handlers) nightInterlockSignalResolver(ctx context.Context) config.Inte
 			Target struct {
 				Integration string `json:"integration"`
 				Expect      struct {
-					Kind string `json:"kind"`
+					Kind  string  `json:"kind"`
+					Value *string `json:"value"`
 				} `json:"expect"`
 			} `json:"target"`
 		}
 		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
 			return config.NightInterlockSignalInfo{}, false
 		}
-		return config.NightInterlockSignalInfo{Show: head.Show, Integration: head.Target.Integration, MQTTExpectKind: head.Target.Expect.Kind}, true
+		return config.NightInterlockSignalInfo{
+			Show: head.Show, Integration: head.Target.Integration,
+			MQTTExpectKind: head.Target.Expect.Kind, MQTTExpectValuePresent: head.Target.Expect.Value != nil,
+		}, true
 	}
 }
 

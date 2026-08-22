@@ -430,32 +430,159 @@ func TestInterlockOtherPhaseDoesNotBlockPowerDownPresentation(t *testing.T) {
 
 // --- end-session remains the unconditional escape ---
 
-// TestEndSessionIsNeverWithheldByAnInterlockEvenWithOverridePolicyNone is
-// the coordinator's own required proof: a "block" rule on fade-out-night
-// with an unavailable source, onUnavailable: block, AND overridePolicy:
-// none has no override path at all, but end-session still reaches
-// stopped, because end-session declares no interlock phase and consults
-// no gate.
-func TestEndSessionIsNeverWithheldByAnInterlockEvenWithOverridePolicyNone(t *testing.T) {
-	api, brokers, opToken, _, obs := setupNightInterlockRawFixture(t, `{
-		"name": "cooldown", "phase": "fade-out-night", "posture": "block",
-		"signal": "cooldown-check", "failureText": "f",
-		"onUnavailable": "block", "overridePolicy": "none"
-	}`)
+// TestConfigRejectsOverridePolicyNoneOnShutdownPhases is D1+D2's own
+// write-time half: RESTING-MODE.md's own shutdown guarantee (this seam's
+// safety review round) refuses a "block" rule on fade-out-night or
+// power-down-presentation that declares overridePolicy "none" at
+// PUT /config/night.session/{id} time, before any session ever pins it,
+// rather than letting a night be configured that cannot be made safe.
+func TestConfigRejectsOverridePolicyNoneOnShutdownPhases(t *testing.T) {
+	for _, phase := range []string{"fade-out-night", "power-down-presentation"} {
+		t.Run(phase, func(t *testing.T) {
+			clock := fixedClock(testNow)
+			svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+			admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+			adminToken := mustIssueToken(t, svc, admin.ID)
+			deps, _ := nightControlTestDeps(svc, st)
+			deps.FPP = nightWireFPPForReadiness(t)
+			deps.AssetBackend = nightTestAssetBackend(t)
+			deps.MQTTBrokers = &fakeMQTTBrokerRegistry{}
+			api := New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+			mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+			mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+			mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
+			mustCreateNightSessionFSEQAsset(t, st, deps.AssetBackend, "halloween-2026", "resting-loop", "player-01")
+
+			body := nightSessionBodyWithRawInterlock(`{
+				"name": "cooldown", "phase": "` + phase + `", "posture": "block",
+				"signal": "cooldown-check", "failureText": "f",
+				"onUnavailable": "block", "overridePolicy": "none"
+			}`)
+			req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + adminToken})
+			resp, respBody := doRawRequest(t, api.Handler, req)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("PUT night.session with overridePolicy:none on phase %q: status = %d, want 400; body: %s", phase, resp.StatusCode, respBody)
+			}
+			if !containsAll(string(respBody), "interlock-shutdown-phase-requires-override") {
+				t.Fatalf("expected the interlock-shutdown-phase-requires-override problem type; body: %s", respBody)
+			}
+		})
+	}
+}
+
+// TestConfigAcceptsOverridePolicyAuthorizedOperatorOnShutdownPhases proves
+// the refusal is specific to "none", not to configuring a shutdown-phase
+// interlock at all.
+func TestConfigAcceptsOverridePolicyAuthorizedOperatorOnShutdownPhases(t *testing.T) {
+	for _, phase := range []string{"fade-out-night", "power-down-presentation"} {
+		t.Run(phase, func(t *testing.T) {
+			setupNightInterlockRawFixture(t, `{
+				"name": "cooldown", "phase": "`+phase+`", "posture": "block",
+				"signal": "cooldown-check", "failureText": "f",
+				"onUnavailable": "block", "overridePolicy": "authorized-operator"
+			}`)
+		})
+	}
+}
+
+// TestSafeSitePathExistsWithBothShutdownPhasesBlockedByEveryCombination is
+// the coordinator's own required property proof, not the narrower claim
+// this seam previously tested. It configures FOUR block rules across
+// BOTH shutdown phases (every onUnavailable value on each phase, the
+// full combination space this build can construct now that overridePolicy:
+// none is refused at write time), drives the site to preshow with the
+// cooldown check answering false, and shows two things by name:
+//
+//  1. An operator WITHOUT night:override cannot end the night through
+//     fade-out-night or power-down-presentation (both refuse), but
+//     end-session, which declares no interlock phase and consults no
+//     gate, still reaches "stopped" for them. That is the guaranteed
+//     exit for a caller who cannot override.
+//  2. THE SAFE-SITE PATH: an admin holding night:override, naming every
+//     one of the four rules in interlockOverrides, successfully runs
+//     fade-out-night and reaches "fading-out": unlike end-session, this
+//     path is the one that actually issues FPP's own stop (nightloop.go's
+//     fading-out tick, nightshutdown.go), so it is the path that makes
+//     the SITE safe, not merely the session record.
+func TestSafeSitePathExistsWithBothShutdownPhasesBlockedByEveryCombination(t *testing.T) {
+	rules := `
+		{"name": "fade-block-block", "phase": "fade-out-night", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
+		{"name": "fade-block-allow", "phase": "fade-out-night", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "allow", "overridePolicy": "authorized-operator"},
+		{"name": "power-block-block", "phase": "power-down-presentation", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "block", "overridePolicy": "authorized-operator"},
+		{"name": "power-block-allow", "phase": "power-down-presentation", "posture": "block", "signal": "cooldown-check", "failureText": "f", "onUnavailable": "allow", "overridePolicy": "authorized-operator"}
+	`
+	api, brokers, opToken, adminToken, obs := setupNightInterlockRawFixture(t, rules)
 	mustNightCommand(t, api, opToken, "prepare-site")
 	setHealthyFPPReachable(obs, testNow)
-	brokers.msg = broker.Message{Payload: []byte("false")}
 	mustNightCommand(t, api, opToken, "run-readiness")
 	mustNightCommand(t, api, opToken, "start-preshow")
 
-	// Confirm fade-out-night is genuinely stuck first.
-	status, _ := nightCommandProblem(t, api, opToken, "fade-out-night")
-	if status != http.StatusConflict {
-		t.Fatalf("expected fade-out-night to be withheld before proving the escape hatch, got status %d", status)
+	// The site answers false: every "block" rule with onUnavailable
+	// "allow" still withholds on a genuine negative answer (RESTING-MODE.md
+	// §10.1's own matrix: onUnavailable governs only the unavailable
+	// column), so all four rules withhold both phases right now.
+	brokers.msg = broker.Message{Payload: []byte("false")}
+
+	// (1) No override scope: both shutdown commands refuse, end-session
+	// still reaches stopped.
+	if status, _ := nightCommandProblem(t, api, opToken, "fade-out-night"); status != http.StatusConflict {
+		t.Fatalf("fade-out-night without override: status = %d, want 409", status)
+	}
+	if status, _ := nightCommandProblem(t, api, opToken, "power-down-presentation"); status != http.StatusConflict {
+		t.Fatalf("power-down-presentation without override: status = %d, want 409", status)
 	}
 
-	out := mustNightCommand(t, api, opToken, "end-session")
-	if out.Command.Outcome != "applied" || out.Session.State != "stopped" {
-		t.Fatalf("end-session with an unoverridable withholding interlock elsewhere: outcome=%q state=%q, want applied/stopped", out.Command.Outcome, out.Session.State)
+	// (2) THE SAFE-SITE PATH: an authorized override on every withholding
+	// rule lets fade-out-night actually run.
+	overrideBody := `{"interlockOverrides":[
+		{"rule":"fade-block-block","reason":"operator confirmed safe by hand"},
+		{"rule":"fade-block-allow","reason":"operator confirmed safe by hand"}
+	]}`
+	resp, body := nightCommandRawBody(t, api, adminToken, "fade-out-night", overrideBody)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("fade-out-night with an authorized override on every fade-out-night rule: status = %d, want 202; body: %s", resp.StatusCode, body)
+	}
+	got := mustGetNightSession(t, api)
+	if got.Session.State != "fading-out" {
+		t.Fatalf("state after the authorized override = %q, want fading-out: this is the path that actually issues FPP's own stop, which end-session never does", got.Session.State)
+	}
+}
+
+// --- also-fix: decodeNightCommandBody strictness and scope ---
+
+// TestNightCommandBodyRejectsMisspelledInterlockOverridesField proves the
+// decoder is strict: a misspelled "interlockOverride" (missing the
+// trailing "s") is refused outright rather than silently decoding as
+// zero overrides, which previously left the caller staring at a 409 with
+// no hint the override never arrived.
+func TestNightCommandBodyRejectsMisspelledInterlockOverridesField(t *testing.T) {
+	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "start-night", "block")
+	brokers.msg = broker.Message{Payload: []byte("false")}
+	runToPreshowForInterlockTest(t, api, opToken, obs)
+
+	resp, body := nightCommandRawBody(t, api, opToken, "start-night", `{"interlockOverride":[{"rule":"cooldown","reason":"x"}]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("start-night with a misspelled interlockOverrides field: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestNightCommandBodyRejectsInterlockOverridesOnEndSession and its
+// request-final-show sibling prove the decoder refuses interlockOverrides
+// on the two commands that consult no interlock at all, rather than
+// silently ignoring a value the caller believed would do something.
+func TestNightCommandBodyRejectsInterlockOverridesOnEndSession(t *testing.T) {
+	api, _, opToken, _, _ := setupNightInterlockFixture(t, "start-night", "block")
+	resp, body := nightCommandRawBody(t, api, opToken, "end-session", `{"interlockOverrides":[{"rule":"cooldown","reason":"x"}]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("end-session with interlockOverrides: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+}
+
+func TestNightCommandBodyRejectsInterlockOverridesOnRequestFinalShow(t *testing.T) {
+	api, _, opToken, _, _ := setupNightInterlockFixture(t, "start-night", "block")
+	resp, body := nightCommandRawBody(t, api, opToken, "request-final-show", `{"interlockOverrides":[{"rule":"cooldown","reason":"x"}]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("request-final-show with interlockOverrides: status = %d, want 400; body: %s", resp.StatusCode, body)
 	}
 }

@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -114,6 +117,21 @@ func TestEvaluateNightInterlockRule_ClosedBehaviorMatrix(t *testing.T) {
 	}
 }
 
+// TestEvaluateNightInterlockRule_FailsClosedOnUnrecognizedOnUnavailable
+// proves the read-path defense in depth: an OnUnavailable value that is
+// neither "block" nor "allow" (a future format, or a corrupted read)
+// still withholds, never silently degrading into a rule that never does.
+func TestEvaluateNightInterlockRule_FailsClosedOnUnrecognizedOnUnavailable(t *testing.T) {
+	rule := config.NightInterlockRule{
+		Posture: config.NightInterlockPostureBlock, OnUnavailable: "garbage",
+		OverridePolicy: config.NightInterlockOverridePolicyAuthorizedOperator, FailureText: "f",
+	}
+	got := evaluateNightInterlockRule(rule, nightInterlockConditionUnavailable)
+	if !got.Withhold {
+		t.Fatalf("Withhold = false with an unrecognized OnUnavailable value %q, want fail-closed true: %+v", rule.OnUnavailable, got)
+	}
+}
+
 func TestClassifyMQTTActionResult(t *testing.T) {
 	cases := []struct {
 		name string
@@ -172,7 +190,7 @@ func failedCheck(rule config.NightInterlockRule) nightReadinessCheck {
 func TestNightEvaluatePhaseInterlockGate_WithholdsWithNoOverride(t *testing.T) {
 	rule := blockRule("cooldown", "start-night")
 	payload := config.NightSessionPayload{Interlocks: []config.NightInterlockRule{rule}}
-	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, nil, false)
+	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, 0, nil, false)
 	if len(gate.Withheld) != 1 || len(gate.Overridden) != 0 {
 		t.Fatalf("gate = %+v, want exactly one withheld rule and no overrides", gate)
 	}
@@ -184,13 +202,13 @@ func TestNightEvaluatePhaseInterlockGate_OverrideRequiresScope(t *testing.T) {
 	overrides := []nightInterlockOverrideRequest{{Rule: "cooldown", Reason: "operator confirmed safe"}}
 
 	// Requested but caller lacks the scope: still withheld.
-	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, overrides, false)
+	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, 0, overrides, false)
 	if len(gate.Withheld) != 1 || len(gate.Overridden) != 0 {
 		t.Fatalf("gate without override scope = %+v, want still withheld", gate)
 	}
 
 	// Requested and authorized: overridden, not withheld.
-	gate = nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, overrides, true)
+	gate = nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, 0, overrides, true)
 	if len(gate.Withheld) != 0 || len(gate.Overridden) != 1 {
 		t.Fatalf("gate with override scope = %+v, want overridden, not withheld", gate)
 	}
@@ -210,7 +228,7 @@ func TestNightEvaluatePhaseInterlockGate_OverridePolicyNoneRefusesOverride(t *te
 	payload := config.NightSessionPayload{Interlocks: []config.NightInterlockRule{rule}}
 	overrides := []nightInterlockOverrideRequest{{Rule: "cooldown", Reason: "operator confirmed safe"}}
 
-	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, overrides, true)
+	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, 0, overrides, true)
 	if len(gate.Withheld) != 1 || len(gate.Overridden) != 0 {
 		t.Fatalf("gate with overridePolicy=none = %+v, want still withheld despite the override request", gate)
 	}
@@ -222,7 +240,7 @@ func TestNightEvaluatePhaseInterlockGate_OverridePolicyNoneRefusesOverride(t *te
 func TestNightEvaluatePhaseInterlockGate_OnlyGatesItsOwnPhase(t *testing.T) {
 	rule := blockRule("other-phase-rule", "fade-out-night")
 	payload := config.NightSessionPayload{Interlocks: []config.NightInterlockRule{rule}}
-	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, nil, false)
+	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{failedCheck(rule)}, 0, nil, false)
 	if len(gate.Withheld) != 0 {
 		t.Fatalf("a rule declared for a DIFFERENT phase withheld start-night: %+v", gate)
 	}
@@ -232,11 +250,64 @@ func TestNightEvaluatePhaseInterlockGate_OnlyGatesItsOwnPhase(t *testing.T) {
 // rule with no matching stored check (a configuration change since
 // readiness ran, or readiness never ran for it) is treated as
 // evidence-unavailable rather than silently skipped.
+// TestNightEvaluatePhaseInterlockGate_EnforcesRuleOwnFreshnessSeconds is
+// D5, this seam's safety review round: freshnessSeconds was decoded and
+// bounded at write time but never enforced anywhere. A rule that declares
+// it must now treat a stored check older than that bound as
+// evidence-unavailable, regardless of what the check itself reports.
+func TestNightEvaluatePhaseInterlockGate_EnforcesRuleOwnFreshnessSeconds(t *testing.T) {
+	freshness := 30
+	rule := blockRule("cooldown", "start-night")
+	rule.FreshnessSeconds = &freshness
+	healthyCheck := nightReadinessCheck{name: nightInterlockCheckName(rule), health: nightHealthHealthy()}
+	payload := config.NightSessionPayload{Interlocks: []config.NightInterlockRule{rule}}
+
+	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{healthyCheck}, 10*time.Second, nil, false)
+	if len(gate.Withheld) != 0 {
+		t.Fatalf("gate within the rule's own freshnessSeconds = %+v, want no withhold (the stored healthy check is trusted)", gate)
+	}
+
+	gate = nightEvaluatePhaseInterlockGate(payload, "start-night", []nightReadinessCheck{healthyCheck}, 60*time.Second, nil, false)
+	if len(gate.Withheld) != 1 {
+		t.Fatalf("gate past the rule's own freshnessSeconds (30s) at age 60s = %+v, want withheld even though the stored check reports healthy", gate)
+	}
+}
+
 func TestNightEvaluatePhaseInterlockGate_MissingCheckIsUnavailable(t *testing.T) {
 	rule := blockRule("cooldown", "start-night")
 	payload := config.NightSessionPayload{Interlocks: []config.NightInterlockRule{rule}}
-	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", nil, nil, false)
+	gate := nightEvaluatePhaseInterlockGate(payload, "start-night", nil, 0, nil, false)
 	if len(gate.Withheld) != 1 {
 		t.Fatalf("a block rule with no stored check at all did not withhold: %+v", gate)
+	}
+}
+
+// TestNightTrustedReadinessChecksTx_RejectsWrongEpoch proves the
+// defensive check nightTrustedReadinessChecksTx applies against
+// readiness.EpochID actually rejects a mismatch. This shape is NOT
+// reachable through this codebase's own write path today:
+// nightRunReadinessCommand always sets EpochID equal to SessionID at
+// creation, so the two never diverge in practice; inserted directly
+// here (bypassing that write path) to prove the guard works if that ever
+// changes, rather than leaving it an untested claimed guarantee.
+func TestNightTrustedReadinessChecksTx_RejectsWrongEpoch(t *testing.T) {
+	h, st := newTableTestHandlers(t)
+	if err := st.CreateNightReadiness(context.Background(), store.NightReadinessRecord{
+		ID: "r1", SessionID: "s1", EpochID: "a-different-epoch", CompletedAt: testNow, Outcome: "ready", ChecksJSON: "[]",
+	}); err != nil {
+		t.Fatalf("seed mismatched-epoch readiness: %v", err)
+	}
+
+	var checks []nightReadinessCheck
+	var age time.Duration
+	err := st.InTx(context.Background(), func(ctx context.Context, tx *store.Tx) error {
+		checks, age = h.nightTrustedReadinessChecksTx(ctx, tx, "s1", testNow)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("InTx: %v", err)
+	}
+	if checks != nil || age != 0 {
+		t.Fatalf("checks/age for a readiness result whose EpochID does not match the queried session = %v/%v, want nil/0", checks, age)
 	}
 }
