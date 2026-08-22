@@ -221,12 +221,69 @@ const (
 	// it the day someone changes the FSEQ and forgets the field.
 	ValidationCodeDuplicateRestDuration = "duplicate-rest-duration"
 
-	// ValidationCodeNotImplemented means the payload carried a
-	// "siteControl" or "interlocks" block — RESTING-MODE.md §10 specifies
-	// both, but Track F F6 has not shipped an enforcement path for
-	// either, and accepting configuration nothing enforces is a surface
-	// asserting something false (owner decision, TRACK-F-F1 seam spec).
+	// ValidationCodeNotImplemented is retired: Track F seam F1 produced it
+	// for a payload naming "siteControl" or "interlocks" before either was
+	// enforced. Seam F6 (nightsitecontrol.go) now decodes and validates
+	// both, so this Code is no longer returned by anything in this
+	// package. Kept, unused, rather than removed: a Code string that once
+	// left this coordinator over the wire is not repurposed for a
+	// different meaning later.
 	ValidationCodeNotImplemented = "not-implemented"
+
+	// The Codes below are Track F seam F6's own additions
+	// (nightsitecontrol.go, RESTING-MODE.md §10, ADR-016, ADR-029):
+	// interlocks and siteControl rules that are not "one field, one
+	// problem," the same reasoning ValidationCodeCueNameDuplicate and
+	// ValidationCodeCrossShowReference above already carry for F1's own
+	// structural rules.
+
+	// ValidationCodeInterlockNameDuplicate means two entries of
+	// night.session.interlocks declared the same name — RESTING-MODE.md
+	// §10.1: "Rule names are unique within a configuration revision."
+	ValidationCodeInterlockNameDuplicate = "interlock-name-duplicate"
+
+	// ValidationCodeInterlockSignalNotConfirmable means an interlock's
+	// signal named a show.action that cannot produce the evidence read an
+	// interlock needs: either its target is not mqtt, or its
+	// target.expect.kind is "none". An interlock is a request/response
+	// evidence read (orchestrator ruling, this seam's own build brief);
+	// an action nothing ever answers can never resolve one.
+	ValidationCodeInterlockSignalNotConfirmable = "interlock-signal-not-confirmable"
+
+	// ValidationCodePowerDomainRefused means a power binding declared a
+	// powerDomain this position in the schema does not accept:
+	// presentationPowerOn/presentationPowerOff both require
+	// "presentation" (RESTING-MODE.md §10.2 — "power-down-presentation
+	// accepts only bindings declared as powerDomain: presentation. It
+	// rejects environmental, mixed, and unknown bindings rather than
+	// guessing," applied at write time to the binding the command actually
+	// invokes rather than deferred to the moment the command runs).
+	ValidationCodePowerDomainRefused = "power-domain-refused"
+
+	// ValidationCodeDomainProvenanceRefused means a power binding declared
+	// domainProvenance "provider" — refused because no control provider in
+	// this build can authoritatively identify what is physically behind an
+	// mqtt/Home Assistant binding (RESTING-MODE.md §10.2, ADR-016): every
+	// binding this build can express is operator-declared, and trusting a
+	// "provider" claim here would be exactly the guess this field exists
+	// to prevent.
+	ValidationCodeDomainProvenanceRefused = "domain-provenance-refused"
+
+	// ValidationCodePrerequisitesEmpty means presentationPowerOff selected
+	// removalPolicy "after-actions" but supplied zero prerequisites —
+	// RESTING-MODE.md §10.2: "a non-empty ordered list."
+	ValidationCodePrerequisitesEmpty = "prerequisites-empty"
+
+	// ValidationCodePowerOffPrerequisiteCycle means an "after-actions"
+	// prerequisite named the SAME presentation power-off binding's own
+	// action — RESTING-MODE.md §10.2: prerequisites "may not invoke the
+	// same power-off binding directly or indirectly." This build has
+	// exactly one presentation power-off binding per session and no
+	// action-to-action call graph, so the only reachable cycle is direct
+	// self-reference; see nightsitecontrol.go's own doc comment on
+	// decodeNightPrerequisite for why indirect reference is not a
+	// distinct, separately-detected case here.
+	ValidationCodePowerOffPrerequisiteCycle = "power-off-prerequisite-cycle"
 
 	// ValidationCodeBackgroundAudioItemsEmpty means
 	// resting.backgroundAudio.items was present but held zero entries —

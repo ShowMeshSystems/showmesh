@@ -54,6 +54,69 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 
 	printNightSessionCues(w, "Enter-resting cues", p.EnterResting.Cues)
 	_, _ = fmt.Fprintf(w, "  Blackout after show: %dms\n", p.EnterResting.BlackoutAfterShowMs)
+
+	printNightSessionSiteControl(w, p.SiteControl)
+	printNightSessionInterlocks(w, p.Interlocks)
+}
+
+// printNightSessionSiteControl renders night.session.siteControl
+// (RESTING-MODE.md §10.2/§10.4, Track F seam F6) — "(not configured)"
+// when the deployment omits the whole block, per RESTING-MODE.md §10's
+// own opening line.
+func printNightSessionSiteControl(w io.Writer, sc *nightSessionSiteControl) {
+	_, _ = fmt.Fprintf(w, "\nSite control:")
+	if sc == nil {
+		_, _ = fmt.Fprintf(w, " (not configured)\n")
+		return
+	}
+	_, _ = fmt.Fprintln(w)
+	if sc.RequestThermalProfile != "" {
+		_, _ = fmt.Fprintf(w, "  Thermal profile action: %s\n", sc.RequestThermalProfile)
+	}
+	if sc.PresentationPowerOn == nil {
+		_, _ = fmt.Fprintf(w, "  Presentation power-on:  (not configured)\n")
+	} else {
+		b := sc.PresentationPowerOn
+		_, _ = fmt.Fprintf(w, "  Presentation power-on:  action=%s domain=%s provenance=%s\n", b.Action, b.PowerDomain, b.DomainProvenance)
+	}
+	if sc.PresentationPowerOff == nil {
+		_, _ = fmt.Fprintf(w, "  Presentation power-off: (not configured)\n")
+		return
+	}
+	off := sc.PresentationPowerOff
+	_, _ = fmt.Fprintf(w, "  Presentation power-off: action=%s domain=%s provenance=%s removalPolicy=%s\n",
+		off.Action, off.PowerDomain, off.DomainProvenance, off.RemovalPolicy)
+	if off.RemovalPolicy == "immediate" {
+		_, _ = fmt.Fprintf(w, "    immediateSafeAttestation: %v\n", off.ImmediateSafeAttestation)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "    prerequisites (%d):\n", len(off.Prerequisites))
+	for _, p := range off.Prerequisites {
+		switch p.Kind {
+		case "delay":
+			_, _ = fmt.Fprintf(w, "      - delay: %dms\n", p.DelayMs)
+		default:
+			_, _ = fmt.Fprintf(w, "      - %s: action=%s requireConfirmation=%v\n", p.Kind, p.Action, p.RequireConfirmation)
+		}
+	}
+}
+
+// printNightSessionInterlocks renders night.session.interlocks
+// (RESTING-MODE.md §10.1, Track F seam F6). Each rule's live evaluation
+// (whether it currently withholds ITS OWN phase) is reported by
+// run-readiness's own checks, not here — this is the authored
+// configuration, not evidence.
+func printNightSessionInterlocks(w io.Writer, rules []nightSessionInterlock) {
+	_, _ = fmt.Fprintf(w, "\nInterlocks (%d):\n", len(rules))
+	if len(rules) == 0 {
+		return
+	}
+	tw := newTabWriter(w)
+	_, _ = fmt.Fprintln(tw, "  NAME\tPHASE\tPOSTURE\tSIGNAL\tON UNAVAILABLE\tOVERRIDE POLICY")
+	for _, r := range rules {
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\n", r.Name, r.Phase, r.Posture, r.Signal, r.OnUnavailable, r.OverridePolicy)
+	}
+	_ = tw.Flush()
 }
 
 func printNightSessionCues(w io.Writer, heading string, cues []nightSessionCue) {

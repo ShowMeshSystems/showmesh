@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -117,9 +118,80 @@ func cmdNightPreshow(args []string, stdout, stderr io.Writer, clock func() time.
 		"Enter the configured pre-show presentation (POST\n/api/v1/night/commands/start-preshow). Requires the current preparation\nepoch.")
 }
 
+// nightOverrideFlag is flag.Value for a repeatable "--override
+// rule=reason" flag (Track F seam F6): each occurrence names one
+// configured "block" interlock rule to override, plus the required
+// reason ADR-024/RESTING-MODE.md §10.1 puts in the audit entry. Honored
+// only against a rule that declares overridePolicy "authorized-operator"
+// and only by a caller holding night:override — see
+// internal/coordinator/api/nightinterlock.go's own doc comment for the
+// full authorization chain this flag's contents feed into.
+type nightOverrideFlag struct {
+	overrides *[]nightCommandOverrideWire
+}
+
+func (f nightOverrideFlag) String() string { return "" }
+
+func (f nightOverrideFlag) Set(s string) error {
+	rule, reason, ok := strings.Cut(s, "=")
+	if !ok || rule == "" || reason == "" {
+		return fmt.Errorf("--override must be RULE=REASON, got %q", s)
+	}
+	*f.overrides = append(*f.overrides, nightCommandOverrideWire{Rule: rule, Reason: reason})
+	return nil
+}
+
 func cmdNightStart(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
-	return runSimpleNightLifecycleCommand(args, stdout, stderr, clock, "night start", "start-night",
-		"Authorize the night session and begin the first transition (POST\n/api/v1/night/commands/start-night). Requires a completed readiness\nresult from the SAME preparation epoch, within the coordinator's\nconfigured maximum age.")
+	fs, g := newFlagSet("showmeshctl night start", stderr)
+	var overrides []nightCommandOverrideWire
+	fs.Var(nightOverrideFlag{overrides: &overrides}, "override",
+		"override one withholding interlock rule: RULE=REASON (repeatable; requires night:override and that rule's own overridePolicy: authorized-operator)")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl night start [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nAuthorize the night session and begin the first transition (POST")
+		_, _ = fmt.Fprintln(stderr, "/api/v1/night/commands/start-night). Requires a completed readiness")
+		_, _ = fmt.Fprintln(stderr, "result from the SAME preparation epoch, within the coordinator's")
+		_, _ = fmt.Fprintln(stderr, "configured maximum age, and every configured \"block\" interlock for")
+		_, _ = fmt.Fprintln(stderr, "phase start-night either passing or covered by --override.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "night start", err)
+	}
+	if extra := fs.Args(); len(extra) > 0 {
+		fs.Usage()
+		return exitUsage
+	}
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "night start", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body := map[string]any{}
+	if len(overrides) > 0 {
+		body["interlockOverrides"] = overrides
+	}
+	var resp nightCommandResponseWire
+	if err := c.postJSON(ctx, "/api/v1/night/commands/start-night", body, &resp); err != nil {
+		return reportError(stderr, "night start", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "night start", err)
+		}
+		return exitOK
+	}
+	_, _ = fmt.Fprintf(stdout, "start-night: %s\n", resp.Command.Outcome)
+	printNightSessionStateDetail(stdout, resp.Session)
+	return exitOK
 }
 
 func cmdNightFinalShow(args []string, stdout, stderr io.Writer, clock func() time.Time) int {

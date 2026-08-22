@@ -293,3 +293,46 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 		t.Errorf("a background step printed under the announcement heading; stdout=%s", out)
 	}
 }
+
+// TestCmdNightStartWithOverrideSendsInterlockOverrides proves --override
+// RULE=REASON is translated into the request body's own
+// interlockOverrides array, which the coordinator's start-night gate
+// (internal/coordinator/api/nightinterlock.go) reads.
+func TestCmdNightStartWithOverrideSendsInterlockOverrides(t *testing.T) {
+	var gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","command":{"command":"start-night","outcome":"applied"},
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"transition-to-show",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"a1","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"","sameEpoch":true,"fresh":true,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},"transition":{"state":"not_available","reason":""},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"start", "--override", "cooldown=operator confirmed safe", "--server", ts.URL, "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(gotBody, `"interlockOverrides"`) || !strings.Contains(gotBody, `"cooldown"`) || !strings.Contains(gotBody, "operator confirmed safe") {
+		t.Fatalf("request body = %q, want it to carry the interlockOverrides entry", gotBody)
+	}
+}
+
+// TestCmdNightStartOverrideFlagRejectsMalformedValue proves a value with
+// no "=" is refused at parse time, before any request is sent.
+func TestCmdNightStartOverrideFlagRejectsMalformedValue(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"start", "--override", "no-equals-sign", "--server", "http://unused.invalid", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code == exitOK {
+		t.Fatalf("exit code = %d, want a parse failure for a malformed --override value", code)
+	}
+}

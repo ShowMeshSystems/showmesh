@@ -125,6 +125,23 @@ const (
 	// sight of the lifecycle state.
 	ScopeNightCommand Scope = "night:command"
 
+	// ScopeNightOverride is Track F seam F6's own scope
+	// (RESTING-MODE.md §10.1, IDENTIFIER-REGISTER.md): accepting an
+	// interlock override where that rule declares
+	// overridePolicy: authorized-operator. Deliberately separate from
+	// [ScopeNightCommand] and admin-only rather than folded into
+	// operatorActionScopes: a principal that can start a night must not
+	// thereby be able to bypass a blocking interlock, which is the
+	// opposite of what a blocking interlock is for. RESTING-MODE.md
+	// §10.4's force-power-off does NOT use this scope: a deployment
+	// configures it as an ordinary show.action and an operator invokes it
+	// through the existing generic POST /api/v1/actions/{id}/invocations
+	// surface, behind [ScopeShowActionInvoke] — already a separate
+	// authorization and a separate audit presentation from the ordinary
+	// night lifecycle, and already structurally unreachable from
+	// power-down-presentation's own code path.
+	ScopeNightOverride Scope = "night:override"
+
 	// ScopeShowActionInvoke gates POST /api/v1/actions/{id}/invocations:
 	// invoke one stored show.action by id, outside of a macro run. Reads
 	// stay open by default (ADR-024) — this scope exists only because
@@ -162,7 +179,10 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // ScopeFPPObserve's own doc comment) — admin holds it only because admin
 // holds everything, never because an operator credential should be able
 // to forge plugin evidence.
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve}
+// ScopeNightOverride sits here, not in operatorActionScopes, per its own
+// doc comment: bypassing a blocking interlock is deliberately not implied
+// by holding [ScopeNightCommand].
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a
