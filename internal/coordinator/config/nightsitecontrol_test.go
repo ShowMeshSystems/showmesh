@@ -6,7 +6,7 @@ import (
 )
 
 // withTopLevelFragment injects fragment as extra top-level key(s) into
-// base's JSON object — the same "TrimSuffix + append" idiom
+// base's JSON object, the same "TrimSuffix + append" idiom
 // nightsession_test.go's own siteControl/interlocks tests already use.
 func withTopLevelFragment(base, fragment string) string {
 	return strings.TrimSuffix(base, "}") + "," + fragment + "}"

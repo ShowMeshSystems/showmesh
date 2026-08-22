@@ -13,7 +13,7 @@ func alwaysTrueActionResolver(string) (string, bool)      { return "halloween-20
 func alwaysFalseActionResolver(string) (string, bool)     { return "", false }
 
 // alwaysTrueInterlockSignalResolver resolves any signal id to a confirmable
-// mqtt action in this session's own show — the shape decodeNightInterlockRule
+// mqtt action in this session's own show: the shape decodeNightInterlockRule
 // requires. nightsitecontrol_test.go exercises every other combination
 // (wrong show, non-mqtt, expect.kind "none").
 func alwaysTrueInterlockSignalResolver(string) (NightInterlockSignalInfo, bool) {
@@ -214,7 +214,7 @@ func TestDecodeNightSessionPayloadRejectsDuplicateRestDuration(t *testing.T) {
 // things nightsession.go itself is responsible for: an empty siteControl
 // object is refused as pointless configuration (nightsitecontrol.go owns
 // the field-by-field rules once siteControl is non-empty), and
-// siteControl is a TOP-LEVEL key only — a nested "resting.siteControl"
+// siteControl is a TOP-LEVEL key only; a nested "resting.siteControl"
 // is refused by the ordinary unknown-key rule for that object, not
 // silently accepted.
 
@@ -228,7 +228,7 @@ func TestDecodeNightSessionPayloadRejectsEmptySiteControl(t *testing.T) {
 
 // TestDecodeNightSessionPayloadRejectsNestedSiteControlAsUnknownKey is
 // review finding 8's original property, restated for real decoding:
-// "resting" never accepted "siteControl" and still does not — a nested
+// "resting" never accepted "siteControl" and still does not; a nested
 // occurrence is refused by resting's own closed key set.
 func TestDecodeNightSessionPayloadRejectsNestedSiteControlAsUnknownKey(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"endOfNightRepeat": true,`, `"endOfNightRepeat": true, "siteControl": {},`, 1)
@@ -239,8 +239,8 @@ func TestDecodeNightSessionPayloadRejectsNestedSiteControlAsUnknownKey(t *testin
 }
 
 // TestDecodeNightSessionPayloadEmptyInterlocksIsValid: an explicit empty
-// array means the same thing omitting the key does — no interlocks
-// configured — rather than being refused.
+// array means the same thing omitting the key does (no interlocks
+// configured) rather than being refused.
 func TestDecodeNightSessionPayloadEmptyInterlocksIsValid(t *testing.T) {
 	raw := strings.TrimSuffix(validNightSessionJSON, "}") + `,"interlocks":[]}`
 	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)

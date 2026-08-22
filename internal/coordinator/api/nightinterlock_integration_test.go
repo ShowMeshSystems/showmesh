@@ -31,7 +31,7 @@ const validCooldownCheckActionBody = `{
 	}
 }`
 
-func nightSessionBodyWithCooldownInterlock(onUnavailable string) string {
+func nightSessionBodyWithCooldownInterlock(phase, onUnavailable string) string {
 	return `{
 		"show": "halloween-2026",
 		"label": "Halloween main loop",
@@ -52,7 +52,7 @@ func nightSessionBodyWithCooldownInterlock(onUnavailable string) string {
 		"interlocks": [
 			{
 				"name": "cooldown",
-				"phase": "start-night",
+				"phase": "` + phase + `",
 				"posture": "block",
 				"signal": "cooldown-check",
 				"failureText": "enclosure has not confirmed a safe cooldown",
@@ -66,7 +66,7 @@ func nightSessionBodyWithCooldownInterlock(onUnavailable string) string {
 // setupNightInterlockFixture is setupNightControlFixtureWithBody plus a
 // wired fakeMQTTBrokerRegistry and the cooldown-check show.action the
 // interlock body above names.
-func setupNightInterlockFixture(t *testing.T, onUnavailable string) (api *API, brokers *fakeMQTTBrokerRegistry, operatorToken, adminToken string, obs *fakeObservationLister) {
+func setupNightInterlockFixture(t *testing.T, phase, onUnavailable string) (api *API, brokers *fakeMQTTBrokerRegistry, operatorToken, adminToken string, obs *fakeObservationLister) {
 	t.Helper()
 	clock := fixedClock(testNow)
 	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
@@ -87,7 +87,7 @@ func setupNightInterlockFixture(t *testing.T, onUnavailable string) (api *API, b
 	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
 	mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
 	mustCreateNightSessionFSEQAsset(t, st, deps.AssetBackend, "halloween-2026", "resting-loop", "player-01")
-	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithCooldownInterlock(onUnavailable))
+	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithCooldownInterlock(phase, onUnavailable))
 	mustActivateNightSession(t, api, adminToken, "halloween-main")
 
 	return api, brokers, operatorToken, adminToken, obsLister
@@ -103,7 +103,7 @@ func runToPreshowForInterlockTest(t *testing.T, api *API, token string, obs *fak
 }
 
 func TestInterlockBlocksStartNightWhenConditionFalse(t *testing.T) {
-	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "block")
+	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "start-night", "block")
 	brokers.msg = broker.Message{Payload: []byte("false")}
 	runToPreshowForInterlockTest(t, api, opToken, obs)
 
@@ -117,7 +117,7 @@ func TestInterlockBlocksStartNightWhenConditionFalse(t *testing.T) {
 }
 
 func TestInterlockAllowsStartNightWhenConditionTrue(t *testing.T) {
-	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "block")
+	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "start-night", "block")
 	brokers.msg = broker.Message{Payload: []byte("true")}
 	runToPreshowForInterlockTest(t, api, opToken, obs)
 
@@ -128,7 +128,7 @@ func TestInterlockAllowsStartNightWhenConditionTrue(t *testing.T) {
 }
 
 func TestInterlockOnUnavailableAllowLetsStartNightProceed(t *testing.T) {
-	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "allow")
+	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "start-night", "allow")
 	brokers.err = broker.ErrResponseDeadlineExceeded
 	runToPreshowForInterlockTest(t, api, opToken, obs)
 
@@ -139,7 +139,7 @@ func TestInterlockOnUnavailableAllowLetsStartNightProceed(t *testing.T) {
 }
 
 func TestInterlockOnUnavailableBlockRefusesStartNight(t *testing.T) {
-	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "block")
+	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "start-night", "block")
 	brokers.err = broker.ErrResponseDeadlineExceeded
 	runToPreshowForInterlockTest(t, api, opToken, obs)
 
@@ -154,7 +154,7 @@ func TestInterlockOnUnavailableBlockRefusesStartNight(t *testing.T) {
 // principal holds night:command (can start-night) but not night:override,
 // and its override request must still be refused.
 func TestInterlockOverrideRequiresScopeNotJustNightCommand(t *testing.T) {
-	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "block")
+	api, brokers, opToken, _, obs := setupNightInterlockFixture(t, "start-night", "block")
 	brokers.msg = broker.Message{Payload: []byte("false")}
 	runToPreshowForInterlockTest(t, api, opToken, obs)
 
@@ -168,7 +168,7 @@ func TestInterlockOverrideRequiresScopeNotJustNightCommand(t *testing.T) {
 // path: an admin principal (holds night:override) names the withholding
 // rule and a reason, and start-night proceeds.
 func TestInterlockOverrideByAuthorizedOperatorSucceeds(t *testing.T) {
-	api, brokers, _, adminToken, obs := setupNightInterlockFixture(t, "block")
+	api, brokers, _, adminToken, obs := setupNightInterlockFixture(t, "start-night", "block")
 	brokers.msg = broker.Message{Payload: []byte("false")}
 	runToPreshowForInterlockTest(t, api, adminToken, obs)
 
@@ -180,9 +180,9 @@ func TestInterlockOverrideByAuthorizedOperatorSucceeds(t *testing.T) {
 
 // TestInterlockOverrideOfWrongRuleNameDoesNotHelp proves an override
 // naming a DIFFERENT rule than the one actually withholding still
-// refuses — a caller cannot bypass a rule it does not correctly name.
+// refuses: a caller cannot bypass a rule it does not correctly name.
 func TestInterlockOverrideOfWrongRuleNameDoesNotHelp(t *testing.T) {
-	api, brokers, _, adminToken, obs := setupNightInterlockFixture(t, "block")
+	api, brokers, _, adminToken, obs := setupNightInterlockFixture(t, "start-night", "block")
 	brokers.msg = broker.Message{Payload: []byte("false")}
 	runToPreshowForInterlockTest(t, api, adminToken, obs)
 
@@ -240,7 +240,7 @@ func nightSessionBodyWithPresentationPowerOff() string {
 // TestPowerDownPresentationConfiguredReportsHonestlyNotNotConfigured is
 // the domain-refusal test's own sibling for observability: a deployment
 // that DOES configure presentationPowerOff must never see "not_configured"
-// once it reaches stopped — that would claim nothing exists to remove
+// once it reaches stopped: that would claim nothing exists to remove
 // power when something does (CLAUDE.md's evidence rule).
 func TestPowerDownPresentationConfiguredReportsHonestlyNotNotConfigured(t *testing.T) {
 	clock := fixedClock(testNow)

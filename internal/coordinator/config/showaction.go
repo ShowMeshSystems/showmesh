@@ -238,7 +238,7 @@ const (
 	// structural rules.
 
 	// ValidationCodeInterlockNameDuplicate means two entries of
-	// night.session.interlocks declared the same name — RESTING-MODE.md
+	// night.session.interlocks declared the same name: RESTING-MODE.md
 	// §10.1: "Rule names are unique within a configuration revision."
 	ValidationCodeInterlockNameDuplicate = "interlock-name-duplicate"
 
@@ -253,7 +253,7 @@ const (
 	// ValidationCodePowerDomainRefused means a power binding declared a
 	// powerDomain this position in the schema does not accept:
 	// presentationPowerOn/presentationPowerOff both require
-	// "presentation" (RESTING-MODE.md §10.2 — "power-down-presentation
+	// "presentation" (RESTING-MODE.md §10.2: "power-down-presentation
 	// accepts only bindings declared as powerDomain: presentation. It
 	// rejects environmental, mixed, and unknown bindings rather than
 	// guessing," applied at write time to the binding the command actually
@@ -261,7 +261,7 @@ const (
 	ValidationCodePowerDomainRefused = "power-domain-refused"
 
 	// ValidationCodeDomainProvenanceRefused means a power binding declared
-	// domainProvenance "provider" — refused because no control provider in
+	// domainProvenance "provider": refused because no control provider in
 	// this build can authoritatively identify what is physically behind an
 	// mqtt/Home Assistant binding (RESTING-MODE.md §10.2, ADR-016): every
 	// binding this build can express is operator-declared, and trusting a
@@ -270,13 +270,13 @@ const (
 	ValidationCodeDomainProvenanceRefused = "domain-provenance-refused"
 
 	// ValidationCodePrerequisitesEmpty means presentationPowerOff selected
-	// removalPolicy "after-actions" but supplied zero prerequisites —
+	// removalPolicy "after-actions" but supplied zero prerequisites;
 	// RESTING-MODE.md §10.2: "a non-empty ordered list."
 	ValidationCodePrerequisitesEmpty = "prerequisites-empty"
 
 	// ValidationCodePowerOffPrerequisiteCycle means an "after-actions"
 	// prerequisite named the SAME presentation power-off binding's own
-	// action — RESTING-MODE.md §10.2: prerequisites "may not invoke the
+	// action: RESTING-MODE.md §10.2 says prerequisites "may not invoke the
 	// same power-off binding directly or indirectly." This build has
 	// exactly one presentation power-off binding per session and no
 	// action-to-action call graph, so the only reachable cycle is direct

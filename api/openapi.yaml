@@ -5420,13 +5420,33 @@ paths:
 
         `interlockOverrides` (optional request body field, Track F seam
         F6) names configured "block" interlock rules to override for THIS
-        command. `night:command` alone never authorizes an override — a
+        command. `night:command` alone never authorizes an override: a
         rule is bypassed only when it declares
         `overridePolicy: authorized-operator` AND the caller separately
         holds `night:override` (RESTING-MODE.md §10.1;
         IDENTIFIER-REGISTER.md: starting a night must not, by itself,
-        authorize bypassing a blocking interlock). Consulted only by
-        `start-night` in this build.
+        authorize bypassing a blocking interlock).
+
+
+        A "block" interlock declared for `prepare-site`, `run-readiness`,
+        `start-preshow`, `start-night`, `fade-out-night`, or
+        `power-down-presentation` can withhold that same command with a
+        `409` (`night-not-ready`) naming the rule, unless a valid override
+        is supplied. `prepare-site` and `run-readiness` dispatch that
+        rule's own evidence LIVE, at the instant the command runs; the
+        other four gate on the most recent readiness result instead,
+        which is at most as fresh as the last `run-readiness` call; see
+        RESTING-MODE.md §10.1 and this seam's own build report for why
+        those are different freshness guarantees. `request-final-show`
+        and `end-session` declare no interlock phase and consult no gate
+        at all: `end-session` in particular is never withheld by any
+        interlock, by construction, so a misconfigured "block" rule with
+        `overridePolicy: none` and an unavailable source can never make
+        the night impossible to end, only impossible to end through
+        `fade-out-night`/`power-down-presentation` specifically.
+        `projector-strike`, `enter-resting`, and `presentation-power-on`
+        are validated and shown on readiness but have no command of their
+        own to gate in this build.
       parameters:
         - name: command
           in: path
@@ -5471,7 +5491,7 @@ paths:
             Three distinct causes, three distinct `type` values:
             `night-not-ready` (a precondition is not yet met, including a
             configured "block" interlock currently withholding this
-            phase and not covered by a valid override — Track F seam F6),
+            phase and not covered by a valid override, Track F seam F6),
             `night-state-rejected` (refused by the command's own closed
             state table for the session's current state), or
             `night-ambiguous` (the session is degraded; run `end-session`
@@ -11401,7 +11421,7 @@ components:
       description: >-
         night.session.siteControl (RESTING-MODE.md §10.2/§10.4, ADR-016,
         Track F seam F6): entirely optional, and every field within it is
-        independently optional too — an empty object is refused
+        independently optional too; an empty object is refused
         (server-side) as configuration nothing enforces.
         requestThermalProfile, when present, names an existing
         show.action object in this session's own show (server-side).
@@ -11425,7 +11445,7 @@ components:
         with no default (server-side; the exact combination rules are
         not expressible in this schema alone). signal names an existing
         show.action object that declares an mqtt target with
-        expect.kind other than "none" (server-side) — an interlock's
+        expect.kind other than "none" (server-side): an interlock's
         evidence is that action's own request/response, the only
         mechanism this build has to reach a site sensor.
       required: [name, phase, posture]
@@ -11913,10 +11933,13 @@ components:
         The optional body of POST /night/commands/{command}.
         `idempotencyKey` is honored only by `prepare-site`; every other
         command is already idempotent by lifecycle state and ignores it.
-        `interlockOverrides` is consulted only by `start-night` today
-        (Track F seam F6): every other command's own configured
-        interlocks are visible on run-readiness but not yet gated by this
-        seam.
+        `interlockOverrides` (Track F seam F6) is consulted by
+        `prepare-site`, `run-readiness`, `start-preshow`, `start-night`,
+        `fade-out-night`, and `power-down-presentation`, each against
+        the "block" interlock rules declared for that command's own
+        phase, described in full on `POST /night/commands/{command}`
+        itself. `request-final-show` and `end-session` consult no
+        interlock at all.
       properties:
         idempotencyKey:
           type: string

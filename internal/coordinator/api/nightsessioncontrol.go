@@ -69,9 +69,14 @@ var validNightCommands = map[string]bool{
 }
 
 // nightExemptFromDegradedGate: these three, plus end-session (handled on
-// its own path), are direction-safe and never gated on Degraded — a
-// refusal here would be strictly worse than no coordinator at all, since
-// it is a successful conversation that fires no fallback.
+// its own path), are direction-safe and never gated on the session's OWN
+// Degraded flag: a refusal here would be strictly worse than no
+// coordinator at all, since it is a successful conversation that fires no
+// fallback. This is unrelated to a configured interlock: fade-out-night
+// and power-down-presentation CAN still be withheld by a "block" rule
+// declared for their own phase (Track F seam F6); see
+// [handlers.nightFadeOutNight] and [handlers.nightPowerDownPresentation]'s
+// own doc comments for what remains available when one does.
 var nightExemptFromDegradedGate = map[string]bool{
 	nightCommandFadeOutNight:          true,
 	nightCommandPowerDownPresentation: true,
@@ -86,10 +91,15 @@ const (
 // nightDegradedGuidance is what a degraded session tells an operator, and
 // it names every command that still works: refusing one of those would be
 // a successful conversation that fires no fallback, which is worse than
-// this coordinator being switched off.
+// this coordinator being switched off. A configured "block" interlock can
+// still separately refuse fade-out-night or power-down-presentation
+// (Track F seam F6) even though the session's own Degraded flag never
+// does; end-session is untouched by any interlock and is always the
+// unconditional way to reach stopped.
 const nightDegradedGuidance = "night session is degraded (%s). " +
-	"request-final-show, fade-out-night and power-down-presentation are still accepted and are how you end the night through this session; " +
-	"end-session abandons it instead, and prepare-site then starts a fresh one. Every other lifecycle command is refused until then."
+	"request-final-show, fade-out-night and power-down-presentation are still accepted and are how you end the night through this session, " +
+	"unless a configured interlock separately withholds one of them; " +
+	"end-session abandons it instead, is never withheld by an interlock, and prepare-site then starts a fresh one. Every other lifecycle command is refused until then."
 
 // errNightCommandRefused is the sentinel a Tx closure returns to signal
 // "roll back, no error occurred — a *v1.Problem describes the refusal",
@@ -157,7 +167,7 @@ const maxNightCommandRequestBodyBytes = 4 << 10
 
 // decodeNightCommandBody reads the optional {"idempotencyKey": string,
 // "interlockOverrides": [{"rule": string, "reason": string}]?} body. An
-// absent or empty body is valid — every field is optional.
+// absent or empty body is valid: every field is optional.
 // interlockOverrides is Track F seam F6's own addition
 // (RESTING-MODE.md §10.1): naming a rule here is the caller's request to
 // override it, and is honored only where that rule itself declares
@@ -213,22 +223,32 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 	var attributionDegraded bool
 	var opErr error
 
+	callerHasOverrideScope := nightCallerHasOverrideScope(ac)
+
 	switch {
 	case cmd == nightCommandEndSession:
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 			return h.nightEndSessionDecide(now, current), nil, nil
 		})
 	case cmd == nightCommandRunReadiness:
-		// Runs its own FPP/asset work outside any transaction — see
+		// Runs its own FPP/asset work, and its own phase="run-readiness"
+		// interlock evidence, outside any transaction; see
 		// [handlers.nightRunReadinessCommand]'s own doc comment.
-		out, problem, opErr = h.nightRunReadinessCommand(ctx, now, issuer)
+		out, problem, opErr = h.nightRunReadinessCommand(ctx, now, issuer, interlockOverrides, callerHasOverrideScope)
+	case cmd == nightCommandPrepareSite:
+		// Its own phase="prepare-site" interlock evidence is dispatched
+		// live, outside any transaction; see
+		// [handlers.nightPrepareSiteCommand]'s own doc comment for why
+		// prepare-site cannot be routed through nightRunGated directly the
+		// way start-preshow and start-night are.
+		out, problem, opErr = h.nightPrepareSiteCommand(ctx, now, issuer, idempotencyKey, interlockOverrides, callerHasOverrideScope)
 	case nightExemptFromDegradedGate[cmd]:
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightDecideExemptCommand(ctx, tx, cmd, now, current)
+			return h.nightDecideExemptCommand(ctx, tx, cmd, now, current, interlockOverrides, callerHasOverrideScope)
 		})
 	default:
 		out, problem, opErr = h.nightRunGated(ctx, now, cmd, issuer, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey, interlockOverrides, nightCallerHasOverrideScope(ac))
+			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey, interlockOverrides, callerHasOverrideScope)
 		})
 	}
 
@@ -257,35 +277,39 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 // nightDecideExemptCommand dispatches to the three degraded-gate-exempt
-// commands' own decide functions.
-func (h *handlers) nightDecideExemptCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+// commands' own decide functions. request-final-show declares no
+// interlock phase (RESTING-MODE.md §10.1's nine-phase enum does not
+// include it) and so takes no overrides at all.
+func (h *handlers) nightDecideExemptCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	switch cmd {
 	case nightCommandRequestFinalShow:
 		return h.nightRequestFinalShow(now, current)
 	case nightCommandFadeOutNight:
-		return h.nightFadeOutNight(now, current)
+		return h.nightFadeOutNight(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
 	case nightCommandPowerDownPresentation:
-		return h.nightPowerDownPresentation(ctx, tx, now, current)
+		return h.nightPowerDownPresentation(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
 	}
 	return nightCommandOutcome{}, nil, fmt.Errorf("api: no exempt decide function for %q", cmd)
 }
 
 // nightDecideGatedCommand applies invariant 4 (a degraded, non-terminal
-// session refuses every gated command) and then dispatches to the
-// admission-opening commands' own decide functions. run-readiness is NOT
-// here: it needs FPP/asset work outside any transaction, so
-// handleNightCommand routes it to [handlers.nightRunReadinessCommand]
-// directly instead.
+// session refuses every gated command) and then dispatches to
+// start-preshow and start-night, which both gate their own declared
+// phase against a STORED, trusted readiness result
+// ([handlers.nightGatePhaseTx]/[nightEvaluatePhaseInterlockGate]) since
+// both already run inside this transaction. run-readiness and
+// prepare-site are NOT here: both need live evidence dispatched outside
+// any transaction, so handleNightCommand routes them to
+// [handlers.nightRunReadinessCommand] and
+// [handlers.nightPrepareSiteCommand] directly instead.
 func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
 		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch cmd {
-	case nightCommandPrepareSite:
-		return h.nightPrepareSiteTx(ctx, tx, now, current, idempotencyKey)
 	case nightCommandStartPreshow:
-		return h.nightStartPreshow(now, current)
+		return h.nightStartPreshow(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
 	case nightCommandStartNight:
 		return h.nightStartNightTx(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
 	}
@@ -436,7 +460,20 @@ func nightSyntheticInactiveSession(now time.Time) store.NightSessionRecord {
 // nightPrepareSiteTx is prepare-site's decide function. idempotencyKey,
 // checked first, replays the original session rather than creating a
 // second one.
-func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, idempotencyKey string) (nightCommandOutcome, *v1.Problem, error) {
+// nightPrepareSiteTx is prepare-site's own tx-bound decide function,
+// invoked by [handlers.nightPrepareSiteCommand] with gateObjectID/
+// gateRevision already resolved and cleared against phase="prepare-site"
+// interlocks OUTSIDE this transaction. gateObjectID is "" when that
+// precheck determined no NEW epoch could possibly be created (an
+// idempotent replay or an already-open session), in which case no
+// consistency check runs here either. When gateObjectID is set, this
+// still re-resolves the active configuration itself, inside the SAME
+// transaction that persists the new session, and refuses rather than
+// silently using stale interlock evidence if the two disagree, the
+// identical race the pre-tx/short-tx split in
+// [handlers.nightRunReadinessCommand] already accepts and names for the
+// identical reason.
+func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, idempotencyKey, gateObjectID string, gateRevision int64) (nightCommandOutcome, *v1.Problem, error) {
 	if idempotencyKey != "" {
 		existing, err := tx.GetNightSessionByIdempotencyKey(ctx, idempotencyKey)
 		if err == nil {
@@ -463,6 +500,10 @@ func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now tim
 	if problem != nil {
 		return nightCommandOutcome{}, problem, nil
 	}
+	if gateObjectID != "" && (objectID != gateObjectID || revision != gateRevision) {
+		p := nightNotReadyProblem("prepare-site: the active night.session configuration changed while its prepare-site interlocks were being evaluated; run prepare-site again")
+		return nightCommandOutcome{}, &p, nil
+	}
 
 	rec := store.NightSessionRecord{
 		ID: uuid.NewString(), ConfigObjectID: objectID, ConfigRevision: revision,
@@ -471,17 +512,140 @@ func (h *handlers) nightPrepareSiteTx(ctx context.Context, tx *store.Tx, now tim
 	return nightCommandOutcome{result: rec, outcome: nightOutcomeApplied, persist: "create"}, nil, nil
 }
 
-func (h *handlers) nightStartPreshow(now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+// nightPrepareSiteCommand is prepare-site's own top-level entry, mirroring
+// [handlers.nightRunReadinessCommand]'s shape: any interlock evidence
+// read for phase "prepare-site" must dispatch live and OUTSIDE any store
+// transaction, since prepare-site's own persist step already holds the
+// store's one connection ([handlers.nightRunGated] wraps
+// [handlers.nightPrepareSiteTx] in one transaction). An idempotent
+// replay or an already-open session creates no new epoch, so it consults
+// no interlock at all: nothing is being "entered."
+func (h *handlers) nightPrepareSiteCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, idempotencyKey string, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
+	current, hasCurrent, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
+	if err != nil {
+		return nightCommandOutcome{}, nil, err
+	}
+
+	willAttemptNewEpoch := !hasCurrent || current.State == nightStateStopped
+	if willAttemptNewEpoch && idempotencyKey != "" {
+		if _, err := h.deps.NightSessions.GetNightSessionByIdempotencyKey(ctx, idempotencyKey); err == nil {
+			willAttemptNewEpoch = false
+		} else if !errors.Is(err, store.ErrNightSessionNotFound) {
+			return nightCommandOutcome{}, nil, err
+		}
+	}
+
+	var gateObjectID string
+	var gateRevision int64
+	var overrideAuditParams []map[string]any
+	if willAttemptNewEpoch {
+		objectID, revision, payload, problem, err := h.nightResolveActiveConfigForGate(ctx)
+		if err != nil {
+			return nightCommandOutcome{}, nil, err
+		}
+		if problem != nil {
+			return nightCommandOutcome{}, problem, nil
+		}
+		gate := h.nightLiveEvaluatePhaseGate(ctx, payload, config.NightInterlockPhasePrepareSite, overrides, callerHasOverrideScope)
+		if len(gate.Withheld) > 0 {
+			p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhasePrepareSite, gate.Withheld).detail())
+			return nightCommandOutcome{}, &p, nil
+		}
+		gateObjectID, gateRevision = objectID, revision
+		if len(gate.Overridden) > 0 {
+			overrideAuditParams = nightInterlockOverrideAuditParams(gate.Overridden)
+		}
+	}
+
+	return h.nightRunGated(ctx, now, nightCommandPrepareSite, issuer, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+		if cur != nil && cur.Degraded && cur.State != nightStateStopped {
+			p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, cur.DegradedReason))
+			return nightCommandOutcome{}, &p, nil
+		}
+		out, problem, err := h.nightPrepareSiteTx(ctx, tx, now, cur, idempotencyKey, gateObjectID, gateRevision)
+		if err == nil && problem == nil && len(overrideAuditParams) > 0 {
+			out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
+		}
+		return out, problem, err
+	})
+}
+
+// nightResolveActiveConfigForGate is [handlers.resolveActiveNightSessionConfigTx]'s
+// non-tx twin, for [handlers.nightPrepareSiteCommand]'s own pre-transaction
+// interlock precheck: a plain read, never held alongside the store's one
+// connection the way [handlers.nightPrepareSiteTx]'s own resolution
+// (inside the transaction) already is. Also returns the decoded payload,
+// since the precheck needs it and re-decoding it a second time inside the
+// transaction would be wasted work for the common case where nothing
+// changed in between.
+func (h *handlers) nightResolveActiveConfigForGate(ctx context.Context) (objectID string, revision int64, payload config.NightSessionPayload, problem *v1.Problem, err error) {
+	activeObj, aerr := h.deps.Config.GetConfigObject(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID)
+	if aerr != nil {
+		if errors.Is(aerr, store.ErrConfigObjectNotFound) {
+			p := nightNotReadyProblem("prepare-site: no night.session.active pointer is configured; PUT /api/v1/config/night.session.active first")
+			return "", 0, config.NightSessionPayload{}, &p, nil
+		}
+		return "", 0, config.NightSessionPayload{}, nil, aerr
+	}
+	if activeObj.CurrentRevision == 0 {
+		p := nightNotReadyProblem("prepare-site: no night.session.active pointer is configured; PUT /api/v1/config/night.session.active first")
+		return "", 0, config.NightSessionPayload{}, &p, nil
+	}
+	activeRev, aerr := h.deps.Config.GetConfigRevision(ctx, config.NightSessionActiveConfigKind, config.NightSessionActiveObjectID, activeObj.CurrentRevision)
+	if aerr != nil {
+		return "", 0, config.NightSessionPayload{}, nil, aerr
+	}
+	var activePayload config.NightSessionActivePayload
+	if err := jsonUnmarshalStrict(activeRev.PayloadJSON, &activePayload); err != nil {
+		return "", 0, config.NightSessionPayload{}, nil, fmt.Errorf("api: decode night.session.active payload: %w", err)
+	}
+	if activePayload.Session == "" {
+		p := nightNotReadyProblem("prepare-site: night.session.active names no session; PUT /api/v1/config/night.session.active first")
+		return "", 0, config.NightSessionPayload{}, &p, nil
+	}
+
+	obj, oerr := h.deps.Config.GetConfigObject(ctx, config.NightSessionConfigKind, activePayload.Session)
+	if oerr != nil || obj.CurrentRevision == 0 {
+		if oerr != nil && !errors.Is(oerr, store.ErrConfigObjectNotFound) {
+			return "", 0, config.NightSessionPayload{}, nil, oerr
+		}
+		p := nightNotReadyProblem(fmt.Sprintf("prepare-site: night.session.active names %q, which has no active revision", activePayload.Session))
+		return "", 0, config.NightSessionPayload{}, &p, nil
+	}
+	rev, rerr := h.deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, activePayload.Session, obj.CurrentRevision)
+	if rerr != nil {
+		return "", 0, config.NightSessionPayload{}, nil, rerr
+	}
+	var sessionPayload config.NightSessionPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &sessionPayload); err != nil {
+		return "", 0, config.NightSessionPayload{}, nil, fmt.Errorf("api: decode night.session payload: %w", err)
+	}
+	return activePayload.Session, obj.CurrentRevision, sessionPayload, nil, nil
+}
+
+// nightStartPreshow gates phase="start-preshow" against the most recent
+// TRUSTED readiness result ([handlers.nightGatePhaseTx]): a live
+// dispatch is not safe here, since this decide function already runs
+// inside nightRunGated's own transaction.
+func (h *handlers) nightStartPreshow(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		p := nightStateRejectedProblem("start-preshow has no unconsumed preparation epoch; run prepare-site first")
 		return nightCommandOutcome{}, &p, nil
 	}
 	switch current.State {
 	case nightStatePreparing:
+		gateProblem, auditParams := h.nightGatePhaseTx(ctx, tx, now, *current, config.NightInterlockPhaseStartPreshow, overrides, callerHasOverrideScope)
+		if gateProblem != nil {
+			return nightCommandOutcome{}, gateProblem, nil
+		}
 		next := *current
 		next.State = nightStatePreshow
 		next.StateEnteredAt = now
-		return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
+		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+		if len(auditParams) > 0 {
+			out.auditParams = map[string]any{"interlockOverrides": auditParams}
+		}
+		return out, nil, nil
 	case nightStatePreshow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting, nightStateRestingIntershow, nightStateEndOfNightResting:
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	default: // fading-out, stopped
@@ -636,7 +800,27 @@ func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, inten
 	return rec, changed
 }
 
-func (h *handlers) nightFadeOutNight(now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+// nightFadeOutNight gates phase="fade-out-night" against the most
+// recent TRUSTED readiness result ([handlers.nightGatePhaseTx]) whenever
+// this call would actually change something (a pure idempotent replay of
+// an already-fading-out or already-stopped session consults no
+// interlock, because nothing is being newly entered). Gating happens
+// from inside nightRunExempt's own transaction, so, like start-preshow
+// and start-night, evidence here is at most as fresh as the last
+// run-readiness call, never a live dispatch.
+//
+// A "block" rule with an unavailable source and onUnavailable: block CAN
+// make this command permanently refuse if that rule also declares
+// overridePolicy: none (an author's own explicit choice: RESTING-MODE.md
+// §10.1 makes override conditional on the rule's own declaration, not a
+// guaranteed escape). That does NOT strand the night: end-session is
+// declared for no interlock phase, is dispatched by a wholly separate
+// decide path (nightEndSessionDecide), and always reaches stopped
+// regardless of any interlock's own posture, onUnavailable, or
+// overridePolicy; the coordinator's own build brief requires this to
+// remain true, and it is unconditionally true by construction, not by a
+// check added here.
+func (h *handlers) nightFadeOutNight(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
@@ -644,7 +828,15 @@ func (h *handlers) nightFadeOutNight(now time.Time, current *store.NightSessionR
 	if !changed {
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
-	return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
+	gateProblem, auditParams := h.nightGatePhaseTx(ctx, tx, now, *current, config.NightInterlockPhaseFadeOutNight, overrides, callerHasOverrideScope)
+	if gateProblem != nil {
+		return nightCommandOutcome{}, gateProblem, nil
+	}
+	out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+	if len(auditParams) > 0 {
+		out.auditParams = map[string]any{"interlockOverrides": auditParams}
+	}
+	return out, nil, nil
 }
 
 // nightPowerPhaseConfiguredNotDispatched is Track F seam F6's own
@@ -652,7 +844,7 @@ func (h *handlers) nightFadeOutNight(now time.Time, current *store.NightSessionR
 // siteControl.presentationPowerOff IS configured: unlike invariant 6's
 // "not_configured", this build validates that configuration fully
 // (nightsitecontrol.go) but does not yet dispatch it automatically from
-// this shutdown path — reported honestly rather than as "not_configured",
+// this shutdown path; reported honestly rather than as "not_configured",
 // which would claim nothing exists to remove power when something does.
 // An operator removes it today either by dispatching the configured
 // action directly (POST /api/v1/actions/{id}/invocations, behind
@@ -668,7 +860,18 @@ const nightPowerPhaseConfiguredNotDispatched = "configured_not_dispatched"
 // Reads the pinned night.session revision via tx, matching
 // resolveActiveNightSessionConfigTx's own reason: this decide function
 // already holds the store's one connection.
-func (h *handlers) nightPowerDownPresentation(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+//
+// Gates phase="power-down-presentation" against the most recent TRUSTED
+// readiness result ([handlers.nightGatePhaseTx]) only when
+// applyNightShutdownEffect itself would change something, i.e. only the
+// FIRST time this call actually closes admission or raises the shutdown
+// intent, never the later, purely-bookkeeping step that resolves
+// PowerPhase once the display has already reached stopped by some other
+// path (fade-out-night, or a prior power-down-presentation call). See
+// [handlers.nightFadeOutNight]'s own doc comment for the identical
+// unavailable-source/overridePolicy-none analysis and why end-session
+// remains the unconditional way to end the night regardless.
+func (h *handlers) nightPowerDownPresentation(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
@@ -679,7 +882,16 @@ func (h *handlers) nightPowerDownPresentation(ctx context.Context, tx *store.Tx,
 		// and must still be allowed through below to resolve it.
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
-	next, changed := applyNightShutdownEffect(now, *current, "power-down")
+	next, shutdownChanged := applyNightShutdownEffect(now, *current, "power-down")
+	var auditParams []map[string]any
+	if shutdownChanged {
+		gateProblem, params := h.nightGatePhaseTx(ctx, tx, now, *current, config.NightInterlockPhasePowerDownPresentation, overrides, callerHasOverrideScope)
+		if gateProblem != nil {
+			return nightCommandOutcome{}, gateProblem, nil
+		}
+		auditParams = params
+	}
+	changed := shutdownChanged
 	if next.State == nightStateStopped && next.PowerPhase == "" {
 		phase := "not_configured"
 		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil &&
@@ -692,7 +904,11 @@ func (h *handlers) nightPowerDownPresentation(ctx context.Context, tx *store.Tx,
 	if !changed {
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
-	return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
+	out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+	if len(auditParams) > 0 {
+		out.auditParams = map[string]any{"interlockOverrides": auditParams}
+	}
+	return out, nil, nil
 }
 
 // nightEndSessionDecide is the operator-recovery action: abandons
@@ -755,8 +971,11 @@ type nightReadinessCheck struct {
 // transaction and persists the result inside a short one: FPP HTTP reads
 // and the asset blob copy inside nightComputeReadinessChecks can each
 // take seconds, and the store's single connection (SetMaxOpenConns(1))
-// must never be held across that or every other request stalls.
-func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry) (nightCommandOutcome, *v1.Problem, error) {
+// must never be held across that or every other request stalls. Its own
+// phase="run-readiness" interlocks are dispatched live, for the identical
+// reason: a rule that withholds this phase refuses the command before
+// anything else is computed or persisted.
+func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, issuer identity.AuditEntry, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	current, ok, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
 	if err != nil {
 		return nightCommandOutcome{}, nil, err
@@ -769,6 +988,17 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 	if err != nil {
 		return nightCommandOutcome{}, nil, err
 	}
+
+	gate := h.nightLiveEvaluatePhaseGate(ctx, payload, config.NightInterlockPhaseRunReadiness, overrides, callerHasOverrideScope)
+	if len(gate.Withheld) > 0 {
+		p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhaseRunReadiness, gate.Withheld).detail())
+		return nightCommandOutcome{}, &p, nil
+	}
+	var overrideAuditParams []map[string]any
+	if len(gate.Overridden) > 0 {
+		overrideAuditParams = nightInterlockOverrideAuditParams(gate.Overridden)
+	}
+
 	checks, outcome := h.nightComputeReadinessChecks(ctx, now, payload)
 	checksJSON, err := json.Marshal(nightEncodeChecks(checks))
 	if err != nil {
@@ -796,7 +1026,11 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 		}
 		next := *curTx
 		next.ReadinessID = rec.ID
-		return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
+		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+		if len(overrideAuditParams) > 0 {
+			out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
+		}
+		return out, nil, nil
 	})
 }
 
@@ -876,13 +1110,13 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))
 	// Track F seam F6: every configured interlock, disabled ones included,
 	// gets its own check regardless of which phase this preparation epoch
-	// is actually about to enter — RESTING-MODE.md §13: "configured
+	// is actually about to enter, per RESTING-MODE.md §13: "configured
 	// observe-only interlocks report their current outcome without
 	// blocking" and "blocking interlocks for the phase being entered have
 	// fresh passing evidence... other-phase failures remain visible but do
 	// not block." A block-posture rule's own withhold effect is computed
 	// separately, from this stored result, at the moment its own phase is
-	// actually entered (nightEvaluatePhaseInterlockGate) — never here.
+	// actually entered (nightEvaluatePhaseInterlockGate), never here.
 	checks = append(checks, h.nightComputeInterlockChecks(ctx, payload.Interlocks)...)
 
 	for _, c := range checks {
@@ -961,7 +1195,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 // getPinnedNightSessionPayloadTx is [handlers.getPinnedNightSessionPayload]
 // (nightloop.go) read through tx instead of h.deps.Config, necessary so a
 // gated decide function (which already holds the store's one connection
-// via tx — resolveActiveNightSessionConfigTx's own doc comment states the
+// via tx; resolveActiveNightSessionConfigTx's own doc comment states the
 // identical reason) never tries to acquire a second one and deadlock the
 // single-connection pool.
 func (h *handlers) getPinnedNightSessionPayloadTx(ctx context.Context, tx *store.Tx, rec store.NightSessionRecord) (config.NightSessionPayload, error) {

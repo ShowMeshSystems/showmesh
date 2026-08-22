@@ -1939,7 +1939,9 @@ export interface paths {
          *
          *     `idempotencyKey` (optional request body field) is honored only by `prepare-site`, the one command that creates something new; a repeat with the same key returns the original session. The other six commands are already idempotent by lifecycle state and ignore the field.
          *
-         *     `interlockOverrides` (optional request body field, Track F seam F6) names configured "block" interlock rules to override for THIS command. `night:command` alone never authorizes an override — a rule is bypassed only when it declares `overridePolicy: authorized-operator` AND the caller separately holds `night:override` (RESTING-MODE.md §10.1; IDENTIFIER-REGISTER.md: starting a night must not, by itself, authorize bypassing a blocking interlock). Consulted only by `start-night` in this build.
+         *     `interlockOverrides` (optional request body field, Track F seam F6) names configured "block" interlock rules to override for THIS command. `night:command` alone never authorizes an override: a rule is bypassed only when it declares `overridePolicy: authorized-operator` AND the caller separately holds `night:override` (RESTING-MODE.md §10.1; IDENTIFIER-REGISTER.md: starting a night must not, by itself, authorize bypassing a blocking interlock).
+         *
+         *     A "block" interlock declared for `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, or `power-down-presentation` can withhold that same command with a `409` (`night-not-ready`) naming the rule, unless a valid override is supplied. `prepare-site` and `run-readiness` dispatch that rule's own evidence LIVE, at the instant the command runs; the other four gate on the most recent readiness result instead, which is at most as fresh as the last `run-readiness` call; see RESTING-MODE.md §10.1 and this seam's own build report for why those are different freshness guarantees. `request-final-show` and `end-session` declare no interlock phase and consult no gate at all: `end-session` in particular is never withheld by any interlock, by construction, so a misconfigured "block" rule with `overridePolicy: none` and an unavailable source can never make the night impossible to end, only impossible to end through `fade-out-night`/`power-down-presentation` specifically. `projector-strike`, `enter-resting`, and `presentation-power-on` are validated and shown on readiness but have no command of their own to gate in this build.
          */
         post: operations["dispatchNightCommand"];
         delete?: never;
@@ -4060,13 +4062,13 @@ export interface components {
             immediateSafeAttestation?: boolean;
             prerequisites?: components["schemas"]["ConfigNightSessionPrerequisite"][];
         };
-        /** @description night.session.siteControl (RESTING-MODE.md §10.2/§10.4, ADR-016, Track F seam F6): entirely optional, and every field within it is independently optional too — an empty object is refused (server-side) as configuration nothing enforces. requestThermalProfile, when present, names an existing show.action object in this session's own show (server-side). */
+        /** @description night.session.siteControl (RESTING-MODE.md §10.2/§10.4, ADR-016, Track F seam F6): entirely optional, and every field within it is independently optional too; an empty object is refused (server-side) as configuration nothing enforces. requestThermalProfile, when present, names an existing show.action object in this session's own show (server-side). */
         ConfigNightSessionSiteControl: {
             requestThermalProfile?: string;
             presentationPowerOn?: components["schemas"]["ConfigNightSessionPowerBinding"];
             presentationPowerOff?: components["schemas"]["ConfigNightSessionPresentationPowerOff"];
         };
-        /** @description One entry of night.session.interlocks (RESTING-MODE.md §10.1, Track F seam F6): a named rule attached to exactly one lifecycle phase, unique within a configuration revision. A "disabled" entry carries only name, phase, and posture; every other property below is refused for it (server-side). An "observe" entry must not set onUnavailable or overridePolicy; a "block" entry requires both, with no default (server-side; the exact combination rules are not expressible in this schema alone). signal names an existing show.action object that declares an mqtt target with expect.kind other than "none" (server-side) — an interlock's evidence is that action's own request/response, the only mechanism this build has to reach a site sensor. */
+        /** @description One entry of night.session.interlocks (RESTING-MODE.md §10.1, Track F seam F6): a named rule attached to exactly one lifecycle phase, unique within a configuration revision. A "disabled" entry carries only name, phase, and posture; every other property below is refused for it (server-side). An "observe" entry must not set onUnavailable or overridePolicy; a "block" entry requires both, with no default (server-side; the exact combination rules are not expressible in this schema alone). signal names an existing show.action object that declares an mqtt target with expect.kind other than "none" (server-side): an interlock's evidence is that action's own request/response, the only mechanism this build has to reach a site sensor. */
         ConfigNightSessionInterlock: {
             name: string;
             /** @enum {string} */
@@ -4256,7 +4258,7 @@ export interface components {
             rule: string;
             reason: string;
         };
-        /** @description The optional body of POST /night/commands/{command}. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. `interlockOverrides` is consulted only by `start-night` today (Track F seam F6): every other command's own configured interlocks are visible on run-readiness but not yet gated by this seam. */
+        /** @description The optional body of POST /night/commands/{command}. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. `interlockOverrides` (Track F seam F6) is consulted by `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, and `power-down-presentation`, each against the "block" interlock rules declared for that command's own phase, described in full on `POST /night/commands/{command}` itself. `request-final-show` and `end-session` consult no interlock at all. */
         NightCommandRequest: {
             idempotencyKey?: string;
             interlockOverrides?: components["schemas"]["NightInterlockOverride"][];
@@ -8254,7 +8256,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met, including a configured "block" interlock currently withholding this phase and not covered by a valid override — Track F seam F6), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
+            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met, including a configured "block" interlock currently withholding this phase and not covered by a valid override, Track F seam F6), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

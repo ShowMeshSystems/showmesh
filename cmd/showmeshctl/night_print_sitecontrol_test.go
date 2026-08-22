@@ -7,7 +7,7 @@ import (
 )
 
 // TestPrintNightSessionSiteControl_NotConfigured proves the omitted-
-// configuration case renders plainly rather than as an empty section —
+// configuration case renders plainly rather than as an empty section,
 // the reference installation's own shape (RESTING-MODE.md §10).
 func TestPrintNightSessionSiteControl_NotConfigured(t *testing.T) {
 	var buf bytes.Buffer

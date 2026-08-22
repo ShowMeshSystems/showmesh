@@ -14,7 +14,7 @@ import (
 // TestDecodeNightSessionPayloadAbsentSiteControlIsValid.
 //
 // Every cross-object reference this file needs (an existing show.action
-// object, and — for an interlock's own signal — whether that action is a
+// object, and (for an interlock's own signal) whether that action is a
 // confirmable mqtt binding) is a caller-supplied callback, exactly like
 // nightsession.go's own AssetCurrent/ActionResolver: this package has no
 // store access.
@@ -62,7 +62,7 @@ var nightInterlockPostureValues = map[string]bool{
 }
 
 // The two members of a "block" rule's onUnavailable. No default:
-// RESTING-MODE.md §10.1 — "required onUnavailable: block|allow with no
+// RESTING-MODE.md §10.1: "required onUnavailable: block|allow with no
 // default."
 const (
 	NightInterlockOnUnavailableBlock = "block"
@@ -93,7 +93,7 @@ var nightInterlockOverridePolicyValues = map[string]bool{
 // enforced. See nightinterlock.go (internal/coordinator/api) for the one
 // evidence source this build actually has (a named mqtt action's own
 // request/response), which carries no independent "collected at" the way
-// an observation.Observation does — freshness here is validated shape,
+// an observation.Observation does; freshness here is validated shape,
 // not yet a runtime gate.
 const nightInterlockMaxFreshnessSeconds = 3600
 
@@ -120,7 +120,7 @@ type InterlockSignalResolver func(actionID string) (NightInterlockSignalInfo, bo
 // FreshnessSeconds is a pointer because absent and 0 are both legal and
 // distinct (0 means "evidence must be from this same instant," an
 // operator choice, not this decoder's own default). OnUnavailable and
-// OverridePolicy are "" for posture "observe" or "disabled" — never a
+// OverridePolicy are "" for posture "observe" or "disabled", never a
 // zero-value stand-in for one of the two real enum members, matching
 // [NightSessionBackgroundAudio]'s own CrossfadeMs precedent one file over.
 type NightInterlockRule struct {
@@ -147,7 +147,7 @@ var (
 )
 
 // decodeNightInterlocks decodes night.session.interlocks. An absent key
-// and an explicit empty array both mean "no interlocks configured" —
+// and an explicit empty array both mean "no interlocks configured",
 // RESTING-MODE.md §10's own "Omitting siteControl and interlocks is
 // valid," read as applying at the granularity of "no rules" rather than
 // forcing every deployment with any rule at all to also avoid the empty
@@ -319,8 +319,8 @@ var nightPowerDomainValues = map[string]bool{
 }
 
 // The two members of a power binding's domainProvenance. "provider" is a
-// closed-enum member with no accepting decoder path today — see
-// decodeNightPowerBinding's own comment — kept in the vocabulary because
+// closed-enum member with no accepting decoder path today; see
+// decodeNightPowerBinding's own comment, kept in the vocabulary because
 // RESTING-MODE.md §10.2 names it as the shape a future authoritative
 // provider would use, not because this build can produce it.
 const (
@@ -334,7 +334,7 @@ var nightDomainProvenanceValues = map[string]bool{
 }
 
 // The two members of presentationPowerOff.removalPolicy. No default:
-// RESTING-MODE.md §10.2 — "no default" and "a half-filled configuration is
+// RESTING-MODE.md §10.2: "no default" and "a half-filled configuration is
 // invalid at write time."
 const (
 	NightRemovalPolicyImmediate    = "immediate"
@@ -383,7 +383,7 @@ type NightPowerBinding struct {
 // Action and RequireConfirmation apply only to Kind "action" and
 // "evidence" (RequireConfirmation to "action" only); DelayMs applies only
 // to Kind "delay". A zero value in the field that does not apply to Kind
-// is never a distinct configuration from that field being absent — the
+// is never a distinct configuration from that field being absent; the
 // decoder rejects the field being present at all outside its own Kind.
 type NightPrerequisite struct {
 	Kind                string `json:"kind"`
@@ -541,7 +541,7 @@ func decodeNightPowerBinding(fields map[string]json.RawMessage, path, sessionSho
 		// only when it can authoritatively identify every target. Generic
 		// MQTT and Home Assistant service-call bindings are
 		// operator-declared." ADR-016 confirms no such provider exists in
-		// this codebase for any power/climate device — enforced here
+		// this codebase for any power/climate device; enforced here
 		// rather than trusted, per this seam's own build brief.
 		return NightPowerBinding{}, &ValidationError{
 			Code: ValidationCodeDomainProvenanceRefused, Field: path + ".domainProvenance",
@@ -614,12 +614,12 @@ func decodeNightPresentationPowerOff(fields map[string]json.RawMessage, sessionS
 // decodeNightPrerequisites decodes presentationPowerOff.prerequisites.
 // selfAction is the enclosing power-off binding's own action id: an
 // "action" or "evidence" prerequisite naming it back is a direct cycle
-// (RESTING-MODE.md §10.2 — "may not invoke the same power-off binding
+// (RESTING-MODE.md §10.2: "may not invoke the same power-off binding
 // directly or indirectly"). This build has exactly one presentation
 // power-off binding per session and show.action is a leaf protocol
 // binding with no action-to-action call graph of its own (ADR-029: a
 // macro invokes actions, an action never invokes another action), so a
-// genuinely INDIRECT cycle has no representable path here — only direct
+// genuinely INDIRECT cycle has no representable path here; only direct
 // self-reference is checked, and that is the whole reachable cycle set.
 func decodeNightPrerequisites(fields map[string]json.RawMessage, sessionShow string, actionResolver ActionResolver, selfAction string) ([]NightPrerequisite, *ValidationError) {
 	raw, present := fields["prerequisites"]

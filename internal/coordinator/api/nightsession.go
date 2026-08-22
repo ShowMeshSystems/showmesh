@@ -84,7 +84,7 @@ func (h *handlers) nightSessionActionResolver(ctx context.Context) config.Action
 // nightInterlockSignalResolver is [config.InterlockSignalResolver]: unlike
 // h.nightSessionActionResolver, an interlock's "signal" also needs enough
 // of the action's own target to confirm it can produce an evidence read
-// at all (mqtt, with an expect.kind other than "none") — the orchestrator
+// at all (mqtt, with an expect.kind other than "none"): the orchestrator
 // ruling this seam's build brief carries: a named logical action's own
 // request/response is the only evidence source this codebase can reach
 // today, so a signal that can never confirm anything is refused at write
