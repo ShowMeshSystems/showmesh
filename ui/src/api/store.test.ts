@@ -17,6 +17,7 @@ import {
   makeEventsResponse,
   makeFPPInstance,
   makeMacroRunSummary,
+  makeNightSessionChangedEvent,
   makeNode,
   makeProblem,
   makeSessionResponse,
@@ -3299,6 +3300,117 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     })
 
     expect(store.getSnapshot().macroRuns).toEqual([])
+  })
+
+  it('applies a nightSession.changed frame as a whole-object replace of model.nightSession', async () => {
+    const changed = makeNightSessionChangedEvent({
+      seq: 1,
+      session: {
+        ...makeNightSessionChangedEvent().session,
+        state: 'preshow',
+        cycle: 1,
+      },
+    })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'nightSession.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+
+    // Model.nightSession is not part of Snapshot (unlike resolume/fpp) —
+    // this asserts the "before the first live frame" state a view relies
+    // on for its own reconciliation (views/NightSession.tsx).
+    expect(store.getSnapshot().nightSession).toBeNull()
+
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().nightSession?.state === 'preshow', {
+      message: 'nightSession.changed was never applied to the model',
+    })
+
+    expect(store.getSnapshot().nightSession).toEqual(changed.session)
+  })
+
+  it('review finding 9: a stream.reset clears model.nightSession back to null rather than leaving a value this connection has no evidence still holds', async () => {
+    const changed = makeNightSessionChangedEvent({
+      seq: 1,
+      session: { ...makeNightSessionChangedEvent().session, state: 'preshow' },
+    })
+    let streamRes = null as import('node:http').ServerResponse | null
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamRes = res
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'nightSession.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().nightSession?.state === 'preshow', {
+      message: 'nightSession.changed was never applied to the model',
+    })
+
+    // A stream.reset on the SAME still-open connection is a resnapshot,
+    // and the coordinator's hub gives this fresh generation no guarantee
+    // it will hear a nightSession.changed frame again soon (stream.go's
+    // hub-wide "last rendered" map only fires on the next actual state
+    // change) — the stale value from before the reset must not keep
+    // rendering as current.
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'stream.reset', {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      reason: 'subscriber_too_slow',
+      snapshotRequired: true,
+    })
+
+    await waitFor(() => store.getSnapshot().nightSession === null, {
+      message: 'stream.reset did not clear model.nightSession',
+    })
   })
 
   it('submitMacroRun upserts the returned run into the model immediately, without waiting for a stream frame', async () => {

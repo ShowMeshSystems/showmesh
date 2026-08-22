@@ -101,6 +101,36 @@ export type {
   AssetGap,
   ExtraAsset,
   AuditEntry,
+  // Track F seam F2/F1: the night-session lifecycle controller and the
+  // night.session/night.session.active configuration kinds.
+  ConfigNightSession,
+  ConfigNightSessionWrite,
+  ConfigNightSessionResting,
+  ConfigNightSessionRestingWrite,
+  ConfigNightSessionEnterShow,
+  ConfigNightSessionEnterShowWrite,
+  ConfigNightSessionEnterResting,
+  ConfigNightSessionEnterRestingWrite,
+  ConfigNightSessionCue,
+  ConfigNightSessionCueWrite,
+  ConfigNightSessionFPPPlaylist,
+  ConfigNightSessionAssetRef,
+  ConfigNightSessionBackgroundAudio,
+  ConfigNightSessionBackgroundAudioWrite,
+  ConfigNightSessionBackgroundAudioItem,
+  ConfigNightSessionActive,
+  NightSessionConfigResponse,
+  NightSessionActiveConfigResponse,
+  NightSessionState,
+  NightSessionResponse,
+  NightReadiness,
+  NightReadinessCheck,
+  NightPhaseEvidence,
+  NightCue,
+  NightCues,
+  NightAuthorization,
+  NightCommandName,
+  NightCommandResult,
 } from '../api'
 // Renamed on import, not re-declared: seam B's `Event` is identical to
 // the wire schema's Event plus a branded `EventSeq` (see api/domain.ts);
@@ -130,6 +160,13 @@ import type {
   ConfigShowSurfaceOutput as ConfigShowSurfaceOutputType,
   Asset as AssetType,
   NodeAssetManifest as NodeAssetManifestType,
+  NightSessionState as NightSessionStateType,
+  NightReadiness as NightReadinessType,
+  NightReadinessCheck as NightReadinessCheckType,
+  NightPhaseEvidence as NightPhaseEvidenceType,
+  NightCue as NightCueType,
+  NightCues as NightCuesType,
+  NightAuthorization as NightAuthorizationType,
 } from '../api'
 
 // Derived, not duplicated: these are indexed-access views onto seam B's
@@ -167,3 +204,22 @@ export type SurfaceTransport = ConfigShowSurfaceOutputType['transport']
 export type AssetMediaType = AssetType['mediaType']
 export type AssetTargetKind = AssetType['targetKind']
 export type NodeAssetManifestState = NodeAssetManifestType['state']
+// Track F seam F2: same derived-not-duplicated pattern as every alias
+// above.
+export type NightLifecycleState = NightSessionStateType['state']
+export type NightShutdownIntent = NightSessionStateType['shutdownIntent']
+export type NightReadinessState = NightReadinessType['state']
+// `outcome` is present only when `state` is "recorded" (NightReadiness's
+// own schema description), so the wire field type is optional —
+// NonNullable here since every call site already narrows on
+// `state === 'recorded'` (or `outcome !== undefined`) before reading it.
+export type NightReadinessOutcome = NonNullable<NightReadinessType['outcome']>
+export type NightReadinessCheckState = NightReadinessCheckType['state']
+export type NightPhaseEvidenceState = NightPhaseEvidenceType['state']
+export type NightCueState = NightCueType['state']
+// `outcome` (and `reason`) are optional wire fields on NightCue — see
+// NightReadinessOutcome's identical comment just above.
+export type NightCueOutcome = NonNullable<NightCueType['outcome']>
+export type NightCuePhase = NightCueType['phase']
+export type NightCuesState = NightCuesType['state']
+export type NightAuthorizationState = NightAuthorizationType['state']

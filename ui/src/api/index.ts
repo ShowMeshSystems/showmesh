@@ -141,6 +141,39 @@ export type {
   AssetManifestResponse,
   AuditEntry,
   AuditResponse,
+  // Track F seam F2/F1: the night-session lifecycle controller and the
+  // night.session/night.session.active configuration kinds.
+  ConfigNightSessionFPPPlaylist,
+  ConfigNightSessionAssetRef,
+  ConfigNightSessionBackgroundAudioItem,
+  ConfigNightSessionBackgroundAudio,
+  ConfigNightSessionResting,
+  ConfigNightSessionCue,
+  ConfigNightSessionEnterShow,
+  ConfigNightSessionEnterResting,
+  ConfigNightSessionCueWrite,
+  ConfigNightSessionEnterShowWrite,
+  ConfigNightSessionEnterRestingWrite,
+  ConfigNightSessionBackgroundAudioWrite,
+  ConfigNightSessionRestingWrite,
+  ConfigNightSessionWrite,
+  ConfigNightSession,
+  NightSessionConfigResponse,
+  ConfigNightSessionActive,
+  NightSessionActiveConfigResponse,
+  NightReadinessCheck,
+  NightReadiness,
+  NightPhaseEvidence,
+  NightCue,
+  NightCues,
+  NightAuthorization,
+  NightSessionState,
+  NightSessionResponse,
+  NightCommandRequest,
+  NightCommandResult,
+  NightCommandResponse,
+  NightSessionChangedEvent,
+  NightCommandName,
 } from './domain'
 export {
   useModel,
@@ -233,6 +266,18 @@ export {
   getAssetManifest,
   getNodeAssetManifest,
   listAudit,
+  // Track F seam F2/F1: the night-session lifecycle controller and the
+  // night.session/night.session.active configuration kinds.
+  getCurrentNightSession,
+  getNightSessionById,
+  dispatchNightCommand,
+  getNightSessionConfig,
+  putNightSessionConfig,
+  getNightSessionConfigRevisions,
+  getNightSessionConfigRevision,
+  getNightSessionActiveConfig,
+  putNightSessionActiveConfig,
+  getNightSessionActiveConfigRevisions,
 } from './useModel'
 
 // Track D seam D-2a: the progress shape [uploadResolumeComposition]'s
