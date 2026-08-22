@@ -109,12 +109,12 @@ func TestStartPlaylistConfirmsOnStatusAndNameMatch(t *testing.T) {
 	setup.obs.setObs([]observation.Observation{
 		fppStatusObs("bench-fpp", "idle", testNow, testNow),
 	})
-	srv.onRequest = func() {
+	srv.setOnRequest(func() {
 		setup.obs.setObs([]observation.Observation{
 			fppStatusObs("bench-fpp", "playing", testNow, testNow),
 			fppPlaylistNameObs("bench-fpp", "showmesh-test", testNow, testNow),
 		})
-	}
+	})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 2 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
@@ -168,12 +168,12 @@ func TestStartPlaylistUnconfirmedWhenPlayingButNameDiffers(t *testing.T) {
 	// turning this test's own "idle at dispatch" premise into a spurious
 	// 409 (ADR-024's ifBusy=refuse correctly refusing state that no longer
 	// matches the premise).
-	srv.onRequest = func() {
+	srv.setOnRequest(func() {
 		setup.obs.setObs([]observation.Observation{
 			fppStatusObs("bench-fpp", "playing", testNow, testNow),
 			fppPlaylistNameObs("bench-fpp", "some-other-playlist", testNow, testNow),
 		})
-	}
+	})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 150 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,

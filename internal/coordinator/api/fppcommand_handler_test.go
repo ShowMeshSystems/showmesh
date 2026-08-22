@@ -163,6 +163,14 @@ func newFailIfHitFPPCommandServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// setOnRequest sets the hook under f.mu, matching how the request handler
+// above reads it.
+func (f *fakeFPPCommandServer) setOnRequest(hook func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onRequest = hook
+}
+
 func (f *fakeFPPCommandServer) hitCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1407,25 +1415,27 @@ func TestFPPCommandOutcomeSurvivesClientDisconnect(t *testing.T) {
 		FPPCommandConfirmDeadline: 1 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
 	})
 
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
-	}()
-
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel the REQUEST's own context from the fake FPP server's onRequest
-	// hook, which fires only once FPP has actually received the dispatch,
-	// i.e. strictly after authentication and the pre-dispatch write ran.
-	// A timed sleep here races authentication's own duration, which has no
-	// upper bound under load: a slow token lookup can still be in flight
-	// when the sleep fires, canceling the request's context before
-	// authentication observes it and turning this simulated "client closed
-	// its tab after dispatch" into a spurious 401 from authentication
-	// itself.
-	srv.onRequest = cancel
+	// Cancel, THEN deliver evidence, both from the fake FPP server's own
+	// onRequest hook, which fires only once FPP has actually received the
+	// dispatch, i.e. strictly after authentication and the pre-dispatch
+	// write ran. Chaining evidence off cancel (rather than off a second,
+	// independent sleep) is the load-bearing part: it orders "client
+	// disconnects" strictly before "fresh evidence arrives" regardless of
+	// how long authentication took to reach this hook, which a pair of
+	// sleeps racing the wall clock independently cannot guarantee. The
+	// short sleep after cancel only gives the confirmation loop a couple
+	// of poll cycles to observe the canceled context and keep running
+	// before evidence resolves the command; it is not itself racing
+	// anything unbounded.
+	srv.setOnRequest(func() {
+		cancel()
+		time.Sleep(100 * time.Millisecond)
+		setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+	})
 	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token).WithContext(ctx)
 
 	rec := httptest.NewRecorder()
