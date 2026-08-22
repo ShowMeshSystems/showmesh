@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -9,8 +10,12 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// Track F seam F5's announcement duck/mix/interrupt orchestration
-// (nightannouncement.go).
+// Track F seam F5's announcement policy declaration (nightannouncement.go).
+// The node enforces duck/mix/interrupt from what is declared on the
+// announcement's own session; this controller declares it and never
+// drives background audio's gain or playback around a cue. The proof that
+// the node actually honors the declaration lives against a real
+// audio.Manager in internal/agent/audio/nightduck_test.go.
 
 func announcementAudioAction() config.ShowActionTarget {
 	return config.ShowActionTarget{
@@ -20,15 +25,28 @@ func announcementAudioAction() config.ShowActionTarget {
 }
 
 // mustPutAnnouncementCueAction registers a hyphenated cue action name
-// deliberately: an earlier version of this seam's interrupt-stop
-// encoding broke on exactly this shape (CRITICAL 3, found by review), so
-// every announcement test below exercises it rather than a name with no
-// hyphen that would never have caught the bug.
+// deliberately: an earlier version of this seam broke on exactly this
+// shape, so every announcement test below exercises it rather than a name
+// with no hyphen that would never have caught the bug.
 func mustPutAnnouncementCueAction(t *testing.T, st *store.Store) {
 	t.Helper()
 	putNightAction(t, st, "thank-you", config.ShowActionPayload{
 		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
 		Target: announcementAudioAction(),
+	})
+}
+
+// mustPutAnnouncementFPPAction binds the same cue name to a NON-audio
+// action, standing in for an announcement played through FPP: nothing a
+// mix policy can be declared on.
+func mustPutAnnouncementFPPAction(t *testing.T, st *store.Store, id string) {
+	t.Helper()
+	putNightAction(t, st, id, config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationFPP, InstanceID: "fpp-main",
+			Primitive: "startPlaylist", Params: map[string]any{"playlist": id},
+		},
 	})
 }
 
@@ -46,92 +64,212 @@ func announcementPayload(ba *config.NightSessionBackgroundAudio, defaultPolicy s
 	}
 }
 
-// TestNightAnnouncement_DuckThenRestoreOnSuccess proves the ordinary
-// path: duck fires before the announcement, and restore fires once both
-// the duck and the announcement cue resolve.
-func TestNightAnnouncement_DuckThenRestoreOnSuccess(t *testing.T) {
+// announcementFixture is every announcement test's identical setup:
+// background audio configured, applied, gained and started on node-a.
+func announcementFixture(t *testing.T, resume string) (*handlers, *store.Store, *fakeAudioPublisher, store.NightSessionRecord, *config.NightSessionBackgroundAudio) {
+	t.Helper()
 	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
 	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
 	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, resume, config.NightSessionItemTransitionSequential)
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
-	mustPutAnnouncementCueAction(t, st)
 	playThroughApplyGainStart(t, h, pub, rec)
+	return h, st, pub, rec, ba
+}
 
-	cue := announcementCue(nil)
-	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
-
-	pub.resultsByAction = map[string]mqttproto.ResultPayload{
-		"audio.gain.fade":     confirmedResultForAction("fade", nightBackgroundAudioSessionID(rec), "gain"),
-		"audio.session.apply": confirmedResultForAction("apply", "announcement-1", "started"),
+// announcementApplyParams returns the params of the single dispatched
+// audio.session.apply addressed at the announcement's own session.
+func announcementApplyParams(t *testing.T, pub *fakeAudioPublisher) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for _, d := range pub.dispatched {
+		if d.Action != "audio.session.apply" {
+			continue
+		}
+		// The background session's own apply always carries a playlist;
+		// the announcement's never does in these fixtures.
+		if _, isBackground := d.Params["playlist"]; isBackground {
+			continue
+		}
+		found = d.Params
 	}
-	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
-
-	duckRow, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseAnnouncementDuck+":"+nightPhaseEnterResting, "thank-you")
-	if err != nil || duckRow.State != nightCueStateResolved || duckRow.Outcome != nightCueOutcomeConfirmed {
-		t.Fatalf("duck row = %+v, err = %v, want resolved/confirmed", duckRow, err)
+	if found == nil {
+		t.Fatal("no audio.session.apply was dispatched for the announcement session")
 	}
-	restorePhase := nightAnnouncementRestorePhase(nightPhaseEnterResting, 1)
-	restoreRow, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, restorePhase, "thank-you")
-	if err != nil || restoreRow.State != nightCueStateResolved || restoreRow.Outcome != nightCueOutcomeConfirmed {
-		t.Fatalf("restore row = %+v, err = %v, want resolved/confirmed", restoreRow, err)
+	return found
+}
+
+// assertNoGainCommandsAfter fails when any audio.gain.* or background
+// pause/stop/resume command was dispatched at or after index from. This is
+// the regression guard for the removed coordinator-side duck: reinstating
+// any of it makes this fail.
+func assertNoBackgroundCommandsAfter(t *testing.T, pub *fakeAudioPublisher, from int) {
+	t.Helper()
+	for _, d := range pub.dispatched[from:] {
+		if strings.HasPrefix(d.Action, "audio.gain.") ||
+			d.Action == "audio.session.pause" || d.Action == "audio.session.stop" || d.Action == "audio.session.resume" {
+			t.Fatalf("announcement handling dispatched %q at background audio; the node owns making room for an announcement and this controller must send nothing", d.Action)
+		}
 	}
 }
 
-// TestNightAnnouncement_RestoreHappensEvenWhenAnnouncementFails is the
-// defect-class proof the coordinator's own report names: a failed
-// announcement dispatch must never strand background audio at duck gain.
-func TestNightAnnouncement_RestoreHappensEvenWhenAnnouncementFails(t *testing.T) {
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
-	mustPutAnnouncementCueAction(t, st)
-	playThroughApplyGainStart(t, h, pub, rec)
+// mutation target: nightAnnouncementDeclaredTarget's two params writes.
+// Drop either and the assertion fails; the node would then see an
+// announcement with no source role and no mix policy, and would never
+// duck the bed at all.
+func TestNightAnnouncement_DeclaresRoleAndPolicyOnTheAnnouncementSession(t *testing.T) {
+	for _, policy := range []string{
+		config.NightSessionAnnouncementPolicyDuck,
+		config.NightSessionAnnouncementPolicyMix,
+		config.NightSessionAnnouncementPolicyInterrupt,
+	} {
+		t.Run(policy, func(t *testing.T) {
+			h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+			mustPutAnnouncementCueAction(t, st)
+			cue := announcementCue(&policy)
+			payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyMix)
 
-	cue := announcementCue(nil)
-	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+			before := len(pub.dispatched)
+			pub.result = confirmedResultForAction("apply", "announcement-1", "started")
+			h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
-	pub.resultsByAction = map[string]mqttproto.ResultPayload{
-		"audio.gain.fade":     confirmedResultForAction("fade", nightBackgroundAudioSessionID(rec), "gain"),
-		"audio.session.apply": {Outcome: mqttproto.OutcomeFailed, Reason: "node refused to apply"},
+			params := announcementApplyParams(t, pub)
+			if params["sourceRole"] != "announcement" {
+				t.Fatalf("announcement apply sourceRole = %v, want \"announcement\"", params["sourceRole"])
+			}
+			if params["mixPolicy"] != policy {
+				t.Fatalf("announcement apply mixPolicy = %v, want %q", params["mixPolicy"], policy)
+			}
+			assertNoBackgroundCommandsAfter(t, pub, before)
+		})
 	}
+}
+
+// mutation target: nightAnnouncementCueWithResolvedPolicy's fallback to
+// payload.AnnouncementDefaultPolicy. Return the cue unchanged and the
+// declared policy becomes empty, failing here.
+func TestNightAnnouncement_UnsetCuePolicyFallsBackToTheSessionDefault(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	cue := announcementCue(nil)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyInterrupt)
+
+	pub.result = confirmedResultForAction("apply", "announcement-1", "started")
 	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
-	announcementRow, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseEnterResting, "thank-you")
-	if err != nil || announcementRow.State != nightCueStateResolved || announcementRow.Outcome == nightCueOutcomeConfirmed {
-		t.Fatalf("announcement row = %+v, err = %v, want resolved and NOT confirmed", announcementRow, err)
+	params := announcementApplyParams(t, pub)
+	if params["mixPolicy"] != config.NightSessionAnnouncementPolicyInterrupt {
+		t.Fatalf("mixPolicy = %v, want the session default %q", params["mixPolicy"], config.NightSessionAnnouncementPolicyInterrupt)
 	}
-	restorePhase := nightAnnouncementRestorePhase(nightPhaseEnterResting, 1)
-	restoreRow, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, restorePhase, "thank-you")
+}
+
+// mutation target: nightAnnouncementDeclaredTarget's two `if _, ok :=
+// params[...]; !ok` guards. Overwrite unconditionally and this fails: a
+// show.action that spells its own policy out is the operator's decision,
+// not this controller's to override.
+func TestNightAnnouncement_OperatorDeclaredParamsAreNeverOverwritten(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	putNightAction(t, st, "thank-you", config.ShowActionPayload{
+		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationAudio,
+			AudioNodeID: "node-a", AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
+			Params: map[string]any{"sourceRole": "manual", "mixPolicy": "mix"},
+		},
+	})
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	pub.result = confirmedResultForAction("apply", "announcement-1", "started")
+	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	params := announcementApplyParams(t, pub)
+	if params["sourceRole"] != "manual" || params["mixPolicy"] != "mix" {
+		t.Fatalf("params = %v, want the operator's own sourceRole/mixPolicy left exactly as authored", params)
+	}
+}
+
+// mutation target: nightAnnouncementTargetDeclarable's integration/action
+// check. Remove it and this controller starts injecting audio params into
+// an FPP dispatch, which fails here.
+func TestNightAnnouncement_NonAudioActionIsDispatchedUntouched(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementFPPAction(t, st, "thank-you")
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	// Nothing at all was sent to the audio node: not a policy declaration
+	// it could not carry, and above all not a gain command at background
+	// audio that would strand the bed with no way to know when the FPP
+	// announcement ended.
+	assertNoBackgroundCommandsAfter(t, pub, before)
+	for _, d := range pub.dispatched[before:] {
+		t.Fatalf("an FPP-bound announcement dispatched %q to the audio node", d.Action)
+	}
+
+	// And the FPP target itself is handed to its own integration byte for
+	// byte, with no audio vocabulary smuggled into its params.
+	fpp := config.ShowActionTarget{
+		Integration: config.ShowActionIntegrationFPP, InstanceID: "fpp-main",
+		Primitive: "startPlaylist", Params: map[string]any{"playlist": "thank-you"},
+	}
+	resolved := nightAnnouncementCueWithResolvedPolicy(cue, payload)
+	got := nightAnnouncementDeclaredTarget(resolved, fpp)
+	if len(got.Params) != 1 || got.Params["playlist"] != "thank-you" {
+		t.Fatalf("FPP announcement params = %v, want the authored map unchanged", got.Params)
+	}
+}
+
+// mutation target: nightAdvanceCueList's removal of the duck/restore
+// hooks. This is the stranded-quiet defect class the seam exists to
+// close, stated as an invariant rather than as a repair sequence: a
+// FAILED announcement leaves background audio exactly as it was, because
+// nothing about the bed was changed to need undoing.
+func TestNightAnnouncement_FailedAnnouncementLeavesBackgroundAudioUntouched(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	before := len(pub.dispatched)
+	historyBefore, err := h.nightBackgroundAudioHistory(context.Background(), rec)
 	if err != nil {
-		t.Fatalf("restore row was never committed after the announcement failed: %v (this is the exact stranded-duck defect class)", err)
+		t.Fatalf("history: %v", err)
 	}
-	if restoreRow.State != nightCueStateResolved || restoreRow.Outcome != nightCueOutcomeConfirmed {
-		t.Fatalf("restore row = %+v, want resolved/confirmed even though the announcement itself failed", restoreRow)
+	pub.result = mqttproto.ResultPayload{Outcome: mqttproto.OutcomeFailed, Reason: "node refused to apply"}
+	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseEnterResting, "thank-you")
+	if err != nil || row.State != nightCueStateResolved || row.Outcome == nightCueOutcomeConfirmed {
+		t.Fatalf("announcement row = %+v, err = %v; this test needs a resolved, non-confirmed announcement", row, err)
+	}
+	assertNoBackgroundCommandsAfter(t, pub, before)
+	historyAfter, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(historyAfter) != len(historyBefore) {
+		t.Fatalf("background-audio history grew from %d to %d rows around a failed announcement; the bed must be left alone", len(historyBefore), len(historyAfter))
+	}
+	last := historyAfter[len(historyAfter)-1]
+	if last.Step.Kind != nightBGStepStart || last.Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("latest background-audio step = %+v, want the confirmed start it was already at", last)
 	}
 }
 
-// TestNightAnnouncement_RestoreHappensWhenAnnouncementIsAmbiguous proves
-// the SAME defect class for the ambiguous outcome specifically -
-// review's own explicit ask: an ambiguous announcement row is ALSO
-// terminal and must not leave the restore ungated forever.
-func TestNightAnnouncement_RestoreHappensWhenAnnouncementIsAmbiguous(t *testing.T) {
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+// mutation target: the same removal, for the AMBIGUOUS outcome
+// specifically. An announcement that never resolves cleanly must still
+// leave the bed at its configured gain, and it does so here by never
+// having moved it.
+func TestNightAnnouncement_AmbiguousAnnouncementLeavesBackgroundAudioUntouched(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
 	mustPutAnnouncementCueAction(t, st)
-	playThroughApplyGainStart(t, h, pub, rec)
-
-	// Fabricate the announcement cue's own row as ambiguous directly:
-	// audio is retryable by identity, so the ordinary dispatch path can
-	// never actually produce this outcome for it, but a mqtt- or
-	// resolume-bound announcement action still can, and the restore path
-	// must handle it the same way regardless of which integration
-	// produced it.
 	ctx := context.Background()
 	if err := st.InsertNightCueOutboxRow(ctx, store.NightCueOutboxRecord{
 		ID: "row-ambiguous", SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhaseEnterResting, CueName: "thank-you",
@@ -139,222 +277,45 @@ func TestNightAnnouncement_RestoreHappensWhenAnnouncementIsAmbiguous(t *testing.
 	}, testNow); err != nil {
 		t.Fatalf("insert ambiguous announcement row: %v", err)
 	}
-
-	cue := announcementCue(nil)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
 	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
 
-	// Duck first (as the ordinary path would have run it before the cue).
-	pub.resultsByAction = map[string]mqttproto.ResultPayload{
-		"audio.gain.fade": confirmedResultForAction("fade", nightBackgroundAudioSessionID(rec), "gain"),
-	}
-	h.nightAdvanceAnnouncementDuck(ctx, testNow, rec, nightPhaseEnterResting, cue, payload)
-	h.nightAdvanceAnnouncementRestore(ctx, testNow, rec, nightPhaseEnterResting, cue, payload)
-
-	restorePhase := nightAnnouncementRestorePhase(nightPhaseEnterResting, 1)
-	restoreRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, restorePhase, "thank-you")
-	if err != nil {
-		t.Fatalf("restore row was never committed for an ambiguous announcement: %v", err)
-	}
-	if restoreRow.State != nightCueStateResolved || restoreRow.Outcome != nightCueOutcomeConfirmed {
-		t.Fatalf("restore row = %+v, want resolved/confirmed even though the announcement itself is ambiguous", restoreRow)
-	}
-}
-
-// TestNightAnnouncement_RestoreRetriesWhenRefused proves CRITICAL 2's
-// second half: a restore attempt that resolves refused (or any other
-// non-confirmed outcome) is retried under a NEW attempt rather than
-// silently treated as done, so the bed does not strand at duck gain.
-func TestNightAnnouncement_RestoreRetriesWhenRefused(t *testing.T) {
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
-	mustPutAnnouncementCueAction(t, st)
-	playThroughApplyGainStart(t, h, pub, rec)
-
-	cue := announcementCue(nil)
-	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
-	ctx := context.Background()
-
-	pub.resultsByAction = map[string]mqttproto.ResultPayload{
-		"audio.gain.fade":     {Outcome: mqttproto.OutcomeFailed, Reason: "stale_revision"},
-		"audio.session.apply": confirmedResultForAction("apply", "announcement-1", "started"),
-	}
-	h.nightAdvanceAnnouncementDuck(ctx, testNow, rec, nightPhaseEnterResting, cue, payload)
+	before := len(pub.dispatched)
 	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
-
-	attempt1Phase := nightAnnouncementRestorePhase(nightPhaseEnterResting, 1)
-	attempt1, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, attempt1Phase, "thank-you")
-	if err != nil || attempt1.State != nightCueStateResolved || attempt1.Outcome == nightCueOutcomeConfirmed {
-		t.Fatalf("restore attempt 1 = %+v, err = %v, want resolved and refused (this test's own fabricated failure)", attempt1, err)
-	}
-	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, attempt1Phase, "thank-you"); err != nil {
-		t.Fatalf("attempt 1 row missing: %v", err)
-	}
-
-	// The retry: attempt 2 confirms.
-	pub.resultsByAction["audio.gain.fade"] = confirmedResultForAction("fade", nightBackgroundAudioSessionID(rec), "gain")
-	h.nightAdvanceAnnouncementRestore(ctx, testNow, rec, nightPhaseEnterResting, cue, payload)
-
-	attempt2Phase := nightAnnouncementRestorePhase(nightPhaseEnterResting, 2)
-	attempt2, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, attempt2Phase, "thank-you")
-	if err != nil {
-		t.Fatalf("restore attempt 2 was never committed after attempt 1 was refused: %v", err)
-	}
-	if attempt2.State != nightCueStateResolved || attempt2.Outcome != nightCueOutcomeConfirmed {
-		t.Fatalf("restore attempt 2 = %+v, want resolved/confirmed", attempt2)
-	}
-	if attempt2.ActionRevision <= attempt1.ActionRevision {
-		t.Fatalf("attempt 2 revision %d did not exceed attempt 1 revision %d", attempt2.ActionRevision, attempt1.ActionRevision)
-	}
+	assertNoBackgroundCommandsAfter(t, pub, before)
 }
 
-// TestNightAnnouncement_DuckAndRestoreShareOneRevisionCounter proves
-// CRITICAL 2's first half directly: duck and restore draw from the SAME
-// shared counter as the background session's own apply/gain/start
-// steps, so restore's revision is strictly greater than duck's - never
-// equal, which is exactly what the node's own RevisionState would
-// refuse as stale_revision.
-func TestNightAnnouncement_DuckAndRestoreShareOneRevisionCounter(t *testing.T) {
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
-	mustPutAnnouncementCueAction(t, st)
-	playThroughApplyGainStart(t, h, pub, rec)
-
-	cue := announcementCue(nil)
-	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+// mutation target: nightCheckAnnouncementPolicyEnforceable's
+// nightAnnouncementTargetDeclarable branch. The one case this controller
+// genuinely cannot serve is reported rather than silently ignored.
+func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
+	h, st, _, _, _ := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
 	ctx := context.Background()
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cues := []config.NightSessionCue{announcementCue(&duck)}
 
-	pub.resultsByAction = map[string]mqttproto.ResultPayload{
-		"audio.gain.fade":     confirmedResultForAction("fade", nightBackgroundAudioSessionID(rec), "gain"),
-		"audio.session.apply": confirmedResultForAction("apply", "announcement-1", "started"),
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, nil, true); check.health != nightCheckStateNotConfigured {
+		t.Fatalf("no announcement cues: health = %v, want not_configured", check.health)
 	}
-	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
-	duckRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementDuck+":"+nightPhaseEnterResting, "thank-you")
-	if err != nil {
-		t.Fatalf("duck row: %v", err)
-	}
-	restoreRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightAnnouncementRestorePhase(nightPhaseEnterResting, 1), "thank-you")
-	if err != nil {
-		t.Fatalf("restore row: %v", err)
-	}
-	if restoreRow.ActionRevision <= duckRow.ActionRevision {
-		t.Fatalf("restore revision %d did not strictly exceed duck revision %d (the counter is not genuinely shared)", restoreRow.ActionRevision, duckRow.ActionRevision)
-	}
-	// And both exceed the revisions already used by apply/gain/start.
-	if duckRow.ActionRevision <= 3 {
-		t.Fatalf("duck revision %d did not continue the session's own counter past apply/gain/start (expected > 3)", duckRow.ActionRevision)
-	}
-}
-
-// TestNightAnnouncement_MixNeverDucks proves policy "mix" never touches
-// background audio: no duck row is ever committed.
-func TestNightAnnouncement_MixNeverDucks(t *testing.T) {
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
 	mustPutAnnouncementCueAction(t, st)
-	playThroughApplyGainStart(t, h, pub, rec)
-
-	mixPolicy := config.NightSessionAnnouncementPolicyMix
-	cue := announcementCue(&mixPolicy)
-	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
-
-	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
-
-	if _, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseAnnouncementDuck+":"+nightPhaseEnterResting, "thank-you"); err == nil {
-		t.Fatal("expected no duck row for policy=mix, but one exists")
-	}
-}
-
-// TestNightAnnouncement_InterruptSuspendsThenBackgroundResumesAfterResolve
-// proves the interrupt path end to end with a HYPHENATED cue name
-// (CRITICAL 3's own regression case): background audio is paused
-// (resume policy "resume") to make room, and once the announcement
-// resolves, the next background-audio tick resumes it.
-func TestNightAnnouncement_InterruptSuspendsThenBackgroundResumesAfterResolve(t *testing.T) {
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential)
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
-	mustPutAnnouncementCueAction(t, st)
-	playThroughApplyGainStart(t, h, pub, rec)
-
-	interrupt := config.NightSessionAnnouncementPolicyInterrupt
-	cue := announcementCue(&interrupt)
-	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
-
-	pub.resultsByAction = map[string]mqttproto.ResultPayload{
-		"audio.session.pause": confirmedResultForAction("pause", nightBackgroundAudioSessionID(rec), "started"),
-		"audio.session.apply": confirmedResultForAction("apply", "announcement-1", "started"),
-	}
-	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
-
-	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
-	if err != nil {
-		t.Fatalf("history: %v", err)
-	}
-	pbHistory := nightBackgroundAudioPlaybackHistory(history)
-	latest := pbHistory[len(pbHistory)-1]
-	if latest.Step.Kind != nightBGStepInterruptPause || latest.Row.State != nightCueStateResolved || latest.Row.Outcome != nightCueOutcomeConfirmed {
-		t.Fatalf("latest background-audio step = %+v, want a resolved/confirmed interrupt pause", latest)
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, cues, true); check.health != nightHealthHealthy() {
+		t.Fatalf("audio-bound announcement: health = %v (%s), want healthy", check.health, check.reason)
 	}
 
-	pub.resultsByAction = nil
-	pub.result = confirmedResultForAction("resume", nightBackgroundAudioSessionID(rec), "started")
-	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
-
-	if pub.lastAction != "audio.session.resume" {
-		t.Fatalf("dispatched action after interrupt resolved = %q, want audio.session.resume", pub.lastAction)
+	mustPutAnnouncementFPPAction(t, st, "over-the-tannoy")
+	fppCue := announcementCue(&duck)
+	fppCue.Name, fppCue.Action = "over-the-tannoy", "over-the-tannoy"
+	fppCues := []config.NightSessionCue{fppCue}
+	check := h.nightCheckAnnouncementPolicyEnforceable(ctx, fppCues, true)
+	if check.health != nightHealthFailed() {
+		t.Fatalf("FPP-bound announcement with background audio configured: health = %v (%s), want failed", check.health, check.reason)
 	}
-}
-
-// TestNightAnnouncement_InterruptGateBlocksWhileAnnouncementUnresolved
-// proves the interrupt gate actually waits: while the announcement cue's
-// own row is still pending, a background-audio tick must not resume
-// playback out from under the announcement still in flight.
-func TestNightAnnouncement_InterruptGateBlocksWhileAnnouncementUnresolved(t *testing.T) {
-	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
-	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
-	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
-	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeResume, config.NightSessionItemTransitionSequential)
-	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
-	mustPutAnnouncementCueAction(t, st)
-	playThroughApplyGainStart(t, h, pub, rec)
-
-	// The interrupt suspend itself confirms normally...
-	interrupt := config.NightSessionAnnouncementPolicyInterrupt
-	cue := announcementCue(&interrupt)
-	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
-	pub.result = confirmedResultForAction("pause", nightBackgroundAudioSessionID(rec), "started")
-	h.nightAdvanceAnnouncementDuck(context.Background(), testNow, rec, nightPhaseEnterResting, cue, payload)
-
-	// ...but the announcement cue's OWN row is fabricated as still
-	// pending, standing in for "the announcement has not resolved yet"
-	// without relying on the cueName-only crash hook, which cannot
-	// distinguish this row from the interrupt-pause row above once both
-	// share the announcement's own cue name (by design, so the gate can
-	// look the interrupting cue up directly).
-	if err := st.InsertNightCueOutboxRow(context.Background(), store.NightCueOutboxRecord{
-		ID: "row-pending", SessionID: rec.ID, Cycle: rec.Cycle, Phase: nightPhaseEnterResting, CueName: "thank-you",
-		ActionRevision: 1, State: nightCueStatePending,
-	}, testNow); err != nil {
-		t.Fatalf("insert pending announcement row: %v", err)
+	if !strings.Contains(check.reason, "over-the-tannoy") {
+		t.Fatalf("reason %q does not name the offending cue", check.reason)
 	}
-
-	pub.result = confirmedResultForAction("resume", nightBackgroundAudioSessionID(rec), "started")
-	countBeforeGatedTick := pub.count()
-	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
-
-	if pub.count() != countBeforeGatedTick {
-		t.Fatalf("publish count = %d after a tick while the announcement is still pending, want unchanged at %d (must not resume yet)", pub.count(), countBeforeGatedTick)
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, fppCues, false); check.health != nightHealthHealthy() {
+		t.Fatalf("FPP-bound announcement with no background audio: health = %v (%s), want healthy", check.health, check.reason)
 	}
 }

@@ -60,6 +60,19 @@ type fakeAudioPublisher struct {
 	// one shared result field cannot express. An action absent from this
 	// map falls back to f.result.
 	resultsByAction map[string]mqttproto.ResultPayload
+
+	// dispatched records every command this fake was handed, in order.
+	// lastAction/lastParams answer "what was the final one"; a test that
+	// must prove a command was NEVER sent, or must read the params of an
+	// earlier one in a multi-step sequence, needs the whole list.
+	dispatched []dispatchedAudioCommand
+}
+
+// dispatchedAudioCommand is one recorded publish: the action string and
+// the params it carried.
+type dispatchedAudioCommand struct {
+	Action string
+	Params map[string]any
 }
 
 func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool, payload []byte) error {
@@ -75,6 +88,7 @@ func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool
 	_ = json.Unmarshal(payload, &env)
 	f.lastAction = env.Payload.Action
 	f.lastParams = env.Payload.Params
+	f.dispatched = append(f.dispatched, dispatchedAudioCommand{Action: env.Payload.Action, Params: env.Payload.Params})
 	return f.publishErr
 }
 

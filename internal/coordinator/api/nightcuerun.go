@@ -179,7 +179,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			return store.NightCueOutboxRecord{}, err
 		}
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, action.Target, idemKey, issuer, row.ActionRevision)
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, row.ActionRevision)
 
 	case nightCueStateDispatched:
 		action, err := nightResolveShowActionRevision(ctx, h.deps.Config, cue.Action, row.ActionRevision)
@@ -201,7 +201,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			return row, nil
 		}
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, action.Target, idemKey, issuer, row.ActionRevision)
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, row.ActionRevision)
 
 	default:
 		return store.NightCueOutboxRecord{}, fmt.Errorf("api: night cue outbox row %s/%d/%s/%s has unrecognized state %q", rec.ID, rec.Cycle, phase, cue.Name, row.State)
@@ -257,7 +257,7 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 	}
 
 	idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, action.Target, idemKey, issuer, revision)
+	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, revision)
 }
 
 // nightBarrierResolutionDeadline bounds how long a barrier cue may hold
@@ -382,9 +382,10 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			continue
 		}
 		isFirst := isEnterShow && !firstCommitted
-		if cue.Role == config.NightSessionCueRoleAnnouncement {
-			h.nightAdvanceAnnouncementDuck(ctx, now, rec, phase, cue, payload)
-		}
+		// An announcement cue carries its effective duck/mix/interrupt
+		// policy into its own dispatch, where the node enforces it
+		// (nightannouncement.go). Nothing here touches background audio.
+		cue = nightAnnouncementCueWithResolvedPolicy(cue, payload)
 		_, err := h.nightRunCue(ctx, now, rec, phase, cue, issuer, isFirst)
 		if err != nil {
 			if errors.Is(err, errNightCueSessionMoved) {
@@ -397,14 +398,6 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			}
 		} else if isFirst {
 			firstCommitted = true
-		}
-		if cue.Role == config.NightSessionCueRoleAnnouncement {
-			// Unconditional: a failed duck or a failed announcement must
-			// never strand background audio at duck gain for the rest of
-			// the night (the exact defect class this seam's own report
-			// names). Restore is attempted regardless of the outcome
-			// above.
-			h.nightAdvanceAnnouncementRestore(ctx, now, rec, phase, cue, payload)
 		}
 	}
 

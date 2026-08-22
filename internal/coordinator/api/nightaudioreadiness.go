@@ -93,3 +93,42 @@ func nightCheckAnnouncementAssets(cues []config.NightSessionCue) nightReadinessC
 	}
 	return nightReadinessCheck{name: name, health: nightCheckStateNotConfigured, reason: "no announcement-role cue is configured"}
 }
+
+// nightCheckAnnouncementPolicyEnforceable reports whether every
+// configured announcement cue's own bound show.action is something an
+// announcement policy can actually be declared on. The node enforces
+// duck/mix/interrupt from the source role and mix policy declared on the
+// announcement's own playback session (nightannouncement.go), so an
+// announcement dispatched through FPP, MQTT, or Resolume has no session
+// to carry the policy and background audio is left alone. That is
+// reported here rather than silently ignored: the alternative this build
+// used to ship - a coordinator-driven gain fade around the cue - could
+// not tell when the announcement ended and stranded the bed at duck gain.
+func (h *handlers) nightCheckAnnouncementPolicyEnforceable(ctx context.Context, cues []config.NightSessionCue, backgroundAudioConfigured bool) nightReadinessCheck {
+	name := "announcement-policy-enforceable"
+	var announcements int
+	var undeclarable []string
+	for _, cue := range cues {
+		if cue.Role != config.NightSessionCueRoleAnnouncement {
+			continue
+		}
+		announcements++
+		action, _, err := nightResolveShowAction(ctx, h.deps.Config, cue.Action)
+		if err != nil {
+			return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf("could not read announcement cue %q's bound show.action %q: %s", cue.Name, cue.Action, err.Error())}
+		}
+		if !nightAnnouncementTargetDeclarable(action.Target) {
+			undeclarable = append(undeclarable, cue.Name)
+		}
+	}
+	switch {
+	case announcements == 0:
+		return nightReadinessCheck{name: name, health: nightCheckStateNotConfigured, reason: "no announcement-role cue is configured"}
+	case len(undeclarable) == 0:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d announcement cue(s) dispatch audio.session.apply, which carries the declared source role and mix policy the node enforces", announcements)}
+	case !backgroundAudioConfigured:
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("announcement cue(s) %v do not dispatch audio.session.apply, so no mix policy is declared for them; no resting background audio is configured for them to make room in either", undeclarable)}
+	default:
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf("announcement cue(s) %v do not dispatch audio.session.apply, so their configured duck/mix/interrupt policy cannot be declared on any playback session and resting background audio will play straight through them; only the audio node can make room for an announcement, and only for one it is running", undeclarable)}
+	}
+}

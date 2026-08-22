@@ -30,12 +30,11 @@ import (
 // itself once the engine reports Completed, so this controller never
 // polls for item completion or issues its own per-item apply.
 //
-// Leaving playback (a real show, or an interrupting announcement) always
-// uses [nightBackgroundSuspendKind]: pause when resume policy is
+// Leaving playback for a real show always uses
+// [nightBackgroundSuspendKind]: pause when resume policy is
 // "resume" (the engine keeps position; a bare audio.session.resume
 // continues it), stop when it is "restart" (a fresh apply starts over at
-// item 0). This is the ONE mechanism both the ordinary rest/show cycle
-// and an interrupt-policy announcement share, so resume never needs a
+// item 0), so resume never needs a
 // coordinator-tracked bookmark at all - pkgaudio.Bookmark and
 // ApplyRequest.Bookmark are not wired on the coordinator-facing apply
 // parser anyway (internal/agent/audiosessionops.go's own comment).
@@ -44,23 +43,20 @@ import (
 // resumed exactly the way nightDispatchAndPersistCue's two crash-window
 // hooks already prove for cues (nightcuerun.go). A step's identity is
 // (phase, cueName) as separate DB columns, never fields packed into one
-// parsed string - the exact defect an earlier version of this file had
-// for an interrupt's own stop step, found by review: a hyphenated cue
-// name broke a greedy regex meant to split it back into "which phase"
-// and "which cue". Phase values below are all fixed, coordinator-chosen
-// constants (never an operator string), so encoding a KNOWN-safe
-// classifier (an announcement's own enterShow/enterResting/fadeOut
-// phase) into the outbox phase column is safe; a cue's own arbitrary
-// name only ever occupies the cue_name column, verbatim, never parsed.
+// parsed string: the phase column holds one fixed, coordinator-chosen
+// constant, and a cue's own arbitrary name only ever occupies the
+// cue_name column, verbatim, never parsed.
 //
 // One pkgaudio.Revision counter is shared across every step that
-// addresses this session, regardless of which of the phase spellings
-// below recorded it - its own RevisionState enforces one strictly-
+// addresses this session - its own RevisionState enforces one strictly-
 // increasing space for the whole session, and
 // [nightNextBackgroundAudioRevision]/[nightBackgroundAudioRevisionState]
-// both read via [NightSessionStore.ListNightCueOutboxRowsForPhasePrefix]
-// so a duck/restore/interrupt step and an ordinary apply/gain/start/
-// pause/resume/stop step never collide or race each other's revision.
+// both read via [NightSessionStore.ListNightCueOutboxRowsForPhasePrefix].
+//
+// An announcement never appears here. Its duck/mix/interrupt policy is
+// declared on the announcement's own playback session and enforced by
+// the audio node (nightannouncement.go); this controller commits no step
+// for it, because only the node can observe when an announcement ends.
 //
 // Known, deliberate limits (see this builder's own report): a failed
 // apply or start is logged and left for an operator rather than auto-
@@ -74,68 +70,12 @@ import (
 // audio.session.apply or audio.gain.set today (a contract gap filed
 // separately, not invented here).
 
-// nightPhaseRestingBackground is the exact phase for this controller's
-// own apply/gain/start/pause/resume/stop steps. Every announcement-
-// triggered step below uses a phase that STARTS WITH this string plus a
-// colon, so [NightSessionStore.ListNightCueOutboxRowsForPhasePrefix]
-// (store/nightsession.go) returns all of them together.
+// nightPhaseRestingBackground is the exact phase for every step this
+// controller commits for background audio: apply, gain, start, pause,
+// resume, and stop. It is read back through
+// [NightSessionStore.ListNightCueOutboxRowsForPhasePrefix]
+// (store/nightsession.go).
 const nightPhaseRestingBackground = "restingBackground"
-
-// The three announcement-triggered phase families, each followed by
-// ":<cuePhase>" where cuePhase is one of nightPhaseEnterShow/
-// EnterResting/FadeOut - always one of this package's own constants,
-// never a cue's own name.
-const (
-	nightPhaseAnnouncementDuck           = nightPhaseRestingBackground + ":announcementDuck"
-	nightPhaseAnnouncementRestorePrefix  = nightPhaseRestingBackground + ":announcementRestore"
-	nightPhaseAnnouncementInterruptPause = nightPhaseRestingBackground + ":announcementInterruptPause"
-	nightPhaseAnnouncementInterruptStop  = nightPhaseRestingBackground + ":announcementInterruptStop"
-)
-
-// nightAnnouncementRestorePhase builds one restore ATTEMPT's own phase:
-// attempt is a plain increasing integer, never adversarial content, so
-// this needs no escaping or parsing back - the caller looks up an exact
-// attempt number directly rather than scanning and splitting a string.
-func nightAnnouncementRestorePhase(cuePhase string, attempt int) string {
-	return fmt.Sprintf("%s:%s:attempt%d", nightPhaseAnnouncementRestorePrefix, cuePhase, attempt)
-}
-
-// nightInterruptPhase builds one interrupt suspend ATTEMPT's own phase,
-// mirroring nightAnnouncementRestorePhase's identical reasoning: attempt
-// is a plain increasing integer this package itself mints, so the
-// announcement cue's own name can be the row's cueName UNCHANGED across
-// every attempt, and the gate check in nightAdvanceBackgroundAudio can
-// look up that exact cue by name directly rather than trying to recover
-// it from an encoded string.
-func nightInterruptPhase(kind, cuePhase string, attempt int) string {
-	prefix := nightPhaseAnnouncementInterruptStop
-	if kind == nightBGStepInterruptPause {
-		prefix = nightPhaseAnnouncementInterruptPause
-	}
-	return fmt.Sprintf("%s:%s:attempt%d", prefix, cuePhase, attempt)
-}
-
-// nightSplitInterruptPhase is nightInterruptPhase's inverse for one
-// known prefix.
-func nightSplitInterruptPhase(phase, prefix string) (cuePhase string, attempt int) {
-	rest := strings.TrimPrefix(phase, prefix+":")
-	idx := strings.LastIndex(rest, ":attempt")
-	if idx < 0 {
-		return rest, 0
-	}
-	cuePhase = rest[:idx]
-	n, err := strconv.Atoi(rest[idx+len(":attempt"):])
-	if err != nil {
-		return cuePhase, 0
-	}
-	return cuePhase, n
-}
-
-// nightMaxAnnouncementRestoreAttempts bounds retry growth: far more than
-// any real announcement should ever need, so hitting it means something
-// is durably broken, worth its own loud log line rather than an
-// unbounded row count.
-const nightMaxAnnouncementRestoreAttempts = 50
 
 // nightBackgroundAudioSessionID is this session's own deterministic
 // pkg/audio.SessionID: stable for the whole lifetime of the night.session
@@ -145,35 +85,25 @@ func nightBackgroundAudioSessionID(rec store.NightSessionRecord) string {
 	return "night-bg:" + rec.ID
 }
 
-// The playback-relevant step kinds this controller's own state machine
-// recognizes. "duck"/"restore" are announcement-only and never change
-// playback state (they only ever fade gain), so they are deliberately
-// NOT in this set - nightAdvanceBackgroundAudio's own decision only
-// looks at the ones that do.
+// The step kinds this controller's own state machine recognizes. Every
+// one of them changes or reflects background audio's playback state:
+// making room for an announcement is declared on the announcement's own
+// session and enforced by the node (nightannouncement.go), so no step
+// kind here exists for it.
 const (
-	nightBGStepApply          = "apply"
-	nightBGStepGain           = "gain"
-	nightBGStepStart          = "start"
-	nightBGStepPause          = "pause"
-	nightBGStepResume         = "resume"
-	nightBGStepStop           = "stop"
-	nightBGStepInterruptPause = "interruptPause"
-	nightBGStepInterruptStop  = "interruptStop"
-	nightBGStepDuck           = "duck"
-	nightBGStepRestore        = "restore"
+	nightBGStepApply  = "apply"
+	nightBGStepGain   = "gain"
+	nightBGStepStart  = "start"
+	nightBGStepPause  = "pause"
+	nightBGStepResume = "resume"
+	nightBGStepStop   = "stop"
 )
 
-// nightBackgroundAudioStep is one parsed night_cue_outbox row under a
-// background-audio phase. CuePhase is set for every announcement-
-// triggered kind (duck, restore, interruptPause, interruptStop) - the
-// enterShow/enterResting/fadeOut phase the triggering cue belongs to,
-// read directly off this row's own Phase column, never parsed out of a
-// combined string.
+// nightBackgroundAudioStep is one parsed night_cue_outbox row under this
+// controller's background-audio phase.
 type nightBackgroundAudioStep struct {
-	Seq      int
-	Kind     string
-	CuePhase string
-	Attempt  int
+	Seq  int
+	Kind string
 }
 
 func nightBackgroundAudioCueNameApply(seq int) string  { return fmt.Sprintf("bg-%04d-apply", seq) }
@@ -205,65 +135,34 @@ func nightBackgroundAudioSeqFromCueName(name string) (int, bool) {
 }
 
 // nightParseBackgroundAudioRow classifies one outbox row already known
-// to belong to this session's background-audio phase family (its Phase
-// is nightPhaseRestingBackground or starts with it plus ":"). false
-// means the row does not match any recognized shape - never expected in
-// practice, answered rather than panicking on a malformed row.
+// to belong to this session's background-audio phase. false means the row
+// does not match any recognized shape - never expected in practice,
+// answered rather than panicking on a malformed row. A row left behind by
+// an older build under a phase this one no longer writes lands here too,
+// and is dropped rather than mistaken for a step.
 func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (nightBackgroundAudioStep, bool) {
-	switch {
-	case row.Phase == nightPhaseRestingBackground:
-		seq, ok := nightBackgroundAudioSeqFromCueName(row.CueName)
-		if !ok {
-			return nightBackgroundAudioStep{}, false
-		}
-		switch {
-		case strings.HasSuffix(row.CueName, "-apply"):
-			return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply}, true
-		case strings.HasSuffix(row.CueName, "-gain"):
-			return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepGain}, true
-		case strings.HasSuffix(row.CueName, "-start"):
-			return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStart}, true
-		case strings.HasSuffix(row.CueName, "-pause"):
-			return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepPause}, true
-		case strings.HasSuffix(row.CueName, "-resume"):
-			return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepResume}, true
-		case strings.HasSuffix(row.CueName, "-stop"):
-			return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStop}, true
-		}
+	if row.Phase != nightPhaseRestingBackground {
 		return nightBackgroundAudioStep{}, false
-	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementDuck+":"):
-		return nightBackgroundAudioStep{Kind: nightBGStepDuck, CuePhase: strings.TrimPrefix(row.Phase, nightPhaseAnnouncementDuck+":")}, true
-	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementRestorePrefix+":"):
-		cuePhase, _ := nightSplitAnnouncementRestorePhase(row.Phase)
-		return nightBackgroundAudioStep{Kind: nightBGStepRestore, CuePhase: cuePhase}, true
-	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementInterruptPause+":"):
-		cuePhase, attempt := nightSplitInterruptPhase(row.Phase, nightPhaseAnnouncementInterruptPause)
-		return nightBackgroundAudioStep{Kind: nightBGStepInterruptPause, CuePhase: cuePhase, Attempt: attempt}, true
-	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementInterruptStop+":"):
-		cuePhase, attempt := nightSplitInterruptPhase(row.Phase, nightPhaseAnnouncementInterruptStop)
-		return nightBackgroundAudioStep{Kind: nightBGStepInterruptStop, CuePhase: cuePhase, Attempt: attempt}, true
+	}
+	seq, ok := nightBackgroundAudioSeqFromCueName(row.CueName)
+	if !ok {
+		return nightBackgroundAudioStep{}, false
+	}
+	switch {
+	case strings.HasSuffix(row.CueName, "-apply"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepApply}, true
+	case strings.HasSuffix(row.CueName, "-gain"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepGain}, true
+	case strings.HasSuffix(row.CueName, "-start"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStart}, true
+	case strings.HasSuffix(row.CueName, "-pause"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepPause}, true
+	case strings.HasSuffix(row.CueName, "-resume"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepResume}, true
+	case strings.HasSuffix(row.CueName, "-stop"):
+		return nightBackgroundAudioStep{Seq: seq, Kind: nightBGStepStop}, true
 	}
 	return nightBackgroundAudioStep{}, false
-}
-
-// nightSplitAnnouncementRestorePhase splits
-// "restingBackground:announcementRestore:<cuePhase>:attempt<N>" back
-// into cuePhase and N. cuePhase is always one of a small fixed constant
-// set (enterShow/enterResting/fadeOut) and attempt is always a plain
-// integer this package itself minted, so splitting on the LAST
-// ":attempt" occurrence is unambiguous regardless of either value.
-func nightSplitAnnouncementRestorePhase(phase string) (cuePhase string, attempt int) {
-	rest := strings.TrimPrefix(phase, nightPhaseAnnouncementRestorePrefix+":")
-	idx := strings.LastIndex(rest, ":attempt")
-	if idx < 0 {
-		return rest, 0
-	}
-	cuePhase = rest[:idx]
-	n, err := strconv.Atoi(rest[idx+len(":attempt"):])
-	if err != nil {
-		return cuePhase, 0
-	}
-	return cuePhase, n
 }
 
 // nightBackgroundAudioHistoryRow pairs a parsed step with the outbox row
@@ -274,11 +173,8 @@ type nightBackgroundAudioHistoryRow struct {
 }
 
 // nightBackgroundAudioHistory returns every step ever recorded for rec's
-// background-audio session, across every phase spelling and every
-// cycle, sorted stably by Row.CreatedAt/rowid (the store's own insertion
-// order - [nightBackgroundAudioStep.Seq] is meaningful only within the
-// nightPhaseRestingBackground family, not across announcement phases,
-// which carry no seq at all).
+// background-audio session across every cycle, sorted stably by
+// Row.CreatedAt/rowid (the store's own insertion order).
 func (h *handlers) nightBackgroundAudioHistory(ctx context.Context, rec store.NightSessionRecord) ([]nightBackgroundAudioHistoryRow, error) {
 	rows, err := h.deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseRestingBackground)
 	if err != nil {
@@ -293,23 +189,6 @@ func (h *handlers) nightBackgroundAudioHistory(ctx context.Context, rec store.Ni
 		out = append(out, nightBackgroundAudioHistoryRow{Step: step, Row: r})
 	}
 	return out, nil
-}
-
-// nightBackgroundAudioPlaybackHistory is history narrowed to the steps
-// that change or reflect PLAYBACK state (never duck/restore, which only
-// ever fade gain around an announcement without stopping or pausing
-// anything) - what nightAdvanceBackgroundAudio's own state machine reads
-// to decide its next action.
-func nightBackgroundAudioPlaybackHistory(history []nightBackgroundAudioHistoryRow) []nightBackgroundAudioHistoryRow {
-	out := make([]nightBackgroundAudioHistoryRow, 0, len(history))
-	for _, h := range history {
-		switch h.Step.Kind {
-		case nightBGStepDuck, nightBGStepRestore:
-			continue
-		}
-		out = append(out, h)
-	}
-	return out
 }
 
 // nightBackgroundAudioRevisionState rebuilds a [pkgaudio.RevisionState]
@@ -526,13 +405,11 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 		h.logWarn("night loop: background audio: failed to read history", "sessionId", rec.ID, "error", err)
 		return
 	}
-	pbHistory := nightBackgroundAudioPlaybackHistory(history)
-
-	if len(pbHistory) == 0 {
+	if len(history) == 0 {
 		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, items, history)
 		return
 	}
-	latest := pbHistory[len(pbHistory)-1]
+	latest := history[len(history)-1]
 
 	if latest.Row.State == nightCueStatePending || latest.Row.State == nightCueStateDispatched {
 		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, items, latest, history)
@@ -583,40 +460,7 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 			return
 		}
 		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, items, history)
-
-	case nightBGStepInterruptPause, nightBGStepInterruptStop:
-		gateOK, err := h.nightAnnouncementCueResolved(ctx, rec, latest.Step.CuePhase, latest.Row.CueName)
-		if err != nil {
-			h.logWarn("night loop: background audio: failed to check the interrupting announcement's own row", "sessionId", rec.ID, "error", err)
-			return
-		}
-		if !confirmed {
-			// Retry the suspend itself under a fresh attempt regardless
-			// of the gate: an unconfirmed pause/stop must not silently
-			// leave the bed audible over the announcement.
-			h.nightBackgroundAudioResuspend(ctx, now, rec, nodeID, sessionID, latest.Step.Kind, latest.Step.CuePhase, latest.Row.CueName, latest.Step.Attempt, history)
-			return
-		}
-		if !gateOK {
-			return // the interrupting announcement has not resolved yet.
-		}
-		if latest.Step.Kind == nightBGStepInterruptPause {
-			h.nightBackgroundAudioResume(ctx, now, rec, nodeID, sessionID, history)
-		} else {
-			h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, items, history)
-		}
 	}
-}
-
-func (h *handlers) nightAnnouncementCueResolved(ctx context.Context, rec store.NightSessionRecord, cuePhase, cueName string) (bool, error) {
-	row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, cuePhase, cueName)
-	if errors.Is(err, store.ErrNightCueOutboxNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return row.State == nightCueStateResolved, nil
 }
 
 func (h *handlers) nightBackgroundAudioApply(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, ba *config.NightSessionBackgroundAudio, items []pkgaudio.PlaylistItem, history []nightBackgroundAudioHistoryRow) {
@@ -686,25 +530,6 @@ func (h *handlers) nightBackgroundAudioStop(ctx context.Context, now time.Time, 
 	}
 }
 
-// nightBackgroundAudioResuspend retries an unconfirmed interrupt-driven
-// pause/stop under a NEW attempt number, keeping the announcement cue's
-// own name as the row's cueName (nightInterruptPhase's own reasoning),
-// so the gate in nightAdvanceBackgroundAudio can still find the
-// interrupting announcement's own row directly by name once this
-// confirms.
-func (h *handlers) nightBackgroundAudioResuspend(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID, kind, cuePhase, cueName string, priorAttempt int, history []nightBackgroundAudioHistoryRow) {
-	revision := nightNextBackgroundAudioRevision(history)
-	action := "audio.session.stop"
-	if kind == nightBGStepInterruptPause {
-		action = "audio.session.pause"
-	}
-	phase := nightInterruptPhase(kind, cuePhase, priorAttempt+1)
-	target := nightAudioTarget(nodeID, sessionID, action, map[string]any{})
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cueName, target, revision, history); err != nil {
-		h.logWarn("night loop: background audio: interrupt resuspend failed", "sessionId", rec.ID, "kind", kind, "error", err)
-	}
-}
-
 // nightResumeBackgroundStep re-attempts an in-flight (pending or
 // dispatched) step under its own already-committed identity - audio is
 // retryable by identity ([nightCueRetryableByIdentity]), so this can
@@ -726,9 +551,9 @@ func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time,
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.start", map[string]any{})
 	case nightBGStepResume:
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.resume", map[string]any{})
-	case nightBGStepPause, nightBGStepInterruptPause:
+	case nightBGStepPause:
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.pause", map[string]any{})
-	case nightBGStepStop, nightBGStepInterruptStop:
+	case nightBGStepStop:
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.stop", map[string]any{})
 	default:
 		return
@@ -751,26 +576,14 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 		h.logWarn("night loop: background audio: failed to read history for stop", "sessionId", rec.ID, "error", err)
 		return
 	}
-	pbHistory := nightBackgroundAudioPlaybackHistory(history)
-	if len(pbHistory) == 0 {
+	if len(history) == 0 {
 		return
 	}
-	latest := pbHistory[len(pbHistory)-1]
+	latest := history[len(history)-1]
 	switch latest.Step.Kind {
 	case nightBGStepStop, nightBGStepPause:
 		if latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed {
 			return // genuinely confirmed suspended; nothing to do.
-		}
-	case nightBGStepInterruptStop, nightBGStepInterruptPause:
-		// An unresolved interrupt suspend is background's own to finish
-		// via nightAdvanceBackgroundAudio once resting resumes; leaving
-		// resting entirely while interrupted is not a state this
-		// controller currently reaches (an interrupt never changes
-		// rec.State), but if it ever did, falling through to an
-		// ordinary suspend below is still correct and never leaves the
-		// bed audible.
-		if latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed {
-			return
 		}
 	}
 
