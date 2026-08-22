@@ -983,18 +983,31 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	if err != nil {
 		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
 	}
-	out := make([]v1.NightBackgroundAudioStep, 0, len(rows))
+	// The announcement-session sequence is read here too, under its own
+	// phase family and tagged with its own sequence name. Its clear and
+	// start steps are as durable as background audio's and carry the same
+	// class of failure - a refused clear means a previous announcement may
+	// still be playing and still holding the bed ducked - so surfacing one
+	// sequence and not the other would leave that reachable from nothing
+	// but a log line (ADR-039).
+	announcementRows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseAnnouncementSession)
+	if err != nil {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the announcement-session step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+	}
+	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
 		step, ok := nightParseBackgroundAudioRow(row)
 		if !ok {
 			continue
 		}
-		rev := row.ActionRevision
-		out = append(out, v1.NightBackgroundAudioStep{
-			Phase: row.Phase, CueName: row.CueName, Kind: step.Kind, ActionRevision: rev,
-			State: row.State, Outcome: row.Outcome, Reason: row.OutcomeReason,
-			DispatchedAt: formatTimePtr(row.DispatchedAt), ResolvedAt: formatTimePtr(row.ResolvedAt),
-		})
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceBackground, step.Kind))
+	}
+	for _, row := range announcementRows {
+		kind, ok := nightParseAnnouncementRow(row)
+		if !ok {
+			continue
+		}
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind))
 	}
 	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
 }
@@ -1321,4 +1334,15 @@ func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, r
 		}
 	}
 	return nil
+}
+
+// nightMapAudioStep is one durable audio step's wire shape, shared by the
+// background-audio and announcement-session sequences.
+func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind string) v1.NightBackgroundAudioStep {
+	return v1.NightBackgroundAudioStep{
+		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, Kind: kind,
+		ActionRevision: row.ActionRevision,
+		State:          row.State, Outcome: row.Outcome, Reason: row.OutcomeReason,
+		DispatchedAt: formatTimePtr(row.DispatchedAt), ResolvedAt: formatTimePtr(row.ResolvedAt),
+	}
 }

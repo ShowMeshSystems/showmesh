@@ -79,6 +79,7 @@ func (s *Session) setGainLocked(ctx context.Context, requested pkgaudio.Gain) pk
 	}
 	effective := result.Effective
 	s.desired.Gain = &effective
+	s.rememberIntendedGainWhileDuckedLocked(effective)
 	s.persistBestEffortLocked("state change")
 
 	if !s.handleLoaded {
@@ -141,6 +142,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 
 	f := fade
 	s.desired.Fade = &f
+	s.rememberIntendedGainWhileDuckedLocked(result.Effective)
 	s.fadePending = true
 	s.fadeInvocation = invocation
 	s.fadeHandleNeverFaded = false
@@ -443,6 +445,32 @@ func (m *Manager) submitToActivePolicies(ctx context.Context, id pkgaudio.Sessio
 	for _, interrupterID := range interrupters {
 		m.interruptOneLocked(ctx, s, interrupterID)
 	}
+}
+
+// rememberIntendedGainWhileDuckedLocked keeps a ducked session's restore
+// target in step with the newest gain anyone has actually asked for.
+//
+// [Manager.removeDuckerLocked] returns a session to preDuckGain, which is
+// captured once, at the moment the first ducker arrives. Without this, a
+// gain change that lands DURING a duck moved the session's desired gain
+// and was then silently replayed away by the restore, putting the session
+// back at whatever it held before the duck. That is not merely a lost
+// setting: a bed whose configured gain never reached this node before the
+// duck sits at the default of unity, and the restore would put it back
+// there, playing louder than the configured maximum until something else
+// changed it. A failure path is exactly when that happens, because a
+// failure path is what makes a caller retry a gain step late.
+//
+// Only the restore target moves here. Whether a gain change should also
+// be allowed to drive the engine out of the duck while the duck is still
+// active is a separate question about what audio.gain.set means mid-duck,
+// deliberately not decided here. Caller holds s.mu.
+func (s *Session) rememberIntendedGainWhileDuckedLocked(effective pkgaudio.Gain) {
+	if len(s.duckedByAll) == 0 {
+		return
+	}
+	g := effective
+	s.preDuckGain = &g
 }
 
 // duckOneLocked adds duckerID to t's set of active duckers. t's gain is

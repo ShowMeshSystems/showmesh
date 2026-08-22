@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -137,6 +138,31 @@ const (
 	nightPhaseAnnouncementClear   = nightPhaseAnnouncementSession + ":clear"
 	nightPhaseAnnouncementStart   = nightPhaseAnnouncementSession + ":start"
 )
+
+// The step kinds these two phases surface, distinct from background
+// audio's own so an operator reading one step list can tell which
+// sequence a failure belongs to (ADR-039: a durable step nothing can
+// read is not evidence). A refused clear in particular means the
+// PREVIOUS announcement may still be playing and still holding the bed
+// ducked, which is exactly the kind of thing that must not live only in
+// a log line.
+const (
+	nightAnnouncementStepClear = "announcementClear"
+	nightAnnouncementStepStart = "announcementStart"
+)
+
+// nightParseAnnouncementRow classifies one outbox row under this
+// controller's announcement-session phase family. false means the row
+// matches no shape this build writes.
+func nightParseAnnouncementRow(row store.NightCueOutboxRecord) (kind string, ok bool) {
+	switch {
+	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementClear+":"):
+		return nightAnnouncementStepClear, true
+	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementStart+":"):
+		return nightAnnouncementStepStart, true
+	}
+	return "", false
+}
 
 // nightAnnouncementHistory returns every announcement-session step this
 // controller has recorded for rec, across every cycle and every cue.

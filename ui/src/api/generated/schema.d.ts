@@ -4167,13 +4167,18 @@ export interface components {
             reason: string;
             cues: components["schemas"]["NightCue"][];
         };
-        /** @description One durable background-audio step Track F seam F5's own controller has recorded, across every cycle the session has lived through. */
+        /** @description One durable audio step Track F seam F5's own controller has recorded, across every cycle the session has lived through: either the resting bed's own playback sequence or an announcement session's clear and start. */
         NightBackgroundAudioStep: {
-            /** @description The internal outbox phase this step was recorded under (always "restingBackground") - a diagnostic identifier, not a value to round-trip back into a request. */
+            /**
+             * @description Which of the controller's two audio sequences this step belongs to, so a failure is attributable without reading the internal phase string.
+             * @enum {string}
+             */
+            sequence: "background" | "announcement";
+            /** @description The internal outbox phase this step was recorded under - a diagnostic identifier, not a value to round-trip back into a request. */
             phase: string;
             cueName: string;
             /** @enum {string} */
-            kind: "apply" | "gain" | "start" | "pause" | "resume" | "stop";
+            kind: "apply" | "gain" | "start" | "pause" | "resume" | "stop" | "announcementClear" | "announcementStart";
             actionRevision: number;
             /** @enum {string} */
             state: "pending" | "dispatched" | "resolved" | "ambiguous";

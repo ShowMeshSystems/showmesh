@@ -11648,23 +11648,32 @@ components:
     NightBackgroundAudioStep:
       type: object
       description: >-
-        One durable background-audio step Track F seam F5's own
-        controller has recorded, across every cycle the session has
-        lived through.
-      required: [phase, cueName, kind, actionRevision, state,
+        One durable audio step Track F seam F5's own controller has
+        recorded, across every cycle the session has lived through:
+        either the resting bed's own playback sequence or an
+        announcement session's clear and start.
+      required: [sequence, phase, cueName, kind, actionRevision, state,
                  dispatchedAt, resolvedAt]
       properties:
+        sequence:
+          type: string
+          enum: [background, announcement]
+          description: >-
+            Which of the controller's two audio sequences this step
+            belongs to, so a failure is attributable without reading the
+            internal phase string.
         phase:
           type: string
           description: >-
-            The internal outbox phase this step was recorded under
-            (always "restingBackground") - a diagnostic identifier, not
-            a value to round-trip back into a request.
+            The internal outbox phase this step was recorded under - a
+            diagnostic identifier, not a value to round-trip back into a
+            request.
         cueName:
           type: string
         kind:
           type: string
-          enum: [apply, gain, start, pause, resume, stop]
+          enum: [apply, gain, start, pause, resume, stop,
+                 announcementClear, announcementStart]
         actionRevision:
           type: integer
         state:

@@ -48,6 +48,7 @@ type nightCuesWire struct {
 }
 
 type nightBackgroundAudioStepWire struct {
+	Sequence       string  `json:"sequence"`
 	Phase          string  `json:"phase"`
 	CueName        string  `json:"cueName"`
 	Kind           string  `json:"kind"`

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -590,5 +591,48 @@ func TestNightAnnouncement_NoClearAheadOfTheShowCommitBoundary(t *testing.T) {
 	// boundary has been crossed.
 	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow, "thank-you"); err != nil {
 		t.Fatalf("no start step after the first outward-facing announcement cue: %v", err)
+	}
+}
+
+// mutation target: mapNightBackgroundAudio's announcement-phase read and
+// the sequence tag on each step. Drop either and an announcement's clear
+// and start are durable rows reachable from no surface: a refused clear,
+// which means a previous announcement may still be playing and still
+// holding the bed ducked, would live only in a log line.
+func TestNightAnnouncement_StepsAreOnTheOperatorSurface(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	surface := mapNightBackgroundAudio(ctx, h.deps, rec)
+	if surface.State != v1.NightEvidenceRecorded {
+		t.Fatalf("background-audio surface state = %q, want recorded", surface.State)
+	}
+	byKind := map[string]v1.NightBackgroundAudioStep{}
+	for _, step := range surface.Steps {
+		byKind[step.Kind] = step
+	}
+	for _, kind := range []string{nightAnnouncementStepClear, nightAnnouncementStepStart} {
+		step, ok := byKind[kind]
+		if !ok {
+			t.Fatalf("no %q step on the operator surface; the announcement sequence is durable and reachable from nothing", kind)
+		}
+		if step.Sequence != v1.NightAudioSequenceAnnouncement {
+			t.Fatalf("%q step sequence = %q, want %q so an operator can tell which sequence a failure belongs to", kind, step.Sequence, v1.NightAudioSequenceAnnouncement)
+		}
+		if step.CueName != "thank-you" {
+			t.Fatalf("%q step cueName = %q, want the announcement cue's own name", kind, step.CueName)
+		}
+	}
+	// Background audio's own steps are still there, still tagged as
+	// background: adding one sequence must not swallow the other.
+	if step, ok := byKind[nightBGStepStart]; !ok || step.Sequence != v1.NightAudioSequenceBackground {
+		t.Fatalf("background start step = %+v (present=%v), want it present and tagged background", step, ok)
 	}
 }

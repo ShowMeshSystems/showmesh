@@ -86,23 +86,19 @@ func TestNightAnnouncementDucksBedAndRestoresConfiguredGain(t *testing.T) {
 	}
 }
 
-// mutation target: removeDuckerLocked's restore. (The zero-duckers guard
-// in duckOneLocked is NOT covered here: replacing it with a constant
-// true leaves this test passing, because only one ducker is ever
-// involved. TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores
-// is what catches that guard.) This is the compounding proof, and the
-// reason the coordinator no longer sends its
-// own audio.gain.fade around an announcement: a SECOND mechanism moving
-// the bed's gain while the node holds it ducked is silently discarded by
-// the node's own restore, and any gain it left in place before the node
-// ducked is what the bed comes back to.
+// mutation target: duckOneLocked's capture of effectiveGainLocked into
+// preDuckGain. Capture a constant and this stops observing what it
+// exists to observe.
 //
-// Run with the exact values the night controller used to send: a fade to
-// nightAnnouncementDuckFraction (0.25) of the configured gain before the
-// announcement, and a fade back to the configured gain once the
-// announcement's own DISPATCH confirmed - which is not when the
-// announcement ends.
-func TestNightCoordinatorGainAroundADuckIsDiscardedByTheNode(t *testing.T) {
+// This is the compounding proof, and the reason the coordinator no
+// longer sends its own audio.gain.fade around an announcement. Run with
+// the exact values the night controller used to send: a fade to a
+// quarter of the configured gain before the announcement, and the node's
+// own duck on top of it. The node captures the ALREADY-ducked gain as
+// its pre-duck value and drives the session to silence, so the bed ends
+// up quieter than either mechanism asked for, and the value the node
+// will restore is a duck level rather than the configured gain.
+func TestNightTwoDuckMechanismsCompoundBelowEitherIntendedLevel(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
@@ -122,25 +118,125 @@ func TestNightCoordinatorGainAroundADuckIsDiscardedByTheNode(t *testing.T) {
 		t.Fatalf("coordinator duck fade left gain %v, want %v", g, coordinatorDuck)
 	}
 
-	// The node then ducks the same session and captures the already-
-	// ducked gain as its pre-duck value: the two compound to silence.
+	// The node then ducks the same session on top of it.
 	startPlaying(t, m, ctx, "announcement-1", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
 
-	// The second mechanism restores, on its own (wrong) signal.
-	m.GainFade(ctx, "night-bg", "bg-restore", 5, pkgaudio.FadeCurveLinear, 500*time.Millisecond, configured)
-	c.advance(500 * time.Millisecond)
-	m.watchTick(ctx)
+	bed, _ := m.get("night-bg")
+	bed.mu.Lock()
+	live, preDuck := bed.effectiveGainLocked(), bed.preDuckGain
+	bed.mu.Unlock()
+	if live >= coordinatorDuck {
+		t.Fatalf("bed gain under both mechanisms = %v, want strictly below the coordinator's own intended duck level %v", live, coordinatorDuck)
+	}
+	if preDuck == nil || *preDuck != coordinatorDuck {
+		t.Fatalf("the node captured %v as the gain to restore, want the already-ducked %v; this is the compounding, and it is what made the bed come back quiet", preDuck, coordinatorDuck)
+	}
+}
+
+// mutation target: rememberIntendedGainWhileDuckedLocked, called from
+// setGainLocked. Delete either and this fails with the bed back at the
+// node's default of unity, which is ABOVE the configured maximum.
+//
+// The sequence is the reachable one: the bed's gain step does not take
+// effect on this node, so the session starts at the node's own default;
+// an announcement ducks it, capturing that default as the gain to
+// restore; the controller's retry lands mid-announcement; the
+// announcement ends. The bed must come back at the configured maximum,
+// never above it.
+func TestNightGainRetryDuringAnAnnouncementIsWhatTheBedComesBackAt(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	bedRef := writeTestAsset(t, m.assetDir, "bed.wav", "bed-asset", []byte("x"))
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "ann-asset", []byte("y"))
+	configured := nightConfiguredGain(-10)
+
+	// The gain step never reached this node, so the session starts at the
+	// engine's own default of unity rather than at the configured maximum.
+	startPlaying(t, m, ctx, "night-bg", bedRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	if g, _ := nightBedGain(t, m, "night-bg"); g != pkgaudio.Gain(1) {
+		t.Fatalf("bed gain with no gain step delivered = %v, want the default 1; this test's premise is that the configured gain never landed", g)
+	}
+
+	startPlaying(t, m, ctx, "announcement-1", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+	if _, duckers := nightBedGain(t, m, "night-bg"); duckers != 1 {
+		t.Fatal("the announcement did not duck the bed")
+	}
+
+	// The retry lands while the announcement is still playing.
+	if r := m.GainSet(ctx, "night-bg", "bg-gain-retry", 3, configured); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("the retried gain.set was refused: %+v", r)
+	}
 
 	m.Stop(ctx, "announcement-1", "ann-stop", 3)
 	final, duckers := nightBedGain(t, m, "night-bg")
 	if duckers != 0 {
 		t.Fatalf("bed still ducked by %d after the announcement stopped", duckers)
 	}
-	if final == configured {
-		t.Fatalf("gain came back to the configured %v; this test pins the OPPOSITE, and its whole point is that a second gain mechanism cannot survive the node's own duck restore", configured)
+	if final > configured {
+		t.Fatalf("bed came back at %v, ABOVE the configured maximum %v", final, configured)
 	}
-	if final != coordinatorDuck {
-		t.Fatalf("final gain = %v, want the node to restore the gain it captured at duck time (%v)", final, coordinatorDuck)
+	if final != configured {
+		t.Fatalf("bed came back at %v, want the configured maximum %v", final, configured)
+	}
+}
+
+// mutation target: rememberIntendedGainWhileDuckedLocked, called from
+// startFadeLocked. The same rule for the fade path: a fade dispatched
+// while a session is ducked names the gain the restore returns to, so
+// gain.set and gain.fade cannot disagree about what the newest intended
+// gain is.
+func TestNightGainFadeDuringAnAnnouncementIsWhatTheBedComesBackAt(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	bedRef := writeTestAsset(t, m.assetDir, "bed.wav", "bed-asset", []byte("x"))
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "ann-asset", []byte("y"))
+	configured := nightConfiguredGain(-10)
+
+	startPlaying(t, m, ctx, "night-bg", bedRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	startPlaying(t, m, ctx, "announcement-1", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	if r := m.GainFade(ctx, "night-bg", "bg-fade", 3, pkgaudio.FadeCurveLinear, 500*time.Millisecond, configured); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("the fade was refused: %+v", r)
+	}
+
+	m.Stop(ctx, "announcement-1", "ann-stop", 3)
+	final, _ := nightBedGain(t, m, "night-bg")
+	if final > configured {
+		t.Fatalf("bed came back at %v, ABOVE the configured maximum %v", final, configured)
+	}
+	if final != configured {
+		t.Fatalf("bed came back at %v, want the fade's own target %v", final, configured)
+	}
+}
+
+// mutation target: rememberIntendedGainWhileDuckedLocked's
+// zero-duckers guard. Remove it and preDuckGain is written for a session
+// nobody is ducking, so the NEXT duck restores a value captured before it
+// ever existed instead of the gain the session actually held.
+func TestNightGainChangeOnAnUnduckedSessionLeavesPreDuckGainAlone(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	bedRef := writeTestAsset(t, m.assetDir, "bed.wav", "bed-asset", []byte("x"))
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "ann-asset", []byte("y"))
+
+	startPlaying(t, m, ctx, "night-bg", bedRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	m.GainSet(ctx, "night-bg", "bg-gain", 3, pkgaudio.Gain(0.4))
+	bed, _ := m.get("night-bg")
+	bed.mu.Lock()
+	preDuck := bed.preDuckGain
+	bed.mu.Unlock()
+	if preDuck != nil {
+		t.Fatalf("preDuckGain = %v on a session nobody has ducked, want nil", *preDuck)
+	}
+
+	// And the duck that follows still captures the gain in force now.
+	startPlaying(t, m, ctx, "announcement-1", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+	m.Stop(ctx, "announcement-1", "ann-stop", 3)
+	if final, _ := nightBedGain(t, m, "night-bg"); final != pkgaudio.Gain(0.4) {
+		t.Fatalf("bed came back at %v, want the 0.4 it held when the duck began", final)
 	}
 }
 

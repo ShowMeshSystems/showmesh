@@ -249,9 +249,13 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 			"transition":{"state":"unknown","reason":""},
 			"cues":{"state":"recorded","reason":"","cues":[]},
 			"backgroundAudio":{"state":"recorded","reason":"","steps":[
-				{"phase":"restingBackground","cueName":"bg-0002-gain","kind":"gain","actionRevision":2,
+				{"sequence":"background","phase":"restingBackground","cueName":"bg-0002-gain","kind":"gain","actionRevision":2,
 				 "state":"resolved","outcome":"unconfirmable","reason":"no confirmation evidence was reported",
-				 "dispatchedAt":"2026-08-18T22:00:00Z","resolvedAt":"2026-08-18T22:00:01Z"}
+				 "dispatchedAt":"2026-08-18T22:00:00Z","resolvedAt":"2026-08-18T22:00:01Z"},
+				{"sequence":"announcement","phase":"announcementSession:clear:enterResting","cueName":"thank-you",
+				 "kind":"announcementClear","actionRevision":4,
+				 "state":"resolved","outcome":"refused","reason":"stale_revision",
+				 "dispatchedAt":"2026-08-18T22:00:02Z","resolvedAt":"2026-08-18T22:00:03Z"}
 			]},
 			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
 	}))
@@ -265,9 +269,27 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"Background audio", "bg-0002-gain", "gain", "unconfirmable", "no confirmation evidence was reported",
+		// The announcement sequence prints under its own heading. A
+		// refused clear means a previous announcement may still be
+		// playing and still holding the bed ducked, which must be
+		// readable here and not only in a coordinator log line.
+		"Announcement sessions", "thank-you", "announcementClear", "refused", "stale_revision",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout does not contain %q; stdout=%s", want, out)
 		}
+	}
+	// And under the right heading: an announcement failure attributed to
+	// background audio is worse than one that is merely hard to find.
+	bgAt := strings.Index(out, "Background audio:")
+	annAt := strings.Index(out, "Announcement sessions:")
+	if bgAt < 0 || annAt < 0 || annAt < bgAt {
+		t.Fatalf("headings out of order or missing (background at %d, announcement at %d); stdout=%s", bgAt, annAt, out)
+	}
+	if strings.Contains(out[bgAt:annAt], "announcementClear") {
+		t.Errorf("the announcement step printed under the background-audio heading; stdout=%s", out)
+	}
+	if strings.Contains(out[annAt:], "bg-0002-gain") {
+		t.Errorf("a background step printed under the announcement heading; stdout=%s", out)
 	}
 }

@@ -75,16 +75,30 @@ type NightCues struct {
 	Cues   []NightCue         `json:"cues"`
 }
 
+// NightAudioSequence values for [NightBackgroundAudioStep.Sequence].
+const (
+	NightAudioSequenceBackground   = "background"
+	NightAudioSequenceAnnouncement = "announcement"
+)
+
 // NightBackgroundAudioStep is one durable background-audio step this
 // session's controller has recorded (Track F seam F5), across every
 // cycle the session has lived through - the same evidence
 // nightbackgroundaudio.go's own history read uses to decide its next
 // action, surfaced so a stall is visible on the operator surface rather
-// than only in a log line (RESTING-MODE.md section 14). An announcement
-// never appears here: its duck/mix/interrupt policy is declared on the
-// announcement's own playback session and enforced by the audio node,
-// and this controller commits no background-audio step for it.
+// than only in a log line (RESTING-MODE.md section 14). An
+// announcement's own clear and start steps appear here too, tagged
+// Sequence "announcement": they are as durable and carry the same class
+// of failure. What never appears here is any step making room for an
+// announcement, because there is none - that policy is declared on the
+// announcement's own playback session and enforced by the audio node.
 type NightBackgroundAudioStep struct {
+	// Sequence names which of this controller's two audio sequences the
+	// step belongs to, so a failure is attributable without reading the
+	// internal phase string: "background" for the resting bed's own
+	// apply/gain/start/pause/resume/stop, "announcement" for an
+	// announcement session's clear and start.
+	Sequence       string  `json:"sequence"` // "background" | "announcement"
 	Phase          string  `json:"phase"`
 	CueName        string  `json:"cueName"`
 	Kind           string  `json:"kind"`
