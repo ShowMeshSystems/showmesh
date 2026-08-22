@@ -94,8 +94,8 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `show.surface` | operator-chosen | shipped | Track E |
 | `show.action` | operator-chosen | shipped | Step 9 |
 | `show.macro` | operator-chosen | shipped | Step 9 |
-| `show.cue` | operator-chosen | reserved | Track H seam H1 |
-| `show.playlist` | operator-chosen | reserved | Track H seam H1 |
+| `show.cue` | operator-chosen | shipped | Track H seam H1 |
+| `show.playlist` | operator-chosen | shipped | Track H seam H1 |
 | `resolume.instances` | `default` singleton | shipped | Track G seam G-2 |
 | `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
 | `assets.settings` | `default` singleton | shipped | Track G seam G-4 |

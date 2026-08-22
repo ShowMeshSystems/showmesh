@@ -1720,6 +1720,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show.cue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate show.cue objects (Track H seam H1, ADR-043)
+         * @description Object ids with label (the cue's own name), show (the parent show id), and current revision number, NOT the full payloads. Optionally narrowed with `?show=<id>`. Same read posture as GET /config/show.surface. `?node=` is not a supported filter for this kind (400).
+         */
+        get: operations["listShowCues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.cue/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One show.cue object's active revision (Track H seam H1) */
+        get: operations["getShowCue"];
+        /**
+         * Write a new show.cue revision (Track H seam H1, ADR-043)
+         * @description Requires `config:write`. `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` object. `outputs` is required and must declare at least one of render/audio/ltc/announcement — a Cue declaring nothing is an authoring mistake, not an empty-but-valid Cue. `outputs.ltc` and `outputs.announcement` each require `outputs.audio` to also be present (ADR-018's one clock domain; an announcement with no audio to play is a policy with no subject). `outputs.announcement.policy` of "duck" requires `duckGainDb` (negative, at least -60 dB) and refuses it on "mix"/"interrupt". This is a FULL REPLACEMENT.
+         */
+        put: operations["putShowCue"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.cue/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** show.cue revision history, newest first (Track H seam H1) */
+        get: operations["listShowCueRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.playlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate show.playlist objects (Track H seam H1, ADR-043)
+         * @description Object ids with label (the playlist's own name), show (the parent show id), and current revision number, NOT the full payloads. Optionally narrowed with `?show=<id>`. `?node=` is not a supported filter for this kind (400).
+         */
+        get: operations["listShowPlaylists"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.playlist/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One show.playlist object's active revision (Track H seam H1) */
+        get: operations["getShowPlaylist"];
+        /**
+         * Write a new show.playlist revision (Track H seam H1, ADR-043)
+         * @description Requires `config:write`. `show` is immutable: a PUT that changes an existing object's `show` is refused, naming both, with problem type `show-config-cross-show-reference`. `show` must name an existing `show` object. `runner` is one of `fpp`/`showmesh-audio`; the reserved, unimplemented `showmesh` runner is refused with a 400 Problem whose type is `show-config-not-implemented`, never a 501. `fpp` is required iff `runner` is `fpp`; `showmeshAudio` is permitted only when `runner` is `showmesh-audio`. `mismatchPolicy` is permitted only when `runner` is `fpp`; `safeCueRef` is required iff `mismatchPolicy` is `safeCue`, and must name a same-show `show.cue` object. `entries` is required and non-empty; each entry's `cue` must name a same-show `show.cue` object, entry ids must be unique, and two entries sharing the same `fpp.section`/`fpp.position` pair are refused (they derive the identical FPP entry key). This is a FULL REPLACEMENT.
+         */
+        put: operations["putShowPlaylist"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.playlist/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** show.playlist revision history, newest first (Track H seam H1) */
+        get: operations["listShowPlaylistRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/show.active": {
         parameters: {
             query?: never;
@@ -2869,12 +2985,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, and GET /config/audio.node/{id}/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, and audio.settings/audio.node two more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, and GET /config/audio.node/{id}/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, and Track H seam H1 two more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3312,7 +3428,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
             title: string;
             status: number;
             detail: string;
@@ -3385,12 +3501,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/night.session, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "night.session" | "audio.node";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "audio.node";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
@@ -3899,6 +4015,108 @@ export interface components {
             id: string;
             revision: number;
             payload: components["schemas"]["ConfigShowSurface"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description show.cue.outputs.render (Track H seam H1, ADR-043). sequence is the LOGICAL sequence name, never an FSEQ filename or an asset id. */
+        ConfigShowCueRenderOutput: {
+            sequence: string;
+        };
+        /** @description show.cue.outputs.audio (Track H seam H1). */
+        ConfigShowCueAudioOutput: {
+            asset: string;
+            startOffsetMillis: number;
+        };
+        /** @description show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours; requires outputs.audio to also be present (ADR-018's one clock domain) — enforced server-side. */
+        ConfigShowCueLTCOutput: {
+            startOffsetMillis: number;
+        };
+        /** @description show.cue.outputs.announcement (Track H seam H1, H0.4). Requires outputs.audio to also be present. duckGainDb is required when policy is "duck" and refused otherwise — enforced server-side. */
+        ConfigShowCueAnnouncementOutput: {
+            /** @enum {string} */
+            policy: "duck" | "mix" | "interrupt";
+            duckGainDb?: number;
+            fadeMillis: number;
+        };
+        /** @description show.cue.outputs (Track H seam H1). At least one member is required — enforced server-side, since an empty object cannot be distinguished from "absent" by a plain JSON schema. */
+        ConfigShowCueOutputs: {
+            render?: components["schemas"]["ConfigShowCueRenderOutput"];
+            audio?: components["schemas"]["ConfigShowCueAudioOutput"];
+            ltc?: components["schemas"]["ConfigShowCueLTCOutput"];
+            announcement?: components["schemas"]["ConfigShowCueAnnouncementOutput"];
+        };
+        /** @description The "show.cue" configuration kind's decoded payload (Track H seam H1, ADR-043), returned by GET and accepted by PUT /config/show.cue/{id}. show must name an existing show object. */
+        ConfigShowCue: {
+            show: string;
+            name: string;
+            outputs: components["schemas"]["ConfigShowCueOutputs"];
+        };
+        /** @description The body of GET and PUT /config/show.cue/{id}. */
+        ShowCueConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "show.cue";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigShowCue"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            /** @enum {string} */
+            source: "api";
+        };
+        /** @description show.playlist.fpp (Track H seam H1): the imported FPP playlist identity this Playlist is bound to. playlistHash is the imported canonical hash (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 1.3), 64 lowercase hex characters; this seam validates its shape only. */
+        ConfigShowPlaylistFPPBinding: {
+            instanceUuid: string;
+            playlistName: string;
+            playlistHash: string;
+        };
+        /** @description show.playlist.showmeshAudio (Track H seam H1). Permitted only when runner is "showmesh-audio" — enforced server-side. The handler always resolves and emits repeat (default "none"), so it is required on the wire even though an authored request may omit it. */
+        ConfigShowPlaylistShowmeshAudio: {
+            /** @enum {string} */
+            repeat: "none" | "all";
+        };
+        /** @description One entry's fpp binding (Track H seam H1, section 3.1). section may be empty (an FPP playlist's default, unnamed section). expectedSequenceFilename/expectedMediaFilename are optional validation evidence, never identity — the entry key is derived, never authored. */
+        ConfigShowPlaylistEntryFPP: {
+            section: string;
+            position: number;
+            expectedSequenceFilename?: string;
+            expectedMediaFilename?: string;
+        };
+        /** @description One element of show.playlist.entries (Track H seam H1). */
+        ConfigShowPlaylistEntry: {
+            id: string;
+            cue: string;
+            fpp?: components["schemas"]["ConfigShowPlaylistEntryFPP"];
+        };
+        /** @description The "show.playlist" configuration kind's decoded payload (Track H seam H1, ADR-043), returned by GET and accepted by PUT /config/show.playlist/{id}. show must name an existing show object. runner is one of fpp/showmesh-audio; the reserved showmesh runner is refused server-side. fpp is required iff runner is fpp; showmeshAudio is permitted only when runner is showmesh-audio. mismatchPolicy is permitted only when runner is fpp; safeCueRef is required iff mismatchPolicy is safeCue. entries is required and non-empty. */
+        ConfigShowPlaylist: {
+            show: string;
+            name: string;
+            /** @enum {string} */
+            runner: "fpp" | "showmesh-audio";
+            /** @enum {string} */
+            mismatchPolicy?: "hold" | "blackAndSilence" | "safeCue";
+            safeCueRef?: string;
+            fpp?: components["schemas"]["ConfigShowPlaylistFPPBinding"];
+            showmeshAudio?: components["schemas"]["ConfigShowPlaylistShowmeshAudio"];
+            entries: components["schemas"]["ConfigShowPlaylistEntry"][];
+        };
+        /** @description The body of GET and PUT /config/show.playlist/{id}. */
+        ShowPlaylistConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            /** @enum {string} */
+            kind: "show.playlist";
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigShowPlaylist"];
             /** Format: date-time */
             updatedAt: string;
             createdByPrincipalId: string | null;
@@ -7783,6 +8001,238 @@ export interface operations {
         };
     };
     listShowSurfaceRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowCues: {
+        parameters: {
+            query?: {
+                /** @description Narrow the list to cues belonging to this show id. */
+                show?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShowCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowCueConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putShowCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigShowCue"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowCueConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowCueRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowPlaylists: {
+        parameters: {
+            query?: {
+                /** @description Narrow the list to playlists belonging to this show id. */
+                show?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShowPlaylist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowPlaylistConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putShowPlaylist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigShowPlaylist"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowPlaylistConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listShowPlaylistRevisions: {
         parameters: {
             query?: never;
             header?: never;

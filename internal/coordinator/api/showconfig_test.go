@@ -580,6 +580,9 @@ func TestShowConfigValidationCodesAllMapToDistinctProblemTypes(t *testing.T) {
 		config.ValidationCodeAudioNodeChannelDuplicate,
 		config.ValidationCodeAudioNodeChannelOverlap,
 		config.ValidationCodeAudioNodeRouteMismatch,
+		config.ValidationCodeEntriesEmpty,
+		config.ValidationCodeEntryPositionDuplicate,
+		config.ValidationCodeCrossShowReference,
 	}
 	seen := make(map[string]string, len(codes))
 	for _, code := range codes {
