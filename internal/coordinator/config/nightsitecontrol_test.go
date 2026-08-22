@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -440,5 +441,102 @@ func TestNightSessionRunsUnchangedWithoutSiteControlOrInterlocks(t *testing.T) {
 	}
 	if p.Show == "" || p.Resting.Playlist == "" {
 		t.Fatalf("expected the rest of the payload to decode normally: %+v", p)
+	}
+}
+
+// --- interlock count cap: reviewer suspicion, this seam's safety review round ---
+
+// TestInterlocksRejectsExcessiveCount proves night.session.interlocks is
+// bounded the same way presentationPowerOff.prerequisites already is: a
+// reviewer-constructed 200-rule payload previously decoded successfully,
+// and each rule is dispatched serially at run-readiness with its own
+// deadline of up to 120 seconds, making one HTTP request's own
+// live-dispatch time unbounded in practice.
+func TestInterlocksRejectsExcessiveCount(t *testing.T) {
+	var rules []string
+	for i := 0; i <= nightInterlockMaxCount; i++ {
+		rules = append(rules, fmt.Sprintf(`{"name":"r%d","phase":"start-night","posture":"disabled"}`, i))
+	}
+	fragment := "[" + strings.Join(rules, ",") + "]"
+	_, verr := decodeWithInterlocksFragment(t, fragment)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "interlocks" {
+		t.Fatalf("expected field-invalid rejecting more than %d interlocks, got %+v", nightInterlockMaxCount, verr)
+	}
+}
+
+func TestInterlocksAcceptsMaxCount(t *testing.T) {
+	var rules []string
+	for i := 0; i < nightInterlockMaxCount; i++ {
+		rules = append(rules, fmt.Sprintf(`{"name":"r%d","phase":"start-night","posture":"disabled"}`, i))
+	}
+	fragment := "[" + strings.Join(rules, ",") + "]"
+	p, verr := decodeWithInterlocksFragment(t, fragment)
+	if verr != nil {
+		t.Fatalf("unexpected error at exactly the cap: %+v", verr)
+	}
+	if len(p.Interlocks) != nightInterlockMaxCount {
+		t.Fatalf("expected %d interlocks, got %d", nightInterlockMaxCount, len(p.Interlocks))
+	}
+}
+
+// --- also-fix: a "block" rule's signal must be able to say no ---
+
+// TestInterlockBlockSignalTextKindRejected proves a "block" rule whose
+// signal uses expect.kind "text" is refused at write time: text always
+// confirms on any valid UTF-8 payload (config/showaction.go's own
+// resolveMQTTActionPayload), so it can never produce a negative answer
+// and could only ever withhold via onUnavailable, never a real
+// condition-false reading.
+func TestInterlockBlockSignalTextKindRejected(t *testing.T) {
+	raw := withTopLevelFragment(validNightSessionJSON, `"interlocks":[{"name":"x","phase":"start-night","posture":"block","signal":"s","failureText":"f","onUnavailable":"block","overridePolicy":"authorized-operator"}]`)
+	textKind := func(string) (NightInterlockSignalInfo, bool) {
+		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindText}, true
+	}
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, textKind)
+	if verr == nil || verr.Code != ValidationCodeInterlockSignalNoFalseAnswer {
+		t.Fatalf("expected interlock-signal-no-false-answer for a block rule on kind text, got %+v", verr)
+	}
+}
+
+// TestInterlockBlockSignalNumberWithNoValueRejected proves a "block"
+// rule whose signal uses expect.kind "number" with no configured
+// comparison value is refused the same way: any successfully parsed
+// number confirms, so it can never produce a negative answer either.
+func TestInterlockBlockSignalNumberWithNoValueRejected(t *testing.T) {
+	raw := withTopLevelFragment(validNightSessionJSON, `"interlocks":[{"name":"x","phase":"start-night","posture":"block","signal":"s","failureText":"f","onUnavailable":"block","overridePolicy":"authorized-operator"}]`)
+	numberNoValue := func(string) (NightInterlockSignalInfo, bool) {
+		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindNumber, MQTTExpectValuePresent: false}, true
+	}
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, numberNoValue)
+	if verr == nil || verr.Code != ValidationCodeInterlockSignalNoFalseAnswer {
+		t.Fatalf("expected interlock-signal-no-false-answer for a block rule on kind number with no value, got %+v", verr)
+	}
+}
+
+// TestInterlockBlockSignalNumberWithValueAccepted proves the refusal is
+// specific to the inexpressible cases, not to kind "number" in general.
+func TestInterlockBlockSignalNumberWithValueAccepted(t *testing.T) {
+	raw := withTopLevelFragment(validNightSessionJSON, `"interlocks":[{"name":"x","phase":"start-night","posture":"block","signal":"s","failureText":"f","onUnavailable":"block","overridePolicy":"authorized-operator"}]`)
+	numberWithValue := func(string) (NightInterlockSignalInfo, bool) {
+		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindNumber, MQTTExpectValuePresent: true}, true
+	}
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, numberWithValue)
+	if verr != nil {
+		t.Fatalf("unexpected error for a block rule on kind number with a value: %+v", verr)
+	}
+}
+
+// TestInterlockObserveSignalTextKindAccepted proves the refusal is
+// specific to "block": an "observe" rule that can never report false is
+// merely uninformative, not misleading about a control effect that never
+// fires, so it is not refused.
+func TestInterlockObserveSignalTextKindAccepted(t *testing.T) {
+	raw := withTopLevelFragment(validNightSessionJSON, `"interlocks":[{"name":"x","phase":"start-night","posture":"observe","signal":"s","failureText":"f"}]`)
+	textKind := func(string) (NightInterlockSignalInfo, bool) {
+		return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindText}, true
+	}
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, textKind)
+	if verr != nil {
+		t.Fatalf("unexpected error for an observe rule on kind text: %+v", verr)
 	}
 }

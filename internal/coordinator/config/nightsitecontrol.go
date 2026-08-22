@@ -86,6 +86,21 @@ var nightInterlockOverridePolicyValues = map[string]bool{
 	NightInterlockOverridePolicyAuthorizedOperator: true,
 }
 
+// nightInterlockPhaseRequiresOverride names the two phases whose own
+// "block" rule may never declare overridePolicy "none" (see
+// decodeNightInterlockRule's own check): fade-out-night and
+// power-down-presentation are how a night ENDS, and a guard that can
+// withhold either one with no override path at all leaves no way to make
+// the site safe through this session once the guard's source goes
+// unavailable. start-night and start-preshow are deliberately NOT in
+// this set: refusing to START a night is never a safety trap the way
+// refusing to END one is, and RESTING-MODE.md §10.1 leaves that choice to
+// the author for every other phase.
+var nightInterlockPhaseRequiresOverride = map[string]bool{
+	NightInterlockPhaseFadeOutNight:          true,
+	NightInterlockPhasePowerDownPresentation: true,
+}
+
 // nightInterlockMaxFreshnessSeconds bounds an enabled rule's optional
 // freshnessSeconds. Ruling (this seam's own build brief): this build may
 // decode and validate freshness now even where no observation-backed
@@ -96,6 +111,15 @@ var nightInterlockOverridePolicyValues = map[string]bool{
 // an observation.Observation does; freshness here is validated shape,
 // not yet a runtime gate.
 const nightInterlockMaxFreshnessSeconds = 3600
+
+// nightInterlockMaxCount bounds night.session.interlocks the same way
+// nightPrerequisiteMaxCount bounds one power-off binding's prerequisites:
+// each configured rule is dispatched serially, and each rule's own
+// evaluation timeout can run up to mqttExpectMaxDeadlineSeconds, so an
+// unbounded count makes one HTTP request's own live-dispatch time
+// unbounded in practice (a reviewer-constructed 200-rule payload was the
+// finding this bound closes).
+const nightInterlockMaxCount = 20
 
 // NightInterlockSignalInfo is what an interlock's "signal" must resolve
 // to: an existing show.action, which show it belongs to (for ADR-027's
@@ -108,6 +132,13 @@ type NightInterlockSignalInfo struct {
 	Show           string
 	Integration    string
 	MQTTExpectKind string
+	// MQTTExpectValuePresent reports whether the resolved action's own
+	// target.expect.value is set. Needed only for kind "number", whose
+	// own decoder (showaction.go's decodeMQTTExpect) treats value as
+	// optional: with no value, ANY successfully parsed number confirms,
+	// which can never produce a negative answer. See
+	// decodeNightInterlockRule's own "cannot express false" check.
+	MQTTExpectValuePresent bool
 }
 
 // InterlockSignalResolver reports whether actionID names an existing
@@ -167,6 +198,12 @@ func decodeNightInterlocks(top map[string]json.RawMessage, sessionShow string, r
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "interlocks", Detail: "interlocks must be a JSON array"}
 	}
+	if len(items) > nightInterlockMaxCount {
+		return nil, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "interlocks",
+			Detail: fmt.Sprintf("interlocks must not exceed %d entries", nightInterlockMaxCount),
+		}
+	}
 
 	rules := make([]NightInterlockRule, 0, len(items))
 	seenNames := make(map[string]bool, len(items))
@@ -186,6 +223,26 @@ func decodeNightInterlocks(top map[string]json.RawMessage, sessionShow string, r
 		rules = append(rules, rule)
 	}
 	return rules, nil
+}
+
+// nightInterlockSignalCanExpressFalse reports whether info's own resolved
+// mqtt expect shape can ever produce a negative answer
+// (mqttActionStateNegativeAnswer, nightinterlock.go's own
+// classifyMQTTActionResult): "boolean" and "match" always can (a boolean
+// payload of false, or any payload not byte-equal to the configured
+// value); "number" can only when a comparison value is configured
+// (config/showaction.go's decodeMQTTExpect leaves it optional); "text"
+// and any unrecognized kind never can, since resolveMQTTActionPayload
+// confirms on any valid UTF-8 payload regardless of content.
+func nightInterlockSignalCanExpressFalse(info NightInterlockSignalInfo) bool {
+	switch info.MQTTExpectKind {
+	case MQTTExpectKindBoolean, MQTTExpectKindMatch:
+		return true
+	case MQTTExpectKindNumber:
+		return info.MQTTExpectValuePresent
+	default:
+		return false
+	}
 }
 
 func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, resolver InterlockSignalResolver) (NightInterlockRule, *ValidationError) {
@@ -250,6 +307,24 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 			Detail: fmt.Sprintf("signal %q must be an mqtt action with an expected response other than \"none\"; an interlock's evidence is that action's own request/response", signal),
 		}
 	}
+	// A "block" rule that can never observe a negative answer can only
+	// ever withhold via onUnavailable, never via a real condition-false
+	// reading, found by review: "text" always confirms on any valid
+	// UTF-8 payload, and "number" with no configured expect.value
+	// confirms on any parseable number, so neither can ever produce
+	// mqttActionStateNegativeAnswer (classifyMQTTActionResult,
+	// nightinterlock.go). Checked here for every posture that reaches
+	// this point (observe and block both decode signal the same way);
+	// only block's own inability to ever say "no" is unsafe enough to
+	// refuse outright, since an observe rule that always reads healthy
+	// is merely uninformative, not misleading about a control effect
+	// that never fires.
+	if posture == NightInterlockPostureBlock && !nightInterlockSignalCanExpressFalse(info) {
+		return NightInterlockRule{}, &ValidationError{
+			Code: ValidationCodeInterlockSignalNoFalseAnswer, Field: field + ".signal",
+			Detail: fmt.Sprintf("signal %q uses an expect kind that can never report a negative answer (kind %q with no comparison value); a \"block\" rule needs a signal capable of reporting condition-false, not only confirmed/unavailable", signal, info.MQTTExpectKind),
+		}
+	}
 
 	var freshness *int
 	if _, has := fields["freshnessSeconds"]; has {
@@ -294,6 +369,19 @@ func decodeNightInterlockRule(raw json.RawMessage, field, sessionShow string, re
 		overridePolicy, verr := decodeRequiredEnum(fields, "overridePolicy", field+".overridePolicy", nightInterlockOverridePolicyValues)
 		if verr != nil {
 			return NightInterlockRule{}, verr
+		}
+		// A "block" rule on a phase that ends the night must always have
+		// a human exit. RESTING-MODE.md §10.4's own shutdown guarantee
+		// (orchestrator ruling, this review round): refuse the
+		// combination at write time rather than let an author configure
+		// a night that can withhold both fade-out-night and
+		// power-down-presentation with no override at all, discoverable
+		// only once the source genuinely goes unavailable during a show.
+		if overridePolicy == NightInterlockOverridePolicyNone && nightInterlockPhaseRequiresOverride[phase] {
+			return NightInterlockRule{}, &ValidationError{
+				Code: ValidationCodeInterlockShutdownPhaseRequiresOverride, Field: field + ".overridePolicy",
+				Detail: fmt.Sprintf("a \"block\" rule on phase %q must declare overridePolicy \"authorized-operator\", never \"none\": this phase ends the night, and a guard on it must always have a human exit", phase),
+			}
 		}
 		rule.OnUnavailable = onUnavailable
 		rule.OverridePolicy = overridePolicy
@@ -707,6 +795,13 @@ func decodeNightPrerequisite(raw json.RawMessage, field, sessionShow string, act
 	if verr := validateNightSiteActionRef(action, field+".action", sessionShow, actionResolver); verr != nil {
 		return NightPrerequisite{}, verr
 	}
+	// This direct id-equality check is the whole cycle guard: it does NOT
+	// walk a call graph. That is safe only because show.action has no
+	// action-to-action reference of its own (ADR-029: an action is a leaf
+	// protocol binding, never something that invokes another action), if
+	// that ever changes, this check must be revisited, since an indirect
+	// cycle through a chain of actions would then be representable and
+	// this line would no longer catch it.
 	if action == selfAction {
 		return NightPrerequisite{}, &ValidationError{
 			Code: ValidationCodePowerOffPrerequisiteCycle, Field: field + ".action",

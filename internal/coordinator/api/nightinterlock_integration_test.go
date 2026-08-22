@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,6 +243,60 @@ func nightSessionBodyWithPresentationPowerOff() string {
 // that DOES configure presentationPowerOff must never see "not_configured"
 // once it reaches stopped: that would claim nothing exists to remove
 // power when something does (CLAUDE.md's evidence rule).
+// TestPowerDownPresentationCommandPathReportsHonestlyNotNotConfigured is
+// D6, this seam's safety review round: the ONLY existing honesty test
+// covered nightshutdown.go's own nightReachStopped assignment. Reverting
+// nightPowerDownPresentationApply's OWN assignment in
+// nightsessioncontrol.go (the command path exercised when
+// power-down-presentation is called against a session that is ALREADY
+// stopped with no power phase resolved yet, e.g. one that reached
+// stopped via fade-out-night alone) left the entire suite green, because
+// nothing exercised that specific branch through the command itself.
+func TestPowerDownPresentationCommandPathReportsHonestlyNotNotConfigured(t *testing.T) {
+	clock := fixedClock(testNow)
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	opToken := mustIssueToken(t, svc, operator.ID)
+
+	deps, obs := nightControlTestDeps(svc, st)
+	deps.FPP = nightWireFPPForReadiness(t)
+	deps.AssetBackend = nightTestAssetBackend(t)
+	api := New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "site-power-off", validSitePowerOffActionBody)
+	mustCreateNightSessionFSEQAsset(t, st, deps.AssetBackend, "halloween-2026", "resting-loop", "player-01")
+	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithPresentationPowerOff())
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	runToPreshowForInterlockTest(t, api, opToken, obs)
+	mustNightCommand(t, api, opToken, "fade-out-night")
+
+	// Force the session to "stopped" with no power phase resolved,
+	// bypassing nightReachStopped entirely (a fresh restart, or a stop
+	// observed by some other path, could plausibly leave exactly this
+	// shape): State=stopped, PowerPhase="", ShutdownIntent still whatever
+	// fade-out-night left it as.
+	rec := mustGetCurrentSession(t, st)
+	rec.State = nightStateStopped
+	rec.PowerPhase = ""
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("force session to stopped: %v", err)
+	}
+
+	out := mustNightCommand(t, api, opToken, "power-down-presentation")
+	if out.Session.State != "stopped" {
+		t.Fatalf("power-down-presentation against an already-stopped session: state = %q, want stopped", out.Session.State)
+	}
+	final := mustGetCurrentSession(t, st)
+	if final.PowerPhase != nightPowerPhaseConfiguredNotDispatched {
+		t.Fatalf("PowerPhase = %q, want %q: the COMMAND path must never report not_configured for a configured presentationPowerOff either", final.PowerPhase, nightPowerPhaseConfiguredNotDispatched)
+	}
+}
+
 func TestPowerDownPresentationConfiguredReportsHonestlyNotNotConfigured(t *testing.T) {
 	clock := fixedClock(testNow)
 	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
@@ -282,5 +337,104 @@ func TestPowerDownPresentationConfiguredReportsHonestlyNotNotConfigured(t *testi
 	got := mapNightPowerPhase(final)
 	if got.State == v1.NightEvidenceNotConfigured {
 		t.Fatalf("mapNightPowerPhase reports not_configured for a CONFIGURED presentationPowerOff: %+v", got)
+	}
+}
+
+// TestNightBoundInterlockDispatch_ExpiredBudgetDegradesEvidenceToUnavailable
+// is the reviewer's own aggregate-dispatch-time suspicion, proven at the
+// mechanism it actually operates through: nightBoundInterlockDispatch
+// derives an already-expired context when the aggregate budget has been
+// exhausted, and a live rule evaluation against that context degrades to
+// evidence-unavailable (via the ordinary ctx-cancellation path every
+// store read already honors) instead of dispatching anyway.
+func TestNightBoundInterlockDispatch_ExpiredBudgetDegradesEvidenceToUnavailable(t *testing.T) {
+	origBudget := nightInterlockAggregateDispatchBudget
+	nightInterlockAggregateDispatchBudget = -1 * time.Second
+	defer func() { nightInterlockAggregateDispatchBudget = origBudget }()
+
+	clock := fixedClock(testNow)
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	deps, _ := nightControlTestDeps(svc, st)
+	deps.MQTTBrokers = &fakeMQTTBrokerRegistry{msg: broker.Message{Payload: []byte("true")}}
+	api := New(deps, Options{Clock: clock, Logger: testLogger()})
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
+
+	h := &handlers{deps: deps.withDefaults(), clock: clock, logger: testLogger()}
+	rule := blockRule("cooldown", "start-night")
+	rule.Signal = "cooldown-check"
+
+	dispatchCtx, cancel := nightBoundInterlockDispatch(context.Background())
+	defer cancel()
+	if dispatchCtx.Err() == nil {
+		t.Fatalf("expected an already-expired context from a negative aggregate budget")
+	}
+
+	decision := h.nightEvaluateInterlockRuleLive(dispatchCtx, rule)
+	if decision.Health != nightHealthUnknown() {
+		t.Fatalf("live evaluation against an expired dispatch budget = %+v, want health=unknown (evidence-unavailable), even though the broker would have answered true", decision)
+	}
+}
+
+// TestFadeOutNightOverrideIsAudited is D3, this seam's safety review
+// round: nightRunExempt built its own issuer and never read
+// out.auditParams, while nightRunGated did. fade-out-night and
+// power-down-presentation both set auditParams for an accepted override
+// and both route through nightRunExempt, so an accepted override on
+// exactly the two commands where a bypass matters most was never
+// audited at all. RESTING-MODE.md §10.1 requires rule, phase, reason,
+// and bounded scope in the audit log; this asserts all four are actually
+// present in the stored entry's own params, not merely that the command
+// succeeded.
+func TestFadeOutNightOverrideIsAudited(t *testing.T) {
+	clock := fixedClock(testNow)
+	svc, st, _ := newTestIdentityServiceWithStore(t, clock)
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	opToken := mustIssueToken(t, svc, operator.ID)
+
+	deps, obs := nightControlTestDeps(svc, st)
+	deps.FPP = nightWireFPPForReadiness(t)
+	deps.AssetBackend = nightTestAssetBackend(t)
+	brokers := &fakeMQTTBrokerRegistry{}
+	deps.MQTTBrokers = brokers
+	api := New(deps, Options{Clock: clock, Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustPutShowAction(t, api, adminToken, "cooldown-check", validCooldownCheckActionBody)
+	mustCreateNightSessionFSEQAsset(t, st, deps.AssetBackend, "halloween-2026", "resting-loop", "player-01")
+	mustPutNightSession(t, api, adminToken, "halloween-main", nightSessionBodyWithCooldownInterlock("fade-out-night", "block"))
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+
+	runToPreshowForInterlockTest(t, api, opToken, obs)
+	brokers.msg = broker.Message{Payload: []byte("false")}
+
+	resp, body := nightCommandRawBody(t, api, adminToken, "fade-out-night", `{"interlockOverrides":[{"rule":"cooldown","reason":"operator confirmed safe by hand"}]}`)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("fade-out-night with an authorized override: status = %d, want 202; body: %s", resp.StatusCode, body)
+	}
+
+	entries, err := st.ListAuditEntries(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	var found *string
+	for _, e := range entries {
+		if e.Action == "night.fade-out-night" {
+			p := e.ParamsJSON
+			found = &p
+		}
+	}
+	if found == nil {
+		t.Fatalf("no night.fade-out-night audit entry found among %d entries", len(entries))
+	}
+	for _, want := range []string{`"rule":"cooldown"`, `"phase":"fade-out-night"`, `"reason":"operator confirmed safe by hand"`, `"scope":"invocation"`} {
+		if !strings.Contains(*found, want) {
+			t.Fatalf("fade-out-night audit entry params = %q, want it to contain %q (RESTING-MODE.md §10.1: rule, phase, reason, bounded scope)", *found, want)
+		}
 	}
 }
