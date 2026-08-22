@@ -1416,15 +1416,17 @@ func TestFPPCommandOutcomeSurvivesClientDisconnect(t *testing.T) {
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel the REQUEST's own context from the fake FPP server's onRequest
+	// hook, which fires only once FPP has actually received the dispatch,
+	// i.e. strictly after authentication and the pre-dispatch write ran.
+	// A timed sleep here races authentication's own duration, which has no
+	// upper bound under load: a slow token lookup can still be in flight
+	// when the sleep fires, canceling the request's context before
+	// authentication observes it and turning this simulated "client closed
+	// its tab after dispatch" into a spurious 401 from authentication
+	// itself.
+	srv.onRequest = cancel
 	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token).WithContext(ctx)
-
-	// Cancel the REQUEST's own context shortly after dispatch (the fake
-	// FPP server answers instantly) but well before the 150ms fresh
-	// evidence arrives — simulating the client closing its tab mid-wait.
-	go func() {
-		time.Sleep(40 * time.Millisecond)
-		cancel()
-	}()
 
 	rec := httptest.NewRecorder()
 	api.Handler.ServeHTTP(rec, req)
