@@ -123,11 +123,12 @@ var nightSessionDurationKeys = map[string]bool{
 
 // nightSessionTopLevelKeys is the complete set of keys
 // DecodeNightSessionPayload recognizes at the top level of the request
-// body. "siteControl" and "interlocks" are deliberately NOT members: see
-// rejectNightSessionUnimplementedBlocks.
+// body. "siteControl" and "interlocks" are Track F seam F6's own additions
+// (nightsitecontrol.go); both are independently optional (RESTING-MODE.md
+// §10's own opening line).
 var nightSessionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "showPlaylist": true, "resting": true,
-	"enterShow": true, "enterResting": true,
+	"enterShow": true, "enterResting": true, "siteControl": true, "interlocks": true,
 }
 
 var (
@@ -150,6 +151,13 @@ type NightSessionPayload struct {
 	Resting      NightSessionResting      `json:"resting"`
 	EnterShow    NightSessionEnterShow    `json:"enterShow"`
 	EnterResting NightSessionEnterResting `json:"enterResting"`
+
+	// SiteControl and Interlocks are Track F seam F6's own optional
+	// blocks (nightsitecontrol.go, RESTING-MODE.md §10). Both are nil/empty
+	// on a deployment that omits them, and the rest of the night loop runs
+	// unchanged in that case (RESTING-MODE.md §10's own opening line).
+	SiteControl *NightSiteControl    `json:"siteControl,omitempty"`
+	Interlocks  []NightInterlockRule `json:"interlocks,omitempty"`
 }
 
 // NightSessionFPPPlaylist names an FPP-owned playlist: referenced, never
@@ -294,19 +302,20 @@ type AssetCurrent func(show, sequence, target string) bool
 type ActionResolver func(actionID string) (show string, ok bool)
 
 // DecodeNightSessionPayload parses and validates raw against the seam F1
-// spec. endpoints is the coordinator's currently configured FPP instances
-// (show.action's own currentFPPEndpoints precedent); assetCurrent and
-// actionResolver are the two cross-object reference checks this kind
-// needs. Every cross-object reference this payload carries — cue actions,
-// the resting timeline asset, and every backgroundAudio item — must name
+// spec, plus seam F6's own optional siteControl/interlocks blocks
+// (nightsitecontrol.go). endpoints is the coordinator's currently
+// configured FPP instances (show.action's own currentFPPEndpoints
+// precedent); assetCurrent and actionResolver are seam F1's own
+// cross-object reference checks; interlockSignalResolver is seam F6's own
+// check for an interlock's "signal" (nil is only safe when the payload
+// configures no interlocks). Every cross-object reference this payload
+// carries — cue actions, the resting timeline asset, every backgroundAudio
+// item, every siteControl action, and every interlock signal — must name
 // an object belonging to THIS session's own "show" (ADR-027: a Show is a
 // namespace precisely so that programming Christmas cannot break
 // Halloween); a reference into a different show is rejected with
 // [ValidationCodeCrossShowReference], not silently accepted.
-func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, actionResolver ActionResolver) (NightSessionPayload, *ValidationError) {
-	if verr := rejectNightSessionUnimplementedBlocks(raw); verr != nil {
-		return NightSessionPayload{}, verr
-	}
+func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent AssetCurrent, actionResolver ActionResolver, interlockSignalResolver InterlockSignalResolver) (NightSessionPayload, *ValidationError) {
 	if verr := scanNightSessionForbiddenKeys(raw); verr != nil {
 		return NightSessionPayload{}, verr
 	}
@@ -380,32 +389,20 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	siteControl, verr := decodeNightSiteControl(top, show, actionResolver)
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+	interlocks, verr := decodeNightInterlocks(top, show, interlockSignalResolver)
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	return NightSessionPayload{
 		Show: show, Label: label, ShowPlaylist: showPlaylist, Resting: resting,
 		EnterShow: enterShow, EnterResting: enterResting,
+		SiteControl: siteControl, Interlocks: interlocks,
 	}, nil
-}
-
-// nightSessionUnimplementedBlockKeys is
-// rejectNightSessionUnimplementedBlocks' forbidden-key set.
-var nightSessionUnimplementedBlockKeys = map[string]bool{"siteControl": true, "interlocks": true}
-
-// rejectNightSessionUnimplementedBlocks refuses a payload that names
-// "siteControl" or "interlocks" ANYWHERE in the object tree — not only at
-// the top level — with its own message naming exactly why (RESTING-MODE.md
-// §10 specifies both; Track F F6 has not shipped enforcement for either).
-// Run before both the generic unknown-key rule and the calendar/duration
-// scans so the operator sees this specific reason rather than a generic
-// "field-unknown-key" — found in review: a NESTED "resting.siteControl"
-// was still refused, but by the generic rule, silently losing the
-// "specified, not implemented" reason the top-level check gave.
-func rejectNightSessionUnimplementedBlocks(raw string) *ValidationError {
-	var generic any
-	if err := json.Unmarshal([]byte(raw), &generic); err != nil {
-		return nil // malformed JSON is reported by decodeTopLevelObject
-	}
-	return scanForbiddenKeysRec(generic, "", nightSessionUnimplementedBlockKeys, ValidationCodeNotImplemented,
-		"%s is specified (RESTING-MODE.md §10) and not implemented (Track F F6); omit it entirely rather than configuring something nothing enforces")
 }
 
 // scanNightSessionForbiddenKeys walks raw's full JSON object tree —

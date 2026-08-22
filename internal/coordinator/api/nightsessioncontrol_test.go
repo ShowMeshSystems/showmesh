@@ -1019,9 +1019,31 @@ func TestInvariant7_CommandResponseCarriesBothAcceptanceAndSessionStateInOneRoun
 // drives nightStartNightTx inside one real transaction, matching the
 // table's own row names.
 
+// tableTestConfigPayload is a minimal, validly-shaped night.session
+// payload (no siteControl, no interlocks) — Track F seam F6's own
+// nightStartNightTx interlock gate reads the pinned revision via tx
+// directly (getPinnedNightSessionPayloadTx), so seedNightSession pins one
+// even though these table tests exercise the state machine, not
+// interlocks.
+const tableTestConfigPayload = `{
+	"show": "halloween-2026", "label": "table test",
+	"showPlaylist": {"fppInstanceId": "player-01", "playlist": "halloween-show"},
+	"resting": {"fppInstanceId": "player-01", "playlist": "halloween-resting", "timelineAsset": {"show":"halloween-2026","sequence":"resting-loop","target":"player-01"}, "endOfNightRepeat": true},
+	"enterShow": {"cues": [], "blackoutHoldMs": 0},
+	"enterResting": {"cues": [], "blackoutAfterShowMs": 0}
+}`
+
 func seedNightSession(t *testing.T, st *store.Store, state string) store.NightSessionRecord {
 	t.Helper()
-	rec := store.NightSessionRecord{ID: "s1", State: state, StateEnteredAt: testNow}
+	if _, err := st.CreateConfigObject(context.Background(), "night.session", "halloween-main"); err != nil {
+		t.Fatalf("seed night.session config object: %v", err)
+	}
+	if _, err := st.CreateConfigRevision(context.Background(), store.ConfigRevisionRecord{
+		Kind: "night.session", ObjectID: "halloween-main", Revision: 1, PayloadJSON: tableTestConfigPayload, Source: "api",
+	}); err != nil {
+		t.Fatalf("seed night.session config revision: %v", err)
+	}
+	rec := store.NightSessionRecord{ID: "s1", ConfigObjectID: "halloween-main", ConfigRevision: 1, State: state, StateEnteredAt: testNow}
 	if err := st.CreateNightSession(context.Background(), rec, testNow); err != nil {
 		t.Fatalf("seed night session in state %q: %v", state, err)
 	}
@@ -1041,7 +1063,7 @@ func runStartNightTx(t *testing.T, h *handlers, st *store.Store, current *store.
 	var problem *v1.Problem
 	err := st.InTx(context.Background(), func(ctx context.Context, tx *store.Tx) error {
 		var derr error
-		out, problem, derr = h.nightStartNightTx(ctx, tx, testNow, current)
+		out, problem, derr = h.nightStartNightTx(ctx, tx, testNow, current, nil, false)
 		return derr
 	})
 	if err != nil {

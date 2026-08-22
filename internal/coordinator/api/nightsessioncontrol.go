@@ -115,6 +115,12 @@ type nightCommandOutcome struct {
 	result  store.NightSessionRecord
 	outcome string
 	persist string // "" | "create" | "update"
+
+	// auditParams, when non-nil, is folded into this command's own audit
+	// entry (ADR-024's Params field). Track F seam F6's only user: an
+	// applied interlock override, which RESTING-MODE.md §10.1 requires the
+	// audit entry to identify by rule, phase, reason, and bounded scope.
+	auditParams map[string]any
 }
 
 // --- HTTP handlers ---
@@ -149,21 +155,35 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 
 const maxNightCommandRequestBodyBytes = 4 << 10
 
-// decodeNightCommandBody reads the optional {"idempotencyKey": string}
-// body. An absent or empty body is valid — every field is optional.
-func decodeNightCommandBody(r *http.Request) (idempotencyKey string, problem *v1.Problem) {
+// decodeNightCommandBody reads the optional {"idempotencyKey": string,
+// "interlockOverrides": [{"rule": string, "reason": string}]?} body. An
+// absent or empty body is valid — every field is optional.
+// interlockOverrides is Track F seam F6's own addition
+// (RESTING-MODE.md §10.1): naming a rule here is the caller's request to
+// override it, and is honored only where that rule itself declares
+// overridePolicy "authorized-operator", the caller separately holds
+// [identity.ScopeNightOverride], and the rule is actually withholding the
+// phase this command is entering (nightEvaluatePhaseInterlockGate).
+func decodeNightCommandBody(r *http.Request) (idempotencyKey string, overrides []nightInterlockOverrideRequest, problem *v1.Problem) {
 	if r.ContentLength == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	var body struct {
-		IdempotencyKey string `json:"idempotencyKey"`
+		IdempotencyKey     string                          `json:"idempotencyKey"`
+		InterlockOverrides []nightInterlockOverrideRequest `json:"interlockOverrides"`
 	}
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxNightCommandRequestBodyBytes+1))
 	if err := dec.Decode(&body); err != nil && err != io.EOF {
-		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?}")
-		return "", &p
+		p := invalidParameterProblem("request body must be a JSON object matching {\"idempotencyKey\":string?,\"interlockOverrides\":[{\"rule\":string,\"reason\":string}]?}")
+		return "", nil, &p
 	}
-	return body.IdempotencyKey, nil
+	for _, o := range body.InterlockOverrides {
+		if o.Rule == "" || o.Reason == "" {
+			p := invalidParameterProblem("every interlockOverrides entry requires a non-empty \"rule\" and \"reason\"")
+			return "", nil, &p
+		}
+	}
+	return body.IdempotencyKey, body.InterlockOverrides, nil
 }
 
 // handleNightCommand serves POST /api/v1/night/commands/{command}, behind
@@ -177,7 +197,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("unsupported command %q; this coordinator supports: prepare-site, run-readiness, start-preshow, start-night, request-final-show, fade-out-night, power-down-presentation, end-session", cmd)))
 		return
 	}
-	idempotencyKey, problem := decodeNightCommandBody(r)
+	idempotencyKey, interlockOverrides, problem := decodeNightCommandBody(r)
 	if problem != nil {
 		writeProblem(w, h.logger, now, *problem)
 		return
@@ -204,11 +224,11 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		out, problem, opErr = h.nightRunReadinessCommand(ctx, now, issuer)
 	case nightExemptFromDegradedGate[cmd]:
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightDecideExemptCommand(cmd, now, current)
+			return h.nightDecideExemptCommand(ctx, tx, cmd, now, current)
 		})
 	default:
 		out, problem, opErr = h.nightRunGated(ctx, now, cmd, issuer, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey)
+			return h.nightDecideGatedCommand(ctx, tx, cmd, now, current, idempotencyKey, interlockOverrides, nightCallerHasOverrideScope(ac))
 		})
 	}
 
@@ -238,14 +258,14 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 
 // nightDecideExemptCommand dispatches to the three degraded-gate-exempt
 // commands' own decide functions.
-func (h *handlers) nightDecideExemptCommand(cmd string, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+func (h *handlers) nightDecideExemptCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 	switch cmd {
 	case nightCommandRequestFinalShow:
 		return h.nightRequestFinalShow(now, current)
 	case nightCommandFadeOutNight:
 		return h.nightFadeOutNight(now, current)
 	case nightCommandPowerDownPresentation:
-		return h.nightPowerDownPresentation(now, current)
+		return h.nightPowerDownPresentation(ctx, tx, now, current)
 	}
 	return nightCommandOutcome{}, nil, fmt.Errorf("api: no exempt decide function for %q", cmd)
 }
@@ -256,7 +276,7 @@ func (h *handlers) nightDecideExemptCommand(cmd string, now time.Time, current *
 // here: it needs FPP/asset work outside any transaction, so
 // handleNightCommand routes it to [handlers.nightRunReadinessCommand]
 // directly instead.
-func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string) (nightCommandOutcome, *v1.Problem, error) {
+func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cmd string, now time.Time, current *store.NightSessionRecord, idempotencyKey string, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current != nil && current.Degraded && current.State != nightStateStopped {
 		p := nightAmbiguousProblem(fmt.Sprintf(nightDegradedGuidance, current.DegradedReason))
 		return nightCommandOutcome{}, &p, nil
@@ -267,7 +287,7 @@ func (h *handlers) nightDecideGatedCommand(ctx context.Context, tx *store.Tx, cm
 	case nightCommandStartPreshow:
 		return h.nightStartPreshow(now, current)
 	case nightCommandStartNight:
-		return h.nightStartNightTx(ctx, tx, now, current)
+		return h.nightStartNightTx(ctx, tx, now, current, interlockOverrides, callerHasOverrideScope)
 	}
 	return nightCommandOutcome{}, nil, fmt.Errorf("api: no gated decide function for %q", cmd)
 }
@@ -386,6 +406,9 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 		issuer.Kind = identity.AuditOutcome
 		issuer.OutcomeState = string(observation.StateCurrent)
 		issuer.OutcomeReason = out.outcome
+		if out.auditParams != nil {
+			issuer.Params = out.auditParams
+		}
 		return issuer, nil
 	})
 	if auditErr != nil {
@@ -467,8 +490,13 @@ func (h *handlers) nightStartPreshow(now time.Time, current *store.NightSessionR
 	}
 }
 
-// nightStartNightTx encodes RESTING-MODE.md §4.4's table exactly.
-func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+// nightStartNightTx encodes RESTING-MODE.md §4.4's table exactly, plus
+// Track F seam F6's own interlock gate for phase "start-night": a
+// "block" rule for that phase currently withholding it (per the SAME
+// stored readiness result the freshness check just accepted) refuses
+// start-night unless every withholding rule is covered by a valid,
+// authorized override in interlockOverrides.
+func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord, interlockOverrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		p := nightNotReadyProblem("start-night: no active preparation; run prepare-site, run-readiness, and start-preshow first")
 		return nightCommandOutcome{}, &p, nil
@@ -495,6 +523,19 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 			p := nightNotReadyProblem(fmt.Sprintf("start-night: readiness result is %s old, past the configured maximum age of %s; run run-readiness again", age.Round(time.Second), h.nightReadinessMaxAge))
 			return nightCommandOutcome{}, &p, nil
 		}
+
+		payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, *current)
+		if err != nil {
+			return nightCommandOutcome{}, nil, err
+		}
+		var storedChecks []v1.NightReadinessCheck
+		_ = json.Unmarshal([]byte(readiness.ChecksJSON), &storedChecks)
+		gate := nightEvaluatePhaseInterlockGate(payload, config.NightInterlockPhaseStartNight, nightDecodeWireChecks(storedChecks), interlockOverrides, callerHasOverrideScope)
+		if len(gate.Withheld) > 0 {
+			p := nightNotReadyProblem(nightInterlockGateProblem(config.NightInterlockPhaseStartNight, gate.Withheld).detail())
+			return nightCommandOutcome{}, &p, nil
+		}
+
 		next := *current
 		next.State = nightStateTransitionToShow
 		next.StateEnteredAt = now
@@ -507,7 +548,11 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		// explicitly, never left for a fallback to reconstruct.
 		boundaryE := now
 		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &boundaryE, Reason: "content boundary E is this transition's own start; no resting playback preceded it"})
-		return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
+		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+		if len(gate.Overridden) > 0 {
+			out.auditParams = map[string]any{"interlockOverrides": nightInterlockOverrideAuditParams(gate.Overridden)}
+		}
+		return out, nil, nil
 	case nightStateRestingIntershow, nightStateTransitionToShow, nightStateLive, nightStateTransitionToResting:
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	case nightStateEndOfNightResting:
@@ -602,10 +647,28 @@ func (h *handlers) nightFadeOutNight(now time.Time, current *store.NightSessionR
 	return nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}, nil, nil
 }
 
-// nightPowerDownPresentation is invariant 6: with no power configuration
-// (Track F seam F6 not built), reaching stopped records "not_configured"
-// for that optional phase.
-func (h *handlers) nightPowerDownPresentation(now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
+// nightPowerPhaseConfiguredNotDispatched is Track F seam F6's own
+// recorded value for the optional presentation-power phase when
+// siteControl.presentationPowerOff IS configured: unlike invariant 6's
+// "not_configured", this build validates that configuration fully
+// (nightsitecontrol.go) but does not yet dispatch it automatically from
+// this shutdown path — reported honestly rather than as "not_configured",
+// which would claim nothing exists to remove power when something does.
+// An operator removes it today either by dispatching the configured
+// action directly (POST /api/v1/actions/{id}/invocations, behind
+// show:action:invoke) or through a separately configured force-power-off
+// action on the identical surface (RESTING-MODE.md §10.4).
+const nightPowerPhaseConfiguredNotDispatched = "configured_not_dispatched"
+
+// nightPowerDownPresentation is invariant 6, extended by Track F seam F6:
+// with no power configuration, reaching stopped still records
+// "not_configured" for the optional phase; with siteControl.
+// presentationPowerOff configured, it records
+// [nightPowerPhaseConfiguredNotDispatched] instead of a false claim.
+// Reads the pinned night.session revision via tx, matching
+// resolveActiveNightSessionConfigTx's own reason: this decide function
+// already holds the store's one connection.
+func (h *handlers) nightPowerDownPresentation(ctx context.Context, tx *store.Tx, now time.Time, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 	if current == nil {
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
@@ -617,8 +680,13 @@ func (h *handlers) nightPowerDownPresentation(now time.Time, current *store.Nigh
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
 	next, changed := applyNightShutdownEffect(now, *current, "power-down")
-	if next.State == nightStateStopped && next.PowerPhase != "not_configured" {
-		next.PowerPhase = "not_configured"
+	if next.State == nightStateStopped && next.PowerPhase == "" {
+		phase := "not_configured"
+		if payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, next); err == nil &&
+			payload.SiteControl != nil && payload.SiteControl.PresentationPowerOff != nil {
+			phase = nightPowerPhaseConfiguredNotDispatched
+		}
+		next.PowerPhase = phase
 		changed = true
 	}
 	if !changed {
@@ -806,6 +874,16 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, h.nightCheckFirstOutwardCueConfirmable(ctx, payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))
+	// Track F seam F6: every configured interlock, disabled ones included,
+	// gets its own check regardless of which phase this preparation epoch
+	// is actually about to enter — RESTING-MODE.md §13: "configured
+	// observe-only interlocks report their current outcome without
+	// blocking" and "blocking interlocks for the phase being entered have
+	// fresh passing evidence... other-phase failures remain visible but do
+	// not block." A block-posture rule's own withhold effect is computed
+	// separately, from this stored result, at the moment its own phase is
+	// actually entered (nightEvaluatePhaseInterlockGate) — never here.
+	checks = append(checks, h.nightComputeInterlockChecks(ctx, payload.Interlocks)...)
 
 	for _, c := range checks {
 		if c.health == nightCheckStateNotVerifiable {
@@ -878,6 +956,37 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 		reason = "fpp.reachable evidence state: " + string(obs[0].StateAt(now))
 	}
 	return nightReadinessCheck{name: name, health: nightCheckState(health), reason: reason}
+}
+
+// getPinnedNightSessionPayloadTx is [handlers.getPinnedNightSessionPayload]
+// (nightloop.go) read through tx instead of h.deps.Config, necessary so a
+// gated decide function (which already holds the store's one connection
+// via tx — resolveActiveNightSessionConfigTx's own doc comment states the
+// identical reason) never tries to acquire a second one and deadlock the
+// single-connection pool.
+func (h *handlers) getPinnedNightSessionPayloadTx(ctx context.Context, tx *store.Tx, rec store.NightSessionRecord) (config.NightSessionPayload, error) {
+	rev, err := tx.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
+	if err != nil {
+		return config.NightSessionPayload{}, fmt.Errorf("api: get pinned night.session revision (tx) %s/%d: %w", rec.ConfigObjectID, rec.ConfigRevision, err)
+	}
+	var payload config.NightSessionPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return config.NightSessionPayload{}, fmt.Errorf("api: decode pinned night.session payload (tx): %w", err)
+	}
+	return payload, nil
+}
+
+// nightDecodeWireChecks converts a stored readiness result's own decoded
+// wire checks back into this package's internal [nightReadinessCheck]
+// shape, the only shape [nightEvaluatePhaseInterlockGate] accepts. A
+// malformed or missing entry simply is not found by name, which
+// nightEvaluatePhaseInterlockGate already treats as evidence-unavailable.
+func nightDecodeWireChecks(wire []v1.NightReadinessCheck) []nightReadinessCheck {
+	out := make([]nightReadinessCheck, 0, len(wire))
+	for _, w := range wire {
+		out = append(out, nightReadinessCheck{name: w.Name, health: nightCheckState(w.State), reason: w.Reason})
+	}
+	return out
 }
 
 // --- config resolution ---
@@ -1052,7 +1161,13 @@ func mapNightPowerPhase(rec store.NightSessionRecord) v1.NightPhaseEvidence {
 		}
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceUnknown, Reason: "power-down-presentation has not been requested"}
 	case "not_configured":
-		return v1.NightPhaseEvidence{State: v1.NightEvidenceNotConfigured, Reason: "no site-power configuration is present (Track F seam F6)"}
+		return v1.NightPhaseEvidence{State: v1.NightEvidenceNotConfigured, Reason: "no site-power configuration is present"}
+	case nightPowerPhaseConfiguredNotDispatched:
+		return v1.NightPhaseEvidence{
+			State: v1.NightEvidenceUnknown,
+			Reason: "siteControl.presentationPowerOff is configured, but this build does not yet dispatch it automatically; " +
+				"remove power by invoking the configured action directly (POST /api/v1/actions/{id}/invocations) or through a configured force-power-off action",
+		}
 	default:
 		return v1.NightPhaseEvidence{State: v1.NightEvidenceRecorded, Reason: rec.PowerPhase}
 	}
