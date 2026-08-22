@@ -313,6 +313,8 @@ func (t *Tx) GetAsset(ctx context.Context, id string) (AssetRecord, error) {
 // any"). NodeID filters to TargetKind == AssetTargetKindNode AND
 // TargetID == NodeID — it never matches a show-targeted asset, since a
 // node-scoped listing is what spec §3.3's `?node=` query parameter means.
+// NodeID also excludes superseded rows, since `?node=` promises current
+// assets only.
 type AssetFilter struct {
 	ShowID     string
 	SequenceID string
@@ -331,7 +333,7 @@ func listAssets(ctx context.Context, q querier, filter AssetFilter) ([]AssetReco
 		args = append(args, filter.SequenceID)
 	}
 	if filter.NodeID != "" {
-		clauses = append(clauses, "target_kind = ? AND target_id = ?")
+		clauses = append(clauses, "target_kind = ? AND target_id = ? AND superseded_at IS NULL")
 		args = append(args, AssetTargetKindNode, filter.NodeID)
 	}
 
