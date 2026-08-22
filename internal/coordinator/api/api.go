@@ -1563,6 +1563,24 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/show.active", h.writeGuard(&scopeConfigWrite, h.handlePutShowActive))
 	mux.HandleFunc("GET /api/v1/config/show.active/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowActiveRevisions))
 
+	// --- Track H seam H1: show.cue and show.playlist ---
+	//
+	// Same route shape as show/show.surface immediately above: reads use
+	// readAnyGuard(showConfigReadScopes, ...), writes use
+	// writeGuard(&scopeConfigWrite, ...). Both are operator-chosen
+	// collections with the usual four routes each (TRACK-H-H1-SPEC.md
+	// section 6). No new scope: config:write already guards every
+	// configuration write (section 7).
+	mux.HandleFunc("GET /api/v1/config/show.cue", h.readAnyGuard(showConfigReadScopes, h.handleListShowCues))
+	mux.HandleFunc("GET /api/v1/config/show.cue/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowCue))
+	mux.HandleFunc("PUT /api/v1/config/show.cue/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowCue))
+	mux.HandleFunc("GET /api/v1/config/show.cue/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowCueRevisions))
+
+	mux.HandleFunc("GET /api/v1/config/show.playlist", h.readAnyGuard(showConfigReadScopes, h.handleListShowPlaylists))
+	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylist))
+	mux.HandleFunc("PUT /api/v1/config/show.playlist/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutShowPlaylist))
+	mux.HandleFunc("GET /api/v1/config/show.playlist/{id}/revisions", h.readAnyGuard(showConfigReadScopes, h.handleGetShowPlaylistRevisions))
+
 	// --- Track F seam F1: night.session and its active-session pointer ---
 	//
 	// Same route shape as show/show.surface/show.active immediately above:

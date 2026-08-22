@@ -999,3 +999,59 @@ func TestDecodeShowActionPayloadShowMustExist(t *testing.T) {
 		t.Fatalf("expected show-unknown-reference error, got %+v", verr)
 	}
 }
+
+// TestDecodeRequiredIntPreservesValuesOutsideFloat64ExactRange is the
+// shared helper defect the H1 review found and confirmed by reading the
+// code: decodeRequiredInt used to unmarshal into float64 and validate with
+// `f != float64(int(f))`, a guard that cannot detect a JSON integer
+// literal outside float64's exactly-representable range. 9007199254740993
+// (2^53 + 1) decoded to 9007199254740992 and the round trip compared
+// equal, so the mangled value was silently returned and stored instead of
+// the literal the caller actually wrote. This test pins the corrected
+// behavior: the exact literal is preserved (it is a valid int64, so it is
+// not refused — only silent mangling was the defect).
+func TestDecodeRequiredIntPreservesValuesOutsideFloat64ExactRange(t *testing.T) {
+	top := map[string]json.RawMessage{"n": json.RawMessage("9007199254740993")}
+	v, verr := decodeRequiredInt(top, "n", "n")
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if v != 9007199254740993 {
+		t.Fatalf("v = %d, want 9007199254740993 (the exact literal, not the float64-mangled 9007199254740992)", v)
+	}
+}
+
+// TestDecodeRequiredIntRefusesValuesAboveMaxInt64 pins the other half of
+// the same defect: a literal above math.MaxInt64 used to saturate through
+// the float64 conversion instead of being refused.
+func TestDecodeRequiredIntRefusesValuesAboveMaxInt64(t *testing.T) {
+	top := map[string]json.RawMessage{"n": json.RawMessage("9223372036854775808")}
+	_, verr := decodeRequiredInt(top, "n", "n")
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid {
+		t.Fatalf("expected field-invalid for a value above math.MaxInt64, got %+v", verr)
+	}
+}
+
+// TestDecodeRequiredIntAcceptsOrdinaryWholeNumber proves the fix did not
+// disturb the ordinary case decodeRequiredInt exists for.
+func TestDecodeRequiredIntAcceptsOrdinaryWholeNumber(t *testing.T) {
+	top := map[string]json.RawMessage{"n": json.RawMessage("42")}
+	v, verr := decodeRequiredInt(top, "n", "n")
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if v != 42 {
+		t.Fatalf("v = %d, want 42", v)
+	}
+}
+
+// TestDecodeRequiredIntRefusesFractional proves the "must be a whole
+// number" refusal still fires for an ordinary fractional value, now
+// detected via strconv.ParseInt rather than the float64 round trip.
+func TestDecodeRequiredIntRefusesFractional(t *testing.T) {
+	top := map[string]json.RawMessage{"n": json.RawMessage("1.5")}
+	_, verr := decodeRequiredInt(top, "n", "n")
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid {
+		t.Fatalf("expected field-invalid for a fractional value, got %+v", verr)
+	}
+}

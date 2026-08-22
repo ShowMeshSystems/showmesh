@@ -4961,6 +4961,294 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/show.cue:
+    get:
+      operationId: listShowCues
+      summary: Enumerate show.cue objects (Track H seam H1, ADR-043)
+      description: >-
+        Object ids with label (the cue's own name), show (the parent show
+        id), and current revision number, NOT the full payloads. Optionally
+        narrowed with `?show=<id>`. Same read posture as GET
+        /config/show.surface. `?node=` is not a supported filter for this
+        kind (400).
+      parameters:
+        - name: show
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to cues belonging to this show id.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.cue/{id}:
+    get:
+      operationId: getShowCue
+      summary: One show.cue object's active revision (Track H seam H1)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowCueConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShowCue
+      summary: Write a new show.cue revision (Track H seam H1, ADR-043)
+      description: >-
+        Requires `config:write`. `show` is immutable: a PUT that changes an
+        existing object's `show` is refused, naming both, with problem type
+        `show-config-cross-show-reference`. `show` must name an existing
+        `show` object. `outputs` is required and must declare at least one of
+        render/audio/ltc/announcement — a Cue declaring nothing is an
+        authoring mistake, not an empty-but-valid Cue. `outputs.ltc` and
+        `outputs.announcement` each require `outputs.audio` to also be
+        present (ADR-018's one clock domain; an announcement with no audio
+        to play is a policy with no subject). `outputs.announcement.policy`
+        of "duck" requires `duckGainDb` (negative, at least -60 dB) and
+        refuses it on "mix"/"interrupt". This is a FULL REPLACEMENT.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowCue"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowCueConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.cue/{id}/revisions:
+    get:
+      operationId: listShowCueRevisions
+      summary: show.cue revision history, newest first (Track H seam H1)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.playlist:
+    get:
+      operationId: listShowPlaylists
+      summary: Enumerate show.playlist objects (Track H seam H1, ADR-043)
+      description: >-
+        Object ids with label (the playlist's own name), show (the parent
+        show id), and current revision number, NOT the full payloads.
+        Optionally narrowed with `?show=<id>`. `?node=` is not a supported
+        filter for this kind (400).
+      parameters:
+        - name: show
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Narrow the list to playlists belonging to this show id.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.playlist/{id}:
+    get:
+      operationId: getShowPlaylist
+      summary: One show.playlist object's active revision (Track H seam H1)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowPlaylistConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShowPlaylist
+      summary: Write a new show.playlist revision (Track H seam H1, ADR-043)
+      description: >-
+        Requires `config:write`. `show` is immutable: a PUT that changes an
+        existing object's `show` is refused, naming both, with problem type
+        `show-config-cross-show-reference`. `show` must name an existing
+        `show` object. `runner` is one of `fpp`/`showmesh-audio`; the
+        reserved, unimplemented `showmesh` runner is refused with a 400
+        Problem whose type is `show-config-not-implemented`, never a 501.
+        `fpp` is required iff `runner` is `fpp`;
+        `showmeshAudio` is permitted only when `runner` is
+        `showmesh-audio`. `mismatchPolicy` is permitted only when `runner`
+        is `fpp`; `safeCueRef` is required iff `mismatchPolicy` is
+        `safeCue`, and must name a same-show `show.cue` object. `entries`
+        is required and non-empty; each entry's `cue` must name a
+        same-show `show.cue` object, entry ids must be unique, and two
+        entries sharing the same `fpp.section`/`fpp.position` pair are
+        refused (they derive the identical FPP entry key). This is a FULL
+        REPLACEMENT.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowPlaylist"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowPlaylistConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.playlist/{id}/revisions:
+    get:
+      operationId: listShowPlaylistRevisions
+      summary: show.playlist revision history, newest first (Track H seam H1)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/show.active:
     get:
       operationId: getShowActive
@@ -8313,6 +8601,8 @@ components:
         /config/show/{id}/revisions, GET
         /config/show.surface/{id}/revisions, GET
         /config/show.active/revisions, GET
+        /config/show.cue/{id}/revisions, GET
+        /config/show.playlist/{id}/revisions, GET
         /config/resolume.recovery/revisions, GET
         /config/render.settings/revisions, GET
         /config/resolume.instances/revisions, GET
@@ -8325,7 +8615,8 @@ components:
         Step 7-only and never revisited when this schema gained more
         callers; Track E added three more, Track D seam D-3a another,
         Track B seam B2c another, Track G seams G-2, G-3, and G-4 one
-        each more, and audio.settings/audio.node two more).
+        each more, audio.settings/audio.node two more, and Track H seam
+        H1 two more).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -8333,7 +8624,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
         revisions:
           type: array
           items:
@@ -9552,6 +9843,9 @@ components:
             - https://showmesh.dev/problems/audio-node-channel-duplicate
             - https://showmesh.dev/problems/audio-node-channel-overlap
             - https://showmesh.dev/problems/audio-node-route-mismatch
+            - https://showmesh.dev/problems/show-config-entries-empty
+            - https://showmesh.dev/problems/show-config-entry-position-duplicate
+            - https://showmesh.dev/problems/show-config-cross-show-reference
             - https://showmesh.dev/problems/unsupported-observation-schema-version
             - https://showmesh.dev/problems/observation-entry-key-mismatch
         title:
@@ -9729,8 +10023,9 @@ components:
       type: object
       description: >-
         The body of GET /config/show.action, GET /config/show.macro, GET
-        /config/show, GET /config/show.surface, GET /config/night.session,
-        and GET /config/audio.node (audio.node's own list summary reports its
+        /config/show, GET /config/show.surface, GET /config/show.cue, GET
+        /config/show.playlist, GET /config/night.session, and GET
+        /config/audio.node (audio.node's own list summary reports its
         configured programRoute as label and leaves show empty, since
         audio.node carries no show reference).
       required: [serverTime, kind, objects]
@@ -9740,7 +10035,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface, night.session, audio.node]
+          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, audio.node]
         objects:
           type: array
           items:
@@ -10965,6 +11260,248 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigShowSurface"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigShowCueRenderOutput:
+      type: object
+      description: >-
+        show.cue.outputs.render (Track H seam H1, ADR-043). sequence is the
+        LOGICAL sequence name, never an FSEQ filename or an asset id.
+      required: [sequence]
+      properties:
+        sequence:
+          type: string
+          minLength: 1
+    ConfigShowCueAudioOutput:
+      type: object
+      description: show.cue.outputs.audio (Track H seam H1).
+      required: [asset, startOffsetMillis]
+      properties:
+        asset:
+          type: string
+          minLength: 1
+        startOffsetMillis:
+          type: integer
+          minimum: 0
+    ConfigShowCueLTCOutput:
+      type: object
+      description: >-
+        show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours;
+        requires outputs.audio to also be present (ADR-018's one clock
+        domain) — enforced server-side.
+      required: [startOffsetMillis]
+      properties:
+        startOffsetMillis:
+          type: integer
+          minimum: 0
+          maximum: 86400000
+    ConfigShowCueAnnouncementOutput:
+      type: object
+      description: >-
+        show.cue.outputs.announcement (Track H seam H1, H0.4). Requires
+        outputs.audio to also be present. duckGainDb is required when
+        policy is "duck" and refused otherwise — enforced server-side.
+      required: [policy, fadeMillis]
+      properties:
+        policy:
+          type: string
+          enum: [duck, mix, interrupt]
+        duckGainDb:
+          type: number
+          exclusiveMaximum: 0
+          minimum: -60
+        fadeMillis:
+          type: integer
+          minimum: 0
+          maximum: 60000
+    ConfigShowCueOutputs:
+      type: object
+      description: >-
+        show.cue.outputs (Track H seam H1). At least one member is
+        required — enforced server-side, since an empty object cannot be
+        distinguished from "absent" by a plain JSON schema.
+      properties:
+        render:
+          $ref: "#/components/schemas/ConfigShowCueRenderOutput"
+        audio:
+          $ref: "#/components/schemas/ConfigShowCueAudioOutput"
+        ltc:
+          $ref: "#/components/schemas/ConfigShowCueLTCOutput"
+        announcement:
+          $ref: "#/components/schemas/ConfigShowCueAnnouncementOutput"
+    ConfigShowCue:
+      type: object
+      description: >-
+        The "show.cue" configuration kind's decoded payload (Track H seam
+        H1, ADR-043), returned by GET and accepted by PUT
+        /config/show.cue/{id}. show must name an existing show object.
+      required: [show, name, outputs]
+      properties:
+        show:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        outputs:
+          $ref: "#/components/schemas/ConfigShowCueOutputs"
+    ShowCueConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/show.cue/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show.cue]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShowCue"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [api]
+    ConfigShowPlaylistFPPBinding:
+      type: object
+      description: >-
+        show.playlist.fpp (Track H seam H1): the imported FPP playlist
+        identity this Playlist is bound to. playlistHash is the imported
+        canonical hash (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 1.3),
+        64 lowercase hex characters; this seam validates its shape only.
+      required: [instanceUuid, playlistName, playlistHash]
+      properties:
+        instanceUuid:
+          type: string
+          minLength: 1
+        playlistName:
+          type: string
+          minLength: 1
+        playlistHash:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    ConfigShowPlaylistShowmeshAudio:
+      type: object
+      description: >-
+        show.playlist.showmeshAudio (Track H seam H1). Permitted only when
+        runner is "showmesh-audio" — enforced server-side. The handler
+        always resolves and emits repeat (default "none"), so it is
+        required on the wire even though an authored request may omit it.
+      required: [repeat]
+      properties:
+        repeat:
+          type: string
+          enum: [none, all]
+    ConfigShowPlaylistEntryFPP:
+      type: object
+      description: >-
+        One entry's fpp binding (Track H seam H1, section 3.1). section
+        may be empty (an FPP playlist's default, unnamed section).
+        expectedSequenceFilename/expectedMediaFilename are optional
+        validation evidence, never identity — the entry key is derived,
+        never authored.
+      required: [section, position]
+      properties:
+        section:
+          type: string
+        position:
+          type: integer
+          minimum: 0
+        expectedSequenceFilename:
+          type: string
+        expectedMediaFilename:
+          type: string
+    ConfigShowPlaylistEntry:
+      type: object
+      description: One element of show.playlist.entries (Track H seam H1).
+      required: [id, cue]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        cue:
+          type: string
+          minLength: 1
+        fpp:
+          $ref: "#/components/schemas/ConfigShowPlaylistEntryFPP"
+    ConfigShowPlaylist:
+      type: object
+      description: >-
+        The "show.playlist" configuration kind's decoded payload (Track H
+        seam H1, ADR-043), returned by GET and accepted by PUT
+        /config/show.playlist/{id}. show must name an existing show
+        object. runner is one of fpp/showmesh-audio; the reserved
+        showmesh runner is refused server-side. fpp is required iff
+        runner is fpp; showmeshAudio is permitted only when runner is
+        showmesh-audio. mismatchPolicy is permitted only when runner is
+        fpp; safeCueRef is required iff mismatchPolicy is safeCue.
+        entries is required and non-empty.
+      required: [show, name, runner, entries]
+      properties:
+        show:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        runner:
+          type: string
+          enum: [fpp, showmesh-audio]
+        mismatchPolicy:
+          type: string
+          enum: [hold, blackAndSilence, safeCue]
+        safeCueRef:
+          type: string
+        fpp:
+          $ref: "#/components/schemas/ConfigShowPlaylistFPPBinding"
+        showmeshAudio:
+          $ref: "#/components/schemas/ConfigShowPlaylistShowmeshAudio"
+        entries:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ConfigShowPlaylistEntry"
+    ShowPlaylistConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/show.playlist/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [show.playlist]
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShowPlaylist"
         updatedAt:
           type: string
           format: date-time
