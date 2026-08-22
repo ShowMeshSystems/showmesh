@@ -114,11 +114,11 @@ func TestValidateFPPMQTTConfigKindAllowsUnconfigured(t *testing.T) {
 // TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy
 // pins ADR-039's fix (decision 1): reached through the store-backed
 // config:write surface (`showmeshctl fpp-mqtt set --host`), an unmatched
-// host id must lead with the `showmeshctl fpp-endpoints set` / fpp.endpoints
-// remedy, not with the two SHOWMESH_FPP_MQTT_HOSTS/SHOWMESH_FPP_ENDPOINTS
-// variable names an operator on this surface never touched. The env var is
-// still named, but only as the hedge for a coordinator that has not yet
-// migrated off it.
+// host id must lead with the `showmeshctl config set` / fpp.endpoints
+// remedy. SHOWMESH_FPP_MQTT_HOSTS still gets named too (a startup failure
+// here is often a typo in that variable, not a missing endpoint), but only
+// after the store remedy, and SHOWMESH_FPP_ENDPOINTS stays a trailing
+// hedge for a coordinator that has not migrated.
 func TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy(t *testing.T) {
 	cfg := FPPMQTTConfig{
 		BrokerURL: "tcp://broker:1883",
@@ -132,13 +132,14 @@ func TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy(t *
 	if !strings.Contains(got, "fpp1") {
 		t.Errorf("error = %q, want it to name the unmatched instance id %q", got, "fpp1")
 	}
-	if !strings.Contains(got, "showmeshctl fpp-endpoints set") || !strings.Contains(got, "fpp.endpoints") {
-		t.Errorf("error = %q, want it to lead with the store-backed remedy (showmeshctl fpp-endpoints set / fpp.endpoints)", got)
+	storeIdx := strings.Index(got, "showmeshctl config set")
+	if storeIdx < 0 || !strings.Contains(got, "fpp.endpoints") {
+		t.Fatalf("error = %q, want it to lead with the store-backed remedy (showmeshctl config set / fpp.endpoints)", got)
 	}
-	if strings.Contains(got, "SHOWMESH_FPP_MQTT_HOSTS") {
-		t.Errorf("error = %q, must not name SHOWMESH_FPP_MQTT_HOSTS: the operator reached this refusal through a store write, not that variable", got)
+	if !strings.Contains(got, "SHOWMESH_FPP_MQTT_HOSTS") {
+		t.Errorf("error = %q, want it to also name SHOWMESH_FPP_MQTT_HOSTS as a possible typo", got)
 	}
-	if idx := strings.Index(got, "SHOWMESH_FPP_ENDPOINTS"); idx >= 0 && idx < strings.Index(got, "showmeshctl fpp-endpoints set") {
+	if idx := strings.Index(got, "SHOWMESH_FPP_ENDPOINTS"); idx >= 0 && idx < storeIdx {
 		t.Errorf("error = %q, want the store remedy to lead and SHOWMESH_FPP_ENDPOINTS to appear only as a trailing hedge", got)
 	}
 }

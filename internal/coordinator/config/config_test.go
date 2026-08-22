@@ -280,13 +280,15 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 			// which id is unmatched. The message leads with the
 			// store-backed remedy (ADR-039 decision 1) rather than the env
 			// var, since [ValidateFPPMQTTHostIDs] backs the store-backed
-			// config:write surface too.
+			// config:write surface too. wantVar names the store remedy,
+			// not "shed" alone, because the old env-first message also
+			// named the unmatched id and would pass a weaker check.
 			name: "fpp mqtt hosts id not in fpp endpoints",
 			env: map[string]string{
 				"SHOWMESH_FPP_ENDPOINTS":  "player-01=http://10.0.1.20",
 				"SHOWMESH_FPP_MQTT_HOSTS": "shed=FPP-Shed",
 			},
-			wantVar: "shed",
+			wantVar: "showmeshctl config set",
 		},
 		{
 			name:    "fpp mqtt broker url invalid",
@@ -893,7 +895,7 @@ func TestLoadConfigFPPMQTTHostsWithoutBrokerURLStillCrossChecked(t *testing.T) {
 	if err == nil {
 		t.Fatalf("LoadConfigFrom() error = nil, want an error naming the unmatched id even with no broker URL configured")
 	}
-	if !strings.Contains(err.Error(), "shed") || !strings.Contains(err.Error(), "showmeshctl fpp-endpoints set") {
+	if !strings.Contains(err.Error(), "shed") || !strings.Contains(err.Error(), "showmeshctl config set") {
 		t.Errorf("LoadConfigFrom() error = %q, want it to name the unmatched id %q and the store-backed remedy", err.Error(), "shed")
 	}
 }

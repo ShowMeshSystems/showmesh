@@ -100,8 +100,10 @@ func TestValidateFPPEndpointsExportedMatchesInternalValidation(t *testing.T) {
 // TestValidateFPPEndpointsNamesTheKindNotTheEnvVar pins ADR-039's fix
 // (decision 1): [ValidateFPPEndpoints] backs both LoadConfig's env parse
 // and the store-backed config:write surface (`showmeshctl config set
-// --file`, PUT /api/v1/config/fpp.endpoints), so its messages must not lead
-// an operator on the store-backed path back to SHOWMESH_FPP_ENDPOINTS.
+// --file`, PUT /api/v1/config/fpp.endpoints), so its messages must lead
+// with the "fpp.endpoints" kind rather than SHOWMESH_FPP_ENDPOINTS.
+// SHOWMESH_FPP_ENDPOINTS is still named, but only after the kind, for a
+// coordinator that has not migrated off it.
 func TestValidateFPPEndpointsNamesTheKindNotTheEnvVar(t *testing.T) {
 	invalid := []FPPEndpoint{{ID: "fpp1", URL: ""}}
 	err := ValidateFPPEndpoints(invalid)
@@ -109,11 +111,15 @@ func TestValidateFPPEndpointsNamesTheKindNotTheEnvVar(t *testing.T) {
 		t.Fatalf("ValidateFPPEndpoints(%+v) error = nil, want an error for an empty URL", invalid)
 	}
 	got := err.Error()
-	want := `fpp.endpoints: instance "fpp1": url "" must use http or https`
-	if got != want {
-		t.Errorf("ValidateFPPEndpoints(%+v) error = %q, want %q", invalid, got, want)
+	if !strings.HasPrefix(got, "fpp.endpoints") {
+		t.Fatalf(`ValidateFPPEndpoints(%+v) error = %q, want it to lead with the "fpp.endpoints" kind`, invalid, got)
 	}
-	if strings.Contains(got, "SHOWMESH_FPP_ENDPOINTS") {
-		t.Errorf("error = %q, must not name SHOWMESH_FPP_ENDPOINTS: the operator reached this refusal through a store write, not that variable", got)
+	if !containsAll(got, "fpp1", "must use http or https") {
+		t.Errorf("ValidateFPPEndpoints(%+v) error = %q, want it to name the instance id and the defect", invalid, got)
+	}
+	kindIdx := strings.Index(got, "fpp.endpoints")
+	envIdx := strings.Index(got, "SHOWMESH_FPP_ENDPOINTS")
+	if envIdx < 0 || envIdx < kindIdx {
+		t.Errorf("error = %q, want SHOWMESH_FPP_ENDPOINTS to appear only as a trailing hedge after the fpp.endpoints kind", got)
 	}
 }
