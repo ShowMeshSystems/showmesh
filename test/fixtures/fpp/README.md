@@ -3,7 +3,7 @@
 This directory holds plain JSON data files consumable by any language. They
 freeze the exact bytes that
 [`docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md`](../../../docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md)
-section 3 promises: the coordinator (this repository, Go) and the ShowMesh
+section 4 promises: the coordinator (this repository, Go) and the ShowMesh
 FPP plugin (`showmesh-fpp-plugin`, Apache-2.0, C++) implement the same
 canonicalization and hashing rules independently, and these files are how
 that agreement is checked without either repository depending on the other.

@@ -2,9 +2,10 @@
 
 [RES-018](../research/RES-018-fpp-brightness-control.md) · [ADR-043](../decisions/ADR-043-show-scoped-cues-and-playlist-authority.md) · [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) · [Track F](TRACK-F-resting-mode.md) · [Track H](TRACK-H-cues-and-playlists.md) · [SM-63 handoff](SM-63-FPP-PLUGIN-HANDOFF.md)
 
-Status: frozen 2026-08-21. This record fixes the two wire contracts the
-ShowMesh FPP plugin runtime shares with the coordinator: playlist-entry
-observation ingestion, and the coordinator-owned brightness transition gain.
+Status: frozen 2026-08-21, extended 2026-08-22. This record fixes the wire
+contracts the ShowMesh FPP plugin runtime shares with the coordinator:
+playlist-entry observation ingestion, the coordinator-owned brightness
+transition gain, and playlist definition publication.
 RES-018 decided the design; this file fixes the exact bytes so the plugin and
 the coordinator can be built independently and still meet.
 
@@ -342,7 +343,208 @@ mid-fade case is observed on a real host.
 This section is the frozen shape that unblocks those two implementations. It
 is not a claim that either exists.
 
-## 3. Shared fixtures
+## 3. Playlist definition publication
+
+Frozen 2026-08-22 for Track H seam H2. Section 1 gives the coordinator a
+playlist hash and an entry key. Neither says what the playlist contains, so
+neither can be authored against: an operator binding a ShowMesh Cue to FPP
+entry 3 needs to see that entry 3 is `Thriller.fseq` before the show, not
+discover it when FPP plays it.
+
+This section fixes how the definition behind a hash reaches the coordinator.
+**The plugin posts it.** The same principal, the same credential, and the same
+`fpp:observe` scope as section 1.
+
+### 3.1 Why the plugin sends it rather than the coordinator fetching it
+
+The hash in section 1.3 is SHA-256 over the RFC 8785 canonicalization of the
+definition the plugin read. Today that read is a local file: the resident
+worker opens `FPP_DIR_PLAYLIST/<name>.json` and hashes those bytes. It is not
+FPP's REST API, and it is not the `Json::Value` FPP hands the playlist
+callback, which the plugin deliberately mines for three bounded fields and
+otherwise discards.
+
+If the coordinator fetched the definition from FPP's REST API instead, it
+would be canonicalizing a different read of a different representation. FPP's
+`GET /api/playlist/{name}` re-serializes through FPP's own JSON layer, and
+whether it adds, drops, or recomputes a member relative to the stored file is
+not measured anywhere in either repository. Canonicalization removes
+formatting differences; it does not remove a field FPP's API injects.
+
+Every binding in Track H is keyed on the hash. A hash the coordinator computed
+from a second source is a hash no observation will ever match, and the failure
+would arrive on show night looking like a permanent unexplained mismatch
+rather than like the wrong import path it actually was. So the rule is: **the
+bytes the plugin hashed are the bytes the coordinator imports.**
+
+The plugin publishes rather than serving a read for one further reason. The
+plugin has no HTTP server and deliberately registers no route, which is what
+lets the FPP 10 adapter be unmapped safely and what keeps ADR-013's
+no-second-control-port rule intact. It does need an outbound client for
+section 1 regardless. One more outbound POST is a small addition to work
+already required; an inbound listener is a new surface on a component that
+has gone out of its way not to have one.
+
+### 3.2 The route
+
+```text
+POST /api/v1/integrations/fpp/playlist-definitions
+```
+
+Guarded by `fpp:observe`. Authentication and the scope check run before the
+body is parsed, as in section 1.1. The body is bounded at **1048576 bytes**
+and a larger body is refused with `413` before parsing. This bound is two
+orders of magnitude above section 1.2's, because unlike an observation this
+body does carry the complete definition.
+
+### 3.3 Request body, schema version 1
+
+```json
+{
+  "schemaVersion": 1,
+  "instanceUuid": "M4-7840e12f81da4191c0d00fbb6a889314",
+  "playlistName": "Halloween Main",
+  "playlistHash": "<64 lowercase hex>",
+  "definition": { },
+  "capturedAtMillis": 1755900000000
+}
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schemaVersion` | integer | yes | Currently `1`. Any other value is refused. |
+| `instanceUuid` | string | yes | The same persistent FPP UUID section 1.2 reports, from FPP's `SystemUUID` setting. |
+| `playlistName` | string | yes | FPP playlist name. |
+| `playlistHash` | string | yes | SHA-256 over the canonicalization of `definition`, section 1.3. Lowercase hex. |
+| `definition` | object | yes | The complete playlist definition, as a parsed JSON value. No member removed. |
+| `capturedAtMillis` | integer | yes | When the plugin read this definition, epoch milliseconds. |
+
+`definition` is the JSON value itself, not a string holding JSON. The
+coordinator canonicalizes what it received and refuses the request when the
+result does not hash to the declared `playlistHash`.
+
+That check is the load-bearing one. It makes the transport irrelevant, since a
+proxy that reformats the body still canonicalizes to the same bytes, and it
+makes the store self-verifying: every definition is filed under a hash the
+coordinator computed itself. A caller cannot install a definition under
+someone else's hash, so the worst a forged post can do is add an entry nothing
+references.
+
+### 3.4 Ingestion behavior
+
+In order:
+
+1. Authenticate; refuse `401` when no credential resolves.
+2. Check `fpp:observe`; refuse `403` naming the scope.
+3. Bound the body at 1048576 bytes; refuse `413` on overflow.
+4. Decode strictly. Refuse `400` on malformed JSON, an unknown field, trailing
+   content after the object, or a duplicate member name, for section 1.6's
+   reasons.
+5. Refuse `400` when `schemaVersion` is not `1`.
+6. Refuse `400` when `instanceUuid` or `playlistName` is absent or empty, when
+   `playlistHash` is not 64 lowercase hex characters, when `definition` is
+   absent or is not an object, or when `capturedAtMillis` is negative.
+7. Canonicalize `definition` and refuse `400` with
+   `definition-hash-mismatch` when its SHA-256 disagrees with `playlistHash`.
+   A definition the coordinator's own canonicalizer refuses, for invalid UTF-8
+   or excessive nesting, fails here too and is the same refusal: the
+   coordinator never stores a definition it could not canonicalize.
+8. Store under the key `(instanceUuid, playlistHash)`. A repeat of a key
+   already held is idempotent `200` and stores nothing, because the key is the
+   content. `playlistName` and `capturedAtMillis` on a repeat are ignored
+   rather than overwriting the stored ones: the first report of a given
+   content is the one with provenance.
+
+There is no sequence and no ordering. Content addressing removes the need for
+one, which also removes section 1.5's wedging hazard from this route entirely:
+a definition carrying a wildly wrong value cannot refuse later legitimate
+posts, because there is no counter for it to poison.
+
+A store that actually inserted is audited, under the action
+`fpp.publish_playlist_definition`. Unlike an accepted observation, this
+happens once per playlist revision rather than once per entry, so it does not
+flood, and it gives an operator a dated record that the FPP playlist changed.
+An idempotent repeat is not audited. Every refusal from step 5 onward is
+audited with its reason.
+
+### 3.5 Refusal vocabulary
+
+| Case | Status | Problem type |
+|---|---|---|
+| No credential | 401 | `unauthorized` |
+| Missing `fpp:observe` | 403 | `forbidden` |
+| Body over 1048576 bytes | 413 | `payload-too-large` |
+| Malformed body, unknown field, duplicate member | 400 | `invalid-parameter` |
+| Unsupported `schemaVersion` | 400 | `unsupported-definition-schema-version` |
+| Missing or malformed identity field | 400 | `invalid-parameter` |
+| Definition does not hash to `playlistHash` | 400 | `definition-hash-mismatch` |
+
+### 3.6 Reading definitions back
+
+```text
+GET /api/v1/integrations/fpp/playlist-definitions
+GET /api/v1/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}
+```
+
+Both under `observation:read`, matching every other FPP read surface. The list
+returns metadata only (instance, playlist name, hash, captured and received
+times, entry count, and whether a stored `show.playlist` references it); the
+second returns the stored definition. The list exists so an operator can
+choose a playlist to import without downloading every definition on the host.
+
+### 3.7 When the plugin posts
+
+The plugin posts a definition whenever it holds one whose hash it has not
+already posted successfully, on all three of these occasions:
+
+1. **When it resolves an entry identity.** The definition behind that hash
+   must reach the coordinator before, or alongside, the first observation
+   citing it. An observation is still accepted when the definition has not
+   arrived, per section 1 unchanged; Track H holds that binding as having no
+   definition rather than activating it.
+2. **At worker start, for every playlist definition on the host.** The
+   coordinator otherwise holds nothing until FPP plays something, and
+   authoring happens in the afternoon with FPP idle. The plugin already reads
+   this directory; enumerating it is the same read.
+3. **On a bounded re-scan, no more often than every 60 seconds.** An operator
+   who edits a playlist and does not play it would otherwise leave the
+   coordinator holding the previous revision until the next plugin restart.
+   Skipping a file whose size and modification time are unchanged keeps this
+   cheap; no filesystem watch is required.
+
+The plugin tracks which hashes it has posted successfully in memory only. A
+restart re-posts, and the coordinator answers idempotently, so nothing is lost
+by not persisting that set. This is deliberately weaker than section 1.5's
+requirement on the observation sequence, and it is safe for the same reason
+the route needs no sequence: the key is the content.
+
+Retries use the same bounded backoff and the same visible local status as
+section 1's observation delivery.
+
+### 3.8 What the plugin must add
+
+Stated plainly, because as of 2026-08-22 none of it exists:
+
+- Retain the canonical definition past the hash call.
+  `resolveEntryIdentity()` already computes `IdentityResolution::canonicalDefinition`
+  and the runtime discards it.
+- The outbound HTTP client section 1 already requires, carrying this second
+  route.
+- Enumeration of the playlist directory at start, and the bounded re-scan.
+- No inbound HTTP route, no second listener, and no change to the callback
+  thread's bounded copy-and-return.
+
+### 3.9 What this section does not do
+
+- It does not let the coordinator write anything to FPP or to the plugin.
+- It does not give the coordinator a second source of entry identity. The
+  entry key still comes from section 1.3, derived from the same five fields.
+- It does not make a definition an observation. It carries no sequence, is not
+  ordered against anything, and grants no execution authority. Track H applies
+  Show, Playlist, Cue, and active-show authorization to a binding built from
+  it, exactly as section 1.6 requires for an observation.
+
+## 4. Shared fixtures
 
 `test/fixtures/fpp/` holds plain JSON data files, consumable by any language.
 They are deliberately not a Go package and not a shared module: the plugin
