@@ -34,21 +34,51 @@ import type { NightCue, NightSessionState } from '../app/types'
 
 type LoadState =
   | { kind: 'loading' }
+  // Only reachable when this view has NEVER successfully loaded a session
+  // at all (the very first GET fails). Once any session has loaded, a
+  // later failure degrades the 'loaded' state in place instead (see
+  // `stale`/`staleError` below) — see this function's own header comment
+  // and review finding 2 (ADR-024 constraint 23: a transient read failure
+  // must never cost the operator visibility of the lifecycle state).
   | { kind: 'error'; message: string }
-  | { kind: 'loaded'; session: NightSessionState }
-
-// Which of the ten RESTING-MODE.md §3 states cues are currently replayed
-// under (RESTING-MODE.md §7): used only to pick a sensible "current
-// phase" for the cue table's default filter, never to invent evidence the
-// session itself does not carry.
-function phaseForState(state: NightSessionState['state']): NightCue['phase'] {
-  if (state === 'transition-to-resting' || state === 'end-of-night-resting') return 'enterResting'
-  if (state === 'fading-out') return 'fadeOut'
-  return 'enterShow'
-}
+  | {
+      kind: 'loaded'
+      session: NightSessionState
+      // True when the MOST RECENT background refresh (a reload, or the
+      // periodic GET this view's own mount effect re-runs) failed —
+      // `session` is then a stale, possibly-outdated last-known value
+      // rather than freshly confirmed. Cleared back to false the next
+      // time either a GET succeeds or a live frame is actually ADOPTED
+      // (see `adoptSession` below) — mirroring
+      // `Model.sessionFetchFailed`'s identical "stale renders as stale,
+      // never silently as current" contract (app/session.ts).
+      stale: boolean
+      staleError: string | null
+    }
 
 function findNextCue(cues: NightCue[]): NightCue | null {
   return cues.find((c) => c.state === 'not_dispatched' || c.state === 'pending' || c.state === 'dispatched') ?? null
+}
+
+/**
+ * Whichever of `current` (already on screen) and `incoming` (a fresh GET
+ * response, a live `nightSession.changed` frame, or a command's own
+ * response) is actually newer, compared by `updatedAt` rather than by
+ * arrival order. Review finding 1: this view previously assumed a live
+ * frame or a fresh GET always wins by virtue of arriving second, which a
+ * frame landing WHILE a slower GET is still in flight silently violates
+ * (the GET's `.then` would blindly overwrite the frame's newer state).
+ * `current === null` (nothing loaded yet) always adopts `incoming`.
+ * `NaN` from an unparseable timestamp is treated as "not newer" — never
+ * as newer, which would let a malformed value evict good data.
+ */
+function newerSession(current: NightSessionState | null, incoming: NightSessionState): NightSessionState {
+  if (current === null) return incoming
+  const currentMs = Date.parse(current.updatedAt)
+  const incomingMs = Date.parse(incoming.updatedAt)
+  if (Number.isNaN(incomingMs)) return current
+  if (Number.isNaN(currentMs)) return incoming
+  return incomingMs > currentMs ? incoming : current
 }
 
 export function NightSession() {
@@ -57,15 +87,43 @@ export function NightSession() {
   const [reloadGeneration, setReloadGeneration] = useState(0)
   const [armEndSession, setArmEndSession] = useState(false)
 
+  // The one place `state` is asked to adopt a NEW session, from any
+  // source (initial GET, a reload's GET, a live stream frame, or a
+  // command's own response) — routes every one of them through
+  // [newerSession] so a frame that already won cannot be rolled back by
+  // a slower-arriving GET, and vice versa (review finding 1). Always
+  // clears staleness: adopting anything, even one [newerSession] decides
+  // to keep the CURRENT session over, means this device just heard from
+  // the coordinator successfully.
+  function adoptSession(session: NightSessionState): void {
+    setState((prev) => ({
+      kind: 'loaded',
+      session: newerSession(prev.kind === 'loaded' ? prev.session : null, session),
+      stale: false,
+      staleError: null,
+    }))
+  }
+
   useEffect(() => {
     let cancelled = false
-    setState((prev) => (prev.kind === 'loaded' ? prev : { kind: 'loading' }))
     getCurrentNightSession()
       .then((resp) => {
-        if (!cancelled) setState({ kind: 'loaded', session: resp.session })
+        if (!cancelled) adoptSession(resp.session)
       })
       .catch((err: unknown) => {
-        if (!cancelled) setState({ kind: 'error', message: describeApiError(err) })
+        if (cancelled) return
+        // Review finding 2: a transient read failure degrades an
+        // already-loaded state IN PLACE (marked stale, error carried
+        // alongside) rather than replacing it — the operator keeps
+        // seeing the last known lifecycle state instead of one error
+        // line where the whole page used to be. Only the very first
+        // load, which has nothing to fall back to, becomes the
+        // dedicated 'error' state.
+        setState((prev) =>
+          prev.kind === 'loaded'
+            ? { ...prev, stale: true, staleError: describeApiError(err) }
+            : { kind: 'error', message: describeApiError(err) },
+        )
       })
     return () => {
       cancelled = true
@@ -75,15 +133,21 @@ export function NightSession() {
 
   // `model.nightSession` is not seeded from Snapshot (domain.ts's own
   // comment on Model.nightSession) — it only ever updates via a live
-  // `nightSession.changed` frame. Once one arrives, it is strictly fresher
-  // than whatever this view's own GET produced, so it always wins.
+  // `nightSession.changed` frame, and the store clears it to null on
+  // every resnapshot (reconnect/stream.reset — store.ts's applySnapshot).
+  // Routed through [adoptSession] rather than a blind replace — see that
+  // function's own comment and review finding 1.
   useEffect(() => {
     if (model.nightSession === null) return
-    setState({ kind: 'loaded', session: model.nightSession })
+    adoptSession(model.nightSession)
   }, [model.nightSession])
 
+  // Also routed through [adoptSession]: the command response is the
+  // freshest evidence at the moment it arrives, but is not IMMUNE to a
+  // live frame having already landed first (review finding 1's "the same
+  // class applies to handleApplied").
   function handleApplied(session: NightSessionState): void {
-    setState({ kind: 'loaded', session })
+    adoptSession(session)
     setArmEndSession(false)
   }
 
@@ -100,6 +164,16 @@ export function NightSession() {
       {state.kind === 'error' && (
         <p className="panel panel--error" role="alert">
           {state.message}
+        </p>
+      )}
+
+      {state.kind === 'loaded' && state.stale && state.staleError !== null && (
+        // Review finding 2: shown ALONGSIDE the last known state below,
+        // never instead of it — a transient read failure must not cost
+        // the operator visibility of the lifecycle state.
+        <p className="panel panel--error" role="alert">
+          The lifecycle state below is the last one this device could confirm; the most recent
+          refresh failed: {state.staleError}
         </p>
       )}
 
@@ -168,7 +242,6 @@ export function NightSession() {
 }
 
 function NightSessionDetail({ session, onReload }: { session: NightSessionState; onReload: () => void }) {
-  const currentPhase = phaseForState(session.state)
   const nextCue = session.cues.state === 'recorded' ? findNextCue(session.cues.cues) : null
 
   return (
@@ -250,11 +323,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
       <h3 className="section-title">Next cue</h3>
       <PanelErrorBoundary panelLabel="Next cue">
         <section className="panel" role="status">
-          {session.cues.state !== 'recorded' && (
-            <p className="text-muted">
-              {session.cues.state === 'not_configured' ? 'not configured' : session.cues.reason}
-            </p>
-          )}
+          {session.cues.state !== 'recorded' && <p className="text-muted">{session.cues.reason}</p>}
           {session.cues.state === 'recorded' && nextCue === null && (
             <p className="text-muted">No pending cue in the current cycle&rsquo;s outbox.</p>
           )}
@@ -273,12 +342,17 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
         </section>
       </PanelErrorBoundary>
 
-      <h3 className="section-title">Cues ({currentPhase})</h3>
+      <h3 className="section-title">Cues</h3>
+      {/* Review finding 6: this list is every cue in the current cycle's
+          outbox across all three phases, not scoped to any one of them —
+          the heading no longer claims a filter this table does not apply.
+          Each row's own Phase column (below) still says which phase it
+          belongs to. */}
       <PanelErrorBoundary panelLabel="Cue evidence">
         <section className="panel">
           {session.cues.state !== 'recorded' && (
             <p className="text-muted" role="status">
-              {session.cues.state === 'not_configured' ? 'not configured' : session.cues.reason}
+              {session.cues.reason}
             </p>
           )}
           {session.cues.state === 'recorded' &&
@@ -321,8 +395,8 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                           {cue.outcome === undefined ? '—' : <NightCueOutcomeBadge outcome={cue.outcome} />}
                         </td>
                         <td>{cue.reason ?? '—'}</td>
-                        <td>{formatAbsolute(cue.dispatchedAt)}</td>
-                        <td>{formatAbsolute(cue.resolvedAt)}</td>
+                        <td>{cue.dispatchedAt === null ? 'not dispatched' : formatAbsolute(cue.dispatchedAt)}</td>
+                        <td>{cue.resolvedAt === null ? 'not resolved' : formatAbsolute(cue.resolvedAt)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -337,7 +411,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
         <section className="panel">
           {session.readiness.state !== 'recorded' && (
             <p className="text-muted" role="status">
-              {session.readiness.state === 'not_configured' ? 'not configured' : session.readiness.reason}
+              {session.readiness.reason}
             </p>
           )}
           {session.readiness.state === 'recorded' && (

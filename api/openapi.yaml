@@ -1817,6 +1817,7 @@ paths:
           | `resolume.changed` | `ResolumeChangedEvent` | every connection |
           | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
           | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
+          | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded

@@ -2666,6 +2666,22 @@ export class ApiStore {
       // coordinator's own authoritative current list, never a delta this
       // store needs to merge.
       resolume: snapshot.resolume,
+      // Review finding 9: `Snapshot` carries no `nightSession` field
+      // (domain.ts's own comment on Model.nightSession), so unlike every
+      // field above this one is not being refreshed here, it is being
+      // INVALIDATED. `applySnapshot` runs on every resnapshot — the
+      // initial connect, every reconnect, and every `stream.reset` — each
+      // of which is a generation boundary this store cannot vouch for
+      // continuity across. The coordinator's stream hub keys change
+      // detection on its own hub-wide "last rendered" map (stream.go), so
+      // a freshly (re)connected client gets no `nightSession.changed`
+      // frame at all until the session's state next actually moves —
+      // without this, a stale, possibly wrong-session value from BEFORE
+      // the reconnect would keep rendering as current indefinitely. Null
+      // forces the view back to its own GET (views/NightSession.tsx) to
+      // re-establish ground truth rather than trusting a value this
+      // connection has no evidence still holds.
+      nightSession: null,
     })
   }
 

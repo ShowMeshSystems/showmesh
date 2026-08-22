@@ -379,6 +379,13 @@ export interface Model {
    * the stream only announces a CHANGE, so this stays `null` until either
    * the first live frame arrives or a view's own `GET /night/session`
    * call seeds it — see views/NightSession.tsx for that reconciliation.
+   * Cleared back to `null` by every `applySnapshot` (store.ts) — the
+   * initial connect, every reconnect, and every `stream.reset` — because
+   * none of those is a guarantee this connection will hear about the
+   * session again soon: the coordinator's stream hub only emits a frame
+   * on an actual state change, so a stale value from a PRIOR connection
+   * generation must not keep rendering as current across one it was
+   * never confirmed against.
    */
   nightSession: NightSessionState | null
   /** Newest first, bounded — see MAX_RETAINED_EVENTS in store.ts. */

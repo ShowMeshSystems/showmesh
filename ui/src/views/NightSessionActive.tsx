@@ -26,7 +26,21 @@ type LoadState =
   | { kind: 'loading' }
   | { kind: 'not_configured'; reason: string }
   | { kind: 'error'; message: string }
-  | { kind: 'loaded'; config: NightSessionActiveConfigResponse; revisions: ConfigRevisionMeta[] }
+  | {
+      kind: 'loaded'
+      config: NightSessionActiveConfigResponse
+      revisions: ConfigRevisionMeta[]
+      // Suspicion resolved (see this file's own fetch effect): GET
+      // /config/night.session.active/revisions never 404s on its own —
+      // handleGetNightSessionActiveRevisions (nightsession.go) answers
+      // 200 with an empty list when nothing has ever been activated, and
+      // only a genuine transient/internal failure rejects it — but it CAN
+      // fail independently of the pointer read that already succeeded.
+      // That failure is carried here, alongside the pointer, rather than
+      // rejecting the whole load: a revisions-history outage must not
+      // hide the current pointer this device already confirmed.
+      revisionsError: string | null
+    }
 
 type SessionsState =
   | { kind: 'loading' }
@@ -58,10 +72,28 @@ export function NightSessionActive() {
     if (!readGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
-    Promise.all([getNightSessionActiveConfig(), getNightSessionActiveConfigRevisions()])
-      .then(([config, revisionsResp]) => {
+    // Fetched independently, not via Promise.all: the two calls have
+    // genuinely different failure shapes (the config read 404s when
+    // nothing has ever been activated; the revisions read never does —
+    // see LoadState's own comment on `revisionsError`), and a
+    // Promise.all would let an unrelated revisions-read failure reject
+    // the whole load, hiding the current pointer this device already
+    // has evidence for.
+    getNightSessionActiveConfig()
+      .then((config) => {
         if (cancelled) return
-        setState({ kind: 'loaded', config, revisions: revisionsResp.revisions })
+        setState({ kind: 'loaded', config, revisions: [], revisionsError: null })
+        getNightSessionActiveConfigRevisions()
+          .then((revisionsResp) => {
+            if (cancelled) return
+            setState((prev) =>
+              prev.kind === 'loaded' ? { ...prev, revisions: revisionsResp.revisions, revisionsError: null } : prev,
+            )
+          })
+          .catch((err: unknown) => {
+            if (cancelled) return
+            setState((prev) => (prev.kind === 'loaded' ? { ...prev, revisionsError: describeApiError(err) } : prev))
+          })
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -182,7 +214,17 @@ export function NightSessionActive() {
               Requires the <code>config:write</code> scope. {writeGate.reason}
             </p>
           )}
-          {writeGate.allowed && armedTarget === null && (
+          {/* Review finding 12: this section previously omitted entirely
+              when writeGate was not held, rather than rendering its
+              controls disabled with a stated reason (ADR-024 decision
+              12) — `writeGate` here encodes only a missing scope, never
+              a structural reason like "this is read-only history", so
+              omission was the wrong choice. The picker itself is always
+              shown (choosing is harmless); the two arm buttons below
+              render as a manually disabled span carrying `writeGate.reason`
+              when the scope is missing, on Shows.tsx's own "New show"
+              link/disabled-span precedent for the identical situation. */}
+          {armedTarget === null && (
             <div>
               {sessionsState.kind === 'loading' && <p className="text-muted">Loading night sessions…</p>}
               {sessionsState.kind === 'error' && (
@@ -213,18 +255,36 @@ export function NightSessionActive() {
                         </select>
                       </label>
                       <div style={{ display: 'flex', gap: '0.75rem' }}>
-                        <button
-                          type="button"
-                          onClick={() => arm(selectedSession.trim())}
-                          disabled={selectedSession.trim() === '' || selectedSession.trim() === currentSession}
-                        >
-                          Activate this session…
-                        </button>
-                        {currentSession !== null && currentSession !== '' && (
-                          <button type="button" onClick={() => arm('')}>
-                            Clear the pointer…
+                        {writeGate.allowed ? (
+                          <button
+                            type="button"
+                            onClick={() => arm(selectedSession.trim())}
+                            disabled={selectedSession.trim() === '' || selectedSession.trim() === currentSession}
+                          >
+                            Activate this session…
                           </button>
+                        ) : (
+                          <span className="scoped-button">
+                            <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
+                              Activate this session…
+                            </button>
+                            <span className="scoped-button__reason">{writeGate.reason}</span>
+                          </span>
                         )}
+                        {currentSession !== null &&
+                          currentSession !== '' &&
+                          (writeGate.allowed ? (
+                            <button type="button" onClick={() => arm('')}>
+                              Clear the pointer…
+                            </button>
+                          ) : (
+                            <span className="scoped-button">
+                              <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
+                                Clear the pointer…
+                              </button>
+                              <span className="scoped-button__reason">{writeGate.reason}</span>
+                            </span>
+                          ))}
                       </div>
                     </>
                   )}
@@ -238,7 +298,14 @@ export function NightSessionActive() {
               (or clearing has been chosen), states what is about to
               happen, and requires a SECOND, distinct click to actually
               submit. */}
-          {writeGate.allowed && armedTarget !== null && (
+          {/* Review finding 12: previously gated on `writeGate.allowed` too
+              — if the scope was lost between arming and confirming, the
+              whole panel (including Cancel) vanished with `armedTarget`
+              still set, leaving the operator stuck mid-flow with no way
+              out. The Confirm button below is already independently
+              scope-gated via ScopedButton; Cancel must always be
+              reachable regardless of scope. */}
+          {armedTarget !== null && (
             <div className="panel panel--warning" role="alertdialog" aria-label="Confirm night session activation">
               {armedTarget === '' ? (
                 <p>
@@ -274,6 +341,11 @@ export function NightSessionActive() {
         </>
       )}
 
+      {readGate.allowed && state.kind === 'loaded' && state.revisionsError !== null && (
+        <p className="panel panel--error" role="alert">
+          The activation history could not be loaded: {state.revisionsError}
+        </p>
+      )}
       {readGate.allowed && state.kind === 'loaded' && state.revisions.length > 0 && (
         <>
           <h3 className="panel__title">Activation history</h3>

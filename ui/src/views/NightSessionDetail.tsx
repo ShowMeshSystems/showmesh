@@ -35,7 +35,7 @@ type CueOnFailure = NonNullable<ConfigNightSessionCueWrite['onFailure']>
 const CUE_ROLES: CueRole[] = ['lighting', 'projection', 'audio', 'announcement', 'other']
 const CUE_ON_FAILURE: CueOnFailure[] = ['continue', 'abort']
 
-interface CueForm {
+export interface CueForm {
   name: string
   role: CueRole
   action: string
@@ -45,7 +45,7 @@ interface CueForm {
   onFailure: CueOnFailure
 }
 
-function newCueForm(): CueForm {
+export function newCueForm(): CueForm {
   return { name: '', role: 'lighting', action: '', offsetMs: '0', fadeDurationMs: '', barrier: false, onFailure: 'continue' }
 }
 
@@ -61,18 +61,18 @@ function cueToForm(cue: ConfigNightSession['enterShow']['cues'][number]): CueFor
   }
 }
 
-interface BackgroundAudioItemForm {
+export interface BackgroundAudioItemForm {
   itemId: string
   show: string
   sequence: string
   target: string
 }
 
-function newBackgroundAudioItemForm(): BackgroundAudioItemForm {
+export function newBackgroundAudioItemForm(): BackgroundAudioItemForm {
   return { itemId: '', show: '', sequence: '', target: '' }
 }
 
-interface FormState {
+export interface FormState {
   show: string
   label: string
   showPlaylistFppInstanceId: string
@@ -97,7 +97,7 @@ interface FormState {
   enterRestingBlackoutAfterShowMs: string
 }
 
-function emptyForm(): FormState {
+export function emptyForm(): FormState {
   return {
     show: '',
     label: '',
@@ -156,7 +156,7 @@ function formFromPayload(payload: ConfigNightSession): FormState {
   }
 }
 
-function parseNonNegativeInt(value: string, fieldLabel: string): { value: number } | { error: string } {
+export function parseNonNegativeInt(value: string, fieldLabel: string): { value: number } | { error: string } {
   const trimmed = value.trim()
   if (trimmed === '') return { error: `${fieldLabel} is required.` }
   const n = Number(trimmed)
@@ -164,7 +164,7 @@ function parseNonNegativeInt(value: string, fieldLabel: string): { value: number
   return { value: n }
 }
 
-function buildCues(cues: CueForm[], label: string): { cues: ConfigNightSessionCueWrite[] } | { error: string } {
+export function buildCues(cues: CueForm[], label: string): { cues: ConfigNightSessionCueWrite[] } | { error: string } {
   const built: ConfigNightSessionCueWrite[] = []
   for (const [index, cue] of cues.entries()) {
     if (cue.name.trim() === '') return { error: `${label} cue ${index + 1} needs a name.` }
@@ -194,7 +194,7 @@ function buildCues(cues: CueForm[], label: string): { cues: ConfigNightSessionCu
   return { cues: built }
 }
 
-function buildPayload(form: FormState): { payload: ConfigNightSessionWrite } | { error: string } {
+export function buildPayload(form: FormState): { payload: ConfigNightSessionWrite } | { error: string } {
   if (form.show.trim() === '') return { error: 'Show is required.' }
   if (form.label.trim() === '') return { error: 'Label is required.' }
   if (form.showPlaylistFppInstanceId.trim() === '') return { error: 'The show playlist needs an FPP instance.' }
@@ -231,7 +231,14 @@ function buildPayload(form: FormState): { payload: ConfigNightSessionWrite } | {
     if (items.length === 0) return { error: 'Background audio needs at least one item, or turn it off.' }
     const maxGainDbTrimmed = form.backgroundAudioMaxGainDb.trim()
     const maxGainDb = Number(maxGainDbTrimmed)
-    if (maxGainDbTrimmed === '' || Number.isNaN(maxGainDb) || maxGainDb > 0) {
+    // Suspicion resolved: `Number('-Infinity')` is `-Infinity`, which is
+    // neither NaN nor greater than 0, so a NaN-only check let it through.
+    // `JSON.stringify(-Infinity)` serializes to `null`, and the wire
+    // schema's `maxGainDb` is `type: number` (not nullable), so this
+    // would have come back from the coordinator as a type error rather
+    // than the range error an operator typing garbage here actually
+    // needs to see. `Number.isFinite` excludes NaN AND both infinities.
+    if (maxGainDbTrimmed === '' || !Number.isFinite(maxGainDb) || maxGainDb > 0) {
       return { error: 'Background audio max gain must be a number, 0 dB or lower.' }
     }
     let crossfadeMs: number | undefined
@@ -376,6 +383,13 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         return
       }
       setState((prev) => (prev.kind === 'loaded' ? { ...prev, config: resp } : prev))
+      // Review finding 10: the server resolves defaults on write
+      // (endOfNightPlaylist, endOfNightRepeat, every cue's barrier/
+      // onFailure) that this form's own optimistic `built.payload` never
+      // set explicitly — re-seeding from the response is what makes the
+      // resolved values visible immediately rather than only after a
+      // full page reload re-fetches this same object.
+      setForm(formFromPayload(resp.payload))
       const revisionsResp = await getNightSessionConfigRevisions(id)
       setState((prev) => (prev.kind === 'loaded' ? { ...prev, revisions: revisionsResp.revisions } : prev))
     } catch (err) {
@@ -568,18 +582,23 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
                   value={item.target}
                   onChange={(e) => updateBackgroundAudioItem(i, { target: e.target.value })}
                 />
-                {editable && (
-                  <button type="button" onClick={() => removeBackgroundAudioItem(i)}>
-                    Remove
-                  </button>
-                )}
+                {/* Review finding 12: `editable` here encodes only whether this
+                    principal holds config:write (`const editable =
+                    writeGate.allowed`) — never a structural reason like
+                    "this is a read-only historical revision". ADR-024
+                    decision 12 requires that case to render disabled with
+                    the reason, not be omitted, so this is a ScopedButton
+                    (always rendered) rather than an `editable &&` guard. */}
+                <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={() => removeBackgroundAudioItem(i)}>
+                  Remove
+                </ScopedButton>
               </div>
             ))}
-            {editable && (
-              <button type="button" onClick={addBackgroundAudioItem}>
-                Add background audio item
-              </button>
-            )}
+            {/* Review finding 12: see the identical comment on the Remove
+                button above. */}
+            <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={addBackgroundAudioItem}>
+              Add background audio item
+            </ScopedButton>
             <label className="form-field">
               Repeat
               <select
@@ -638,7 +657,6 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         <CueListEditor
           heading="Enter-show cues"
           cues={form.enterShowCues}
-          editable={editable}
           onUpdate={(i, patch) => updateCue('enterShowCues', i, patch)}
           onAdd={() => addCue('enterShowCues')}
           onRemove={(i) => removeCue('enterShowCues', i)}
@@ -655,7 +673,6 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         <CueListEditor
           heading="Enter-resting cues"
           cues={form.enterRestingCues}
-          editable={editable}
           onUpdate={(i, patch) => updateCue('enterRestingCues', i, patch)}
           onAdd={() => addCue('enterRestingCues')}
           onRemove={(i) => removeCue('enterRestingCues', i)}
@@ -751,14 +768,12 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
 function CueListEditor({
   heading,
   cues,
-  editable,
   onUpdate,
   onAdd,
   onRemove,
 }: {
   heading: string
   cues: CueForm[]
-  editable: boolean
   onUpdate: (index: number, patch: Partial<CueForm>) => void
   onAdd: () => void
   onRemove: (index: number) => void
@@ -801,18 +816,18 @@ function CueListEditor({
               </option>
             ))}
           </select>
-          {editable && (
-            <button type="button" onClick={() => onRemove(i)}>
-              Remove
-            </button>
-          )}
+          {/* Review finding 12: `editable` (the caller's writeGate.allowed)
+              is a missing-scope reason, not a structural one — this is a
+              ScopedButton, always rendered, rather than an omitted
+              control (ADR-024 decision 12). */}
+          <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={() => onRemove(i)}>
+            Remove
+          </ScopedButton>
         </div>
       ))}
-      {editable && (
-        <button type="button" onClick={onAdd}>
-          Add cue
-        </button>
-      )}
+      <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={onAdd}>
+        Add cue
+      </ScopedButton>
     </div>
   )
 }

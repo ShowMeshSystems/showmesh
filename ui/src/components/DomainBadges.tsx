@@ -279,12 +279,18 @@ export function NightReadinessCheckBadge({ state }: { state: NightReadinessCheck
 
 // NightCue.state: the outbox row's own lifecycle, distinct from `outcome`
 // below (ADR-031 decision 3: completed and confirmed must be visually
-// distinct — this badge answers "did it run", not "did it work").
+// distinct — this badge answers "did it run", not "did it work"). Review
+// finding 3: `resolved` is a POSITION in the outbox lifecycle, not a
+// success claim — the schema never collapses `state` into `outcome`, so a
+// cue can be `state: 'resolved'` with `outcome: 'failed'`. `resolved`
+// therefore stays neutral ('unknown' tone) exactly like every other
+// non-terminal state here; only `outcome` below ever renders success or
+// failure.
 const NIGHT_CUE_STATE: Record<NightCueState, { tone: StatusTone; icon: string; label: string }> = {
   not_dispatched: { tone: 'unknown', icon: '–', label: 'not dispatched' },
   pending: { tone: 'unknown', icon: '…', label: 'pending' },
   dispatched: { tone: 'unknown', icon: '…', label: 'dispatched' },
-  resolved: { tone: 'good', icon: '●', label: 'resolved' },
+  resolved: { tone: 'unknown', icon: '■', label: 'resolved' },
   ambiguous: { tone: 'warn', icon: '⚠', label: 'ambiguous' },
 }
 
@@ -297,16 +303,23 @@ export function NightCueStateBadge({ state }: { state: NightCueState }) {
   return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
 }
 
-// NightCue.outcome: "unconfirmed" is deliberately its OWN tone, neither
-// 'good' (confirmed) nor 'bad' (failed/refused) — a dispatched-but-
-// unconfirmed cue is not a failure (NightCue's own schema description,
-// ADR-031 decision 3).
+// NightCue.outcome: "unconfirmed" is deliberately NEUTRAL ('unknown'
+// tone), never 'warn' — review finding 4: ADR-031 decision 3's own
+// worked example is a run that legitimately reports unconfirmed every
+// time it runs perfectly (no expected response was ever declared), so
+// painting it amber on every cycle teaches the operator the indicator
+// means nothing, the exact outcome the ADR argues against. Every one of
+// the six outcomes below has its own tone+icon PAIR, not just its own
+// label — `failed`/`refused` no longer share bad+'✕', and
+// `unconfirmed`/`unconfirmable` no longer share unknown+the same icon —
+// so a viewer distinguishing by shape/color alone (not just reading
+// text) can still tell all six apart.
 const NIGHT_CUE_OUTCOME: Record<NightCueOutcome, { tone: StatusTone; icon: string; label: string }> = {
   confirmed: { tone: 'good', icon: '●', label: 'confirmed' },
-  unconfirmed: { tone: 'warn', icon: '?', label: 'unconfirmed' },
+  unconfirmed: { tone: 'unknown', icon: '~', label: 'unconfirmed' },
   unconfirmable: { tone: 'unknown', icon: '–', label: 'unconfirmable' },
   failed: { tone: 'bad', icon: '✕', label: 'failed' },
-  refused: { tone: 'bad', icon: '✕', label: 'refused' },
+  refused: { tone: 'bad', icon: '⊘', label: 'refused' },
   ambiguous: { tone: 'warn', icon: '⚠', label: 'ambiguous' },
 }
 
