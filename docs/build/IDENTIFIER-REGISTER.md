@@ -628,8 +628,8 @@ The store schema version, bumped by migrations in
 | v6 | shipped | Step 7 seam 0 (atomic audit variant, strict login CSRF) |
 | v7 | shipped | Step 9 wave 1a (macro execution history, ADR-031) |
 | v8 | shipped | Track E (asset store tables, ADR-028) |
-| v9 | reserved | Track C (audio session desired state) |
-| v10 | reserved | Track F (night-session lifecycle, cue outbox) |
+| v9 | shipped | Track C seam C3 (audio session desired state, `audio_sessions`) |
+| v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox added by seam F4) |
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
 | v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
