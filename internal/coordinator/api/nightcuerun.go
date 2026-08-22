@@ -386,6 +386,14 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 		// policy into its own dispatch, where the node enforces it
 		// (nightannouncement.go). Nothing here touches background audio.
 		cue = nightAnnouncementCueWithResolvedPolicy(cue, payload)
+		// Never before the atomic show-commit boundary: the clear is an
+		// outward-facing command, and the first outward-facing cue is
+		// itself that boundary (nightRunCue's isFirstOutwardCue). An
+		// announcement that IS the first outward cue simply goes without
+		// its clear, which costs it only the stale-apply protection.
+		if cue.Role == config.NightSessionCueRoleAnnouncement && !isFirst {
+			h.nightAdvanceAnnouncementClear(ctx, now, rec, phase, cue)
+		}
 		_, err := h.nightRunCue(ctx, now, rec, phase, cue, issuer, isFirst)
 		if err != nil {
 			if errors.Is(err, errNightCueSessionMoved) {
@@ -398,6 +406,13 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			}
 		} else if isFirst {
 			firstCommitted = true
+		}
+		if cue.Role == config.NightSessionCueRoleAnnouncement {
+			// Unconditional, exactly like the dispatch above: an
+			// announcement whose apply did not confirm still gets its
+			// start, so a silent announcement is never the quiet
+			// outcome of a step this controller simply skipped.
+			h.nightAdvanceAnnouncementStart(ctx, now, rec, phase, cue)
 		}
 	}
 

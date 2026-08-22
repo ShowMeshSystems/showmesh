@@ -823,7 +823,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	}
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
 	checks = append(checks, nightCheckAnnouncementAssets(allCues))
-	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload.Resting.BackgroundAudio != nil))
+	checks = append(checks, h.nightCheckAnnouncementPolicyEnforceable(ctx, allCues, payload))
 
 	for _, c := range checks {
 		if c.health == nightCheckStateNotVerifiable || c.health == nightCheckStateNotConfigured {

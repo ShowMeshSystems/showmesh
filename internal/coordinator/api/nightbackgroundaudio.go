@@ -170,6 +170,32 @@ func nightParseBackgroundAudioRow(row store.NightCueOutboxRecord) (nightBackgrou
 type nightBackgroundAudioHistoryRow struct {
 	Step nightBackgroundAudioStep
 	Row  store.NightCueOutboxRecord
+
+	// Parsed is false for a row this build recognizes no step shape for,
+	// which in practice means a row written by an older build under a
+	// phase this one no longer uses. Such a row is not a step and must
+	// never reach the state machine, but its ActionRevision is still a
+	// revision the node has already seen, so it stays in history for
+	// [nightNextBackgroundAudioRevision] and
+	// [nightBackgroundAudioRevisionState] to count. Dropping it at the
+	// store read instead would silently rewind this controller's counter
+	// below what the node's own RevisionState already holds, and every
+	// later command would be refused as stale for the rest of the night
+	// with nothing to self-heal it.
+	Parsed bool
+}
+
+// nightBackgroundAudioSteps is history narrowed to rows that are
+// genuinely steps - what the state machine reads. Everything else in
+// history exists only to keep revisions monotonic.
+func nightBackgroundAudioSteps(history []nightBackgroundAudioHistoryRow) []nightBackgroundAudioHistoryRow {
+	out := make([]nightBackgroundAudioHistoryRow, 0, len(history))
+	for _, row := range history {
+		if row.Parsed {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // nightBackgroundAudioHistory returns every step ever recorded for rec's
@@ -183,10 +209,7 @@ func (h *handlers) nightBackgroundAudioHistory(ctx context.Context, rec store.Ni
 	out := make([]nightBackgroundAudioHistoryRow, 0, len(rows))
 	for _, r := range rows {
 		step, ok := nightParseBackgroundAudioRow(r)
-		if !ok {
-			continue
-		}
-		out = append(out, nightBackgroundAudioHistoryRow{Step: step, Row: r})
+		out = append(out, nightBackgroundAudioHistoryRow{Step: step, Row: r, Parsed: ok})
 	}
 	return out, nil
 }
@@ -218,11 +241,11 @@ func nightBackgroundAudioRevisionState(sessionID string, history []nightBackgrou
 
 // nightNextBackgroundAudioRevision is the next revision to mint for a
 // new step against this session: history's own highest ActionRevision,
-// plus one, across EVERY phase spelling this session's steps use - never
-// reset across a restart (history is read fresh from the store) or
-// across cycles (history spans every cycle) or across a phase boundary
-// (duck/restore/interrupt steps share this exact counter with apply/
-// gain/start/pause/resume/stop).
+// plus one. Never reset across a restart (history is read fresh from the
+// store), across cycles (history spans every cycle), or across a row
+// this build no longer recognizes as a step - see
+// [nightBackgroundAudioHistoryRow.Parsed], which is exactly why this
+// counts every row in history rather than only the steps.
 func nightNextBackgroundAudioRevision(history []nightBackgroundAudioHistoryRow) int64 {
 	var max int64
 	for _, h := range history {
@@ -405,11 +428,12 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 		h.logWarn("night loop: background audio: failed to read history", "sessionId", rec.ID, "error", err)
 		return
 	}
-	if len(history) == 0 {
+	steps := nightBackgroundAudioSteps(history)
+	if len(steps) == 0 {
 		h.nightBackgroundAudioApply(ctx, now, rec, nodeID, sessionID, ba, items, history)
 		return
 	}
-	latest := history[len(history)-1]
+	latest := steps[len(steps)-1]
 
 	if latest.Row.State == nightCueStatePending || latest.Row.State == nightCueStateDispatched {
 		h.nightResumeBackgroundStep(ctx, now, rec, nodeID, sessionID, ba, items, latest, history)
@@ -576,10 +600,11 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 		h.logWarn("night loop: background audio: failed to read history for stop", "sessionId", rec.ID, "error", err)
 		return
 	}
-	if len(history) == 0 {
+	steps := nightBackgroundAudioSteps(history)
+	if len(steps) == 0 {
 		return
 	}
-	latest := history[len(history)-1]
+	latest := steps[len(steps)-1]
 	switch latest.Step.Kind {
 	case nightBGStepStop, nightBGStepPause:
 		if latest.Row.State == nightCueStateResolved && latest.Row.Outcome == nightCueOutcomeConfirmed {

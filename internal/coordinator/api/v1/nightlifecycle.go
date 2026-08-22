@@ -75,13 +75,15 @@ type NightCues struct {
 	Cues   []NightCue         `json:"cues"`
 }
 
-// NightBackgroundAudioStep is one durable background-audio or
-// announcement duck/restore/interrupt step this session's controller has
-// recorded (Track F seam F5), across every cycle the session has lived
-// through - the same evidence nightbackgroundaudio.go's own history read
-// uses to decide its next action, surfaced so a stall or a stranded
-// duck is visible on the operator surface rather than only in a log
-// line (RESTING-MODE.md section 14).
+// NightBackgroundAudioStep is one durable background-audio step this
+// session's controller has recorded (Track F seam F5), across every
+// cycle the session has lived through - the same evidence
+// nightbackgroundaudio.go's own history read uses to decide its next
+// action, surfaced so a stall is visible on the operator surface rather
+// than only in a log line (RESTING-MODE.md section 14). An announcement
+// never appears here: its duck/mix/interrupt policy is declared on the
+// announcement's own playback session and enforced by the audio node,
+// and this controller commits no background-audio step for it.
 type NightBackgroundAudioStep struct {
 	Phase          string  `json:"phase"`
 	CueName        string  `json:"cueName"`

@@ -7,6 +7,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -61,6 +62,22 @@ func announcementPayload(ba *config.NightSessionBackgroundAudio, defaultPolicy s
 	return config.NightSessionPayload{
 		Show: "halloween", AnnouncementDefaultPolicy: defaultPolicy,
 		Resting: config.NightSessionResting{BackgroundAudio: ba},
+	}
+}
+
+// announcementNodeResults answers each dispatched action with the
+// outcome a real node actually produces for it. An apply reports
+// "position" (Manager.Apply merges desired state and never touches the
+// engine), a start reports "started", a clear reports "stopped". Spelling
+// them truthfully matters: an earlier version of this file answered an
+// apply with "started", which is a result no node can produce, and that
+// single lie hid the fact that the announcement was applied and never
+// started at all.
+func announcementNodeResults(announcementSessionID string) map[string]mqttproto.ResultPayload {
+	return map[string]mqttproto.ResultPayload{
+		"audio.session.apply": confirmedResultForAction("apply", announcementSessionID, "position"),
+		"audio.session.start": confirmedResultForAction("start", announcementSessionID, "started"),
+		"audio.session.clear": confirmedResultForAction("clear", announcementSessionID, "stopped"),
 	}
 }
 
@@ -130,7 +147,7 @@ func TestNightAnnouncement_DeclaresRoleAndPolicyOnTheAnnouncementSession(t *test
 			payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyMix)
 
 			before := len(pub.dispatched)
-			pub.result = confirmedResultForAction("apply", "announcement-1", "started")
+			pub.resultsByAction = announcementNodeResults("announcement-1")
 			h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
 			params := announcementApplyParams(t, pub)
@@ -154,7 +171,7 @@ func TestNightAnnouncement_UnsetCuePolicyFallsBackToTheSessionDefault(t *testing
 	cue := announcementCue(nil)
 	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyInterrupt)
 
-	pub.result = confirmedResultForAction("apply", "announcement-1", "started")
+	pub.resultsByAction = announcementNodeResults("announcement-1")
 	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
 	params := announcementApplyParams(t, pub)
@@ -181,7 +198,7 @@ func TestNightAnnouncement_OperatorDeclaredParamsAreNeverOverwritten(t *testing.
 	cue := announcementCue(&duck)
 	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
 
-	pub.result = confirmedResultForAction("apply", "announcement-1", "started")
+	pub.resultsByAction = announcementNodeResults("announcement-1")
 	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
 	params := announcementApplyParams(t, pub)
@@ -286,36 +303,292 @@ func TestNightAnnouncement_AmbiguousAnnouncementLeavesBackgroundAudioUntouched(t
 	assertNoBackgroundCommandsAfter(t, pub, before)
 }
 
-// mutation target: nightCheckAnnouncementPolicyEnforceable's
-// nightAnnouncementTargetDeclarable branch. The one case this controller
-// genuinely cannot serve is reported rather than silently ignored.
+// mutation target: each branch of nightCheckAnnouncementPolicyEnforceable.
+// Every case here is one this build genuinely cannot serve, and each was
+// reported healthy before.
 func TestNightCheckAnnouncementPolicyEnforceable(t *testing.T) {
-	h, st, _, _, _ := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	h, st, _, _, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
 	ctx := context.Background()
 	duck := config.NightSessionAnnouncementPolicyDuck
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	noBed := announcementPayload(nil, config.NightSessionAnnouncementPolicyDuck)
 	cues := []config.NightSessionCue{announcementCue(&duck)}
 
-	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, nil, true); check.health != nightCheckStateNotConfigured {
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, nil, payload); check.health != nightCheckStateNotConfigured {
 		t.Fatalf("no announcement cues: health = %v, want not_configured", check.health)
 	}
 
 	mustPutAnnouncementCueAction(t, st)
-	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, cues, true); check.health != nightHealthHealthy() {
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, cues, payload); check.health != nightHealthHealthy() {
 		t.Fatalf("audio-bound announcement: health = %v (%s), want healthy", check.health, check.reason)
 	}
 
+	// Not bound to audio.session.apply: nothing to declare the policy on,
+	// and nothing for this controller's own start step to start.
 	mustPutAnnouncementFPPAction(t, st, "over-the-tannoy")
 	fppCue := announcementCue(&duck)
 	fppCue.Name, fppCue.Action = "over-the-tannoy", "over-the-tannoy"
-	fppCues := []config.NightSessionCue{fppCue}
-	check := h.nightCheckAnnouncementPolicyEnforceable(ctx, fppCues, true)
+	check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{fppCue}, payload)
 	if check.health != nightHealthFailed() {
-		t.Fatalf("FPP-bound announcement with background audio configured: health = %v (%s), want failed", check.health, check.reason)
+		t.Fatalf("FPP-bound announcement: health = %v (%s), want failed", check.health, check.reason)
 	}
 	if !strings.Contains(check.reason, "over-the-tannoy") {
 		t.Fatalf("reason %q does not name the offending cue", check.reason)
 	}
-	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, fppCues, false); check.health != nightHealthHealthy() {
-		t.Fatalf("FPP-bound announcement with no background audio: health = %v (%s), want healthy", check.health, check.reason)
+	// Failed with no bed too: it does not play at all, which has nothing
+	// to do with whether there is background audio to duck.
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{fppCue}, noBed); check.health != nightHealthFailed() {
+		t.Fatalf("FPP-bound announcement with no background audio: health = %v (%s), want failed", check.health, check.reason)
+	}
+
+	// Operator params contradicting the cue's configured policy.
+	putNightAction(t, st, "contradicted", config.ShowActionPayload{
+		Show: "halloween", Label: "Contradicted", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationAudio, AudioNodeID: "node-a",
+			AudioSessionID: "announcement-2", AudioAction: "audio.session.apply",
+			Params: map[string]any{"mixPolicy": "mix"},
+		},
+	})
+	contra := announcementCue(&duck)
+	contra.Name, contra.Action = "contradicted", "contradicted"
+	check = h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{contra}, payload)
+	if check.health != nightHealthFailed() {
+		t.Fatalf("contradicted policy: health = %v (%s), want failed", check.health, check.reason)
+	}
+	if !strings.Contains(check.reason, "duck") || !strings.Contains(check.reason, "mix") {
+		t.Fatalf("reason %q does not name both the cue policy and the action's own", check.reason)
+	}
+
+	// A source role that cannot outrank the bed ducks nothing.
+	putNightAction(t, st, "too-quiet", config.ShowActionPayload{
+		Show: "halloween", Label: "Too quiet", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationAudio, AudioNodeID: "node-a",
+			AudioSessionID: "announcement-3", AudioAction: "audio.session.apply",
+			Params: map[string]any{"sourceRole": string(pkgaudio.SourceRoleBackground)},
+		},
+	})
+	lowRole := announcementCue(&duck)
+	lowRole.Name, lowRole.Action = "too-quiet", "too-quiet"
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{lowRole}, payload); check.health != nightHealthFailed() {
+		t.Fatalf("source role that cannot outrank the bed: health = %v (%s), want failed", check.health, check.reason)
+	}
+	// With no bed there is nothing to outrank, so it is not a failure.
+	if check := h.nightCheckAnnouncementPolicyEnforceable(ctx, []config.NightSessionCue{lowRole}, noBed); check.health != nightHealthHealthy() {
+		t.Fatalf("low source role with no background audio: health = %v (%s), want healthy", check.health, check.reason)
+	}
+}
+
+// mutation target: pkgaudio.OutranksForMixing's strictly-greater
+// comparison, which the node and this readiness check now share instead
+// of each carrying their own copy of the order.
+func TestSourceRolePriorityIsSharedWithTheNode(t *testing.T) {
+	if pkgaudio.OutranksForMixing(pkgaudio.SourceRoleBackground, pkgaudio.SourceRoleBackground) {
+		t.Fatal("background outranks background; a duck would then suppress its own peers")
+	}
+	if !pkgaudio.OutranksForMixing(pkgaudio.SourceRoleAnnouncement, pkgaudio.SourceRoleBackground) {
+		t.Fatal("announcement does not outrank background")
+	}
+	if pkgaudio.OutranksForMixing(pkgaudio.SourceRole("not-a-role"), pkgaudio.SourceRoleBackground) {
+		t.Fatal("an unrecognized role outranks background")
+	}
+}
+
+// announcementActions returns the actions dispatched at or after from,
+// in order.
+func announcementActions(pub *fakeAudioPublisher, from int) []string {
+	out := make([]string, 0, len(pub.dispatched)-from)
+	for _, d := range pub.dispatched[from:] {
+		out = append(out, d.Action)
+	}
+	return out
+}
+
+// mutation target: nightAdvanceCueList's two announcement hooks. Delete
+// the start hook and the announcement is applied and never started,
+// which internal/agent/nightannouncement_test.go proves plays nothing and
+// ducks nothing; delete the clear hook and an announcement left playing
+// by an earlier cycle keeps holding the bed.
+func TestNightAnnouncement_DispatchesClearThenApplyThenStart(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	before := len(pub.dispatched)
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+	h.nightAdvanceCueList(context.Background(), testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	got := announcementActions(pub, before)
+	want := []string{"audio.session.clear", "audio.session.apply", "audio.session.start"}
+	if len(got) != len(want) {
+		t.Fatalf("dispatched %v, want exactly %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dispatched %v, want %v", got, want)
+		}
+	}
+	assertNoBackgroundCommandsAfter(t, pub, before)
+
+	ctx := context.Background()
+	startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("the start was not committed as a durable outbox row: %v", err)
+	}
+	if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("start row = %+v, want resolved/confirmed", startRow)
+	}
+	clearRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("the clear was not committed as a durable outbox row: %v", err)
+	}
+	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("apply row: %v", err)
+	}
+	// The revision order the node's own RevisionState requires: clear,
+	// then the pinned apply on the session the clear deleted, then start
+	// strictly above both.
+	if clearRow.ActionRevision <= applyRow.ActionRevision {
+		t.Fatalf("clear revision %d must exceed the apply's pinned %d", clearRow.ActionRevision, applyRow.ActionRevision)
+	}
+	if startRow.ActionRevision <= clearRow.ActionRevision {
+		t.Fatalf("start revision %d must exceed the clear's %d", startRow.ActionRevision, clearRow.ActionRevision)
+	}
+}
+
+// mutation target: nightAnnouncementRevisions' floor computation over
+// history. Return a constant and the second cycle's clear or start is
+// dispatched at a revision the node has already seen, which its own
+// RevisionState refuses as stale.
+func TestNightAnnouncement_RevisionsAdvanceAcrossCycles(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	firstStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("cycle 1 start row: %v", err)
+	}
+
+	rec.Cycle++
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	secondClear, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("cycle 2 clear row: %v", err)
+	}
+	secondStart, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("cycle 2 start row: %v", err)
+	}
+	if secondClear.ActionRevision <= firstStart.ActionRevision {
+		t.Fatalf("cycle 2 clear revision %d did not advance past cycle 1's start revision %d", secondClear.ActionRevision, firstStart.ActionRevision)
+	}
+	if secondStart.ActionRevision <= secondClear.ActionRevision {
+		t.Fatalf("cycle 2 start revision %d did not advance past its own clear's %d", secondStart.ActionRevision, secondClear.ActionRevision)
+	}
+}
+
+// mutation target: nightAdvanceAnnouncementStart's terminal-not-confirmed
+// gate. Require a confirmed apply and this fails with no start row: an
+// apply the node refused because it already holds this exact desired
+// state is not a reason to leave the announcement silent, and a genuinely
+// broken one must fail visibly in the start's own row rather than by a
+// step that was silently never attempted.
+func TestNightAnnouncement_StartsEvenWhenTheApplyDidNotConfirm(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+
+	results := announcementNodeResults("announcement-1")
+	results["audio.session.apply"] = mqttproto.ResultPayload{Outcome: mqttproto.OutcomeFailed, Reason: "stale_revision"}
+	pub.resultsByAction = results
+
+	before := len(pub.dispatched)
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+
+	applyRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseEnterResting, "thank-you")
+	if err != nil || applyRow.Outcome == nightCueOutcomeConfirmed {
+		t.Fatalf("apply row = %+v, err = %v; this test needs an unconfirmed apply", applyRow, err)
+	}
+	startRow, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterResting, "thank-you")
+	if err != nil {
+		t.Fatalf("no start row after an unconfirmed apply: %v (a silent announcement must never be the quiet outcome of a skipped step)", err)
+	}
+	if startRow.State != nightCueStateResolved || startRow.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("start row = %+v, want resolved/confirmed", startRow)
+	}
+	assertNoBackgroundCommandsAfter(t, pub, before)
+}
+
+// mutation target: nightAnnouncementSessionTarget's declarable check.
+// A non-audio announcement gets neither a clear nor a start: there is no
+// session to address, and inventing one would dispatch commands at a node
+// that has never heard of it.
+func TestNightAnnouncement_NonAudioActionGetsNoClearOrStart(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementFPPAction(t, st, "thank-you")
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+
+	before := len(pub.dispatched)
+	ctx := context.Background()
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
+	if got := announcementActions(pub, before); len(got) != 0 {
+		t.Fatalf("an FPP-bound announcement dispatched %v to the audio node", got)
+	}
+	// Asserted on the outbox, not only on what reached the publisher: a
+	// step is committed BEFORE it is dispatched, so a row exists even for
+	// a command that never made it onto the wire.
+	for _, phase := range []string{
+		nightPhaseAnnouncementClear + ":" + nightPhaseEnterResting,
+		nightPhaseAnnouncementStart + ":" + nightPhaseEnterResting,
+	} {
+		if row, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, "thank-you"); err == nil {
+			t.Fatalf("an FPP-bound announcement committed a %q step: %+v", phase, row)
+		}
+	}
+}
+
+// mutation target: nightAdvanceCueList's !isFirst guard on the clear.
+// The first outward-facing cue IS the atomic show-commit boundary, so
+// nothing outward-facing may be dispatched ahead of it.
+func TestNightAnnouncement_NoClearAheadOfTheShowCommitBoundary(t *testing.T) {
+	h, st, pub, rec, ba := announcementFixture(t, config.NightSessionBackgroundResumeRestart)
+	mustPutAnnouncementCueAction(t, st)
+	duck := config.NightSessionAnnouncementPolicyDuck
+	cue := announcementCue(&duck)
+	payload := announcementPayload(ba, config.NightSessionAnnouncementPolicyDuck)
+	ctx := context.Background()
+	pub.resultsByAction = announcementNodeResults("announcement-1")
+
+	before := len(pub.dispatched)
+	// enterShow with the show not yet committed: this announcement is the
+	// first outward-facing cue.
+	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterShow, []config.NightSessionCue{cue}, payload)
+
+	got := announcementActions(pub, before)
+	if len(got) > 0 && got[0] == "audio.session.clear" {
+		t.Fatalf("dispatched %v: a clear was sent ahead of the atomic show-commit boundary", got)
+	}
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementClear+":"+nightPhaseEnterShow, "thank-you"); err == nil {
+		t.Fatal("a clear step was committed for the first outward-facing cue")
+	}
+	// The start still happens: it runs after the cue, by which point the
+	// boundary has been crossed.
+	if _, err := st.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, nightPhaseAnnouncementStart+":"+nightPhaseEnterShow, "thank-you"); err != nil {
+		t.Fatalf("no start step after the first outward-facing announcement cue: %v", err)
 	}
 }

@@ -191,7 +191,7 @@ func TestNightAdvanceBackgroundAudio_GainBeforeStart(t *testing.T) {
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
 	sessionID := nightBackgroundAudioSessionID(rec)
 
-	pub.result = confirmedResultForAction("apply", sessionID, "started")
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // apply
 	pub.result = confirmedResultForAction("gain", sessionID, "gain")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // gain
@@ -231,7 +231,7 @@ func TestNightAdvanceBackgroundAudio_GainRetriesWhenNotConfirmed(t *testing.T) {
 	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
 	sessionID := nightBackgroundAudioSessionID(rec)
 
-	pub.result = confirmedResultForAction("apply", sessionID, "started")
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // apply
 
 	pub.result = mqttproto.ResultPayload{Outcome: mqttproto.OutcomeConfirmed, Reason: ""} // no evidence: unconfirmable
@@ -294,7 +294,7 @@ func TestNightAdvanceBackgroundAudio_RefusesUnconfirmedItemTransition(t *testing
 func playThroughApplyGainStart(t *testing.T, h *handlers, pub *fakeAudioPublisher, rec store.NightSessionRecord) {
 	t.Helper()
 	sessionID := nightBackgroundAudioSessionID(rec)
-	pub.result = confirmedResultForAction("apply", sessionID, "started")
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 	pub.result = confirmedResultForAction("gain", sessionID, "gain")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
@@ -417,7 +417,7 @@ func TestNightAdvanceBackgroundAudio_ReappliesAfterStop(t *testing.T) {
 	pub.result = confirmedResultForAction("stop", nightBackgroundAudioSessionID(rec), "stopped")
 	h.nightStopBackgroundAudioIfRunning(context.Background(), testNow, rec)
 
-	pub.result = confirmedResultForAction("apply", nightBackgroundAudioSessionID(rec), "started")
+	pub.result = confirmedResultForAction("apply", nightBackgroundAudioSessionID(rec), "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 
 	if pub.lastAction != "audio.session.apply" {
@@ -505,7 +505,7 @@ func TestNightAdvanceBackgroundAudio_CrashAfterCommitBeforeDispatch(t *testing.T
 	}
 
 	h.nightCueHooks.afterCommit = nil
-	pub.result = confirmedResultForAction("apply", sessionID, "started")
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 
 	if pub.count() != 1 {
@@ -535,7 +535,7 @@ func TestNightAdvanceBackgroundAudio_CrashAfterDispatchBeforePersist(t *testing.
 	sessionID := nightBackgroundAudioSessionID(rec)
 
 	h.nightCueHooks.afterDispatch = func(string) bool { return true }
-	pub.result = confirmedResultForAction("apply", sessionID, "started")
+	pub.result = confirmedResultForAction("apply", sessionID, "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 
 	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackground, "bg-0001-apply")
@@ -606,5 +606,59 @@ func TestNightTick_LiveStopsBackgroundAudio(t *testing.T) {
 
 	if pub.lastAction != "audio.session.stop" {
 		t.Fatalf("dispatched action = %q, want audio.session.stop", pub.lastAction)
+	}
+}
+
+// mutation target: nightBackgroundAudioHistory keeping rows it cannot
+// parse, and nightNextBackgroundAudioRevision counting them. Drop an
+// unrecognized row at the store read and this fails: the next revision
+// falls back below one the node has already accepted, and from that
+// point every background command is refused as stale for the rest of the
+// night with nothing to self-heal it.
+//
+// Only reachable upgrading over a database an earlier build wrote, when
+// that build recorded background-audio steps under phases this one no
+// longer uses. That is a development coordinator in practice, but the
+// counter must not be able to go backwards for any reason.
+func TestNightBackgroundAudioRevisionNeverRewindsPastAnUnrecognizedRow(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	ctx := context.Background()
+
+	// A row an earlier build wrote under a phase this one no longer
+	// recognizes, at a revision the node's own RevisionState has already
+	// advanced to.
+	if err := st.InsertNightCueOutboxRow(ctx, store.NightCueOutboxRecord{
+		ID: "row-legacy", SessionID: rec.ID, Cycle: rec.Cycle,
+		Phase: nightPhaseRestingBackground + ":announcementDuck:enterResting", CueName: "thank-you",
+		ActionRevision: 99, State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed,
+	}, testNow); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	history, err := h.nightBackgroundAudioHistory(ctx, rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if got := nightNextBackgroundAudioRevision(history); got <= 99 {
+		t.Fatalf("next revision = %d, want it above the legacy row's own 99", got)
+	}
+	// And the unrecognized row is still not a step: the state machine must
+	// see an empty history and start from apply, not treat it as one.
+	if steps := nightBackgroundAudioSteps(history); len(steps) != 0 {
+		t.Fatalf("nightBackgroundAudioSteps returned %d step(s) for a history of one unrecognized row", len(steps))
+	}
+
+	pub.result = confirmedResultForAction("apply", nightBackgroundAudioSessionID(rec), "position")
+	h.nightAdvanceBackgroundAudio(ctx, testNow, rec)
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("first dispatch after a legacy-only history = %q, want audio.session.apply", pub.lastAction)
+	}
+	applyRow := pub.dispatched[len(pub.dispatched)-1]
+	if applyRow.Params["revision"].(float64) <= 99 {
+		t.Fatalf("apply dispatched at revision %v, want above the legacy row's 99", applyRow.Params["revision"])
 	}
 }
