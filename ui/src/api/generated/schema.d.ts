@@ -3421,9 +3421,10 @@ export interface components {
         /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp, mqtt, or resolume fields directly, never nested a second level under an "fpp"/"mqtt"/"resolume" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's named-reference vocabulary (clip, deck, layer, column, persistent, bypassed, master) — never a Resolume object id. To submit a target, use ConfigShowActionTargetWrite instead. */
         ConfigShowActionTarget: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt" | "resolume";
+            integration: "fpp" | "mqtt" | "resolume" | "audio";
             instanceId?: string;
             primitive?: string;
+            /** @description An fpp primitive's own decoded params, or (audio-only) that audio operation's own command params, passed through undecoded to the node exactly as a direct audio.session.*\/ audio.gain.*\/audio.output.* API call's own params would be. */
             params?: {
                 [key: string]: unknown;
             };
@@ -3436,11 +3437,17 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
+            /** @description audio-only: the target audio node id. */
+            audioNodeId?: string;
+            /** @description audio-only: the target pkg/audio session id. */
+            audioSessionId?: string;
+            /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) — never a new operation name. */
+            audioAction?: string;
         };
         /** @description The WRITE shape of show.action.target. Identical to ConfigShowActionTarget except that publish, when present, is ConfigShowActionMQTTPublishWrite, which allows retain to be absent. The response to a successful write is always the resolved ConfigShowActionTarget shape, never this one. */
         ConfigShowActionTargetWrite: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt" | "resolume";
+            integration: "fpp" | "mqtt" | "resolume" | "audio";
             instanceId?: string;
             primitive?: string;
             params?: {
@@ -3453,6 +3460,9 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
+            audioNodeId?: string;
+            audioSessionId?: string;
+            audioAction?: string;
         };
         /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. */
         ConfigShowAction: {
@@ -3580,7 +3590,7 @@ export interface components {
             actionObjectId: string;
             actionRevision: number;
             /** @enum {string} */
-            integration: "fpp" | "mqtt" | "resolume";
+            integration: "fpp" | "mqtt" | "resolume" | "audio";
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             /** @enum {string} */
