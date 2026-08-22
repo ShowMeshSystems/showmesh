@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"testing"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -26,6 +27,41 @@ const (
 	argon2SaltLen     = 16
 	argon2KeyLen      = 32
 )
+
+// hashArgon2Memory, hashArgon2Time, and hashArgon2Parallelism are the cost
+// [HashPassword] actually runs with. They default to the ADR-024 decision
+// 1 constants above and are changed only by [UseTestArgon2Cost], so the
+// constants above stay the literal, unedited decision while a test binary
+// that needs a cheap KDF has somewhere to redirect.
+var (
+	hashArgon2Memory      uint32 = argon2Memory
+	hashArgon2Time        uint32 = argon2Time
+	hashArgon2Parallelism uint8  = argon2Parallelism
+)
+
+// UseTestArgon2Cost redirects [HashPassword] to a drastically cheaper
+// argon2id cost for the rest of the test binary. It exists because the
+// ADR-024 decision 1 cost, paid once per hash, dominates wall time under
+// the race detector in a package (internal/coordinator/api) that creates
+// hundreds of principals; this package's own suite exercises the real
+// cost and must never call it.
+//
+// It panics unless testing.Testing() reports true, so nothing outside a
+// test binary can reach it: there is no build tag or environment variable
+// that lowers the cost, only this in-binary check, matching HashPassword's
+// doc comment that these parameters are a decision, not a flag.
+//
+// Call it once, from a TestMain, before m.Run(): the package-level vars
+// it sets are read (never written) by every test that follows, so setting
+// them after tests have started running would itself be a data race.
+func UseTestArgon2Cost(memory, time uint32, parallelism uint8) {
+	if !testing.Testing() {
+		panic("identity: UseTestArgon2Cost called outside a test binary")
+	}
+	hashArgon2Memory = memory
+	hashArgon2Time = time
+	hashArgon2Parallelism = parallelism
+}
 
 // ErrMalformedPasswordHash is returned by [VerifyPassword] when hash is
 // not a well-formed argon2id PHC string this package produced — a
@@ -57,11 +93,11 @@ func HashPassword(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("identity: generate password salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Parallelism, argon2KeyLen)
+	key := argon2.IDKey([]byte(password), salt, hashArgon2Time, hashArgon2Memory, hashArgon2Parallelism, argon2KeyLen)
 
 	return fmt.Sprintf(
 		"$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argon2Memory, argon2Time, argon2Parallelism,
+		argon2.Version, hashArgon2Memory, hashArgon2Time, hashArgon2Parallelism,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key),
 	), nil

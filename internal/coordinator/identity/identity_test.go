@@ -199,6 +199,22 @@ func TestHashPasswordUsesFreshSaltEachCall(t *testing.T) {
 	}
 }
 
+// TestADR024Argon2ConstantsAreFixed asserts the literal ADR-024 decision
+// 1 values (memory 64 MiB, time cost 2, parallelism 1) so a future change
+// to argon2Memory, argon2Time, or argon2Parallelism has to edit this
+// assertion deliberately rather than pass unnoticed.
+func TestADR024Argon2ConstantsAreFixed(t *testing.T) {
+	if argon2Memory != 64*1024 {
+		t.Errorf("argon2Memory = %d, want %d (64 MiB, ADR-024 decision 1)", argon2Memory, 64*1024)
+	}
+	if argon2Time != 2 {
+		t.Errorf("argon2Time = %d, want 2 (ADR-024 decision 1)", argon2Time)
+	}
+	if argon2Parallelism != 1 {
+		t.Errorf("argon2Parallelism = %d, want 1 (ADR-024 decision 1)", argon2Parallelism)
+	}
+}
+
 func TestHashPasswordEncodesFixedADR024Parameters(t *testing.T) {
 	hash, err := HashPassword("x")
 	if err != nil {
