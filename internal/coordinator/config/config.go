@@ -990,38 +990,44 @@ var reservedCollectorIDs = map[string]bool{
 // Task C spec, a malformed entry is a startup error naming the offending
 // value, not a silently skipped endpoint — every error here names the
 // specific id or URL that failed.
+// Every message below names the "fpp.endpoints" configuration kind rather
+// than envFPPEndpoints (ADR-039 decision 1): this function validates the
+// same shape whether it was reached from LoadConfig's env parse or from
+// the store-backed config:write surface ([ValidateFPPEndpoints]), and the
+// remedy for a shape defect is the same in both cases regardless of which
+// path is still authoritative for this deployment.
 func validateFPPEndpoints(endpoints []FPPEndpoint) error {
 	seen := make(map[string]bool, len(endpoints))
 
 	for _, ep := range endpoints {
 		if err := mqttproto.ValidateNodeID(ep.ID); err != nil {
-			return fmt.Errorf("%s: instance id %q: %w", envFPPEndpoints, ep.ID, err)
+			return fmt.Errorf("fpp.endpoints: instance id %q: %w", ep.ID, err)
 		}
 		if reservedCollectorIDs[ep.ID] {
-			return fmt.Errorf("%s: instance id %q is reserved for one of this coordinator's own collectors and cannot name an FPP endpoint; rename the endpoint",
-				envFPPEndpoints, ep.ID)
+			return fmt.Errorf("fpp.endpoints: instance id %q is reserved for one of this coordinator's own collectors and cannot name an FPP endpoint; rename the endpoint",
+				ep.ID)
 		}
 		if seen[ep.ID] {
-			return fmt.Errorf("%s: duplicate instance id %q", envFPPEndpoints, ep.ID)
+			return fmt.Errorf("fpp.endpoints: duplicate instance id %q", ep.ID)
 		}
 		seen[ep.ID] = true
 
 		u, err := url.Parse(ep.URL)
 		if err != nil {
-			return fmt.Errorf("%s: instance %q: url %q is not valid: %w", envFPPEndpoints, ep.ID, ep.URL, err)
+			return fmt.Errorf("fpp.endpoints: instance %q: url %q is not valid: %w", ep.ID, ep.URL, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("%s: instance %q: url %q must use http or https", envFPPEndpoints, ep.ID, ep.URL)
+			return fmt.Errorf("fpp.endpoints: instance %q: url %q must use http or https", ep.ID, ep.URL)
 		}
 		if u.Host == "" {
-			return fmt.Errorf("%s: instance %q: url %q must include a host", envFPPEndpoints, ep.ID, ep.URL)
+			return fmt.Errorf("fpp.endpoints: instance %q: url %q must include a host", ep.ID, ep.URL)
 		}
 		if u.User != nil {
 			// See FPPEndpoint.URL's doc comment: rejected here, at the
 			// only entry point, rather than relying on every downstream
 			// consumer (log lines, API rendering, error reasons) to
 			// remember to strip it.
-			return fmt.Errorf("%s: instance %q: url must not include userinfo/credentials", envFPPEndpoints, ep.ID)
+			return fmt.Errorf("fpp.endpoints: instance %q: url must not include userinfo/credentials", ep.ID)
 		}
 	}
 
@@ -1170,7 +1176,7 @@ func ValidateFPPMQTTHostIDs(hosts map[string]string, endpoints []FPPEndpoint) er
 	}
 	for id := range hosts {
 		if !known[id] {
-			return fmt.Errorf("%s: instance id %q is not configured in %s (nor in the store-authoritative fpp.endpoints configuration, if migrated)", envFPPMQTTHosts, id, envFPPEndpoints)
+			return fmt.Errorf("instance id %q is not a configured FPP endpoint; add it with `showmeshctl fpp-endpoints set` (fpp.endpoints), or %s if this coordinator has not migrated yet", id, envFPPEndpoints)
 		}
 	}
 	return nil
@@ -1248,9 +1254,10 @@ func validateResolumeConfig(c Config) error {
 func ValidateResolumeIDAgainstFPPEndpoints(resolumeID string, endpoints []FPPEndpoint) error {
 	for _, ep := range endpoints {
 		if ep.ID == resolumeID {
-			return fmt.Errorf("%s %q collides with an FPP endpoint id configured in %s; "+
-				"both are registered on the same collector.Runner and must be unique — rename one",
-				envResolumeID, resolumeID, envFPPEndpoints)
+			return fmt.Errorf("resolume id %q collides with a configured FPP endpoint id; rename one — "+
+				"the Resolume instance with `showmeshctl resolume-instances set` (resolume.instances), "+
+				"or the FPP endpoint with `showmeshctl fpp-endpoints set` (fpp.endpoints), or %s/%s if this coordinator has not migrated yet",
+				resolumeID, envResolumeID, envFPPEndpoints)
 		}
 	}
 	return nil

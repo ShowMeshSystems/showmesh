@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEncodeFPPEndpointsPayloadRoundTrips(t *testing.T) {
 	in := []FPPEndpoint{{ID: "player-01", URL: "http://10.0.1.20"}, {ID: "shed", URL: "http://10.0.1.21"}}
@@ -91,5 +94,26 @@ func TestValidateFPPEndpointsExportedMatchesInternalValidation(t *testing.T) {
 	invalid := []FPPEndpoint{{ID: "player-01", URL: "not a url"}}
 	if err := ValidateFPPEndpoints(invalid); err == nil {
 		t.Errorf("ValidateFPPEndpoints(%+v) error = nil, want an error for a malformed URL", invalid)
+	}
+}
+
+// TestValidateFPPEndpointsNamesTheKindNotTheEnvVar pins ADR-039's fix
+// (decision 1): [ValidateFPPEndpoints] backs both LoadConfig's env parse
+// and the store-backed config:write surface (`showmeshctl config set
+// --file`, PUT /api/v1/config/fpp.endpoints), so its messages must not lead
+// an operator on the store-backed path back to SHOWMESH_FPP_ENDPOINTS.
+func TestValidateFPPEndpointsNamesTheKindNotTheEnvVar(t *testing.T) {
+	invalid := []FPPEndpoint{{ID: "fpp1", URL: ""}}
+	err := ValidateFPPEndpoints(invalid)
+	if err == nil {
+		t.Fatalf("ValidateFPPEndpoints(%+v) error = nil, want an error for an empty URL", invalid)
+	}
+	got := err.Error()
+	want := `fpp.endpoints: instance "fpp1": url "" must use http or https`
+	if got != want {
+		t.Errorf("ValidateFPPEndpoints(%+v) error = %q, want %q", invalid, got, want)
+	}
+	if strings.Contains(got, "SHOWMESH_FPP_ENDPOINTS") {
+		t.Errorf("error = %q, must not name SHOWMESH_FPP_ENDPOINTS: the operator reached this refusal through a store write, not that variable", got)
 	}
 }

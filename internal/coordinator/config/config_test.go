@@ -195,25 +195,29 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 		{
 			// mqttproto.ValidateNodeID rejects uppercase; this proves
 			// Validate actually calls it rather than accepting anything
-			// non-empty.
+			// non-empty. The semantic check below this line runs through
+			// [validateFPPEndpoints], which names the "fpp.endpoints"
+			// configuration kind rather than the env var: the same
+			// function backs the store-backed config:write surface, and
+			// the remedy is the same in both directions.
 			name:    "fpp endpoints invalid instance id",
 			env:     map[string]string{"SHOWMESH_FPP_ENDPOINTS": "Player_01=http://10.0.1.20"},
-			wantVar: "SHOWMESH_FPP_ENDPOINTS",
+			wantVar: "fpp.endpoints",
 		},
 		{
 			name:    "fpp endpoints url with no scheme",
 			env:     map[string]string{"SHOWMESH_FPP_ENDPOINTS": "player-01=10.0.1.20"},
-			wantVar: "SHOWMESH_FPP_ENDPOINTS",
+			wantVar: "fpp.endpoints",
 		},
 		{
 			name:    "fpp endpoints url with unsupported scheme",
 			env:     map[string]string{"SHOWMESH_FPP_ENDPOINTS": "player-01=ftp://10.0.1.20"},
-			wantVar: "SHOWMESH_FPP_ENDPOINTS",
+			wantVar: "fpp.endpoints",
 		},
 		{
 			name:    "fpp endpoints url with no host",
 			env:     map[string]string{"SHOWMESH_FPP_ENDPOINTS": "player-01=http://"},
-			wantVar: "SHOWMESH_FPP_ENDPOINTS",
+			wantVar: "fpp.endpoints",
 		},
 		{
 			// The leak this closes: contract section 2 forbids leaking a
@@ -223,12 +227,12 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 			// remember to scrub it.
 			name:    "fpp endpoints url with userinfo",
 			env:     map[string]string{"SHOWMESH_FPP_ENDPOINTS": "player-01=http://user:pass@10.0.1.20"},
-			wantVar: "SHOWMESH_FPP_ENDPOINTS",
+			wantVar: "fpp.endpoints",
 		},
 		{
 			name:    "fpp endpoints duplicate instance id",
 			env:     map[string]string{"SHOWMESH_FPP_ENDPOINTS": "player-01=http://10.0.1.20,player-01=http://10.0.1.21"},
-			wantVar: "SHOWMESH_FPP_ENDPOINTS",
+			wantVar: "fpp.endpoints",
 		},
 		{
 			name:    "fpp mqtt hosts entry missing equals",
@@ -271,15 +275,18 @@ func TestLoadConfigValidationFailures(t *testing.T) {
 		},
 		{
 			// The load-bearing cross-check (contract section 4.4): every id
-			// in SHOWMESH_FPP_MQTT_HOSTS must also be a configured FPP REST
+			// in SHOWMESH_FPP_MQTT_HOSTS must also be a configured FPP
 			// endpoint, named specifically so an operator sees exactly
-			// which id is unmatched.
+			// which id is unmatched. The message leads with the
+			// store-backed remedy (ADR-039 decision 1) rather than the env
+			// var, since [ValidateFPPMQTTHostIDs] backs the store-backed
+			// config:write surface too.
 			name: "fpp mqtt hosts id not in fpp endpoints",
 			env: map[string]string{
 				"SHOWMESH_FPP_ENDPOINTS":  "player-01=http://10.0.1.20",
 				"SHOWMESH_FPP_MQTT_HOSTS": "shed=FPP-Shed",
 			},
-			wantVar: "SHOWMESH_FPP_MQTT_HOSTS",
+			wantVar: "shed",
 		},
 		{
 			name:    "fpp mqtt broker url invalid",
@@ -886,8 +893,8 @@ func TestLoadConfigFPPMQTTHostsWithoutBrokerURLStillCrossChecked(t *testing.T) {
 	if err == nil {
 		t.Fatalf("LoadConfigFrom() error = nil, want an error naming the unmatched id even with no broker URL configured")
 	}
-	if !strings.Contains(err.Error(), "SHOWMESH_FPP_MQTT_HOSTS") || !strings.Contains(err.Error(), "shed") {
-		t.Errorf("LoadConfigFrom() error = %q, want it to name SHOWMESH_FPP_MQTT_HOSTS and the unmatched id %q", err.Error(), "shed")
+	if !strings.Contains(err.Error(), "shed") || !strings.Contains(err.Error(), "showmeshctl fpp-endpoints set") {
+		t.Errorf("LoadConfigFrom() error = %q, want it to name the unmatched id %q and the store-backed remedy", err.Error(), "shed")
 	}
 }
 
@@ -1046,10 +1053,10 @@ func TestLoadConfigResolumeIDCollisionWithFPPEndpoint(t *testing.T) {
 
 	_, err := LoadConfigFrom(lookupFrom(env))
 	if err == nil {
-		t.Fatal("LoadConfigFrom() error = nil, want an error naming the id collision between SHOWMESH_RESOLUME_ID and SHOWMESH_FPP_ENDPOINTS")
+		t.Fatal("LoadConfigFrom() error = nil, want an error naming the id collision between the Resolume id and the FPP endpoint id")
 	}
-	if !strings.Contains(err.Error(), "SHOWMESH_RESOLUME_ID") || !strings.Contains(err.Error(), "shed") {
-		t.Errorf("LoadConfigFrom() error = %q, want it to name SHOWMESH_RESOLUME_ID and the colliding id %q", err.Error(), "shed")
+	if !strings.Contains(err.Error(), "resolume id") || !strings.Contains(err.Error(), "shed") {
+		t.Errorf("LoadConfigFrom() error = %q, want it to name the colliding id %q", err.Error(), "shed")
 	}
 }
 
