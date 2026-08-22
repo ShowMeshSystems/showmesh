@@ -11183,6 +11183,15 @@ components:
         onFailure:
           type: string
           enum: [continue, abort]
+        announcementPolicy:
+          type: string
+          enum: [duck, mix, interrupt]
+          description: >-
+            Meaningful only when role is "announcement"; rejected on any
+            other role. Absent means the night.session's own
+            announcementDefaultPolicy applies. interrupt uses
+            resting.backgroundAudio's own resume/restart policy on the way
+            back.
     ConfigNightSessionEnterShow:
       type: object
       description: night.session.enterShow (RESTING-MODE.md §7.1).
@@ -11239,6 +11248,9 @@ components:
         onFailure:
           type: string
           enum: [continue, abort]
+        announcementPolicy:
+          type: string
+          enum: [duck, mix, interrupt]
     ConfigNightSessionEnterShowWrite:
       type: object
       description: >-
@@ -11359,6 +11371,12 @@ components:
           $ref: "#/components/schemas/ConfigNightSessionEnterShowWrite"
         enterResting:
           $ref: "#/components/schemas/ConfigNightSessionEnterRestingWrite"
+        announcementDefaultPolicy:
+          type: string
+          enum: [duck, mix, interrupt]
+          description: >-
+            Defaults to "duck" when absent. Used by any announcement-role
+            cue that does not name its own announcementPolicy.
     ConfigNightSession:
       type: object
       description: >-
@@ -11382,7 +11400,7 @@ components:
         this object carries (cue actions, the resting timeline asset,
         every backgroundAudio item) must belong to this session's own
         `show` (ADR-027: a Show is a namespace).
-      required: [show, label, showPlaylist, resting, enterShow, enterResting]
+      required: [show, label, showPlaylist, resting, enterShow, enterResting, announcementDefaultPolicy]
       properties:
         show:
           type: string
@@ -11398,6 +11416,9 @@ components:
           $ref: "#/components/schemas/ConfigNightSessionEnterShow"
         enterResting:
           $ref: "#/components/schemas/ConfigNightSessionEnterResting"
+        announcementDefaultPolicy:
+          type: string
+          enum: [duck, mix, interrupt]
     NightSessionConfigResponse:
       type: object
       description: >-

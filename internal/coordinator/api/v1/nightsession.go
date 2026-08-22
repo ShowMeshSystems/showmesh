@@ -55,13 +55,14 @@ type ConfigNightSessionResting struct {
 // ConfigNightSessionCue is one entry of enterShow.cues or
 // enterResting.cues.
 type ConfigNightSessionCue struct {
-	Name           string `json:"name"`
-	Role           string `json:"role"`
-	Action         string `json:"action"`
-	OffsetMs       int    `json:"offsetMs"`
-	FadeDurationMs *int   `json:"fadeDurationMs,omitempty"`
-	Barrier        bool   `json:"barrier"`
-	OnFailure      string `json:"onFailure"`
+	Name               string  `json:"name"`
+	Role               string  `json:"role"`
+	Action             string  `json:"action"`
+	OffsetMs           int     `json:"offsetMs"`
+	FadeDurationMs     *int    `json:"fadeDurationMs,omitempty"`
+	Barrier            bool    `json:"barrier"`
+	OnFailure          string  `json:"onFailure"`
+	AnnouncementPolicy *string `json:"announcementPolicy,omitempty"`
 }
 
 // ConfigNightSessionEnterShow is night.session.enterShow.
@@ -80,12 +81,13 @@ type ConfigNightSessionEnterResting struct {
 // payload: the body PUT /config/night.session/{id} accepts and GET
 // returns.
 type ConfigNightSession struct {
-	Show         string                         `json:"show"`
-	Label        string                         `json:"label"`
-	ShowPlaylist ConfigNightSessionFPPPlaylist  `json:"showPlaylist"`
-	Resting      ConfigNightSessionResting      `json:"resting"`
-	EnterShow    ConfigNightSessionEnterShow    `json:"enterShow"`
-	EnterResting ConfigNightSessionEnterResting `json:"enterResting"`
+	Show                      string                         `json:"show"`
+	Label                     string                         `json:"label"`
+	ShowPlaylist              ConfigNightSessionFPPPlaylist  `json:"showPlaylist"`
+	Resting                   ConfigNightSessionResting      `json:"resting"`
+	EnterShow                 ConfigNightSessionEnterShow    `json:"enterShow"`
+	EnterResting              ConfigNightSessionEnterResting `json:"enterResting"`
+	AnnouncementDefaultPolicy string                         `json:"announcementDefaultPolicy"`
 }
 
 // NightSessionConfigResponse is the body of GET and PUT

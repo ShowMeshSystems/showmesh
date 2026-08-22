@@ -667,7 +667,7 @@ func TestNightAdvanceCueList_EnterRestingNeverEvaluatesBarrier(t *testing.T) {
 	}
 	cues := []config.NightSessionCue{{Name: "fade-up", Barrier: true, OnFailure: config.NightSessionCueOnFailureContinue}}
 
-	h.nightAdvanceCueList(context.Background(), testNow, rec, dispatchedAt, nightPhaseEnterResting, cues)
+	h.nightAdvanceCueList(context.Background(), testNow, rec, dispatchedAt, nightPhaseEnterResting, cues, config.NightSessionPayload{})
 
 	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseEnterResting, "fade-up")
 	if err != nil {

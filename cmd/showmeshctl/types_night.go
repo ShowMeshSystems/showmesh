@@ -57,13 +57,14 @@ type nightSessionResting struct {
 
 // nightSessionCue is one entry of enterShow.cues or enterResting.cues.
 type nightSessionCue struct {
-	Name           string `json:"name"`
-	Role           string `json:"role"`
-	Action         string `json:"action"`
-	OffsetMs       int    `json:"offsetMs"`
-	FadeDurationMs *int   `json:"fadeDurationMs,omitempty"`
-	Barrier        bool   `json:"barrier"`
-	OnFailure      string `json:"onFailure"`
+	Name               string  `json:"name"`
+	Role               string  `json:"role"`
+	Action             string  `json:"action"`
+	OffsetMs           int     `json:"offsetMs"`
+	FadeDurationMs     *int    `json:"fadeDurationMs,omitempty"`
+	Barrier            bool    `json:"barrier"`
+	OnFailure          string  `json:"onFailure"`
+	AnnouncementPolicy *string `json:"announcementPolicy,omitempty"`
 }
 
 // nightSessionEnterShow is night.session.enterShow.
@@ -82,12 +83,13 @@ type nightSessionEnterResting struct {
 // payload: the "payload" member of GET/PUT /config/night.session/{id}'s
 // response.
 type nightSession struct {
-	Show         string                   `json:"show"`
-	Label        string                   `json:"label"`
-	ShowPlaylist nightSessionFPPPlaylist  `json:"showPlaylist"`
-	Resting      nightSessionResting      `json:"resting"`
-	EnterShow    nightSessionEnterShow    `json:"enterShow"`
-	EnterResting nightSessionEnterResting `json:"enterResting"`
+	Show                      string                   `json:"show"`
+	Label                     string                   `json:"label"`
+	ShowPlaylist              nightSessionFPPPlaylist  `json:"showPlaylist"`
+	Resting                   nightSessionResting      `json:"resting"`
+	EnterShow                 nightSessionEnterShow    `json:"enterShow"`
+	EnterResting              nightSessionEnterResting `json:"enterResting"`
+	AnnouncementDefaultPolicy string                   `json:"announcementDefaultPolicy"`
 }
 
 // nightSessionConfigResponse is the body of GET and PUT

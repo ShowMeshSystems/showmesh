@@ -254,6 +254,19 @@ const (
 	// carries is checked against the session's own show, not merely
 	// checked for existence.
 	ValidationCodeCrossShowReference = "cross-show-reference"
+
+	// ValidationCodeBackgroundAudioMixedTargets means
+	// resting.backgroundAudio.items named more than one distinct asset
+	// target: a background-audio playlist plays on exactly one audio
+	// output, and each item's own "target" (ADR-028 asset identity) is
+	// this seam's only source of which audio.node id that is, so every
+	// item must agree.
+	ValidationCodeBackgroundAudioMixedTargets = "background-audio-mixed-targets"
+
+	// ValidationCodeAnnouncementPolicyNotApplicable means a cue named
+	// announcementPolicy while its own role was not "announcement": the
+	// duck/mix/interrupt policy only ever applies to an announcement.
+	ValidationCodeAnnouncementPolicyNotApplicable = "announcement-policy-not-applicable"
 	// ValidationCodeAudioNodeChannelDuplicate: audionode.go's own rule.
 	// programChannels lists the SAME physical route's channel indices, so a
 	// repeated index is a distinct refusal from an ordinary out-of-range

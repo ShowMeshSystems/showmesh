@@ -369,7 +369,7 @@ func sortedNightCues(cues []config.NightSessionCue) []config.NightSessionCue {
 // nightAdvanceCueList runs every due cue (offset relative to referenceE).
 // Only nightPhaseEnterShow carries the atomic show-commit boundary and a
 // launch barrier; enterResting and fadeOut are fire-and-forget.
-func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec store.NightSessionRecord, referenceE time.Time, phase string, cues []config.NightSessionCue) (barrierSatisfied bool, blockedReason string) {
+func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec store.NightSessionRecord, referenceE time.Time, phase string, cues []config.NightSessionCue, payload config.NightSessionPayload) (barrierSatisfied bool, blockedReason string) {
 	isEnterShow := phase == nightPhaseEnterShow
 	issuer := nightControllerIssuer(rec)
 	if nightAttributionMissing(rec) && len(cues) > 0 {
@@ -382,6 +382,9 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			continue
 		}
 		isFirst := isEnterShow && !firstCommitted
+		if cue.Role == config.NightSessionCueRoleAnnouncement {
+			h.nightAdvanceAnnouncementDuck(ctx, now, rec, phase, cue, payload)
+		}
 		_, err := h.nightRunCue(ctx, now, rec, phase, cue, issuer, isFirst)
 		if err != nil {
 			if errors.Is(err, errNightCueSessionMoved) {
@@ -392,10 +395,16 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			} else {
 				h.logWarn("night loop: failed to run cue", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 			}
-			continue
-		}
-		if isFirst {
+		} else if isFirst {
 			firstCommitted = true
+		}
+		if cue.Role == config.NightSessionCueRoleAnnouncement {
+			// Unconditional: a failed duck or a failed announcement must
+			// never strand background audio at duck gain for the rest of
+			// the night (the exact defect class this seam's own report
+			// names). Restore is attempted regardless of the outcome
+			// above.
+			h.nightAdvanceAnnouncementRestore(ctx, now, rec, phase, cue, payload)
 		}
 	}
 

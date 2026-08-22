@@ -42,7 +42,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	// The enterShow cue definitions are the configured "bring presentation
 	// to black" list; fading out replays them under their own phase and
 	// waits on none of them, since there is no launch to gate.
-	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseFadeOut, payload.EnterShow.Cues)
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseFadeOut, payload.EnterShow.Cues, payload)
 
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {

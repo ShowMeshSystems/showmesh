@@ -25,7 +25,7 @@ import (
 // genuinely external dependency (here, the MQTT publish-and-await).
 
 // fakeAudioPublisher records every publish and, on AwaitResponse, replies
-// with a canned mqttproto.ResultPayload the test configures — standing in
+// with a canned mqttproto.ResultPayload the test configures - standing in
 // for a node's own CommandHandler round trip without a real broker.
 type fakeAudioPublisher struct {
 	mu           sync.Mutex
@@ -45,13 +45,21 @@ type fakeAudioPublisher struct {
 
 	// noAutoCorrelate disables this fake's own default behavior of
 	// stamping f.result's CommandID/IdempotencyKey/Action from the
-	// dispatched command envelope before returning it — a real agent's
+	// dispatched command envelope before returning it - a real agent's
 	// result always carries the SAME identifiers it was dispatched
 	// under, so this fake does the same unless a test deliberately wants
 	// to prove that a result carrying someone else's identifiers is
 	// rejected rather than accepted (see
 	// TestAudioSessionDispatchRejectsUncorrelatedResult).
 	noAutoCorrelate bool
+
+	// resultsByAction, when non-nil, answers AwaitResponse per dispatched
+	// action rather than with one global f.result - Track F seam F5's
+	// own announcement tests need a duck (audio.gain.fade) to succeed
+	// while the announcement's own action fails, in the SAME test, which
+	// one shared result field cannot express. An action absent from this
+	// map falls back to f.result.
+	resultsByAction map[string]mqttproto.ResultPayload
 }
 
 func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool, payload []byte) error {
@@ -98,6 +106,11 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 	}
 
 	result := f.result
+	if f.resultsByAction != nil {
+		if r, ok := f.resultsByAction[cmd.Action]; ok {
+			result = r
+		}
+	}
 	if !f.noAutoCorrelate {
 		result.CommandID = cmd.CommandID
 		result.IdempotencyKey = cmd.IdempotencyKey
@@ -177,7 +190,7 @@ func TestAudioSessionDispatchRefusedUnauthenticated(t *testing.T) {
 		t.Fatalf("status = %d, want 401; body: %s", resp.StatusCode, body)
 	}
 	if setup.pub.count() != 0 {
-		t.Fatalf("publish count = %d, want 0 — an unauthenticated request must never reach dispatch", setup.pub.count())
+		t.Fatalf("publish count = %d, want 0 - an unauthenticated request must never reach dispatch", setup.pub.count())
 	}
 }
 
@@ -196,7 +209,7 @@ func TestAudioSessionDispatchRefusedForbiddenViewer(t *testing.T) {
 		t.Fatalf("body = %q, want it to name the missing scope audio:command", body)
 	}
 	if setup.pub.count() != 0 {
-		t.Fatalf("publish count = %d, want 0 — a forbidden request must never reach dispatch", setup.pub.count())
+		t.Fatalf("publish count = %d, want 0 - a forbidden request must never reach dispatch", setup.pub.count())
 	}
 }
 
@@ -278,7 +291,7 @@ func TestAudioSessionDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *
 		t.Fatalf("replayed dispatch status = %d; body: %s", resp2.StatusCode, body2)
 	}
 	if setup.pub.count() != 1 {
-		t.Fatalf("publish count after replay = %d, want still 1 — a replayed idempotency key must not re-dispatch", setup.pub.count())
+		t.Fatalf("publish count after replay = %d, want still 1 - a replayed idempotency key must not re-dispatch", setup.pub.count())
 	}
 	var decoded struct {
 		Command struct {
@@ -300,7 +313,7 @@ func TestAudioSessionDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *
 // TestAudioSessionDispatchConflictingReplayIsRefusedNotAnswered proves an
 // idempotency key reused against a DIFFERENT action is a 409 conflict,
 // never silently answered as if it belonged to the first command that
-// claimed the key — mirroring resolveResolumeActionReplay's identical
+// claimed the key - mirroring resolveResolumeActionReplay's identical
 // rule one file over.
 func TestAudioSessionDispatchConflictingReplayIsRefusedNotAnswered(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
@@ -322,7 +335,7 @@ func TestAudioSessionDispatchConflictingReplayIsRefusedNotAnswered(t *testing.T)
 		t.Fatalf("first dispatch status = %d", resp1.StatusCode)
 	}
 
-	// Same idempotency key, DIFFERENT op (stop instead of start) — this
+	// Same idempotency key, DIFFERENT op (stop instead of start) - this
 	// must never be answered as a replay of the start above.
 	req2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", key, token)
 	resp2, body2 := doRawRequest(t, api.Handler, req2)
@@ -330,7 +343,7 @@ func TestAudioSessionDispatchConflictingReplayIsRefusedNotAnswered(t *testing.T)
 		t.Fatalf("conflicting-action replay status = %d, want 409; body: %s", resp2.StatusCode, body2)
 	}
 	if setup.pub.count() != 1 {
-		t.Fatalf("publish count after conflicting reuse = %d, want still 1 — a conflict must never dispatch", setup.pub.count())
+		t.Fatalf("publish count after conflicting reuse = %d, want still 1 - a conflict must never dispatch", setup.pub.count())
 	}
 }
 
@@ -346,7 +359,7 @@ func TestAudioSessionDispatchNotReachableByGET(t *testing.T) {
 		t.Fatal("GET against an audio.session.* dispatch path must never succeed (ADR-024 decision 6)")
 	}
 	if setup.pub.count() != 0 {
-		t.Fatalf("publish count = %d, want 0 — GET must never dispatch", setup.pub.count())
+		t.Fatalf("publish count = %d, want 0 - GET must never dispatch", setup.pub.count())
 	}
 }
 
@@ -376,7 +389,7 @@ func TestAudioSessionDispatchSendsRevisionInParams(t *testing.T) {
 	}
 	rev, ok := setup.pub.lastParams["revision"]
 	if !ok {
-		t.Fatal(`dispatched params carry no "revision" key — internal/agent's parseAudioSessionCommon requires it and refuses every dispatch without it`)
+		t.Fatal(`dispatched params carry no "revision" key - internal/agent's parseAudioSessionCommon requires it and refuses every dispatch without it`)
 	}
 	if got, ok := rev.(float64); !ok || got != 7 {
 		t.Fatalf("dispatched params.revision = %v, want 7", rev)
@@ -416,7 +429,7 @@ func TestAudioSessionDispatchRejectsUncorrelatedResult(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if decoded.Command.Outcome != "unconfirmable" {
-		t.Fatalf("outcome = %q, want unconfirmable — a mismatched result must never be accepted as this command's own", decoded.Command.Outcome)
+		t.Fatalf("outcome = %q, want unconfirmable - a mismatched result must never be accepted as this command's own", decoded.Command.Outcome)
 	}
 }
 
@@ -452,7 +465,7 @@ func TestAudioSessionDispatchRefusedResultDoesNotPersistDesiredState(t *testing.
 	// 5 above: a refused result must never be persisted regardless of
 	// whether its OWN revision would otherwise satisfy the store's
 	// separate anti-rewind guard (audiosessions.go's ON CONFLICT WHERE
-	// clause) — this isolates "only an accepted outcome is persisted"
+	// clause) - this isolates "only an accepted outcome is persisted"
 	// from "revision only advances", which a lower revision would not.
 	req2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/apply",
 		`{"revision":10,"params":{"media":{"assetId":"clip-EVIL"}}}`, token)
@@ -466,7 +479,7 @@ func TestAudioSessionDispatchRefusedResultDoesNotPersistDesiredState(t *testing.
 		t.Fatalf("GetAudioSession: %v", err)
 	}
 	if rec.Revision != 5 {
-		t.Fatalf("stored revision = %d, want 5 — a refused outcome must never be persisted, even at a higher revision", rec.Revision)
+		t.Fatalf("stored revision = %d, want 5 - a refused outcome must never be persisted, even at a higher revision", rec.Revision)
 	}
 	if strings.Contains(rec.DesiredJSON, "clip-EVIL") {
 		t.Fatalf("stored desired state = %q, must not contain the refused request's own params", rec.DesiredJSON)
@@ -474,8 +487,8 @@ func TestAudioSessionDispatchRefusedResultDoesNotPersistDesiredState(t *testing.
 }
 
 // TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState proves
-// a pause command — whose own params carry only
-// sessionId/invocationId/revision — merges onto the session's prior
+// a pause command - whose own params carry only
+// sessionId/invocationId/revision - merges onto the session's prior
 // desired state rather than replacing it outright, which would erase
 // the previously-applied media reference.
 func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.T) {
@@ -518,7 +531,7 @@ func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.
 // ADR-024 fail-closed default for a NON-exempt action: when the audit
 // store cannot be written, nothing is recorded and nothing is
 // dispatched. pause carries no ADR-024 decision 11 safety-class
-// exemption — see TestAudioSessionSafetyExemptActionsDispatchDegraded
+// exemption - see TestAudioSessionSafetyExemptActionsDispatchDegraded
 // for stop/clear/output.mute, which do.
 func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
@@ -534,15 +547,15 @@ func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
 		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
 	}
 	if setup.pub.count() != 0 {
-		t.Fatalf("publish count = %d, want 0 — an audit-write failure must dispatch nothing", setup.pub.count())
+		t.Fatalf("publish count = %d, want 0 - an audit-write failure must dispatch nothing", setup.pub.count())
 	}
 }
 
 // TestAudioSessionSafetyExemptActionsDispatchDegraded proves ADR-024
 // decision 11's safety-class exemption for this file's audience-audio
 // equivalent of blackout: audio.session.stop, audio.session.clear, and
-// audio.output.mute must still dispatch — with AttributionDegraded true
-// — when the audit store cannot be written, never refused. A refusal
+// audio.output.mute must still dispatch - with AttributionDegraded true
+// - when the audit store cannot be written, never refused. A refusal
 // here would leave an operator unable to silence the show over a full
 // audit disk, which ADR-024 decision 7 makes strictly worse than the
 // coordinator being switched off.
@@ -568,7 +581,7 @@ func TestAudioSessionSafetyExemptActionsDispatchDegraded(t *testing.T) {
 				t.Fatalf("status = %d, want 200 (dispatched with degraded attribution, never refused); body: %s", resp.StatusCode, body)
 			}
 			if setup.pub.count() != 1 {
-				t.Fatalf("publish count = %d, want 1 — the safety-class exemption must still dispatch", setup.pub.count())
+				t.Fatalf("publish count = %d, want 1 - the safety-class exemption must still dispatch", setup.pub.count())
 			}
 			var decoded struct {
 				Command struct {
@@ -588,7 +601,7 @@ func TestAudioSessionSafetyExemptActionsDispatchDegraded(t *testing.T) {
 // TestAudioSessionDispatchReplayAcrossDifferentNodeIsConflict proves an
 // idempotency key reused against the SAME action but a DIFFERENT target
 // node is a 409 conflict, never answered as a replay of the ORIGINAL
-// node's result — a session reassigned to a different node must not let
+// node's result - a session reassigned to a different node must not let
 // a redelivered/reused key replay the old node's outcome as if it
 // answered a request to the new one.
 func TestAudioSessionDispatchReplayAcrossDifferentNodeIsConflict(t *testing.T) {
@@ -615,14 +628,14 @@ func TestAudioSessionDispatchReplayAcrossDifferentNodeIsConflict(t *testing.T) {
 		t.Fatalf("cross-node reuse status = %d, want 409; body: %s", resp2.StatusCode, body2)
 	}
 	if setup.pub.count() != 1 {
-		t.Fatalf("publish count after cross-node reuse = %d, want still 1 — a conflict must never dispatch", setup.pub.count())
+		t.Fatalf("publish count after cross-node reuse = %d, want still 1 - a conflict must never dispatch", setup.pub.count())
 	}
 }
 
 // TestAudioSessionDispatchBeforePublishFailureDoesNotClaimDispatch proves
 // finding 12's distinction: when AwaitResponse fails before anything is
 // published (broker.ErrResponseFailedBeforePublish), the stored commands
-// row must not claim DispatchedAt — that would assert a publish that
+// row must not claim DispatchedAt - that would assert a publish that
 // never reached the wire, indistinguishable from a genuine dispatch whose
 // result never arrived.
 func TestAudioSessionDispatchBeforePublishFailureDoesNotClaimDispatch(t *testing.T) {
@@ -639,7 +652,7 @@ func TestAudioSessionDispatchBeforePublishFailureDoesNotClaimDispatch(t *testing
 		t.Fatalf("status = %d, want 500; body: %s", resp.StatusCode, body)
 	}
 	if setup.pub.count() != 0 {
-		t.Fatalf("publish count = %d, want 0 — nothing reached the wire", setup.pub.count())
+		t.Fatalf("publish count = %d, want 0 - nothing reached the wire", setup.pub.count())
 	}
 
 	rec, err := setup.st.GetCommandByIdempotencyKey(context.Background(), "before-publish-key")
@@ -647,14 +660,14 @@ func TestAudioSessionDispatchBeforePublishFailureDoesNotClaimDispatch(t *testing
 		t.Fatalf("GetCommandByIdempotencyKey: %v", err)
 	}
 	if rec.DispatchedAt != nil {
-		t.Fatalf("DispatchedAt = %v, want nil — nothing was ever published", *rec.DispatchedAt)
+		t.Fatalf("DispatchedAt = %v, want nil - nothing was ever published", *rec.DispatchedAt)
 	}
 }
 
 // TestAudioSessionDispatchUnconfirmablePersistsDesiredState proves that
-// an unconfirmable outcome — the ordinary result of a dispatch against
+// an unconfirmable outcome - the ordinary result of a dispatch against
 // every shipped engine today, and the outcome a real engine also
-// produces whenever it applies a command but cannot confirm it — still
+// produces whenever it applies a command but cannot confirm it - still
 // persists desired state. Without this, the audio_sessions table never
 // gets a row in any configuration this project ships. It also proves the
 // store's own anti-rewind guard, not an outcome check, is what stops a
@@ -702,7 +715,7 @@ func TestAudioSessionDispatchUnconfirmablePersistsDesiredState(t *testing.T) {
 	}
 
 	// A stale, lower revision must still not rewind the persisted record
-	// even though this outcome is also unconfirmable — that guarantee
+	// even though this outcome is also unconfirmable - that guarantee
 	// lives in the store's own ON CONFLICT ... WHERE clause
 	// (audiosessions.go), not in which outcomes this file chooses to
 	// persist.
@@ -732,8 +745,8 @@ func TestAudioSessionDispatchUnconfirmablePersistsDesiredState(t *testing.T) {
 }
 
 // TestAudioSessionDispatchDeadlineExceededPersistsDesiredState proves
-// that a dispatch whose confirmation deadline expires — the node may
-// well have already acted — also persists desired state, not only the
+// that a dispatch whose confirmation deadline expires - the node may
+// well have already acted - also persists desired state, not only the
 // decoded-result path. A mismatched result is what drives the fake
 // publisher to return broker.ErrResponseDeadlineExceeded, the same path
 // a real deadline takes.

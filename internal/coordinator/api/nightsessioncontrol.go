@@ -807,6 +807,15 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterShow", payload.EnterShow.Cues))
 	checks = append(checks, nightCheckNoUnbuiltBrightnessComposition("enterResting", payload.EnterResting.Cues))
 
+	// Track F seam F5: resting.backgroundAudio's own readiness (RESTING-
+	// MODE.md §13), only when it is configured at all.
+	if ba := payload.Resting.BackgroundAudio; ba != nil {
+		checks = append(checks, h.nightCheckBackgroundAudioAssets(ctx, payload.Show, ba))
+		checks = append(checks, nightCheckBackgroundAudioItemTransition(ba))
+		checks = append(checks, nightCheckAudioOutputCapabilities(ba.OutputNodeID()))
+	}
+	checks = append(checks, nightCheckAnnouncementAssets(append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)))
+
 	for _, c := range checks {
 		if c.health == nightCheckStateNotVerifiable {
 			continue

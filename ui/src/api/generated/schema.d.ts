@@ -3986,6 +3986,11 @@ export interface components {
             barrier: boolean;
             /** @enum {string} */
             onFailure: "continue" | "abort";
+            /**
+             * @description Meaningful only when role is "announcement"; rejected on any other role. Absent means the night.session's own announcementDefaultPolicy applies. interrupt uses resting.backgroundAudio's own resume/restart policy on the way back.
+             * @enum {string}
+             */
+            announcementPolicy?: "duck" | "mix" | "interrupt";
         };
         /** @description night.session.enterShow (RESTING-MODE.md §7.1). */
         ConfigNightSessionEnterShow: {
@@ -4008,6 +4013,8 @@ export interface components {
             barrier?: boolean;
             /** @enum {string} */
             onFailure?: "continue" | "abort";
+            /** @enum {string} */
+            announcementPolicy?: "duck" | "mix" | "interrupt";
         };
         /** @description The WRITE shape of night.session.enterShow: identical to ConfigNightSessionEnterShow except that cues carries ConfigNightSessionCueWrite entries (barrier/onFailure optional). */
         ConfigNightSessionEnterShowWrite: {
@@ -4048,6 +4055,11 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionRestingWrite"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShowWrite"];
             enterResting: components["schemas"]["ConfigNightSessionEnterRestingWrite"];
+            /**
+             * @description Defaults to "duck" when absent. Used by any announcement-role cue that does not name its own announcementPolicy.
+             * @enum {string}
+             */
+            announcementDefaultPolicy?: "duck" | "mix" | "interrupt";
         };
         /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seam F1, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} — never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) — this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present. Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
         ConfigNightSession: {
@@ -4057,6 +4069,8 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionResting"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShow"];
             enterResting: components["schemas"]["ConfigNightSessionEnterResting"];
+            /** @enum {string} */
+            announcementDefaultPolicy: "duck" | "mix" | "interrupt";
         };
         /** @description The body of GET and PUT /config/night.session/{id}, and of GET /config/night.session/{id}/revisions/{revision} (one past, immutable revision's full payload). */
         NightSessionConfigResponse: {
