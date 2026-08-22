@@ -71,6 +71,13 @@ func printShowActionDetail(w io.Writer, resp showActionConfigResponse) {
 		if len(t.Ref) > 0 {
 			_, _ = fmt.Fprintf(w, "  Ref:         %v\n", t.Ref)
 		}
+	case "audio":
+		_, _ = fmt.Fprintf(w, "  Node:        %s\n", t.AudioNodeID)
+		_, _ = fmt.Fprintf(w, "  Session:     %s\n", t.AudioSessionID)
+		_, _ = fmt.Fprintf(w, "  Action:      %s\n", t.AudioAction)
+		if len(t.Params) > 0 {
+			_, _ = fmt.Fprintf(w, "  Params:      %v\n", t.Params)
+		}
 	default:
 		_, _ = fmt.Fprintf(w, "  (unrecognized integration %q)\n", t.Integration)
 	}

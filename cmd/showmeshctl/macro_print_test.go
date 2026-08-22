@@ -214,3 +214,33 @@ func TestPrintMacroRunDetailRendersOutcomeState(t *testing.T) {
 		t.Errorf("printMacroRunDetail output missing outcomeState %q:\n%s", "collection_failed", buf.String())
 	}
 }
+
+// TestPrintShowActionDetailRendersAudioTarget defends the fourth
+// show.action.target.integration (Track F seam F5): the operator-facing
+// "action get" detail must show the audio node/session/action rather than
+// falling into the "(unrecognized integration)" default branch.
+// Mutation-checked: deleting the "audio" case from printShowActionDetail's
+// switch makes this fail on the "  Node:" assertion.
+func TestPrintShowActionDetailRendersAudioTarget(t *testing.T) {
+	resp := showActionConfigResponse{
+		ID: "hush-background", Revision: 3,
+		Payload: showAction{
+			Show: "halloween-2026", Label: "Hush resting background audio", SafetyClass: "stop",
+			Target: showActionTarget{
+				Integration: "audio", AudioNodeID: "node-a", AudioSessionID: "resting-bg",
+				AudioAction: "audio.session.stop",
+			},
+		},
+	}
+	var buf bytes.Buffer
+	printShowActionDetail(&buf, resp)
+	out := buf.String()
+	for _, want := range []string{"node-a", "resting-bg", "audio.session.stop"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printShowActionDetail output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "unrecognized integration") {
+		t.Errorf("printShowActionDetail fell into the unrecognized-integration default for \"audio\":\n%s", out)
+	}
+}

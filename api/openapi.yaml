@@ -9847,7 +9847,7 @@ components:
       properties:
         integration:
           type: string
-          enum: [fpp, mqtt, resolume]
+          enum: [fpp, mqtt, resolume, audio]
         instanceId:
           type: string
           minLength: 1
@@ -9856,6 +9856,11 @@ components:
           minLength: 1
         params:
           type: object
+          description: >-
+            An fpp primitive's own decoded params, or (audio-only) that
+            audio operation's own command params, passed through
+            undecoded to the node exactly as a direct audio.session.*/
+            audio.gain.*/audio.output.* API call's own params would be.
           additionalProperties: true
         broker:
           type: string
@@ -9879,6 +9884,21 @@ components:
             per-action list, enforced by this coordinator's write-time
             validation rather than by this schema.
           additionalProperties: true
+        audioNodeId:
+          type: string
+          description: "audio-only: the target audio node id."
+          minLength: 1
+        audioSessionId:
+          type: string
+          description: "audio-only: the target pkg/audio session id."
+          minLength: 1
+        audioAction:
+          type: string
+          description: >-
+            audio-only: one of the reserved audio.session.*/audio.gain.*/
+            audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's
+            "Agent operation names" table) — never a new operation name.
+          minLength: 1
     ConfigShowActionTargetWrite:
       type: object
       description: >-
@@ -9891,7 +9911,7 @@ components:
       properties:
         integration:
           type: string
-          enum: [fpp, mqtt, resolume]
+          enum: [fpp, mqtt, resolume, audio]
         instanceId:
           type: string
           minLength: 1
@@ -9914,6 +9934,15 @@ components:
         ref:
           type: object
           additionalProperties: true
+        audioNodeId:
+          type: string
+          minLength: 1
+        audioSessionId:
+          type: string
+          minLength: 1
+        audioAction:
+          type: string
+          minLength: 1
     ConfigShowAction:
       type: object
       description: >-
@@ -10262,7 +10291,7 @@ components:
           type: integer
         integration:
           type: string
-          enum: [fpp, mqtt, resolume]
+          enum: [fpp, mqtt, resolume, audio]
         safetyClass:
           type: string
           enum: [none, blackout, stop, powerOff]

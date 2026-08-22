@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
 // This file is Track F seam F1's own addition (docs/private/seam-specs/
@@ -22,22 +24,28 @@ import (
 // show.active's showExists: this package has no store access.
 //
 // The background-audio vocabulary (itemId, resume, repeat, itemTransition)
-// is pinned against pkg/audio's PlaylistItem/PlaylistRef shape on Track
-// C's branch (track-c/audio-node, commit 12ce0d8, not yet on main): this
-// package does not and must not import pkg/audio (it is not merged), but
-// the wire spellings here are chosen to agree with it now rather than
-// reconciling two vocabularies at F5.
+// mirrors pkg/audio's PlaylistItem/PlaylistRef shape (pkg/audio is on
+// main): repeat, resume, and itemTransition validate against and are
+// spelled from pkg/audio.RepeatMode/ResumePolicy/ItemTransition directly
+// rather than a second, independently maintained vocabulary. itemId plus
+// an [NightSessionAssetRef] is this file's own flattening of
+// pkg/audio.PlaylistItem's ItemID/Media pairing (see
+// [NightSessionBackgroundAudioItem]'s doc comment) because a night.session
+// asset reference is a (show, sequence, target) tuple resolved by this
+// package's own AssetCurrent callback, not a pkg/audio.MediaRef.
 
 // NightSessionConfigKind is config_objects.kind and config_revisions.kind
 // for a night.session object. Like show.action, this is a collection: each
 // object id is the session's own identifier, chosen by the caller.
 const NightSessionConfigKind = "night.session"
 
-// The three members of night.session.resting.backgroundAudio.repeat.
+// The three members of night.session.resting.backgroundAudio.repeat,
+// spelled from pkg/audio.RepeatMode — the single source of truth this
+// package validates against rather than a second, hand-copied set.
 const (
-	NightSessionBackgroundRepeatNone     = "none"
-	NightSessionBackgroundRepeatItem     = "item"
-	NightSessionBackgroundRepeatPlaylist = "playlist"
+	NightSessionBackgroundRepeatNone     = string(pkgaudio.RepeatNone)
+	NightSessionBackgroundRepeatItem     = string(pkgaudio.RepeatItem)
+	NightSessionBackgroundRepeatPlaylist = string(pkgaudio.RepeatPlaylist)
 )
 
 var nightSessionBackgroundRepeatValues = map[string]bool{
@@ -46,13 +54,12 @@ var nightSessionBackgroundRepeatValues = map[string]bool{
 	NightSessionBackgroundRepeatPlaylist: true,
 }
 
-// The two members of night.session.resting.backgroundAudio.resume —
-// pinned against pkg/audio's vocabulary on track-c/audio-node (see this
-// file's own top doc comment). NOT a bool: orchestrator correction,
-// 2026-08-18.
+// The two members of night.session.resting.backgroundAudio.resume,
+// spelled from pkg/audio.ResumePolicy. NOT a bool: orchestrator
+// correction, 2026-08-18.
 const (
-	NightSessionBackgroundResumeResume  = "resume"
-	NightSessionBackgroundResumeRestart = "restart"
+	NightSessionBackgroundResumeResume  = string(pkgaudio.ResumePolicyResume)
+	NightSessionBackgroundResumeRestart = string(pkgaudio.ResumePolicyRestart)
 )
 
 var nightSessionBackgroundResumeValues = map[string]bool{
@@ -60,11 +67,12 @@ var nightSessionBackgroundResumeValues = map[string]bool{
 	NightSessionBackgroundResumeRestart: true,
 }
 
-// The three members of night.session.resting.backgroundAudio.itemTransition.
+// The three members of night.session.resting.backgroundAudio.itemTransition,
+// spelled from pkg/audio.ItemTransition.
 const (
-	NightSessionItemTransitionSequential = "sequential"
-	NightSessionItemTransitionGapless    = "gapless"
-	NightSessionItemTransitionCrossfade  = "crossfade"
+	NightSessionItemTransitionSequential = string(pkgaudio.ItemTransitionSequential)
+	NightSessionItemTransitionGapless    = string(pkgaudio.ItemTransitionGapless)
+	NightSessionItemTransitionCrossfade  = string(pkgaudio.ItemTransitionCrossfade)
 )
 
 var nightSessionItemTransitionValues = map[string]bool{

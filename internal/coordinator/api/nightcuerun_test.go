@@ -95,6 +95,7 @@ func TestNightCueConfirmable(t *testing.T) {
 		{"mqttNoExpect", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT}, false},
 		{"mqttExpectNone", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT, Expect: &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindNone}}, false},
 		{"mqttExpectBoolean", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT, Expect: &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindBoolean, Value: &yes}}, true},
+		{"audio", config.ShowActionTarget{Integration: config.ShowActionIntegrationAudio, AudioNodeID: "node-a", AudioSessionID: "resting-bg", AudioAction: "audio.session.apply"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,10 +107,13 @@ func TestNightCueConfirmable(t *testing.T) {
 }
 
 // TestNightCueRetryableByIdentity defends the seam spec's own conservative
-// rule: only fpp carries a stable end-to-end retry identity today
-// (dispatchFPPCommand's idempotency-first design); resolume and mqtt do
-// not, whatever their confirmability. Mutation-checked: changing the
-// switch's true case to include resolume fails the resolume case.
+// rule: fpp and audio both carry a stable end-to-end retry identity today
+// (dispatchFPPCommand's and executeAudioSessionDispatch's own
+// idempotency-first designs — see [nightCueRetryableByIdentity]'s own doc
+// comment for the audio proof); resolume and mqtt do not, whatever their
+// confirmability. Mutation-checked: changing the switch's true case to
+// include resolume fails the resolume case; dropping the audio disjunct
+// fails the audio case.
 func TestNightCueRetryableByIdentity(t *testing.T) {
 	cases := []struct {
 		integration string
@@ -118,6 +122,7 @@ func TestNightCueRetryableByIdentity(t *testing.T) {
 		{config.ShowActionIntegrationFPP, true},
 		{config.ShowActionIntegrationResolume, false},
 		{config.ShowActionIntegrationMQTT, false},
+		{config.ShowActionIntegrationAudio, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.integration, func(t *testing.T) {
