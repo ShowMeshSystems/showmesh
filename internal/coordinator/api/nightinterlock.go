@@ -2,21 +2,25 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Track F seam F6 (RESTING-MODE.md §10.1, ADR-016, ADR-029): interlock
 // evaluation. Orchestrator ruling for this seam: a named logical action's
-// own mqtt request/response IS the evidence read an interlock uses — this
+// own mqtt request/response IS the evidence read an interlock uses: this
 // codebase has no other way to reach a site sensor today, and a signal
 // that never answers is exactly the "source unavailable" column of
 // RESTING-MODE.md §10.1's matrix. nightsitecontrol.go (config package)
 // already refuses, at write time, any interlock signal that is not an
-// mqtt action with expect.kind other than "none" — everything below
+// mqtt action with expect.kind other than "none"; everything below
 // assumes that refusal already ran.
 
 // nightInterlockCondition is what one evidence read resolved to, before
@@ -33,8 +37,8 @@ const (
 // contract onto the two-valued condition RESTING-MODE.md §10.1's matrix
 // needs: "confirmed" is the condition holding true; "failed" with
 // mqttActionStateNegativeAnswer is the condition holding false (the
-// external system answered and said no); every other outcome — a
-// deadline, a transport error, an unknown broker, a malformed payload —
+// external system answered and said no); every other outcome (a
+// deadline, a transport error, an unknown broker, a malformed payload)
 // is "source unavailable," never silently treated as either true or
 // false.
 func classifyMQTTActionResult(res MQTTActionResult) nightInterlockCondition {
@@ -49,7 +53,7 @@ func classifyMQTTActionResult(res MQTTActionResult) nightInterlockCondition {
 }
 
 // nightInterlockDecision is [evaluateNightInterlockRule]'s own output.
-// Withhold is meaningful only for the phase rule.Phase itself declares —
+// Withhold is meaningful only for the phase rule.Phase itself declares:
 // RESTING-MODE.md §10.1: "Only rules for the phase currently being
 // entered can withhold that phase." A caller evaluating a rule for
 // display outside its own phase must ignore Withhold entirely.
@@ -68,7 +72,7 @@ type nightInterlockDecision struct {
 func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterlockCondition) nightInterlockDecision {
 	switch rule.Posture {
 	case config.NightInterlockPostureDisabled:
-		// "Do not evaluate" for either matrix column — reported, never
+		// "Do not evaluate" for either matrix column: reported, never
 		// withheld, and its health is not_verifiable rather than a claim
 		// about anything that was actually checked.
 		return nightInterlockDecision{Health: nightCheckStateNotVerifiable, Reason: "disabled: not evaluated"}
@@ -109,7 +113,7 @@ func evaluateNightInterlockRule(rule config.NightInterlockRule, cond nightInterl
 
 // nightConditionFromHealth is [classifyMQTTActionResult]'s own inverse,
 // for a caller that only has a PERSISTED health string (a stored
-// readiness check) rather than a live MQTTActionResult — see
+// readiness check) rather than a live MQTTActionResult; see
 // nightInterlockWithholdsPhase's own doc comment for why start-night
 // re-derives Withhold from the stored readiness result instead of
 // dispatching again inside its own transaction.
@@ -132,7 +136,7 @@ func nightInterlockCheckName(rule config.NightInterlockRule) string {
 }
 
 // nightEvaluateInterlockRuleLive dispatches rule's own named action and
-// evaluates the result — the only place in this seam that puts anything
+// evaluates the result: the only place in this seam that puts anything
 // on the wire for an interlock. Used by run-readiness (outside any store
 // transaction, mirroring nightCheckFPPReachable's own siblings in
 // nightasset.go) and never called from inside a store-bound decide
@@ -158,10 +162,10 @@ func (h *handlers) nightEvaluateInterlockRuleLive(ctx context.Context, rule conf
 // nightComputeInterlockChecks runs every enabled interlock's own live
 // evidence read (nightEvaluateInterlockRuleLive) and reports one
 // [nightReadinessCheck] per configured rule, disabled ones included
-// (as not_verifiable — see evaluateNightInterlockRule's own doc comment).
+// (as not_verifiable; see evaluateNightInterlockRule's own doc comment).
 // The reason text names the rule's own phase and posture explicitly so an
-// operator reading run-readiness's own check list — not this seam's own
-// gating code — can see which phase a failing rule would affect, since
+// operator reading run-readiness's own check list, not this seam's own
+// gating code, can see which phase a failing rule would affect, since
 // RESTING-MODE.md §10.1 makes that visibility a requirement independent
 // of whether the CURRENT command is even entering that phase.
 func (h *handlers) nightComputeInterlockChecks(ctx context.Context, rules []config.NightInterlockRule) []nightReadinessCheck {
@@ -184,24 +188,38 @@ func (h *handlers) nightComputeInterlockChecks(ctx context.Context, rules []conf
 // nightInterlockOverrideRequest is one entry of the night command body's
 // optional "interlockOverrides" array: RESTING-MODE.md §10.1's own
 // requirement that an accepted override identify the rule, the reason,
-// and — via the command that carried it — the phase and bounded
+// and, via the command that carried it, the phase and bounded
 // invocation scope.
 type nightInterlockOverrideRequest struct {
 	Rule   string `json:"rule"`
 	Reason string `json:"reason"`
 }
 
-// nightPhaseInterlockGate is what a gated command (start-night today; see
-// this file's own top doc comment for why prepare-site and the other
-// seven phases are not wired here yet) computes from the MOST RECENT
-// stored readiness result for the preparation epoch being advanced. It
-// deliberately does not dispatch anything live: the epoch's own
-// run-readiness command already did that (nightComputeInterlockChecks),
-// and re-checking freshness of a two-minute-old mqtt confirmation against
-// this codebase's one enforced freshness gate (h.nightReadinessMaxAge on
-// the WHOLE readiness result, not per check — ground truth this seam
-// inherited, unchanged here) is what already stands between a stale
-// interlock result and this gate accepting it.
+// nightPhaseInterlockGate is what a gated command computes for the phase
+// it is about to enter. Two distinct evidence sources feed it, and a
+// caller must not treat them as the same freshness guarantee
+// (orchestrator ruling, this seam's own build report):
+//
+//   - LIVE: prepare-site and run-readiness dispatch every phase-matching
+//     rule's own action at the instant the command runs
+//     ([handlers.nightLiveEvaluatePhaseGate]), because both already run
+//     outside any store transaction (nightPrepareSiteCommand,
+//     nightRunReadinessCommand) and can safely put something on the wire
+//     without holding the store's single connection.
+//   - STORED: start-night, start-preshow, fade-out-night, and
+//     power-down-presentation are dispatched from inside a store
+//     transaction (nightRunGated/nightRunExempt) and gate on the most
+//     recent TRUSTED readiness result instead
+//     ([handlers.nightTrustedReadinessChecksTx] plus
+//     [nightEvaluatePhaseInterlockGate]): an mqtt action's own
+//     expect.deadlineSeconds can run up to
+//     [mqttExpectMaxDeadlineSeconds], which must never be dispatched
+//     while the store's one connection is held. That evidence is only as
+//     fresh as the last successful run-readiness call, bounded by
+//     h.nightReadinessMaxAge on the WHOLE readiness result (not per
+//     check); a caller with no trusted readiness at all is
+//     evidence-unavailable for every phase-matching rule, governed by
+//     that rule's own onUnavailable.
 type nightPhaseInterlockGate struct {
 	// Withheld names every "block" rule for phase that currently withholds
 	// it and was not covered by a valid override.
@@ -216,18 +234,53 @@ type nightWithheldInterlock struct {
 	Reason string
 }
 
-// nightEvaluatePhaseInterlockGate walks payload.Interlocks for phase,
-// resolves each block rule's own decision from checks (the stored
-// readiness result), and applies overrides. A rule not named in checks at
-// all (readiness never ran for it — the pinned revision changed after the
-// checks were computed, or checks predate this rule) is treated as
-// evidence-unavailable rather than skipped, so a configuration change
-// cannot silently disable an interlock's own withhold.
+// nightEvaluatePhaseInterlockGate is the STORED-evidence gate (see
+// [nightPhaseInterlockGate]'s own doc comment): it walks
+// payload.Interlocks for phase, resolves each block rule's own decision
+// from checks (a trusted readiness result; see
+// [handlers.nightTrustedReadinessChecksTx]), and applies overrides. A
+// rule not named in checks at all (readiness never ran for it, the
+// pinned revision changed after the checks were computed, checks predate
+// this rule, or no trusted readiness exists at all) is treated as
+// evidence-unavailable rather than skipped, so a configuration change or
+// a stale/missing readiness result cannot silently disable an
+// interlock's own withhold.
 func nightEvaluatePhaseInterlockGate(payload config.NightSessionPayload, phase string, checks []nightReadinessCheck, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) nightPhaseInterlockGate {
 	checksByName := make(map[string]nightReadinessCheck, len(checks))
 	for _, c := range checks {
 		checksByName[c.name] = c
 	}
+	decide := func(rule config.NightInterlockRule) nightInterlockDecision {
+		cond := nightInterlockConditionUnavailable
+		if c, ok := checksByName[nightInterlockCheckName(rule)]; ok {
+			cond = nightConditionFromHealth(string(c.health))
+		}
+		return evaluateNightInterlockRule(rule, cond)
+	}
+	return nightBuildPhaseGate(payload, phase, decide, overrides, callerHasOverrideScope)
+}
+
+// nightLiveEvaluatePhaseGate is the LIVE-evidence gate (see
+// [nightPhaseInterlockGate]'s own doc comment): every phase-matching
+// "block" rule is dispatched at this instant
+// ([handlers.nightEvaluateInterlockRuleLive]). Callable only from a
+// command path that runs OUTSIDE any store transaction
+// (nightPrepareSiteCommand, nightRunReadinessCommand): an mqtt action's
+// own expect.deadlineSeconds can run up to [mqttExpectMaxDeadlineSeconds],
+// which must never be dispatched while the store's one connection is
+// held.
+func (h *handlers) nightLiveEvaluatePhaseGate(ctx context.Context, payload config.NightSessionPayload, phase string, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) nightPhaseInterlockGate {
+	decide := func(rule config.NightInterlockRule) nightInterlockDecision {
+		return h.nightEvaluateInterlockRuleLive(ctx, rule)
+	}
+	return nightBuildPhaseGate(payload, phase, decide, overrides, callerHasOverrideScope)
+}
+
+// nightBuildPhaseGate is the shared core of the live and stored gates
+// above: filter payload.Interlocks to phase's own "block" rules, resolve
+// each one's decision via decide, and apply any matching, authorized
+// override.
+func nightBuildPhaseGate(payload config.NightSessionPayload, phase string, decide func(config.NightInterlockRule) nightInterlockDecision, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) nightPhaseInterlockGate {
 	overrideReasonByRule := make(map[string]string, len(overrides))
 	for _, o := range overrides {
 		overrideReasonByRule[o.Rule] = o.Reason
@@ -238,11 +291,7 @@ func nightEvaluatePhaseInterlockGate(payload config.NightSessionPayload, phase s
 		if rule.Phase != phase || rule.Posture != config.NightInterlockPostureBlock {
 			continue
 		}
-		cond := nightInterlockConditionUnavailable
-		if c, ok := checksByName[nightInterlockCheckName(rule)]; ok {
-			cond = nightConditionFromHealth(string(c.health))
-		}
-		decision := evaluateNightInterlockRule(rule, cond)
+		decision := decide(rule)
 		if !decision.Withhold {
 			continue
 		}
@@ -258,7 +307,7 @@ func nightEvaluatePhaseInterlockGate(payload config.NightSessionPayload, phase s
 
 // nightInterlockOverrideAuditParams builds the audit Params ADR-024's own
 // Params map carries for an accepted override: rule, phase, reason, and a
-// bounded scope. Scope is always "invocation" here — this build has no
+// bounded scope. Scope is always "invocation" here; this build has no
 // session-scoped override concept, only "this one command."
 func nightInterlockOverrideAuditParams(overridden []nightWithheldInterlock) []map[string]any {
 	out := make([]map[string]any, 0, len(overridden))
@@ -271,7 +320,7 @@ func nightInterlockOverrideAuditParams(overridden []nightWithheldInterlock) []ma
 }
 
 // nightCallerHasOverrideScope reports whether ac's principal holds
-// [identity.ScopeNightOverride] — deliberately checked separately from
+// [identity.ScopeNightOverride]: deliberately checked separately from
 // [identity.ScopeNightCommand]: IDENTIFIER-REGISTER.md's own rationale is
 // that starting a night must never imply bypassing a blocking interlock.
 func nightCallerHasOverrideScope(ac authContext) bool {
@@ -313,3 +362,66 @@ func (p *interlockGateProblem) detail() string {
 // 120s): each rule's own dispatch never exceeds its own action's
 // expect.deadlineSeconds, which write-time validation already bounds to
 // that same constant.
+
+// nightTrustedReadinessChecksTx returns the given session's most recent
+// readiness checks, but ONLY when that result belongs to THIS session and
+// is within the coordinator's configured maximum age, the identical
+// trust filter start-night's own freshness gate applies
+// (nightStartNightTx). Anything else (no readiness at all, a different
+// epoch, a stale result, a corrupt checks payload) returns nil, which
+// [nightEvaluatePhaseInterlockGate] already treats as
+// evidence-unavailable for every rule it cannot find a check for.
+//
+// Unlike start-night, fade-out-night, power-down-presentation, and
+// start-preshow do NOT themselves require readiness to exist at all;
+// only a rule that names one of their own phases is affected by its
+// absence, exactly the way [nightEvaluatePhaseInterlockGate]'s own
+// "missing check" case already behaves.
+func (h *handlers) nightTrustedReadinessChecksTx(ctx context.Context, tx *store.Tx, sessionID string, now time.Time) []nightReadinessCheck {
+	readiness, err := tx.GetLatestNightReadiness(ctx, sessionID)
+	if err != nil {
+		return nil
+	}
+	if readiness.EpochID != sessionID {
+		return nil
+	}
+	age := now.Sub(readiness.CompletedAt)
+	if age < 0 || age > h.nightReadinessMaxAge {
+		return nil
+	}
+	var wire []v1.NightReadinessCheck
+	if err := json.Unmarshal([]byte(readiness.ChecksJSON), &wire); err != nil {
+		return nil
+	}
+	return nightDecodeWireChecks(wire)
+}
+
+// nightGatePhaseTx is the shared STORED-evidence gate every tx-bound
+// command below consults for its own declared phase: start-preshow,
+// fade-out-night, and power-down-presentation. It reads the pinned
+// night.session revision and the session's own trusted readiness result
+// via tx (never live; see [nightPhaseInterlockGate]'s own doc comment
+// for why these three commands cannot dispatch live evidence without
+// risking the store's single-connection deadlock). A withheld phase
+// returns a refusal problem naming every blocking rule; an authorized
+// override returns audit params for the caller to fold into its own
+// command's audit entry.
+func (h *handlers) nightGatePhaseTx(ctx context.Context, tx *store.Tx, now time.Time, rec store.NightSessionRecord, phase string, overrides []nightInterlockOverrideRequest, callerHasOverrideScope bool) (*v1.Problem, []map[string]any) {
+	payload, err := h.getPinnedNightSessionPayloadTx(ctx, tx, rec)
+	if err != nil {
+		// The pinned configuration itself could not be read: every
+		// phase-matching block rule is evidence-unavailable, exactly as
+		// if none of its checks were found.
+		payload = config.NightSessionPayload{}
+	}
+	checks := h.nightTrustedReadinessChecksTx(ctx, tx, rec.ID, now)
+	gate := nightEvaluatePhaseInterlockGate(payload, phase, checks, overrides, callerHasOverrideScope)
+	if len(gate.Withheld) > 0 {
+		p := nightNotReadyProblem(nightInterlockGateProblem(phase, gate.Withheld).detail())
+		return &p, nil
+	}
+	if len(gate.Overridden) > 0 {
+		return nil, nightInterlockOverrideAuditParams(gate.Overridden)
+	}
+	return nil, nil
+}

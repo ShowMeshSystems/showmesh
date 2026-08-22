@@ -201,7 +201,7 @@ func TestNightEvaluatePhaseInterlockGate_OverrideRequiresScope(t *testing.T) {
 
 // TestNightEvaluatePhaseInterlockGate_OverridePolicyNoneRefusesOverride
 // is RESTING-MODE.md §10.1's own rule: "An override is accepted only when
-// that rule declares authorized-operator" — a rule that declares
+// that rule declares authorized-operator", a rule that declares
 // overridePolicy "none" must stay withheld even with a requesting,
 // correctly-scoped caller.
 func TestNightEvaluatePhaseInterlockGate_OverridePolicyNoneRefusesOverride(t *testing.T) {

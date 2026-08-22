@@ -370,8 +370,8 @@ type ActionResolver func(actionID string) (show string, ok bool)
 // cross-object reference checks; interlockSignalResolver is seam F6's own
 // check for an interlock's "signal" (nil is only safe when the payload
 // configures no interlocks). Every cross-object reference this payload
-// carries - cue actions, the resting timeline asset, every backgroundAudio
-// item, every siteControl action, and every interlock signal - must name
+// carries (cue actions, the resting timeline asset, every backgroundAudio
+// item, every siteControl action, and every interlock signal) must name
 // an object belonging to THIS session's own "show" (ADR-027: a Show is a
 // namespace precisely so that programming Christmas cannot break
 // Halloween); a reference into a different show is rejected with

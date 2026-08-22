@@ -60,7 +60,7 @@ func printNightSessionDetail(w io.Writer, resp nightSessionConfigResponse) {
 }
 
 // printNightSessionSiteControl renders night.session.siteControl
-// (RESTING-MODE.md §10.2/§10.4, Track F seam F6) — "(not configured)"
+// (RESTING-MODE.md §10.2/§10.4, Track F seam F6): "(not configured)"
 // when the deployment omits the whole block, per RESTING-MODE.md §10's
 // own opening line.
 func printNightSessionSiteControl(w io.Writer, sc *nightSessionSiteControl) {
@@ -104,7 +104,7 @@ func printNightSessionSiteControl(w io.Writer, sc *nightSessionSiteControl) {
 // printNightSessionInterlocks renders night.session.interlocks
 // (RESTING-MODE.md §10.1, Track F seam F6). Each rule's live evaluation
 // (whether it currently withholds ITS OWN phase) is reported by
-// run-readiness's own checks, not here — this is the authored
+// run-readiness's own checks, not here; this is the authored
 // configuration, not evidence.
 func printNightSessionInterlocks(w io.Writer, rules []nightSessionInterlock) {
 	_, _ = fmt.Fprintf(w, "\nInterlocks (%d):\n", len(rules))

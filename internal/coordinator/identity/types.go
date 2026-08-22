@@ -136,7 +136,7 @@ const (
 	// §10.4's force-power-off does NOT use this scope: a deployment
 	// configures it as an ordinary show.action and an operator invokes it
 	// through the existing generic POST /api/v1/actions/{id}/invocations
-	// surface, behind [ScopeShowActionInvoke] — already a separate
+	// surface, behind [ScopeShowActionInvoke]: already a separate
 	// authorization and a separate audit presentation from the ordinary
 	// night lifecycle, and already structurally unreachable from
 	// power-down-presentation's own code path.

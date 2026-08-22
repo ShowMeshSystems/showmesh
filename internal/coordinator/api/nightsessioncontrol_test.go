@@ -1020,7 +1020,7 @@ func TestInvariant7_CommandResponseCarriesBothAcceptanceAndSessionStateInOneRoun
 // table's own row names.
 
 // tableTestConfigPayload is a minimal, validly-shaped night.session
-// payload (no siteControl, no interlocks) — Track F seam F6's own
+// payload (no siteControl, no interlocks): Track F seam F6's own
 // nightStartNightTx interlock gate reads the pinned revision via tx
 // directly (getPinnedNightSessionPayloadTx), so seedNightSession pins one
 // even though these table tests exercise the state machine, not

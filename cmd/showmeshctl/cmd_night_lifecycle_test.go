@@ -200,7 +200,7 @@ func TestCmdNightStatusIsAnOpenRead(t *testing.T) {
 }
 
 // TestCmdNightEndSessionSendsExpectedPath proves "night end-session" POSTs
-// the expected path — the one command reachable against a degraded
+// the expected path: the one command reachable against a degraded
 // session (finding 1).
 func TestCmdNightEndSessionSendsExpectedPath(t *testing.T) {
 	var gotPath string
@@ -334,5 +334,47 @@ func TestCmdNightStartOverrideFlagRejectsMalformedValue(t *testing.T) {
 	code := cmdNight([]string{"start", "--override", "no-equals-sign", "--server", "http://unused.invalid", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
 	if code == exitOK {
 		t.Fatalf("exit code = %d, want a parse failure for a malformed --override value", code)
+	}
+}
+
+// TestCmdNightFadeOutWithOverrideSendsInterlockOverrides proves --override
+// is available on "night fade-out" too, not only "night start"; Track F
+// seam F6's gate now covers fade-out-night's own phase.
+func TestCmdNightFadeOutWithOverrideSendsInterlockOverrides(t *testing.T) {
+	var gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","command":{"command":"fade-out-night","outcome":"applied"},
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"fading-out",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":0,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":true,"admissionClosedAt":"2026-08-18T22:00:00Z","shutdownIntent":"fade-out","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"","sameEpoch":true,"fresh":true,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},"transition":{"state":"not_available","reason":""},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"fade-out", "--override", "cooldown=operator confirmed safe", "--server", ts.URL, "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(gotBody, `"interlockOverrides"`) || !strings.Contains(gotBody, `"cooldown"`) {
+		t.Fatalf("request body = %q, want it to carry the interlockOverrides entry", gotBody)
+	}
+}
+
+// TestCmdNightEndSessionHasNoOverrideFlag proves end-session (which
+// consults no interlock) does not even accept --override.
+func TestCmdNightEndSessionHasNoOverrideFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"end-session", "--override", "cooldown=x", "--server", "http://unused.invalid", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code == exitOK {
+		t.Fatalf("exit code = %d, want a parse failure: end-session has no --override flag", code)
 	}
 }
