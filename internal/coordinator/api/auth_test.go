@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,16 +25,28 @@ import (
 // middleware_test.go's CSRF cases all build on these helpers.
 //
 // A cost note repeated from CLAUDE.md because it shapes how these helpers
-// are used, not just how they are built: argon2id at ADR-024 decision 1's
-// FIXED parameters (64 MiB, time 2, parallelism 1 — identity/password.go
-// exposes no override, and this task does not own that package) costs
-// real wall time on every password verification, with no cheap-mode
-// escape hatch available from this package. Every test in this package's
-// suite therefore prefers [mustIssueToken] (a SHA-256 digest lookup, no
-// KDF) over a real password login wherever it only needs SOME
-// authenticated principal and is not itself testing the session-cookie or
-// CSRF path; [loginAndGetCookie] is reserved for tests that must mint a
-// real cookie.
+// are used, not just how they are built: no test in this package asserts
+// anything about password content (see testPassword below), only about
+// what a correct or incorrect password does at the HTTP layer, so this
+// package's TestMain lowers identity's argon2id cost for the whole binary
+// via [identity.UseTestArgon2Cost]. The tests that genuinely own the
+// ADR-024 decision 1 cost live in internal/coordinator/identity and run
+// at the real parameters. Even at the lowered cost, [mustIssueToken] (a
+// SHA-256 digest lookup, no KDF) remains preferred over a real password
+// login wherever a test only needs SOME authenticated principal and is
+// not itself testing the session-cookie or CSRF path; [loginAndGetCookie]
+// is reserved for tests that must mint a real cookie.
+
+// TestMain lowers internal/coordinator/identity's argon2id cost once, for
+// the whole binary, before any test runs. Doing this per test instead
+// would mean writing identity's package-level cost vars while other
+// tests are already running (or, under t.Parallel, concurrently), which
+// is exactly the kind of data race this package's test-cost fix must not
+// add to the package the race detector is timing.
+func TestMain(m *testing.M) {
+	identity.UseTestArgon2Cost(8, 1, 1)
+	os.Exit(m.Run())
+}
 
 // newTestIdentityService builds a real [identity.Service] over a
 // throwaway store sharing clock's notion of "now" — the same pattern
