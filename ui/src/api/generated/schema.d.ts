@@ -587,6 +587,7 @@ export interface paths {
          *       | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
          *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
          *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
+         *       | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
          *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
@@ -4192,6 +4193,14 @@ export interface components {
         };
         /** @description The body of GET /night/session and GET /night/sessions/{id}. */
         NightSessionResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            session: components["schemas"]["NightSessionState"];
+        };
+        /** @description The payload of a "nightSession.changed" SSE event (Track F seam F2): one kind, not one per transition — the full NightSessionState a GET returns, never a delta. No delta event kind exists for this resource, matching resolume.changed's own posture. */
+        NightSessionChangedEvent: {
+            /** @description Per-connection only; never a durable cursor. */
+            seq: number;
             /** Format: date-time */
             serverTime: string;
             session: components["schemas"]["NightSessionState"];

@@ -78,6 +78,7 @@ import {
   type FPPCommandResult,
   type FPPInstance,
   type Model,
+  type NightCommandName,
   type RenderCommandResult,
   type ResolumeInstance,
 } from './domain'
@@ -175,6 +176,16 @@ type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
 type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
 type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
 type SchemaAuditResponse = components['schemas']['AuditResponse']
+// Track F seam F2/F1: the night-session lifecycle controller and the
+// night.session/night.session.active configuration kinds.
+type SchemaNightSessionResponse = components['schemas']['NightSessionResponse']
+type SchemaNightCommandRequest = components['schemas']['NightCommandRequest']
+type SchemaNightCommandResponse = components['schemas']['NightCommandResponse']
+type SchemaNightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
+type SchemaConfigNightSessionWrite = components['schemas']['ConfigNightSessionWrite']
+type SchemaNightSessionConfigResponse = components['schemas']['NightSessionConfigResponse']
+type SchemaConfigNightSessionActive = components['schemas']['ConfigNightSessionActive']
+type SchemaNightSessionActiveConfigResponse = components['schemas']['NightSessionActiveConfigResponse']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -1233,7 +1244,7 @@ export class ApiStore {
    * — `show` itself is a namespace and does not accept it on itself.
    */
   async listConfigObjects(
-    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',
+    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'night.session',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
@@ -1565,6 +1576,195 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         '/config/show.active/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- Track F seam F2/F1: the night-session lifecycle controller and the
+  // night.session/night.session.active configuration kinds ---------------
+  //
+  // Same "plain side-call, never touches `this.model` directly" posture as
+  // every method above — `getCurrentNightSession`/`getNightSessionById`
+  // seed a view's own state (views/NightSession.tsx), and live updates
+  // arrive separately via the `nightSession.changed` stream frame
+  // (handleFrame/applyNightSessionChanged below), matching
+  // getResolumeRecovery's identical split for the same reason (this
+  // resource is not part of Snapshot).
+
+  /**
+   * `GET /api/v1/night/session` (Track F seam F2). Never gated by any
+   * scope (ADR-024 constraint 23) — reads stay open by default, and this
+   * one never even throws on 401/403 the way most reads can, since the
+   * route itself carries no auth requirement. Answers `200` with
+   * `session.state === "inactive"` when no session has ever been
+   * created, never `404`.
+   */
+  async getCurrentNightSession(): Promise<SchemaNightSessionResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNightSessionResponse>('/night/session', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/night/sessions/{id}` (Track F seam F2). Throws (404) when no session with this id has ever existed. */
+  async getNightSessionById(id: string): Promise<SchemaNightSessionResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNightSessionResponse>(
+        `/night/sessions/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/night/commands/{command}` (ADR-038). Requires
+   * `night:command`. Answers `202`, never `200` — accepted and applied,
+   * or recognized as an idempotent duplicate. `idempotencyKey` is
+   * honored only by `prepare-site`; every other command ignores it.
+   * Throws a typed `ApiError` on the three distinguishable `409`s
+   * (`night-not-ready`, `night-state-rejected`, `night-ambiguous`) and
+   * the `503` (`night-command-refused-audit-unavailable`, `prepare-site`/
+   * `run-readiness`/`start-preshow`/`start-night` only) — see
+   * NightCommandButton.tsx for the caller that branches on
+   * `ApiError.problemType` to render each distinguishably rather than as
+   * one generic failure.
+   */
+  async dispatchNightCommand(
+    command: NightCommandName,
+    idempotencyKey?: string,
+  ): Promise<SchemaNightCommandResponse> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaNightCommandRequest = idempotencyKey === undefined ? {} : { idempotencyKey }
+      return await this.client.postJson<SchemaNightCommandResponse>(
+        `/night/commands/${encodeURIComponent(command)}`,
+        body,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/night.session/{id}` (Track F seam F1). Throws (404) when no such object exists. */
+  async getNightSessionConfig(id: string): Promise<SchemaNightSessionConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNightSessionConfigResponse>(
+        `/config/night.session/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/night.session/{id}` (Track F seam F1). `config:write`
+   * only (admin). Full replacement — every field this seam's create/edit
+   * form does not expose (calendar/duration keys, siteControl, interlocks)
+   * must never be sent, since the coordinator rejects the write outright
+   * if it sees any of them.
+   */
+  async putNightSessionConfig(
+    id: string,
+    payload: SchemaConfigNightSessionWrite,
+  ): Promise<SchemaNightSessionConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaNightSessionConfigResponse>(
+        `/config/night.session/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/night.session/{id}/revisions`: revision history, newest first, metadata only. */
+  async getNightSessionConfigRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/night.session/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/night.session/{id}/revisions/{revision}`: one
+   * past, immutable revision's full payload — no other config kind in
+   * this coordinator exposes this route yet (api/openapi.yaml's own
+   * description of the endpoint).
+   */
+  async getNightSessionConfigRevision(id: string, revision: number): Promise<SchemaNightSessionConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNightSessionConfigResponse>(
+        `/config/night.session/${encodeURIComponent(id)}/revisions/${revision}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/night.session.active` (ADR-039 rule 4). Throws
+   * (404) when nothing has ever been activated.
+   */
+  async getNightSessionActiveConfig(): Promise<SchemaNightSessionActiveConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaNightSessionActiveConfigResponse>(
+        '/config/night.session.active',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/night.session.active` (ADR-039 rule 4).
+   * `config:write` only. `session` may be the empty string, which
+   * explicitly clears the pointer — the caller (views/NightSessionActive.tsx)
+   * must confirm before calling this, matching putShowActive's identical
+   * "sharp control" posture.
+   */
+  async putNightSessionActiveConfig(
+    payload: SchemaConfigNightSessionActive,
+  ): Promise<SchemaNightSessionActiveConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaNightSessionActiveConfigResponse>(
+        '/config/night.session.active',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/night.session.active/revisions`: revision history, newest first, metadata only. */
+  async getNightSessionActiveConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/night.session.active/revisions',
         controller.signal,
       )
     } finally {
@@ -2358,6 +2558,17 @@ export class ApiStore {
         this.applyMacroRunChanged(payload)
         return
       }
+      case 'nightSession.changed': {
+        // Track F seam F2: mirrors `resolume.changed`'s own shape — this
+        // frame's schema (NightSessionChangedEvent) carries serverTime as
+        // one of its OWN top-level fields, alongside the full current
+        // `session`, never a delta. Parsed as the whole event, matching
+        // `macroRun.changed`'s own parsing above.
+        const payload = tryParse<SchemaNightSessionChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyNightSessionChanged(payload)
+        return
+      }
       default:
         // Unknown event: name — ignored, not an error. v1 is
         // additive-only (api/openapi.yaml's /stream description).
@@ -2612,6 +2823,25 @@ export class ApiStore {
       clockSkewMs: this.computeClockSkewMs(serverTime, receivedAt),
       serverTimeReceivedAt: receivedAt,
       resolume,
+    })
+  }
+
+  /**
+   * `nightSession.changed` (Track F seam F2) carries the night session's
+   * COMPLETE current representation, matching [applyResolumeChanged]'s
+   * exact same whole-object-replace posture and for the identical reason
+   * (no delta kind exists for this resource). Unlike `resolume`, there is
+   * only ever one current night session, so this is a plain assignment
+   * rather than an array upsert.
+   */
+  private applyNightSessionChanged(event: SchemaNightSessionChangedEvent): void {
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime: event.serverTime,
+      clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      nightSession: event.session,
     })
   }
 

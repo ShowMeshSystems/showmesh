@@ -17,6 +17,7 @@ import {
   makeEventsResponse,
   makeFPPInstance,
   makeMacroRunSummary,
+  makeNightSessionChangedEvent,
   makeNode,
   makeProblem,
   makeSessionResponse,
@@ -3299,6 +3300,57 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     })
 
     expect(store.getSnapshot().macroRuns).toEqual([])
+  })
+
+  it('applies a nightSession.changed frame as a whole-object replace of model.nightSession', async () => {
+    const changed = makeNightSessionChangedEvent({
+      seq: 1,
+      session: {
+        ...makeNightSessionChangedEvent().session,
+        state: 'preshow',
+        cycle: 1,
+      },
+    })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'nightSession.changed', changed)
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+
+    // Model.nightSession is not part of Snapshot (unlike resolume/fpp) —
+    // this asserts the "before the first live frame" state a view relies
+    // on for its own reconciliation (views/NightSession.tsx).
+    expect(store.getSnapshot().nightSession).toBeNull()
+
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().nightSession?.state === 'preshow', {
+      message: 'nightSession.changed was never applied to the model',
+    })
+
+    expect(store.getSnapshot().nightSession).toEqual(changed.session)
   })
 
   it('submitMacroRun upserts the returned run into the model immediately, without waiting for a stream frame', async () => {

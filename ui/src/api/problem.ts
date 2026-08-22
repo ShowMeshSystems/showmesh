@@ -94,4 +94,16 @@ export const PROBLEM_TYPE = {
   showConfigStepsEmpty: 'https://showmesh.dev/problems/show-config-steps-empty',
   showConfigStepsTooMany: 'https://showmesh.dev/problems/show-config-steps-too-many',
   showConfigStepIdDuplicate: 'https://showmesh.dev/problems/show-config-step-id-duplicate',
+  // Track F seam F2 (ADR-038): POST /night/commands/{command}'s three
+  // distinct 409 causes and one 503 cause, all naming `detail` as the
+  // full actionable message (which precondition, which state rejected it,
+  // or that the session is degraded and end-session/prepare-site is the
+  // recovery path). No dedicated error class dispatches on any of these
+  // — see NightCommandButton.tsx for the caller that branches on `type`
+  // directly, matching this file's own "listed individually so this
+  // constant stays complete" posture for showConfig*/fppCommand* above.
+  nightNotReady: 'https://showmesh.dev/problems/night-not-ready',
+  nightStateRejected: 'https://showmesh.dev/problems/night-state-rejected',
+  nightAmbiguous: 'https://showmesh.dev/problems/night-ambiguous',
+  nightCommandRefusedAuditUnavailable: 'https://showmesh.dev/problems/night-command-refused-audit-unavailable',
 } as const

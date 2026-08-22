@@ -4,6 +4,12 @@ import type {
   DiscoveryState,
   EventSeverity,
   FPPHealth,
+  NightCueOutcome,
+  NightCueState,
+  NightLifecycleState,
+  NightPhaseEvidenceState,
+  NightReadinessCheckState,
+  NightReadinessOutcome,
   ResolumeHealth,
   ResolumeRecoveryLayerState,
   ResolumeRecoveryRestoreResult,
@@ -181,4 +187,134 @@ export function ActionBindingBadge({ state, reason }: { state: ActionBindingStat
       <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
     </span>
   )
+}
+
+// Track F seam F2 (RESTING-MODE.md §3): the night-session lifecycle's own
+// ten states. Never collapsed into a generic health tone — "resting" is
+// the show's NORMAL steady state, not a degraded one, so it gets 'good'
+// exactly like "live"; only "inactive"/"stopped" (nothing running) reads
+// as neutral/unknown.
+const NIGHT_LIFECYCLE_STATE: Record<NightLifecycleState, { tone: StatusTone; icon: string; label: string }> = {
+  inactive: { tone: 'unknown', icon: '–', label: 'inactive' },
+  preparing: { tone: 'unknown', icon: '…', label: 'preparing' },
+  preshow: { tone: 'unknown', icon: '…', label: 'preshow' },
+  'transition-to-show': { tone: 'unknown', icon: '…', label: 'transitioning to show' },
+  live: { tone: 'good', icon: '●', label: 'live' },
+  'transition-to-resting': { tone: 'unknown', icon: '…', label: 'transitioning to resting' },
+  'resting-intershow': { tone: 'good', icon: '●', label: 'resting (between shows)' },
+  'end-of-night-resting': { tone: 'good', icon: '●', label: 'resting (end of night)' },
+  'fading-out': { tone: 'unknown', icon: '…', label: 'fading out' },
+  stopped: { tone: 'unknown', icon: '–', label: 'stopped' },
+}
+
+export function NightLifecycleBadge({ state }: { state: NightLifecycleState }) {
+  const spec = NIGHT_LIFECYCLE_STATE[state] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized state (${String(state)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// NightPhaseEvidence.state / NightReadiness.state share one four-value
+// vocabulary (recorded/unknown/not_configured/not_available). "recorded"
+// alone says nothing about good/bad — a caller wanting the READINESS
+// OUTCOME (ready/not_ready/unknown) uses NightReadinessOutcomeBadge below
+// instead; this badge is only ever about whether evidence EXISTS at all.
+// "not_configured" is deliberately neutral, never a warning (task
+// instruction: "never renders as a warning and never as an error").
+const NIGHT_EVIDENCE_STATE: Record<NightPhaseEvidenceState, { tone: StatusTone; icon: string; label: string }> = {
+  recorded: { tone: 'good', icon: '●', label: 'recorded' },
+  unknown: { tone: 'unknown', icon: '?', label: 'unknown' },
+  not_configured: { tone: 'unknown', icon: '–', label: 'not configured' },
+  not_available: { tone: 'unknown', icon: '–', label: 'not available' },
+}
+
+export function NightPhaseEvidenceBadge({ state }: { state: NightPhaseEvidenceState }) {
+  const spec = NIGHT_EVIDENCE_STATE[state] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized state (${String(state)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+const NIGHT_READINESS_OUTCOME: Record<NightReadinessOutcome, { tone: StatusTone; icon: string; label: string }> = {
+  ready: { tone: 'good', icon: '●', label: 'ready' },
+  not_ready: { tone: 'bad', icon: '✕', label: 'not ready' },
+  unknown: { tone: 'unknown', icon: '?', label: 'unknown' },
+}
+
+export function NightReadinessOutcomeBadge({ outcome }: { outcome: NightReadinessOutcome }) {
+  const spec = NIGHT_READINESS_OUTCOME[outcome] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized outcome (${String(outcome)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+const NIGHT_READINESS_CHECK_STATE: Record<
+  NightReadinessCheckState,
+  { tone: StatusTone; icon: string; label: string }
+> = {
+  healthy: { tone: 'good', icon: '●', label: 'healthy' },
+  degraded: { tone: 'warn', icon: '⚠', label: 'degraded' },
+  failed: { tone: 'bad', icon: '✕', label: 'failed' },
+  unknown: { tone: 'unknown', icon: '?', label: 'unknown' },
+  // Permanently not_verifiable is a structural fact about the check, not
+  // a failure (NightReadinessCheck's own schema description) — 'unknown'
+  // tone, never 'warn'/'bad'.
+  not_verifiable: { tone: 'unknown', icon: '–', label: 'not verifiable' },
+}
+
+export function NightReadinessCheckBadge({ state }: { state: NightReadinessCheckState }) {
+  const spec = NIGHT_READINESS_CHECK_STATE[state] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized state (${String(state)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// NightCue.state: the outbox row's own lifecycle, distinct from `outcome`
+// below (ADR-031 decision 3: completed and confirmed must be visually
+// distinct — this badge answers "did it run", not "did it work").
+const NIGHT_CUE_STATE: Record<NightCueState, { tone: StatusTone; icon: string; label: string }> = {
+  not_dispatched: { tone: 'unknown', icon: '–', label: 'not dispatched' },
+  pending: { tone: 'unknown', icon: '…', label: 'pending' },
+  dispatched: { tone: 'unknown', icon: '…', label: 'dispatched' },
+  resolved: { tone: 'good', icon: '●', label: 'resolved' },
+  ambiguous: { tone: 'warn', icon: '⚠', label: 'ambiguous' },
+}
+
+export function NightCueStateBadge({ state }: { state: NightCueState }) {
+  const spec = NIGHT_CUE_STATE[state] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized state (${String(state)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// NightCue.outcome: "unconfirmed" is deliberately its OWN tone, neither
+// 'good' (confirmed) nor 'bad' (failed/refused) — a dispatched-but-
+// unconfirmed cue is not a failure (NightCue's own schema description,
+// ADR-031 decision 3).
+const NIGHT_CUE_OUTCOME: Record<NightCueOutcome, { tone: StatusTone; icon: string; label: string }> = {
+  confirmed: { tone: 'good', icon: '●', label: 'confirmed' },
+  unconfirmed: { tone: 'warn', icon: '?', label: 'unconfirmed' },
+  unconfirmable: { tone: 'unknown', icon: '–', label: 'unconfirmable' },
+  failed: { tone: 'bad', icon: '✕', label: 'failed' },
+  refused: { tone: 'bad', icon: '✕', label: 'refused' },
+  ambiguous: { tone: 'warn', icon: '⚠', label: 'ambiguous' },
+}
+
+export function NightCueOutcomeBadge({ outcome }: { outcome: NightCueOutcome }) {
+  const spec = NIGHT_CUE_OUTCOME[outcome] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized outcome (${String(outcome)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
 }

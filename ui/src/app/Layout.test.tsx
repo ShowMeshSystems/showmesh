@@ -23,6 +23,7 @@ function model(
     collectors: [],
     macroRuns: [],
     resolume: [],
+    nightSession: null,
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,
