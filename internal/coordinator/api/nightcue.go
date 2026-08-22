@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
@@ -17,7 +19,7 @@ import (
 const (
 	nightCueStatePending    = "pending"    // outbox row committed; dispatch not yet attempted.
 	nightCueStateDispatched = "dispatched" // a dispatch attempt was made; outcome not yet resolved.
-	nightCueStateResolved   = "resolved"   // outcome captured — see the outcome column for confirmed/unconfirmed/etc.
+	nightCueStateResolved   = "resolved"   // outcome captured - see the outcome column for confirmed/unconfirmed/etc.
 	nightCueStateAmbiguous  = "ambiguous"  // terminal, unresolved by construction; never retried automatically.
 
 	// nightCueStateNotDispatched is a wire-only state (no outbox row
@@ -66,7 +68,7 @@ func nightResolveShowAction(ctx context.Context, cfg ConfigStore, actionID strin
 }
 
 // nightResolveShowActionRevision reads actionID at a SPECIFIC, already-
-// pinned revision — recovery must not silently move onto whatever
+// pinned revision - recovery must not silently move onto whatever
 // revision happens to be current by the time it runs.
 func nightResolveShowActionRevision(ctx context.Context, cfg ConfigStore, actionID string, revision int64) (config.ShowActionPayload, error) {
 	rev, err := cfg.GetConfigRevision(ctx, config.ShowActionConfigKind, actionID, revision)
@@ -99,7 +101,7 @@ func nightCueConfirmable(target config.ShowActionTarget) bool {
 // target under the SAME identity after an unresolved crash. fpp and audio
 // both qualify: dispatchFPPCommand's and executeAudioSessionDispatch's own
 // idempotency-first replay (audiodispatch.go's InsertCommand duplicate-key
-// path, resolveAudioSessionReplay) can never re-send under the same key —
+// path, resolveAudioSessionReplay) can never re-send under the same key -
 // a retry with the same idemKey, action, node, and params returns the
 // FIRST attempt's own recorded outcome rather than dispatching again.
 // Resolume and mqtt carry no comparable key and stay ambiguous.
@@ -121,7 +123,7 @@ type nightCueDispatchResult struct {
 // nightDispatchCueTarget dispatches target through its integration's own
 // adapter. It never inspects night_cue_outbox; the caller owns timing.
 // actionRevision is the cue's own pinned show.action revision (never the
-// live one) — only the audio branch currently needs it, to carry as
+// live one) - only the audio branch currently needs it, to carry as
 // pkg/audio's own Revision.
 func (h *handlers) nightDispatchCueTarget(ctx context.Context, now time.Time, issuer FPPCommandIssuer, target config.ShowActionTarget, idemKey string, actionRevision int64) nightCueDispatchResult {
 	switch target.Integration {
@@ -162,7 +164,7 @@ func (h *handlers) nightDispatchCueFPP(ctx context.Context, now time.Time, issue
 	}
 	if outcome.Outcome == "" {
 		// A Replay observed mid-flight (FPPCommandOutcome.Outcome's own
-		// doc comment) — an fpp command row exists under this key but has
+		// doc comment) - an fpp command row exists under this key but has
 		// not resolved yet. Not yet resolved, not an error: the caller
 		// leaves the row in nightCueStateDispatched and a later tick
 		// retries this same call, which dispatchFPPCommand's own
@@ -261,14 +263,14 @@ func nightAudioCueOutcome(outcome string) string {
 
 // nightDispatchCueAudio dispatches target through the SAME
 // executeAudioSessionDispatch machinery a direct audio.session.* API call
-// uses (audiodispatch.go) — never a parallel dispatch path. idemKey (the
+// uses (audiodispatch.go) - never a parallel dispatch path. idemKey (the
 // cue's own stable invocation identity, [nightCueIdempotencyKey]) becomes
 // both the command's idempotency key and, via params["invocationId"],
 // pkg/audio's own InvocationID, so a crash-recovery replay can never play
 // something twice (executeAudioSessionDispatch's own InsertCommand
 // duplicate-key path returns the first attempt's recorded outcome rather
-// than redispatching). actionRevision — the pinned show.action revision,
-// never the live one — becomes params["revision"]: pkg/audio's
+// than redispatching). actionRevision - the pinned show.action revision,
+// never the live one - becomes params["revision"]: pkg/audio's
 // RevisionState.Apply refuses to apply a revision that does not strictly
 // advance the session's own desired revision, so a delayed retry can
 // never rewind a newer command that has already landed.
@@ -288,11 +290,26 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID, ClientAddr: issuer.ClientAddr,
 	})
 	if err != nil {
-		// A plain error means an internal failure this coordinator cannot
-		// attribute to the caller, not a structural refusal — resolved
-		// failed, never left dispatched for a later tick to misread,
-		// mirroring nightDispatchCueFPP's identical treatment.
-		return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue could not be dispatched: " + err.Error()}
+		if errors.Is(err, broker.ErrResponseFailedBeforePublish) {
+			// Nothing was ever published (executeAudioSessionDispatch's
+			// own markUndispatched path): resolved failed is correct here,
+			// mirroring nightDispatchCueFPP's identical treatment for an
+			// error that provably sent nothing.
+			return nightCueDispatchResult{dispatched: false, resolved: true, outcome: nightCueOutcomeFailed, reason: "this cue could not be dispatched: " + err.Error()}
+		}
+		// Any OTHER error from executeAudioSessionDispatch arrives AFTER
+		// its own markDispatched call (audiodispatch.go's own await-result
+		// error branch): the command was published and may have reached
+		// the node, and its outcome is genuinely unknown - recording this
+		// as a definite failure would be fabricating evidence exactly the
+		// way dispatchFPPCommand's own "Replay observed mid-flight" case
+		// (nightDispatchCueFPP, one function up) already avoids. Leaving
+		// this unresolved lets a later tick retry under the SAME
+		// idempotency key, which audio's own replay-by-identity dedup
+		// (executeAudioSessionDispatch's InsertCommand duplicate-key path)
+		// answers from the first attempt's own recorded outcome rather
+		// than sending a second command.
+		return nightCueDispatchResult{dispatched: true, resolved: false}
 	}
 	if problem != nil {
 		// A structural refusal (e.g. the audit store was unavailable, or

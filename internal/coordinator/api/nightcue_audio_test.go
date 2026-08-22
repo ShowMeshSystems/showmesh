@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -198,5 +199,52 @@ func TestNightAudioCueOutcome(t *testing.T) {
 				t.Errorf("nightAudioCueOutcome(%q) = %q, want %q", tc.outcome, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestNightDispatchCueAudio_AmbiguousAwaitErrorLeavesUnresolved defends
+// HIGH 6: a crash between publish and recording the outcome (an
+// executeAudioSessionDispatch error that is NOT
+// broker.ErrResponseFailedBeforePublish) must never resolve as a
+// definite failure, because the command reached the node and may have
+// played. Mirroring dispatchFPPCommand's own "Replay observed mid-
+// flight" treatment, this leaves the row dispatched-but-unresolved for a
+// later tick to retry under the same identity.
+func TestNightDispatchCueAudio_AmbiguousAwaitErrorLeavesUnresolved(t *testing.T) {
+	h, _, pub := nightAudioCueTestHandlers(t)
+	pub.awaitErr = errors.New("boom: connection reset mid-flight")
+	target := audioCueTarget()
+	idemKey := nightCueIdempotencyKey("sess-1", 1, nightPhaseEnterResting, "background-stop")
+
+	result := h.nightDispatchCueAudio(context.Background(), testNow, testIssuer, target, idemKey, 1)
+
+	if result.resolved {
+		t.Fatalf("result = %+v, want resolved=false (outcome genuinely unknown, not a definite failure)", result)
+	}
+	if !result.dispatched {
+		t.Fatalf("result = %+v, want dispatched=true (the command WAS published before the error)", result)
+	}
+	if pub.count() != 1 {
+		t.Fatalf("publish count = %d, want 1", pub.count())
+	}
+}
+
+// TestNightDispatchCueAudio_NeverPublishedResolvesFailed defends the
+// OTHER half of HIGH 6's fix: an error that provably sent nothing
+// (broker.ErrResponseFailedBeforePublish) still resolves as a definite
+// failure, exactly as before.
+func TestNightDispatchCueAudio_NeverPublishedResolvesFailed(t *testing.T) {
+	h, _, pub := nightAudioCueTestHandlers(t)
+	pub.beforePublishErr = errors.New("subscribe failed")
+	target := audioCueTarget()
+	idemKey := nightCueIdempotencyKey("sess-1", 1, nightPhaseEnterResting, "background-stop")
+
+	result := h.nightDispatchCueAudio(context.Background(), testNow, testIssuer, target, idemKey, 1)
+
+	if !result.resolved || result.outcome != nightCueOutcomeFailed {
+		t.Fatalf("result = %+v, want resolved/failed (nothing was ever published)", result)
+	}
+	if result.dispatched {
+		t.Fatalf("result = %+v, want dispatched=false", result)
 	}
 }

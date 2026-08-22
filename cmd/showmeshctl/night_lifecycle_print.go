@@ -89,4 +89,28 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 			}
 		}
 	}
+
+	if s.BackgroundAudio.State != "recorded" {
+		_, _ = fmt.Fprintf(w, "\nBackground audio: %s (%s)\n", s.BackgroundAudio.State, s.BackgroundAudio.Reason)
+	} else if len(s.BackgroundAudio.Steps) == 0 {
+		_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+	} else {
+		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
+		for _, step := range s.BackgroundAudio.Steps {
+			_, _ = fmt.Fprintf(w, "  - [%s] %s (kind=%s rev=%d): %s", step.Phase, step.CueName, step.Kind, step.ActionRevision, step.State)
+			if step.Outcome != "" {
+				_, _ = fmt.Fprintf(w, " outcome=%s", step.Outcome)
+			}
+			_, _ = fmt.Fprintln(w)
+			if step.Reason != "" {
+				_, _ = fmt.Fprintf(w, "      %s\n", step.Reason)
+			}
+			if step.DispatchedAt != nil {
+				_, _ = fmt.Fprintf(w, "      dispatched: %s\n", *step.DispatchedAt)
+			}
+			if step.ResolvedAt != nil {
+				_, _ = fmt.Fprintf(w, "      resolved:   %s\n", *step.ResolvedAt)
+			}
+		}
+	}
 }

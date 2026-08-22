@@ -18,13 +18,13 @@ const (
 	NightEvidenceNotAvailable  NightEvidenceState = "not_available"
 )
 
-// NightReadinessCheck is one named signal run-readiness evaluated — see
+// NightReadinessCheck is one named signal run-readiness evaluated - see
 // the OpenAPI schema for the current, full list of checks. A healthy
 // result on one check is never evidence any other check passed.
 type NightReadinessCheck struct {
 	Name string `json:"name"`
 	// State is observation.Health's vocabulary plus "not_verifiable" for
-	// a check that can never be anything else — excluded from the
+	// a check that can never be anything else - excluded from the
 	// aggregate outcome but always listed.
 	State  string `json:"state"`
 	Reason string `json:"reason"`
@@ -67,12 +67,42 @@ type NightCue struct {
 }
 
 // NightCues is the current cycle's per-cue detail, or the stated reason it
-// could not be read — never a silently empty list standing in for either
+// could not be read - never a silently empty list standing in for either
 // "no cues configured" or "read failed" (ADR-020).
 type NightCues struct {
 	State  NightEvidenceState `json:"state"`
 	Reason string             `json:"reason"`
 	Cues   []NightCue         `json:"cues"`
+}
+
+// NightBackgroundAudioStep is one durable background-audio or
+// announcement duck/restore/interrupt step this session's controller has
+// recorded (Track F seam F5), across every cycle the session has lived
+// through - the same evidence nightbackgroundaudio.go's own history read
+// uses to decide its next action, surfaced so a stall or a stranded
+// duck is visible on the operator surface rather than only in a log
+// line (RESTING-MODE.md section 14).
+type NightBackgroundAudioStep struct {
+	Phase          string  `json:"phase"`
+	CueName        string  `json:"cueName"`
+	Kind           string  `json:"kind"`
+	ActionRevision int64   `json:"actionRevision"`
+	State          string  `json:"state"` // "pending" | "dispatched" | "resolved" | "ambiguous"
+	Outcome        string  `json:"outcome,omitempty"`
+	Reason         string  `json:"reason,omitempty"`
+	DispatchedAt   *string `json:"dispatchedAt"`
+	ResolvedAt     *string `json:"resolvedAt"`
+}
+
+// NightBackgroundAudio is resting.backgroundAudio's own durable step log
+// for the current cycle, or the stated reason it could not be read.
+// Empty Steps with State "recorded" means backgroundAudio is not
+// configured at all, or has never been started this cycle - both
+// legitimate, distinct from a read failure.
+type NightBackgroundAudio struct {
+	State  NightEvidenceState         `json:"state"`
+	Reason string                     `json:"reason"`
+	Steps  []NightBackgroundAudioStep `json:"steps"`
 }
 
 // NightSessionState is the full lifecycle resource.
@@ -100,6 +130,8 @@ type NightSessionState struct {
 	Transition NightPhaseEvidence `json:"transition"`
 
 	Cues NightCues `json:"cues"`
+
+	BackgroundAudio NightBackgroundAudio `json:"backgroundAudio"`
 
 	Degraded       bool   `json:"degraded"`
 	DegradedReason string `json:"degradedReason,omitempty"`
@@ -155,7 +187,7 @@ type NightCommandResponse struct {
 	Session    NightSessionState  `json:"session"`
 }
 
-// NightSessionChangedEvent is the "nightSession.changed" stream frame —
+// NightSessionChangedEvent is the "nightSession.changed" stream frame -
 // one kind, not one per transition. The stream is not resumable, so this
 // carries the full NightSessionState a GET returns, never a delta.
 type NightSessionChangedEvent struct {

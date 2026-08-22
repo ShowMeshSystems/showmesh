@@ -407,6 +407,11 @@ type NightSessionStore interface {
 	// every cycle a night.session record lives through, not one cycle at
 	// a time.
 	ListNightCueOutboxRowsForPhase(ctx context.Context, sessionID, phase string) ([]store.NightCueOutboxRecord, error)
+	// ListNightCueOutboxRowsForPhasePrefix is ListNightCueOutboxRowsForPhase's
+	// prefix-matching sibling: every step that shares one pkg/audio
+	// session's revision counter, regardless of exactly which phase
+	// spelling recorded it (nightbackgroundaudio.go's own doc comment).
+	ListNightCueOutboxRowsForPhasePrefix(ctx context.Context, sessionID, prefix string) ([]store.NightCueOutboxRecord, error)
 	UpdateNightCueOutboxRow(ctx context.Context, rec store.NightCueOutboxRecord) error
 
 	// InTx runs fn inside one BEGIN IMMEDIATE transaction, so a lifecycle

@@ -37,7 +37,9 @@ func (h *handlers) nightCheckBackgroundAudioAssets(ctx context.Context, show str
 	if _, err := h.nightBuildBackgroundPlaylistItems(ctx, show, ba.Items); err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: err.Error()}
 	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("%d item(s) resolve to a current audio asset", len(ba.Items))}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
+		"%d item(s) resolve to a current, non-superseded coordinator asset record of media type \"audio\". NOT checked: whether the stored bytes still hash-match on disk (no re-hash-on-read exists in this build), and whether audio.media.probe has confirmed a usable duration for any item (this readiness pass never dispatches a node probe)",
+		len(ba.Items))}
 }
 
 // nightCheckBackgroundAudioItemTransition is §13's own item-transition
@@ -89,5 +91,5 @@ func nightCheckAnnouncementAssets(cues []config.NightSessionCue) nightReadinessC
 			}
 		}
 	}
-	return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: "no announcement-role cue is configured"}
+	return nightReadinessCheck{name: name, health: nightCheckStateNotConfigured, reason: "no announcement-role cue is configured"}
 }

@@ -231,3 +231,43 @@ func TestCmdNightEndSessionSendsExpectedPath(t *testing.T) {
 		t.Errorf("stdout = %q, want it to report the still-degraded flag", stdout.String())
 	}
 }
+
+// TestCmdNightStatusPrintsBackgroundAudioDetail proves Track F seam F5's
+// background-audio/announcement steps reach the operator CLI surface
+// (RESTING-MODE.md section 14), not only a coordinator log line.
+func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z",
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"resting-intershow",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"no readiness result recorded","sameEpoch":false,"fresh":false,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},
+			"transition":{"state":"unknown","reason":""},
+			"cues":{"state":"recorded","reason":"","cues":[]},
+			"backgroundAudio":{"state":"recorded","reason":"","steps":[
+				{"phase":"restingBackground","cueName":"bg-0002-gain","kind":"gain","actionRevision":2,
+				 "state":"resolved","outcome":"unconfirmable","reason":"no confirmation evidence was reported",
+				 "dispatchedAt":"2026-08-18T22:00:00Z","resolvedAt":"2026-08-18T22:00:01Z"}
+			]},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"status", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Background audio", "bg-0002-gain", "gain", "unconfirmable", "no confirmation evidence was reported",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout does not contain %q; stdout=%s", want, out)
+		}
+	}
+}

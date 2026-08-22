@@ -22,13 +22,13 @@ import (
 // Track F seam F2: the persisted night-session lifecycle controller
 // (RESTING-MODE.md §3/§4/§11, ADR-038). transition-to-show, live, and
 // transition-to-resting are modeled and persisted, but nothing here
-// advances a session out of transition-to-show or transition-to-resting —
+// advances a session out of transition-to-show or transition-to-resting -
 // that needs FPP playback evidence and cue dispatch (seams F3/F4).
 //
 // No wall-clock scheduling anywhere: every deadline check is relative to
 // h.now().
 
-// Night lifecycle states — RESTING-MODE.md §3, exactly.
+// Night lifecycle states - RESTING-MODE.md §3, exactly.
 const (
 	nightStateInactive            = "inactive"
 	nightStatePreparing           = "preparing"
@@ -42,7 +42,7 @@ const (
 	nightStateStopped             = "stopped"
 )
 
-// Night lifecycle commands — RESTING-MODE.md §4. The path segment IS the
+// Night lifecycle commands - RESTING-MODE.md §4. The path segment IS the
 // command name. end-session is a provisional operator-recovery action
 // (owner ADR question queued separately, not yet part of ADR-038's own
 // closed vocabulary).
@@ -69,7 +69,7 @@ var validNightCommands = map[string]bool{
 }
 
 // nightExemptFromDegradedGate: these three, plus end-session (handled on
-// its own path), are direction-safe and never gated on Degraded — a
+// its own path), are direction-safe and never gated on Degraded - a
 // refusal here would be strictly worse than no coordinator at all, since
 // it is a successful conversation that fires no fallback.
 var nightExemptFromDegradedGate = map[string]bool{
@@ -92,7 +92,7 @@ const nightDegradedGuidance = "night session is degraded (%s). " +
 	"end-session abandons it instead, and prepare-site then starts a fresh one. Every other lifecycle command is refused until then."
 
 // errNightCommandRefused is the sentinel a Tx closure returns to signal
-// "roll back, no error occurred — a *v1.Problem describes the refusal",
+// "roll back, no error occurred - a *v1.Problem describes the refusal",
 // distinguishing that from a genuine store/internal error.
 var errNightCommandRefused = errors.New("api: night command refused")
 
@@ -150,7 +150,7 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 const maxNightCommandRequestBodyBytes = 4 << 10
 
 // decodeNightCommandBody reads the optional {"idempotencyKey": string}
-// body. An absent or empty body is valid — every field is optional.
+// body. An absent or empty body is valid - every field is optional.
 func decodeNightCommandBody(r *http.Request) (idempotencyKey string, problem *v1.Problem) {
 	if r.ContentLength == 0 {
 		return "", nil
@@ -199,7 +199,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 			return h.nightEndSessionDecide(now, current), nil, nil
 		})
 	case cmd == nightCommandRunReadiness:
-		// Runs its own FPP/asset work outside any transaction — see
+		// Runs its own FPP/asset work outside any transaction - see
 		// [handlers.nightRunReadinessCommand]'s own doc comment.
 		out, problem, opErr = h.nightRunReadinessCommand(ctx, now, issuer)
 	case nightExemptFromDegradedGate[cmd]:
@@ -404,7 +404,7 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 // --- per-command logic ---
 
 // nightSyntheticInactiveSession is what a GET reports and every exempt
-// command decides for when no session has EVER been created — never
+// command decides for when no session has EVER been created - never
 // persisted.
 func nightSyntheticInactiveSession(now time.Time) store.NightSessionRecord {
 	return store.NightSessionRecord{State: nightStateInactive, StateEnteredAt: now}
@@ -503,7 +503,7 @@ func (h *handlers) nightStartNightTx(ctx context.Context, tx *store.Tx, now time
 		next.Cycle = current.Cycle + 1
 		next.ContentAnchorJSON = ""
 		// The first show of the night has no resting playback to lead
-		// from, so E is the moment this transition begins — written
+		// from, so E is the moment this transition begins - written
 		// explicitly, never left for a fallback to reconstruct.
 		boundaryE := now
 		next.BoundaryJSON = encodeNightBoundary(nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &boundaryE, Reason: "content boundary E is this transition's own start; no resting playback preceded it"})
@@ -548,7 +548,7 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 // applyNightShutdownEffect is fade-out-night's and power-down-
 // presentation's shared core: close admission, record the (monotonic)
 // shutdown intent, and either defer (a live or already-committed show
-// finishes first — RESTING-MODE.md §7.1.1) or enter the fade/shutdown
+// finishes first - RESTING-MODE.md §7.1.1) or enter the fade/shutdown
 // path. It never reaches stopped on its own: stopped requires an issued
 // FPP stop and fresh idle evidence, which the night loop's own
 // fading-out tick owns (nightshutdown.go).
@@ -610,7 +610,7 @@ func (h *handlers) nightPowerDownPresentation(now time.Time, current *store.Nigh
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
 	if current.State == nightStateStopped && current.PowerPhase != "" {
-		// Already stopped AND the power phase already resolved — truly
+		// Already stopped AND the power phase already resolved - truly
 		// nothing left to do. A session that reached stopped via
 		// fade-out-night has State==stopped but PowerPhase=="",
 		// and must still be allowed through below to resolve it.
@@ -629,7 +629,7 @@ func (h *handlers) nightPowerDownPresentation(now time.Time, current *store.Nigh
 
 // nightEndSessionDecide is the operator-recovery action: abandons
 // the current session, reaches stopped, launches nothing. It deliberately
-// leaves Degraded unchanged — resuming a session ShowMesh cannot confirm
+// leaves Degraded unchanged - resuming a session ShowMesh cannot confirm
 // is the guess ADR-038 forbids, so recovery is a fresh prepare-site, not a
 // clear-and-continue.
 func (h *handlers) nightEndSessionDecide(now time.Time, current *store.NightSessionRecord) nightCommandOutcome {
@@ -654,7 +654,7 @@ func (h *handlers) nightEndSessionDecide(now time.Time, current *store.NightSess
 
 // --- readiness ---
 
-// nightCheckState is one readiness check's own state — a superset of
+// nightCheckState is one readiness check's own state - a superset of
 // observation.Health, adding nightCheckStateNotVerifiable for a check that
 // is structurally incapable of ever reporting anything else (owner
 // ruling, ADR-029 decision 4's rule applied to readiness: an indicator
@@ -675,6 +675,13 @@ type nightCheckState string
 
 const (
 	nightCheckStateNotVerifiable nightCheckState = "not_verifiable"
+
+	// nightCheckStateNotConfigured is RESTING-MODE.md section 13's own
+	// distinction from not_verifiable: absent OPTIONAL configuration
+	// (nothing was ever asked for) is a different fact from a check this
+	// coordinator is structurally incapable of ever verifying. Excluded
+	// from the aggregate outcome the same way not_verifiable is.
+	nightCheckStateNotConfigured nightCheckState = "not_configured"
 )
 
 type nightReadinessCheck struct {
@@ -756,7 +763,7 @@ func nightValidateReadinessEpoch(current *store.NightSessionRecord, ok bool) *v1
 // checks in nightasset.go: the pinned resting FSEQ asset's duration, the
 // resting playlist's idle-read shape, the show playlist's presence, and
 // whether the exact deployed FSEQ variant can be confirmed
-// (not_verifiable, excluded from outcome — see [nightCheckState]). None
+// (not_verifiable, excluded from outcome - see [nightCheckState]). None
 // of this touches the store transactionally; every read here is the
 // ordinary non-tx form.
 func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Time, payload config.NightSessionPayload) ([]nightReadinessCheck, string) {
@@ -817,7 +824,7 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	checks = append(checks, nightCheckAnnouncementAssets(append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)))
 
 	for _, c := range checks {
-		if c.health == nightCheckStateNotVerifiable {
+		if c.health == nightCheckStateNotVerifiable || c.health == nightCheckStateNotConfigured {
 			continue
 		}
 		if nightHealthSeverity(c.health) > nightHealthSeverity(worst) {
@@ -859,7 +866,7 @@ func nightEncodeChecks(checks []nightReadinessCheck) []v1.NightReadinessCheck {
 
 // nightCheckFPPReachable checks exactly one signal, fpp.reachable, for one
 // FPP instance. It is one of several checks nightRunReadinessTx now runs
-// (Track F seam F3 added the others in nightasset.go) — see the OpenAPI
+// (Track F seam F3 added the others in nightasset.go) - see the OpenAPI
 // NightReadinessCheck schema for the full, current list; a caller must
 // not read a healthy result on THIS check as evidence any other check
 // passed.
@@ -892,7 +899,7 @@ func (h *handlers) nightCheckFPPReachable(ctx context.Context, now time.Time, in
 // --- config resolution ---
 
 // resolveActiveNightSessionConfigTx reads night.session.active and, when
-// it names a session, that session's current revision, both via tx —
+// it names a session, that session's current revision, both via tx -
 // necessary so the whole prepare-site decision shares one transaction
 // without deadlocking the single-connection pool against a
 // Store-level read.
@@ -955,7 +962,39 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
+	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec)
 	return out
+}
+
+// mapNightBackgroundAudio is RESTING-MODE.md section 14's own surface for
+// Track F seam F5's background-audio/announcement steps
+// (nightbackgroundaudio.go's own durable log), on the SAME "read failure
+// states its own reason, never a silently empty list" rule mapNightCues
+// already follows. Empty Steps with State Recorded is a legitimate
+// reading (backgroundAudio not configured, or never started this
+// cycle), distinct from a read failure.
+func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightBackgroundAudio {
+	if rec.ID == "" {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}}
+	}
+	rows, err := deps.NightSessions.ListNightCueOutboxRowsForPhasePrefix(ctx, rec.ID, nightPhaseRestingBackground)
+	if err != nil {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the background-audio step log: " + err.Error(), Steps: []v1.NightBackgroundAudioStep{}}
+	}
+	out := make([]v1.NightBackgroundAudioStep, 0, len(rows))
+	for _, row := range rows {
+		step, ok := nightParseBackgroundAudioRow(row)
+		if !ok {
+			continue
+		}
+		rev := row.ActionRevision
+		out = append(out, v1.NightBackgroundAudioStep{
+			Phase: row.Phase, CueName: row.CueName, Kind: step.Kind, ActionRevision: rev,
+			State: row.State, Outcome: row.Outcome, Reason: row.OutcomeReason,
+			DispatchedAt: formatTimePtr(row.DispatchedAt), ResolvedAt: formatTimePtr(row.ResolvedAt),
+		})
+	}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
 }
 
 // mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read

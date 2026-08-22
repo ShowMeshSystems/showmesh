@@ -75,15 +75,20 @@ func TestNightCheckAudioOutputCapabilities_NeverInventsAPass(t *testing.T) {
 }
 
 // TestNightCheckAnnouncementAssets_NeverInventsAPass mirrors the same
-// rule for announcement content, both with and without an announcement
-// cue configured.
+// rule for announcement content: not_verifiable when one IS configured
+// (this coordinator holds no evidence for it), not_configured when none
+// is (LOW 14: absent OPTIONAL configuration is a different fact from a
+// structurally unverifiable check).
 func TestNightCheckAnnouncementAssets_NeverInventsAPass(t *testing.T) {
 	withAnnouncement := []config.NightSessionCue{{Name: "thanks", Role: config.NightSessionCueRoleAnnouncement}}
+	check := nightCheckAnnouncementAssets(withAnnouncement)
+	if check.health != nightCheckStateNotVerifiable {
+		t.Fatalf("with an announcement cue: health = %v, want not_verifiable", check.health)
+	}
+
 	withoutAnnouncement := []config.NightSessionCue{{Name: "lights", Role: config.NightSessionCueRoleLighting}}
-	for _, cues := range [][]config.NightSessionCue{withAnnouncement, withoutAnnouncement} {
-		check := nightCheckAnnouncementAssets(cues)
-		if check.health != nightCheckStateNotVerifiable {
-			t.Fatalf("cues = %+v: health = %v, want not_verifiable", cues, check.health)
-		}
+	check = nightCheckAnnouncementAssets(withoutAnnouncement)
+	if check.health != nightCheckStateNotConfigured {
+		t.Fatalf("with no announcement cue: health = %v, want not_configured", check.health)
 	}
 }

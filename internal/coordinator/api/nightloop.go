@@ -133,12 +133,29 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 	// Track F seam F5: resting.backgroundAudio runs for the WHOLE resting
 	// presentation, not on one state's own tick alone - end-of-night-
 	// resting has no autonomous FPP action (this switch's own comment
-	// below), but background audio still advances there. Every other
-	// state stops a still-playing background session idempotently; a
-	// session already stopped or never started costs nothing to check.
+	// below), but background audio still advances there.
+	//
+	// transition-to-show deliberately does NOT stop it: RESTING-MODE.md
+	// section 7.1 stages the audio fade beginning at E minus the audio
+	// lead, with music deliberately continuing into darkness, rather than
+	// cutting it the instant this state is entered (found by review: an
+	// earlier version hard-stopped here, about 20 seconds early, which
+	// also made the enterShow duck/restore path dead code since the
+	// announcement always found an already-resolved stop). This
+	// coordinator has no enterShow.audio.fadeDuration/
+	// startBeforeTimelineEnd configuration field to stage that fade at
+	// its own precise offset (a contract gap filed separately, not
+	// invented here), so the bounded fix is: let it keep playing through
+	// the transition, and suspend only once boundary E has actually
+	// passed (nightStateLive) or the night otherwise leaves resting.
+	// Every OTHER non-resting state stops a still-playing background
+	// session idempotently; a session already stopped or never started
+	// costs nothing to check.
 	switch rec.State {
 	case nightStateRestingIntershow, nightStateEndOfNightResting:
 		h.nightAdvanceBackgroundAudio(ctx, now, rec)
+	case nightStateTransitionToShow:
+		// Intentionally no action: see this switch's own comment above.
 	default:
 		h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
 	}
