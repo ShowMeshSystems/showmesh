@@ -163,6 +163,14 @@ func newFailIfHitFPPCommandServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// setOnRequest sets the hook under f.mu, matching how the request handler
+// above reads it.
+func (f *fakeFPPCommandServer) setOnRequest(hook func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onRequest = hook
+}
+
 func (f *fakeFPPCommandServer) hitCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1407,24 +1415,37 @@ func TestFPPCommandOutcomeSurvivesClientDisconnect(t *testing.T) {
 		FPPCommandConfirmDeadline: 1 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
 	})
 
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
-	}()
-
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token).WithContext(ctx)
-
-	// Cancel the REQUEST's own context shortly after dispatch (the fake
-	// FPP server answers instantly) but well before the 150ms fresh
-	// evidence arrives — simulating the client closing its tab mid-wait.
-	go func() {
-		time.Sleep(40 * time.Millisecond)
+	// Cancel synchronously from the fake FPP server's own onRequest hook,
+	// which fires only once FPP has actually received the dispatch, i.e.
+	// strictly after authentication and the pre-dispatch write ran.
+	// Anchoring cancel to that event (rather than a sleep racing the wall
+	// clock) is the load-bearing part: it orders "client disconnects"
+	// strictly after dispatch regardless of how long authentication took
+	// to reach this hook.
+	//
+	// Evidence delivery runs on its own goroutine, NOT inline in the hook:
+	// onRequest fires before this fake server writes its HTTP response
+	// (see newFakeFPPCommandServer), so a sleep inline here would delay
+	// FPP's own response and let the confirmation loop's first poll see
+	// the idle evidence before it ever starts waiting, proving only that
+	// an already-decided outcome gets recorded rather than that the wait
+	// itself keeps running server-side past the disconnect. The 100ms
+	// sleep inside the goroutine only needs to land within the 1s confirm
+	// deadline, giving the confirmation loop a live poll window in which
+	// the client has already disconnected but evidence has not yet
+	// arrived.
+	srv.setOnRequest(func() {
 		cancel()
-	}()
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
+		}()
+	})
+	req := newFPPCommandRequest(t, "bench-fpp", stopPlaylistBody("key-1"), token).WithContext(ctx)
 
 	rec := httptest.NewRecorder()
 	api.Handler.ServeHTTP(rec, req)

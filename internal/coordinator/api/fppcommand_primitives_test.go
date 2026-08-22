@@ -109,12 +109,12 @@ func TestStartPlaylistConfirmsOnStatusAndNameMatch(t *testing.T) {
 	setup.obs.setObs([]observation.Observation{
 		fppStatusObs("bench-fpp", "idle", testNow, testNow),
 	})
-	srv.onRequest = func() {
+	srv.setOnRequest(func() {
 		setup.obs.setObs([]observation.Observation{
 			fppStatusObs("bench-fpp", "playing", testNow, testNow),
 			fppPlaylistNameObs("bench-fpp", "showmesh-test", testNow, testNow),
 		})
-	}
+	})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
 		FPPCommandConfirmDeadline: 2 * time.Second, FPPCommandPollInterval: 10 * time.Millisecond,
@@ -155,11 +155,24 @@ func TestStartPlaylistUnconfirmedWhenPlayingButNameDiffers(t *testing.T) {
 	// status reads "playing" but the NAME is a different playlist — FPP's
 	// own scheduler may have started it. "playing" alone must never
 	// confirm this command.
-	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
 	setup.obs.setObs([]observation.Observation{
 		fppStatusObs("bench-fpp", "idle", testNow, testNow),
+	})
+	// Flip the evidence from the fake FPP's own onRequest hook, which fires
+	// only once the dispatch has actually reached FPP, i.e. strictly after
+	// the ifBusy pre-dispatch check ran. A timed sleep here races that
+	// check under load and can flip the evidence before ifBusy reads it,
+	// turning this test's own "idle at dispatch" premise into a spurious
+	// 409 (ADR-024's ifBusy=refuse correctly refusing state that no longer
+	// matches the premise).
+	srv.setOnRequest(func() {
+		setup.obs.setObs([]observation.Observation{
+			fppStatusObs("bench-fpp", "playing", testNow, testNow),
+			fppPlaylistNameObs("bench-fpp", "some-other-playlist", testNow, testNow),
+		})
 	})
 	api := New(setup.deps(), Options{
 		Clock: fixedClock(testNow), Logger: testLogger(),
@@ -168,14 +181,6 @@ func TestStartPlaylistUnconfirmedWhenPlayingButNameDiffers(t *testing.T) {
 
 	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, operator.ID)
-
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		setup.obs.setObs([]observation.Observation{
-			fppStatusObs("bench-fpp", "playing", testNow, testNow),
-			fppPlaylistNameObs("bench-fpp", "some-other-playlist", testNow, testNow),
-		})
-	}()
 
 	body := fppCommandBody("startPlaylist", "key-1", `{"playlist":"showmesh-test"}`)
 	req := newFPPCommandRequest(t, "bench-fpp", body, token)
