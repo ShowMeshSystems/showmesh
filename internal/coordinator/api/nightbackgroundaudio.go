@@ -81,6 +81,7 @@ type nightBackgroundAudioStep struct {
 var (
 	nightBGApplyPattern  = regexp.MustCompile(`^bg-(\d{4,})-apply-(.+)$`)
 	nightBGStartPattern  = regexp.MustCompile(`^bg-(\d{4,})-start-(.+)$`)
+	nightBGGainPattern   = regexp.MustCompile(`^bg-(\d{4,})-gain$`)
 	nightBGStopPattern   = regexp.MustCompile(`^bg-(\d{4,})-stop$`)
 	nightBGInterruptStop = regexp.MustCompile(`^bg-(\d{4,})-stop-interrupt-(.+)-(.+)$`)
 )
@@ -90,6 +91,9 @@ func nightBackgroundAudioCueNameApply(seq int, itemID string) string {
 }
 func nightBackgroundAudioCueNameStart(seq int, itemID string) string {
 	return fmt.Sprintf("bg-%04d-start-%s", seq, itemID)
+}
+func nightBackgroundAudioCueNameGain(seq int) string {
+	return fmt.Sprintf("bg-%04d-gain", seq)
 }
 func nightBackgroundAudioCueNameStop(seq int) string {
 	return fmt.Sprintf("bg-%04d-stop", seq)
@@ -131,6 +135,13 @@ func parseNightBackgroundAudioCueName(name string) (nightBackgroundAudioStep, bo
 			return nightBackgroundAudioStep{}, false
 		}
 		return nightBackgroundAudioStep{Seq: seq, Kind: "start", ItemID: m[2]}, true
+	}
+	if m := nightBGGainPattern.FindStringSubmatch(name); m != nil {
+		seq, err := strconv.Atoi(m[1])
+		if err != nil {
+			return nightBackgroundAudioStep{}, false
+		}
+		return nightBackgroundAudioStep{Seq: seq, Kind: "gain"}, true
 	}
 	return nightBackgroundAudioStep{}, false
 }
@@ -377,7 +388,12 @@ func dbToLinearGain(db float64) float64 {
 	return math.Pow(10, db/20)
 }
 
-func nightBackgroundApplyParams(item pkgaudio.PlaylistItem, nodeID string, gain, ceiling float64) map[string]any {
+// nightBackgroundApplyParams builds audio.session.apply's own wire
+// params. Gain and ceiling are established separately, by
+// nightBackgroundAudioGainStep's own audio.gain.set command: apply's
+// wire parser (internal/agent/audiosessionops.go) does not accept either
+// field.
+func nightBackgroundApplyParams(item pkgaudio.PlaylistItem, nodeID string) map[string]any {
 	return map[string]any{
 		"sourceRole": string(pkgaudio.SourceRoleBackground),
 		"media": map[string]any{
@@ -520,6 +536,10 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 			h.logWarn("night loop: background audio: start did not confirm; not auto-retrying", "sessionId", rec.ID, "item", latest.Step.ItemID, "outcome", latest.Row.Outcome)
 			return
 		}
+		if !nightBackgroundAudioGainEverSet(history) {
+			h.nightBackgroundAudioGainStep(ctx, now, rec, nodeID, sessionID, ba.MaxGainDb, history)
+			return
+		}
 		if !h.nightBackgroundItemCompleted(ctx, sessionID, latest.Step.ItemID) {
 			return
 		}
@@ -528,6 +548,66 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 			return // natural end: repeat "none" past the last item.
 		}
 		h.nightBackgroundAudioApplyStep(ctx, now, rec, nodeID, sessionID, next, history)
+
+	case "gain":
+		if latest.Row.Outcome != nightCueOutcomeConfirmed {
+			h.logWarn("night loop: background audio: gain did not confirm; not auto-retrying", "sessionId", rec.ID, "outcome", latest.Row.Outcome)
+			return
+		}
+		lastItemID, have := nightLastStartedBackgroundItem(history)
+		if !have {
+			return
+		}
+		if !h.nightBackgroundItemCompleted(ctx, sessionID, lastItemID) {
+			return
+		}
+		next, ok := nightNextBackgroundItem(items, lastItemID, ba.Repeat)
+		if !ok {
+			return // natural end: repeat "none" past the last item.
+		}
+		h.nightBackgroundAudioApplyStep(ctx, now, rec, nodeID, sessionID, next, history)
+	}
+}
+
+// nightBackgroundAudioGainEverSet reports whether a "gain" step has ever
+// been recorded for this session: the ceiling-bounded gain is established
+// ONCE per session (not per item), since maxGainDb does not change while
+// the same night.session revision is pinned.
+func nightBackgroundAudioGainEverSet(history []nightBackgroundAudioHistoryRow) bool {
+	for _, h := range history {
+		if h.Step.Kind == "gain" {
+			return true
+		}
+	}
+	return false
+}
+
+// nightBackgroundAudioGainStep sets the background session's own gain to
+// resting.backgroundAudio.maxGainDb, converted from dB to a linear
+// pkg/audio.Gain and passed through [pkgaudio.ApplyCeiling] against that
+// SAME value as its own ceiling: this controller's only gain intent for
+// background audio IS the configured ceiling, so ApplyCeiling never
+// actually clamps here, but the call is real, not decorative, and its
+// CeilingResult is logged so a future caller that ever requests a
+// DIFFERENT gain for this session has a place to see how the clamp
+// decision is made. There is no wire-level "ceiling" concept on
+// audio.session.apply or audio.gain.set (internal/agent/audiosessionops.go's
+// own doc comment: "Gain, ceiling, fade, and bookmark are not wired
+// here"), so the ceiling is enforced only at the moment this controller
+// computes and sends a gain, not as a standing constraint the node itself
+// re-applies against a later, independently issued gain change.
+func (h *handlers) nightBackgroundAudioGainStep(ctx context.Context, now time.Time, rec store.NightSessionRecord, nodeID, sessionID string, maxGainDb float64, history []nightBackgroundAudioHistoryRow) {
+	requested, ceiling := nightBackgroundCeilingGain(maxGainDb)
+	result, err := pkgaudio.ApplyCeiling(requested, ceiling)
+	if err != nil {
+		h.logWarn("night loop: background audio: gain computation failed", "sessionId", rec.ID, "error", err)
+		return
+	}
+	revision := nightNextBackgroundAudioRevision(history)
+	cueName := nightBackgroundAudioCueNameGain(int(revision))
+	target := nightAudioTarget(nodeID, sessionID, "audio.gain.set", map[string]any{"gain": float64(result.Effective)})
+	if _, err := h.nightRunAudioCommand(ctx, now, rec, nightPhaseRestingBackground, cueName, target, revision, history); err != nil {
+		h.logWarn("night loop: background audio: gain failed", "sessionId", rec.ID, "error", err, "requested", float64(result.Requested), "effective", float64(result.Effective), "clamped", result.Clamped)
 	}
 }
 
@@ -536,9 +616,7 @@ func (h *handlers) nightBackgroundAudioApplyStep(ctx context.Context, now time.T
 	if err != nil || payload.Resting.BackgroundAudio == nil {
 		return
 	}
-	ba := payload.Resting.BackgroundAudio
-	gain, ceiling := nightBackgroundCeilingGain(ba.MaxGainDb)
-	params := nightBackgroundApplyParams(item, nodeID, float64(gain), float64(ceiling))
+	params := nightBackgroundApplyParams(item, nodeID)
 	revision := nightNextBackgroundAudioRevision(history)
 	cueName := nightBackgroundAudioCueNameApply(int(revision), item.ItemID)
 	target := nightAudioTarget(nodeID, sessionID, "audio.session.apply", params)
@@ -569,10 +647,16 @@ func (h *handlers) nightResumeBackgroundStep(ctx context.Context, now time.Time,
 		if idx == -1 {
 			return
 		}
-		gain, ceiling := nightBackgroundCeilingGain(ba.MaxGainDb)
-		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(items[idx], nodeID, float64(gain), float64(ceiling)))
+		target = nightAudioTarget(nodeID, sessionID, "audio.session.apply", nightBackgroundApplyParams(items[idx], nodeID))
 	case "start":
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.start", map[string]any{})
+	case "gain":
+		gain, ceiling := nightBackgroundCeilingGain(ba.MaxGainDb)
+		result, err := pkgaudio.ApplyCeiling(gain, ceiling)
+		if err != nil {
+			return
+		}
+		target = nightAudioTarget(nodeID, sessionID, "audio.gain.set", map[string]any{"gain": float64(result.Effective)})
 	case "stop":
 		target = nightAudioTarget(nodeID, sessionID, "audio.session.stop", map[string]any{})
 	default:

@@ -206,11 +206,13 @@ func TestNightAdvanceBackgroundAudio_AdvancesOnCompletionEvidence(t *testing.T) 
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // apply track-1
 	pub.result = confirmedResultForAction("start", sessionID, "started")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // start track-1
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // establish gain (once per session)
 
 	// Not yet completed: no observation set at all.
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
-	if pub.count() != 2 {
-		t.Fatalf("publish count = %d after a tick with no completion evidence, want still 2", pub.count())
+	if pub.count() != 3 {
+		t.Fatalf("publish count = %d after a tick with no completion evidence, want still 3", pub.count())
 	}
 
 	obs.setObs([]observation.Observation{
@@ -220,8 +222,8 @@ func TestNightAdvanceBackgroundAudio_AdvancesOnCompletionEvidence(t *testing.T) 
 	pub.result = confirmedResultForAction("apply", sessionID, "started")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // apply track-2
 
-	if pub.count() != 3 {
-		t.Fatalf("publish count = %d, want 3 (apply track-2 after track-1 completed)", pub.count())
+	if pub.count() != 4 {
+		t.Fatalf("publish count = %d, want 4 (apply track-2 after track-1 completed)", pub.count())
 	}
 	media, _ := pub.lastParams["media"].(map[string]any)
 	if media["assetId"] != "asset-2" {
@@ -244,6 +246,8 @@ func TestNightAdvanceBackgroundAudio_PlayingStateNeverAdvances(t *testing.T) {
 	pub.result = confirmedResultForAction("apply", sessionID, "started")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 	pub.result = confirmedResultForAction("start", sessionID, "started")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 	countAfterStart := pub.count()
 
@@ -550,5 +554,55 @@ func TestNightAdvanceBackgroundAudio_CrashAfterDispatchBeforePersist(t *testing.
 	}
 	if rows[0].State != nightCueStateResolved || rows[0].Outcome != nightCueOutcomeConfirmed {
 		t.Fatalf("resumed row = %+v, want resolved/confirmed", rows[0])
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_EstablishesGainAtConfiguredCeiling
+// proves maxGainDb reaches the node as a real audio.gain.set command,
+// converted from dB to linear amplitude and passed through
+// pkgaudio.ApplyCeiling, once per session (not re-sent on every item
+// advance).
+func TestNightAdvanceBackgroundAudio_EstablishesGainAtConfiguredCeiling(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.result = confirmedResultForAction("apply", sessionID, "started")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	pub.result = confirmedResultForAction("start", sessionID, "started")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	pub.result = confirmedResultForAction("gain", sessionID, "gain")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.gain.set" {
+		t.Fatalf("dispatched action = %q, want audio.gain.set", pub.lastAction)
+	}
+	gain, ok := pub.lastParams["gain"].(float64)
+	if !ok {
+		t.Fatalf("params.gain = %v, want a float64", pub.lastParams["gain"])
+	}
+	wantGain := dbToLinearGain(-10) // ba.MaxGainDb
+	if diff := gain - wantGain; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("gain = %v, want %v (linear amplitude for -10 dB)", gain, wantGain)
+	}
+
+	countAfterGain := pub.count()
+	obs := &dynamicObservationLister{}
+	h.deps.Observations = obs
+	obs.setObs([]observation.Observation{
+		backgroundAudioSessionObs(sessionID, "audio_session.state", "completed", testNow),
+		backgroundAudioSessionObs(sessionID, "audio_session.playlist.item_id", "track-1", testNow),
+	})
+	pub.result = confirmedResultForAction("apply", sessionID, "started")
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec) // advances to track-2
+
+	if pub.lastAction != "audio.session.apply" {
+		t.Fatalf("dispatched action after gain established = %q, want audio.session.apply (gain is not re-sent per item)", pub.lastAction)
+	}
+	if pub.count() != countAfterGain+1 {
+		t.Fatalf("publish count = %d, want %d (exactly one more dispatch, the apply)", pub.count(), countAfterGain+1)
 	}
 }
