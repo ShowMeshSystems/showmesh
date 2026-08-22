@@ -646,6 +646,17 @@ var showConfigValidationProblemTypes = map[string]string{
 	config.ValidationCodeAudioNodeChannelDuplicate: ProblemBaseURI + "audio-node-channel-duplicate",
 	config.ValidationCodeAudioNodeChannelOverlap:   ProblemBaseURI + "audio-node-channel-overlap",
 	config.ValidationCodeAudioNodeRouteMismatch:    ProblemBaseURI + "audio-node-route-mismatch",
+	config.ValidationCodeCrossShowReference:        ProblemBaseURI + "show-config-cross-show-reference",
+
+	// Track F seam F6's own additions (nightsitecontrol.go).
+	config.ValidationCodeInterlockNameDuplicate:                 ProblemBaseURI + "show-config-interlock-name-duplicate",
+	config.ValidationCodeInterlockSignalNotConfirmable:          ProblemBaseURI + "show-config-interlock-signal-not-confirmable",
+	config.ValidationCodePowerDomainRefused:                     ProblemBaseURI + "show-config-power-domain-refused",
+	config.ValidationCodeDomainProvenanceRefused:                ProblemBaseURI + "show-config-domain-provenance-refused",
+	config.ValidationCodePrerequisitesEmpty:                     ProblemBaseURI + "show-config-prerequisites-empty",
+	config.ValidationCodePowerOffPrerequisiteCycle:              ProblemBaseURI + "show-config-power-off-prerequisite-cycle",
+	config.ValidationCodeInterlockShutdownPhaseRequiresOverride: ProblemBaseURI + "interlock-shutdown-phase-requires-override",
+	config.ValidationCodeInterlockSignalNoFalseAnswer:           ProblemBaseURI + "interlock-signal-no-false-answer",
 }
 
 // mapValidationError renders verr as a v1.Problem whose Type names verr's

@@ -1938,6 +1938,12 @@ export interface paths {
          *     `fade-out-night`, `power-down-presentation`, `request-final-show`, and `end-session` are exempt from the degraded-session gate and never refused for want of an audit write (ADR-024 decision 11): all four are direction-safe. The other four fail closed on an unwritable audit store (`503`, see below) and refuse while the session is degraded and non-terminal.
          *
          *     `idempotencyKey` (optional request body field) is honored only by `prepare-site`, the one command that creates something new; a repeat with the same key returns the original session. The other six commands are already idempotent by lifecycle state and ignore the field.
+         *
+         *     `interlockOverrides` (optional request body field, Track F seam F6) names configured "block" interlock rules to override for THIS command. `night:command` alone never authorizes an override: a rule is bypassed only when it declares `overridePolicy: authorized-operator` AND the caller separately holds `night:override` (RESTING-MODE.md §10.1; IDENTIFIER-REGISTER.md: starting a night must not, by itself, authorize bypassing a blocking interlock).
+         *
+         *     A "block" interlock declared for `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, or `power-down-presentation` can withhold that same command with a `409` (`night-not-ready`) naming the rule, unless a valid override is supplied. `prepare-site`, `run-readiness`, `fade-out-night`, and `power-down-presentation` dispatch that rule's own evidence LIVE, at the instant the command runs. `start-preshow` and `start-night` gate on the most recent readiness result instead, which is at most as fresh as the last `run-readiness` call; see RESTING-MODE.md §10.1 and this seam's own build report for why those are different freshness guarantees, and for why fade-out-night and power-down-presentation moved from a stored gate to a live one: a night runs for hours and run-readiness typically runs once, near the start, so a stored gate on either shutdown phase almost always found no trusted result at all by the time it mattered and silently made `onUnavailable: allow` the only condition it could ever report.
+         *
+         *     `fade-out-night` and `power-down-presentation` are also the two phases where PUT /config/night.session/{id} refuses a "block" rule that declares `overridePolicy: "none"` (`interlock-shutdown-phase-requires-override`): a guard on a phase that ends the night must always have a human exit, so every such rule is guaranteed an authorized-operator override path. `request-final-show` and `end-session` declare no interlock phase and consult no gate at all: `end-session` in particular is never withheld by any interlock, by construction, so it always reaches "stopped" even for a caller who cannot supply a valid override, though only `fade-out-night` and `power-down-presentation` themselves actually issue FPP's own stop. `projector-strike`, `enter-resting`, and `presentation-power-on` are validated and shown on readiness but have no command of their own to gate in this build.
          */
         post: operations["dispatchNightCommand"];
         delete?: never;
@@ -3312,7 +3318,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
             title: string;
             status: number;
             detail: string;
@@ -4030,7 +4036,57 @@ export interface components {
             endOfNightRepeat?: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudioWrite"];
         };
-        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, and enterResting carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a- documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one — matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks refusal, the same-show rule) applies identically here. */
+        /** @description A configured power binding under night.session.siteControl (RESTING-MODE.md §10.2, Track F seam F6). action must name an existing show.action object in this session's own show (server-side; not expressible here). domainProvenance "provider" is refused (server-side): no control provider in this build can authoritatively identify a power binding's physical targets, so every binding this build accepts is operator-declared. */
+        ConfigNightSessionPowerBinding: {
+            action: string;
+            /** @enum {string} */
+            powerDomain: "presentation" | "environmental" | "mixed" | "unknown";
+            /** @enum {string} */
+            domainProvenance: "provider" | "operator-declared";
+        };
+        /** @description One entry of presentationPowerOff.prerequisites, present only when removalPolicy is "after-actions" (RESTING-MODE.md §10.2). A "delay" entry carries delayMs and neither action nor requireConfirmation; an "action" or "evidence" entry carries action and, for "action" only, an optional requireConfirmation. action must not name this same presentation power-off binding's own action, directly or indirectly (server-side; not expressible here). */
+        ConfigNightSessionPrerequisite: {
+            /** @enum {string} */
+            kind: "action" | "delay" | "evidence";
+            action?: string;
+            requireConfirmation?: boolean;
+            delayMs?: number;
+        };
+        /** @description night.session.siteControl.presentationPowerOff (RESTING-MODE.md §10.2). powerDomain must be "presentation" (server-side): this binding is what power-down-presentation invokes, and every other domain is refused rather than guessed. removalPolicy "immediate" requires immediateSafeAttestation: true and forbids prerequisites; "after-actions" requires a non-empty prerequisites list and forbids immediateSafeAttestation (server-side; that either/or is not expressible in this schema alone). */
+        ConfigNightSessionPresentationPowerOff: {
+            action: string;
+            /** @enum {string} */
+            powerDomain: "presentation" | "environmental" | "mixed" | "unknown";
+            /** @enum {string} */
+            domainProvenance: "provider" | "operator-declared";
+            /** @enum {string} */
+            removalPolicy: "immediate" | "after-actions";
+            immediateSafeAttestation?: boolean;
+            prerequisites?: components["schemas"]["ConfigNightSessionPrerequisite"][];
+        };
+        /** @description night.session.siteControl (RESTING-MODE.md §10.2/§10.4, ADR-016, Track F seam F6): entirely optional, and every field within it is independently optional too; an empty object is refused (server-side) as configuration nothing enforces. requestThermalProfile, when present, names an existing show.action object in this session's own show (server-side). */
+        ConfigNightSessionSiteControl: {
+            requestThermalProfile?: string;
+            presentationPowerOn?: components["schemas"]["ConfigNightSessionPowerBinding"];
+            presentationPowerOff?: components["schemas"]["ConfigNightSessionPresentationPowerOff"];
+        };
+        /** @description One entry of night.session.interlocks (RESTING-MODE.md §10.1, Track F seam F6): a named rule attached to exactly one lifecycle phase, unique within a configuration revision. A "disabled" entry carries only name, phase, and posture; every other property below is refused for it (server-side). An "observe" entry must not set onUnavailable or overridePolicy; a "block" entry requires both, with no default (server-side; the exact combination rules are not expressible in this schema alone). signal names an existing show.action object that declares an mqtt target with expect.kind other than "none" (server-side): an interlock's evidence is that action's own request/response, the only mechanism this build has to reach a site sensor. */
+        ConfigNightSessionInterlock: {
+            name: string;
+            /** @enum {string} */
+            phase: "prepare-site" | "presentation-power-on" | "projector-strike" | "run-readiness" | "start-preshow" | "start-night" | "enter-resting" | "fade-out-night" | "power-down-presentation";
+            /** @enum {string} */
+            posture: "observe" | "block" | "disabled";
+            signal?: string;
+            /** @description Bounds how old the evidence this rule consults may be before it is treated as unavailable (server-side enforced). For a phase whose evidence is dispatched live at the instant the command runs (prepare-site, run-readiness, fade-out-night, power-down-presentation), evidence is always current and this has no effect. For a phase gated against a stored readiness result instead (start-preshow, start-night), the stricter of this value and the coordinator's own configured readiness max age is enforced; with no trusted result at all, or one older than either bound, this rule is evidence-unavailable regardless of what its stored check reports. */
+            freshnessSeconds?: number;
+            failureText?: string;
+            /** @enum {string} */
+            onUnavailable?: "block" | "allow";
+            /** @enum {string} */
+            overridePolicy?: "none" | "authorized-operator";
+        };
+        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, and enterResting carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a- documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one — matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks validation, the same-show rule) applies identically here. */
         ConfigNightSessionWrite: {
             show: string;
             label: string;
@@ -4038,8 +4094,10 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionRestingWrite"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShowWrite"];
             enterResting: components["schemas"]["ConfigNightSessionEnterRestingWrite"];
+            siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
+            interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
         };
-        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seam F1, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} — never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) — this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present. Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
+        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seams F1 and F6, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} — never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) — this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are entirely optional (RESTING-MODE.md §10's own opening line: a deployment that omits both runs the whole night loop unchanged). Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item, every siteControl action, every interlock signal) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
         ConfigNightSession: {
             show: string;
             label: string;
@@ -4047,6 +4105,8 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionResting"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShow"];
             enterResting: components["schemas"]["ConfigNightSessionEnterResting"];
+            siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
+            interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
         };
         /** @description The body of GET and PUT /config/night.session/{id}, and of GET /config/night.session/{id}/revisions/{revision} (one past, immutable revision's full payload). */
         NightSessionConfigResponse: {
@@ -4196,9 +4256,15 @@ export interface components {
             serverTime: string;
             session: components["schemas"]["NightSessionState"];
         };
-        /** @description The optional body of POST /night/commands/{command}. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. */
+        /** @description One entry of NightCommandRequest.interlockOverrides (RESTING-MODE.md §10.1, Track F seam F6): a request to override a named "block" interlock rule currently withholding the command's own phase. Honored only when that rule declares `overridePolicy: authorized-operator`, the caller separately holds `night:override`, and the rule is actually withholding the phase being entered (server-side; not expressible here). Every accepted override is audited with the rule, phase, reason, and a bounded (this-invocation-only) scope. */
+        NightInterlockOverride: {
+            rule: string;
+            reason: string;
+        };
+        /** @description The optional body of POST /night/commands/{command}. Decoded strictly: an unrecognized key is refused, not silently ignored. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. `interlockOverrides` (Track F seam F6) is consulted by `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, and `power-down-presentation`, each against the "block" interlock rules declared for that command's own phase, described in full on `POST /night/commands/{command}` itself. `request-final-show` and `end-session` consult no interlock at all and REFUSE a non-empty `interlockOverrides` rather than silently ignoring it. */
         NightCommandRequest: {
             idempotencyKey?: string;
+            interlockOverrides?: components["schemas"]["NightInterlockOverride"][];
         };
         /** @description What POST /night/commands/{command} accepted, and how — `idempotent_no_op` is a real, distinct outcome from `applied`. */
         NightCommandResult: {
@@ -8193,7 +8259,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
+            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met, including a configured "block" interlock currently withholding this phase and not covered by a valid override, Track F seam F6), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

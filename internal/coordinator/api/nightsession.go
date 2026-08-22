@@ -81,6 +81,44 @@ func (h *handlers) nightSessionActionResolver(ctx context.Context) config.Action
 	}
 }
 
+// nightInterlockSignalResolver is [config.InterlockSignalResolver]: unlike
+// h.nightSessionActionResolver, an interlock's "signal" also needs enough
+// of the action's own target to confirm it can produce an evidence read
+// at all (mqtt, with an expect.kind other than "none"): the orchestrator
+// ruling this seam's build brief carries: a named logical action's own
+// request/response is the only evidence source this codebase can reach
+// today, so a signal that can never confirm anything is refused at write
+// time rather than accepted and silently unusable at run-readiness.
+func (h *handlers) nightInterlockSignalResolver(ctx context.Context) config.InterlockSignalResolver {
+	return func(id string) (config.NightInterlockSignalInfo, bool) {
+		obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowActionConfigKind, id)
+		if err != nil || obj.CurrentRevision == 0 {
+			return config.NightInterlockSignalInfo{}, false
+		}
+		rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowActionConfigKind, id, obj.CurrentRevision)
+		if err != nil {
+			return config.NightInterlockSignalInfo{}, false
+		}
+		var head struct {
+			Show   string `json:"show"`
+			Target struct {
+				Integration string `json:"integration"`
+				Expect      struct {
+					Kind  string  `json:"kind"`
+					Value *string `json:"value"`
+				} `json:"expect"`
+			} `json:"target"`
+		}
+		if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+			return config.NightInterlockSignalInfo{}, false
+		}
+		return config.NightInterlockSignalInfo{
+			Show: head.Show, Integration: head.Target.Integration,
+			MQTTExpectKind: head.Target.Expect.Kind, MQTTExpectValuePresent: head.Target.Expect.Value != nil,
+		}, true
+	}
+}
+
 // nightSessionExists is [config.NightSessionExists] — the
 // night.session.active singleton's own reference check, mirroring
 // h.showExists (showobjects.go) one kind over.
@@ -156,7 +194,7 @@ func (h *handlers) handlePutNightSession(w http.ResponseWriter, r *http.Request)
 	}
 
 	payload, verr := config.DecodeNightSessionPayload(string(raw), endpoints,
-		h.nightSessionAssetCurrent(r.Context()), h.nightSessionActionResolver(r.Context()))
+		h.nightSessionAssetCurrent(r.Context()), h.nightSessionActionResolver(r.Context()), h.nightInterlockSignalResolver(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
