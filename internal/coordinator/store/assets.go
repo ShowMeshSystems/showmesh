@@ -364,7 +364,8 @@ func listAssets(ctx context.Context, q querier, filter AssetFilter) ([]AssetReco
 }
 
 // ListAssets returns every asset matching filter (current and superseded
-// alike), ordered for a stable, deterministic result.
+// alike, except that NodeID selects current only), ordered for a stable,
+// deterministic result.
 func (s *Store) ListAssets(ctx context.Context, filter AssetFilter) ([]AssetRecord, error) {
 	guardNotInTx(ctx, "Store.ListAssets")
 	return listAssets(ctx, s.db, filter)
