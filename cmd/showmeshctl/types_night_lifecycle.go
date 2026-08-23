@@ -112,6 +112,14 @@ type nightCommandResultWire struct {
 	AttributionDegraded bool   `json:"attributionDegraded"`
 }
 
+// nightCommandOverrideWire is one entry of the POST
+// /night/commands/{command} request body's optional
+// "interlockOverrides" array (Track F seam F6, RESTING-MODE.md §10.1).
+type nightCommandOverrideWire struct {
+	Rule   string `json:"rule"`
+	Reason string `json:"reason"`
+}
+
 type nightCommandResponseWire struct {
 	ServerTime time.Time              `json:"serverTime"`
 	Command    nightCommandResultWire `json:"command"`

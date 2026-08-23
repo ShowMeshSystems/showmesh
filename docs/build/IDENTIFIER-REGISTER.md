@@ -212,7 +212,7 @@ bundles of these (ADR-024).
 | `principal:read` | shipped | principal/token/audit administration reads (Track G seam G-5) |
 | `audio:command` | reserved | Track C seams C3/C4: session, gain, fade, mute |
 | `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
-| `night:override` | reserved | Track F seam F6: interlock override where a rule declares `authorized-operator` |
+| `night:override` | shipped | Track F seam F6: interlock override where a rule declares `authorized-operator` (force-power-off instead reuses `show:action:invoke`, see RESTING-MODE.md §10.4) |
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
