@@ -37,8 +37,19 @@ var exemptWritePaths = map[string]string{
 		"either refused or a forged claim about what FPP played, so a verb for it would be a way to lie " +
 		"to the coordinator rather than a way to operate it, which is also why fpp:observe is granted to " +
 		"scheduler and admin and deliberately not to operator (FPP-PLUGIN-COORDINATOR-CONTRACTS.md 1.1). " +
-		"The READ half, GET on the same path, is an ordinary read this CLI should grow a verb for when " +
-		"Track H gives an operator a reason to look at it.",
+		"The READ half, GET on the same path, IS covered: cmd_fpp_playlist_entry_observations.go " +
+		"(showmeshctl fpp playlist-entry-observations list|reconciliation). TRACK-H-H2-SPEC.md section 5 " +
+		"is the reason it grew that verb.",
+	"/integrations/fpp/playlist-definitions": "POST is the installed FPP plugin's own evidence-publication " +
+		"route (FPP-PLUGIN-COORDINATOR-CONTRACTS.md 3.2), not an operator capability: the body is a complete " +
+		"playlist definition the coordinator only ever accepts after re-canonicalizing it and confirming its " +
+		"SHA-256 equals the caller's own declared playlistHash. A hand-typed definition is either refused by " +
+		"that hash check or a forged claim about what is on the FPP host, the identical reasoning the " +
+		"playlist-entry-observations POST exemption above states for its own sibling route, and POST shares " +
+		"fpp:observe with that route for the same reason. The READ half — GET on this path and on " +
+		"/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash} — IS covered: " +
+		"cmd_fpp_playlist_definition.go (showmeshctl fpp playlist-definitions list|get). TRACK-H-H2-SPEC.md " +
+		"section 7 is the stated reason to grow it, exactly as this file's own comment anticipated.",
 }
 
 // pathSegment is one "/"-delimited piece of a URL path as this test sees

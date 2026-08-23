@@ -57,13 +57,14 @@ type nightSessionResting struct {
 
 // nightSessionCue is one entry of enterShow.cues or enterResting.cues.
 type nightSessionCue struct {
-	Name           string `json:"name"`
-	Role           string `json:"role"`
-	Action         string `json:"action"`
-	OffsetMs       int    `json:"offsetMs"`
-	FadeDurationMs *int   `json:"fadeDurationMs,omitempty"`
-	Barrier        bool   `json:"barrier"`
-	OnFailure      string `json:"onFailure"`
+	Name               string  `json:"name"`
+	Role               string  `json:"role"`
+	Action             string  `json:"action"`
+	OffsetMs           int     `json:"offsetMs"`
+	FadeDurationMs     *int    `json:"fadeDurationMs,omitempty"`
+	Barrier            bool    `json:"barrier"`
+	OnFailure          string  `json:"onFailure"`
+	AnnouncementPolicy *string `json:"announcementPolicy,omitempty"`
 }
 
 // nightSessionEnterShow is night.session.enterShow.
@@ -78,16 +79,69 @@ type nightSessionEnterResting struct {
 	BlackoutAfterShowMs int               `json:"blackoutAfterShowMs"`
 }
 
+// nightSessionPowerBinding is a configured power binding under
+// night.session.siteControl (RESTING-MODE.md §10.2, Track F seam F6).
+type nightSessionPowerBinding struct {
+	Action           string `json:"action"`
+	PowerDomain      string `json:"powerDomain"`
+	DomainProvenance string `json:"domainProvenance"`
+}
+
+// nightSessionPrerequisite is one entry of
+// siteControl.presentationPowerOff.prerequisites.
+type nightSessionPrerequisite struct {
+	Kind                string `json:"kind"`
+	Action              string `json:"action,omitempty"`
+	RequireConfirmation bool   `json:"requireConfirmation,omitempty"`
+	DelayMs             int    `json:"delayMs,omitempty"`
+}
+
+// nightSessionPresentationPowerOff is
+// night.session.siteControl.presentationPowerOff.
+type nightSessionPresentationPowerOff struct {
+	Action                   string                     `json:"action"`
+	PowerDomain              string                     `json:"powerDomain"`
+	DomainProvenance         string                     `json:"domainProvenance"`
+	RemovalPolicy            string                     `json:"removalPolicy"`
+	ImmediateSafeAttestation bool                       `json:"immediateSafeAttestation,omitempty"`
+	Prerequisites            []nightSessionPrerequisite `json:"prerequisites,omitempty"`
+}
+
+// nightSessionSiteControl is night.session.siteControl (RESTING-MODE.md
+// §10.2/§10.4, Track F seam F6), entirely optional.
+type nightSessionSiteControl struct {
+	RequestThermalProfile string                            `json:"requestThermalProfile,omitempty"`
+	PresentationPowerOn   *nightSessionPowerBinding         `json:"presentationPowerOn,omitempty"`
+	PresentationPowerOff  *nightSessionPresentationPowerOff `json:"presentationPowerOff,omitempty"`
+}
+
+// nightSessionInterlock is one entry of night.session.interlocks
+// (RESTING-MODE.md §10.1, Track F seam F6).
+type nightSessionInterlock struct {
+	Name             string `json:"name"`
+	Phase            string `json:"phase"`
+	Posture          string `json:"posture"`
+	Signal           string `json:"signal,omitempty"`
+	FreshnessSeconds *int   `json:"freshnessSeconds,omitempty"`
+	FailureText      string `json:"failureText,omitempty"`
+	OnUnavailable    string `json:"onUnavailable,omitempty"`
+	OverridePolicy   string `json:"overridePolicy,omitempty"`
+}
+
 // nightSession is the "night.session" configuration kind's decoded
 // payload: the "payload" member of GET/PUT /config/night.session/{id}'s
-// response.
+// response. SiteControl and Interlocks are nil/empty on a deployment that
+// omits them (RESTING-MODE.md §10's own opening line).
 type nightSession struct {
-	Show         string                   `json:"show"`
-	Label        string                   `json:"label"`
-	ShowPlaylist nightSessionFPPPlaylist  `json:"showPlaylist"`
-	Resting      nightSessionResting      `json:"resting"`
-	EnterShow    nightSessionEnterShow    `json:"enterShow"`
-	EnterResting nightSessionEnterResting `json:"enterResting"`
+	Show                      string                   `json:"show"`
+	Label                     string                   `json:"label"`
+	ShowPlaylist              nightSessionFPPPlaylist  `json:"showPlaylist"`
+	Resting                   nightSessionResting      `json:"resting"`
+	EnterShow                 nightSessionEnterShow    `json:"enterShow"`
+	EnterResting              nightSessionEnterResting `json:"enterResting"`
+	AnnouncementDefaultPolicy string                   `json:"announcementDefaultPolicy"`
+	SiteControl               *nightSessionSiteControl `json:"siteControl,omitempty"`
+	Interlocks                []nightSessionInterlock  `json:"interlocks,omitempty"`
 }
 
 // nightSessionConfigResponse is the body of GET and PUT

@@ -401,3 +401,56 @@ func mapFPPPlaylistEntryObservation(rec store.FPPPlaylistEntryObservationRecord)
 func formatInt64(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
+
+// auditActionFPPResetPlaylistEntryObservationSequence is the recovery
+// route's fixed audit action, TRACK-H-H2-SPEC.md §5.1: "It clears the
+// stored observation and its sequence anchor for one instance, is
+// audited."
+const auditActionFPPResetPlaylistEntryObservationSequence = "fpp.reset_playlist_entry_observation_sequence"
+
+// handleDeleteFPPPlaylistEntryObservation serves
+// DELETE /api/v1/integrations/fpp/playlist-entry-observations/{instanceUuid},
+// H2 spec §5.1, behind writeGuard(&scopeFPPCommand, ...) — deliberately
+// fpp:command, not fpp:observe. §5.1's own reasoning: fpp:observe stays
+// out of the operator bundle so an operator credential cannot forge
+// plugin evidence, but clearing wedged evidence and manufacturing it are
+// different powers — this route only ever removes a row, it can never
+// make the store say FPP reported something it did not, so it belongs
+// with the OTHER operator-held FPP authority (fpp:command) instead.
+//
+// This is the ONLY path that clears a stored observation and its
+// sequence anchor — contract §1.5's own text: "the stored per-instance
+// sequence is cleared only by an explicit, authenticated operator
+// action." Idempotent: whether or not a row existed, the post-condition
+// (no stored observation for this instance) is the same, so this
+// succeeds either way rather than 404ing on a caller who is not sure
+// whether the instance is actually wedged.
+func (h *handlers) handleDeleteFPPPlaylistEntryObservation(w http.ResponseWriter, r *http.Request) {
+	now := h.now()
+	ctx := r.Context()
+	ac := authFromContext(ctx)
+
+	instanceUUID := r.PathValue("instanceUuid")
+
+	var deleted bool
+	writeErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
+		var err error
+		deleted, err = tx.DeleteFPPPlaylistEntryObservation(ctx, instanceUUID)
+		if err != nil {
+			return identity.AuditEntry{}, err
+		}
+		return identity.AuditEntry{
+			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+			Action: auditActionFPPResetPlaylistEntryObservationSequence, Target: instanceUUID,
+			Params: map[string]any{"deleted": deleted},
+			Kind:   identity.AuditAdmin,
+		}, nil
+	})
+	if writeErr != nil {
+		h.writeInternalError(w, now, "delete fpp playlist entry observation", writeErr)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -94,8 +94,8 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `show.surface` | operator-chosen | shipped | Track E |
 | `show.action` | operator-chosen | shipped | Step 9 |
 | `show.macro` | operator-chosen | shipped | Step 9 |
-| `show.cue` | operator-chosen | reserved | Track H seam H1 |
-| `show.playlist` | operator-chosen | reserved | Track H seam H1 |
+| `show.cue` | operator-chosen | shipped | Track H seam H1 |
+| `show.playlist` | operator-chosen | shipped | Track H seam H1 |
 | `resolume.instances` | `default` singleton | shipped | Track G seam G-2 |
 | `fpp.mqtt` | `default` singleton | shipped | Track G seam G-3 |
 | `assets.settings` | `default` singleton | shipped | Track G seam G-4 |
@@ -168,6 +168,26 @@ Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
 (ADR-032), and the path shape differs deliberately.
 
+### show.action target integrations
+
+`show.action.target.integration`, defined in
+`internal/coordinator/config/showaction.go`. ADR-029: a macro or night-
+session cue invokes the named action, and the action's own adapter owns
+the protocol underneath it — a new member here is a new integration an
+operator can bind an action to, not a new way to reach one that already
+exists.
+
+| Integration | Status | Owner |
+|---|---|---|
+| `fpp` | shipped | Step 9 |
+| `resolume` | shipped | Track D seam C |
+| `mqtt` | shipped | Step 9 |
+| `audio` | shipped | Track F seam F5 |
+
+`audio`'s own `target.audioAction` names one of the already-registered
+`audio.session.*`/`audio.gain.*`/`audio.output.*` operation names in this
+file's own "Agent operation names" table; it mints no new operation name.
+
 ## Authorization scopes
 
 Defined in `internal/coordinator/identity/types.go`. Roles are named
@@ -192,7 +212,7 @@ bundles of these (ADR-024).
 | `principal:read` | shipped | principal/token/audit administration reads (Track G seam G-5) |
 | `audio:command` | reserved | Track C seams C3/C4: session, gain, fade, mute |
 | `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
-| `night:override` | reserved | Track F seam F6: interlock override where a rule declares `authorized-operator` |
+| `night:override` | shipped | Track F seam F6: interlock override where a rule declares `authorized-operator` (force-power-off instead reuses `show:action:invoke`, see RESTING-MODE.md §10.4) |
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
@@ -628,13 +648,14 @@ The store schema version, bumped by migrations in
 | v6 | shipped | Step 7 seam 0 (atomic audit variant, strict login CSRF) |
 | v7 | shipped | Step 9 wave 1a (macro execution history, ADR-031) |
 | v8 | shipped | Track E (asset store tables, ADR-028) |
-| v9 | reserved | Track C (audio session desired state) |
-| v10 | reserved | Track F (night-session lifecycle, cue outbox) |
+| v9 | shipped | Track C seam C3 (audio session desired state, `audio_sessions`) |
+| v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox filled by seam F4) |
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
 | v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
 | v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
-| v15+ | unallocated | free |
+| v15 | shipped | Track H seam H2: FPP playlist definition storage (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3) |
+| v16+ | unallocated | free |
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are

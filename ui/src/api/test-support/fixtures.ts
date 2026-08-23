@@ -24,6 +24,9 @@ type MacroRunSummary = components['schemas']['MacroRunSummary']
 type MacroRunStep = components['schemas']['MacroRunStep']
 type MacroRun = components['schemas']['MacroRun']
 type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
+// Track F seam F2.
+type NightSessionState = components['schemas']['NightSessionState']
+type NightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
 
 const NOW = '2026-08-11T12:00:00.000Z'
 
@@ -246,6 +249,45 @@ export function makeMacroRunSummary(overrides: Partial<MacroRunSummary> = {}): M
     confirmed: null,
     reason: '',
     attributionDegraded: false,
+    ...overrides,
+  }
+}
+
+export function makeNightSessionState(overrides: Partial<NightSessionState> = {}): NightSessionState {
+  return {
+    id: 'night-1',
+    configObjectId: 'halloween-night',
+    configRevision: 1,
+    state: 'inactive',
+    stateEnteredAt: NOW,
+    cycle: 0,
+    finalShowRequested: false,
+    finalShowRequestedAt: null,
+    admissionClosed: false,
+    admissionClosedAt: null,
+    shutdownIntent: '',
+    armedShowId: '',
+    showCommitted: false,
+    readiness: { state: 'unknown', reason: 'no run-readiness result yet', sameEpoch: false, fresh: false, checks: [] },
+    powerPhase: { state: 'unknown', reason: 'not observed yet' },
+    transition: { state: 'unknown', reason: 'not observed yet' },
+    cues: { state: 'unknown', reason: 'no cycle started yet', cues: [] },
+    backgroundAudio: { state: 'unknown', reason: 'no cycle started yet', steps: [] },
+    degraded: false,
+    attributionDegraded: false,
+    authorization: { state: 'unknown', recordedAt: null },
+    updatedAt: NOW,
+    ...overrides,
+  }
+}
+
+export function makeNightSessionChangedEvent(
+  overrides: Partial<NightSessionChangedEvent> = {},
+): NightSessionChangedEvent {
+  return {
+    seq: 1,
+    serverTime: NOW,
+    session: makeNightSessionState(),
     ...overrides,
   }
 }

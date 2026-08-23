@@ -189,6 +189,48 @@ func (h *handlers) getActiveShowConfigRevision(ctx context.Context, kind, id str
 	return rev, obj, nil, nil
 }
 
+// refuseShowChange refuses a PUT to kind/id that would change its stored
+// "show" (TRACK-H-H1-SPEC.md section 2: "a PUT whose show differs from
+// the stored revision's is refused, naming both"). id having no active
+// revision yet has no stored show to compare against, so a first-time PUT
+// is never refused here: (nil, nil) means "nothing stored, proceed", a
+// non-nil *v1.Problem means "refuse this write", and a non-nil error means
+// the store lookup itself failed. Shared by handlePutShowCue and
+// handlePutShowPlaylist rather than duplicated: both kinds carry "show" at
+// the same JSON path and refuse the same way.
+func (h *handlers) refuseShowChange(ctx context.Context, kind, id, incomingShow string) (*v1.Problem, error) {
+	obj, err := h.deps.Config.GetConfigObject(ctx, kind, id)
+	if errors.Is(err, store.ErrConfigObjectNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if obj.CurrentRevision == 0 {
+		return nil, nil
+	}
+	rev, err := h.deps.Config.GetConfigRevision(ctx, kind, id, obj.CurrentRevision)
+	if err != nil {
+		return nil, err
+	}
+	var head struct {
+		Show string `json:"show"`
+	}
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+		return nil, err
+	}
+	if head.Show == incomingShow {
+		return nil, nil
+	}
+	p := mapValidationError(&config.ValidationError{
+		Code: config.ValidationCodeCrossShowReference, Field: "show",
+		Detail: fmt.Sprintf(
+			"show is immutable: %s %q belongs to show %q and cannot be moved to show %q by a PUT; author a new %s in show %q instead",
+			kind, id, head.Show, incomingShow, kind, incomingShow),
+	})
+	return &p, nil
+}
+
 func (h *handlers) handleGetShowAction(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	id := r.PathValue("id")
@@ -646,6 +688,27 @@ var showConfigValidationProblemTypes = map[string]string{
 	config.ValidationCodeAudioNodeChannelDuplicate: ProblemBaseURI + "audio-node-channel-duplicate",
 	config.ValidationCodeAudioNodeChannelOverlap:   ProblemBaseURI + "audio-node-channel-overlap",
 	config.ValidationCodeAudioNodeRouteMismatch:    ProblemBaseURI + "audio-node-route-mismatch",
+
+	// Track F seam F6's own additions (nightsitecontrol.go).
+	config.ValidationCodeInterlockNameDuplicate:                 ProblemBaseURI + "show-config-interlock-name-duplicate",
+	config.ValidationCodeInterlockSignalNotConfirmable:          ProblemBaseURI + "show-config-interlock-signal-not-confirmable",
+	config.ValidationCodePowerDomainRefused:                     ProblemBaseURI + "show-config-power-domain-refused",
+	config.ValidationCodeDomainProvenanceRefused:                ProblemBaseURI + "show-config-domain-provenance-refused",
+	config.ValidationCodePrerequisitesEmpty:                     ProblemBaseURI + "show-config-prerequisites-empty",
+	config.ValidationCodePowerOffPrerequisiteCycle:              ProblemBaseURI + "show-config-power-off-prerequisite-cycle",
+	config.ValidationCodeInterlockShutdownPhaseRequiresOverride: ProblemBaseURI + "interlock-shutdown-phase-requires-override",
+	config.ValidationCodeInterlockSignalNoFalseAnswer:           ProblemBaseURI + "interlock-signal-no-false-answer",
+
+	// Track H seam H1's own additions (showplaylist.go).
+	config.ValidationCodeEntriesEmpty:           ProblemBaseURI + "show-config-entries-empty",
+	config.ValidationCodeEntryPositionDuplicate: ProblemBaseURI + "show-config-entry-position-duplicate",
+
+	// config.ValidationCodeCrossShowReference predates Track H (showmacro.go
+	// and others already produce it) but had no problem type of its own
+	// until H1's review found it: an unmapped code falls back to the
+	// generic invalid-parameter type, making H1's headline refusal
+	// indistinguishable from any other bad field.
+	config.ValidationCodeCrossShowReference: ProblemBaseURI + "show-config-cross-show-reference",
 }
 
 // mapValidationError renders verr as a v1.Problem whose Type names verr's

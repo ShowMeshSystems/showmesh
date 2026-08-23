@@ -200,7 +200,7 @@ func TestCmdNightStatusIsAnOpenRead(t *testing.T) {
 }
 
 // TestCmdNightEndSessionSendsExpectedPath proves "night end-session" POSTs
-// the expected path — the one command reachable against a degraded
+// the expected path: the one command reachable against a degraded
 // session (finding 1).
 func TestCmdNightEndSessionSendsExpectedPath(t *testing.T) {
 	var gotPath string
@@ -229,5 +229,152 @@ func TestCmdNightEndSessionSendsExpectedPath(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "DEGRADED") {
 		t.Errorf("stdout = %q, want it to report the still-degraded flag", stdout.String())
+	}
+}
+
+// TestCmdNightStatusPrintsBackgroundAudioDetail proves Track F seam F5's
+// background-audio/announcement steps reach the operator CLI surface
+// (RESTING-MODE.md section 14), not only a coordinator log line.
+func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z",
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"resting-intershow",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"no readiness result recorded","sameEpoch":false,"fresh":false,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},
+			"transition":{"state":"unknown","reason":""},
+			"cues":{"state":"recorded","reason":"","cues":[]},
+			"backgroundAudio":{"state":"recorded","reason":"","steps":[
+				{"sequence":"background","phase":"restingBackground","cueName":"bg-0002-gain","kind":"gain","actionRevision":2,
+				 "state":"resolved","outcome":"unconfirmable","reason":"no confirmation evidence was reported",
+				 "dispatchedAt":"2026-08-18T22:00:00Z","resolvedAt":"2026-08-18T22:00:01Z"},
+				{"sequence":"announcement","phase":"announcementSession:clear:enterResting","cueName":"thank-you",
+				 "kind":"announcementClear","actionRevision":4,
+				 "state":"resolved","outcome":"refused","reason":"stale_revision",
+				 "dispatchedAt":"2026-08-18T22:00:02Z","resolvedAt":"2026-08-18T22:00:03Z"}
+			]},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"status", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Background audio", "bg-0002-gain", "gain", "unconfirmable", "no confirmation evidence was reported",
+		// The announcement sequence prints under its own heading. A
+		// refused clear means a previous announcement may still be
+		// playing and still holding the bed ducked, which must be
+		// readable here and not only in a coordinator log line.
+		"Announcement sessions", "thank-you", "announcementClear", "refused", "stale_revision",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout does not contain %q; stdout=%s", want, out)
+		}
+	}
+	// And under the right heading: an announcement failure attributed to
+	// background audio is worse than one that is merely hard to find.
+	bgAt := strings.Index(out, "Background audio:")
+	annAt := strings.Index(out, "Announcement sessions:")
+	if bgAt < 0 || annAt < 0 || annAt < bgAt {
+		t.Fatalf("headings out of order or missing (background at %d, announcement at %d); stdout=%s", bgAt, annAt, out)
+	}
+	if strings.Contains(out[bgAt:annAt], "announcementClear") {
+		t.Errorf("the announcement step printed under the background-audio heading; stdout=%s", out)
+	}
+	if strings.Contains(out[annAt:], "bg-0002-gain") {
+		t.Errorf("a background step printed under the announcement heading; stdout=%s", out)
+	}
+}
+
+// TestCmdNightStartWithOverrideSendsInterlockOverrides proves --override
+// RULE=REASON is translated into the request body's own
+// interlockOverrides array, which the coordinator's start-night gate
+// (internal/coordinator/api/nightinterlock.go) reads.
+func TestCmdNightStartWithOverrideSendsInterlockOverrides(t *testing.T) {
+	var gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","command":{"command":"start-night","outcome":"applied"},
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"transition-to-show",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"a1","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"","sameEpoch":true,"fresh":true,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},"transition":{"state":"not_available","reason":""},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"start", "--override", "cooldown=operator confirmed safe", "--server", ts.URL, "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(gotBody, `"interlockOverrides"`) || !strings.Contains(gotBody, `"cooldown"`) || !strings.Contains(gotBody, "operator confirmed safe") {
+		t.Fatalf("request body = %q, want it to carry the interlockOverrides entry", gotBody)
+	}
+}
+
+// TestCmdNightStartOverrideFlagRejectsMalformedValue proves a value with
+// no "=" is refused at parse time, before any request is sent.
+func TestCmdNightStartOverrideFlagRejectsMalformedValue(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"start", "--override", "no-equals-sign", "--server", "http://unused.invalid", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code == exitOK {
+		t.Fatalf("exit code = %d, want a parse failure for a malformed --override value", code)
+	}
+}
+
+// TestCmdNightFadeOutWithOverrideSendsInterlockOverrides proves --override
+// is available on "night fade-out" too, not only "night start"; Track F
+// seam F6's gate now covers fade-out-night's own phase.
+func TestCmdNightFadeOutWithOverrideSendsInterlockOverrides(t *testing.T) {
+	var gotBody string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z","command":{"command":"fade-out-night","outcome":"applied"},
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"fading-out",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":0,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":true,"admissionClosedAt":"2026-08-18T22:00:00Z","shutdownIntent":"fade-out","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"","sameEpoch":true,"fresh":true,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},"transition":{"state":"not_available","reason":""},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"fade-out", "--override", "cooldown=operator confirmed safe", "--server", ts.URL, "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(gotBody, `"interlockOverrides"`) || !strings.Contains(gotBody, `"cooldown"`) {
+		t.Fatalf("request body = %q, want it to carry the interlockOverrides entry", gotBody)
+	}
+}
+
+// TestCmdNightEndSessionHasNoOverrideFlag proves end-session (which
+// consults no interlock) does not even accept --override.
+func TestCmdNightEndSessionHasNoOverrideFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"end-session", "--override", "cooldown=x", "--server", "http://unused.invalid", "--token", "smsh_test"}, &stdout, &stderr, time.Now)
+	if code == exitOK {
+		t.Fatalf("exit code = %d, want a parse failure: end-session has no --override flag", code)
 	}
 }
