@@ -560,7 +560,7 @@ func Run() int {
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
 		// refusing default (unlike AssetManifests above).
-		FPPReconciliation: api.StoreFPPReconciliation{Store: st},
+		FPPReconciliation: api.StoreFPPReconciliation{Store: st, Logger: logger},
 		// AssetSettings is Track G seam G-4's live, no-restart view of the
 		// assets.settings configuration kind (ADR-039 decision 6): the SAME
 		// *assetsync.Service constructed above straight in. It already

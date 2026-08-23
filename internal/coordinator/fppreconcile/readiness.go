@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -79,7 +80,7 @@ type Report struct {
 // yet. Building one is out of this seam's scope (H2 ships no activation);
 // this is the narrower, safer reading of a spec phrase this codebase does
 // not yet have infrastructure to answer more richly.
-func PlaylistReadiness(ctx context.Context, st *store.Store, playlistID string, revision int64, p config.ShowPlaylistPayload) (Report, error) {
+func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, playlistID string, revision int64, p config.ShowPlaylistPayload) (Report, error) {
 	if p.Runner != config.ShowPlaylistRunnerFPP || p.FPP == nil {
 		return Report{}, fmt.Errorf("fppreconcile: playlist readiness requires an fpp-runner playlist with an fpp binding, got runner %q", p.Runner)
 	}
@@ -143,7 +144,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, playlistID string, 
 	// and passes its own (narrow) readiness — see this function's own doc
 	// comment.
 	for _, entry := range p.Entries {
-		if cond, reason, err := cueReady(ctx, st, entry.Cue, p.Show); err != nil {
+		if cond, reason, err := cueReady(ctx, st, logger, entry.Cue, p.Show); err != nil {
 			return Report{}, err
 		} else if cond != "" {
 			report.Ready = false
@@ -181,7 +182,13 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, playlistID string, 
 // cueReady implements condition 4's narrow Cue check (see
 // [PlaylistReadiness]'s own doc comment): exists, has an active revision,
 // and belongs to playlistShow. Returns ("", "", nil) when ready.
-func cueReady(ctx context.Context, st *store.Store, cueID, playlistShow string) (ReadinessCondition, string, error) {
+//
+// A stored revision that fails to decode is demoted to
+// [ReadinessCueNotReady] rather than failed as an error: an operator
+// still needs a readiness answer for the rest of the Playlist. Because
+// that demotion swallows the actual decode error, it is logged at warn
+// level, naming the cue id, so the corruption is not otherwise invisible.
+func cueReady(ctx context.Context, st *store.Store, logger *slog.Logger, cueID, playlistShow string) (ReadinessCondition, string, error) {
 	obj, err := st.GetConfigObject(ctx, config.ShowCueConfigKind, cueID)
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
 		return ReadinessCueNotReady, fmt.Sprintf("cue %q does not exist", cueID), nil
@@ -201,6 +208,9 @@ func cueReady(ctx context.Context, st *store.Store, cueID, playlistShow string) 
 	}
 	var cuePayload config.ShowCuePayload
 	if err := json.Unmarshal([]byte(rev.PayloadJSON), &cuePayload); err != nil {
+		if logger != nil {
+			logger.Warn("fppreconcile: stored cue revision could not be decoded; reporting cue-not-ready", "cueId", cueID, "error", err)
+		}
 		return ReadinessCueNotReady, fmt.Sprintf("cue %q's stored revision could not be decoded", cueID), nil
 	}
 	if cuePayload.Show != playlistShow {

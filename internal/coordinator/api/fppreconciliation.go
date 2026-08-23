@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -26,6 +27,12 @@ import (
 // show.
 type StoreFPPReconciliation struct {
 	Store *store.Store
+	// Logger is passed straight through to [fppreconcile.PlaylistReadiness]
+	// for the one warn-level log that package's own cueReady doc comment
+	// describes (a corrupted stored cue revision). Nil is safe: that
+	// package guards every call with a nil check, the same posture
+	// [handlers.logger] takes everywhere else in this package.
+	Logger *slog.Logger
 }
 
 // ReconcileFPPPlaylistEntryObservation implements [FPPReconciliationStore]
@@ -38,7 +45,7 @@ func (s StoreFPPReconciliation) ReconcileFPPPlaylistEntryObservation(ctx context
 // PlaylistReadinessForFPPPlaylist implements [FPPReconciliationStore] by
 // delegating straight to [fppreconcile.PlaylistReadiness].
 func (s StoreFPPReconciliation) PlaylistReadinessForFPPPlaylist(ctx context.Context, playlistID string, revision int64, p config.ShowPlaylistPayload) (fppreconcile.Report, error) {
-	return fppreconcile.PlaylistReadiness(ctx, s.Store, playlistID, revision, p)
+	return fppreconcile.PlaylistReadiness(ctx, s.Store, s.Logger, playlistID, revision, p)
 }
 
 // handleGetFPPPlaylistEntryReconciliation serves GET

@@ -1,7 +1,10 @@
 package fppreconcile
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +40,7 @@ func TestPlaylistReadinessDefinitionMissing(t *testing.T) {
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
 	// Deliberately no definition stored.
 
-	report, err := PlaylistReadiness(context.Background(), st, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -58,7 +61,7 @@ func TestPlaylistReadinessEntryNotInDefinition(t *testing.T) {
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 5, "", "")
 	putDefinitionWithEntries(t, st, "inst-1", hash, "Thriller.fseq", "")
 
-	report, err := PlaylistReadiness(context.Background(), st, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -77,7 +80,7 @@ func TestPlaylistReadinessEntryFilenameMismatch(t *testing.T) {
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
 	putDefinitionWithEntries(t, st, "inst-1", hash, "SomethingElse.fseq", "")
 
-	report, err := PlaylistReadiness(context.Background(), st, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -107,7 +110,7 @@ func TestPlaylistReadinessCueNotReady(t *testing.T) {
 	}
 	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
 
-	report, err := PlaylistReadiness(context.Background(), st, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -116,6 +119,60 @@ func TestPlaylistReadinessCueNotReady(t *testing.T) {
 	}
 	if report.FailingCondition != ReadinessCueNotReady {
 		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessCueNotReady)
+	}
+}
+
+// TestPlaylistReadinessCorruptedCueRevisionLogsWarnAndStillReportsCueNotReady
+// is review fix item 49-5: a cue whose stored revision fails to decode is
+// silently demoted to [ReadinessCueNotReady], the same closed-vocabulary
+// answer as "the cue does not exist" — but unlike that case, an operator
+// looking only at the readiness reason has no way to learn a decode
+// failure, not a missing cue, was the actual cause. The returned readiness
+// value must not change (still ReadinessCueNotReady, still not Ready); a
+// warn-level log naming the cue id and the error is what closes the gap.
+func TestPlaylistReadinessCorruptedCueRevisionLogsWarnAndStillReportsCueNotReady(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+
+	// Overwrite cue-1's own current revision with truncated JSON — the
+	// same "an interrupted write could really leave this behind" shape
+	// reconcile_test.go's corrupted-payload test uses, written directly
+	// through CreateConfigRevision rather than the encoder (which would
+	// refuse to produce it).
+	ctx := context.Background()
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.ShowCueConfigKind, ObjectID: "cue-1", Revision: 2,
+		PayloadJSON: `{"show":"show-1","name":"Thriller","outputs":{`, Source: "api",
+	}); err != nil {
+		t.Fatalf("create corrupted cue revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.ShowCueConfigKind, "cue-1", 2); err != nil {
+		t.Fatalf("activate corrupted cue revision: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	report, err := PlaylistReadiness(ctx, st, logger, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: the referenced cue's current revision does not decode")
+	}
+	if report.FailingCondition != ReadinessCueNotReady {
+		t.Fatalf("FailingCondition = %q, want %q (readiness value must not change)", report.FailingCondition, ReadinessCueNotReady)
+	}
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "level=WARN") {
+		t.Errorf("log output = %q, want a WARN-level entry", logged)
+	}
+	if !strings.Contains(logged, "cue-1") {
+		t.Errorf("log output = %q, want it to name cue id %q", logged, "cue-1")
 	}
 }
 
@@ -131,7 +188,7 @@ func TestPlaylistReadinessObservationHashMismatchIsFailureWhenObservationExists(
 	obs.EntryKey = entryKeyFor(t, p, "entry-1")
 	putObservation(t, st, obs)
 
-	report, err := PlaylistReadiness(context.Background(), st, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -154,7 +211,7 @@ func TestPlaylistReadinessObservationHashMismatchIsWarningWhenNoObservationRecei
 	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
 	// Deliberately no observation stored: the normal afternoon state.
 
-	report, err := PlaylistReadiness(context.Background(), st, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
@@ -178,7 +235,7 @@ func TestPlaylistReadinessAllConditionsPass(t *testing.T) {
 	obs.EntryKey = entryKeyFor(t, p, "entry-1")
 	putObservation(t, st, obs)
 
-	report, err := PlaylistReadiness(context.Background(), st, "playlist-1", 1, p)
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
 	if err != nil {
 		t.Fatalf("PlaylistReadiness: %v", err)
 	}
