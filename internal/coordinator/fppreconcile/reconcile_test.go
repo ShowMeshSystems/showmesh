@@ -539,26 +539,18 @@ func TestReconcileDuplicateSequenceFilenameResolvesByKeyAlone(t *testing.T) {
 	}
 }
 
-// TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic asserts that
-// fppRunnerBindingsForInstance (decodeStoredShowPlaylistPayload) skips a
-// show.playlist object whose stored payload_json fails to decode, never
-// fails the whole search on it. This proves the negative control end to
-// end through [Reconcile]
-// itself: a real config_revisions row holding truncated JSON, the shape
-// an interrupted write or a corrupted disk page could actually leave
-// behind, put directly with putConfig rather than through
-// [config.EncodeShowPlaylistPayload] (which would refuse to produce
-// this), must be skipped rather than aborting the scan.
+// TestReconcileCorruptedStoredPlaylistPayloadIsSkippedNotFatal pins that
+// fppRunnerBindingsForInstance skips a show.playlist object whose stored
+// payload_json fails to decode instead of aborting the whole search. The
+// corrupt object id sorts before a second, valid fpp binding for the same
+// instance, and only resolving to that second binding tells skipping apart
+// from stopping: a scan that halted at the first decode error would report
+// OutcomeUnbound, which is also what a genuinely unbound instance reports.
 //
-// The corrupt object id ("playlist-1") sorts BEFORE a second, valid
-// fpp-runner binding for the same instance ("playlist-2"), so the scan
-// must continue past the corrupt row and keep looking: a version of
-// fppRunnerBindingsForInstance that stopped the scan at the first
-// decode error would report OutcomeUnbound here too, even though a real
-// binding follows, so asserting only OutcomeUnbound (as this test
-// originally did) would not tell the two behaviors apart. Resolving to
-// the valid binding is the only outcome that does.
-func TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic(t *testing.T) {
+// The corrupted payload is truncated JSON put directly with putConfig, the
+// shape an interrupted write or a corrupted disk page could leave behind.
+// config.EncodeShowPlaylistPayload would refuse to produce it.
+func TestReconcileCorruptedStoredPlaylistPayloadIsSkippedNotFatal(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "show-1", "Show One")
 	putActiveShow(t, st, "show-1")
