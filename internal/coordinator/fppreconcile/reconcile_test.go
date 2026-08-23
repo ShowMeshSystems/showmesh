@@ -539,16 +539,25 @@ func TestReconcileDuplicateSequenceFilenameResolvesByKeyAlone(t *testing.T) {
 	}
 }
 
-// TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic is review
-// fix item 49-2: fppRunnerBindingsForInstance
-// (decodeStoredShowPlaylistPayload) skips a show.playlist object whose
-// stored payload_json fails to decode, never fails the whole search on
-// it. This proves the negative control end to end through [Reconcile]
-// itself: a real config_revisions row holding truncated JSON — the shape
+// TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic asserts that
+// fppRunnerBindingsForInstance (decodeStoredShowPlaylistPayload) skips a
+// show.playlist object whose stored payload_json fails to decode, never
+// fails the whole search on it. This proves the negative control end to
+// end through [Reconcile]
+// itself: a real config_revisions row holding truncated JSON, the shape
 // an interrupted write or a corrupted disk page could actually leave
 // behind, put directly with putConfig rather than through
 // [config.EncodeShowPlaylistPayload] (which would refuse to produce
-// this) — must resolve to OutcomeUnbound and must not panic.
+// this), must be skipped rather than aborting the scan.
+//
+// The corrupt object id ("playlist-1") sorts BEFORE a second, valid
+// fpp-runner binding for the same instance ("playlist-2"), so the scan
+// must continue past the corrupt row and keep looking: a version of
+// fppRunnerBindingsForInstance that stopped the scan at the first
+// decode error would report OutcomeUnbound here too, even though a real
+// binding follows, so asserting only OutcomeUnbound (as this test
+// originally did) would not tell the two behaviors apart. Resolving to
+// the valid binding is the only outcome that does.
 func TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "show-1", "Show One")
@@ -560,16 +569,23 @@ func TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic(t *testing.T) 
 	const corrupted = `{"show":"show-1","name":"Main","runner":"fpp","fpp":{"instanceUuid":"inst-1","playlistName":"Main","playlistHash":"`
 	putConfig(t, st, config.ShowPlaylistConfigKind, "playlist-1", corrupted)
 
+	validHash := hash64("valid")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main2", validHash, "cue-1", "mainPlaylist", 0, "", "")
+	putPlaylist(t, st, "playlist-2", p)
+
 	obs := baseObservation("inst-1")
-	obs.PlaylistHash = hash64("h1")
-	obs.EntryKey = hash64("e1")
+	obs.PlaylistHash = validHash
+	obs.EntryKey = entryKeyFor(t, p, "entry-1")
 
 	result, err := Reconcile(context.Background(), st, obs)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if result.Outcome != OutcomeUnbound {
-		t.Fatalf("Outcome = %q, want %q: a corrupted stored show.playlist must be skipped, not treated as a binding", result.Outcome, OutcomeUnbound)
+	if result.Outcome != OutcomeResolved {
+		t.Fatalf("Outcome = %q, want %q: the scan must skip the corrupted row and still resolve the valid binding that follows it", result.Outcome, OutcomeResolved)
+	}
+	if result.EntryID != "entry-1" || result.CueID != "cue-1" {
+		t.Fatalf("resolved to entry %q cue %q, want entry-1/cue-1", result.EntryID, result.CueID)
 	}
 }
 
