@@ -371,6 +371,32 @@ func TestDeriveShowCueClaimsAnnouncementOnlyClaimsSession(t *testing.T) {
 	}
 }
 
+// TestDeriveShowCueClaimsAudioOnlyClaimsProgramAudioRoute is the symmetric
+// case to TestDeriveShowCueClaimsAnnouncementOnlyClaimsSession: a Cue
+// declaring audio and nothing else (no announcement) claims exactly
+// program-audio-route, the exclusive route an announcement Cue explicitly
+// does not seize.
+func TestDeriveShowCueClaimsAudioOnlyClaimsProgramAudioRoute(t *testing.T) {
+	j := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {"audio": {"asset": "a", "startOffsetMillis": 0}}
+	}`
+	p, verr := DecodeShowCuePayload(j, alwaysTrueShowExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	claims, err := DeriveShowCueClaims(p, ShowCueClaimContext{
+		ProgramAudioNode: "audio-01", ProgramAudioRoute: "line-out-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []ShowCueClaim{{Kind: ShowCueClaimKindProgramAudioRoute, Node: "audio-01", Resource: "line-out-1"}}
+	if len(claims) != len(want) || claims[0] != want[0] {
+		t.Fatalf("claims = %v, want %v", claims, want)
+	}
+}
+
 // TestDeriveShowCueClaimsRepeatedCallsAgree replaces a prior
 // "IsDeterministic" test that called DeriveShowCueClaims twice on the same
 // input and only ever checked the two results agreed with EACH OTHER: the
