@@ -427,7 +427,7 @@ func evidenceMismatchReason(entry config.ShowPlaylistEntry, obs store.FPPPlaylis
 }
 
 // definitionAvailable reports whether a definition is stored for
-// (instanceUUID, playlistHash) — a small helper so every one of
+// (instanceUUID, playlistHash): a small helper so every one of
 // [Reconcile]'s four definition-checking return points reads identically
 // rather than repeating the same errors.Is dance four times.
 func definitionAvailable(ctx context.Context, st *store.Store, instanceUUID, playlistHash string) (bool, error) {
