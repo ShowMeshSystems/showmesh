@@ -392,6 +392,12 @@ const (
 	// means no FPP collector runs; see [Config.FPPEndpoints].
 	envFPPEndpoints = "SHOWMESH_FPP_ENDPOINTS"
 
+	// fppEndpointsSource labels an endpoint-shape refusal with where the
+	// operator fixes it. The store kind leads because that is the remedy
+	// once migrated; the variable stays named for a coordinator that
+	// still reads its endpoints from the environment.
+	fppEndpointsSource = "fpp.endpoints (or " + envFPPEndpoints + " if this coordinator has not migrated yet)"
+
 	// envAPIToken is SHOWMESH_API_TOKEN, ADR-021's shared secret. ADR-024
 	// decision 2 retires it: this constant now exists only so
 	// checkAPITokenRetired can name it in the refusal-to-start error and
@@ -990,38 +996,42 @@ var reservedCollectorIDs = map[string]bool{
 // Task C spec, a malformed entry is a startup error naming the offending
 // value, not a silently skipped endpoint — every error here names the
 // specific id or URL that failed.
+//
+// Messages lead with the "fpp.endpoints" kind, not envFPPEndpoints: this
+// function also backs the store-backed config:write surface, where the
+// remedy is a showmeshctl write rather than an environment edit.
 func validateFPPEndpoints(endpoints []FPPEndpoint) error {
 	seen := make(map[string]bool, len(endpoints))
 
 	for _, ep := range endpoints {
 		if err := mqttproto.ValidateNodeID(ep.ID); err != nil {
-			return fmt.Errorf("%s: instance id %q: %w", envFPPEndpoints, ep.ID, err)
+			return fmt.Errorf("%s: instance id %q: %w", fppEndpointsSource, ep.ID, err)
 		}
 		if reservedCollectorIDs[ep.ID] {
 			return fmt.Errorf("%s: instance id %q is reserved for one of this coordinator's own collectors and cannot name an FPP endpoint; rename the endpoint",
-				envFPPEndpoints, ep.ID)
+				fppEndpointsSource, ep.ID)
 		}
 		if seen[ep.ID] {
-			return fmt.Errorf("%s: duplicate instance id %q", envFPPEndpoints, ep.ID)
+			return fmt.Errorf("%s: duplicate instance id %q", fppEndpointsSource, ep.ID)
 		}
 		seen[ep.ID] = true
 
 		u, err := url.Parse(ep.URL)
 		if err != nil {
-			return fmt.Errorf("%s: instance %q: url %q is not valid: %w", envFPPEndpoints, ep.ID, ep.URL, err)
+			return fmt.Errorf("%s: instance %q: url %q is not valid: %w", fppEndpointsSource, ep.ID, ep.URL, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("%s: instance %q: url %q must use http or https", envFPPEndpoints, ep.ID, ep.URL)
+			return fmt.Errorf("%s: instance %q: url %q must use http or https", fppEndpointsSource, ep.ID, ep.URL)
 		}
 		if u.Host == "" {
-			return fmt.Errorf("%s: instance %q: url %q must include a host", envFPPEndpoints, ep.ID, ep.URL)
+			return fmt.Errorf("%s: instance %q: url %q must include a host", fppEndpointsSource, ep.ID, ep.URL)
 		}
 		if u.User != nil {
 			// See FPPEndpoint.URL's doc comment: rejected here, at the
 			// only entry point, rather than relying on every downstream
 			// consumer (log lines, API rendering, error reasons) to
 			// remember to strip it.
-			return fmt.Errorf("%s: instance %q: url must not include userinfo/credentials", envFPPEndpoints, ep.ID)
+			return fmt.Errorf("%s: instance %q: url must not include userinfo/credentials", fppEndpointsSource, ep.ID)
 		}
 	}
 
@@ -1170,7 +1180,8 @@ func ValidateFPPMQTTHostIDs(hosts map[string]string, endpoints []FPPEndpoint) er
 	}
 	for id := range hosts {
 		if !known[id] {
-			return fmt.Errorf("%s: instance id %q is not configured in %s (nor in the store-authoritative fpp.endpoints configuration, if migrated)", envFPPMQTTHosts, id, envFPPEndpoints)
+			return fmt.Errorf("instance id %q is not a configured FPP endpoint; add it with `showmeshctl config set` (fpp.endpoints), or check %s for a typo, or %s if this coordinator has not migrated yet",
+				id, envFPPMQTTHosts, envFPPEndpoints)
 		}
 	}
 	return nil
@@ -1248,9 +1259,10 @@ func validateResolumeConfig(c Config) error {
 func ValidateResolumeIDAgainstFPPEndpoints(resolumeID string, endpoints []FPPEndpoint) error {
 	for _, ep := range endpoints {
 		if ep.ID == resolumeID {
-			return fmt.Errorf("%s %q collides with an FPP endpoint id configured in %s; "+
-				"both are registered on the same collector.Runner and must be unique — rename one",
-				envResolumeID, resolumeID, envFPPEndpoints)
+			return fmt.Errorf("resolume id %q collides with a configured FPP endpoint id. Rename one: "+
+				"the Resolume instance with `showmeshctl resolume instance set` (resolume.instances), "+
+				"or the FPP endpoint with `showmeshctl config set` (fpp.endpoints); or %s/%s if this coordinator has not migrated yet",
+				resolumeID, envResolumeID, envFPPEndpoints)
 		}
 	}
 	return nil

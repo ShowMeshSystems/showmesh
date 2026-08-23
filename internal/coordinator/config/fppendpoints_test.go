@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEncodeFPPEndpointsPayloadRoundTrips(t *testing.T) {
 	in := []FPPEndpoint{{ID: "player-01", URL: "http://10.0.1.20"}, {ID: "shed", URL: "http://10.0.1.21"}}
@@ -91,5 +94,32 @@ func TestValidateFPPEndpointsExportedMatchesInternalValidation(t *testing.T) {
 	invalid := []FPPEndpoint{{ID: "player-01", URL: "not a url"}}
 	if err := ValidateFPPEndpoints(invalid); err == nil {
 		t.Errorf("ValidateFPPEndpoints(%+v) error = nil, want an error for a malformed URL", invalid)
+	}
+}
+
+// TestValidateFPPEndpointsNamesTheKindNotTheEnvVar pins ADR-039's fix
+// (decision 1): [ValidateFPPEndpoints] backs both LoadConfig's env parse
+// and the store-backed config:write surface (`showmeshctl config set
+// --file`, PUT /api/v1/config/fpp.endpoints), so its messages must lead
+// with the "fpp.endpoints" kind rather than SHOWMESH_FPP_ENDPOINTS.
+// SHOWMESH_FPP_ENDPOINTS is still named, but only after the kind, for a
+// coordinator that has not migrated off it.
+func TestValidateFPPEndpointsNamesTheKindNotTheEnvVar(t *testing.T) {
+	invalid := []FPPEndpoint{{ID: "fpp1", URL: ""}}
+	err := ValidateFPPEndpoints(invalid)
+	if err == nil {
+		t.Fatalf("ValidateFPPEndpoints(%+v) error = nil, want an error for an empty URL", invalid)
+	}
+	got := err.Error()
+	if !strings.HasPrefix(got, "fpp.endpoints") {
+		t.Fatalf(`ValidateFPPEndpoints(%+v) error = %q, want it to lead with the "fpp.endpoints" kind`, invalid, got)
+	}
+	if !containsAll(got, "fpp1", "must use http or https") {
+		t.Errorf("ValidateFPPEndpoints(%+v) error = %q, want it to name the instance id and the defect", invalid, got)
+	}
+	kindIdx := strings.Index(got, "fpp.endpoints")
+	envIdx := strings.Index(got, "SHOWMESH_FPP_ENDPOINTS")
+	if envIdx < 0 || envIdx < kindIdx {
+		t.Errorf("error = %q, want SHOWMESH_FPP_ENDPOINTS to appear only as a trailing hedge after the fpp.endpoints kind", got)
 	}
 }

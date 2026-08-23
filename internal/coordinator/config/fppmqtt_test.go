@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEncodeDecodeFPPMQTTPayloadRoundTrip(t *testing.T) {
 	cfg := FPPMQTTConfig{
@@ -105,5 +108,38 @@ func TestValidateFPPMQTTConfigKindRejectsDuplicateHostName(t *testing.T) {
 func TestValidateFPPMQTTConfigKindAllowsUnconfigured(t *testing.T) {
 	if err := ValidateFPPMQTTConfigKind(FPPMQTTConfig{}, nil); err != nil {
 		t.Fatalf("ValidateFPPMQTTConfigKind: unexpected error for a fully empty (unconfigured) payload: %v", err)
+	}
+}
+
+// TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy
+// pins ADR-039's fix (decision 1): reached through the store-backed
+// config:write surface (`showmeshctl fpp-mqtt set --host`), an unmatched
+// host id must lead with the `showmeshctl config set` / fpp.endpoints
+// remedy. SHOWMESH_FPP_MQTT_HOSTS still gets named too (a startup failure
+// here is often a typo in that variable, not a missing endpoint), but only
+// after the store remedy, and SHOWMESH_FPP_ENDPOINTS stays a trailing
+// hedge for a coordinator that has not migrated.
+func TestValidateFPPMQTTConfigKindHostIDNotInFPPEndpointsNamesTheStoreRemedy(t *testing.T) {
+	cfg := FPPMQTTConfig{
+		BrokerURL: "tcp://broker:1883",
+		Hosts:     map[string]string{"fpp1": "fpp-one"},
+	}
+	err := ValidateFPPMQTTConfigKind(cfg, nil)
+	if err == nil {
+		t.Fatalf("ValidateFPPMQTTConfigKind: want an error for host id %q with no configured fpp.endpoints", "fpp1")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "fpp1") {
+		t.Errorf("error = %q, want it to name the unmatched instance id %q", got, "fpp1")
+	}
+	storeIdx := strings.Index(got, "showmeshctl config set")
+	if storeIdx < 0 || !strings.Contains(got, "fpp.endpoints") {
+		t.Fatalf("error = %q, want it to lead with the store-backed remedy (showmeshctl config set / fpp.endpoints)", got)
+	}
+	if !strings.Contains(got, "SHOWMESH_FPP_MQTT_HOSTS") {
+		t.Errorf("error = %q, want it to also name SHOWMESH_FPP_MQTT_HOSTS as a possible typo", got)
+	}
+	if idx := strings.Index(got, "SHOWMESH_FPP_ENDPOINTS"); idx >= 0 && idx < storeIdx {
+		t.Errorf("error = %q, want the store remedy to lead and SHOWMESH_FPP_ENDPOINTS to appear only as a trailing hedge", got)
 	}
 }
