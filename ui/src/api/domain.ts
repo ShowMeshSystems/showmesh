@@ -239,6 +239,50 @@ export type AssetManifestResponse = components['schemas']['AssetManifestResponse
 export type AuditEntry = components['schemas']['AuditEntry']
 export type AuditResponse = components['schemas']['AuditResponse']
 
+// Track F seam F2/F1 (RESTING-MODE.md, ADR-038, ADR-039): the night-session
+// lifecycle controller and the night.session/night.session.active
+// configuration kinds. Aliased for the identical reason as every type
+// above (ADR-015).
+export type ConfigNightSessionFPPPlaylist = components['schemas']['ConfigNightSessionFPPPlaylist']
+export type ConfigNightSessionAssetRef = components['schemas']['ConfigNightSessionAssetRef']
+export type ConfigNightSessionBackgroundAudioItem = components['schemas']['ConfigNightSessionBackgroundAudioItem']
+export type ConfigNightSessionBackgroundAudio = components['schemas']['ConfigNightSessionBackgroundAudio']
+export type ConfigNightSessionResting = components['schemas']['ConfigNightSessionResting']
+export type ConfigNightSessionCue = components['schemas']['ConfigNightSessionCue']
+export type ConfigNightSessionEnterShow = components['schemas']['ConfigNightSessionEnterShow']
+export type ConfigNightSessionEnterResting = components['schemas']['ConfigNightSessionEnterResting']
+export type ConfigNightSessionCueWrite = components['schemas']['ConfigNightSessionCueWrite']
+export type ConfigNightSessionEnterShowWrite = components['schemas']['ConfigNightSessionEnterShowWrite']
+export type ConfigNightSessionEnterRestingWrite = components['schemas']['ConfigNightSessionEnterRestingWrite']
+export type ConfigNightSessionBackgroundAudioWrite = components['schemas']['ConfigNightSessionBackgroundAudioWrite']
+export type ConfigNightSessionRestingWrite = components['schemas']['ConfigNightSessionRestingWrite']
+export type ConfigNightSessionWrite = components['schemas']['ConfigNightSessionWrite']
+export type ConfigNightSession = components['schemas']['ConfigNightSession']
+export type NightSessionConfigResponse = components['schemas']['NightSessionConfigResponse']
+export type ConfigNightSessionActive = components['schemas']['ConfigNightSessionActive']
+export type NightSessionActiveConfigResponse = components['schemas']['NightSessionActiveConfigResponse']
+export type NightReadinessCheck = components['schemas']['NightReadinessCheck']
+export type NightReadiness = components['schemas']['NightReadiness']
+export type NightPhaseEvidence = components['schemas']['NightPhaseEvidence']
+export type NightCue = components['schemas']['NightCue']
+export type NightCues = components['schemas']['NightCues']
+export type NightAuthorization = components['schemas']['NightAuthorization']
+export type NightSessionState = components['schemas']['NightSessionState']
+export type NightSessionResponse = components['schemas']['NightSessionResponse']
+export type NightCommandRequest = components['schemas']['NightCommandRequest']
+export type NightCommandResult = components['schemas']['NightCommandResult']
+export type NightCommandResponse = components['schemas']['NightCommandResponse']
+export type NightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
+export type NightCommandName =
+  | 'prepare-site'
+  | 'run-readiness'
+  | 'start-preshow'
+  | 'start-night'
+  | 'request-final-show'
+  | 'fade-out-night'
+  | 'power-down-presentation'
+  | 'end-session'
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare
@@ -325,6 +369,25 @@ export interface Model {
    * `fpp`, every observation rides every frame.
    */
   resolume: ResolumeInstance[]
+  /**
+   * Track F seam F2: the night-session lifecycle controller's current
+   * state, kept live by `nightSession.changed` frames (store.ts's
+   * applyNightSessionChanged) — a whole-object replace, matching
+   * `resolume.changed`'s posture (no delta kind exists for this resource
+   * either). Unlike `resolume` above, this is NOT part of `Snapshot`
+   * (api/openapi.yaml's own Snapshot schema has no `nightSession` field):
+   * the stream only announces a CHANGE, so this stays `null` until either
+   * the first live frame arrives or a view's own `GET /night/session`
+   * call seeds it — see views/NightSession.tsx for that reconciliation.
+   * Cleared back to `null` by every `applySnapshot` (store.ts) — the
+   * initial connect, every reconnect, and every `stream.reset` — because
+   * none of those is a guarantee this connection will hear about the
+   * session again soon: the coordinator's stream hub only emits a frame
+   * on an actual state change, so a stale value from a PRIOR connection
+   * generation must not keep rendering as current across one it was
+   * never confirmed against.
+   */
+  nightSession: NightSessionState | null
   /** Newest first, bounded — see MAX_RETAINED_EVENTS in store.ts. */
   events: Event[]
   /**
@@ -379,6 +442,7 @@ export function initialModel(): Model {
     collectors: [],
     macroRuns: [],
     resolume: [],
+    nightSession: null,
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

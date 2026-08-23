@@ -640,6 +640,14 @@ func (noNightSessionStore) ListNightCueOutboxRows(context.Context, string, int64
 	return nil, nil
 }
 
+func (noNightSessionStore) ListNightCueOutboxRowsForPhase(context.Context, string, string) ([]store.NightCueOutboxRecord, error) {
+	return nil, nil
+}
+
+func (noNightSessionStore) ListNightCueOutboxRowsForPhasePrefix(context.Context, string, string) ([]store.NightCueOutboxRecord, error) {
+	return nil, nil
+}
+
 func (noNightSessionStore) UpdateNightCueOutboxRow(context.Context, store.NightCueOutboxRecord) error {
 	return fmt.Errorf("api: night session store not wired in")
 }

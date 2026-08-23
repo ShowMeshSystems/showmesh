@@ -42,7 +42,7 @@ func (h *handlers) nightAdvanceFadingOut(ctx context.Context, now time.Time, rec
 	// The enterShow cue definitions are the configured "bring presentation
 	// to black" list; fading out replays them under their own phase and
 	// waits on none of them, since there is no launch to gate.
-	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseFadeOut, payload.EnterShow.Cues)
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseFadeOut, payload.EnterShow.Cues, payload)
 
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {
@@ -199,6 +199,16 @@ func (h *handlers) nightDispatchShutdownStop(ctx context.Context, now time.Time,
 // nightReachStopped is the only path to stopped that is not operator
 // recovery: FPP has been observed idle with no playlist after the stop.
 func (h *handlers) nightReachStopped(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	// Read OUTSIDE nightCommit's own short transaction, matching every
+	// other pinned-payload read in this file: this is a plain read, never
+	// held across the store's single connection alongside a write.
+	powerPhase := nightShutdownPowerPhaseNotConfigured
+	if rec.ShutdownIntent == "power-down" {
+		if payload, err := h.getPinnedNightSessionPayload(ctx, rec); err == nil &&
+			payload.SiteControl != nil && payload.SiteControl.PresentationPowerOff != nil {
+			powerPhase = nightPowerPhaseConfiguredNotDispatched
+		}
+	}
 	h.nightCommit(ctx, now, rec.ID, rec.State, func(cur store.NightSessionRecord) store.NightSessionRecord {
 		cur.State = nightStateStopped
 		cur.StateEnteredAt = now
@@ -207,7 +217,7 @@ func (h *handlers) nightReachStopped(ctx context.Context, now time.Time, rec sto
 		cur.ContentAnchorJSON = ""
 		cur.BoundaryJSON = ""
 		if cur.ShutdownIntent == "power-down" && cur.PowerPhase == "" {
-			cur.PowerPhase = nightShutdownPowerPhaseNotConfigured
+			cur.PowerPhase = powerPhase
 		}
 		return cur
 	})
