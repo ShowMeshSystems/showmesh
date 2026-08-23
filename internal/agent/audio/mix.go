@@ -9,18 +9,6 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
-// sourceRolePriority orders [pkgaudio.SourceRole] for duck resolution:
-// a Playing session ducks another Playing session only when its own
-// role outranks the target's. These are AUDIO-ENGINE section 9's
-// indicative priorities taken as starting values for tuning, not
-// normative constants.
-var sourceRolePriority = map[pkgaudio.SourceRole]int{
-	pkgaudio.SourceRoleBackground:   0,
-	pkgaudio.SourceRoleManual:       1,
-	pkgaudio.SourceRoleShow:         2,
-	pkgaudio.SourceRoleAnnouncement: 3,
-}
-
 // duckTargetGain is what a ducked session's gain is set to. SHOWMESH
 // HYPOTHESIS, NOT MEASURED: full silence is the simplest correct
 // starting behavior; RES-007's bench is what should decide whether a
@@ -91,6 +79,7 @@ func (s *Session) setGainLocked(ctx context.Context, requested pkgaudio.Gain) pk
 	}
 	effective := result.Effective
 	s.desired.Gain = &effective
+	s.rememberIntendedGainWhileDuckedLocked(effective)
 	s.persistBestEffortLocked("state change")
 
 	if !s.handleLoaded {
@@ -153,6 +142,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 
 	f := fade
 	s.desired.Fade = &f
+	s.rememberIntendedGainWhileDuckedLocked(result.Effective)
 	s.fadePending = true
 	s.fadeInvocation = invocation
 	s.fadeHandleNeverFaded = false
@@ -377,7 +367,6 @@ func (s *Session) applyGainForMuteLocked(ctx context.Context, requested pkgaudio
 // simultaneously (the deadlock a duck and a counter-duck racing each
 // other would otherwise risk).
 func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.SessionID, duckerRole pkgaudio.SourceRole) {
-	myPriority := sourceRolePriority[duckerRole]
 	for _, t := range m.otherSessions(duckerID) {
 		t.mu.Lock()
 		if t.state == pkgaudio.StatePlaying {
@@ -385,12 +374,103 @@ func (m *Manager) duckLowerPriority(ctx context.Context, duckerID pkgaudio.Sessi
 			if t.desired.SourceRole != nil {
 				role = *t.desired.SourceRole
 			}
-			if sourceRolePriority[role] < myPriority {
+			if pkgaudio.OutranksForMixing(duckerRole, role) {
 				m.duckOneLocked(ctx, t, duckerID)
 			}
 		}
 		t.mu.Unlock()
 	}
+}
+
+// submitToActivePolicies is [Manager.duckLowerPriority]'s mirror image,
+// run for a session that has just reached Playing: it finds every OTHER
+// currently-Playing session whose role outranks this one and whose mix
+// policy is Duck or Interrupt, and applies that policy to the session
+// that just started.
+//
+// Without it, mixing would be resolved only at the moment a ducker
+// starts, so a lower-priority session starting UNDER a playing
+// announcement would never be ducked at all. That is not a corner case:
+// the night controller's own enterResting cue list runs before its
+// background-audio tick, and background audio needs several ticks to
+// reach Playing, so an enterResting announcement is normally already
+// playing when the bed starts.
+//
+// Same no-lock-held-on-entry discipline as [Manager.duckLowerPriority],
+// and for the same reason: every other session's state is read under its
+// own lock, released before this session's own lock is taken, so no two
+// session locks are ever held at once.
+func (m *Manager) submitToActivePolicies(ctx context.Context, id pkgaudio.SessionID, role pkgaudio.SourceRole) {
+	var duckers, interrupters []pkgaudio.SessionID
+	for _, o := range m.otherSessions(id) {
+		o.mu.Lock()
+		if o.state == pkgaudio.StatePlaying && o.desired.MixPolicy != nil {
+			var otherRole pkgaudio.SourceRole
+			if o.desired.SourceRole != nil {
+				otherRole = *o.desired.SourceRole
+			}
+			if pkgaudio.OutranksForMixing(otherRole, role) {
+				switch *o.desired.MixPolicy {
+				case pkgaudio.MixPolicyDuck:
+					duckers = append(duckers, o.id)
+				case pkgaudio.MixPolicyInterrupt:
+					interrupters = append(interrupters, o.id)
+				}
+			}
+		}
+		o.mu.Unlock()
+	}
+	if len(duckers) == 0 && len(interrupters) == 0 {
+		return
+	}
+	s, ok := m.get(id)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Re-checked under s's own lock: everything above ran with s
+	// unlocked, and a session that has already left Playing in the
+	// meantime must not be ducked or suspended on the strength of stale
+	// evidence.
+	if s.state != pkgaudio.StatePlaying {
+		return
+	}
+	// Duck before interrupt: a session that is both ducked and suspended
+	// must come back at the ducked gain the still-playing ducker owns,
+	// not at the gain it had before either applied.
+	for _, duckerID := range duckers {
+		m.duckOneLocked(ctx, s, duckerID)
+	}
+	for _, interrupterID := range interrupters {
+		m.interruptOneLocked(ctx, s, interrupterID)
+	}
+}
+
+// rememberIntendedGainWhileDuckedLocked keeps a ducked session's restore
+// target in step with the newest gain anyone has actually asked for.
+//
+// [Manager.removeDuckerLocked] returns a session to preDuckGain, which is
+// captured once, at the moment the first ducker arrives. Without this, a
+// gain change that lands DURING a duck moved the session's desired gain
+// and was then silently replayed away by the restore, putting the session
+// back at whatever it held before the duck. That is not merely a lost
+// setting: a bed whose configured gain never reached this node before the
+// duck sits at the default of unity, and the restore would put it back
+// there, playing louder than the configured maximum until something else
+// changed it. A failure path is exactly when that happens, because a
+// failure path is what makes a caller retry a gain step late.
+//
+// Only the restore target moves here. Whether a gain change should also
+// be allowed to drive the engine out of the duck while the duck is still
+// active is a separate question about what audio.gain.set means mid-duck,
+// deliberately not decided here. Caller holds s.mu.
+func (s *Session) rememberIntendedGainWhileDuckedLocked(effective pkgaudio.Gain) {
+	if len(s.duckedByAll) == 0 {
+		return
+	}
+	g := effective
+	s.preDuckGain = &g
 }
 
 // duckOneLocked adds duckerID to t's set of active duckers. t's gain is

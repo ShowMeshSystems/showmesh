@@ -13,7 +13,6 @@ import (
 // role-priority rule and no-two-locks-held-at-once discipline as
 // [Manager.duckLowerPriority] — see that method's doc comment.
 func (m *Manager) interruptLowerPriority(ctx context.Context, interrupterID pkgaudio.SessionID, interrupterRole pkgaudio.SourceRole) {
-	myPriority := sourceRolePriority[interrupterRole]
 	for _, t := range m.otherSessions(interrupterID) {
 		t.mu.Lock()
 		if t.state == pkgaudio.StatePlaying {
@@ -21,7 +20,7 @@ func (m *Manager) interruptLowerPriority(ctx context.Context, interrupterID pkga
 			if t.desired.SourceRole != nil {
 				role = *t.desired.SourceRole
 			}
-			if sourceRolePriority[role] < myPriority {
+			if pkgaudio.OutranksForMixing(interrupterRole, role) {
 				m.interruptOneLocked(ctx, t, interrupterID)
 			}
 		}

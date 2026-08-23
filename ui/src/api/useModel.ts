@@ -26,6 +26,8 @@ import type {
   ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
   ConfigFPPMQTTPutRequest,
+  ConfigNightSessionActive,
+  ConfigNightSessionWrite,
   ConfigRenderSettingsPayload,
   ConfigResolumeInstancesPayload,
   ConfigResolumeRecoveryPayload,
@@ -42,6 +44,11 @@ import type {
   IssueTokenRequest,
   IssueTokenResponse,
   Model,
+  NightCommandName,
+  NightCommandResponse,
+  NightSessionActiveConfigResponse,
+  NightSessionConfigResponse,
+  NightSessionResponse,
   PrincipalResponse,
   PrincipalsResponse,
   RenderCommandResult,
@@ -298,7 +305,7 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface',
+  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'night.session',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse> {
   return store.listConfigObjects(kind, show)
@@ -538,4 +545,56 @@ export function getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetMan
 
 export function listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
   return store.listAudit(filter)
+}
+
+// Track F seam F2/F1: the night-session lifecycle controller and the
+// night.session/night.session.active configuration kinds. Same thin
+// pass-through pattern as every method above.
+
+export function getCurrentNightSession(): Promise<NightSessionResponse> {
+  return store.getCurrentNightSession()
+}
+
+export function getNightSessionById(id: string): Promise<NightSessionResponse> {
+  return store.getNightSessionById(id)
+}
+
+export function dispatchNightCommand(
+  command: NightCommandName,
+  idempotencyKey?: string,
+): Promise<NightCommandResponse> {
+  return store.dispatchNightCommand(command, idempotencyKey)
+}
+
+export function getNightSessionConfig(id: string): Promise<NightSessionConfigResponse> {
+  return store.getNightSessionConfig(id)
+}
+
+export function putNightSessionConfig(
+  id: string,
+  payload: ConfigNightSessionWrite,
+): Promise<NightSessionConfigResponse> {
+  return store.putNightSessionConfig(id, payload)
+}
+
+export function getNightSessionConfigRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getNightSessionConfigRevisions(id)
+}
+
+export function getNightSessionConfigRevision(id: string, revision: number): Promise<NightSessionConfigResponse> {
+  return store.getNightSessionConfigRevision(id, revision)
+}
+
+export function getNightSessionActiveConfig(): Promise<NightSessionActiveConfigResponse> {
+  return store.getNightSessionActiveConfig()
+}
+
+export function putNightSessionActiveConfig(
+  payload: ConfigNightSessionActive,
+): Promise<NightSessionActiveConfigResponse> {
+  return store.putNightSessionActiveConfig(payload)
+}
+
+export function getNightSessionActiveConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getNightSessionActiveConfigRevisions()
 }

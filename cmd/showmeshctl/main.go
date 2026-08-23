@@ -66,6 +66,10 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdShow(rest, stdout, stderr, clock)
 	case "surface":
 		return cmdSurface(rest, stdout, stderr, clock)
+	case "cue":
+		return cmdCue(rest, stdout, stderr, clock)
+	case "playlist":
+		return cmdPlaylist(rest, stdout, stderr, clock)
 	case "night":
 		return cmdNight(rest, stdout, stderr, clock)
 	case "resolume":
@@ -168,6 +172,14 @@ Commands:
   surface get <id>                    show one surface's full definition
   surface set <id>                    write a new surface revision (write, full replacement)
   surface revisions <id>              list surface revision history, newest first
+  cue list [--show <id>]              enumerate show.cue objects, optionally by show
+  cue get <id>                        show one cue's full definition
+  cue set <id>                        write a new cue revision (write, full replacement)
+  cue revisions <id>                  list cue revision history, newest first
+  playlist list [--show <id>]         enumerate show.playlist objects, optionally by show
+  playlist get <id>                   show one playlist's full definition
+  playlist set <id>                   write a new playlist revision (write, full replacement)
+  playlist revisions <id>             list playlist revision history, newest first
   night list                          enumerate night.session objects
   night get <id>                      show one night session's full definition
   night set <id>                      write a new night.session revision (write, full replacement)

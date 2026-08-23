@@ -38,6 +38,12 @@ import { ShowActive } from '../views/ShowActive'
 import { Assets } from '../views/Assets'
 import { AssetManifest } from '../views/AssetManifest'
 import { Audit } from '../views/Audit'
+// Track F seam F2 (UI half): the night-session lifecycle operating view
+// and its night.session/night.session.active configuration screens.
+import { NightSession } from '../views/NightSession'
+import { NightSessions } from '../views/NightSessions'
+import { NightSessionDetail } from '../views/NightSessionDetail'
+import { NightSessionActive } from '../views/NightSessionActive'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -84,6 +90,18 @@ export default function App() {
             <Route path="config/show.surface/new" element={<ShowSurfaceDetail isNew />} />
             <Route path="config/show.surface/:id" element={<ShowSurfaceDetail />} />
             <Route path="config/show.active" element={<ShowActive />} />
+            {/* Track F seam F2 (UI half): the night-session lifecycle
+                operating view lives under Monitor/Control (Layout.tsx),
+                not under /config — it observes and commands the RUNNING
+                controller, never the authored definition. "new" is listed
+                before its ":id" sibling for readability only, same
+                non-load-bearing note as the macro/action/show routes
+                above. */}
+            <Route path="night" element={<NightSession />} />
+            <Route path="config/night.session" element={<NightSessions />} />
+            <Route path="config/night.session/new" element={<NightSessionDetail isNew />} />
+            <Route path="config/night.session/:id" element={<NightSessionDetail />} />
+            <Route path="config/night.session.active" element={<NightSessionActive />} />
             <Route path="assets" element={<Assets />} />
             <Route path="assets/manifest" element={<AssetManifest />} />
             <Route path="audit" element={<Audit />} />

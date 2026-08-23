@@ -41,6 +41,11 @@ const NAV_GROUPS: Array<{
       // (build contract §2.2/§2.3), so it belongs in Monitor rather than
       // splitting it across two nav groups.
       { to: '/resolume', label: 'Resolume', end: false },
+      // Track F seam F2 (UI half): the night-session lifecycle operating
+      // view — observes and commands the RUNNING controller, so it
+      // belongs in Monitor next to Resolume, not under Configure (that
+      // holds the AUTHORED night.session/night.session.active kinds).
+      { to: '/night', label: 'Night session', end: false },
       { to: '/capabilities', label: 'Capabilities', end: false },
       { to: '/events', label: 'Events', end: false },
       // Track G seam G-8: read-only surfaces — a node's own asset
@@ -78,6 +83,10 @@ const NAV_GROUPS: Array<{
       { to: '/config/show', label: 'Shows', end: false },
       { to: '/config/show.surface', label: 'Surfaces', end: false },
       { to: '/config/show.active', label: 'Active show', end: false },
+      // Track F seam F1 (UI half): the night.session/night.session.active
+      // authoring surfaces, previously reachable only from showmeshctl.
+      { to: '/config/night.session', label: 'Night sessions', end: false },
+      { to: '/config/night.session.active', label: 'Active night session', end: false },
       { to: '/assets', label: 'Assets', end: false },
     ],
   },

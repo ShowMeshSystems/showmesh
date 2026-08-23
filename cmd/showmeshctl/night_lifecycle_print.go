@@ -89,4 +89,65 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 			}
 		}
 	}
+
+	if s.BackgroundAudio.State != "recorded" {
+		_, _ = fmt.Fprintf(w, "\nBackground audio: %s (%s)\n", s.BackgroundAudio.State, s.BackgroundAudio.Reason)
+		return
+	}
+
+	// The two audio sequences print under their own headings. An
+	// announcement's clear and start arrive in the same step list as the
+	// bed's own steps, and a failure in one says something quite
+	// different from a failure in the other: a refused announcement clear
+	// means a previous announcement may still be playing and still
+	// holding the bed ducked.
+	background := nightAudioStepsForSequence(s.BackgroundAudio.Steps, "background")
+	announcement := nightAudioStepsForSequence(s.BackgroundAudio.Steps, "announcement")
+
+	if len(background) == 0 {
+		_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+	} else {
+		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
+		printNightAudioSteps(w, background)
+	}
+	if len(announcement) > 0 {
+		_, _ = fmt.Fprintf(w, "\nAnnouncement sessions:\n")
+		printNightAudioSteps(w, announcement)
+	}
+}
+
+// nightAudioStepsForSequence selects one sequence's steps. A step whose
+// sequence is empty came from a coordinator older than the field and is
+// treated as a background step, which is what every step was then.
+func nightAudioStepsForSequence(steps []nightBackgroundAudioStepWire, sequence string) []nightBackgroundAudioStepWire {
+	out := make([]nightBackgroundAudioStepWire, 0, len(steps))
+	for _, step := range steps {
+		got := step.Sequence
+		if got == "" {
+			got = "background"
+		}
+		if got == sequence {
+			out = append(out, step)
+		}
+	}
+	return out
+}
+
+func printNightAudioSteps(w io.Writer, steps []nightBackgroundAudioStepWire) {
+	for _, step := range steps {
+		_, _ = fmt.Fprintf(w, "  - [%s] %s (kind=%s rev=%d): %s", step.Phase, step.CueName, step.Kind, step.ActionRevision, step.State)
+		if step.Outcome != "" {
+			_, _ = fmt.Fprintf(w, " outcome=%s", step.Outcome)
+		}
+		_, _ = fmt.Fprintln(w)
+		if step.Reason != "" {
+			_, _ = fmt.Fprintf(w, "      %s\n", step.Reason)
+		}
+		if step.DispatchedAt != nil {
+			_, _ = fmt.Fprintf(w, "      dispatched: %s\n", *step.DispatchedAt)
+		}
+		if step.ResolvedAt != nil {
+			_, _ = fmt.Fprintf(w, "      resolved:   %s\n", *step.ResolvedAt)
+		}
+	}
 }

@@ -12,6 +12,14 @@ func alwaysFalseAssetCurrent(string, string, string) bool { return false }
 func alwaysTrueActionResolver(string) (string, bool)      { return "halloween-2026", true }
 func alwaysFalseActionResolver(string) (string, bool)     { return "", false }
 
+// alwaysTrueInterlockSignalResolver resolves any signal id to a confirmable
+// mqtt action in this session's own show: the shape decodeNightInterlockRule
+// requires. nightsitecontrol_test.go exercises every other combination
+// (wrong show, non-mqtt, expect.kind "none").
+func alwaysTrueInterlockSignalResolver(string) (NightInterlockSignalInfo, bool) {
+	return NightInterlockSignalInfo{Show: "halloween-2026", Integration: ShowActionIntegrationMQTT, MQTTExpectKind: MQTTExpectKindBoolean}, true
+}
+
 // validNightSessionJSON is a minimal, fully valid payload used as the base
 // for every negative test below (each test mutates one thing).
 const validNightSessionJSON = `{
@@ -49,7 +57,7 @@ const validNightSessionJSON = `{
 
 func decodeValidNightSession(t *testing.T) NightSessionPayload {
 	t.Helper()
-	p, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	p, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("unexpected error on the base valid payload: %+v", verr)
 	}
@@ -94,7 +102,7 @@ func TestEncodeNightSessionPayloadRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	back, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	back, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("re-decode of the API's own encoded output must not fail: %+v (encoded: %s)", verr, raw)
 	}
@@ -120,7 +128,7 @@ func TestEncodeNightSessionPayloadRoundTrips(t *testing.T) {
 // afterward.
 func TestEncodeNightSessionPayloadRoundTripsCrossfadeZero(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"itemTransition": "sequential"`, `"itemTransition": "crossfade", "crossfadeMs": 0`, 1)
-	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("initial decode: %+v", verr)
 	}
@@ -132,7 +140,7 @@ func TestEncodeNightSessionPayloadRoundTripsCrossfadeZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	back, verr := DecodeNightSessionPayload(encoded, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	back, verr := DecodeNightSessionPayload(encoded, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("re-decode of the API's own encoded output must not fail: %+v (encoded: %s)", verr, encoded)
 	}
@@ -156,7 +164,7 @@ func TestEncodeNightSessionPayloadRoundTripsNonCrossfadeOmitsCrossfadeMs(t *test
 	if strings.Contains(raw, "crossfadeMs") {
 		t.Fatalf("crossfadeMs must not appear on the wire for a non-crossfade transition: %s", raw)
 	}
-	if _, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver); verr != nil {
+	if _, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver); verr != nil {
 		t.Fatalf("re-decode of the API's own encoded output must not fail: %+v", verr)
 	}
 }
@@ -165,7 +173,7 @@ func TestEncodeNightSessionPayloadRoundTripsNonCrossfadeOmitsCrossfadeMs(t *test
 
 func TestDecodeNightSessionPayloadRejectsTopLevelCalendarField(t *testing.T) {
 	raw := `{"show":"x","label":"y","at":"20:00","showPlaylist":{},"resting":{},"enterShow":{},"enterResting":{}}`
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeCalendarFieldRejected || verr.Field != "at" {
 		t.Fatalf("expected calendar-field-rejected on \"at\", got %+v", verr)
 	}
@@ -173,7 +181,7 @@ func TestDecodeNightSessionPayloadRejectsTopLevelCalendarField(t *testing.T) {
 
 func TestDecodeNightSessionPayloadRejectsNestedCalendarField(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"blackoutHoldMs": 6000`, `"blackoutHoldMs": 6000, "schedule": "nightly"`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeCalendarFieldRejected {
 		t.Fatalf("expected calendar-field-rejected for a nested \"schedule\" key, got %+v", verr)
 	}
@@ -184,7 +192,7 @@ func TestDecodeNightSessionPayloadRejectsNestedCalendarField(t *testing.T) {
 
 func TestDecodeNightSessionPayloadRejectsCalendarFieldInsideCueList(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"barrier": true}`, `"barrier": true, "weekday": "friday"}`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeCalendarFieldRejected {
 		t.Fatalf("expected calendar-field-rejected inside an array element, got %+v", verr)
 	}
@@ -194,40 +202,53 @@ func TestDecodeNightSessionPayloadRejectsCalendarFieldInsideCueList(t *testing.T
 
 func TestDecodeNightSessionPayloadRejectsDuplicateRestDuration(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "restDuration": 300`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeDuplicateRestDuration {
 		t.Fatalf("expected duplicate-rest-duration, got %+v", verr)
 	}
 }
 
-// --- siteControl / interlocks: specified, not implemented in this seam. ---
+// --- siteControl / interlocks: Track F seam F6, real decoding. ---
+// The detailed decode rules for both blocks live in
+// nightsitecontrol_test.go; the tests here only re-confirm the two
+// things nightsession.go itself is responsible for: an empty siteControl
+// object is refused as pointless configuration (nightsitecontrol.go owns
+// the field-by-field rules once siteControl is non-empty), and
+// siteControl is a TOP-LEVEL key only; a nested "resting.siteControl"
+// is refused by the ordinary unknown-key rule for that object, not
+// silently accepted.
 
-func TestDecodeNightSessionPayloadRejectsSiteControl(t *testing.T) {
+func TestDecodeNightSessionPayloadRejectsEmptySiteControl(t *testing.T) {
 	raw := strings.TrimSuffix(validNightSessionJSON, "}") + `,"siteControl":{}}`
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
-	if verr == nil || verr.Code != ValidationCodeNotImplemented || verr.Field != "siteControl" {
-		t.Fatalf("expected not-implemented on siteControl, got %+v", verr)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "siteControl" {
+		t.Fatalf("expected field-required on an empty siteControl, got %+v", verr)
 	}
 }
 
-// TestDecodeNightSessionPayloadRejectsNestedSiteControlWithSpecificReason
-// is review finding 8, restated as a test: a NESTED "resting.siteControl"
-// must be refused by the SPECIFIC not-implemented rule, not merely by the
-// generic unknown-key rule that would otherwise fire first and lose the
-// "specified in RESTING-MODE §10, not implemented until F6" reason.
-func TestDecodeNightSessionPayloadRejectsNestedSiteControlWithSpecificReason(t *testing.T) {
+// TestDecodeNightSessionPayloadRejectsNestedSiteControlAsUnknownKey is
+// review finding 8's original property, restated for real decoding:
+// "resting" never accepted "siteControl" and still does not; a nested
+// occurrence is refused by resting's own closed key set.
+func TestDecodeNightSessionPayloadRejectsNestedSiteControlAsUnknownKey(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"endOfNightRepeat": true,`, `"endOfNightRepeat": true, "siteControl": {},`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
-	if verr == nil || verr.Code != ValidationCodeNotImplemented || verr.Field != "resting.siteControl" {
-		t.Fatalf("expected not-implemented (not field-unknown-key) on resting.siteControl, got %+v", verr)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey || verr.Field != "resting" || !strings.Contains(verr.Detail, "siteControl") {
+		t.Fatalf("expected field-unknown-key naming siteControl under resting, got %+v", verr)
 	}
 }
 
-func TestDecodeNightSessionPayloadRejectsInterlocks(t *testing.T) {
+// TestDecodeNightSessionPayloadEmptyInterlocksIsValid: an explicit empty
+// array means the same thing omitting the key does (no interlocks
+// configured) rather than being refused.
+func TestDecodeNightSessionPayloadEmptyInterlocksIsValid(t *testing.T) {
 	raw := strings.TrimSuffix(validNightSessionJSON, "}") + `,"interlocks":[]}`
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
-	if verr == nil || verr.Code != ValidationCodeNotImplemented || verr.Field != "interlocks" {
-		t.Fatalf("expected not-implemented on interlocks, got %+v", verr)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr != nil {
+		t.Fatalf("unexpected error on an empty interlocks array: %+v", verr)
+	}
+	if len(p.Interlocks) != 0 {
+		t.Fatalf("expected zero interlocks, got %+v", p.Interlocks)
 	}
 }
 
@@ -243,7 +264,7 @@ func TestDecodeNightSessionPayloadAbsentSiteControlIsValid(t *testing.T) {
 
 func TestDecodeNightSessionPayloadUnknownShowPlaylistInstance(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"showPlaylist": {"fppInstanceId": "fpp-main"`, `"showPlaylist": {"fppInstanceId": "no-such-fpp"`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "showPlaylist.fppInstanceId" {
 		t.Fatalf("expected field-unknown-reference on showPlaylist.fppInstanceId, got %+v", verr)
 	}
@@ -253,7 +274,7 @@ func TestDecodeNightSessionPayloadUnknownRestingInstance(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"resting": {
     "fppInstanceId": "fpp-main",`, `"resting": {
     "fppInstanceId": "no-such-fpp",`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "resting.fppInstanceId" {
 		t.Fatalf("expected field-unknown-reference on resting.fppInstanceId, got %+v", verr)
 	}
@@ -275,7 +296,7 @@ func TestDecodeNightSessionPayloadEndOfNightPlaylistAbsentDefaultsToPlaylist(t *
 
 func TestDecodeNightSessionPayloadEndOfNightPlaylistExplicitValueHonored(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "endOfNightPlaylist": "halloween-late-night"`, 1)
-	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -286,7 +307,7 @@ func TestDecodeNightSessionPayloadEndOfNightPlaylistExplicitValueHonored(t *test
 
 func TestDecodeNightSessionPayloadEndOfNightPlaylistNullRejected(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "endOfNightPlaylist": null`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "resting.endOfNightPlaylist" {
 		t.Fatalf("expected field-null on an explicit null endOfNightPlaylist, got %+v", verr)
 	}
@@ -294,7 +315,7 @@ func TestDecodeNightSessionPayloadEndOfNightPlaylistNullRejected(t *testing.T) {
 
 func TestDecodeNightSessionPayloadEndOfNightPlaylistEmptyRejected(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"endOfNightRepeat": true`, `"endOfNightRepeat": true, "endOfNightPlaylist": ""`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldEmpty || verr.Field != "resting.endOfNightPlaylist" {
 		t.Fatalf("expected field-empty on an explicit empty endOfNightPlaylist, got %+v", verr)
 	}
@@ -303,7 +324,7 @@ func TestDecodeNightSessionPayloadEndOfNightPlaylistEmptyRejected(t *testing.T) 
 // --- Asset references (ADR-028). ---
 
 func TestDecodeNightSessionPayloadDanglingTimelineAsset(t *testing.T) {
-	_, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysFalseAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysFalseAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || verr.Field != "resting.timelineAsset" {
 		t.Fatalf("expected field-unknown-reference on resting.timelineAsset, got %+v", verr)
 	}
@@ -316,7 +337,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioEmptyItems(t *testing.T) {
 		`"items": [
         {"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-1"}
       ]`, `"items": []`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeBackgroundAudioItemsEmpty {
 		t.Fatalf("expected background-audio-items-empty, got %+v", verr)
 	}
@@ -331,7 +352,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioDuplicateItemID(t *testing.T) {
         {"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-1"},
         {"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-2", "target": "audio-node-1"}
       ]`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeItemIDDuplicate {
 		t.Fatalf("expected item-id-duplicate, got %+v", verr)
 	}
@@ -339,7 +360,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioDuplicateItemID(t *testing.T) {
 
 func TestDecodeNightSessionPayloadBackgroundAudioResumeMustBeEnum(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"resume": "resume"`, `"resume": true`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.resume" {
 		t.Fatalf("expected field-invalid on resting.backgroundAudio.resume for a bool value, got %+v", verr)
 	}
@@ -347,7 +368,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioResumeMustBeEnum(t *testing.T) 
 
 func TestDecodeNightSessionPayloadBackgroundAudioResumeRejectsUnknownValue(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"resume": "resume"`, `"resume": "continue"`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.resume" {
 		t.Fatalf("expected field-invalid on resting.backgroundAudio.resume, got %+v", verr)
 	}
@@ -355,7 +376,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioResumeRejectsUnknownValue(t *te
 
 func TestDecodeNightSessionPayloadCrossfadeMsRequiredWithCrossfadeTransition(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"itemTransition": "sequential"`, `"itemTransition": "crossfade"`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "resting.backgroundAudio.crossfadeMs" {
 		t.Fatalf("expected field-required on crossfadeMs when itemTransition is crossfade, got %+v", verr)
 	}
@@ -363,7 +384,7 @@ func TestDecodeNightSessionPayloadCrossfadeMsRequiredWithCrossfadeTransition(t *
 
 func TestDecodeNightSessionPayloadCrossfadeMsAcceptedWithCrossfadeTransition(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"itemTransition": "sequential"`, `"itemTransition": "crossfade", "crossfadeMs": 500`, 1)
-	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -374,7 +395,7 @@ func TestDecodeNightSessionPayloadCrossfadeMsAcceptedWithCrossfadeTransition(t *
 
 func TestDecodeNightSessionPayloadCrossfadeMsRejectedWithoutCrossfadeTransition(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"itemTransition": "sequential"`, `"itemTransition": "sequential", "crossfadeMs": 500`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.crossfadeMs" {
 		t.Fatalf("expected field-invalid on crossfadeMs present without crossfade transition, got %+v", verr)
 	}
@@ -382,7 +403,7 @@ func TestDecodeNightSessionPayloadCrossfadeMsRejectedWithoutCrossfadeTransition(
 
 func TestDecodeNightSessionPayloadMaxGainDbMustNotBePositive(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"maxGainDb": -10`, `"maxGainDb": 1`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "resting.backgroundAudio.maxGainDb" {
 		t.Fatalf("expected field-invalid on positive maxGainDb, got %+v", verr)
 	}
@@ -399,7 +420,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioIsOptional(t *testing.T) {
       "itemTransition": "sequential",
       "maxGainDb": -10
     }`, "", 1)
-	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("unexpected error omitting backgroundAudio entirely: %+v", verr)
 	}
@@ -424,7 +445,7 @@ const nightSessionBackgroundAudioNullJSON = `{
 }`
 
 func TestDecodeNightSessionPayloadBackgroundAudioNullIsRejected(t *testing.T) {
-	_, verr := DecodeNightSessionPayload(nightSessionBackgroundAudioNullJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(nightSessionBackgroundAudioNullJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldNull || verr.Field != "resting.backgroundAudio" {
 		t.Fatalf("expected field-null on an explicit null backgroundAudio, got %+v", verr)
 	}
@@ -433,7 +454,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioNullIsRejected(t *testing.T) {
 // --- Cues. ---
 
 func TestDecodeNightSessionPayloadDanglingCueAction(t *testing.T) {
-	_, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysFalseActionResolver)
+	_, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysFalseActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownReference || !strings.HasSuffix(verr.Field, ".action") {
 		t.Fatalf("expected field-unknown-reference on a cue's action, got %+v", verr)
 	}
@@ -447,7 +468,7 @@ func TestDecodeNightSessionPayloadDanglingCueAction(t *testing.T) {
 // compared the action's own show.
 func TestDecodeNightSessionPayloadCueActionCrossShowRejected(t *testing.T) {
 	christmasResolver := func(string) (string, bool) { return "christmas-2026", true }
-	_, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, christmasResolver)
+	_, verr := DecodeNightSessionPayload(validNightSessionJSON, nightSessionTestEndpoints, alwaysTrueAssetCurrent, christmasResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeCrossShowReference || !strings.HasSuffix(verr.Field, ".action") {
 		t.Fatalf("expected cross-show-reference on a cue's action, got %+v", verr)
 	}
@@ -461,7 +482,7 @@ func TestDecodeNightSessionPayloadTimelineAssetCrossShowRejected(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON,
 		`"timelineAsset": {"show": "halloween-2026", "sequence": "resting-loop", "target": "fpp-main"}`,
 		`"timelineAsset": {"show": "christmas-2026", "sequence": "resting-loop", "target": "fpp-main"}`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeCrossShowReference || verr.Field != "resting.timelineAsset.show" {
 		t.Fatalf("expected cross-show-reference on resting.timelineAsset.show, got %+v", verr)
 	}
@@ -473,7 +494,7 @@ func TestDecodeNightSessionPayloadBackgroundAudioItemCrossShowRejected(t *testin
 	raw := strings.Replace(validNightSessionJSON,
 		`{"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-1"}`,
 		`{"itemId": "track-1", "show": "christmas-2026", "sequence": "bg-track-1", "target": "audio-node-1"}`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeCrossShowReference {
 		t.Fatalf("expected cross-show-reference on the background audio item, got %+v", verr)
 	}
@@ -495,7 +516,7 @@ func TestDecodeNightSessionPayloadTwoBackgroundAudioItemsSameAssetIsLegal(t *tes
         {"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-1"},
         {"itemId": "track-2", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-1"}
       ]`, 1)
-	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -509,7 +530,7 @@ func TestDecodeNightSessionPayloadDuplicateCueName(t *testing.T) {
 		`{"name": "lighting-fade", "role": "lighting", "action": "lighting-fade-out", "offsetMs": -20000, "barrier": true}`,
 		`{"name": "lighting-fade", "role": "lighting", "action": "lighting-fade-out", "offsetMs": -20000, "barrier": true},
      {"name": "lighting-fade", "role": "projection", "action": "projection-fade-out", "offsetMs": -20000}`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeCueNameDuplicate {
 		t.Fatalf("expected cue-name-duplicate, got %+v", verr)
 	}
@@ -524,7 +545,7 @@ func TestDecodeNightSessionPayloadCueOffsetMsIsSigned(t *testing.T) {
 
 func TestDecodeNightSessionPayloadNegativeBlackoutHoldMsRejected(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"blackoutHoldMs": 6000`, `"blackoutHoldMs": -1`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "enterShow.blackoutHoldMs" {
 		t.Fatalf("expected field-invalid on a negative blackoutHoldMs, got %+v", verr)
 	}
@@ -532,7 +553,7 @@ func TestDecodeNightSessionPayloadNegativeBlackoutHoldMsRejected(t *testing.T) {
 
 func TestDecodeNightSessionPayloadNegativeBlackoutAfterShowMsRejected(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"blackoutAfterShowMs": 6000`, `"blackoutAfterShowMs": -1`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "enterResting.blackoutAfterShowMs" {
 		t.Fatalf("expected field-invalid on a negative blackoutAfterShowMs, got %+v", verr)
 	}
@@ -540,7 +561,7 @@ func TestDecodeNightSessionPayloadNegativeBlackoutAfterShowMsRejected(t *testing
 
 func TestDecodeNightSessionPayloadCueOnFailureExplicitAbort(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"barrier": true}`, `"barrier": true, "onFailure": "abort"}`, 1)
-	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
@@ -551,7 +572,7 @@ func TestDecodeNightSessionPayloadCueOnFailureExplicitAbort(t *testing.T) {
 
 func TestDecodeNightSessionPayloadCueRoleMustBeRecognized(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"role": "lighting", "action": "lighting-fade-out"`, `"role": "smoke-machine", "action": "lighting-fade-out"`, 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldInvalid || !strings.HasSuffix(verr.Field, ".role") {
 		t.Fatalf("expected field-invalid on an unrecognized cue role, got %+v", verr)
 	}
@@ -561,7 +582,7 @@ func TestDecodeNightSessionPayloadCueRoleMustBeRecognized(t *testing.T) {
 
 func TestDecodeNightSessionPayloadLabelAbsentIsRejected(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON, `"label": "Halloween main loop",`, "", 1)
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != "label" {
 		t.Fatalf("expected field-required on an absent label, got %+v", verr)
 	}
@@ -569,7 +590,7 @@ func TestDecodeNightSessionPayloadLabelAbsentIsRejected(t *testing.T) {
 
 func TestDecodeNightSessionPayloadUnknownTopLevelKey(t *testing.T) {
 	raw := strings.TrimSuffix(validNightSessionJSON, "}") + `,"notes":"extra"}`
-	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver)
+	_, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
 	if verr == nil || verr.Code != ValidationCodeFieldUnknownKey {
 		t.Fatalf("expected field-unknown-key, got %+v", verr)
 	}
