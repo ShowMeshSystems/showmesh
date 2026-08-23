@@ -244,9 +244,10 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	if !ok {
 		result.Outcome = OutcomeUnknownEntry
 		result.Reason = "no entry of the bound playlist derives an entry key matching the observation's"
-		result.DefinitionAvailable = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash, &err)
-		if err != nil {
-			return Result{}, err
+		var defErr error
+		result.DefinitionAvailable, defErr = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash)
+		if defErr != nil {
+			return Result{}, defErr
 		}
 		return result, nil
 	}
@@ -256,9 +257,10 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 	if mismatch := evidenceMismatchReason(matched, obs); mismatch != "" {
 		result.Outcome = OutcomeEvidenceMismatch
 		result.Reason = mismatch
-		result.DefinitionAvailable = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash, &err)
-		if err != nil {
-			return Result{}, err
+		var defErr error
+		result.DefinitionAvailable, defErr = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash)
+		if defErr != nil {
+			return Result{}, defErr
 		}
 		return result, nil
 	}
@@ -277,9 +279,10 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 		} else {
 			result.Reason = fmt.Sprintf("the bound playlist's show (%s) is not the currently active show (%s)", binding.payload.Show, activeNow.ShowID)
 		}
-		result.DefinitionAvailable = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash, &err)
-		if err != nil {
-			return Result{}, err
+		var defErr error
+		result.DefinitionAvailable, defErr = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash)
+		if defErr != nil {
+			return Result{}, defErr
 		}
 		return result, nil
 	}
@@ -294,9 +297,10 @@ func Reconcile(ctx context.Context, st *store.Store, obs store.FPPPlaylistEntryO
 		return Result{}, fmt.Errorf("fppreconcile: read resolved cue %q: %w", matched.Cue, err)
 	}
 	result.CueRevision = cueObj.CurrentRevision
-	result.DefinitionAvailable = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash, &err)
-	if err != nil {
-		return Result{}, err
+	var defErr error
+	result.DefinitionAvailable, defErr = definitionAvailable(ctx, st, obs.InstanceUUID, obs.PlaylistHash)
+	if defErr != nil {
+		return Result{}, defErr
 	}
 	return result, nil
 }
@@ -423,20 +427,18 @@ func evidenceMismatchReason(entry config.ShowPlaylistEntry, obs store.FPPPlaylis
 }
 
 // definitionAvailable reports whether a definition is stored for
-// (instanceUUID, playlistHash), setting *errOut on any error other than
-// "not found" — a small helper so every one of [Reconcile]'s four
-// definition-checking return points reads identically rather than
-// repeating the same errors.Is dance four times.
-func definitionAvailable(ctx context.Context, st *store.Store, instanceUUID, playlistHash string, errOut *error) bool {
+// (instanceUUID, playlistHash) — a small helper so every one of
+// [Reconcile]'s four definition-checking return points reads identically
+// rather than repeating the same errors.Is dance four times.
+func definitionAvailable(ctx context.Context, st *store.Store, instanceUUID, playlistHash string) (bool, error) {
 	_, err := st.GetFPPPlaylistDefinition(ctx, instanceUUID, playlistHash)
 	switch {
 	case err == nil:
-		return true
+		return true, nil
 	case errors.Is(err, store.ErrFPPPlaylistDefinitionNotFound):
-		return false
+		return false, nil
 	default:
-		*errOut = fmt.Errorf("fppreconcile: check stored definition for %q/%q: %w", instanceUUID, playlistHash, err)
-		return false
+		return false, fmt.Errorf("fppreconcile: check stored definition for %q/%q: %w", instanceUUID, playlistHash, err)
 	}
 }
 
