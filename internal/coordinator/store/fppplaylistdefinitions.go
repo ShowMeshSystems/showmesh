@@ -229,7 +229,16 @@ func (t *Tx) DeleteFPPPlaylistDefinition(ctx context.Context, instanceUUID, play
 // draws a line around — "this file only ever treats payload_json as an
 // opaque string" — this method does not cross that line, its caller (the
 // api package, which already knows show.playlist's JSON shape) does.
-func pruneFPPPlaylistDefinitions(ctx context.Context, q querier, instanceUUID string, keepUnreferenced int, isReferenced func(playlistHash string) bool) (int, error) {
+//
+// isReferenced returns an error rather than a bare bool so a read
+// failure can be told apart from "not referenced": a bare bool cannot
+// signal failure, and treating a failed read as "unreferenced" would be
+// silent permission to delete a row that might in fact still be bound.
+// Every hash is classified by calling isReferenced BEFORE any row is
+// deleted, so an error aborts the prune with the table exactly as it
+// was; no row is removed on the strength of an isReferenced call that
+// later, for a different hash, fails.
+func pruneFPPPlaylistDefinitions(ctx context.Context, q querier, instanceUUID string, keepUnreferenced int, isReferenced func(playlistHash string) (bool, error)) (int, error) {
 	rows, err := q.QueryContext(ctx,
 		`SELECT playlist_hash FROM fpp_playlist_definitions WHERE instance_uuid = ? ORDER BY received_at DESC`,
 		instanceUUID)
@@ -251,16 +260,27 @@ func pruneFPPPlaylistDefinitions(ctx context.Context, q querier, instanceUUID st
 	}
 	_ = rows.Close()
 
+	// Classify every hash first, without deleting anything: a mid-list
+	// isReferenced failure must abort with the table untouched.
+	var toDelete []string
 	unreferencedSeen := 0
-	pruned := 0
 	for _, h := range hashes {
-		if isReferenced(h) {
+		referenced, err := isReferenced(h)
+		if err != nil {
+			return 0, fmt.Errorf("store: prune fpp playlist definitions for %q: check referenced %q: %w", instanceUUID, h, err)
+		}
+		if referenced {
 			continue
 		}
 		unreferencedSeen++
 		if unreferencedSeen <= keepUnreferenced {
 			continue
 		}
+		toDelete = append(toDelete, h)
+	}
+
+	pruned := 0
+	for _, h := range toDelete {
 		res, err := q.ExecContext(ctx,
 			`DELETE FROM fpp_playlist_definitions WHERE instance_uuid = ? AND playlist_hash = ?`,
 			instanceUUID, h)
@@ -277,13 +297,13 @@ func pruneFPPPlaylistDefinitions(ctx context.Context, q querier, instanceUUID st
 }
 
 // PruneFPPPlaylistDefinitions is [pruneFPPPlaylistDefinitions]'s [Store] form.
-func (s *Store) PruneFPPPlaylistDefinitions(ctx context.Context, instanceUUID string, keepUnreferenced int, isReferenced func(playlistHash string) bool) (int, error) {
+func (s *Store) PruneFPPPlaylistDefinitions(ctx context.Context, instanceUUID string, keepUnreferenced int, isReferenced func(playlistHash string) (bool, error)) (int, error) {
 	guardNotInTx(ctx, "Store.PruneFPPPlaylistDefinitions")
 	return pruneFPPPlaylistDefinitions(ctx, s.db, instanceUUID, keepUnreferenced, isReferenced)
 }
 
 // PruneFPPPlaylistDefinitions is [Store.PruneFPPPlaylistDefinitions]'s [Tx] form.
-func (t *Tx) PruneFPPPlaylistDefinitions(ctx context.Context, instanceUUID string, keepUnreferenced int, isReferenced func(playlistHash string) bool) (int, error) {
+func (t *Tx) PruneFPPPlaylistDefinitions(ctx context.Context, instanceUUID string, keepUnreferenced int, isReferenced func(playlistHash string) (bool, error)) (int, error) {
 	return pruneFPPPlaylistDefinitions(ctx, t.tx, instanceUUID, keepUnreferenced, isReferenced)
 }
 

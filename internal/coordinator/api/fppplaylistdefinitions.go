@@ -262,8 +262,8 @@ func (h *handlers) handlePostFPPPlaylistDefinition(w http.ResponseWriter, r *htt
 		if err != nil {
 			return identity.AuditEntry{}, err
 		}
-		if _, err := tx.PruneFPPPlaylistDefinitions(ctx, req.InstanceUUID, fppPlaylistDefinitionRetentionKeep, func(hash string) bool {
-			return referenced[hash]
+		if _, err := tx.PruneFPPPlaylistDefinitions(ctx, req.InstanceUUID, fppPlaylistDefinitionRetentionKeep, func(hash string) (bool, error) {
+			return referenced[hash], nil
 		}); err != nil {
 			return identity.AuditEntry{}, err
 		}

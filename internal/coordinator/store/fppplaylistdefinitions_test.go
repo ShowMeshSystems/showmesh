@@ -168,7 +168,7 @@ func TestPruneFPPPlaylistDefinitionsNeverEvictsReferenced(t *testing.T) {
 		t.Fatalf("put referenced: %v", err)
 	}
 
-	isReferenced := func(hash string) bool { return hash == "hash-referenced" }
+	isReferenced := func(hash string) (bool, error) { return hash == "hash-referenced", nil }
 	pruned, err := st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 0, isReferenced)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
@@ -195,7 +195,7 @@ func TestPruneFPPPlaylistDefinitionsKeepsNewestUnreferencedAndRemovesOlder(t *te
 		}
 	}
 	// Newest received first is hash-d (sec=4), then hash-c, hash-b, hash-a.
-	isReferenced := func(string) bool { return false }
+	isReferenced := func(string) (bool, error) { return false, nil }
 	pruned, err := st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 2, isReferenced)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
@@ -215,6 +215,47 @@ func TestPruneFPPPlaylistDefinitionsKeepsNewestUnreferencedAndRemovesOlder(t *te
 	}
 }
 
+// TestPruneFPPPlaylistDefinitionsAbortsOnReadFailureLeavingTableUnchanged
+// proves the fail-closed contract: an isReferenced read failure aborts
+// the whole prune and returns the error, and no row is deleted, not even
+// one whose own isReferenced call already succeeded and reported
+// unreferenced before the failing call was reached.
+func TestPruneFPPPlaylistDefinitionsAbortsOnReadFailureLeavingTableUnchanged(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	for i, sec := range []int64{1, 2, 3, 4} {
+		rec := fppDefinitionFixture("instance-1", "hash-"+string(rune('a'+i)), "P", time.Unix(sec, 0))
+		if _, err := st.PutFPPPlaylistDefinition(ctx, rec); err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+	}
+	// Newest received first is hash-d, hash-c, hash-b, hash-a. With
+	// keepUnreferenced=0, hash-d would be classified (and kept as
+	// unreferenced-but-within-keep only if keep>0; here keep=0 so every
+	// unreferenced hash is eligible for deletion) before the failure on
+	// hash-b is reached.
+	wantErr := errors.New("boom: simulated read failure")
+	isReferenced := func(hash string) (bool, error) {
+		if hash == "hash-b" {
+			return false, wantErr
+		}
+		return false, nil
+	}
+	pruned, err := st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 0, isReferenced)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want wrapping %v", err, wantErr)
+	}
+	if pruned != 0 {
+		t.Fatalf("pruned = %d, want 0 (abort must not delete anything)", pruned)
+	}
+	for _, want := range []string{"hash-a", "hash-b", "hash-c", "hash-d"} {
+		if _, err := st.GetFPPPlaylistDefinition(ctx, "instance-1", want); err != nil {
+			t.Errorf("%s should have survived an aborted prune: %v", want, err)
+		}
+	}
+}
+
 func TestPruneFPPPlaylistDefinitionsOnlyTouchesTheNamedInstance(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
@@ -226,7 +267,7 @@ func TestPruneFPPPlaylistDefinitionsOnlyTouchesTheNamedInstance(t *testing.T) {
 		t.Fatalf("put instance-2: %v", err)
 	}
 
-	pruned, err := st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 0, func(string) bool { return false })
+	pruned, err := st.PruneFPPPlaylistDefinitions(ctx, "instance-1", 0, func(string) (bool, error) { return false, nil })
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -271,7 +312,7 @@ func TestFPPPlaylistDefinitionTxFormsMatchStoreForms(t *testing.T) {
 		if len(byInstance) != 1 {
 			t.Errorf("Tx.ListFPPPlaylistDefinitionsByInstance: len = %d, want 1", len(byInstance))
 		}
-		pruned, err := tx.PruneFPPPlaylistDefinitions(ctx, "instance-1", 0, func(string) bool { return true })
+		pruned, err := tx.PruneFPPPlaylistDefinitions(ctx, "instance-1", 0, func(string) (bool, error) { return true, nil })
 		if err != nil {
 			return err
 		}
