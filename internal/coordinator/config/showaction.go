@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -221,13 +222,14 @@ const (
 	// it the day someone changes the FSEQ and forgets the field.
 	ValidationCodeDuplicateRestDuration = "duplicate-rest-duration"
 
-	// ValidationCodeNotImplemented is retired: Track F seam F1 produced it
-	// for a payload naming "siteControl" or "interlocks" before either was
-	// enforced. Seam F6 (nightsitecontrol.go) now decodes and validates
-	// both, so this Code is no longer returned by anything in this
-	// package. Kept, unused, rather than removed: a Code string that once
-	// left this coordinator over the wire is not repurposed for a
-	// different meaning later.
+	// ValidationCodeNotImplemented means the payload named something the
+	// records specify but no code enforces yet. Track F seam F1 produced it
+	// for night.session's "siteControl" and "interlocks"; seam F6
+	// (nightsitecontrol.go) now decodes and validates both, so that reason
+	// is gone. show.playlist's reserved "showmesh" runner still returns it
+	// (ADR-043, no implementation), so the Code is live, not retired.
+	// Accepting configuration nothing enforces is a surface asserting
+	// something false (owner decision, TRACK-F-F1 seam spec).
 	ValidationCodeNotImplemented = "not-implemented"
 
 	// The Codes below are Track F seam F6's own additions
@@ -355,6 +357,23 @@ const (
 	// leave through one interface in one clock domain (ADR-018), so two
 	// different route names can never be satisfied together.
 	ValidationCodeAudioNodeRouteMismatch = "audio-node-route-mismatch"
+
+	// Track H seam H1's own additions (showplaylist.go).
+
+	// ValidationCodeEntriesEmpty means show.playlist.entries was present
+	// but held zero entries — TRACK-H-H1-SPEC.md section 4: "an empty
+	// entries list" is refused, matching ValidationCodeStepsEmpty's and
+	// ValidationCodeBackgroundAudioItemsEmpty's own per-kind precedent
+	// rather than reusing either directly.
+	ValidationCodeEntriesEmpty = "entries-empty"
+
+	// ValidationCodeEntryPositionDuplicate means two show.playlist entries
+	// declared the same (fpp.section, fpp.position) pair. TRACK-H-H1-SPEC.md
+	// section 3.1: two entries at the same section and position derive the
+	// same entry key, and no runtime evidence could ever tell them apart —
+	// distinct from ValidationCodeItemIDDuplicate, which this file reuses
+	// for a duplicate entry id.
+	ValidationCodeEntryPositionDuplicate = "entry-position-duplicate"
 )
 
 // --- show.action's own vocabulary. ---
@@ -1595,7 +1614,15 @@ func decodeOptionalString(top map[string]json.RawMessage, key, field string) (st
 }
 
 // decodeRequiredInt reads key from top as a required, non-null whole
-// number.
+// number. It decodes as json.Number and parses with strconv.ParseInt
+// rather than round-tripping through float64: a float64 guard
+// (`f != float64(int(f))`) cannot detect a JSON integer literal outside
+// float64's exactly-representable range — 9007199254740993 decodes to
+// 9007199254740992 and the round trip compares equal — and above
+// math.MaxInt64 the float64->int conversion saturates instead of
+// overflowing visibly. json.Number preserves the literal's exact decimal
+// text, so a non-integer, an out-of-range value, or too many digits is
+// refused outright instead of silently returning a mangled value.
 func decodeRequiredInt(top map[string]json.RawMessage, key, field string) (int, *ValidationError) {
 	raw, present := top[key]
 	if !present {
@@ -1604,14 +1631,18 @@ func decodeRequiredInt(top map[string]json.RawMessage, key, field string) (int, 
 	if isJSONNull(raw) {
 		return 0, &ValidationError{Code: ValidationCodeFieldNull, Field: field, Detail: fmt.Sprintf("%s must not be null", field)}
 	}
-	var f float64
-	if err := json.Unmarshal(raw, &f); err != nil {
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err != nil {
 		return 0, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a JSON number", field)}
 	}
-	if f != float64(int(f)) {
+	v, err := strconv.ParseInt(n.String(), 10, 64)
+	if err != nil {
 		return 0, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a whole number", field)}
 	}
-	return int(f), nil
+	if v < math.MinInt || v > math.MaxInt {
+		return 0, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a whole number", field)}
+	}
+	return int(v), nil
 }
 
 // decodeDefaultedBool reads key from top: absent takes def; present-and-null

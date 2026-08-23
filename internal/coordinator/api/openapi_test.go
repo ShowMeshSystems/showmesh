@@ -122,16 +122,19 @@ func newOpenAPICompiler(t *testing.T) *jsonschema.Compiler {
 // This is the test-only overlay finding 2.1 asked for, restricted to
 // exactly the one keyword the published document had to give up:
 // "required" is left completely untouched, exactly as api/openapi.yaml
-// itself authors it. That is enough on its own: every schema in this
-// document except Problem already lists every one of its properties as
-// required (Problem's supportedVersions is the sole, deliberate
-// exception — present only on an unsupported-api-version problem — and
-// forcing it into "required" here would fail every OTHER problem
-// response's correctly-absent supportedVersions, which is not drift and
-// must not fail). Re-deriving "required" from "properties" here would
-// silently overwrite that one deliberate exception; not touching it at
-// all is what keeps this overlay strictly additive to what the document
-// already declares.
+// itself authors it. Most schemas in this document list every one of
+// their properties as required (Problem's supportedVersions is one
+// deliberate exception — present only on an unsupported-api-version
+// problem — and forcing it into "required" here would fail every OTHER
+// problem response's correctly-absent supportedVersions, which is not
+// drift and must not fail). Track H seam H1's ConfigShowCue/
+// ConfigShowPlaylist family are the first schemas with genuinely optional
+// members of their own (outputs.ltc, mismatchPolicy, fpp, and so on), so
+// "required" no longer matches "properties" everywhere by coincidence
+// either. Re-deriving "required" from "properties" here would silently
+// overwrite all of those deliberate omissions; not touching it at all is
+// what keeps this overlay strictly additive to what the document already
+// declares.
 //
 // A schema with no "properties" key (Capability.attributes,
 // Event.details — free-form maps the document deliberately leaves
