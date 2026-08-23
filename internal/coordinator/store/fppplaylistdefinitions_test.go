@@ -277,11 +277,9 @@ func TestPruneFPPPlaylistDefinitionsAbortsOnReadFailureLeavingTableUnchanged(t *
 			t.Fatalf("put %d: %v", i, err)
 		}
 	}
-	// Newest received first is hash-d, hash-c, hash-b, hash-a. With
-	// keepUnreferenced=0, hash-d would be classified (and kept as
-	// unreferenced-but-within-keep only if keep>0; here keep=0 so every
-	// unreferenced hash is eligible for deletion) before the failure on
-	// hash-b is reached.
+	// Newest received first is hash-d, hash-c, hash-b, hash-a, so with
+	// keepUnreferenced=0 both hash-d and hash-c are already classified as
+	// deletable before the failure on hash-b is reached.
 	wantErr := errors.New("boom: simulated read failure")
 	isReferenced := func(hash string) (bool, error) {
 		if hash == "hash-b" {
