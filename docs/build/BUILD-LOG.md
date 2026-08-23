@@ -67,7 +67,7 @@ The **Current state** block at the top of this file is overwritten each session:
 >
 > **Resting mode and the operating-night loop are specified, not implemented** (owner, 2026-08-16): [RESTING-MODE](../architecture/RESTING-MODE.md), [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md), [Track F](TRACK-F-resting-mode.md), and the generic third-party synchronized-audio research in RES-016 (L0) are on `main`. ADR-001 is narrowed by ADR-038: FPP opens and closes the operating window; ShowMesh advances content-driven cycles inside it with relative timing only.
 >
-> **UPDATE, 2026-08-22: Track F's F5, F6, and F7's UI half are built, reviewed, and gated on their own branches; none is merged to `main`.** F5 (audio integration) is on `claude/sm-191-night-background-audio`, PR #51, head `9a65363`; F6 (optional site control) is on `claude/sm-192-night-site-control`, PR #46, head `b6e37e0`; F7's UI half is on `claude/sm-193-night-session-ui`, PR #45, head `0658d5e`. **`pkg/audio`, which F5 consumes, is present on `main`** at commit `12ce0d8` via merge `6b0eb38` (2026-08-19); Track F's document previously recorded it as absent, which was checked before that merge landed and is now corrected. Each branch's own gates were green before independent review found further defects, all recorded as fixed at the head commit above: F5's controller sent the wrong wire field name for its playlist reference, silencing resting music after one track, and a compounded coordinator/node duck could strand the bed at a quarter gain for a night; F6's stored readiness gate could let `end-session` reach `stopped` without ever issuing the FPP stop, leaving a show running with ShowMesh no longer tracking it; F7's UI could display a stale night-session snapshot until the next real transition and could blank all lifecycle state on one failed reload. See the 2026-08-22 dated entry below for the full record. Nothing on any of the three branches has run against a real FPP, real audio hardware, a real site-control target, a browser, or the deployed fleet.
+> **UPDATE, 2026-08-22: Track F's F5, F6, and F7's UI half are built, reviewed, gated and merged to `main`.** F7's UI half merged as PR #45 (`1e839f3`), F5 audio integration as PR #51 (`2f35412`), and F6 optional site control as PR #53 (`bd40073`), which supersedes PR #46 after a rebase onto the two seams above. **Merging the first two broke `main`**: each was green against the `main` it was tested on and neither was ever tested against the other, so `NightReadinessCheck.state` gaining `not_configured` and `NightSessionState.backgroundAudio` becoming required failed the UI typecheck once both had landed. Repaired by PR #52 (`ea8ea2f`). `main` at `bd40073` was then verified directly in a clean worktree: `make check` exit 0 and `make test-integration` exit 0, ok in 141.851s. **`pkg/audio`, which F5 consumes, is present on `main`** at commit `12ce0d8` via merge `6b0eb38` (2026-08-19); Track F's document previously recorded it as absent, which was checked before that merge landed and is now corrected. Each branch's own gates were green before independent review found further defects, all recorded as fixed at the head commit above: F5's controller sent the wrong wire field name for its playlist reference, silencing resting music after one track, and a compounded coordinator/node duck could strand the bed at a quarter gain for a night; F6's stored readiness gate could let `end-session` reach `stopped` without ever issuing the FPP stop, leaving a show running with ShowMesh no longer tracking it; F7's UI could display a stale night-session snapshot until the next real transition and could blank all lifecycle state on one failed reload. See the 2026-08-22 dated entry below for the full record. None of it has run against a real FPP, real audio hardware, a real site-control target, a browser, or the deployed fleet.
 >
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090` (configured through `showmeshctl config set` with no restart, ADR-036 exercised for real), and a native `dev-node-01` agent from `~/showmesh-dev-node/` whose first boot created its own asset directory — the merge-review fix observed working in the field. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
 >
@@ -79,11 +79,11 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
-## 2026-08-22 (Track F seams F5, F6, and F7's UI half: three branches built, reviewed, and gated; none merged to `main`)
+## 2026-08-22 (Track F seams F5, F6, and F7's UI half: built, reviewed, gated and merged to `main`)
 
 **Goal:** record Track F's three remaining seams as they landed on their own branches, from evidence captured by the orchestrator against each pushed commit, not from any builder's report.
 
-**Completed**, three branches, none merged to `main`:
+**Completed**, all three merged to `main`:
 
 - **F5, audio integration.** Branch `claude/sm-191-night-background-audio`, PR #51, head `9a65363`, 8 commits. Adds `audio` as a fourth `show.action` target integration alongside `fpp`, `resolume`, and `mqtt`, so a night cue reaches an audio session through an ordinary logical action binding. Applies the whole pinned `PlaylistRef` once and lets the engine own item advancement, repeat, and resume per AUDIO-ENGINE section 3. Gives announcement ducking one owner, the node: the controller declares `sourceRole` and `mixPolicy` and drives no gain itself, running the clear, apply, and start sequence as durable outbox rows. Removes the background-audio vocabulary duplicated in `internal/coordinator/config/nightsession.go`, now spelled from `pkg/audio`'s four pinned wire spellings. Adds background and announcement steps to the night-session response and `showmeshctl night status`.
 
@@ -101,12 +101,13 @@ The **Current state** block at the top of this file is overwritten each session:
 
 **Questions raised with the owner:** none new.
 
-**Deferred**, on all three branches, because none is merged:
+**Deferred:**
 
 - F5: no audio has been heard on any tree. `FakeEngine` reports itself unavailable by design. No hardware, node, deployment, or browser evidence exists for any of it.
 - F6: no real projector, relay, thermostat, Home Assistant instance, or MQTT broker was exercised. The removal-policy runtime specified in RESTING-MODE section 10 is not built.
 - F7: proven only under jsdom against a mock HTTP and stream server. No browser run has occurred.
-- Merge order and conflict resolution across the three branches, and against `main`, has not been attempted.
+- The merge itself produced one defect and one process finding. Merging the UI seam and then the audio seam broke `main`'s UI typecheck, because each was green against a base that did not contain the other and GitHub's CLEAN merge state reports conflicts rather than semantic compatibility. Repaired by PR #52 (`ea8ea2f`), reviewed before merge. Folding F6 afterwards required resolving five conflicting files as a union of both sibling features; a second review verified line by line that nothing from either sibling was lost, that the shipped test count went from 9 to 13 with none dropped, and that all three of F6's own critical review fixes survived.
+- Nothing here changes the standing gap: no seam has run against real hardware.
 
 **Verification gates, run this session by the orchestrator against each pushed head, not reported by the builder:**
 
