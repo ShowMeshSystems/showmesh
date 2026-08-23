@@ -539,6 +539,40 @@ func TestReconcileDuplicateSequenceFilenameResolvesByKeyAlone(t *testing.T) {
 	}
 }
 
+// TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic is review
+// fix item 49-2: fppRunnerBindingsForInstance
+// (decodeStoredShowPlaylistPayload) skips a show.playlist object whose
+// stored payload_json fails to decode, never fails the whole search on
+// it. This proves the negative control end to end through [Reconcile]
+// itself: a real config_revisions row holding truncated JSON — the shape
+// an interrupted write or a corrupted disk page could actually leave
+// behind, put directly with putConfig rather than through
+// [config.EncodeShowPlaylistPayload] (which would refuse to produce
+// this) — must resolve to OutcomeUnbound and must not panic.
+func TestReconcileCorruptedStoredPlaylistPayloadIsUnboundNotPanic(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+
+	// Truncated mid-object: valid UTF-8, syntactically incomplete JSON.
+	// This is what a write cut off partway through could actually leave
+	// in config_revisions.payload_json.
+	const corrupted = `{"show":"show-1","name":"Main","runner":"fpp","fpp":{"instanceUuid":"inst-1","playlistName":"Main","playlistHash":"`
+	putConfig(t, st, config.ShowPlaylistConfigKind, "playlist-1", corrupted)
+
+	obs := baseObservation("inst-1")
+	obs.PlaylistHash = hash64("h1")
+	obs.EntryKey = hash64("e1")
+
+	result, err := Reconcile(context.Background(), st, obs)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.Outcome != OutcomeUnbound {
+		t.Fatalf("Outcome = %q, want %q: a corrupted stored show.playlist must be skipped, not treated as a binding", result.Outcome, OutcomeUnbound)
+	}
+}
+
 // deriveEntryKeyForTest is a tiny local wrapper so
 // TestReconcileStaleImportHoldsOldBindingNotRemapped can construct a
 // syntactically valid entry key for an observation whose hash deliberately
