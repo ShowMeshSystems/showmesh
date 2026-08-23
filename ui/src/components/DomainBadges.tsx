@@ -266,6 +266,11 @@ const NIGHT_READINESS_CHECK_STATE: Record<
   // a failure (NightReadinessCheck's own schema description) — 'unknown'
   // tone, never 'warn'/'bad'.
   not_verifiable: { tone: 'unknown', icon: '–', label: 'not verifiable' },
+  // An absent OPTIONAL configuration is not a fault: not_configured is
+  // excluded from the aggregate outcome exactly as not_verifiable is
+  // (NightReadinessCheck's own schema description), so it carries the
+  // same 'unknown' tone and never 'warn'/'bad'.
+  not_configured: { tone: 'unknown', icon: '–', label: 'not configured' },
 }
 
 export function NightReadinessCheckBadge({ state }: { state: NightReadinessCheckState }) {
