@@ -138,7 +138,9 @@ disagree with its own inputs.
 This seam therefore adds an exported derivation over the stored payload,
 reusing `pkg/fppidentity` rather than re-implementing RFC 8785, and stores
 nothing. H2 resolves an observation to an entry by deriving the key for each
-entry of the active Show's bound Playlist and comparing.
+entry of every candidate bound Playlist it finds across every Show and
+comparing, then separately checks that the matched binding belongs to the
+active Show.
 
 Validation refuses two entries with the same `(section, position)` pair,
 because they derive the same key and no runtime evidence could ever tell them
