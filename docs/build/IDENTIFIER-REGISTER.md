@@ -168,6 +168,26 @@ Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
 (ADR-032), and the path shape differs deliberately.
 
+### show.action target integrations
+
+`show.action.target.integration`, defined in
+`internal/coordinator/config/showaction.go`. ADR-029: a macro or night-
+session cue invokes the named action, and the action's own adapter owns
+the protocol underneath it — a new member here is a new integration an
+operator can bind an action to, not a new way to reach one that already
+exists.
+
+| Integration | Status | Owner |
+|---|---|---|
+| `fpp` | shipped | Step 9 |
+| `resolume` | shipped | Track D seam C |
+| `mqtt` | shipped | Step 9 |
+| `audio` | shipped | Track F seam F5 |
+
+`audio`'s own `target.audioAction` names one of the already-registered
+`audio.session.*`/`audio.gain.*`/`audio.output.*` operation names in this
+file's own "Agent operation names" table; it mints no new operation name.
+
 ## Authorization scopes
 
 Defined in `internal/coordinator/identity/types.go`. Roles are named

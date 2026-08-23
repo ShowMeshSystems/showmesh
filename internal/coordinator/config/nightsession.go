@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
 // This file is Track F seam F1's own addition (docs/private/seam-specs/
@@ -15,29 +17,35 @@ import (
 // doc comment) rather than a generic kind registry two files did not
 // justify and six does not either.
 //
-// Every cross-object reference this kind needs — a configured FPP
+// Every cross-object reference this kind needs - a configured FPP
 // instance, an existing show.action object, a current asset for a
-// (show, sequence, target) tuple — is a caller-supplied callback to
+// (show, sequence, target) tuple - is a caller-supplied callback to
 // DecodeNightSessionPayload, exactly like show.macro's resolveAction and
 // show.active's showExists: this package has no store access.
 //
 // The background-audio vocabulary (itemId, resume, repeat, itemTransition)
-// is pinned against pkg/audio's PlaylistItem/PlaylistRef shape on Track
-// C's branch (track-c/audio-node, commit 12ce0d8, not yet on main): this
-// package does not and must not import pkg/audio (it is not merged), but
-// the wire spellings here are chosen to agree with it now rather than
-// reconciling two vocabularies at F5.
+// mirrors pkg/audio's PlaylistItem/PlaylistRef shape (pkg/audio is on
+// main): repeat, resume, and itemTransition validate against and are
+// spelled from pkg/audio.RepeatMode/ResumePolicy/ItemTransition directly
+// rather than a second, independently maintained vocabulary. itemId plus
+// an [NightSessionAssetRef] is this file's own flattening of
+// pkg/audio.PlaylistItem's ItemID/Media pairing (see
+// [NightSessionBackgroundAudioItem]'s doc comment) because a night.session
+// asset reference is a (show, sequence, target) tuple resolved by this
+// package's own AssetCurrent callback, not a pkg/audio.MediaRef.
 
 // NightSessionConfigKind is config_objects.kind and config_revisions.kind
 // for a night.session object. Like show.action, this is a collection: each
 // object id is the session's own identifier, chosen by the caller.
 const NightSessionConfigKind = "night.session"
 
-// The three members of night.session.resting.backgroundAudio.repeat.
+// The three members of night.session.resting.backgroundAudio.repeat,
+// spelled from pkg/audio.RepeatMode - the single source of truth this
+// package validates against rather than a second, hand-copied set.
 const (
-	NightSessionBackgroundRepeatNone     = "none"
-	NightSessionBackgroundRepeatItem     = "item"
-	NightSessionBackgroundRepeatPlaylist = "playlist"
+	NightSessionBackgroundRepeatNone     = string(pkgaudio.RepeatNone)
+	NightSessionBackgroundRepeatItem     = string(pkgaudio.RepeatItem)
+	NightSessionBackgroundRepeatPlaylist = string(pkgaudio.RepeatPlaylist)
 )
 
 var nightSessionBackgroundRepeatValues = map[string]bool{
@@ -46,13 +54,12 @@ var nightSessionBackgroundRepeatValues = map[string]bool{
 	NightSessionBackgroundRepeatPlaylist: true,
 }
 
-// The two members of night.session.resting.backgroundAudio.resume —
-// pinned against pkg/audio's vocabulary on track-c/audio-node (see this
-// file's own top doc comment). NOT a bool: orchestrator correction,
-// 2026-08-18.
+// The two members of night.session.resting.backgroundAudio.resume,
+// spelled from pkg/audio.ResumePolicy. NOT a bool: orchestrator
+// correction, 2026-08-18.
 const (
-	NightSessionBackgroundResumeResume  = "resume"
-	NightSessionBackgroundResumeRestart = "restart"
+	NightSessionBackgroundResumeResume  = string(pkgaudio.ResumePolicyResume)
+	NightSessionBackgroundResumeRestart = string(pkgaudio.ResumePolicyRestart)
 )
 
 var nightSessionBackgroundResumeValues = map[string]bool{
@@ -60,17 +67,41 @@ var nightSessionBackgroundResumeValues = map[string]bool{
 	NightSessionBackgroundResumeRestart: true,
 }
 
-// The three members of night.session.resting.backgroundAudio.itemTransition.
+// The three members of night.session.resting.backgroundAudio.itemTransition,
+// spelled from pkg/audio.ItemTransition.
 const (
-	NightSessionItemTransitionSequential = "sequential"
-	NightSessionItemTransitionGapless    = "gapless"
-	NightSessionItemTransitionCrossfade  = "crossfade"
+	NightSessionItemTransitionSequential = string(pkgaudio.ItemTransitionSequential)
+	NightSessionItemTransitionGapless    = string(pkgaudio.ItemTransitionGapless)
+	NightSessionItemTransitionCrossfade  = string(pkgaudio.ItemTransitionCrossfade)
 )
 
 var nightSessionItemTransitionValues = map[string]bool{
 	NightSessionItemTransitionSequential: true,
 	NightSessionItemTransitionGapless:    true,
 	NightSessionItemTransitionCrossfade:  true,
+}
+
+// The three members of an announcement cue's resolved duck/mix/interrupt
+// policy, spelled from pkg/audio.MixPolicy - Unsupported is deliberately
+// excluded: an announcement's own configured policy is always one this
+// coordinator can request, never an output-reported fallback.
+const (
+	NightSessionAnnouncementPolicyDuck      = string(pkgaudio.MixPolicyDuck)
+	NightSessionAnnouncementPolicyMix       = string(pkgaudio.MixPolicyMix)
+	NightSessionAnnouncementPolicyInterrupt = string(pkgaudio.MixPolicyInterrupt)
+
+	// NightSessionAnnouncementPolicyDefault is used whenever an
+	// announcement cue does not name its own policy - AUDIO-ENGINE.md
+	// §9 lists duck first among "announcements can duck show or
+	// background", and RESTING-MODE.md §8 requires a configured default
+	// exist at all.
+	NightSessionAnnouncementPolicyDefault = NightSessionAnnouncementPolicyDuck
+)
+
+var nightSessionAnnouncementPolicyValues = map[string]bool{
+	NightSessionAnnouncementPolicyDuck:      true,
+	NightSessionAnnouncementPolicyMix:       true,
+	NightSessionAnnouncementPolicyInterrupt: true,
 }
 
 // The two members of a transition cue's role.
@@ -90,7 +121,7 @@ var nightSessionCueRoleValues = map[string]bool{
 	NightSessionCueRoleOther:        true,
 }
 
-// The two members of a transition cue's onFailure, and its default —
+// The two members of a transition cue's onFailure, and its default -
 // ADR-035: a run always runs every step, so "abort" is an explicit,
 // operator-chosen exception rather than the default polarity.
 const (
@@ -127,7 +158,7 @@ var nightSessionDurationKeys = map[string]bool{
 // rejectNightSessionUnimplementedBlocks.
 var nightSessionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "showPlaylist": true, "resting": true,
-	"enterShow": true, "enterResting": true,
+	"enterShow": true, "enterResting": true, "announcementDefaultPolicy": true,
 }
 
 var (
@@ -138,7 +169,7 @@ var (
 	nightSessionBackgroundItemKeys = map[string]bool{"itemId": true, "show": true, "sequence": true, "target": true}
 	nightSessionTransitionKeys     = map[string]bool{"cues": true, "blackoutHoldMs": true}
 	nightSessionRestingTransKeys   = map[string]bool{"cues": true, "blackoutAfterShowMs": true}
-	nightSessionCueKeys            = map[string]bool{"name": true, "role": true, "action": true, "offsetMs": true, "fadeDurationMs": true, "barrier": true, "onFailure": true}
+	nightSessionCueKeys            = map[string]bool{"name": true, "role": true, "action": true, "offsetMs": true, "fadeDurationMs": true, "barrier": true, "onFailure": true, "announcementPolicy": true}
 )
 
 // NightSessionPayload is config_revisions.payload_json's decoded,
@@ -150,6 +181,13 @@ type NightSessionPayload struct {
 	Resting      NightSessionResting      `json:"resting"`
 	EnterShow    NightSessionEnterShow    `json:"enterShow"`
 	EnterResting NightSessionEnterResting `json:"enterResting"`
+
+	// AnnouncementDefaultPolicy is the duck/mix/interrupt policy an
+	// announcement cue uses when it names none of its own (RESTING-MODE.md
+	// §8: "Policy is configurable per announcement ... with a configured
+	// default"). Optional; defaults to
+	// [NightSessionAnnouncementPolicyDefault].
+	AnnouncementDefaultPolicy string `json:"announcementDefaultPolicy"`
 }
 
 // NightSessionFPPPlaylist names an FPP-owned playlist: referenced, never
@@ -161,7 +199,7 @@ type NightSessionFPPPlaylist struct {
 
 // NightSessionAssetRef is ADR-028's asset identity as a night.session
 // needs to name one: show, sequence, and target. TargetKind is always
-// "node" here — a resting timeline or background-audio asset is always
+// "node" here - a resting timeline or background-audio asset is always
 // resolved per rendering/playout target, never per show.
 type NightSessionAssetRef struct {
 	Show     string `json:"show"`
@@ -180,7 +218,7 @@ type NightSessionResting struct {
 }
 
 // NightSessionBackgroundAudioItem is one entry of
-// resting.backgroundAudio.items — pkg/audio.PlaylistItem's own
+// resting.backgroundAudio.items - pkg/audio.PlaylistItem's own
 // ItemID/Media pairing, spelled out here as ItemID plus an
 // [NightSessionAssetRef] (this file's own top doc comment).
 type NightSessionBackgroundAudioItem struct {
@@ -190,7 +228,7 @@ type NightSessionBackgroundAudioItem struct {
 
 // MarshalJSON flattens Asset's three fields alongside ItemID, matching the
 // wire shape { "itemId", "show", "sequence", "target" } rather than a
-// nested "asset" object — the payload contract in the seam spec.
+// nested "asset" object - the payload contract in the seam spec.
 func (i NightSessionBackgroundAudioItem) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		ItemID   string `json:"itemId"`
@@ -221,13 +259,18 @@ func (i *NightSessionBackgroundAudioItem) UnmarshalJSON(b []byte) error {
 
 // NightSessionBackgroundAudio is night.session.resting.backgroundAudio,
 // present only when the deployment configures background audio at all.
+// Every item's own Asset.Target names the SAME audio.node id (enforced by
+// [DecodeNightSessionPayload]): the coordinator has no separate
+// "which output" field for background audio, so item.Asset.Target
+// (ADR-028's own per-target asset identity) doubles as the audio node
+// this whole playlist plays on. OutputNodeID exposes that shared value.
 // CrossfadeMs is a pointer, not a plain int with "omitempty": the
-// validator REQUIRES the key present (0 is a legal value — an immediate
+// validator REQUIRES the key present (0 is a legal value - an immediate
 // cut) whenever ItemTransition is "crossfade" and requires it ABSENT
 // otherwise. A plain int with "omitempty" collapses "present as 0" and
 // "absent" into the same wire form, so a stored crossfadeMs:0 silently
 // vanished from GET's own response and re-PUTting that exact response
-// was rejected for a field the operator never removed — found in review.
+// was rejected for a field the operator never removed - found in review.
 // nil means "not applicable"; non-nil (including *CrossfadeMs == 0) means
 // "present on the wire", matching FadeDurationMs's existing pointer
 // pattern one field over.
@@ -240,6 +283,16 @@ type NightSessionBackgroundAudio struct {
 	MaxGainDb      float64                           `json:"maxGainDb"`
 }
 
+// OutputNodeID returns the audio.node id every item plays on (item 0's
+// own Asset.Target), or "" if Items is empty. DecodeNightSessionPayload
+// already enforces every item agrees, so any item's Target would do.
+func (b NightSessionBackgroundAudio) OutputNodeID() string {
+	if len(b.Items) == 0 {
+		return ""
+	}
+	return b.Items[0].Asset.Target
+}
+
 // NightSessionCue is one entry of enterShow.cues or enterResting.cues.
 type NightSessionCue struct {
 	Name           string `json:"name"`
@@ -249,6 +302,13 @@ type NightSessionCue struct {
 	FadeDurationMs *int   `json:"fadeDurationMs,omitempty"`
 	Barrier        bool   `json:"barrier"`
 	OnFailure      string `json:"onFailure"`
+
+	// AnnouncementPolicy is one of pkg/audio.MixPolicy's duck/mix/
+	// interrupt members, meaningful only when Role is
+	// [NightSessionCueRoleAnnouncement]; nil means the session's own
+	// AnnouncementDefaultPolicy applies. Always nil for every other
+	// role - see [ValidationCodeAnnouncementPolicyNotApplicable].
+	AnnouncementPolicy *string `json:"announcementPolicy,omitempty"`
 }
 
 // NightSessionEnterShow is night.session.enterShow.
@@ -276,7 +336,7 @@ func EncodeNightSessionPayload(p NightSessionPayload) (string, error) {
 
 // AssetCurrent reports whether a current (non-superseded) asset exists for
 // the given (show, sequence, target) tuple, with an implied TargetKind of
-// "node" — the shape every night.session asset reference needs.
+// "node" - the shape every night.session asset reference needs.
 // Caller-supplied, like every cross-object reference check in this
 // package (this file's own top doc comment).
 type AssetCurrent func(show, sequence, target string) bool
@@ -287,7 +347,7 @@ type AssetCurrent func(show, sequence, target string) bool
 // existence plus show rather than existence plus target.integration:
 // unlike a macro step, a night.session cue carries no localFallback class
 // that would need the integration, but ADR-027's namespace rule DOES need
-// the action's own show compared against this session's — found in
+// the action's own show compared against this session's - found in
 // review: neither this type's predecessor (ActionExists) nor its caller
 // ever read or compared the action's show, so a christmas-2026 action
 // bound into a halloween-2026 session was silently accepted.
@@ -297,8 +357,8 @@ type ActionResolver func(actionID string) (show string, ok bool)
 // spec. endpoints is the coordinator's currently configured FPP instances
 // (show.action's own currentFPPEndpoints precedent); assetCurrent and
 // actionResolver are the two cross-object reference checks this kind
-// needs. Every cross-object reference this payload carries — cue actions,
-// the resting timeline asset, and every backgroundAudio item — must name
+// needs. Every cross-object reference this payload carries - cue actions,
+// the resting timeline asset, and every backgroundAudio item - must name
 // an object belonging to THIS session's own "show" (ADR-027: a Show is a
 // namespace precisely so that programming Christmas cannot break
 // Halloween); a reference into a different show is rejected with
@@ -380,9 +440,15 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 		return NightSessionPayload{}, verr
 	}
 
+	announcementDefaultPolicy, verr := decodeDefaultedEnum(top, "announcementDefaultPolicy", "announcementDefaultPolicy", NightSessionAnnouncementPolicyDefault, nightSessionAnnouncementPolicyValues)
+	if verr != nil {
+		return NightSessionPayload{}, verr
+	}
+
 	return NightSessionPayload{
 		Show: show, Label: label, ShowPlaylist: showPlaylist, Resting: resting,
 		EnterShow: enterShow, EnterResting: enterResting,
+		AnnouncementDefaultPolicy: announcementDefaultPolicy,
 	}, nil
 }
 
@@ -391,12 +457,12 @@ func DecodeNightSessionPayload(raw string, endpoints []FPPEndpoint, assetCurrent
 var nightSessionUnimplementedBlockKeys = map[string]bool{"siteControl": true, "interlocks": true}
 
 // rejectNightSessionUnimplementedBlocks refuses a payload that names
-// "siteControl" or "interlocks" ANYWHERE in the object tree — not only at
-// the top level — with its own message naming exactly why (RESTING-MODE.md
+// "siteControl" or "interlocks" ANYWHERE in the object tree - not only at
+// the top level - with its own message naming exactly why (RESTING-MODE.md
 // §10 specifies both; Track F F6 has not shipped enforcement for either).
 // Run before both the generic unknown-key rule and the calendar/duration
 // scans so the operator sees this specific reason rather than a generic
-// "field-unknown-key" — found in review: a NESTED "resting.siteControl"
+// "field-unknown-key" - found in review: a NESTED "resting.siteControl"
 // was still refused, but by the generic rule, silently losing the
 // "specified, not implemented" reason the top-level check gave.
 func rejectNightSessionUnimplementedBlocks(raw string) *ValidationError {
@@ -408,8 +474,8 @@ func rejectNightSessionUnimplementedBlocks(raw string) *ValidationError {
 		"%s is specified (RESTING-MODE.md §10) and not implemented (Track F F6); omit it entirely rather than configuring something nothing enforces")
 }
 
-// scanNightSessionForbiddenKeys walks raw's full JSON object tree —
-// every level, not only the top — for a calendar key (ADR-038 decision 1)
+// scanNightSessionForbiddenKeys walks raw's full JSON object tree -
+// every level, not only the top - for a calendar key (ADR-038 decision 1)
 // or a hand-entered rest-duration key (RESTING-MODE.md §6.1). Run before
 // structural decode so a forbidden key nested inside an otherwise-valid
 // object is caught with its own dotted path rather than silently accepted
@@ -480,7 +546,7 @@ func decodeNightSessionFPPPlaylist(fields map[string]json.RawMessage, path strin
 }
 
 // decodeNightSessionAssetRef decodes {show, sequence, target} and checks
-// it resolves to a current asset via assetCurrent — the write-time
+// it resolves to a current asset via assetCurrent - the write-time
 // dangling-reference check the seam spec requires. Whether "playlist" (the
 // FPP resting/show playlist reference) or "target" (which node) names the
 // SAME entity FPP itself would resolve at showtime is unverifiable without
@@ -650,6 +716,15 @@ func decodeNightSessionBackgroundAudio(fields map[string]json.RawMessage, sessio
 			return NightSessionBackgroundAudio{}, verr
 		}
 		items = append(items, NightSessionBackgroundAudioItem{ItemID: itemID, Asset: asset})
+	}
+
+	for i, item := range items {
+		if item.Asset.Target != items[0].Asset.Target {
+			return NightSessionBackgroundAudio{}, &ValidationError{
+				Code: ValidationCodeBackgroundAudioMixedTargets, Field: fmt.Sprintf("resting.backgroundAudio.items[%d].target", i),
+				Detail: fmt.Sprintf("item %d names target %q, but item 0 names %q; a background-audio playlist plays on exactly one audio output", i, item.Asset.Target, items[0].Asset.Target),
+			}
+		}
 	}
 
 	repeat, verr := decodeDefaultedEnum(fields, "repeat", "resting.backgroundAudio.repeat", NightSessionBackgroundRepeatNone, nightSessionBackgroundRepeatValues)
@@ -832,9 +907,31 @@ func decodeNightSessionCue(raw json.RawMessage, field, sessionShow string, actio
 		return NightSessionCue{}, verr
 	}
 
+	var announcementPolicy *string
+	if raw, present := fields["announcementPolicy"]; present {
+		if role != NightSessionCueRoleAnnouncement {
+			return NightSessionCue{}, &ValidationError{
+				Code: ValidationCodeAnnouncementPolicyNotApplicable, Field: field + ".announcementPolicy",
+				Detail: fmt.Sprintf("%s.announcementPolicy is set but this cue's role is %q, not %q", field, role, NightSessionCueRoleAnnouncement),
+			}
+		}
+		if isJSONNull(raw) {
+			return NightSessionCue{}, &ValidationError{
+				Code: ValidationCodeFieldNull, Field: field + ".announcementPolicy",
+				Detail: fmt.Sprintf("%s.announcementPolicy must not be null; omit it to use the session's own default", field),
+			}
+		}
+		v, verr := decodeRequiredEnum(fields, "announcementPolicy", field+".announcementPolicy", nightSessionAnnouncementPolicyValues)
+		if verr != nil {
+			return NightSessionCue{}, verr
+		}
+		announcementPolicy = &v
+	}
+
 	return NightSessionCue{
 		Name: name, Role: role, Action: action, OffsetMs: offsetMs,
 		FadeDurationMs: fadeDurationMs, Barrier: barrier, OnFailure: onFailure,
+		AnnouncementPolicy: announcementPolicy,
 	}, nil
 }
 
@@ -842,7 +939,7 @@ func decodeNightSessionCue(raw json.RawMessage, field, sessionShow string, actio
 
 // decodeRequiredEnum is [decodeDefaultedEnum] with no default: the key
 // must be present. Used where a field has no sensible implicit value
-// (resume, itemTransition, a cue's role) — silently defaulting one of
+// (resume, itemTransition, a cue's role) - silently defaulting one of
 // these would mean guessing a playback policy the operator never stated.
 func decodeRequiredEnum(top map[string]json.RawMessage, key, field string, allowed map[string]bool) (string, *ValidationError) {
 	if _, present := top[key]; !present {
@@ -860,7 +957,7 @@ func decodeRequiredEnum(top map[string]json.RawMessage, key, field string, allow
 
 // decodeRequiredNonNegativeInt is [decodeRequiredInt] plus a >= 0 check,
 // for a duration or delay field where a negative value is meaningless
-// (blackoutHoldMs, blackoutAfterShowMs, crossfadeMs, fadeDurationMs) —
+// (blackoutHoldMs, blackoutAfterShowMs, crossfadeMs, fadeDurationMs) -
 // distinct from offsetMs, which IS signed (RESTING-MODE.md §7.1: a cue may
 // begin before its anchor).
 func decodeRequiredNonNegativeInt(top map[string]json.RawMessage, key, field string) (int, *ValidationError) {
@@ -875,7 +972,7 @@ func decodeRequiredNonNegativeInt(top map[string]json.RawMessage, key, field str
 }
 
 // decodeRequiredNumber reads key from top as a required, non-null JSON
-// number (any sign), for maxGainDb — unlike decodeRequiredInt, a
+// number (any sign), for maxGainDb - unlike decodeRequiredInt, a
 // fractional gain in dB is a normal value, not a typo.
 func decodeRequiredNumber(top map[string]json.RawMessage, key, field string) (float64, *ValidationError) {
 	raw, present := top[key]
@@ -896,13 +993,13 @@ func decodeRequiredNumber(top map[string]json.RawMessage, key, field string) (fl
 // caller applies its own default); present-and-null is always an error;
 // present-and-empty-string is ALSO an error, rather than being collapsed
 // into "absent" the way decodeOptionalString's "" return value would
-// otherwise read — found in review, for resting.endOfNightPlaylist:
+// otherwise read - found in review, for resting.endOfNightPlaylist:
 // absent, explicit null, and explicit "" are three distinct author
 // intents (CLAUDE.md's own standing rule), and only the first of the
 // three means "use the default (the resting playlist)". An operator who
 // writes "" almost certainly meant to clear a previous override, which
-// this field has no way to represent — omitting the key already means
-// "no override" — so "" is treated as a mistake, not a synonym for
+// this field has no way to represent - omitting the key already means
+// "no override" - so "" is treated as a mistake, not a synonym for
 // omission.
 func decodeOptionalNonEmptyString(top map[string]json.RawMessage, key, field string) (string, *ValidationError) {
 	raw, present := top[key]

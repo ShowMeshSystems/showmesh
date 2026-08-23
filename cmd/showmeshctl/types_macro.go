@@ -83,6 +83,13 @@ type showActionTarget struct {
 	// column, persistent, bypassed, master) — never a Resolume object id.
 	Action string         `json:"action,omitempty"`
 	Ref    map[string]any `json:"ref,omitempty"`
+
+	// audio-only. AudioAction is one of the reserved audio.session.*/
+	// audio.gain.*/audio.output.* operation names; Params (above) is
+	// that operation's own command params.
+	AudioNodeID    string `json:"audioNodeId,omitempty"`
+	AudioSessionID string `json:"audioSessionId,omitempty"`
+	AudioAction    string `json:"audioAction,omitempty"`
 }
 
 // showAction is the "show.action" configuration kind's decoded payload

@@ -469,6 +469,79 @@ func (s *Store) ListNightCueOutboxRows(ctx context.Context, sessionID string, cy
 	return listNightCueOutboxRows(ctx, s.db, sessionID, cycle)
 }
 
+func listNightCueOutboxRowsForPhase(ctx context.Context, q querier, sessionID, phase string) ([]NightCueOutboxRecord, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+nightCueOutboxColumns+` FROM night_cue_outbox WHERE session_id = ? AND phase = ? ORDER BY rowid ASC`, sessionID, phase)
+	if err != nil {
+		return nil, fmt.Errorf("store: list night cue outbox rows for phase %s/%s: %w", sessionID, phase, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []NightCueOutboxRecord
+	for rows.Next() {
+		rec, err := scanNightCueOutboxRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan night cue outbox row: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list night cue outbox rows for phase %s/%s: %w", sessionID, phase, err)
+	}
+	return out, nil
+}
+
+// ListNightCueOutboxRowsForPhase returns every outbox row for
+// (sessionID, phase) across EVERY cycle, in insertion order. Unlike
+// [Store.ListNightCueOutboxRows] (scoped to one cycle, for enterShow/
+// enterResting cue recovery within a single rest/show iteration), a
+// resting-background-audio or announcement-duck-restore session's own
+// revision/bookmark state must stay continuous across the many cycles one
+// night.session record lives through, so its own recovery reads need the
+// whole history for this phase, not one cycle's slice of it.
+func (s *Store) ListNightCueOutboxRowsForPhase(ctx context.Context, sessionID, phase string) ([]NightCueOutboxRecord, error) {
+	guardNotInTx(ctx, "Store.ListNightCueOutboxRowsForPhase")
+	return listNightCueOutboxRowsForPhase(ctx, s.db, sessionID, phase)
+}
+
+func listNightCueOutboxRowsForPhasePrefix(ctx context.Context, q querier, sessionID, prefix string) ([]NightCueOutboxRecord, error) {
+	// LIKE's own wildcards ("%", "_") are never interpreted here: prefix
+	// is always one of this package's own fixed phase constants, never
+	// an operator-supplied string, so there is nothing to escape.
+	rows, err := q.QueryContext(ctx, `SELECT `+nightCueOutboxColumns+` FROM night_cue_outbox WHERE session_id = ? AND (phase = ? OR phase LIKE ?) ORDER BY rowid ASC`,
+		sessionID, prefix, prefix+":%")
+	if err != nil {
+		return nil, fmt.Errorf("store: list night cue outbox rows for phase prefix %s/%s: %w", sessionID, prefix, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []NightCueOutboxRecord
+	for rows.Next() {
+		rec, err := scanNightCueOutboxRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan night cue outbox row: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list night cue outbox rows for phase prefix %s/%s: %w", sessionID, prefix, err)
+	}
+	return out, nil
+}
+
+// ListNightCueOutboxRowsForPhasePrefix returns every outbox row whose
+// phase is EXACTLY prefix, or starts with prefix followed by a colon,
+// across every cycle. Track F seam F5's own background-audio and
+// announcement duck/restore/interrupt steps all address the SAME
+// pkg/audio session and share ONE revision counter (its own
+// RevisionState enforces one strictly-increasing space regardless of
+// which phase recorded the command), so computing that counter, or
+// rebuilding a RevisionState after a restart, needs every step
+// regardless of which of several phase spellings recorded it - see
+// nightbackgroundaudio.go's own top doc comment for the exact phase
+// values this covers.
+func (s *Store) ListNightCueOutboxRowsForPhasePrefix(ctx context.Context, sessionID, prefix string) ([]NightCueOutboxRecord, error) {
+	guardNotInTx(ctx, "Store.ListNightCueOutboxRowsForPhasePrefix")
+	return listNightCueOutboxRowsForPhasePrefix(ctx, s.db, sessionID, prefix)
+}
+
 func updateNightCueOutboxRow(ctx context.Context, q querier, rec NightCueOutboxRecord) error {
 	res, err := q.ExecContext(ctx, `
 		UPDATE night_cue_outbox SET state = ?, dispatched_at = ?, resolved_at = ?, outcome = ?, outcome_reason = ?

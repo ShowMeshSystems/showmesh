@@ -254,6 +254,19 @@ const (
 	// carries is checked against the session's own show, not merely
 	// checked for existence.
 	ValidationCodeCrossShowReference = "cross-show-reference"
+
+	// ValidationCodeBackgroundAudioMixedTargets means
+	// resting.backgroundAudio.items named more than one distinct asset
+	// target: a background-audio playlist plays on exactly one audio
+	// output, and each item's own "target" (ADR-028 asset identity) is
+	// this seam's only source of which audio.node id that is, so every
+	// item must agree.
+	ValidationCodeBackgroundAudioMixedTargets = "background-audio-mixed-targets"
+
+	// ValidationCodeAnnouncementPolicyNotApplicable means a cue named
+	// announcementPolicy while its own role was not "announcement": the
+	// duck/mix/interrupt policy only ever applies to an announcement.
+	ValidationCodeAnnouncementPolicyNotApplicable = "announcement-policy-not-applicable"
 	// ValidationCodeAudioNodeChannelDuplicate: audionode.go's own rule.
 	// programChannels lists the SAME physical route's channel indices, so a
 	// repeated index is a distinct refusal from an ordinary out-of-range
@@ -292,12 +305,39 @@ var showSafetyClasses = map[string]bool{
 	ShowSafetyClassPowerOff: true,
 }
 
-// The three members of show.action.target.integration.
+// The four members of show.action.target.integration. "audio" reaches
+// pkg/audio's session command surface through an ordinary logical action
+// binding (ADR-029), the same as fpp/mqtt/resolume — see
+// docs/build/IDENTIFIER-REGISTER.md's "show.action target integrations"
+// table.
 const (
 	ShowActionIntegrationFPP      = "fpp"
 	ShowActionIntegrationMQTT     = "mqtt"
 	ShowActionIntegrationResolume = "resolume"
+	ShowActionIntegrationAudio    = "audio"
 )
+
+// showActionAudioActions is every audio.session.*/audio.gain.*/
+// audio.output.* operation name this coordinator's agent-facing dispatch
+// already ships (internal/coordinator/api/audiodispatch.go's own
+// handleAudioSession*/handleAudioGain*/handleAudioOutput* route set) — an
+// audio show.action target names one of these, never a new operation
+// name.
+var showActionAudioActions = []string{
+	"audio.session.apply", "audio.session.prepare", "audio.session.start",
+	"audio.session.pause", "audio.session.resume", "audio.session.seek",
+	"audio.session.advance", "audio.session.stop", "audio.session.clear",
+	"audio.gain.set", "audio.gain.fade",
+	"audio.output.mute", "audio.output.unmute",
+}
+
+var showActionAudioActionSet = func() map[string]bool {
+	m := make(map[string]bool, len(showActionAudioActions))
+	for _, a := range showActionAudioActions {
+		m[a] = true
+	}
+	return m
+}()
 
 // The seven Resolume action names (internal/coordinator/collector/resolume.ActionName),
 // duplicated here by value rather than by import: this package must not
@@ -529,9 +569,18 @@ type ShowActionTarget struct {
 	Integration string `json:"integration"`
 
 	// fpp-only. Empty/nil when Integration is "mqtt".
-	InstanceID string         `json:"instanceId,omitempty"`
-	Primitive  string         `json:"primitive,omitempty"`
-	Params     map[string]any `json:"params,omitempty"`
+	InstanceID string `json:"instanceId,omitempty"`
+	Primitive  string `json:"primitive,omitempty"`
+
+	// Params is the integration's own parameter map: an fpp primitive's
+	// decoded/validated params (registry.DecodeActionParams), or an
+	// audio target's own command params, passed through undecoded — this
+	// package has no audio operation parameter registry (that vocabulary
+	// lives in internal/agent, across a layer this package must not
+	// import); the coordinator's audio dispatch path validates them at
+	// dispatch time the same way it already does for a direct
+	// audio.session.* API call.
+	Params map[string]any `json:"params,omitempty"`
 
 	// mqtt-only. Empty/nil when Integration is "fpp".
 	Broker  string                 `json:"broker,omitempty"`
@@ -544,6 +593,14 @@ type ShowActionTarget struct {
 	// persistent, bypassed, master) — never an object id (ADR-037).
 	Action string         `json:"action,omitempty"`
 	Ref    map[string]any `json:"ref,omitempty"`
+
+	// audio-only. Empty/nil unless Integration is "audio". AudioAction is
+	// one of [showActionAudioActions]; Params (above) carries that
+	// operation's own command params, exactly as a direct
+	// audio.session.*/audio.gain.*/audio.output.* API call would.
+	AudioNodeID    string `json:"audioNodeId,omitempty"`
+	AudioSessionID string `json:"audioSessionId,omitempty"`
+	AudioAction    string `json:"audioAction,omitempty"`
 }
 
 // ShowActionMQTTPublish is show.action.target.publish.
@@ -680,10 +737,12 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 		target, verr = decodeMQTTTarget(targetFields, brokers)
 	case ShowActionIntegrationResolume:
 		target, verr = decodeResolumeTarget(targetFields, safetyClass, resolver)
+	case ShowActionIntegrationAudio:
+		target, verr = decodeAudioTarget(targetFields, safetyClass)
 	default:
 		verr = &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "target.integration",
-			Detail: "integration must be \"fpp\", \"mqtt\", or \"resolume\"",
+			Detail: "integration must be \"fpp\", \"mqtt\", \"resolume\", or \"audio\"",
 		}
 	}
 	if verr != nil {
@@ -939,6 +998,80 @@ func decodeMQTTExpect(fields map[string]json.RawMessage) (ShowActionMQTTExpect, 
 	}
 
 	return ShowActionMQTTExpect{Kind: kind, Topic: topic, Value: value, DeadlineSeconds: deadline}, nil
+}
+
+// audioActionDeclaredSafetyClass mirrors
+// resolumeActionDeclaredSafetyClass's role for the audio integration:
+// stop and clear are this subsystem's "stop show/session audio" action,
+// and output.mute is its blackout (audiodispatch.go's own doc comment:
+// "Muting the output is this subsystem's blackout"). Every other audio
+// action carries no safety class of its own.
+var audioActionDeclaredSafetyClass = map[string]string{
+	"audio.session.stop":  ShowSafetyClassStop,
+	"audio.session.clear": ShowSafetyClassStop,
+	"audio.output.mute":   ShowSafetyClassBlackout,
+}
+
+// decodeAudioTarget decodes and validates target.integration == "audio".
+// It does not check audioNodeId/audioSessionId against a live audio.node
+// or audio.session object: this package has no store access (this file's
+// own top doc comment), and unlike an fpp instance id or a resolume
+// composition reference, an audio session id is minted by the caller
+// (night-session driver or operator), not looked up — nightcue_readiness.go
+// and the coordinator's own dispatch path are where a missing node or
+// session surfaces, exactly as an unresolvable mqtt broker would if it
+// were removed after an action was bound to it.
+func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyClass string) (ShowActionTarget, *ValidationError) {
+	nodeID, verr := decodeRequiredString(targetFields, "audioNodeId", "target.audioNodeId")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	sessionID, verr := decodeRequiredString(targetFields, "audioSessionId", "target.audioSessionId")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	action, verr := decodeRequiredString(targetFields, "audioAction", "target.audioAction")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	if !showActionAudioActionSet[action] {
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: "target.audioAction",
+			Detail: fmt.Sprintf("audioAction %q is not a supported audio operation (supported: %s)", action, strings.Join(showActionAudioActions, ", ")),
+		}
+	}
+
+	var params map[string]any
+	if raw, present := targetFields["params"]; present {
+		if isJSONNull(raw) {
+			return ShowActionTarget{}, &ValidationError{
+				Code: ValidationCodeFieldNull, Field: "target.params",
+				Detail: "target.params must not be null; omit it for an operation with no params",
+			}
+		}
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return ShowActionTarget{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "target.params",
+				Detail: "target.params must be a JSON object",
+			}
+		}
+	}
+
+	registeredClass := audioActionDeclaredSafetyClass[action]
+	if registeredClass == "" {
+		registeredClass = ShowSafetyClassNone
+	}
+	if registeredClass != declaredSafetyClass {
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeSafetyClassMismatch, Field: "safetyClass",
+			Detail: fmt.Sprintf("safetyClass %q does not match audio action %q's own required safety class %q", declaredSafetyClass, action, registeredClass),
+		}
+	}
+
+	return ShowActionTarget{
+		Integration: ShowActionIntegrationAudio, AudioNodeID: nodeID, AudioSessionID: sessionID,
+		AudioAction: action, Params: params,
+	}, nil
 }
 
 // decodeResolumeTarget decodes and validates target.integration ==

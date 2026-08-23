@@ -47,6 +47,25 @@ type nightCuesWire struct {
 	Cues   []nightCueWire `json:"cues"`
 }
 
+type nightBackgroundAudioStepWire struct {
+	Sequence       string  `json:"sequence"`
+	Phase          string  `json:"phase"`
+	CueName        string  `json:"cueName"`
+	Kind           string  `json:"kind"`
+	ActionRevision int64   `json:"actionRevision"`
+	State          string  `json:"state"`
+	Outcome        string  `json:"outcome,omitempty"`
+	Reason         string  `json:"reason,omitempty"`
+	DispatchedAt   *string `json:"dispatchedAt"`
+	ResolvedAt     *string `json:"resolvedAt"`
+}
+
+type nightBackgroundAudioWire struct {
+	State  string                         `json:"state"`
+	Reason string                         `json:"reason"`
+	Steps  []nightBackgroundAudioStepWire `json:"steps"`
+}
+
 type nightSessionStateWire struct {
 	ID             string `json:"id"`
 	ConfigObjectID string `json:"configObjectId"`
@@ -71,6 +90,8 @@ type nightSessionStateWire struct {
 	Transition nightPhaseEvidenceWire `json:"transition"`
 
 	Cues nightCuesWire `json:"cues"`
+
+	BackgroundAudio nightBackgroundAudioWire `json:"backgroundAudio"`
 
 	Degraded            bool   `json:"degraded"`
 	DegradedReason      string `json:"degradedReason,omitempty"`

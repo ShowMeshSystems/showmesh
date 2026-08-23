@@ -252,10 +252,11 @@ func mapNightSessionConfigResponse(now time.Time, rev store.ConfigRevisionRecord
 func mapConfigNightSession(p config.NightSessionPayload) v1.ConfigNightSession {
 	return v1.ConfigNightSession{
 		Show: p.Show, Label: p.Label,
-		ShowPlaylist: v1.ConfigNightSessionFPPPlaylist{FPPInstanceID: p.ShowPlaylist.FPPInstanceID, Playlist: p.ShowPlaylist.Playlist},
-		Resting:      mapConfigNightSessionResting(p.Resting),
-		EnterShow:    v1.ConfigNightSessionEnterShow{Cues: mapConfigNightSessionCues(p.EnterShow.Cues), BlackoutHoldMs: p.EnterShow.BlackoutHoldMs},
-		EnterResting: v1.ConfigNightSessionEnterResting{Cues: mapConfigNightSessionCues(p.EnterResting.Cues), BlackoutAfterShowMs: p.EnterResting.BlackoutAfterShowMs},
+		ShowPlaylist:              v1.ConfigNightSessionFPPPlaylist{FPPInstanceID: p.ShowPlaylist.FPPInstanceID, Playlist: p.ShowPlaylist.Playlist},
+		Resting:                   mapConfigNightSessionResting(p.Resting),
+		EnterShow:                 v1.ConfigNightSessionEnterShow{Cues: mapConfigNightSessionCues(p.EnterShow.Cues), BlackoutHoldMs: p.EnterShow.BlackoutHoldMs},
+		EnterResting:              v1.ConfigNightSessionEnterResting{Cues: mapConfigNightSessionCues(p.EnterResting.Cues), BlackoutAfterShowMs: p.EnterResting.BlackoutAfterShowMs},
+		AnnouncementDefaultPolicy: p.AnnouncementDefaultPolicy,
 	}
 }
 
@@ -290,6 +291,7 @@ func mapConfigNightSessionCues(cues []config.NightSessionCue) []v1.ConfigNightSe
 		out = append(out, v1.ConfigNightSessionCue{
 			Name: c.Name, Role: c.Role, Action: c.Action, OffsetMs: c.OffsetMs,
 			FadeDurationMs: c.FadeDurationMs, Barrier: c.Barrier, OnFailure: c.OnFailure,
+			AnnouncementPolicy: c.AnnouncementPolicy,
 		})
 	}
 	return out

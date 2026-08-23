@@ -40,6 +40,39 @@ func (r SourceRole) Validate() error {
 	return closedSet("audio.SourceRole", string(r), sourceRoles)
 }
 
+// sourceRolePriority orders [SourceRole] for duck and interrupt
+// resolution: a Playing session makes room in another Playing session
+// only when its own role priority is strictly greater. These are
+// AUDIO-ENGINE section 9's indicative priorities taken as starting
+// values for tuning, not normative constants.
+//
+// This lives in pkg/audio rather than in the node that enforces it
+// because the coordinator has to answer the same question at readiness
+// time: an announcement whose declared source role cannot outrank a
+// background bed will never duck it, and a check that guessed at the
+// order instead of reading it here could drift from what the node
+// actually does.
+var sourceRolePriority = map[SourceRole]int{
+	SourceRoleBackground:   0,
+	SourceRoleManual:       1,
+	SourceRoleShow:         2,
+	SourceRoleAnnouncement: 3,
+}
+
+// SourceRolePriority is r's duck/interrupt priority. An unrecognized
+// role reports 0, the same floor [SourceRoleBackground] holds, so it can
+// never outrank anything.
+func SourceRolePriority(r SourceRole) int {
+	return sourceRolePriority[r]
+}
+
+// OutranksForMixing reports whether a session with role r may duck or
+// interrupt a session with role target: strictly greater priority, which
+// is the exact comparison the node makes.
+func OutranksForMixing(r, target SourceRole) bool {
+	return SourceRolePriority(r) > SourceRolePriority(target)
+}
+
 // State is a session's semantic playback state (AUDIO-ENGINE section 3).
 // Unknown means observation is absent or stale and must never be treated
 // as Stopped, Completed, or Ready. Completed (natural end) and Stopped
