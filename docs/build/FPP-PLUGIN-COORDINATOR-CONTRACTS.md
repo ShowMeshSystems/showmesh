@@ -192,10 +192,10 @@ What the coordinator does with a genuine regression:
   operator reading it can tell a restart apart from a genuine reorder.
 - The stored per-instance sequence is cleared only by an explicit,
   authenticated operator action. That action does not exist yet and is
-  deliberately out of scope here. The store method exists and no route reaches
-  it, so today the only way to clear a row is direct database access on the
-  coordinator host. That recovery route is specified in
-  [TRACK-H-H2-SPEC](TRACK-H-H2-SPEC.md) section 5.1.
+  deliberately out of scope here; it is specified in
+  [TRACK-H-H2-SPEC](TRACK-H-H2-SPEC.md) section 5.1. The store method exists
+  and no route reaches it, so today the only way to clear a row is direct
+  database access on the coordinator host.
 
 **That recovery route is a prerequisite for the plugin's sending half, not a
 nice-to-have.** Nothing posts to this endpoint yet, so nothing can be wedged
