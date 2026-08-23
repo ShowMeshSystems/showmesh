@@ -38,7 +38,7 @@ export interface paths {
         };
         /**
          * Authoritative snapshot
-         * @description The authoritative state the SSE stream's deltas are relative to. Contains every resource the stream can notify about — nodes, FPP instances, and collector run state — plus `latestEventSeq`, so a client can fetch this snapshot once and then request exactly the event history after it via `GET /events?since=`, with no gap and no duplicate. Events themselves are not included here; they are a log, fetched separately.
+         * @description The authoritative state the SSE stream's deltas are relative to. Contains every resource the stream can notify about - nodes, FPP instances, and collector run state - plus `latestEventSeq`, so a client can fetch this snapshot once and then request exactly the event history after it via `GET /events?since=`, with no gap and no duplicate. Events themselves are not included here; they are a log, fetched separately.
          */
         get: operations["getSnapshot"];
         put?: never;
@@ -97,12 +97,12 @@ export interface paths {
         put?: never;
         /**
          * Promote a node to declared, or update its label/notes (RES-008 D2, BUILD-PLAN Step 7 seam B)
-         * @description A coordinator-local state change behind `config:write`. Declaring what hardware exists is configuration — ADR-024 decision 4 defines no narrower scope. Idempotent: promoting an already-declared node updates its label/notes without disturbing who first declared it or when. ADR-024 decision 11's same-transaction rule applies in full: the declaration write and its audit entry land in one transaction, or neither does — with the audit store failing, this operation is refused and the declaration is absent afterwards.
+         * @description A coordinator-local state change behind `config:write`. Declaring what hardware exists is configuration - ADR-024 decision 4 defines no narrower scope. Idempotent: promoting an already-declared node updates its label/notes without disturbing who first declared it or when. ADR-024 decision 11's same-transaction rule applies in full: the declaration write and its audit entry land in one transaction, or neither does - with the audit store failing, this operation is refused and the declaration is absent afterwards.
          */
         post: operations["declareNode"];
         /**
          * Remove a node's declaration (RES-008 D6, BUILD-PLAN Step 7 seam B)
-         * @description A coordinator-local state change behind `config:write`, audited the same atomic way as `POST` above. Requires an explicit `{"confirm":true}` body, so a mis-issued call cannot quietly remove inventory — a UI client's own confirmation dialog is in addition to this, never instead of it. This is the ONLY path that removes a declaration: a discovery run never deletes one (RES-008 D6) — see `POST /discovery/runs`.
+         * @description A coordinator-local state change behind `config:write`, audited the same atomic way as `POST` above. Requires an explicit `{"confirm":true}` body, so a mis-issued call cannot quietly remove inventory - a UI client's own confirmation dialog is in addition to this, never instead of it. This is the ONLY path that removes a declaration: a discovery run never deletes one (RES-008 D6) - see `POST /discovery/runs`.
          */
         delete: operations["deleteNodeDeclaration"];
         options?: never;
@@ -121,7 +121,7 @@ export interface paths {
         put?: never;
         /**
          * Run discovery and propose undeclared nodes (RES-008 D2/D6, BUILD-PLAN Step 7 seam B)
-         * @description Behind `config:write`. Reads what this coordinator already observes — agent hellos already in inventory, and configured FPP instances — and PROPOSES what is not currently declared; it never creates, modifies, or deletes a declaration's own identity (ADR-003: discovery proposes, an operator action promotes). Performs NO active probing of its own: no mDNS, no subnet sweep, no MultiSync discover ping, so it cannot find equipment that has never talked to ShowMesh. A run that fails partway is reported as a `500` and is recorded with `complete: false` and a reason — never a missing row and never a silent partial success. Discovery runs are serialized: a second, overlapping request while one is already in progress on this coordinator is refused with `409`, never queued — see `components.responses.Conflict`'s own doc comment on why interleaving two runs is unsafe rather than merely wasteful.
+         * @description Behind `config:write`. Reads what this coordinator already observes - agent hellos already in inventory, and configured FPP instances - and PROPOSES what is not currently declared; it never creates, modifies, or deletes a declaration's own identity (ADR-003: discovery proposes, an operator action promotes). Performs NO active probing of its own: no mDNS, no subnet sweep, no MultiSync discover ping, so it cannot find equipment that has never talked to ShowMesh. A run that fails partway is reported as a `500` and is recorded with `complete: false` and a reason - never a missing row and never a silent partial success. Discovery runs are serialized: a second, overlapping request while one is already in progress on this coordinator is refused with `409`, never queued - see `components.responses.Conflict`'s own doc comment on why interleaving two runs is unsafe rather than merely wasteful.
          */
         post: operations["startDiscoveryRun"];
         delete?: never;
@@ -175,7 +175,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch render.surface.apply to a node (Track B seam B2b-front)
-         * @description Behind `render:command`. Resolves the surface's COMPLETE self-contained assignment — its show.surface configuration plus the coordinator-resolved runtime filename and content hash of its current FSEQ asset for `sequenceId` (identity: show + sequence + target + content hash, never a filename — ADR-028) — and dispatches it to the node over MQTT (build contract ruling 4: the node is told its surface, it does not discover it). Refuses with `400` naming exactly what could not be resolved (no active show, the surface is not assigned to this node, no current asset for the requested sequence, or more than one current asset matches it) rather than ever dispatching a partial assignment. Confirms by `surface.pipeline.state` evidence dated at or after dispatch (ADR-003); a `200` is never conflated with the pipeline having actually reached `running` — see RenderCommandResult.outcome.
+         * @description Behind `render:command`. Resolves the surface's COMPLETE self-contained assignment - its show.surface configuration plus the coordinator-resolved runtime filename and content hash of its current FSEQ asset for `sequenceId` (identity: show + sequence + target + content hash, never a filename - ADR-028) - and dispatches it to the node over MQTT (build contract ruling 4: the node is told its surface, it does not discover it). Refuses with `400` naming exactly what could not be resolved (no active show, the surface is not assigned to this node, no current asset for the requested sequence, or more than one current asset matches it) rather than ever dispatching a partial assignment. Confirms by `surface.pipeline.state` evidence dated at or after dispatch (ADR-003); a `200` is never conflated with the pipeline having actually reached `running` - see RenderCommandResult.outcome.
          */
         post: operations["dispatchRenderSurfaceApply"];
         delete?: never;
@@ -235,7 +235,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch render.transport.probe to a node (Track B seam B4)
-         * @description Behind `render:command`. A COMMAND, not a read: it starts a real gst-launch-1.0 subprocess on the node that attempts a genuine NULL->PLAYING state transition against the configured output transport (ADR-026 decision 6: element presence is not runtime presence, so this is the only thing that may answer "is NDI usable right now"). Confirms once a `surface.transport.available` reading dated at or after dispatch exists — regardless of its value: a probe correctly reporting the transport unavailable is confirmed exactly like one reporting it available, because there is no desired transport value here the way `apply`/`restart` have a desired pipeline state. `showmeshctl render transport` remains the separate read of last-known evidence; this is the "go find out now" counterpart, never reachable by `GET` (ADR-024).
+         * @description Behind `render:command`. A COMMAND, not a read: it starts a real gst-launch-1.0 subprocess on the node that attempts a genuine NULL->PLAYING state transition against the configured output transport (ADR-026 decision 6: element presence is not runtime presence, so this is the only thing that may answer "is NDI usable right now"). Confirms once a `surface.transport.available` reading dated at or after dispatch exists - regardless of its value: a probe correctly reporting the transport unavailable is confirmed exactly like one reporting it available, because there is no desired transport value here the way `apply`/`restart` have a desired pipeline state. `showmeshctl render transport` remains the separate read of last-known evidence; this is the "go find out now" counterpart, never reachable by `GET` (ADR-024).
          */
         post: operations["dispatchRenderTransportProbe"];
         delete?: never;
@@ -255,7 +255,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.apply to a node's playback session
-         * @description Behind `audio:command`. Merges the request body onto the session's desired state, creating the session if it does not already exist — `revision` and `idempotencyKey` go through the node's own revision/idempotency ledger for this session, so a stale or replayed revision is refused rather than applied out of order. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Merges the request body onto the session's desired state, creating the session if it does not already exist - `revision` and `idempotencyKey` go through the node's own revision/idempotency ledger for this session, so a stale or replayed revision is refused rather than applied out of order. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionApply"];
         delete?: never;
@@ -275,7 +275,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.prepare to a node's playback session
-         * @description Behind `audio:command`. Gates readiness (a missing, changed, or undecodable asset is refused) and loads the session's current item on the node without starting playback. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Gates readiness (a missing, changed, or undecodable asset is refused) and loads the session's current item on the node without starting playback. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionPrepare"];
         delete?: never;
@@ -295,7 +295,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.start to a node's playback session
-         * @description Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Prepares the session's current item if it is not already loaded, then starts it from its last bookmark position or from 0. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionStart"];
         delete?: never;
@@ -315,7 +315,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.pause to a node's playback session
-         * @description Behind `audio:command`. Suspends the session's current item, preserving position. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Suspends the session's current item, preserving position. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionPause"];
         delete?: never;
@@ -335,7 +335,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.resume to a node's playback session
-         * @description Behind `audio:command`. Continues the session's current item from the position `pause` left it at. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Continues the session's current item from the position `pause` left it at. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionResume"];
         delete?: never;
@@ -355,7 +355,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.seek to a node's playback session
-         * @description Behind `audio:command`. Re-anchors the session's current item's position — a discontinuity, never a continuation of pre-seek timing. `params.positionMs` names the target position in milliseconds. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Re-anchors the session's current item's position - a discontinuity, never a continuation of pre-seek timing. `params.positionMs` names the target position in milliseconds. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionSeek"];
         delete?: never;
@@ -375,7 +375,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.advance to a node's playback session
-         * @description Behind `audio:command`. Forces the session to its next playlist item — the same underlying transition the node's own natural-completion watcher drives, so an item is advanced exactly once regardless of what triggered it. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Forces the session to its next playlist item - the same underlying transition the node's own natural-completion watcher drives, so an item is advanced exactly once regardless of what triggered it. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionAdvance"];
         delete?: never;
@@ -395,7 +395,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.stop to a node's playback session
-         * @description Behind `audio:command`. Commands the session to stop — permanently distinguishable in evidence from a natural end-of-item completion. Never refused for want of node evidence: an idle or unloaded session still reports `stopped`. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Commands the session to stop - permanently distinguishable in evidence from a natural end-of-item completion. Never refused for want of node evidence: an idle or unloaded session still reports `stopped`. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionStop"];
         delete?: never;
@@ -415,7 +415,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.session.clear to a node's playback session
-         * @description Behind `audio:command`. Releases the session entirely on the node and removes its persisted record. Never refused for want of node evidence, matching `stop`. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Releases the session entirely on the node and removes its persisted record. Never refused for want of node evidence, matching `stop`. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioSessionClear"];
         delete?: never;
@@ -435,7 +435,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.gain.set to a node's playback session
-         * @description Behind `audio:command`. Sets the session's gain immediately, clamped to its configured ceiling (`params.gain` is linear, not dB — see AUDIO-ENGINE.md). The ceiling is enforced at the point the gain takes effect, not only at validation, and a clamp is reported as evidence rather than silently applied. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Sets the session's gain immediately, clamped to its configured ceiling (`params.gain` is linear, not dB - see AUDIO-ENGINE.md). The ceiling is enforced at the point the gain takes effect, not only at validation, and a clamp is reported as evidence rather than silently applied. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioGainSet"];
         delete?: never;
@@ -455,7 +455,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.gain.fade to a node's playback session
-         * @description Behind `audio:command`. Schedules a gain fade toward `params.targetGain` (linear) over `params.durationMs` along `params.curve` (only `"linear"` ships), clamped to the session's ceiling. This response reports the fade as DISPATCHED, never as complete — `fade_complete` is an outcome the engine reports only once it observes the gain actually reached, never inferred from the requested duration having elapsed, because Track F's transition barrier is built on that distinction. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Schedules a gain fade toward `params.targetGain` (linear) over `params.durationMs` along `params.curve` (only `"linear"` ships), clamped to the session's ceiling. This response reports the fade as DISPATCHED, never as complete - `fade_complete` is an outcome the engine reports only once it observes the gain actually reached, never inferred from the requested duration having elapsed, because Track F's transition barrier is built on that distinction. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioGainFade"];
         delete?: never;
@@ -475,7 +475,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.output.mute to a node's playback session
-         * @description Behind `audio:command`. Saves the session's current gain and drives it to silence. Idempotent: muting an already-muted session reports the existing mute rather than overwriting the saved pre-mute gain. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Saves the session's current gain and drives it to silence. Idempotent: muting an already-muted session reports the existing mute rather than overwriting the saved pre-mute gain. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioOutputMute"];
         delete?: never;
@@ -495,7 +495,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.output.unmute to a node's playback session
-         * @description Behind `audio:command`. Restores the session's pre-mute gain, re-clamped to whatever ceiling is current now. Idempotent: unmuting a session that is not muted is a no-op success, never a refusal. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision — every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Restores the session's pre-mute gain, re-clamped to whatever ceiling is current now. Idempotent: unmuting a session that is not muted is a no-op success, never a refusal. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioOutputUnmute"];
         delete?: never;
@@ -515,9 +515,9 @@ export interface paths {
         put?: never;
         /**
          * Dispatch a primitive FPP lifecycle command (Step 7 seam C, Step 8)
-         * @description Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own native command over POST at its own /api/command endpoint (ADR-001: this is ShowMesh invoking FPP's own command, never a second scheduler) and confirms by evidence against the collector's observations before answering, up to an internal, per-action deadline (ADR-003). A `200` from FPP is never reported as this endpoint's own success on its own — see FPPCommandResult.outcome. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt.
-         *     `idempotencyKey` is resolved FIRST, before `startPlaylist`'s own `ifBusy` guard (or any other primitive's pre-dispatch guard) ever runs — a review finding proved live that the reverse order answers a legitimate replay with a fresh `409` the guard invented for what it wrongly evaluated as a brand-new request. A replayed `idempotencyKey` — reused against the SAME `action`, the SAME `instanceId`, and the SAME normalized `params` it was first used against — dispatches nothing and returns the original command's result, flagged `replay: true`, with no guard evaluated at all. An `idempotencyKey` reused against a DIFFERENT `action`, a DIFFERENT `instanceId`, or DIFFERENT `params` is a `409` conflict, not a replay, also decided before any guard runs: see the `idempotencyKey` field on any FPPCommandRequest variant below (the text is identical on all eight) and the `409` response below. Only a genuinely NEW `idempotencyKey` — one this coordinator has never recorded — reaches a primitive's own guard at all.
-         *     `startPlaylist`'s own `ifBusy` default (`"refuse"`) additionally produces a `409` BEFORE anything is dispatched to FPP when a DIFFERENT playlist is currently confirmed playing (`type` `fpp-start-playlist-busy`, `detail` names what is playing), or when the evidence needed to decide that is not current (`type` `fpp-start-playlist-evidence-not-current` — this coordinator never proceeds on the grounds that it could not tell) — two DIFFERENT `type` values on the same `409` status, neither of them the plain `conflict` the idempotency-key case above uses, so a client can tell all three apart without parsing `detail` prose; see StartPlaylistCommandRequest.params's own description. This is a guard against an accidental interruption, not a lock: it is evaluated against evidence that can be stale, and cannot prevent a race against FPP's own scheduler.
+         * @description Behind `fpp:command` (ADR-024 decision 4). Dispatches FPP's own native command over POST at its own /api/command endpoint (ADR-001: this is ShowMesh invoking FPP's own command, never a second scheduler) and confirms by evidence against the collector's observations before answering, up to an internal, per-action deadline (ADR-003). A `200` from FPP is never reported as this endpoint's own success on its own - see FPPCommandResult.outcome. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt.
+         *     `idempotencyKey` is resolved FIRST, before `startPlaylist`'s own `ifBusy` guard (or any other primitive's pre-dispatch guard) ever runs - a review finding proved live that the reverse order answers a legitimate replay with a fresh `409` the guard invented for what it wrongly evaluated as a brand-new request. A replayed `idempotencyKey` - reused against the SAME `action`, the SAME `instanceId`, and the SAME normalized `params` it was first used against - dispatches nothing and returns the original command's result, flagged `replay: true`, with no guard evaluated at all. An `idempotencyKey` reused against a DIFFERENT `action`, a DIFFERENT `instanceId`, or DIFFERENT `params` is a `409` conflict, not a replay, also decided before any guard runs: see the `idempotencyKey` field on any FPPCommandRequest variant below (the text is identical on all eight) and the `409` response below. Only a genuinely NEW `idempotencyKey` - one this coordinator has never recorded - reaches a primitive's own guard at all.
+         *     `startPlaylist`'s own `ifBusy` default (`"refuse"`) additionally produces a `409` BEFORE anything is dispatched to FPP when a DIFFERENT playlist is currently confirmed playing (`type` `fpp-start-playlist-busy`, `detail` names what is playing), or when the evidence needed to decide that is not current (`type` `fpp-start-playlist-evidence-not-current` - this coordinator never proceeds on the grounds that it could not tell) - two DIFFERENT `type` values on the same `409` status, neither of them the plain `conflict` the idempotency-key case above uses, so a client can tell all three apart without parsing `detail` prose; see StartPlaylistCommandRequest.params's own description. This is a guard against an accidental interruption, not a lock: it is evaluated against evidence that can be stale, and cannot prevent a race against FPP's own scheduler.
          */
         post: operations["dispatchFPPCommand"];
         delete?: never;
@@ -535,7 +535,7 @@ export interface paths {
         };
         /**
          * Flat observation list
-         * @description Every observation this coordinator currently holds, across every resource, optionally filtered. A filter that matches nothing returns `200` with an empty `observations` array — "no observations match this filter" is not "this endpoint does not exist", so this is never a `404`.
+         * @description Every observation this coordinator currently holds, across every resource, optionally filtered. A filter that matches nothing returns `200` with an empty `observations` array - "no observations match this filter" is not "this endpoint does not exist", so this is never a `404`.
          */
         get: operations["listObservations"];
         put?: never;
@@ -575,7 +575,7 @@ export interface paths {
         };
         /**
          * Server-Sent Events change stream
-         * @description `text/event-stream`, not JSON-over-HTTP-response, so this operation has no normal `200 application/json` content — the event payload shapes are documented as schemas under `components.schemas` for a client to validate the JSON inside each SSE `data:` line against, even though the transport itself is not modeled as a normal response body here. Every SSE `event:` name this coordinator emits, and the schema of the JSON on its `data:` line, is:
+         * @description `text/event-stream`, not JSON-over-HTTP-response, so this operation has no normal `200 application/json` content - the event payload shapes are documented as schemas under `components.schemas` for a client to validate the JSON inside each SSE `data:` line against, even though the transport itself is not modeled as a normal response body here. Every SSE `event:` name this coordinator emits, and the schema of the JSON on its `data:` line, is:
          *
          *       | SSE `event:` name | `data:` schema | delivered to |
          *       |---|---|---|
@@ -587,23 +587,25 @@ export interface paths {
          *       | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
          *       | `resolume.changed` | `ResolumeChangedEvent` | every connection |
          *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
+         *       | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
+         *       | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
-         *     `data:` is always exactly one line of compact (no embedded newlines) JSON — never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
+         *     `data:` is always exactly one line of compact (no embedded newlines) JSON - never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
          *
-         *     **Delta frames are opt-in per connection (ADR-023).** A request to this exact path with no query string, or with any `deltas` value other than the literal `1`, gets precisely what this endpoint produced before `fpp.observations.changed` existed — byte for byte, with no `fpp.observations.changed` event ever appearing on that connection. This is what makes the addition additive rather than a silent break under ADR-020's own additive-only rule (contract section 6.2, "within a major version the contract is additive-only... clients must ignore unknown fields"): no existing client's behavior changes, and a client that has never heard of deltas cannot be affected by them.
+         *     **Delta frames are opt-in per connection (ADR-023).** A request to this exact path with no query string, or with any `deltas` value other than the literal `1`, gets precisely what this endpoint produced before `fpp.observations.changed` existed - byte for byte, with no `fpp.observations.changed` event ever appearing on that connection. This is what makes the addition additive rather than a silent break under ADR-020's own additive-only rule (contract section 6.2, "within a major version the contract is additive-only... clients must ignore unknown fields"): no existing client's behavior changes, and a client that has never heard of deltas cannot be affected by them.
          *
          *       `GET /stream?deltas=1`
          *
-         *     On a delta-subscribed connection, an observation-level change to an FPP instance (a signal's resolved value, unit, state, reason, or quality differs from what this connection was last told, or a signal stops being reported entirely) arrives as `fpp.observations.changed` instead of repeating that instance's entire `observations` array inside `fpp.changed`. A change to the instance's own structural fields — `health`, `endpoint`, `lastPollAt`, `lastPollError` — still arrives as `fpp.changed`, carrying the instance's full current representation exactly as it always has, on a delta-subscribed connection too; such a connection therefore receives BOTH event kinds and must apply both. `fpp.observations.changed` is never sent in the same render pass as an `fpp.changed` for the same instance that already widened to include this connection, since that `fpp.changed` already carries the current, complete observation set.
+         *     On a delta-subscribed connection, an observation-level change to an FPP instance (a signal's resolved value, unit, state, reason, or quality differs from what this connection was last told, or a signal stops being reported entirely) arrives as `fpp.observations.changed` instead of repeating that instance's entire `observations` array inside `fpp.changed`. A change to the instance's own structural fields - `health`, `endpoint`, `lastPollAt`, `lastPollError` - still arrives as `fpp.changed`, carrying the instance's full current representation exactly as it always has, on a delta-subscribed connection too; such a connection therefore receives BOTH event kinds and must apply both. `fpp.observations.changed` is never sent in the same render pass as an `fpp.changed` for the same instance that already widened to include this connection, since that `fpp.changed` already carries the current, complete observation set.
          *
-         *     On a fixed interval (a ShowMesh-chosen hypothesis, not a measured or contractually significant value) this coordinator also writes an SSE **comment** line, `: keepalive`, with no `event:` or `data:` field at all — this is what lets an idle connection be distinguished from a dead one through an intermediary that would otherwise time it out. A client (or its SSE parsing library) MUST skip a line beginning with `:` rather than attempt to parse it as an event; this is standard `text/event-stream` syntax, not a ShowMesh extension, but is called out explicitly here because a naive hand-rolled parser that only expects `event:`/`data:` lines will otherwise choke on it.
+         *     On a fixed interval (a ShowMesh-chosen hypothesis, not a measured or contractually significant value) this coordinator also writes an SSE **comment** line, `: keepalive`, with no `event:` or `data:` field at all - this is what lets an idle connection be distinguished from a dead one through an intermediary that would otherwise time it out. A client (or its SSE parsing library) MUST skip a line beginning with `:` rather than attempt to parse it as an event; this is standard `text/event-stream` syntax, not a ShowMesh extension, but is called out explicitly here because a naive hand-rolled parser that only expects `event:`/`data:` lines will otherwise choke on it.
          *
-         *     The first event on every connection is `stream.start`, carrying `snapshotRequired: true`; a client MUST fetch `GET /snapshot` before applying anything else from this stream. No SSE `id:` field is ever emitted, and any `Last-Event-ID` request header is ignored: a gap in this stream is indistinguishable from a quiet system, so resuming from a cursor is deliberately impossible (OPERATOR-UI section 6). `seq` on every event after `stream.start` is per-connection only and must never be treated as a durable cursor — unlike `Event.seq`, which is.
+         *     The first event on every connection is `stream.start`, carrying `snapshotRequired: true`; a client MUST fetch `GET /snapshot` before applying anything else from this stream. No SSE `id:` field is ever emitted, and any `Last-Event-ID` request header is ignored: a gap in this stream is indistinguishable from a quiet system, so resuming from a cursor is deliberately impossible (OPERATOR-UI section 6). `seq` on every event after `stream.start` is per-connection only and must never be treated as a durable cursor - unlike `Event.seq`, which is.
          *
-         *     **The stream carries no RESOURCE deletions in v1.** Nothing on this connection tells a client that an entire node or FPP instance has been removed from this coordinator's configuration or inventory; a client applying deltas on top of a snapshot has no signal that a node or FPP instance present in that snapshot is now gone entirely. This is a real gap, stated here so a client does not assume otherwise, not a promise that it will never happen. `fpp.observations.changed`'s `removed` list (ADR-023) is narrower and does not close this gap: it reports a single OBSERVATION disappearing from a still-present FPP instance — a cape swapped for a smaller one, a sensor that stopped reporting — never the instance itself disappearing.
+         *     **The stream carries no RESOURCE deletions in v1.** Nothing on this connection tells a client that an entire node or FPP instance has been removed from this coordinator's configuration or inventory; a client applying deltas on top of a snapshot has no signal that a node or FPP instance present in that snapshot is now gone entirely. This is a real gap, stated here so a client does not assume otherwise, not a promise that it will never happen. `fpp.observations.changed`'s `removed` list (ADR-023) is narrower and does not close this gap: it reports a single OBSERVATION disappearing from a still-present FPP instance - a cape swapped for a smaller one, a sensor that stopped reporting - never the instance itself disappearing.
          *
-         *     **A stream closes with a clean end-of-response and no terminating frame of any kind**, including when the coordinator is the one shutting down — there is no `stream.end` event and none is planned, deliberately: correctness here depends only on a client re-fetching `GET /snapshot` on *any* interruption (this operation's own reconnection rule, above), which already covers an orderly shutdown exactly the same way it covers a network fault or a crash. A client cannot distinguish "the coordinator shut down cleanly" from "a proxy in between timed the connection out" from the stream alone, and is not meant to try; it should simply reconnect and re-snapshot either way.
+         *     **A stream closes with a clean end-of-response and no terminating frame of any kind**, including when the coordinator is the one shutting down - there is no `stream.end` event and none is planned, deliberately: correctness here depends only on a client re-fetching `GET /snapshot` on *any* interruption (this operation's own reconnection rule, above), which already covers an orderly shutdown exactly the same way it covers a network fault or a crash. A client cannot distinguish "the coordinator shut down cleanly" from "a proxy in between timed the connection out" from the stream alone, and is not meant to try; it should simply reconnect and re-snapshot either way.
          */
         get: operations["streamChanges"];
         put?: never;
@@ -623,18 +625,18 @@ export interface paths {
         };
         /**
          * Current session (ADR-024)
-         * @description Always reachable with no credential at all, regardless of whether reads are otherwise closed — see SessionResponse's own description for why "signed out" must be a readable state here, never a 401 this operation itself produces.
+         * @description Always reachable with no credential at all, regardless of whether reads are otherwise closed - see SessionResponse's own description for why "signed out" must be a readable state here, never a 401 this operation itself produces.
          */
         get: operations["getSession"];
         put?: never;
         /**
          * Log in (ADR-024)
-         * @description Unauthenticated by construction (ADR-024 decision 8): this is how a session is created in the first place, so no pre-existing credential is required or considered. Requires `Sec-Fetch-Site: same-origin` regardless (Step 7 seam 0, owner decision 2026-08-12: strict), checked on its own before any credential is verified — see the `403` response. Bounded by a login concurrency limit and a per-source increasing delay, NEVER a per-principal lockout — a correct password always eventually succeeds, only more slowly from a source with recent failures. On success, sets the HttpOnly session cookie via Set-Cookie.
+         * @description Unauthenticated by construction (ADR-024 decision 8): this is how a session is created in the first place, so no pre-existing credential is required or considered. Requires `Sec-Fetch-Site: same-origin` regardless (Step 7 seam 0, owner decision 2026-08-12: strict), checked on its own before any credential is verified - see the `403` response. Bounded by a login concurrency limit and a per-source increasing delay, NEVER a per-principal lockout - a correct password always eventually succeeds, only more slowly from a source with recent failures. On success, sets the HttpOnly session cookie via Set-Cookie.
          */
         post: operations["createSession"];
         /**
          * Log out / revoke a session (ADR-024)
-         * @description Requires an authenticated principal (no specific scope). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) and is rejected when absent — there is no Origin-vs-Host fallback. An empty body revokes the session that authenticated this request, which requires that credential to be the session cookie itself; a body naming `sessionId` instead revokes that specific session (which must belong to the authenticated principal) and works under either credential form — this is this contract's one genuine bearer-authenticated write.
+         * @description Requires an authenticated principal (no specific scope). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) and is rejected when absent - there is no Origin-vs-Host fallback. An empty body revokes the session that authenticated this request, which requires that credential to be the session cookie itself; a body naming `sessionId` instead revokes that specific session (which must belong to the authenticated principal) and works under either credential form - this is this contract's one genuine bearer-authenticated write.
          */
         delete: operations["deleteSession"];
         options?: never;
@@ -653,7 +655,7 @@ export interface paths {
         put?: never;
         /**
          * Claim the one-time bootstrap code and create the first admin (ADR-024 decision 9)
-         * @description Unauthenticated by construction, exactly like `POST /session` — no principal exists yet for a credential to name. Useless without `code`, which is readable only from a file in the coordinator's data volume: possessing it proves filesystem access, which is what keeps this endpoint from being a network-reachable way to become administrator. Bounded by the SAME login concurrency limit and per-source delay as `POST /session` (ADR-024 decision 8), never a per-principal lockout. A successful claim creates the first administrator (always `kind: human`, `role: admin`), invalidates and deletes the bootstrap code, and immediately mints a session for it exactly as `POST /session` does — the response body is the identical `SessionResponse` shape. Requires `Sec-Fetch-Site: same-origin` exactly as `POST /session` does (Step 7 seam 0, owner decision 2026-08-12: strict) — see the `403` response.
+         * @description Unauthenticated by construction, exactly like `POST /session` - no principal exists yet for a credential to name. Useless without `code`, which is readable only from a file in the coordinator's data volume: possessing it proves filesystem access, which is what keeps this endpoint from being a network-reachable way to become administrator. Bounded by the SAME login concurrency limit and per-source delay as `POST /session` (ADR-024 decision 8), never a per-principal lockout. A successful claim creates the first administrator (always `kind: human`, `role: admin`), invalidates and deletes the bootstrap code, and immediately mints a session for it exactly as `POST /session` does - the response body is the identical `SessionResponse` shape. Requires `Sec-Fetch-Site: same-origin` exactly as `POST /session` does (Step 7 seam 0, owner decision 2026-08-12: strict) - see the `403` response.
          */
         post: operations["claimBootstrap"];
         delete?: never;
@@ -671,7 +673,7 @@ export interface paths {
         };
         /**
          * Audit log (ADR-024 decision 11)
-         * @description Append-only. Always requires `audit:read`, regardless of whether reads are otherwise open — this is not one of the four pre-existing read resources the open-reads posture covers. Not carried on the SSE change stream.
+         * @description Append-only. Always requires `audit:read`, regardless of whether reads are otherwise open - this is not one of the four pre-existing read resources the open-reads posture covers. Not carried on the SSE change stream.
          */
         get: operations["listAudit"];
         put?: never;
@@ -691,7 +693,7 @@ export interface paths {
         };
         /**
          * List every principal (Track G seam G-5)
-         * @description Requires `principal:read`. Includes the built-in Resolume recovery principal (`reserved: true`) — visible wherever principals are listed, but not something anything can authenticate as.
+         * @description Requires `principal:read`. Includes the built-in Resolume recovery principal (`reserved: true`) - visible wherever principals are listed, but not something anything can authenticate as.
          */
         get: operations["listPrincipals"];
         put?: never;
@@ -815,7 +817,7 @@ export interface paths {
         };
         /**
          * List one principal's API tokens (Track G seam G-5)
-         * @description Requires `principal:read`. Never renders a digest or a raw token value (ADR-024 decision 1) — only IssueTokenResponse.value ever does, exactly once, at creation.
+         * @description Requires `principal:read`. Never renders a digest or a raw token value (ADR-024 decision 1) - only IssueTokenResponse.value ever does, exactly once, at creation.
          */
         get: operations["listPrincipalTokens"];
         put?: never;
@@ -859,15 +861,15 @@ export interface paths {
         };
         /**
          * The active fpp.endpoints configuration (Step 7 seam A, RES-008 D1)
-         * @description Always requires `config:write` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one exactly like `GET /audit`, not one of the four the open-reads posture covers). `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_ENDPOINTS` into its store (RES-008 D1) could not be persisted, in which case a configuration IS in effect and `GET /fpp` lists it. A client must not read this `404` as "this coordinator is collecting from nothing". `restartRequired` is always `false` as of 2026-08-14: command dispatch resolves the endpoint list per request and the collector set is reconciled while the process runs, so a change here is in effect immediately for dispatch and within about ten seconds for polling. The field remains on the wire, rather than being removed, because this contract is additive-only within a major version; see `restartRequiredReason`.
+         * @description Always requires `config:write` - there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one exactly like `GET /audit`, not one of the four the open-reads posture covers). `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_ENDPOINTS` into its store (RES-008 D1) could not be persisted, in which case a configuration IS in effect and `GET /fpp` lists it. A client must not read this `404` as "this coordinator is collecting from nothing". `restartRequired` is always `false` as of 2026-08-14: command dispatch resolves the endpoint list per request and the collector set is reconciled while the process runs, so a change here is in effect immediately for dispatch and within about ten seconds for polling. The field remains on the wire, rather than being removed, because this contract is additive-only within a major version; see `restartRequiredReason`.
          */
         get: operations["getFPPEndpointsConfig"];
         /**
          * Write a new fpp.endpoints configuration revision (Step 7 seam A, RES-008 D1)
-         * @description Requires `config:write` (admin only). The request body's `endpoints` field is required and must not be `null` — a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero endpoints is an explicit empty array (`"endpoints": []`). No other top-level field is accepted; an unrecognized one (e.g. a typo'd `endpoint`) is rejected rather than silently ignored, unlike a response body, where an unknown field must be ignored (this is a request a client is asking this coordinator to ACT on, not a response whose shape this coordinator already promised — see `ConfigFPPEndpointsPayload`'s own description).
-         *     Validates the body (instance id syntax, URL scheme/host, no userinfo, no duplicate ids — the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is checked against at coordinator startup) BEFORE activation (ADR-009): a rejected write appends no revision. Also refused before activation: an endpoint list that would drop an instance id `SHOWMESH_FPP_MQTT_HOSTS` still references, which this coordinator's own startup already enforces fatally — refusing it here means the mistake is refused at write time, not discovered as a refusal to boot on the next restart.
+         * @description Requires `config:write` (admin only). The request body's `endpoints` field is required and must not be `null` - a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero endpoints is an explicit empty array (`"endpoints": []`). No other top-level field is accepted; an unrecognized one (e.g. a typo'd `endpoint`) is rejected rather than silently ignored, unlike a response body, where an unknown field must be ignored (this is a request a client is asking this coordinator to ACT on, not a response whose shape this coordinator already promised - see `ConfigFPPEndpointsPayload`'s own description).
+         *     Validates the body (instance id syntax, URL scheme/host, no userinfo, no duplicate ids - the identical rule `SHOWMESH_FPP_ENDPOINTS` itself is checked against at coordinator startup) BEFORE activation (ADR-009): a rejected write appends no revision. Also refused before activation: an endpoint list that would drop an instance id `SHOWMESH_FPP_MQTT_HOSTS` still references, which this coordinator's own startup already enforces fatally - refusing it here means the mistake is refused at write time, not discovered as a refusal to boot on the next restart.
          *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_ENDPOINTS` is still set in this coordinator's own process environment: a write accepted in that state cannot survive this coordinator's own env/store disagreement rule on its very next restart, so the refusal happens now, while this coordinator is up and the reason is readable, rather than after a restart that never completes. That `409` carries one of two REMEDIES and they are not interchangeable, so `detail` is the part to read rather than the status: normally, remove the variable and restart once. But if this coordinator's startup migration of that variable was deferred because it could not be persisted, the store holds no endpoint list at all and removing the variable would resolve this coordinator to zero endpoints; `detail` then says so explicitly and the fix is to repair the data volume and restart.
-         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule for `config:write`) - with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putFPPEndpointsConfig"];
         post?: never;
@@ -886,14 +888,14 @@ export interface paths {
         };
         /**
          * The active resolume.instances configuration (Track G seam G-2, ADR-039)
-         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_RESOLUME_URL`/`SHOWMESH_RESOLUME_ID` into its store could not be persisted, in which case a configuration IS in effect and `GET /resolume/instances` lists it. `restartRequired` is always `false`: the Resolume collector set follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start).
+         * @description Always requires `config:write` - there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_RESOLUME_URL`/`SHOWMESH_RESOLUME_ID` into its store could not be persisted, in which case a configuration IS in effect and `GET /resolume/instances` lists it. `restartRequired` is always `false`: the Resolume collector set follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start).
          */
         get: operations["getResolumeInstancesConfig"];
         /**
          * Write a new resolume.instances configuration revision (Track G seam G-2, ADR-039)
-         * @description Requires `config:write` (admin only). The request body's `instances` field is required and must not be `null` — a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero instances is an explicit empty array (`"instances": []`). No other top-level field is accepted.
-         *     At most one instance is accepted today; a second is refused with `400` naming the limit — the schema itself stays a list (this surface may grow past one instance later without a breaking change), the limit is enforced by validation. Each instance's id and URL are validated (node-id syntax, http/https scheme, non-empty host, no userinfo) and cross-checked against every currently configured `fpp.endpoints` id, read live at write time — a collision is refused with `400` naming both ids, because both collectors are registered on one shared runner keyed by id.
-         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_RESOLUME_URL` is still set in this coordinator's own process environment — mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction: the standard remedy (remove the variable, restart once) is unsafe if the startup migration could not be persisted, and `detail` says so explicitly in that case.
+         * @description Requires `config:write` (admin only). The request body's `instances` field is required and must not be `null` - a JSON `null` is not an absent key, and neither means "no change"; the only way to deliberately configure zero instances is an explicit empty array (`"instances": []`). No other top-level field is accepted.
+         *     At most one instance is accepted today; a second is refused with `400` naming the limit - the schema itself stays a list (this surface may grow past one instance later without a breaking change), the limit is enforced by validation. Each instance's id and URL are validated (node-id syntax, http/https scheme, non-empty host, no userinfo) and cross-checked against every currently configured `fpp.endpoints` id, read live at write time - a collision is refused with `400` naming both ids, because both collectors are registered on one shared runner keyed by id.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_RESOLUME_URL` is still set in this coordinator's own process environment - mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction: the standard remedy (remove the variable, restart once) is unsafe if the startup migration could not be persisted, and `detail` says so explicitly in that case.
          *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putResolumeInstancesConfig"];
@@ -933,15 +935,15 @@ export interface paths {
         };
         /**
          * The active fpp.mqtt configuration (Track G seam G-3, ADR-039)
-         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_MQTT_*` into its store could not be persisted, in which case a configuration IS in effect. `restartRequired` is always `false`: the FPP MQTT collector follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start). The broker password is NEVER returned (ADR-039 decision 7): `passwordSet` reports presence only.
+         * @description Always requires `config:write` - there is no `config:read` scope, mirroring `GET /config/fpp.endpoints`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of `SHOWMESH_FPP_MQTT_*` into its store could not be persisted, in which case a configuration IS in effect. `restartRequired` is always `false`: the FPP MQTT collector follows this configuration within about ten seconds with no restart (ADR-036 applied to this kind from the start). The broker password is NEVER returned (ADR-039 decision 7): `passwordSet` reports presence only.
          */
         get: operations["getFPPMQTTConfig"];
         /**
          * Write a new fpp.mqtt configuration revision (Track G seam G-3, ADR-039)
-         * @description Requires `config:write` (admin only). Unlike `PUT /config/fpp.endpoints` and `PUT /config/resolume.instances`, this is a PARTIAL UPDATE: every top-level field (`brokerURL`, `username`, `topicPrefix`, `hosts`, `password`) is independently optional. A key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5) — this is what makes the credential rule (decision 7) usable at all, since `GET` never returns the password and a PUT requiring every field present would erase a credential the operator never saw. A `null` `brokerURL`, `username`, or `topicPrefix` is rejected (pass `""` to explicitly clear that field); a `null` `hosts` is rejected (pass `{}` to explicitly configure zero hosts); a `null` or `""` `password` explicitly clears the stored credential.
+         * @description Requires `config:write` (admin only). Unlike `PUT /config/fpp.endpoints` and `PUT /config/resolume.instances`, this is a PARTIAL UPDATE: every top-level field (`brokerURL`, `username`, `topicPrefix`, `hosts`, `password`) is independently optional. A key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5) - this is what makes the credential rule (decision 7) usable at all, since `GET` never returns the password and a PUT requiring every field present would erase a credential the operator never saw. A `null` `brokerURL`, `username`, or `topicPrefix` is rejected (pass `""` to explicitly clear that field); a `null` `hosts` is rejected (pass `{}` to explicitly configure zero hosts); a `null` or `""` `password` explicitly clears the stored credential.
          *     Once merged with the current stored configuration, the result is validated (broker URL scheme/host, no userinfo, host id syntax, no duplicate `HostName` across two ids, and every host id cross-checked against the current `fpp.endpoints` configuration, read live at write time) BEFORE activation (ADR-009): a rejected write appends no revision.
-         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_MQTT_BROKER_URL` is still set in this coordinator's own process environment — mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction.
-         *     On success, the broker password (if a `password` key was present) is written to a dedicated secret file BEFORE the config revision — never into `config_revisions.payload_json`, which is immutable by design (ADR-009) and would otherwise leave a permanent copy of a rotatable secret (ADR-039 decision 7) — then a new immutable revision is appended and activated in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *     Refused with `409` outright, before the body is even read, while `SHOWMESH_FPP_MQTT_BROKER_URL` is still set in this coordinator's own process environment - mirroring `PUT /config/fpp.endpoints`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         *     On success, the broker password (if a `password` key was present) is written to a dedicated secret file BEFORE the config revision - never into `config_revisions.payload_json`, which is immutable by design (ADR-009) and would otherwise leave a permanent copy of a rotatable secret (ADR-039 decision 7) - then a new immutable revision is appended and activated in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putFPPMQTTConfig"];
         post?: never;
@@ -960,7 +962,7 @@ export interface paths {
         };
         /**
          * fpp.mqtt revision history, newest first (Track G seam G-3, ADR-039)
-         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/fpp.mqtt`'s `404` for the same state. Carries no payload, so the password is not a concern here even in principle — see `ConfigRevisionMeta`.
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/fpp.endpoints/revisions`. `200` with an empty array when nothing has ever been configured, unlike `GET /config/fpp.mqtt`'s `404` for the same state. Carries no payload, so the password is not a concern here even in principle - see `ConfigRevisionMeta`.
          */
         get: operations["getFPPMQTTConfigRevisions"];
         put?: never;
@@ -980,13 +982,13 @@ export interface paths {
         };
         /**
          * The active assets.settings configuration (Track G seam G-4, ADR-039)
-         * @description Always requires `config:write` — there is no `config:read` scope, mirroring `GET /config/resolume.instances`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of one or more of `SHOWMESH_ASSET_CONTENT_BASE_URL`/`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`/ `SHOWMESH_ASSET_SYNC_INTERVAL`/`SHOWMESH_ASSET_INVENTORY_INTERVAL` into its store could not be persisted, in which case a configuration IS in effect. `SHOWMESH_ASSET_DIR` is never part of this kind (ADR-039 decision 2) and stays environment-only. `restartRequired` is always `false`: the live asset sync service follows this configuration promptly with no restart (ADR-036 applied to this kind from the start).
+         * @description Always requires `config:write` - there is no `config:read` scope, mirroring `GET /config/resolume.instances`'s identical always-sensitive posture. `404` when no revision has ever been activated, which carries two distinct facts and states which one in `detail`: nothing has ever been configured here, or this coordinator's startup migration of one or more of `SHOWMESH_ASSET_CONTENT_BASE_URL`/`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`/ `SHOWMESH_ASSET_SYNC_INTERVAL`/`SHOWMESH_ASSET_INVENTORY_INTERVAL` into its store could not be persisted, in which case a configuration IS in effect. `SHOWMESH_ASSET_DIR` is never part of this kind (ADR-039 decision 2) and stays environment-only. `restartRequired` is always `false`: the live asset sync service follows this configuration promptly with no restart (ADR-036 applied to this kind from the start).
          */
         get: operations["getAssetsSettingsConfig"];
         /**
          * Write a new assets.settings configuration revision (Track G seam G-4, ADR-039)
-         * @description Requires `config:write` (admin only). Unlike `PUT /config/resolume.instances`'s whole-array replace, every one of the four fields (`contentBaseUrl`, `maxUploadBytes`, `syncIntervalSeconds`, `inventoryIntervalSeconds`) is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or, on the very first write, default) value alone. A field that IS present must not be JSON `null` — `null` is refused with `400` naming the field; pass `""` for `contentBaseUrl` to deliberately disable asset sync. Any other top-level field is refused. The merged result is validated as a whole before activation (ADR-009): `maxUploadBytes`, `syncIntervalSeconds`, and `inventoryIntervalSeconds` must all be positive, and a non-empty `contentBaseUrl` must be an http/https URL with a host and no userinfo.
-         *     Refused with `409` outright, before the body is even read, while any of the four `SHOWMESH_ASSET_*` settings variables is still set in this coordinator's own process environment — mirroring `PUT /config/resolume.instances`'s identical still-set refusal, including the same migration-deferred remedy correction.
+         * @description Requires `config:write` (admin only). Unlike `PUT /config/resolume.instances`'s whole-array replace, every one of the four fields (`contentBaseUrl`, `maxUploadBytes`, `syncIntervalSeconds`, `inventoryIntervalSeconds`) is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or, on the very first write, default) value alone. A field that IS present must not be JSON `null` - `null` is refused with `400` naming the field; pass `""` for `contentBaseUrl` to deliberately disable asset sync. Any other top-level field is refused. The merged result is validated as a whole before activation (ADR-009): `maxUploadBytes`, `syncIntervalSeconds`, and `inventoryIntervalSeconds` must all be positive, and a non-empty `contentBaseUrl` must be an http/https URL with a host and no userinfo.
+         *     Refused with `409` outright, before the body is even read, while any of the four `SHOWMESH_ASSET_*` settings variables is still set in this coordinator's own process environment - mirroring `PUT /config/resolume.instances`'s identical still-set refusal, including the same migration-deferred remedy correction.
          *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putAssetsSettingsConfig"];
@@ -1026,15 +1028,15 @@ export interface paths {
         };
         /**
          * The stored Resolume composition id map (Track D seam D-2a, ADR-032)
-         * @description Always requires `config:write`, exactly like `GET /config/fpp.endpoints` — there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one, not one of the four the open-reads posture covers). ADR-032 decision 2 means this coordinator NEVER calls Resolume's own `GET /composition` (known to crash Arena 7.23.2): this stored id map, parsed once at upload time from an operator-supplied file, is the only source for it. `404` when nothing has ever been uploaded, which is a normal, expected state (a fresh coordinator, or one whose operator has not uploaded a show yet), not an error — deliberately the same status and shape `GET /config/fpp.endpoints` uses for its own "nothing configured yet" case, so the two configuration surfaces agree on what an empty store looks like.
+         * @description Always requires `config:write`, exactly like `GET /config/fpp.endpoints` - there is no `config:read` scope (ADR-024 decision 4 fixes exactly four read scopes, and this surface is a new, always-sensitive one, not one of the four the open-reads posture covers). ADR-032 decision 2 means this coordinator NEVER calls Resolume's own `GET /composition` (known to crash Arena 7.23.2): this stored id map, parsed once at upload time from an operator-supplied file, is the only source for it. `404` when nothing has ever been uploaded, which is a normal, expected state (a fresh coordinator, or one whose operator has not uploaded a show yet), not an error - deliberately the same status and shape `GET /config/fpp.endpoints` uses for its own "nothing configured yet" case, so the two configuration surfaces agree on what an empty store looks like.
          */
         get: operations["getResolumeComposition"];
         put?: never;
         /**
          * Upload and store a Resolume composition file (Track D seam D-2a, ADR-032)
-         * @description Requires `config:write`. `multipart/form-data` with exactly one file part named `file`. ShowMesh never reads a composition file from the Resolume host's own filesystem and never calls Resolume's own `GET /composition` (known to crash Arena 7.23.2) — an uploaded file is the only ingestion path (ADR-032 decision 4).
-         *     The file is parsed and validated BEFORE any write: a malformed file is refused with `400` and persists nothing at all — no revision, no config object, no audit entry (ADR-032 decision 7). A request body larger than this coordinator's own upload bound is refused with `413` before being buffered whole.
-         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11), replacing whatever composition was stored before — this endpoint always replaces the entire stored composition, never merges into it. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         * @description Requires `config:write`. `multipart/form-data` with exactly one file part named `file`. ShowMesh never reads a composition file from the Resolume host's own filesystem and never calls Resolume's own `GET /composition` (known to crash Arena 7.23.2) - an uploaded file is the only ingestion path (ADR-032 decision 4).
+         *     The file is parsed and validated BEFORE any write: a malformed file is refused with `400` and persists nothing at all - no revision, no config object, no audit entry (ADR-032 decision 7). A request body larger than this coordinator's own upload bound is refused with `413` before being buffered whole.
+         *     On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11), replacing whatever composition was stored before - this endpoint always replaces the entire stored composition, never merges into it. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         post: operations["uploadResolumeComposition"];
         delete?: never;
@@ -1052,12 +1054,12 @@ export interface paths {
         };
         /**
          * The resolume.recovery auto-restore toggle's revision metadata (Track D seam D-3a)
-         * @description Requires `config:write`, mirroring `GET /config/fpp.endpoints`'s own always-sensitive posture. Unlike fpp.endpoints, "nothing has ever been written" is never a `404` here — the toggle has a well-defined default (enabled) — so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written.
+         * @description Requires `config:write`, mirroring `GET /config/fpp.endpoints`'s own always-sensitive posture. Unlike fpp.endpoints, "nothing has ever been written" is never a `404` here - the toggle has a well-defined default (enabled) - so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written.
          */
         get: operations["getResolumeRecoveryConfig"];
         /**
          * Write a new resolume.recovery auto-restore toggle revision (Track D seam D-3a)
-         * @description Requires `config:write` (admin only). The body's `autoRestoreEnabled` field is required and must be a JSON boolean, never absent and never null. No other top-level field is accepted. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         * @description Requires `config:write` (admin only). The body's `autoRestoreEnabled` field is required and must be a JSON boolean, never absent and never null. No other top-level field is accepted. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) - with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putResolumeRecoveryConfig"];
         post?: never;
@@ -1101,7 +1103,7 @@ export interface paths {
         get: operations["getRenderSettingsConfig"];
         /**
          * Write a new render.settings revision (Track B seam B2c, ADR-039)
-         * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write — `idleOutput` and the three members of `restartPolicy` — never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) — with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write - `idleOutput` and the three members of `restartPolicy` - never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule) - with the audit store failing, the write is refused and no revision is created. A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putRenderSettingsConfig"];
         post?: never;
@@ -1145,7 +1147,7 @@ export interface paths {
         get: operations["getAudioSettingsConfig"];
         /**
          * Write a new audio.settings revision (ADR-039)
-         * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write — never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only `"linear"` ships today). On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write - never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only `"linear"` ships today). On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
          */
         put: operations["putAudioSettingsConfig"];
         post?: never;
@@ -1184,7 +1186,7 @@ export interface paths {
         };
         /**
          * Enumerate audio.node objects (ADR-018/ADR-039)
-         * @description Requires `config:write`. Object ids (the node id) with label (the configured programRoute) and current revision number, NOT the full payloads — `show` is always empty, since audio.node carries no show reference.
+         * @description Requires `config:write`. Object ids (the node id) with label (the configured programRoute) and current revision number, NOT the full payloads - `show` is always empty, since audio.node carries no show reference.
          */
         get: operations["listAudioNodes"];
         put?: never;
@@ -1209,7 +1211,7 @@ export interface paths {
         get: operations["getAudioNode"];
         /**
          * Write a new audio.node revision (ADR-018)
-         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: every field is required on every write. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) — never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `programRoute` and `ltcRoute` must also name the SAME route, refused at decode time before evidence is even consulted. `programChannels` (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based, never a member of `programChannels`) are checked structurally, not against evidence. `clockDomain` and `clockDomainProvenance` are operator-declared and never inferred: no software call on this platform proves two outputs share a hardware clock.
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: every field is required on every write. `programRoute` and `ltcRoute` are each cross-checked, LIVE, against this node's OWN most recent capability advertisement (`audio.output.local` / `audio.output.ltc`) - never accepted on the operator's claim alone. A node that has never advertised any audio capability, or whose advertisement does not include the named route, is refused with `400` naming what evidence was missing (or, when the node has advertised nothing at all, that no probe evidence exists for it). `programRoute` and `ltcRoute` must also name the SAME route, refused at decode time before evidence is even consulted. `programChannels` (distinct, positive, 1-based) and `ltcChannel` (positive, 1-based, never a member of `programChannels`) are checked structurally, not against evidence. `clockDomain` and `clockDomainProvenance` are operator-declared and never inferred: no software call on this platform proves two outputs share a hardware clock.
          */
         put: operations["putAudioNode"];
         post?: never;
@@ -1254,9 +1256,9 @@ export interface paths {
         put?: never;
         /**
          * Dispatch one Resolume action and confirm by evidence (Track D seam D-3/B)
-         * @description Behind `resolume:action` (ADR-024 decision 4). Dispatches one of the seven actions this coordinator's own registry supports (see GET /resolume/actions) and confirms by evidence before answering, against that action's own derived deadline (ADR-003). A `200` is never this endpoint's own claim of success on its own — see ResolumeActionResult.outcome, which is exactly one of "confirmed", "unconfirmed", "unconfirmable", "refused", or "failed", every one of which is answered with `200`: this endpoint reports honestly what happened, it does not use the HTTP status to editorialize about whether the operator will like the answer. A cookie- authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt.
-         *     `idempotencyKey` is resolved FIRST, exactly as POST /fpp/{instanceId}/commands documents for its own identical rule: a replayed key — reused against the SAME `action` and the SAME normalized `params` — dispatches nothing and returns the original result, flagged `replay: true`. A key reused against a DIFFERENT `action` or DIFFERENT `params` is a `409` conflict.
-         *     `blackout` and `clearLayer` are exempt from ADR-024 decision 11's fail-closed audit rule (proceed with degraded, stderr-only attribution rather than being refused when this coordinator's audit store cannot be written to); every other action fails closed (`503`, nothing dispatched) under the identical condition — see GET /resolume/actions' own `auditExempt` field.
+         * @description Behind `resolume:action` (ADR-024 decision 4). Dispatches one of the seven actions this coordinator's own registry supports (see GET /resolume/actions) and confirms by evidence before answering, against that action's own derived deadline (ADR-003). A `200` is never this endpoint's own claim of success on its own - see ResolumeActionResult.outcome, which is exactly one of "confirmed", "unconfirmed", "unconfirmable", "refused", or "failed", every one of which is answered with `200`: this endpoint reports honestly what happened, it does not use the HTTP status to editorialize about whether the operator will like the answer. A cookie- authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6, `403` on absence, same Problem schema as a missing-scope `403`); a bearer-token-authenticated request is exempt.
+         *     `idempotencyKey` is resolved FIRST, exactly as POST /fpp/{instanceId}/commands documents for its own identical rule: a replayed key - reused against the SAME `action` and the SAME normalized `params` - dispatches nothing and returns the original result, flagged `replay: true`. A key reused against a DIFFERENT `action` or DIFFERENT `params` is a `409` conflict.
+         *     `blackout` and `clearLayer` are exempt from ADR-024 decision 11's fail-closed audit rule (proceed with degraded, stderr-only attribution rather than being refused when this coordinator's audit store cannot be written to); every other action fails closed (`503`, nothing dispatched) under the identical condition - see GET /resolume/actions' own `auditExempt` field.
          */
         post: operations["dispatchResolumeAction"];
         delete?: never;
@@ -1274,7 +1276,7 @@ export interface paths {
         };
         /**
          * The Arena crash-recovery record, toggle, and last restore (Track D seam D-3a)
-         * @description Never gated by any scope — the dashboard renders this with no session (ADR-024's reads-stay-open posture). autoRestoreEnabled is the current toggle value; autoRestoreConfigured is false when nothing has ever been written for it (the default is enabled). record is one row per layer in the current composition, every object reference a name (ADR-037), never an id. lastRestore is null until a restore has run.
+         * @description Never gated by any scope - the dashboard renders this with no session (ADR-024's reads-stay-open posture). autoRestoreEnabled is the current toggle value; autoRestoreConfigured is false when nothing has ever been written for it (the default is enabled). record is one row per layer in the current composition, every object reference a name (ADR-037), never an id. lastRestore is null until a restore has run.
          */
         get: operations["getResolumeRecovery"];
         put?: never;
@@ -1296,7 +1298,7 @@ export interface paths {
         put?: never;
         /**
          * Manually run the crash-recovery restore (Track D seam D-3a)
-         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check — an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation).
+         * @description Requires `resolume:action`. Runs the same restore the automatic gate runs, without the crash-return gate's own settle wait or identity-freshness check - an operator invoking this on demand is not resolving a specific crash-return race. Always attempts, regardless of the auto-restore toggle. Each eligible layer's own restore is an ordinary `launchClip` dispatch and inherits every D-3 guard (the identity gate, the deck refusal, confirmation).
          */
         post: operations["restoreResolumeRecovery"];
         delete?: never;
@@ -1314,8 +1316,8 @@ export interface paths {
         };
         /**
          * Resolume as a first-class observability resource
-         * @description Everything ShowMesh already holds for its configured Resolume instance (today: at most one, `SHOWMESH_RESOLUME_ID`) — its `resolume.*` observations and the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. No request to Resolume is ever made serving this route. Gated by `observation:read` — the same guard `GET /observations` uses, since this is telemetry, not configuration, unlike `GET /config/resolume/composition` (which uses `config:write`).
-         *     An unconfigured coordinator returns `200` with an empty `instances` array, never `null` and never a `404` — "nothing is configured" is a fact about the deployment, not an error.
+         * @description Everything ShowMesh already holds for its configured Resolume instance (today: at most one, `SHOWMESH_RESOLUME_ID`) - its `resolume.*` observations and the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. No request to Resolume is ever made serving this route. Gated by `observation:read` - the same guard `GET /observations` uses, since this is telemetry, not configuration, unlike `GET /config/resolume/composition` (which uses `config:write`).
+         *     An unconfigured coordinator returns `200` with an empty `instances` array, never `null` and never a `404` - "nothing is configured" is a fact about the deployment, not an error.
          */
         get: operations["listResolumeInstances"];
         put?: never;
@@ -1335,7 +1337,7 @@ export interface paths {
         };
         /**
          * One Resolume instance
-         * @description Unlike the list route, no match here — including on an unconfigured coordinator — is the ordinary resource-not-found shape, matching `GET /fpp/{instanceId}`'s identical posture for a bare, single-resource GET.
+         * @description Unlike the list route, no match here - including on an unconfigured coordinator - is the ordinary resource-not-found shape, matching `GET /fpp/{instanceId}`'s identical posture for a bare, single-resource GET.
          */
         get: operations["getResolumeInstance"];
         put?: never;
@@ -1355,7 +1357,7 @@ export interface paths {
         };
         /**
          * fpp.endpoints revision history, newest first (Step 7 seam A, RES-008 D1)
-         * @description Always requires `config:write`, exactly like `GET /config/fpp.endpoints`. Metadata only — no payload — per revision: ADR-009 requires revisions stay immutable and available, and this endpoint is for browsing that history, not for rollback tooling (deliberately out of scope — RES-008 section 10). An object that has never been created returns `200` with an empty `revisions` array, unlike `GET /config/fpp.endpoints`'s `404` for the same case: "no history yet" is not an absent resource the way "no active configuration" is.
+         * @description Always requires `config:write`, exactly like `GET /config/fpp.endpoints`. Metadata only - no payload - per revision: ADR-009 requires revisions stay immutable and available, and this endpoint is for browsing that history, not for rollback tooling (deliberately out of scope - RES-008 section 10). An object that has never been created returns `200` with an empty `revisions` array, unlike `GET /config/fpp.endpoints`'s `404` for the same case: "no history yet" is not an absent resource the way "no active configuration" is.
          */
         get: operations["listFPPEndpointsConfigRevisions"];
         put?: never;
@@ -1375,7 +1377,7 @@ export interface paths {
         };
         /**
          * Enumerate show.action objects (Step 9, STEP-9-SPEC.md section 5.5)
-         * @description Object ids with label, show, and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write` — never toggled by `Options.CloseReads` (a new, always-sensitive surface, exactly like `GET /audit`). Corrected from an earlier draft that would have copied `fpp.endpoints`' `config:write`-only posture, which breaks the operator role's own macro list (the operator role holds `show:macro:run`, never `config:write`). Optionally narrowed with `?show=<id>`; an id naming no configured show is a legitimate, empty answer, never a refusal. show.action objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
+         * @description Object ids with label, show, and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write` - never toggled by `Options.CloseReads` (a new, always-sensitive surface, exactly like `GET /audit`). Corrected from an earlier draft that would have copied `fpp.endpoints`' `config:write`-only posture, which breaks the operator role's own macro list (the operator role holds `show:macro:run`, never `config:write`). Optionally narrowed with `?show=<id>`; an id naming no configured show is a legitimate, empty answer, never a refusal. show.action objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored - only `GET /config/show.surface` supports it.
          */
         get: operations["listShowActions"];
         put?: never;
@@ -1397,7 +1399,7 @@ export interface paths {
         get: operations["getShowAction"];
         /**
          * Write a new show.action revision (Step 9)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object (`GET /config/show`); a nonexistent show is refused naming the missing id. This is a write-time check only — an existing revision written before this check shipped still reads, lists, and runs unchanged. `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker this deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no default. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) — the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11).
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object (`GET /config/show`); a nonexistent show is refused naming the missing id. This is a write-time check only - an existing revision written before this check shipped still reads, lists, and runs unchanged. `safetyClass` is required and must agree with an `fpp` target's own registered primitive safety class; an `mqtt` target's `broker` must name a broker this deployment declares (`SHOWMESH_INTEGRATION_BROKERS`), with no default. Absent, `null`, and explicitly empty are three different things on every field. Two keys in this payload default when absent, and reject a present `null` as invalid: `description` (defaults to empty, i.e. no description) and `target.publish.retain` (defaults to `false`) - the same rule show.macro's `onFailure`/`onUnconfirmed` uses. The request body for these two is therefore ConfigShowActionWrite, not ConfigShowAction: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload, never the raw request body. Audited in the same transaction as the revision write (ADR-024 decision 11).
          */
         put: operations["putShowAction"];
         post?: never;
@@ -1433,7 +1435,7 @@ export interface paths {
         };
         /**
          * Enumerate show.macro objects (Step 9, STEP-9-SPEC.md section 5.5)
-         * @description Object ids with label, show, and current revision number, NOT the full payloads. Same read posture as GET /config/show.action. Optionally narrowed with `?show=<id>`; an id naming no configured show is a legitimate, empty answer, never a refusal. show.macro objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
+         * @description Object ids with label, show, and current revision number, NOT the full payloads. Same read posture as GET /config/show.action. Optionally narrowed with `?show=<id>`; an id naming no configured show is a legitimate, empty answer, never a refusal. show.macro objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored - only `GET /config/show.surface` supports it.
          */
         get: operations["listShowMacros"];
         put?: never;
@@ -1455,7 +1457,7 @@ export interface paths {
         get: operations["getShowMacro"];
         /**
          * Write a new show.macro revision (Step 9)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object, refused naming the missing id otherwise (write-time only; an existing revision keeps reading, listing, and running unchanged). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object **in this macro's own show** — a step naming an action belonging to a different show is refused, naming both shows. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `continue`) / `onUnconfirmed` (default `continue`). Both default to `continue` because a macro run always runs every step (owner decision 2026-08-14); they remain two independent fields, and `abort` is available on either as an explicit per-step choice. `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload — including description and onFailure/onUnconfirmed resolved to their defaults — never the raw request body.
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` config object, refused naming the missing id otherwise (write-time only; an existing revision keeps reading, listing, and running unchanged). `steps` is required, must contain 1-32 entries, each `id` unique, each `action` resolving to an existing `show.action` object **in this macro's own show** - a step naming an action belonging to a different show is refused, naming both shows. Two keys in this payload default when absent, and reject a present `null` as invalid: the top-level `description` (defaults to empty, i.e. no description) and each step's `onFailure` (default `continue`) / `onUnconfirmed` (default `continue`). Both default to `continue` because a macro run always runs every step (owner decision 2026-08-14); they remain two independent fields, and `abort` is available on either as an explicit per-step choice. `localFallback.class` is required per step (`none` | `coordinator-required` | `silence`); `reduced` is rejected with its own distinct problem type. The request body is therefore ConfigShowMacroWrite, not ConfigShowMacro: the latter is the strict, always-resolved shape this endpoint reads back. Stores the VALIDATED, NORMALIZED payload - including description and onFailure/onUnconfirmed resolved to their defaults - never the raw request body.
          */
         put: operations["putShowMacro"];
         post?: never;
@@ -1511,7 +1513,7 @@ export interface paths {
         };
         /**
          * Re-resolve every show.action's stored target (Track E seam E7-2)
-         * @description The pre-show sweep: every show.action's own binding check, in one request. Never gated by any scope. `show`, when given, narrows the result to that show; a show id matching nothing returns an empty list, never a refusal — see `?show=` on `GET /config/show.action`.
+         * @description The pre-show sweep: every show.action's own binding check, in one request. Never gated by any scope. `show`, when given, narrows the result to that show; a show id matching nothing returns an empty list, never a refusal - see `?show=` on `GET /config/show.action`.
          */
         get: operations["listActionBindings"];
         put?: never;
@@ -1533,7 +1535,7 @@ export interface paths {
         put?: never;
         /**
          * Invoke one stored show.action by id (Track E seam E7-1, ADR-037 decision 8)
-         * @description Behind `show:action:invoke`. The request carries only an idempotency key: the stored action's own target supplies every parameter, so a caller cannot pass a protocol address, topic, or path here (that raw hatch is ADR-029 decision 3's own, separately queued, deliberately inconvenient escape valve, not this endpoint) — a body naming any key other than `idempotencyKey` is refused (`400`), never silently ignored. Dispatches through the exact same in-process seams `internal/coordinator/macro`'s own step dispatch uses. A cookie- authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer- token-authenticated request is exempt.
+         * @description Behind `show:action:invoke`. The request carries only an idempotency key: the stored action's own target supplies every parameter, so a caller cannot pass a protocol address, topic, or path here (that raw hatch is ADR-029 decision 3's own, separately queued, deliberately inconvenient escape valve, not this endpoint) - a body naming any key other than `idempotencyKey` is refused (`400`), never silently ignored. Dispatches through the exact same in-process seams `internal/coordinator/macro`'s own step dispatch uses. A cookie- authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer- token-authenticated request is exempt.
          *     `idempotencyKey` is resolved first: a replayed key against the SAME action id dispatches nothing and returns the original result, flagged `replay: true`. A key reused against a DIFFERENT action id is a `409` conflict. `blackout`/`stop`/`powerOff`-classed actions (read from the stored action's own `safetyClass`) are exempt from ADR-024 decision 11's fail-closed audit rule; every other action fails closed (`503`, nothing dispatched) under the identical condition.
          *     `requestedRevision` optionally pins the exact show.action revision to execute: a durable/queued caller names the revision it queued against, so activating a newer revision after the cue was queued never changes what runs. An interactive caller may omit it to mean "whichever revision is active right now". Either way, the response's `result.revision` states which revision actually executed.
          */
@@ -1555,7 +1557,7 @@ export interface paths {
         put?: never;
         /**
          * Submit a macro run (Step 9, STEP-9-SPEC.md section 6.6, ADR-031)
-         * @description Requires `show:macro:run` specifically (never satisfied by `config:write` alone — an admin who has never been granted `show:macro:run` may not fire a show through a different scope). `202`, never `200` or `201`: the run is accepted and not complete (ADR-031 decision 1). The body is the run's initial state, so a client that never watches still holds the run id and the pinned macro/action revisions; the outcome is learned by GET /macro-runs/{runId} or the `macroRun.changed` change-stream event, never by waiting on this response. `idempotencyKey` governs a three-way replay rule (STEP-9-SPEC.md section 6.2): the same key with the same macro at the same pinned revision replays (returns the existing run, `replay: true`, not a new one); the same key against a different macro, or the same macro at a different pinned revision, is each its own distinct `409`. A second run of the same macro already in flight is refused `409` naming the in-flight run (ADR-031 decision 6).
+         * @description Requires `show:macro:run` specifically (never satisfied by `config:write` alone - an admin who has never been granted `show:macro:run` may not fire a show through a different scope). `202`, never `200` or `201`: the run is accepted and not complete (ADR-031 decision 1). The body is the run's initial state, so a client that never watches still holds the run id and the pinned macro/action revisions; the outcome is learned by GET /macro-runs/{runId} or the `macroRun.changed` change-stream event, never by waiting on this response. `idempotencyKey` governs a three-way replay rule (STEP-9-SPEC.md section 6.2): the same key with the same macro at the same pinned revision replays (returns the existing run, `replay: true`, not a new one); the same key against a different macro, or the same macro at a different pinned revision, is each its own distinct `409`. A second run of the same macro already in flight is refused `409` naming the in-flight run (ADR-031 decision 6).
          */
         post: operations["submitMacroRun"];
         delete?: never;
@@ -1573,7 +1575,7 @@ export interface paths {
         };
         /**
          * Macro runs, most recent first (Step 9, STEP-9-SPEC.md section 6.6)
-         * @description Requires `show:macro:run` OR `config:write`, matching GET /config/show.macro. Steps are not included — a list of runs is a list of runs; a client wanting step detail fetches the run.
+         * @description Requires `show:macro:run` OR `config:write`, matching GET /config/show.macro. Steps are not included - a list of runs is a list of runs; a client wanting step detail fetches the run.
          */
         get: operations["listMacroRuns"];
         put?: never;
@@ -1613,7 +1615,7 @@ export interface paths {
         };
         /**
          * Enumerate show objects (Track E, ADR-027)
-         * @description Object ids with label (the show's own name), show (the show's own id — a show belongs to no other show), and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write`, matching GET /config/show.action and GET /config/show.macro — never toggled by `Options.CloseReads`. show objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored — only `GET /config/show.surface` supports it.
+         * @description Object ids with label (the show's own name), show (the show's own id - a show belongs to no other show), and current revision number, NOT the full payloads. Requires `show:macro:run` OR `config:write`, matching GET /config/show.action and GET /config/show.macro - never toggled by `Options.CloseReads`. show objects carry no `node` field, so `?node=` is rejected with 400 rather than silently ignored - only `GET /config/show.surface` supports it.
          */
         get: operations["listShows"];
         put?: never;
@@ -1635,7 +1637,7 @@ export interface paths {
         get: operations["getShow"];
         /**
          * Write a new show revision (Track E, ADR-027 decision 2)
-         * @description Requires `config:write` (admin only). A Show is a namespace, not a container: this payload carries no list of surfaces, actions, or macros. `name` is required, non-empty, at most 200 characters. This is a FULL REPLACEMENT: `notes` is optional and an absent key means notes becomes empty, never "leave the previous value" — the same absent/null/empty distinction every write surface in this contract enforces. The request body is therefore ConfigShowWrite; the response is always the resolved ConfigShow shape, which renders `notes` even when empty (never absent).
+         * @description Requires `config:write` (admin only). A Show is a namespace, not a container: this payload carries no list of surfaces, actions, or macros. `name` is required, non-empty, at most 200 characters. This is a FULL REPLACEMENT: `notes` is optional and an absent key means notes becomes empty, never "leave the previous value" - the same absent/null/empty distinction every write surface in this contract enforces. The request body is therefore ConfigShowWrite; the response is always the resolved ConfigShow shape, which renders `notes` even when empty (never absent).
          */
         put: operations["putShow"];
         post?: never;
@@ -1693,7 +1695,7 @@ export interface paths {
         get: operations["getShowSurface"];
         /**
          * Write a new show.surface revision (Track E, ADR-026)
-         * @description Requires `config:write` (admin only). `show` must name an existing `show` object; `node` must name a declared node — this coordinator deliberately does NOT check the node's advertised NDI/HDMI capability, which is observed state and absent whenever a node is offline (checking it would manufacture absence from a node that has simply not checked in yet). `channelRange` is required and must be non-empty: an absent `channelRange`, an explicit `null`, and an explicitly empty one (`channelCount: 0`) are three distinct refusals with three distinct messages, never a silent default. `geometry.width * geometry.height * channelsPerPixel(pixelFormat)` must equal `channelRange.channelCount` exactly. `output.transport` selects exactly one of `output.ndi` / `output.hdmi`; the other must be absent — support for one transport is never evidence for the other, so nothing here defaults a transport. This is a FULL REPLACEMENT: every field is required on every write (this payload has no optional/defaulted key), so the request and response share the same ConfigShowSurface shape. A second surface assigned to the same node is accepted (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule).
+         * @description Requires `config:write` (admin only). `show` must name an existing `show` object; `node` must name a declared node - this coordinator deliberately does NOT check the node's advertised NDI/HDMI capability, which is observed state and absent whenever a node is offline (checking it would manufacture absence from a node that has simply not checked in yet). `channelRange` is required and must be non-empty: an absent `channelRange`, an explicit `null`, and an explicitly empty one (`channelCount: 0`) are three distinct refusals with three distinct messages, never a silent default. `geometry.width * geometry.height * channelsPerPixel(pixelFormat)` must equal `channelRange.channelCount` exactly. `output.transport` selects exactly one of `output.ndi` / `output.hdmi`; the other must be absent - support for one transport is never evidence for the other, so nothing here defaults a transport. This is a FULL REPLACEMENT: every field is required on every write (this payload has no optional/defaulted key), so the request and response share the same ConfigShowSurface shape. A second surface assigned to the same node is accepted (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule).
          */
         put: operations["putShowSurface"];
         post?: never;
@@ -1845,7 +1847,7 @@ export interface paths {
         };
         /**
          * The active-show pointer (Track E, ADR-027 decision 3)
-         * @description 404 `resourceNotFoundProblem` when nothing has ever been activated, matching what GET /config/fpp.endpoints and GET /config/resolume/composition already answer for "nothing configured yet" — two configuration surfaces answering differently for the same condition is a thing an operator would have to learn twice.
+         * @description 404 `resourceNotFoundProblem` when nothing has ever been activated, matching what GET /config/fpp.endpoints and GET /config/resolume/composition already answer for "nothing configured yet" - two configuration surfaces answering differently for the same condition is a thing an operator would have to learn twice.
          */
         get: operations["getShowActive"];
         /**
@@ -1908,7 +1910,7 @@ export interface paths {
         get: operations["getNightSession"];
         /**
          * Write a new night.session revision (Track F seam F1)
-         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteControl`/`interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present — the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one.
+         * @description Requires `config:write` (admin only). FPP alone authorizes and schedules a night session (ADR-038): a calendar field or a hand-entered rest-duration field anywhere in the payload is rejected. `siteControl`/`interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present - the whole block's absence is valid and is NOT degraded. showPlaylist.fppInstanceId and resting.fppInstanceId must name configured FPP instances; resting.timelineAsset and every backgroundAudio item must resolve to a current asset (ADR-028); every cue's action must name an existing show.action object in the same show. This is a FULL REPLACEMENT: an omitted optional block (backgroundAudio) is left unconfigured, never wiped by an absent key on top of a required one.
          */
         put: operations["putNightSession"];
         post?: never;
@@ -1944,7 +1946,7 @@ export interface paths {
         };
         /**
          * One past night.session revision's full payload (Track F seam F1)
-         * @description Revisions are immutable (ADR-009); this may not be the currently active one. No other config kind in this coordinator exposes this route yet — a gap for a future seam to close on those kinds, not a reason to withhold it here.
+         * @description Revisions are immutable (ADR-009); this may not be the currently active one. No other config kind in this coordinator exposes this route yet - a gap for a future seam to close on those kinds, not a reason to withhold it here.
          */
         get: operations["getNightSessionRevision"];
         put?: never;
@@ -1969,7 +1971,7 @@ export interface paths {
         get: operations["getNightSessionActive"];
         /**
          * Activate a night session, or clear the pointer (Track F seam F1, ADR-039 rule 4)
-         * @description Requires `config:write` (admin only). `session` is a REQUIRED key but may be the empty string, which explicitly clears the pointer back to unset — the zero-to-one-and-back-to-zero transition ADR-039 rule 4 requires. A non-empty value must name an existing night.session object. This is a singleton: the underlying object id is a fixed constant, never derived from `session`, so activating a different session (or clearing it) accumulates as a new revision of the SAME object rather than orphaning the previous history.
+         * @description Requires `config:write` (admin only). `session` is a REQUIRED key but may be the empty string, which explicitly clears the pointer back to unset - the zero-to-one-and-back-to-zero transition ADR-039 rule 4 requires. A non-empty value must name an existing night.session object. This is a singleton: the underlying object id is a fixed constant, never derived from `session`, so activating a different session (or clearing it) accumulates as a new revision of the SAME object rather than orphaning the previous history.
          */
         put: operations["putNightSessionActive"];
         post?: never;
@@ -2005,9 +2007,9 @@ export interface paths {
         };
         /**
          * The current night-session lifecycle state (Track F seam F2, RESTING-MODE.md, ADR-038)
-         * @description Never gated by any scope — reads stay open by default (ADR-024 constraint 23): a credential problem must never cost the operator sight of the lifecycle state. Distinct from `/config/night.session/{id}` (the AUTHORED definition a session pins): this is the RUNNING controller's own persisted state, a dedicated closed state machine, never observed evidence and never a general workflow.
+         * @description Never gated by any scope - reads stay open by default (ADR-024 constraint 23): a credential problem must never cost the operator sight of the lifecycle state. Distinct from `/config/night.session/{id}` (the AUTHORED definition a session pins): this is the RUNNING controller's own persisted state, a dedicated closed state machine, never observed evidence and never a general workflow.
          *
-         *     If no session has ever been created (the coordinator has never seen `prepare-site`), this still answers `200` with `session.state` = `"inactive"` and every identity field empty, rather than `404` — "no session yet" is itself a real, renderable state.
+         *     If no session has ever been created (the coordinator has never seen `prepare-site`), this still answers `200` with `session.state` = `"inactive"` and every identity field empty, rather than `404` - "no session yet" is itself a real, renderable state.
          */
         get: operations["getCurrentNightSession"];
         put?: never;
@@ -2049,11 +2051,17 @@ export interface paths {
         put?: never;
         /**
          * Dispatch a night-session lifecycle command (Track F seam F2, ADR-038)
-         * @description Behind `night:command`. The seven ADR-038 commands (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `request-final-show`, `fade-out-night`, `power-down-presentation`) plus `end-session`, a PROVISIONAL operator-recovery action not yet part of ADR-038's own closed vocabulary (owner decision pending). Answers `202`, never `200`: accepted and applied, or recognized as an idempotent duplicate — this layer holds no downstream confirmation loop.
+         * @description Behind `night:command`. The seven ADR-038 commands (`prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `request-final-show`, `fade-out-night`, `power-down-presentation`) plus `end-session`, a PROVISIONAL operator-recovery action not yet part of ADR-038's own closed vocabulary (owner decision pending). Answers `202`, never `200`: accepted and applied, or recognized as an idempotent duplicate - this layer holds no downstream confirmation loop.
          *
          *     `fade-out-night`, `power-down-presentation`, `request-final-show`, and `end-session` are exempt from the degraded-session gate and never refused for want of an audit write (ADR-024 decision 11): all four are direction-safe. The other four fail closed on an unwritable audit store (`503`, see below) and refuse while the session is degraded and non-terminal.
          *
          *     `idempotencyKey` (optional request body field) is honored only by `prepare-site`, the one command that creates something new; a repeat with the same key returns the original session. The other six commands are already idempotent by lifecycle state and ignore the field.
+         *
+         *     `interlockOverrides` (optional request body field, Track F seam F6) names configured "block" interlock rules to override for THIS command. `night:command` alone never authorizes an override: a rule is bypassed only when it declares `overridePolicy: authorized-operator` AND the caller separately holds `night:override` (RESTING-MODE.md §10.1; IDENTIFIER-REGISTER.md: starting a night must not, by itself, authorize bypassing a blocking interlock).
+         *
+         *     A "block" interlock declared for `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, or `power-down-presentation` can withhold that same command with a `409` (`night-not-ready`) naming the rule, unless a valid override is supplied. `prepare-site`, `run-readiness`, `fade-out-night`, and `power-down-presentation` dispatch that rule's own evidence LIVE, at the instant the command runs. `start-preshow` and `start-night` gate on the most recent readiness result instead, which is at most as fresh as the last `run-readiness` call; see RESTING-MODE.md §10.1 and this seam's own build report for why those are different freshness guarantees, and for why fade-out-night and power-down-presentation moved from a stored gate to a live one: a night runs for hours and run-readiness typically runs once, near the start, so a stored gate on either shutdown phase almost always found no trusted result at all by the time it mattered and silently made `onUnavailable: allow` the only condition it could ever report.
+         *
+         *     `fade-out-night` and `power-down-presentation` are also the two phases where PUT /config/night.session/{id} refuses a "block" rule that declares `overridePolicy: "none"` (`interlock-shutdown-phase-requires-override`): a guard on a phase that ends the night must always have a human exit, so every such rule is guaranteed an authorized-operator override path. `request-final-show` and `end-session` declare no interlock phase and consult no gate at all: `end-session` in particular is never withheld by any interlock, by construction, so it always reaches "stopped" even for a caller who cannot supply a valid override, though only `fade-out-night` and `power-down-presentation` themselves actually issue FPP's own stop. `projector-strike`, `enter-resting`, and `presentation-power-on` are validated and shown on readiness but have no command of their own to gate in this build.
          */
         post: operations["dispatchNightCommand"];
         delete?: never;
@@ -2225,15 +2233,15 @@ export interface paths {
         };
         /**
          * Enumerate asset metadata (Track E seam E3/E4, ADR-028)
-         * @description Metadata only — bytes never live in SQLite (ADR-028 decision 4). Optionally narrowed with `?show=`, `?sequence=`, and/or `?node=`. `?node=` returns node-TARGETED assets only, never show-wide ones — the manifest (a different, not-yet-built surface) is what answers "what should this node hold" by combining both; this is one question, never the other. Never gated by asset:write: reads stay open by default (ADR-024), matching every other Track E config kind's readAnyGuard(show:macro:run OR config:write) posture.
+         * @description Metadata only - bytes never live in SQLite (ADR-028 decision 4). Optionally narrowed with `?show=`, `?sequence=`, and/or `?node=`. `?node=` returns node-TARGETED assets only, never show-wide ones - the manifest (a different, not-yet-built surface) is what answers "what should this node hold" by combining both; this is one question, never the other. Never gated by asset:write: reads stay open by default (ADR-024), matching every other Track E config kind's readAnyGuard(show:macro:run OR config:write) posture.
          */
         get: operations["listAssets"];
         put?: never;
         /**
          * Upload one asset's bytes and register its metadata (Track E seam E3/E4, ADR-028)
-         * @description Requires `asset:write` (admin only). `multipart/form-data`: the `show`, `sequence`, `mediaType`, `targetKind`, and (for `targetKind: "node"`) `target` fields MUST arrive before the `file` part — a `file` part that arrives first is refused, naming that requirement, so every field is already known before this coordinator streams a single byte to its backend. The bytes are staged, hashed, and only THEN is the metadata row (plus its audit entry) written, in one transaction — an interrupted upload registers nothing (ADR-030).
+         * @description Requires `asset:write` (admin only). `multipart/form-data`: the `show`, `sequence`, `mediaType`, `targetKind`, and (for `targetKind: "node"`) `target` fields MUST arrive before the `file` part - a `file` part that arrives first is refused, naming that requirement, so every field is already known before this coordinator streams a single byte to its backend. The bytes are staged, hashed, and only THEN is the metadata row (plus its audit entry) written, in one transaction - an interrupted upload registers nothing (ADR-030).
          *     `targetKind` is required with no default; `targetKind: "node"` requires a non-empty `target` naming a DECLARED node (`400` `asset-target-required` when it is missing). `show` must name an existing `show` object; `sequence` uses the same slug rule every other Track E object id uses; `mediaType` is one of `fseq`, `audio`, `media`.
-         *     Re-uploading IDENTICAL bytes for an identity that is still CURRENT is idempotent: `200` with the existing asset, no new row, `rolledBack: false`. Re-uploading bytes matching a SUPERSEDED identity is a rollback (ADR-028 decision 10): that asset becomes current again, superseding whatever was current, in one transaction, and the response reports `rolledBack: true`. Uploading DIFFERENT bytes for the same (show, sequence, target) creates a new asset and marks the previous one superseded, in the same transaction — `rolledBack: false` — a filename is never part of this identity (ADR-028 decision 1): three different targets' artifacts for one xLights sequence may share one filename without colliding.
+         *     Re-uploading IDENTICAL bytes for an identity that is still CURRENT is idempotent: `200` with the existing asset, no new row, `rolledBack: false`. Re-uploading bytes matching a SUPERSEDED identity is a rollback (ADR-028 decision 10): that asset becomes current again, superseding whatever was current, in one transaction, and the response reports `rolledBack: true`. Uploading DIFFERENT bytes for the same (show, sequence, target) creates a new asset and marks the previous one superseded, in the same transaction - `rolledBack: false` - a filename is never part of this identity (ADR-028 decision 1): three different targets' artifacts for one xLights sequence may share one filename without colliding.
          */
         post: operations["uploadAsset"];
         delete?: never;
@@ -2268,7 +2276,7 @@ export interface paths {
         };
         /**
          * One asset's bytes (Track E seam E3/E4)
-         * @description Gated by `node:read`, not the show:macro:run/config:write posture every other Track E route on this surface uses — this is the route an AGENT authenticates against to fetch its own bytes, and node:read is what an agent credential already holds. Supports `Range` (via the standard HTTP mechanism), so an interrupted transfer can resume. `ETag` is the asset's own content hash, quoted. Before serving, this coordinator compares the stored blob's actual on-disk size against the asset's own recorded size: on a mismatch it fails with `500` naming the asset rather than serving a truncated or corrupted body.
+         * @description Gated by `node:read`, not the show:macro:run/config:write posture every other Track E route on this surface uses - this is the route an AGENT authenticates against to fetch its own bytes, and node:read is what an agent credential already holds. Supports `Range` (via the standard HTTP mechanism), so an interrupted transfer can resume. `ETag` is the asset's own content hash, quoted. Before serving, this coordinator compares the stored blob's actual on-disk size against the asset's own recorded size: on a mismatch it fails with `500` naming the asset rather than serving a truncated or corrupted body.
          */
         get: operations["getAssetContent"];
         put?: never;
@@ -2288,7 +2296,7 @@ export interface paths {
         };
         /**
          * Every declared node's asset readiness (Track E seam E5, ADR-028)
-         * @description "What should a node hold" (the active show's current assets) compared against "what does it actually hold" (its own inventory report), for every declared node, in declaration order. Computed identically to `GET /nodes/{nodeId}/assets`, one node at a time. Never gated by `asset:write`: reads stay open by default (ADR-024), matching every other Track E config-metadata read's `readAnyGuard(show:macro:run OR config:write)` posture. Absent evidence is stated, never omitted (ADR-020): no active show configured, a report that has never arrived, a report older than the staleness window, and a report that said it could not fully enumerate its own directory each render `state: "unknown"` with their own distinct `reason` — an `unknown` verdict never renders as `ready` or `not_ready`, and a stale report never renders as `not_ready` (a stale report is not evidence of absence).
+         * @description "What should a node hold" (the active show's current assets) compared against "what does it actually hold" (its own inventory report), for every declared node, in declaration order. Computed identically to `GET /nodes/{nodeId}/assets`, one node at a time. Never gated by `asset:write`: reads stay open by default (ADR-024), matching every other Track E config-metadata read's `readAnyGuard(show:macro:run OR config:write)` posture. Absent evidence is stated, never omitted (ADR-020): no active show configured, a report that has never arrived, a report older than the staleness window, and a report that said it could not fully enumerate its own directory each render `state: "unknown"` with their own distinct `reason` - an `unknown` verdict never renders as `ready` or `not_ready`, and a stale report never renders as `not_ready` (a stale report is not evidence of absence).
          */
         get: operations["getAssetManifest"];
         put?: never;
@@ -2308,7 +2316,7 @@ export interface paths {
         };
         /**
          * One node's asset readiness (Track E seam E5, ADR-028)
-         * @description The same verdict `GET /assets/manifest` renders for this node alone. `404` when `nodeId` does not name a declared node — matching `GET /nodes/{nodeId}`'s identical posture, never `state: "unknown"` for a node this coordinator has never heard of at all.
+         * @description The same verdict `GET /assets/manifest` renders for this node alone. `404` when `nodeId` does not name a declared node - matching `GET /nodes/{nodeId}`'s identical posture, never `state: "unknown"` for a node this coordinator has never heard of at all.
          */
         get: operations["getNodeAssetManifest"];
         put?: never;
@@ -2324,15 +2332,15 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description The evidence envelope every observation-bearing field on this API uses (contract section 6.3). `state` is one of the six values below; `value` is null only for the three genuine absence states — `not_collected`, `collection_failed`, `unsupported` — where nothing was ever obtained. It is non-null for `current`, `stale`, AND `unknown_age`: `unknown_age` means a value exists but the time it was observed does not, which is a distinct condition from having no value at all, and a client that treats `unknown_age` as absent is making exactly the reading error that state was invented to prevent (a retained MQTT delivery, most commonly — see below). `reason` is non-null whenever `state` is not `current`. `observedAt` is null whenever the observation time is unknown — most importantly for a retained MQTT delivery (`state: "unknown_age"`) — and MUST NEVER be treated as equivalent to "now".
+         * @description The evidence envelope every observation-bearing field on this API uses (contract section 6.3). `state` is one of the six values below; `value` is null only for the three genuine absence states - `not_collected`, `collection_failed`, `unsupported` - where nothing was ever obtained. It is non-null for `current`, `stale`, AND `unknown_age`: `unknown_age` means a value exists but the time it was observed does not, which is a distinct condition from having no value at all, and a client that treats `unknown_age` as absent is making exactly the reading error that state was invented to prevent (a retained MQTT delivery, most commonly - see below). `reason` is non-null whenever `state` is not `current`. `observedAt` is null whenever the observation time is unknown - most importantly for a retained MQTT delivery (`state: "unknown_age"`) - and MUST NEVER be treated as equivalent to "now".
          *
          *     **A signal can be reported by more than one collector source.** FPP's own REST API and its MQTT status topics both describe the same underlying facts (playback, controller/network health, pixel current), under identically-named `signal` values, distinguished only by `source` ("fpp-rest" vs "fpp-mqtt"). This API never renders more than one `Evidence` for the same signal on the same resource: when both sources have something to say, the coordinator resolves to a single value by a fixed precedence (a source with a known observation time beats one without, which beats an absence; a later observation time beats an earlier one; a tie prefers "fpp-rest" over "fpp-mqtt") before this envelope is ever built. A client reading this API never has to implement that resolution itself, and never sees two competing rows to reconcile.
          */
         Evidence: {
-            /** @description Namespaced, dot-separated signal identifier. Existing namespaces include "fpp.playlist.*"/"fpp.sequence.*"/ "fpp.position.*"/"fpp.song.*"/"fpp.scheduler.*" (playback state), "fpp.fppd.*"/"fpp.power.*"/"fpp.bridging"/ "fpp.channel_inputs.*"/"fpp.channel_outputs.*"/"fpp.mqtt.*"/ "fpp.warnings.*" (controller and network health), "fpp.os.*"/"fpp.platform"/"fpp.variant"/"fpp.kernel"/ "fpp.utilization.*"/"fpp.disk.*" (platform), "fpp.port.<key>.*" and "fpp.sensor.<key>.*" (per-port pixel current and per-sensor readings, `<key>` derived from that port's or sensor's own reported name — this set is dynamic and cannot be enumerated ahead of a real poll; an instance with nothing to report there simply has no such entries), "fpp.multisync.enabled", "node.heartbeat". A client MUST NOT assume this is a closed vocabulary: new signals and new namespaces are added additively, and an unrecognized one should render generically (e.g. under an "other" grouping) rather than being dropped. */
+            /** @description Namespaced, dot-separated signal identifier. Existing namespaces include "fpp.playlist.*"/"fpp.sequence.*"/ "fpp.position.*"/"fpp.song.*"/"fpp.scheduler.*" (playback state), "fpp.fppd.*"/"fpp.power.*"/"fpp.bridging"/ "fpp.channel_inputs.*"/"fpp.channel_outputs.*"/"fpp.mqtt.*"/ "fpp.warnings.*" (controller and network health), "fpp.os.*"/"fpp.platform"/"fpp.variant"/"fpp.kernel"/ "fpp.utilization.*"/"fpp.disk.*" (platform), "fpp.port.<key>.*" and "fpp.sensor.<key>.*" (per-port pixel current and per-sensor readings, `<key>` derived from that port's or sensor's own reported name - this set is dynamic and cannot be enumerated ahead of a real poll; an instance with nothing to report there simply has no such entries), "fpp.multisync.enabled", "node.heartbeat". A client MUST NOT assume this is a closed vocabulary: new signals and new namespaces are added additively, and an unrecognized one should render generically (e.g. under an "other" grouping) rather than being dropped. */
             signal: string;
             value: boolean | string | number | null;
-            /** @description Never a claimed unit this API cannot actually verify — for example, a "fpp.sensor.<key>.value" temperature reading's unit is always null (Celsius vs. Fahrenheit is not stated by the source and is not guessed); the reading's kind is instead carried on a separate "fpp.sensor.<key>.type" signal ("Temperature", "Voltage"). */
+            /** @description Never a claimed unit this API cannot actually verify - for example, a "fpp.sensor.<key>.value" temperature reading's unit is always null (Celsius vs. Fahrenheit is not stated by the source and is not guessed); the reading's kind is instead carried on a separate "fpp.sensor.<key>.type" signal ("Temperature", "Voltage"). */
             unit: string | null;
             /** @enum {string} */
             state: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
@@ -2341,10 +2349,10 @@ export interface components {
             observedAt: string | null;
             /**
              * Format: date-time
-             * @description Null only for state "not_collected" — no attempt was ever made, so there is no collection bookkeeping to report, not even a fallback timestamp. Non-null for every other state, including every absence state that DID involve an attempt ("collection_failed", "unsupported"). This is bookkeeping (when the coordinator recorded this evidence), never itself evidence of the subject's state — see observedAt above for that.
+             * @description Null only for state "not_collected" - no attempt was ever made, so there is no collection bookkeeping to report, not even a fallback timestamp. Non-null for every other state, including every absence state that DID involve an attempt ("collection_failed", "unsupported"). This is bookkeeping (when the coordinator recorded this evidence), never itself evidence of the subject's state - see observedAt above for that.
              */
             collectedAt: string | null;
-            /** @description Names the collector that produced this evidence, e.g. "fpp-rest" (FPP's REST API), "fpp-mqtt" (FPP's own MQTT status topics — a second, independent source for many of the same facts "fpp-rest" reports), "mqtt-inventory" (node advertisement/liveness). Not a closed enum: a client should not special-case specific source values beyond display purposes. */
+            /** @description Names the collector that produced this evidence, e.g. "fpp-rest" (FPP's REST API), "fpp-mqtt" (FPP's own MQTT status topics - a second, independent source for many of the same facts "fpp-rest" reports), "mqtt-inventory" (node advertisement/liveness). Not a closed enum: a client should not special-case specific source values beyond display purposes. */
             source: string;
             /** @enum {string} */
             quality: "direct" | "derived" | "inferred" | "operator";
@@ -2363,7 +2371,7 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** @description A node's control-plane liveness verdict. "offline" means the MQTT control-plane connection is gone, not that the node — or a show it may still be running — is dead (contract section 3.2). */
+        /** @description A node's control-plane liveness verdict. "offline" means the MQTT control-plane connection is gone, not that the node - or a show it may still be running - is dead (contract section 3.2). */
         ControlPlane: {
             /** @enum {string} */
             state: "online" | "offline" | "unknown";
@@ -2375,7 +2383,7 @@ export interface components {
             lastWill: components["schemas"]["Evidence"];
             heartbeat: components["schemas"]["Evidence"];
         };
-        /** @description One node's current representation: an element of GET /nodes, of the snapshot's nodes list, and the payload of a node.changed stream event — all three render identically. */
+        /** @description One node's current representation: an element of GET /nodes, of the snapshot's nodes list, and the payload of a node.changed stream event - all three render identically. */
         Node: {
             nodeId: string;
             label: string | null;
@@ -2392,16 +2400,16 @@ export interface components {
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
             declaration: components["schemas"]["NodeDeclaration"];
-            /** @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node — the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent. */
+            /** @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent. */
             render: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.audio.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published an audio discovery report. */
             audio: components["schemas"]["ObservationEntry"][];
         };
         /**
-         * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run — never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).
-         *     `discoveryState` is one of four values: `present` (the most recent discovery run was complete and saw this node), `not_seen` (the most recent discovery run was complete and did NOT see this node — `discoveryReason` states why and `notSeenAsOfRunId`/ `notSeenAsOfRunFinishedAt` name THAT run specifically), `unknown` (either the most recent run did not complete — an incomplete run is never evidence of absence, so this is never `not_seen` — or no discovery run history is available at all, which covers both "never run" and "history pruned" identically since this API cannot and must not guess which), or `not_applicable` (`declared` is false).
-         *     `lastDiscoveryRunId`/`lastDiscoveredAt` are this declaration's OWN last-seen-by-discovery bookkeeping (the run that most recently DID see it, and when — null if it has never once been seen). They are NEVER repurposed to carry any other run's identity, including the run that just failed to see it: a field literally named `lastDiscoveredAt` asserting a time seconds old for a node that has actually been dark for a week would be exactly backwards. `lastDiscoveryRunId` may name a run id that no longer resolves to any `DiscoveryRun` — `discovery_runs` is pruned by retention and a declaration's own last-seen pointer is not, so a dangling id is expected, not a bug, and it renders as `unknown` (or `not_seen`, if a newer complete run has since run and also missed it) with a reason, never as blank.
-         *     `notSeenAsOfRunId`/`notSeenAsOfRunFinishedAt` name the run that did NOT see this declared node — populated ONLY when `discoveryState` is `not_seen`, both null otherwise. Added additively: an existing client that has never heard of these two fields keeps working unchanged, reading `discoveryReason`'s prose and `lastDiscoveryRunId`/`lastDiscoveredAt`'s own (unaffected) bookkeeping exactly as before.
+         * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run - never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).
+         *     `discoveryState` is one of four values: `present` (the most recent discovery run was complete and saw this node), `not_seen` (the most recent discovery run was complete and did NOT see this node - `discoveryReason` states why and `notSeenAsOfRunId`/ `notSeenAsOfRunFinishedAt` name THAT run specifically), `unknown` (either the most recent run did not complete - an incomplete run is never evidence of absence, so this is never `not_seen` - or no discovery run history is available at all, which covers both "never run" and "history pruned" identically since this API cannot and must not guess which), or `not_applicable` (`declared` is false).
+         *     `lastDiscoveryRunId`/`lastDiscoveredAt` are this declaration's OWN last-seen-by-discovery bookkeeping (the run that most recently DID see it, and when - null if it has never once been seen). They are NEVER repurposed to carry any other run's identity, including the run that just failed to see it: a field literally named `lastDiscoveredAt` asserting a time seconds old for a node that has actually been dark for a week would be exactly backwards. `lastDiscoveryRunId` may name a run id that no longer resolves to any `DiscoveryRun` - `discovery_runs` is pruned by retention and a declaration's own last-seen pointer is not, so a dangling id is expected, not a bug, and it renders as `unknown` (or `not_seen`, if a newer complete run has since run and also missed it) with a reason, never as blank.
+         *     `notSeenAsOfRunId`/`notSeenAsOfRunFinishedAt` name the run that did NOT see this declared node - populated ONLY when `discoveryState` is `not_seen`, both null otherwise. Added additively: an existing client that has never heard of these two fields keeps working unchanged, reading `discoveryReason`'s prose and `lastDiscoveryRunId`/`lastDiscoveredAt`'s own (unaffected) bookkeeping exactly as before.
          */
         NodeDeclaration: {
             declared: boolean;
@@ -2421,7 +2429,7 @@ export interface components {
             /** Format: date-time */
             notSeenAsOfRunFinishedAt: string | null;
         };
-        /** @description One discovery run's wire representation (RES-008 D6, BUILD-PLAN Step 7 seam B). `finishedAt` and `reason` are null while a run is still in progress; `reason` is also null for a run that completed successfully (`complete: true`) — it is populated only when `complete` is false and the run has finished (failed partway), never a missing row and never a silent partial success. */
+        /** @description One discovery run's wire representation (RES-008 D6, BUILD-PLAN Step 7 seam B). `finishedAt` and `reason` are null while a run is still in progress; `reason` is also null for a run that completed successfully (`complete: true`) - it is populated only when `complete` is false and the run has finished (failed partway), never a missing row and never a silent partial success. */
         DiscoveryRun: {
             id: string;
             /** Format: date-time */
@@ -2434,7 +2442,7 @@ export interface components {
             initiatedByPrincipalId: string;
             initiatedByPrincipalName: string;
         };
-        /** @description One entity a discovery run observed that is not currently declared (computed at read time by diffing what is observed against what is declared — no proposals table exists). `source` is `node` (an agent hello already in inventory) or `fpp` (a configured FPP instance), the only two sources discovery reads: it performs no active probing of its own. A run never creates a declaration from a proposal by itself — POST /nodes/{nodeId}/declaration is the separate operator action that promotes one. */
+        /** @description One entity a discovery run observed that is not currently declared (computed at read time by diffing what is observed against what is declared - no proposals table exists). `source` is `node` (an agent hello already in inventory) or `fpp` (a configured FPP instance), the only two sources discovery reads: it performs no active probing of its own. A run never creates a declaration from a proposal by itself - POST /nodes/{nodeId}/declaration is the separate operator action that promotes one. */
         DiscoveryProposal: {
             nodeId: string;
             /** @enum {string} */
@@ -2446,7 +2454,7 @@ export interface components {
             run: components["schemas"]["DiscoveryRun"];
             proposals: components["schemas"]["DiscoveryProposal"][];
         };
-        /** @description Body of POST /nodes/{nodeId}/declaration. Both fields are optional AND nullable — a bare `{}` (or an absent/null field) promotes the named node to declared with no label or notes on a BRAND-NEW declaration, or leaves that field's currently declared value UNCHANGED on an already-declared node. Idempotent: re-declaring an already-declared node with neither field present never disturbs its existing label/notes, or who first declared it, or when. An explicit empty string (`""`) still clears a field; only an absent key or an explicit `null` means "leave unchanged" — the same absent-versus-empty distinction as a JSON `null` never being an absent key, applied in reverse: here, ABSENCE is what must be representable and honored, because a client that cannot omit a field cannot ask for "unchanged" at all. */
+        /** @description Body of POST /nodes/{nodeId}/declaration. Both fields are optional AND nullable - a bare `{}` (or an absent/null field) promotes the named node to declared with no label or notes on a BRAND-NEW declaration, or leaves that field's currently declared value UNCHANGED on an already-declared node. Idempotent: re-declaring an already-declared node with neither field present never disturbs its existing label/notes, or who first declared it, or when. An explicit empty string (`""`) still clears a field; only an absent key or an explicit `null` means "leave unchanged" - the same absent-versus-empty distinction as a JSON `null` never being an absent key, applied in reverse: here, ABSENCE is what must be representable and honored, because a client that cannot omit a field cannot ask for "unchanged" at all. */
         DeclareNodeRequest: {
             label?: string | null;
             notes?: string | null;
@@ -2456,7 +2464,7 @@ export interface components {
             serverTime: string;
             declaration: components["schemas"]["NodeDeclaration"];
         };
-        /** @description Required body of DELETE /nodes/{nodeId}/declaration. `confirm` must be `true`, so a mis-issued call cannot quietly remove inventory — in addition to, never instead of, any confirmation dialog a UI client shows. */
+        /** @description Required body of DELETE /nodes/{nodeId}/declaration. `confirm` must be `true`, so a mis-issued call cannot quietly remove inventory - in addition to, never instead of, any confirmation dialog a UI client shows. */
         DeleteNodeDeclarationRequest: {
             confirm: boolean;
         };
@@ -2533,10 +2541,10 @@ export interface components {
         NodesResponse: {
             /** Format: date-time */
             serverTime: string;
-            /** @description Ordered by nodeId, ascending, and this ordering is guaranteed — a client that renders or diffs this array positionally may rely on it. */
+            /** @description Ordered by nodeId, ascending, and this ordering is guaranteed - a client that renders or diffs this array positionally may rely on it. */
             nodes: components["schemas"]["Node"][];
         };
-        /** @description The body of GET /nodes/{nodeId}: a single node wrapped in serverTime exactly like the collection endpoint, never a bare Node object — every response on this API carries serverTime with no exception (section 6.2). */
+        /** @description The body of GET /nodes/{nodeId}: a single node wrapped in serverTime exactly like the collection endpoint, never a bare Node object - every response on this API carries serverTime with no exception (section 6.2). */
         NodeResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -2554,7 +2562,7 @@ export interface components {
             serverTime: string;
             instance: components["schemas"]["FPPInstance"];
         };
-        /** @description Which show is loaded, from the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. Name only — owner ruling, 2026-08-16: this is an open read with no credential by default, the same class as an FPP playlist name. Revision and activatedAt are administrative provenance and stay on the gated GET /config/resolume/composition. */
+        /** @description Which show is loaded, from the composition ShowMesh holds as configuration (ADR-032), never a live read of Arena. Name only - owner ruling, 2026-08-16: this is an open read with no credential by default, the same class as an FPP playlist name. Revision and activatedAt are administrative provenance and stay on the gated GET /config/resolume/composition. */
         ResolumeInstanceComposition: {
             name: string;
         };
@@ -2580,9 +2588,9 @@ export interface components {
             instance: components["schemas"]["ResolumeInstance"];
         };
         /**
-         * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) — a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies — the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape — required fields, enums, numeric bounds — as real JSON Schema, not as prose a generator cannot see.
-         *     `idempotencyKey` is required on every variant (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. Its scoping rule (replay vs. `409` conflict) is identical on every variant — see any one variant's own `idempotencyKey` description below; the text is not repeated here a ninth time.
-         *     `params` is REQUIRED whenever an action has at least one required parameter (`startPlaylist`, `setVolume`) and OPTIONAL otherwise. When optional, absent or `{}` means every parameter takes its documented default. An explicit `"params": null` is ALWAYS a `400`, for every action — every variant's own `params` schema is a plain JSON object type, never nullable, so a generated client cannot even construct this shape, and this coordinator's own handler rejects it explicitly rather than treating null as "omitted" (an explicit null is not the same as an omitted field). A required parameter absent, present as `null`, or (for a string) present as `""` are three DIFFERENT `400` responses, each naming exactly what is wrong. A key an action's own `params` schema does not declare is a `400` naming it (every variant's `params` sets `additionalProperties: false`) — deliberately stricter than this document's own "clients ignore unknown fields" rule, which governs a client reading RESPONSES, not a server accepting a WRITE: a typo'd parameter name must never silently fall back to that parameter's own default.
+         * @description The body of POST /fpp/{instanceId}/commands (Step 7 seam C, Step 8, ADR-001, ADR-003) - a discriminated union on `action`, one member per docs/bench/fpp-command-vocabulary.md section 4's eight primitives. This is a deliberate correction: earlier this schema declared `params` as a bare, propertyless `object`, which a strict-JSON-Schema code generator renders as a type NO non-empty object satisfies - the exact opposite of what most of these eight actions need, since three of them (`startPlaylist`, `stopPlaylistGracefully`, `setVolume`) take real parameters. Each variant below carries its own concrete `params` shape - required fields, enums, numeric bounds - as real JSON Schema, not as prose a generator cannot see.
+         *     `idempotencyKey` is required on every variant (ARCHITECTURE section 8.1): RES-015 section 7.3 established that FPP supplies nothing a coordinator-minted key could be derived from, so the caller (showmeshctl, the Operator UI) mints a fresh one per invocation. Its scoping rule (replay vs. `409` conflict) is identical on every variant - see any one variant's own `idempotencyKey` description below; the text is not repeated here a ninth time.
+         *     `params` is REQUIRED whenever an action has at least one required parameter (`startPlaylist`, `setVolume`) and OPTIONAL otherwise. When optional, absent or `{}` means every parameter takes its documented default. An explicit `"params": null` is ALWAYS a `400`, for every action - every variant's own `params` schema is a plain JSON object type, never nullable, so a generated client cannot even construct this shape, and this coordinator's own handler rejects it explicitly rather than treating null as "omitted" (an explicit null is not the same as an omitted field). A required parameter absent, present as `null`, or (for a string) present as `""` are three DIFFERENT `400` responses, each naming exactly what is wrong. A key an action's own `params` schema does not declare is a `400` naming it (every variant's `params` sets `additionalProperties: false`) - deliberately stricter than this document's own "clients ignore unknown fields" rule, which governs a client reading RESPONSES, not a server accepting a WRITE: a typo'd parameter name must never silently fall back to that parameter's own default.
          */
         FPPCommandRequest: components["schemas"]["StartPlaylistCommandRequest"] | components["schemas"]["StopPlaylistGracefullyCommandRequest"] | components["schemas"]["SetVolumeCommandRequest"] | components["schemas"]["NoParamsFPPCommandRequest"];
         /** @description `action: "startPlaylist"` (docs/bench/fpp-command-vocabulary.md sections 4/5): starts a playlist on the target FPP instance, or refuses per `ifBusy` below. */
@@ -2592,11 +2600,11 @@ export interface components {
              * @enum {string}
              */
             action: "startPlaylist";
-            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against - a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request - never reuse one across two different invocations "to be safe." */
             idempotencyKey: string;
-            /** @description `ifBusy: "refuse"` (the default) additionally produces a `409` BEFORE anything is dispatched to FPP when a DIFFERENT playlist is currently confirmed playing (`type` `fpp-start-playlist-busy`), or when the evidence needed to decide that is not current (`type` `fpp-start-playlist-evidence-not-current`) — see the `409` response on POST /fpp/{instanceId}/commands. */
+            /** @description `ifBusy: "refuse"` (the default) additionally produces a `409` BEFORE anything is dispatched to FPP when a DIFFERENT playlist is currently confirmed playing (`type` `fpp-start-playlist-busy`), or when the evidence needed to decide that is not current (`type` `fpp-start-playlist-evidence-not-current`) - see the `409` response on POST /fpp/{instanceId}/commands. */
             params: {
-                /** @description Must not contain `/`, `\`, or `..` (FPP resolves this to a path on its own filesystem; this coordinator rejects a traversal attempt before dispatch rather than passing one through), must not contain an ASCII control character, and must not have leading or trailing whitespace (rejected, never trimmed — the operator's value is not this coordinator's to edit). The `maxLength` above is 250 JSON Schema code points; the coordinator's own limit is 250 UTF-8 BYTES (see this property's own schema-level comment for why the two are not always the same number). 250 rather than 255 because FPP appends `.json` to this value to resolve a filename, so the string that must fit a POSIX `NAME_MAX` of 255 is this name plus five bytes. */
+                /** @description Must not contain `/`, `\`, or `..` (FPP resolves this to a path on its own filesystem; this coordinator rejects a traversal attempt before dispatch rather than passing one through), must not contain an ASCII control character, and must not have leading or trailing whitespace (rejected, never trimmed - the operator's value is not this coordinator's to edit). The `maxLength` above is 250 JSON Schema code points; the coordinator's own limit is 250 UTF-8 BYTES (see this property's own schema-level comment for why the two are not always the same number). 250 rather than 255 because FPP appends `.json` to this value to resolve a filename, so the string that must fit a POSIX `NAME_MAX` of 255 is this name plus five bytes. */
                 playlist: string & (unknown & unknown & unknown);
                 /** @default false */
                 repeat?: boolean;
@@ -2608,14 +2616,14 @@ export interface components {
                 ifBusy?: "refuse" | "replace";
             };
         };
-        /** @description `action: "stopPlaylistGracefully"` (docs/bench/fpp-command-vocabulary.md section 3.3/4): a graceful stop's terminal state is bounded by the currently playing item's own remaining runtime, not by any number this coordinator can choose — see FPPCommandResult.outcomeReason. */
+        /** @description `action: "stopPlaylistGracefully"` (docs/bench/fpp-command-vocabulary.md section 3.3/4): a graceful stop's terminal state is bounded by the currently playing item's own remaining runtime, not by any number this coordinator can choose - see FPPCommandResult.outcomeReason. */
         StopPlaylistGracefullyCommandRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             action: "stopPlaylistGracefully";
-            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against - a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request - never reuse one across two different invocations "to be safe." */
             idempotencyKey: string;
             /** @description Optional; absent or `{}` means `afterLoop` defaults to `false`. */
             params?: {
@@ -2630,28 +2638,28 @@ export interface components {
              * @enum {string}
              */
             action: "setVolume";
-            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against - a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request - never reuse one across two different invocations "to be safe." */
             idempotencyKey: string;
             params: {
                 /** @description A JSON number with a fractional part is a `400`, never truncated (capture section 1.5: FPP itself silently coerces and clamps a bad value; this coordinator does not repeat that for its own parameters). */
                 volume: number;
             };
         };
-        /** @description `action` one of `"stopPlaylist"`, `"pausePlaylist"`, `"resumePlaylist"`, `"nextPlaylistItem"`, `"prevPlaylistItem"` — docs/bench/fpp-command-vocabulary.md section 4's five zero-parameter primitives, which take no arguments and so share one shape. */
+        /** @description `action` one of `"stopPlaylist"`, `"pausePlaylist"`, `"resumePlaylist"`, `"nextPlaylistItem"`, `"prevPlaylistItem"` - docs/bench/fpp-command-vocabulary.md section 4's five zero-parameter primitives, which take no arguments and so share one shape. */
         NoParamsFPPCommandRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             action: "stopPlaylist" | "pausePlaylist" | "resumePlaylist" | "nextPlaylistItem" | "prevPlaylistItem";
-            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against — a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request — never reuse one across two different invocations "to be safe." */
+            /** @description Scoped to the exact (action, instanceId, normalized params) triple it is first used against - a database-level UNIQUE constraint on this value alone (schemaV6) cannot express that scope, so the server checks it explicitly: reusing a key against the SAME action, instanceId, AND normalized params is a replay (nothing is dispatched a second time, the original result is returned, flagged `replay: true`); reusing it against a DIFFERENT action, a DIFFERENT instanceId, or DIFFERENT params is a `409` conflict, refused outright, never answered as if it belonged to whichever command first claimed the key. Mint a fresh key per genuinely new request - never reuse one across two different invocations "to be safe." */
             idempotencyKey: string;
-            /** @description Optional; this action takes no parameters — a non-empty `params` object is a `400`. */
+            /** @description Optional; this action takes no parameters - a non-empty `params` object is a `400`. */
             params?: Record<string, never>;
         };
         /** @description The body of POST /nodes/{nodeId}/render/surfaces/{surfaceId}/apply. */
         RenderApplyRequest: {
-            /** @description Which of the show's sequences to resolve the surface's current FSEQ asset from — see this operation's own description for the identity rule (show + sequence + target + content hash). */
+            /** @description Which of the show's sequences to resolve the surface's current FSEQ asset from - see this operation's own description for the identity rule (show + sequence + target + content hash). */
             sequenceId: string;
             /** @description Optional; a fresh key is minted server-side when omitted. A replayed key dispatches nothing and returns the original command's own result, flagged `replay: true`. */
             idempotencyKey?: string;
@@ -2675,21 +2683,21 @@ export interface components {
             action: "render.surface.apply" | "render.surface.clear" | "render.pipeline.restart" | "render.transport.probe";
             nodeId: string;
             surfaceId: string;
-            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result. */
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request - it is the ORIGINAL command's already-recorded result. */
             replay: boolean;
             /**
-             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished — matching FPPCommandResult.outcome's identical accepted-empty case.
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished - matching FPPCommandResult.outcome's identical accepted-empty case.
              * @enum {string}
              */
             outcome: "confirmed" | "unconfirmed" | "";
             /**
-             * @description pkg/observation's six-value evidence-state vocabulary — the state of the evidence this outcome was actually decided from.
+             * @description pkg/observation's six-value evidence-state vocabulary - the state of the evidence this outcome was actually decided from.
              * @enum {string}
              */
             outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
             /** @description A short, human-readable explanation. Always non-empty. */
             outcomeReason: string;
-            /** @description True only when this command's outcome evidence is itself the pipeline's own reported "failed" state, distinct from absent, stale, or a merely-not-yet-reached state. outcomeState above only ever carries the six-value evidence-state vocabulary (never "failed") — a caller that wants to react to the pipeline specifically being down must use this field, never outcomeState or a parse of outcomeReason's free text. Always false for a confirmed outcome and for render.transport.probe. */
+            /** @description True only when this command's outcome evidence is itself the pipeline's own reported "failed" state, distinct from absent, stale, or a merely-not-yet-reached state. outcomeState above only ever carries the six-value evidence-state vocabulary (never "failed") - a caller that wants to react to the pipeline specifically being down must use this field, never outcomeState or a parse of outcomeReason's free text. Always false for a confirmed outcome and for render.transport.probe. */
             pipelineFailed: boolean;
             /** Format: date-time */
             dispatchedAt: string;
@@ -2705,9 +2713,9 @@ export interface components {
         AudioSessionCommandRequest: {
             /** Format: int64 */
             revision: number;
-            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` — see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
             idempotencyKey?: string;
-            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs/ mixPolicy, seek's positionMs. Opaque here by design — see this operation's own description for what it accepts. */
+            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs/ mixPolicy, seek's positionMs. Opaque here by design - see this operation's own description for what it accepts. */
             params?: Record<string, never>;
         };
         /** @description The body of a successful (200) response from any of the nine audio.session.* dispatch endpoints. */
@@ -2716,7 +2724,7 @@ export interface components {
             serverTime: string;
             command: components["schemas"]["AudioSessionCommandResult"];
         };
-        /** @description What happened to one dispatched (or replayed) audio.session.* command. outcome is never "successful" merely because the publish to the node succeeded (ADR-003): it is decided from the node's own evidence, collected after its own dispatch. A SUCCESSFUL HTTP 200 response commonly carries `outcome: "unconfirmable"` — this is a real, expected outcome while the node's session engine has no working pipeline backend wired in, never an error and never a transport failure. Reading only the HTTP status code is not enough to know whether the command worked; read `outcome`. */
+        /** @description What happened to one dispatched (or replayed) audio.session.* command. outcome is never "successful" merely because the publish to the node succeeded (ADR-003): it is decided from the node's own evidence, collected after its own dispatch. A SUCCESSFUL HTTP 200 response commonly carries `outcome: "unconfirmable"` - this is a real, expected outcome while the node's session engine has no working pipeline backend wired in, never an error and never a transport failure. Reading only the HTTP status code is not enough to know whether the command worked; read `outcome`. */
         AudioSessionCommandResult: {
             commandId: string;
             idempotencyKey: string;
@@ -2724,10 +2732,10 @@ export interface components {
             action: "audio.session.apply" | "audio.session.prepare" | "audio.session.start" | "audio.session.pause" | "audio.session.resume" | "audio.session.seek" | "audio.session.advance" | "audio.session.stop" | "audio.session.clear" | "audio.gain.set" | "audio.gain.fade" | "audio.output.mute" | "audio.output.unmute";
             nodeId: string;
             sessionId: string;
-            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result. */
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request - it is the ORIGINAL command's already-recorded result. */
             replay: boolean;
             /**
-             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching FPPCommandResult.outcome's identical accepted-empty case. "refused" and "failed" carry a non-empty reason and were never dispatched to the node as a real command attempt (a bad revision, an unknown session, invalid params). "unconfirmable" WAS dispatched but the node could not corroborate it with fresh evidence — including, today, every dispatch against the shipped agent, whose session engine has no working pipeline backend. gain/fade_complete never appear here: those belong to the separate audio.gain.* dispatch surface.
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching FPPCommandResult.outcome's identical accepted-empty case. "refused" and "failed" carry a non-empty reason and were never dispatched to the node as a real command attempt (a bad revision, an unknown session, invalid params). "unconfirmable" WAS dispatched but the node could not corroborate it with fresh evidence - including, today, every dispatch against the shipped agent, whose session engine has no working pipeline backend. gain/fade_complete never appear here: those belong to the separate audio.gain.* dispatch surface.
              * @enum {string}
              */
             outcome: "started" | "position" | "stopped" | "completed" | "refused" | "failed" | "unconfirmable" | "";
@@ -2746,29 +2754,29 @@ export interface components {
             serverTime: string;
             command: components["schemas"]["FPPCommandResult"];
         };
-        /** @description What happened to one dispatched (or replayed) command. outcome is never "successful" merely because FPP answered 200 (ADR-003): it is exactly "confirmed" or "unconfirmed" once resolved, decided by confirming observed state against the collector's own evidence, or empty in the one accepted race a replay response can observe (see outcome's own description). outcomeState carries pkg/observation's six-value evidence-state vocabulary, the state of the evidence the outcome was actually decided from — the same vocabulary AuditEntry.outcomeState already uses, not a second one invented for this endpoint. */
+        /** @description What happened to one dispatched (or replayed) command. outcome is never "successful" merely because FPP answered 200 (ADR-003): it is exactly "confirmed" or "unconfirmed" once resolved, decided by confirming observed state against the collector's own evidence, or empty in the one accepted race a replay response can observe (see outcome's own description). outcomeState carries pkg/observation's six-value evidence-state vocabulary, the state of the evidence the outcome was actually decided from - the same vocabulary AuditEntry.outcomeState already uses, not a second one invented for this endpoint. */
         FPPCommandResult: {
             id: string;
             idempotencyKey: string;
             action: string;
             instanceId: string;
-            /** @description This command's own normalized parameters (Step 8): defaults applied, present even for a zero-parameter action (as `{}`), never omitted or null — matching AuditEntry.params's identical convention (including `additionalProperties: true`: this is the RESPONSE echo of whichever action's own params this command actually carried, heterogeneous by construction, unlike FPPCommandRequest's own per-action `params`, which is a real, closed shape per variant). On a REPLAY response this is the ORIGINAL command's own params, so a replay always tells the caller what the original request's parameters actually were. */
+            /** @description This command's own normalized parameters (Step 8): defaults applied, present even for a zero-parameter action (as `{}`), never omitted or null - matching AuditEntry.params's identical convention (including `additionalProperties: true`: this is the RESPONSE echo of whichever action's own params this command actually carried, heterogeneous by construction, unlike FPPCommandRequest's own per-action `params`, which is a real, closed shape per variant). On a REPLAY response this is the ORIGINAL command's own params, so a replay always tells the caller what the original request's parameters actually were. */
             params: {
                 [key: string]: unknown;
             };
-            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request — it is the ORIGINAL command's already-recorded result, returned per ADR-024 decision 11 ("a replay is precisely the case an investigator wants to see, because it means the operator did not get their response"). */
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request - it is the ORIGINAL command's already-recorded result, returned per ADR-024 decision 11 ("a replay is precisely the case an investigator wants to see, because it means the operator did not get their response"). */
             replay: boolean;
             /**
-             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished — a real, honest value (ADR-020's absence-is-stated rule), not an omission.
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished - a real, honest value (ADR-020's absence-is-stated rule), not an omission.
              * @enum {string}
              */
             outcome: "confirmed" | "unconfirmed" | "";
             /**
-             * @description pkg/observation's six-value evidence-state vocabulary — the state of the evidence this outcome was actually decided from (or, for a command a coordinator restart left dispatched and never resolved, the state a startup reconciliation pass decided it from — see this document's own note on outcomeReason). NEVER blank for a resolved command: a bare, unconstrained string here is exactly what let a coordinator restart leave outcomeState/outcomeReason as permanent empty strings, indistinguishable from the one narrow, accepted race a REPLAY response's outcome (not outcomeState) may legitimately be empty for — see FPPCommandResult.outcome's own description.
+             * @description pkg/observation's six-value evidence-state vocabulary - the state of the evidence this outcome was actually decided from (or, for a command a coordinator restart left dispatched and never resolved, the state a startup reconciliation pass decided it from - see this document's own note on outcomeReason). NEVER blank for a resolved command: a bare, unconstrained string here is exactly what let a coordinator restart leave outcomeState/outcomeReason as permanent empty strings, indistinguishable from the one narrow, accepted race a REPLAY response's outcome (not outcomeState) may legitimately be empty for - see FPPCommandResult.outcome's own description.
              * @enum {string}
              */
             outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported";
-            /** @description A short, human-readable explanation. Non-empty whenever this response's own `command.outcome` is `"confirmed"` or `"unconfirmed"` (i.e. whenever this command has actually resolved) — verified true, as of Step 8 review finding 6, for every one of the eight primitives on both a confirmed and an unconfirmed outcome (internal/coordinator/api/fppcommand_evidence.go's resolveConfirmationEvidence and every predicate built on it always produces a reason; a confirmed result used to leave this blank, fixed by that same finding). Deliberately left `type: string` with no `minLength`, unlike `outcomeState`'s enum (this schema's own JSON Schema `if`/`then` could express "non-empty unless outcome is empty", but this document's own test suite overlays every schema declaring `properties` with `additionalProperties: false` — including inside an `if` branch — which either rejects the WHOLE object against a partial `if` subschema or silently defeats the conditional outright, a defect invisible to review and exactly the "a test that passes whether or not the bug is present" shape CLAUDE.md warns against; a schema constraint that risky is worse than none). This field's non-emptiness is verified at the handler level instead — the only value for which it may be empty is a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching `outcome`'s own narrow accepted-empty case exactly. A command a coordinator restart left stranded is resolved by a startup reconciliation pass before it can ever reach a client in that state — see outcomeState's own description — so that condition is never a second source of a blank reason. */
+            /** @description A short, human-readable explanation. Non-empty whenever this response's own `command.outcome` is `"confirmed"` or `"unconfirmed"` (i.e. whenever this command has actually resolved) - verified true, as of Step 8 review finding 6, for every one of the eight primitives on both a confirmed and an unconfirmed outcome (internal/coordinator/api/fppcommand_evidence.go's resolveConfirmationEvidence and every predicate built on it always produces a reason; a confirmed result used to leave this blank, fixed by that same finding). Deliberately left `type: string` with no `minLength`, unlike `outcomeState`'s enum (this schema's own JSON Schema `if`/`then` could express "non-empty unless outcome is empty", but this document's own test suite overlays every schema declaring `properties` with `additionalProperties: false` - including inside an `if` branch - which either rejects the WHOLE object against a partial `if` subschema or silently defeats the conditional outright, a defect invisible to review and exactly the "a test that passes whether or not the bug is present" shape CLAUDE.md warns against; a schema constraint that risky is worse than none). This field's non-emptiness is verified at the handler level instead - the only value for which it may be empty is a REPLAY response returned before the original request's own dispatch/confirmation has finished, matching `outcome`'s own narrow accepted-empty case exactly. A command a coordinator restart left stranded is resolved by a startup reconciliation pass before it can ever reach a client in that state - see outcomeState's own description - so that condition is never a second source of a blank reason. */
             outcomeReason: string;
             /** @description True when this command's dispatch or outcome audit entry could not be written. Stop Playlist is a member of ADR-024 decision 11's blackout/stop/power-off safety class, so the command proceeds regardless, with a degraded attribution record written to the coordinator's stderr instead of the audit log. */
             attributionDegraded: boolean;
@@ -2818,7 +2826,7 @@ export interface components {
             /** @enum {string} */
             role: "viewer" | "operator" | "admin" | "scheduler";
         };
-        /** @description The session that authenticated this request, present only when that credential was the session cookie. id is the session's non-secret row identifier — never the cookie value. */
+        /** @description The session that authenticated this request, present only when that credential was the session cookie. id is the session's non-secret row identifier - never the cookie value. */
         SessionInfo: {
             id: string;
             deviceLabel: string;
@@ -2842,7 +2850,7 @@ export interface components {
             password: string;
             deviceLabel: string;
         };
-        /** @description The body of GET and POST /session, and of POST /bootstrap on success (ADR-024 decisions 5, 9, and 12). authenticated is false whenever no valid credential authenticated this request — a new device, cleared cookies, a revoked or idle-expired session, a bad or absent bearer token — which is deliberately NOT a 401: "being signed out" is a persistent, readable state, not an error a caller must catch to learn. When authenticated is false, principal, session, and credentialForm are all null, scopes is an empty array, and scopesState is "not_applicable". scopesState is "current" when scopes was computed from a fresh read of this principal's role in this same request (the only case this coordinator currently produces) and "unknown" on an internal error computing them — a client MUST treat "unknown" exactly like an empty scope list (ADR-024 decision 12: "a stale or unavailable [scope list] renders as unknown, never as permissive"). bootstrapRequired is true whenever this coordinator currently holds zero principals (ADR-024 decision 9's "loud and persistent" unclaimed-bootstrap signal) — computed and returned regardless of whether this particular request authenticated, so a client can render the banner from GET /session on load with no credential at all. */
+        /** @description The body of GET and POST /session, and of POST /bootstrap on success (ADR-024 decisions 5, 9, and 12). authenticated is false whenever no valid credential authenticated this request - a new device, cleared cookies, a revoked or idle-expired session, a bad or absent bearer token - which is deliberately NOT a 401: "being signed out" is a persistent, readable state, not an error a caller must catch to learn. When authenticated is false, principal, session, and credentialForm are all null, scopes is an empty array, and scopesState is "not_applicable". scopesState is "current" when scopes was computed from a fresh read of this principal's role in this same request (the only case this coordinator currently produces) and "unknown" on an internal error computing them - a client MUST treat "unknown" exactly like an empty scope list (ADR-024 decision 12: "a stale or unavailable [scope list] renders as unknown, never as permissive"). bootstrapRequired is true whenever this coordinator currently holds zero principals (ADR-024 decision 9's "loud and persistent" unclaimed-bootstrap signal) - computed and returned regardless of whether this particular request authenticated, so a client can render the banner from GET /session on load with no credential at all. */
         SessionResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -2874,10 +2882,10 @@ export interface components {
             /** @enum {string} */
             kind: "dispatch" | "outcome" | "replay" | "auth_failure" | "admin";
             commandId: string;
-            /** @description The command family's own outcome word — FPP's "confirmed"/ "unconfirmed", or Resolume's five-word vocabulary (ResolumeActionResult.outcome's own enum) — deliberately left unconstrained here because this ONE field is shared across every command family this coordinator has or will ever audit, unlike outcomeState below. Empty except on an `outcome`-kind entry (see this schema's own `kind` enum). */
+            /** @description The command family's own outcome word - FPP's "confirmed"/ "unconfirmed", or Resolume's five-word vocabulary (ResolumeActionResult.outcome's own enum) - deliberately left unconstrained here because this ONE field is shared across every command family this coordinator has or will ever audit, unlike outcomeState below. Empty except on an `outcome`-kind entry (see this schema's own `kind` enum). */
             outcome: string;
             /**
-             * @description pkg/observation's six-value evidence-state vocabulary — never a command family's own outcome word (Review fix 3, 2026-08-15: before this, a Resolume outcome-kind entry carried its own five-word outcome here instead, so an audit reader filtering on evidence states would silently drop or misread every Resolume entry). Empty on every entry that is not an `outcome`-kind entry (identity.AuditEntry's own doc comment: "populated only on an AuditOutcome entry"), and ALSO empty for an outcome-kind entry whose command family has no per-observation evidence-state signal to honestly report for that particular outcome — see ResolumeActionResult's own outcome enum for which of ITS five values do (only "confirmed" does today).
+             * @description pkg/observation's six-value evidence-state vocabulary - never a command family's own outcome word (Review fix 3, 2026-08-15: before this, a Resolume outcome-kind entry carried its own five-word outcome here instead, so an audit reader filtering on evidence states would silently drop or misread every Resolume entry). Empty on every entry that is not an `outcome`-kind entry (identity.AuditEntry's own doc comment: "populated only on an AuditOutcome entry"), and ALSO empty for an outcome-kind entry whose command family has no per-observation evidence-state signal to honestly report for that particular outcome - see ResolumeActionResult's own outcome enum for which of ITS five values do (only "confirmed" does today).
              * @enum {string}
              */
             outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported" | "";
@@ -2889,7 +2897,7 @@ export interface components {
             serverTime: string;
             entries: components["schemas"]["AuditEntry"][];
         };
-        /** @description One principal as Track G seam G-5's admin surface renders it. Distinct from PrincipalSummary (SessionResponse's own narrower "who am I" shape): this is the full object GET/POST /principals and its sub-resources return. hasPassword and reserved are booleans, never a password hash or any other secret — reserved is true only for the built-in Resolume recovery principal, which is visible wherever principals are listed but cannot be created, disabled, renamed, re-roled, or re-credentialed through this surface. */
+        /** @description One principal as Track G seam G-5's admin surface renders it. Distinct from PrincipalSummary (SessionResponse's own narrower "who am I" shape): this is the full object GET/POST /principals and its sub-resources return. hasPassword and reserved are booleans, never a password hash or any other secret - reserved is true only for the built-in Resolume recovery principal, which is visible wherever principals are listed but cannot be created, disabled, renamed, re-roled, or re-credentialed through this surface. */
         PrincipalObject: {
             id: string;
             name: string;
@@ -2915,7 +2923,7 @@ export interface components {
             serverTime: string;
             principal: components["schemas"]["PrincipalObject"];
         };
-        /** @description The body of POST /principals. password may be absent, null, or an empty string — all three mean "no password, token-only" (a machine principal that will only ever use an issued token), matching this coordinator's own create-principal subcommand. */
+        /** @description The body of POST /principals. password may be absent, null, or an empty string - all three mean "no password, token-only" (a machine principal that will only ever use an issued token), matching this coordinator's own create-principal subcommand. */
         CreatePrincipalRequest: {
             name: string;
             /** @enum {string} */
@@ -2929,11 +2937,11 @@ export interface components {
             /** @enum {string} */
             role: "viewer" | "operator" | "admin" | "scheduler" | "recovery";
         };
-        /** @description The body of POST /principals/{id}/password. Unlike CreatePrincipalRequest.password, this one is required and must be non-empty — a reset that silently clears a password would leave a human principal with no way to sign in at all. */
+        /** @description The body of POST /principals/{id}/password. Unlike CreatePrincipalRequest.password, this one is required and must be non-empty - a reset that silently clears a password would leave a human principal with no way to sign in at all. */
         SetPrincipalPasswordRequest: {
             password: string;
         };
-        /** @description One API token's non-secret metadata — never a digest or the raw token value, which is rendered exactly once, by IssueTokenResponse.value, and never again by this or any other schema (ADR-024 decision 1). */
+        /** @description One API token's non-secret metadata - never a digest or the raw token value, which is rendered exactly once, by IssueTokenResponse.value, and never again by this or any other schema (ADR-024 decision 1). */
         TokenObject: {
             id: string;
             principalId: string;
@@ -2952,26 +2960,26 @@ export interface components {
             serverTime: string;
             tokens: components["schemas"]["TokenObject"][];
         };
-        /** @description The body of POST /principals/{id}/tokens. expiresAt absent or null both mean "never expires" (ADR-024 decision 1's default) — the same meaning either way, so there is no absent-vs-null ambiguity for this field to resolve, unlike ConfigFPPEndpointsPayload.endpoints. */
+        /** @description The body of POST /principals/{id}/tokens. expiresAt absent or null both mean "never expires" (ADR-024 decision 1's default) - the same meaning either way, so there is no absent-vs-null ambiguity for this field to resolve, unlike ConfigFPPEndpointsPayload.endpoints. */
         IssueTokenRequest: {
             label?: string;
             /** Format: date-time */
             expiresAt?: string | null;
         };
-        /** @description The body of POST /principals/{id}/tokens. value carries the token's plaintext exactly once (ADR-024 decision 1) — no other response in this contract ever renders it again, including a later GET /principals/{id}/tokens. */
+        /** @description The body of POST /principals/{id}/tokens. value carries the token's plaintext exactly once (ADR-024 decision 1) - no other response in this contract ever renders it again, including a later GET /principals/{id}/tokens. */
         IssueTokenResponse: {
             /** Format: date-time */
             serverTime: string;
             token: components["schemas"]["TokenObject"];
             value: string;
         };
-        /** @description One FPP instance's (id, url) pair (RES-008 D1) — the same shape `SHOWMESH_FPP_ENDPOINTS` carries. */
+        /** @description One FPP instance's (id, url) pair (RES-008 D1) - the same shape `SHOWMESH_FPP_ENDPOINTS` carries. */
         ConfigFPPEndpoint: {
             id: string;
             url: string;
         };
         /**
-         * @description The "fpp.endpoints" configuration kind's payload: the body PUT /config/fpp.endpoints accepts, and the "payload" member of GET /config/fpp.endpoints' response. endpoints is never null — an empty configured-endpoints list is a real, valid state, and it is the only way to deliberately configure zero endpoints; an absent or null "endpoints" key on a PUT is a `400`, never a silent wipe.
+         * @description The "fpp.endpoints" configuration kind's payload: the body PUT /config/fpp.endpoints accepts, and the "payload" member of GET /config/fpp.endpoints' response. endpoints is never null - an empty configured-endpoints list is a real, valid state, and it is the only way to deliberately configure zero endpoints; an absent or null "endpoints" key on a PUT is a `400`, never a silent wipe.
          *     This schema is deliberately NOT closed (no `additionalProperties: false`) even though the PUT handler itself rejects an unrecognized top-level field: ADR-020 requires this published document stay additive-only-compatible for a client reading a RESPONSE (this schema also describes GET's "payload" member), and a closed schema here would apply to both directions at once. The request-side strictness is enforced by the coordinator's own handler, not by this schema.
          */
         ConfigFPPEndpointsPayload: {
@@ -2995,13 +3003,13 @@ export interface components {
             restartRequired: false;
             restartRequiredReason: string;
         };
-        /** @description One Resolume Arena instance's (id, url) pair (Track G seam G-2, ADR-039) — the same shape `SHOWMESH_RESOLUME_URL`/ `SHOWMESH_RESOLUME_ID` carried. */
+        /** @description One Resolume Arena instance's (id, url) pair (Track G seam G-2, ADR-039) - the same shape `SHOWMESH_RESOLUME_URL`/ `SHOWMESH_RESOLUME_ID` carried. */
         ConfigResolumeInstance: {
             id: string;
             url: string;
         };
         /**
-         * @description The "resolume.instances" configuration kind's payload: the body PUT /config/resolume.instances accepts, and the "payload" member of GET /config/resolume.instances' response. instances is never null — an empty configured-instances list is a real, valid state, and it is the only way to deliberately configure zero instances; an absent or null "instances" key on a PUT is a `400`, never a silent wipe. At most one instance is accepted today (enforced by validation, not by this schema — see `PUT /config/resolume.instances`'s own description).
+         * @description The "resolume.instances" configuration kind's payload: the body PUT /config/resolume.instances accepts, and the "payload" member of GET /config/resolume.instances' response. instances is never null - an empty configured-instances list is a real, valid state, and it is the only way to deliberately configure zero instances; an absent or null "instances" key on a PUT is a `400`, never a silent wipe. At most one instance is accepted today (enforced by validation, not by this schema - see `PUT /config/resolume.instances`'s own description).
          *     This schema is deliberately NOT closed (no `additionalProperties: false`), mirroring `ConfigFPPEndpointsPayload`'s identical reasoning: ADR-020 requires this published document stay additive-only-compatible for a client reading a RESPONSE, and the request-side strictness (rejecting an unrecognized top-level field) is enforced by the coordinator's own handler, not by this schema.
          */
         ConfigResolumeInstancesPayload: {
@@ -3025,7 +3033,7 @@ export interface components {
             restartRequired: false;
             restartRequiredReason: string;
         };
-        /** @description The "fpp.mqtt" configuration kind's payload (Track G seam G-3, ADR-039), as it appears in the "payload" member of GET and PUT /config/fpp.mqtt's response. passwordSet reports presence only — the broker password itself never appears on this or any other wire type (ADR-039 decision 7). hosts is never null. */
+        /** @description The "fpp.mqtt" configuration kind's payload (Track G seam G-3, ADR-039), as it appears in the "payload" member of GET and PUT /config/fpp.mqtt's response. passwordSet reports presence only - the broker password itself never appears on this or any other wire type (ADR-039 decision 7). hosts is never null. */
         ConfigFPPMQTTPayload: {
             brokerURL: string;
             username: string;
@@ -3035,7 +3043,7 @@ export interface components {
             };
             passwordSet: boolean;
         };
-        /** @description The request body of PUT /config/fpp.mqtt (Track G seam G-3, ADR-039). Unlike every other configuration kind's PUT request in this document, EVERY field here is independently optional: a key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5), which is what makes the credential rule (decision 7) usable at all — GET never returns the password, so a PUT that required every field present would erase a credential the operator never saw. See `PUT /config/fpp.mqtt`'s own description for the per-field null/empty handling this schema alone does not express (a null brokerURL/username/topicPrefix or a null hosts is rejected by the handler; a null or empty password explicitly clears it). */
+        /** @description The request body of PUT /config/fpp.mqtt (Track G seam G-3, ADR-039). Unlike every other configuration kind's PUT request in this document, EVERY field here is independently optional: a key absent from the request body leaves that field's currently stored value unchanged (ADR-039 decision 5), which is what makes the credential rule (decision 7) usable at all - GET never returns the password, so a PUT that required every field present would erase a credential the operator never saw. See `PUT /config/fpp.mqtt`'s own description for the per-field null/empty handling this schema alone does not express (a null brokerURL/username/topicPrefix or a null hosts is rejected by the handler; a null or empty password explicitly clears it). */
         ConfigFPPMQTTPutRequest: {
             brokerURL?: string;
             username?: string;
@@ -3063,7 +3071,7 @@ export interface components {
             restartRequired: false;
             restartRequiredReason: string;
         };
-        /** @description The "assets.settings" configuration kind's payload (Track G seam G-4, ADR-039) as it appears in a RESPONSE: the "payload" member of GET/PUT /config/assets.settings, with all four fields always present. syncIntervalSeconds/inventoryIntervalSeconds are seconds, matching this contract's existing "...Seconds" convention — NUMBER, not integer, matching ResolumeRecoveryResponse.settleDelaySeconds' identical choice one seam over: an integer-second encoding silently truncates a legitimate sub-second interval to zero. SHOWMESH_ASSET_DIR has no field here — it stays environment-only (ADR-039 decision 2). */
+        /** @description The "assets.settings" configuration kind's payload (Track G seam G-4, ADR-039) as it appears in a RESPONSE: the "payload" member of GET/PUT /config/assets.settings, with all four fields always present. syncIntervalSeconds/inventoryIntervalSeconds are seconds, matching this contract's existing "...Seconds" convention - NUMBER, not integer, matching ResolumeRecoveryResponse.settleDelaySeconds' identical choice one seam over: an integer-second encoding silently truncates a legitimate sub-second interval to zero. SHOWMESH_ASSET_DIR has no field here - it stays environment-only (ADR-039 decision 2). */
         ConfigAssetsSettingsPayload: {
             /** @description Empty is a real, deliberate state: the asset sync service does not run, and nothing ever reaches a node over the network. */
             contentBaseUrl: string;
@@ -3074,7 +3082,7 @@ export interface components {
             /** @description Always positive. */
             inventoryIntervalSeconds: number;
         };
-        /** @description The body PUT /config/assets.settings accepts. Unlike ConfigAssetsSettingsPayload (a response, where every field is always present), every field here is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or default) value alone (ADR-039 decision 5). A field that IS present must not be JSON `null` — refused with 400 naming the field. This schema is deliberately NOT closed (no additionalProperties: false), matching every other PUT payload schema in this contract: the coordinator's own handler enforces top-level-field strictness on the request, not this published schema (see ConfigResolumeInstancesPayload's identical reasoning). */
+        /** @description The body PUT /config/assets.settings accepts. Unlike ConfigAssetsSettingsPayload (a response, where every field is always present), every field here is INDEPENDENTLY OPTIONAL: an absent field leaves the currently stored (or default) value alone (ADR-039 decision 5). A field that IS present must not be JSON `null` - refused with 400 naming the field. This schema is deliberately NOT closed (no additionalProperties: false), matching every other PUT payload schema in this contract: the coordinator's own handler enforces top-level-field strictness on the request, not this published schema (see ConfigResolumeInstancesPayload's identical reasoning). */
         ConfigAssetsSettingsPutPayload: {
             contentBaseUrl?: string;
             maxUploadBytes?: number;
@@ -3111,7 +3119,7 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, and GET /config/audio.node/{id}/revisions, newest first — one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, and Track H seam H1 two more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, and GET /config/audio.node/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, and Track H seam H1 two more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -3127,12 +3135,12 @@ export interface components {
             micro: number;
             revision: number;
         };
-        /** @description A composition's output size in pixels, from the composition file — not available anywhere over Resolume's own REST API. */
+        /** @description A composition's output size in pixels, from the composition file - not available anywhere over Resolume's own REST API. */
         ResolumeCompositionCanvas: {
             width: number;
             height: number;
         };
-        /** @description One deck, as it appears both in ResolumeCompositionSummary.decks and in ResolumeCompositionResponse's own top-level "decks" — the same shape in both places, since a deck's summary is its complete representation. name/nameGenerated are ADR-037 decision 4: name is the deck's own authored name when non-empty, otherwise a generated "Deck <n>" from its 1-based position among this response's own deck list, and nameGenerated says which. */
+        /** @description One deck, as it appears both in ResolumeCompositionSummary.decks and in ResolumeCompositionResponse's own top-level "decks" - the same shape in both places, since a deck's summary is its complete representation. name/nameGenerated are ADR-037 decision 4: name is the deck's own authored name when non-empty, otherwise a generated "Deck <n>" from its 1-based position among this response's own deck list, and nameGenerated says which. */
         ResolumeCompositionDeckSummary: {
             id: string;
             name: string;
@@ -3140,7 +3148,7 @@ export interface components {
             closed: boolean;
             clipCount: number;
         };
-        /** @description What the coordinator parsed from an uploaded composition file, in terms an operator recognizes — never a bare success flag (ADR-032 decisions 7 and 8). Shared verbatim between POST /config/resolume/composition's own response and the "composition" member of GET /config/resolume/composition. */
+        /** @description What the coordinator parsed from an uploaded composition file, in terms an operator recognizes - never a bare success flag (ADR-032 decisions 7 and 8). Shared verbatim between POST /config/resolume/composition's own response and the "composition" member of GET /config/resolume/composition. */
         ResolumeCompositionSummary: {
             name: string;
             sourceFilename: string;
@@ -3169,7 +3177,7 @@ export interface components {
             id: string;
             index: number;
         };
-        /** @description One element of ResolumeCompositionResponse.layers, deck-independent (ADR-032 decision 6 — only a clip's resolution depends on its deck being selected). layerGroupIndex is absent from the wire entirely, never sent as null, when the composition has no layer groups at all. When present, it is the layer's own layerGroup value taken as-is from the uploaded composition file — NOT validated to be within [0, layerGroups.length). A client that wants an actual layerGroups element must bounds-check this value itself before indexing with it. name is never blank (ADR-037 decisions 4 and 7): it is the operator's own value from the composition file when one exists, or a generated positional label ("Layer <n>") when it does not, and nameGenerated says which — a blank cell is never sent in its place. */
+        /** @description One element of ResolumeCompositionResponse.layers, deck-independent (ADR-032 decision 6 - only a clip's resolution depends on its deck being selected). layerGroupIndex is absent from the wire entirely, never sent as null, when the composition has no layer groups at all. When present, it is the layer's own layerGroup value taken as-is from the uploaded composition file - NOT validated to be within [0, layerGroups.length). A client that wants an actual layerGroups element must bounds-check this value itself before indexing with it. name is never blank (ADR-037 decisions 4 and 7): it is the operator's own value from the composition file when one exists, or a generated positional label ("Layer <n>") when it does not, and nameGenerated says which - a blank cell is never sent in its place. */
         ResolumeCompositionLayer: {
             id: string;
             index: number;
@@ -3177,7 +3185,7 @@ export interface components {
             name: string;
             nameGenerated: boolean;
         };
-        /** @description One column position within one deck. name/nameGenerated are ADR-037 decision 4: columns never carry an authored name at all (the .avc format gives them none), so nameGenerated is always true and name is always the generated "Column <n>" form from index — carried anyway so every kind's response shares the identical (name, nameGenerated) shape. */
+        /** @description One column position within one deck. name/nameGenerated are ADR-037 decision 4: columns never carry an authored name at all (the .avc format gives them none), so nameGenerated is always true and name is always the generated "Column <n>" form from index - carried anyway so every kind's response shares the identical (name, nameGenerated) shape. */
         ResolumeCompositionColumn: {
             id: string;
             deckId: string;
@@ -3185,7 +3193,7 @@ export interface components {
             name: string;
             nameGenerated: boolean;
         };
-        /** @description One clip in the stored id map. Every element of "clips" carries deckId: a Resolume clip id resolves over Resolume's own API only while its own deck is selected (ADR-032 decision 6), so a clip reference without its deck cannot tell a stale id from an unselected deck. Elements of "persistentClips" carry no deckId at all (absent from the wire, never sent as an empty string) — they live outside any deck and resolve regardless of selection. transportTypeIndex is a raw index with no label to resolve it against — absent when the clip carries no TransportType param, and never translated to a name. name/nameGenerated are ADR-037 decision 4: name is the clip's own authored name when non-empty, otherwise a generated form — "Clip L<layerIndex+1>C<columnIndex+1>" for a deck clip, "Persistent clip <n>" (1-based position among "persistentClips") for a persistent one. ambiguous (amendment, 2026-08-16) is true when this clip's own (deck-or-persistent, layer, label) triple is shared by another clip in this composition, meaning no reference — including one naming this clip's own layer — can ever resolve it; the remedy is renaming one of the colliding clips in Resolume and re-uploading. */
+        /** @description One clip in the stored id map. Every element of "clips" carries deckId: a Resolume clip id resolves over Resolume's own API only while its own deck is selected (ADR-032 decision 6), so a clip reference without its deck cannot tell a stale id from an unselected deck. Elements of "persistentClips" carry no deckId at all (absent from the wire, never sent as an empty string) - they live outside any deck and resolve regardless of selection. transportTypeIndex is a raw index with no label to resolve it against - absent when the clip carries no TransportType param, and never translated to a name. name/nameGenerated are ADR-037 decision 4: name is the clip's own authored name when non-empty, otherwise a generated form - "Clip L<layerIndex+1>C<columnIndex+1>" for a deck clip, "Persistent clip <n>" (1-based position among "persistentClips") for a persistent one. ambiguous (amendment, 2026-08-16) is true when this clip's own (deck-or-persistent, layer, label) triple is shared by another clip in this composition, meaning no reference - including one naming this clip's own layer - can ever resolve it; the remedy is renaming one of the colliding clips in Resolume and re-uploading. */
         ResolumeCompositionClip: {
             id: string;
             deckId?: string;
@@ -3214,14 +3222,14 @@ export interface components {
             clips: components["schemas"]["ResolumeCompositionClip"][];
             persistentClips: components["schemas"]["ResolumeCompositionClip"][];
         };
-        /** @description One named parameter one Resolume action's "params" object accepts. ADR-037 gave this vocabulary its first optional parameters (launchClip's "layer" and "persistent", and its conditionally required "deck") — required: false means the parameter may be absent, never that an absent value is silently defaulted; there is still no `default` member here the way FPPCommandRequest's variant schemas have for some of their own parameters, because what an absence means is a resolution rule the caller applies, not a decode-time default. */
+        /** @description One named parameter one Resolume action's "params" object accepts. ADR-037 gave this vocabulary its first optional parameters (launchClip's "layer" and "persistent", and its conditionally required "deck") - required: false means the parameter may be absent, never that an absent value is silently defaulted; there is still no `default` member here the way FPPCommandRequest's variant schemas have for some of their own parameters, because what an absence means is a resolution rule the caller applies, not a decode-time default. */
         ResolumeActionParam: {
             name: string;
             /** @enum {string} */
             kind: "string" | "bool" | "number";
             required: boolean;
         };
-        /** @description One entry of the fixed seven-action vocabulary GET /resolume/actions returns. auditExempt mirrors ADR-024 decision 11's safety class: true only for `blackout` and `clearLayer`. coordinatorRequired is `true` for every entry today — the Resolume adapter is coordinator- hosted and Resolume holds no local fallback — carried on the wire so a macro author never has to know that out of band. */
+        /** @description One entry of the fixed seven-action vocabulary GET /resolume/actions returns. auditExempt mirrors ADR-024 decision 11's safety class: true only for `blackout` and `clearLayer`. coordinatorRequired is `true` for every entry today - the Resolume adapter is coordinator- hosted and Resolume holds no local fallback - carried on the wire so a macro author never has to know that out of band. */
         ResolumeAction: {
             /** @enum {string} */
             name: "launchClip" | "clearLayer" | "blackout" | "launchColumn" | "selectDeck" | "setLayerBypass" | "setLayerMaster";
@@ -3235,9 +3243,9 @@ export interface components {
             serverTime: string;
             actions: components["schemas"]["ResolumeAction"][];
         };
-        /** @description The body of POST /resolume/actions — a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against — reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. ADR-037: every reference below is a NAME, resolved against the stored composition — a raw Resolume object id is never accepted anywhere in this union, and a request that still sends one is refused as an unrecognized parameter. */
+        /** @description The body of POST /resolume/actions - a discriminated union on `action`, matching FPPCommandRequest's own shape (Step 7/8) for the identical reason: a bare, propertyless `params` object would let a generated client build a request this coordinator always rejects. Every variant's `idempotencyKey` is required (ARCHITECTURE section 8.1) and scoped to the exact (action, normalized params) pair it is first used against - reusing it against the SAME action and the SAME normalized params is a replay; reusing it against a DIFFERENT action or DIFFERENT params is a `409` conflict, refused outright. There is no `instanceId` the way FPPCommandRequest has one: this coordinator dispatches against exactly one configured Resolume adapter. ADR-037: every reference below is a NAME, resolved against the stored composition - a raw Resolume object id is never accepted anywhere in this union, and a request that still sends one is refused as an unrecognized parameter. */
         ResolumeActionRequest: components["schemas"]["ResolumeLaunchClipActionRequest"] | components["schemas"]["ResolumeClearLayerActionRequest"] | components["schemas"]["ResolumeLaunchColumnActionRequest"] | components["schemas"]["ResolumeSelectDeckActionRequest"] | components["schemas"]["ResolumeBlackoutActionRequest"] | components["schemas"]["ResolumeSetLayerBypassActionRequest"] | components["schemas"]["ResolumeSetLayerMasterActionRequest"];
-        /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) — `params` below encodes that exclusivity structurally, so a client generated from this contract never constructs the other shapes. A coordinator that receives one anyway (neither or both) does not reject it with `400`: it answers `200` with `result.outcome: "refused"`, exactly like any other unresolvable reference — see ResolumeActionResult.outcome. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` too (never a stale-reference error and never a silent deck change). */
+        /** @description `action: "launchClip"`: launches (connects) a clip named by `params.clip`, scoped to exactly one of `params.deck` (a deck clip) or `params.persistent: true` (a persistent clip, which lives outside any deck and carries no `deck`) - `params` below encodes that exclusivity structurally, so a client generated from this contract never constructs the other shapes. A coordinator that receives one anyway (neither or both) does not reject it with `400`: it answers `200` with `result.outcome: "refused"`, exactly like any other unresolvable reference - see ResolumeActionResult.outcome. `params.layer` disambiguates a clip name that occurs more than once; when it does not match any candidate the candidate set narrows to zero, never falling back to the unfiltered set. A clip reference whose own deck is not currently selected is refused with `200` and `result.outcome: "refused"` too (never a stale-reference error and never a silent deck change). */
         ResolumeLaunchClipActionRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -3246,7 +3254,7 @@ export interface components {
             action: "launchClip";
             idempotencyKey: string;
             params: {
-                /** @description The clip's own label — its authored name, or its generated form if unnamed. */
+                /** @description The clip's own label - its authored name, or its generated form if unnamed. */
                 clip: string;
                 /** @description The deck this clip lives on. Required unless `persistent` is `true`; must be absent when `persistent` is `true`. */
                 deck?: string;
@@ -3265,7 +3273,7 @@ export interface components {
             action: "clearLayer";
             idempotencyKey: string;
             params: {
-                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                /** @description The layer's own label - its authored name, or its generated form if unnamed. */
                 layer: string;
             };
         };
@@ -3278,7 +3286,7 @@ export interface components {
             action: "launchColumn";
             idempotencyKey: string;
             params: {
-                /** @description The column's own generated label — columns never carry an authored name. */
+                /** @description The column's own generated label - columns never carry an authored name. */
                 column: string;
                 /** @description The deck this column lives on. Always required. */
                 deck: string;
@@ -3293,7 +3301,7 @@ export interface components {
             action: "selectDeck";
             idempotencyKey: string;
             params: {
-                /** @description The deck's own label — its authored name, or its generated form if unnamed. */
+                /** @description The deck's own label - its authored name, or its generated form if unnamed. */
                 deck: string;
             };
         };
@@ -3305,7 +3313,7 @@ export interface components {
              */
             action: "blackout";
             idempotencyKey: string;
-            /** @description This action takes no parameters — a non-empty params object is a 400. */
+            /** @description This action takes no parameters - a non-empty params object is a 400. */
             params?: Record<string, never>;
         };
         /** @description `action: "setLayerBypass"`: sets a layer's bypass state. */
@@ -3317,12 +3325,12 @@ export interface components {
             action: "setLayerBypass";
             idempotencyKey: string;
             params: {
-                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                /** @description The layer's own label - its authored name, or its generated form if unnamed. */
                 layer: string;
                 bypassed: boolean;
             };
         };
-        /** @description `action: "setLayerMaster"`: sets a layer's master to a continuous value. Validated server-side against Arena's own declared range for THIS layer's master parameter (RangeParameter min/max, read fresh off the pre-dispatch baseline) rather than a fixed [0, 1] — an out-of-range request is refused with the declared bound stated, never silently clamped. */
+        /** @description `action: "setLayerMaster"`: sets a layer's master to a continuous value. Validated server-side against Arena's own declared range for THIS layer's master parameter (RangeParameter min/max, read fresh off the pre-dispatch baseline) rather than a fixed [0, 1] - an out-of-range request is refused with the declared bound stated, never silently clamped. */
         ResolumeSetLayerMasterActionRequest: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -3331,7 +3339,7 @@ export interface components {
             action: "setLayerMaster";
             idempotencyKey: string;
             params: {
-                /** @description The layer's own label — its authored name, or its generated form if unnamed. */
+                /** @description The layer's own label - its authored name, or its generated form if unnamed. */
                 layer: string;
                 /** @description The requested master value. Commonly [0, 1] but validated against the layer's own declared range, not assumed. */
                 master: number;
@@ -3343,25 +3351,25 @@ export interface components {
             serverTime: string;
             result: components["schemas"]["ResolumeActionResult"];
         };
-        /** @description What happened to one dispatched (or replayed) action. outcome is never inferred from this endpoint's own `200` status — it is exactly one of the six values in its enum below, and a `200` is sent for every one of them, including "refused" and "failed": this endpoint reports honestly what happened rather than using the HTTP status to editorialize about the answer. */
+        /** @description What happened to one dispatched (or replayed) action. outcome is never inferred from this endpoint's own `200` status - it is exactly one of the six values in its enum below, and a `200` is sent for every one of them, including "refused" and "failed": this endpoint reports honestly what happened rather than using the HTTP status to editorialize about the answer. */
         ResolumeActionResult: {
             id: string;
             idempotencyKey: string;
             action: string;
-            /** @description This action's own normalized parameters — defaults applied, never omitted or null. */
+            /** @description This action's own normalized parameters - defaults applied, never omitted or null. */
             params: {
                 [key: string]: unknown;
             };
             /** @description True when this response answers a REPLAYED idempotency key: the action described here was NOT dispatched by this request. */
             replay: boolean;
             /**
-             * @description "confirmed": the effect was observed on evidence collected strictly after dispatch. "unconfirmed": this action's own derived confirmation deadline expired first. "unconfirmable": dispatched, but its own effect could not be told apart from its pre-dispatch state (e.g. launching an already-playing clip) — never treated as success. "refused": refused before dispatch (a clip's deck was not selected, the composition identity was unknown, or a non-exempt action's audit write failed) — no request ever reached Resolume. "failed": dispatch was attempted and the attempt itself failed. Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished — a real, honest value (ADR-020's absence-is-stated rule), matching FPPCommandResult.outcome's identical narrow case exactly. A coordinator restart can no longer make this PERMANENT: any Resolume command row still unresolved at startup is resolved by a startup reconciliation pass (mirroring FPPCommandResult.outcomeReason's own note on ReconcileStrandedFPPCommands) before it can ever reach a client in that state.
+             * @description "confirmed": the effect was observed on evidence collected strictly after dispatch. "unconfirmed": this action's own derived confirmation deadline expired first. "unconfirmable": dispatched, but its own effect could not be told apart from its pre-dispatch state (e.g. launching an already-playing clip) - never treated as success. "refused": refused before dispatch (a clip's deck was not selected, the composition identity was unknown, or a non-exempt action's audit write failed) - no request ever reached Resolume. "failed": dispatch was attempted and the attempt itself failed. Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished - a real, honest value (ADR-020's absence-is-stated rule), matching FPPCommandResult.outcome's identical narrow case exactly. A coordinator restart can no longer make this PERMANENT: any Resolume command row still unresolved at startup is resolved by a startup reconciliation pass (mirroring FPPCommandResult.outcomeReason's own note on ReconcileStrandedFPPCommands) before it can ever reach a client in that state.
              * @enum {string}
              */
             outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed" | "";
-            /** @description A short, human-readable explanation. Non-empty for every resolved result, including "confirmed" — the only value for which it may be empty is the identical narrow replay race `outcome`'s own description names. */
+            /** @description A short, human-readable explanation. Non-empty for every resolved result, including "confirmed" - the only value for which it may be empty is the identical narrow replay race `outcome`'s own description names. */
             outcomeReason: string;
-            /** @description True when this action's dispatch or outcome audit entry could not be written — the `blackout`/`clearLayer` safety-class exemption proceeding anyway with a degraded, stderr-only attribution record. */
+            /** @description True when this action's dispatch or outcome audit entry could not be written - the `blackout`/`clearLayer` safety-class exemption proceeding anyway with a degraded, stderr-only attribution record. */
             attributionDegraded: boolean;
             /**
              * Format: date-time
@@ -3372,7 +3380,7 @@ export interface components {
             resolvedAt: string | null;
             /** @description The Resolume object id this action's own name reference resolved to, kept visible for debugging (ADR-037 removes the id from what an operator types, not from the record). Absent for `blackout`, which addresses nothing, and for a refusal reached before any name was resolved. */
             resolvedId?: string;
-            /** @description Whether the selected deck changed between this action's decision and its confirmation. Meaningful only for a confirmed `launchClip` (the only action that can race a deck — layers are deck-independent). ALWAYS present; null, never false, both when the deck could not be read at confirmation time and for every action other than a confirmed launchClip. Evidence, never a refusal. */
+            /** @description Whether the selected deck changed between this action's decision and its confirmation. Meaningful only for a confirmed `launchClip` (the only action that can race a deck - layers are deck-independent). ALWAYS present; null, never false, both when the deck could not be read at confirmation time and for every action other than a confirmed launchClip. Evidence, never a refusal. */
             selectedDeckChanged: boolean | null;
         };
         /** @description One layer's row in the crash-recovery record (Track D seam D-3a). Every object reference is a name (ADR-037), never an id. clip, clipNameGenerated, and deck are absent when state is not "clip". establishedAt and source are absent only when no record has ever been established for this layer at all (state "unknown", reason "never observed"). reason is always present when state is "unknown". */
@@ -3420,7 +3428,7 @@ export interface components {
         ResolumeRecoveryResponse: {
             /** Format: date-time */
             serverTime: string;
-            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) — distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
+            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) - distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
             resolumeConfigured: boolean;
             autoRestoreEnabled: boolean;
             /** @description False when autoRestoreEnabled is the built-in default rather than a stored choice. */
@@ -3441,7 +3449,7 @@ export interface components {
             seq: number;
             /** Format: date-time */
             serverTime: string;
-            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) — distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
+            /** @description False when this coordinator has no Resolume instance configured at all (SHOWMESH_RESOLUME_URL unset) - distinct from autoRestoreConfigured, which is about whether the toggle has a stored value. A client renders "not configured" rather than the toggle's default-ON value when this is false: an operator who believes recovery is armed and is wrong is worse off than one who knows it is unavailable. */
             resolumeConfigured: boolean;
             autoRestoreEnabled: boolean;
             /** @description False when autoRestoreEnabled is the built-in default rather than a stored choice. */
@@ -3467,13 +3475,13 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
-        /** @description render.settings.restartPolicy (Track B seam B2c): the render pipeline supervisor's bounded exponential backoff — must not restart a pipeline that fails identically and immediately forever. */
+        /** @description render.settings.restartPolicy (Track B seam B2c): the render pipeline supervisor's bounded exponential backoff - must not restart a pipeline that fails identically and immediately forever. */
         ConfigRenderRestartPolicy: {
             initialDelaySeconds: number;
             maxDelaySeconds: number;
             maxConsecutiveFastFailures: number;
         };
-        /** @description The "render.settings" configuration kind's decoded payload (Track B seam B2c, ADR-039): the body PUT /config/render.settings accepts (a full replacement — every field required and non-null), and the "payload" member of GET /config/render.settings' response. `idleOutput` is what a surface draws while the MultiSync timeline is stopped, opened, or unknown (TRACK-B-BUILD-CONTRACT.md ruling 3 — sync loss changes the picture, never the sender). */
+        /** @description The "render.settings" configuration kind's decoded payload (Track B seam B2c, ADR-039): the body PUT /config/render.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/render.settings' response. `idleOutput` is what a surface draws while the MultiSync timeline is stopped, opened, or unknown (TRACK-B-BUILD-CONTRACT.md ruling 3 - sync loss changes the picture, never the sender). */
         ConfigRenderSettingsPayload: {
             /** @enum {string} */
             idleOutput: "black" | "hold" | "diagnostic";
@@ -3491,10 +3499,10 @@ export interface components {
             createdByPrincipalId: string | null;
             createdByPrincipalName: string | null;
             source: string;
-            /** @description States that idleOutput takes effect on each surface's own next render.surface.apply dispatch, never on an already-applied surface — there is no config-push path to a node beyond that assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always non-empty. */
+            /** @description States that idleOutput takes effect on each surface's own next render.surface.apply dispatch, never on an already-applied surface - there is no config-push path to a node beyond that assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always non-empty. */
             idleOutputEffectiveNote: string;
         };
-        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement — every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGain` is a linear amplitude multiplier — 1.0 is unity gain — applied as the default ceiling on a background bed. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) — an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
+        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGain` is a linear amplitude multiplier - 1.0 is unity gain - applied as the default ceiling on a background bed. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
             /** @enum {string} */
@@ -3519,7 +3527,7 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
-        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement — every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. */
+        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. */
         ConfigAudioNode: {
             programRoute: string;
             ltcRoute: string;
@@ -3543,18 +3551,18 @@ export interface components {
             source: string;
         };
         /**
-         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on — the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
+         * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on - the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
          *
-         *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) — a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision — the macro was edited between two submissions under one key, 409) — minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
+         *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) - a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision - the macro was edited between two submissions under one key, 409) - minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope — the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now — shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) — `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) — kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit — Review fix 5, 2026-08-15 — because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action — every action except `blackout` and `clearLayer` — `503`, mirroring "fpp-command-refused-audit-unavailable" exactly, for a second vendor's command surface). One is Track E seam E7-1's own addition: "action-invoke-refused-audit-unavailable" (POST /actions/{id}/invocations' own ADR-024 decision 11 fail-closed default for an action whose stored safetyClass is "none"). Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (programRoute and ltcRoute naming the same device route). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) — kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, mirroring "fpp-command-refused-audit-unavailable" exactly, for a second vendor's command surface). One is Track E seam E7-1's own addition: "action-invoke-refused-audit-unavailable" (POST /actions/{id}/invocations' own ADR-024 decision 11 fail-closed default for an action whose stored safetyClass is "none"). Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (programRoute and ltcRoute naming the same device route). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
             title: string;
             status: number;
             detail: string;
@@ -3608,7 +3616,7 @@ export interface components {
             serverTime: string;
             event: components["schemas"]["Event"];
         };
-        /** @description The payload of an `fpp.observations.changed` event (ADR-023), delivered only to a connection that opted into delta frames via `GET /stream?deltas=1`. `changed` is never null and carries the full `Evidence` envelope — exactly the shape an element of `FPPInstance.observations` would have — for every signal on this instance whose resolved evidence differs from what this connection has already been told; it never repeats a signal whose resolved evidence is unchanged from last time. `removed` is never null and carries the signal IDs (bare strings, not `Evidence` envelopes) of every observation this connection has previously been told about for this instance that no longer exists at all — a cape swapped for a smaller one, a renamed port, a sensor that stopped being reported. A client applying `removed` MUST delete those signals from its own merged baseline; without that, the baseline accumulates observations the coordinator no longer has. At least one of `changed`/`removed` is always non-empty: an instance with nothing to report this render pass produces no `fpp.observations.changed` event at all. This event is always paired with `instanceId`, unlike `FPPChangedEvent`, which nests its instance identity inside `instance` — an observations-only delta has no full instance object to carry it in otherwise. Structural, non-observation changes to an instance (health, endpoint, lastPollAt, lastPollError) continue to arrive as `fpp.changed` for a delta-subscribed connection too — this event exists only for a change confined to `observations`. */
+        /** @description The payload of an `fpp.observations.changed` event (ADR-023), delivered only to a connection that opted into delta frames via `GET /stream?deltas=1`. `changed` is never null and carries the full `Evidence` envelope - exactly the shape an element of `FPPInstance.observations` would have - for every signal on this instance whose resolved evidence differs from what this connection has already been told; it never repeats a signal whose resolved evidence is unchanged from last time. `removed` is never null and carries the signal IDs (bare strings, not `Evidence` envelopes) of every observation this connection has previously been told about for this instance that no longer exists at all - a cape swapped for a smaller one, a renamed port, a sensor that stopped being reported. A client applying `removed` MUST delete those signals from its own merged baseline; without that, the baseline accumulates observations the coordinator no longer has. At least one of `changed`/`removed` is always non-empty: an instance with nothing to report this render pass produces no `fpp.observations.changed` event at all. This event is always paired with `instanceId`, unlike `FPPChangedEvent`, which nests its instance identity inside `instance` - an observations-only delta has no full instance object to carry it in otherwise. Structural, non-observation changes to an instance (health, endpoint, lastPollAt, lastPollError) continue to arrive as `fpp.changed` for a delta-subscribed connection too - this event exists only for a change confined to `observations`. */
         FPPObservationsChangedEvent: {
             /** @description Per-connection only; never a durable cursor. */
             seq: number;
@@ -3618,7 +3626,7 @@ export interface components {
             changed: components["schemas"]["Evidence"][];
             removed: string[];
         };
-        /** @description Step 9 (STEP-9-SPEC.md section 5.5): one element of ConfigObjectsListResponse.objects — enough to enumerate and label every show.action or show.macro object without fetching each one's full payload. */
+        /** @description Step 9 (STEP-9-SPEC.md section 5.5): one element of ConfigObjectsListResponse.objects - enough to enumerate and label every show.action or show.macro object without fetching each one's full payload. */
         ConfigObjectSummary: {
             id: string;
             label: string;
@@ -3643,7 +3651,7 @@ export interface components {
             qos: 0 | 1 | 2;
             retain: boolean;
         };
-        /** @description The WRITE shape of show.action.target.publish. Identical to ConfigShowActionMQTTPublish except that retain is not required: an absent key defaults to false, while a present `null` is rejected as invalid — the same absent-defaults rule ConfigShowActionWrite's own description field and ConfigShowMacroStepWrite's onFailure/onUnconfirmed use. The response to a successful write is always the resolved ConfigShowActionMQTTPublish shape, never this one. */
+        /** @description The WRITE shape of show.action.target.publish. Identical to ConfigShowActionMQTTPublish except that retain is not required: an absent key defaults to false, while a present `null` is rejected as invalid - the same absent-defaults rule ConfigShowActionWrite's own description field and ConfigShowMacroStepWrite's onFailure/onUnconfirmed use. The response to a successful write is always the resolved ConfigShowActionMQTTPublish shape, never this one. */
         ConfigShowActionMQTTPublishWrite: {
             topic: string;
             payload: string;
@@ -3651,21 +3659,22 @@ export interface components {
             qos: 0 | 1 | 2;
             retain?: boolean;
         };
-        /** @description show.action.target.expect (STEP-9-SPEC.md section 7.3), present only when target.integration is "mqtt". topic, value, and deadlineSeconds are omitted entirely for kind "none", which declares no expected response at all. This same schema is used for both the GET and the PUT request body: a GET response, PUT back unchanged, always validates. Only kind is required by THIS schema; topic and deadlineSeconds are required, and value is present or absent per kind's own rule (see value's own description), for every kind other than "none" — enforced by this coordinator's write-time validation rather than by this schema, matching ConfigShowActionTarget's identical escape one level up. */
+        /** @description show.action.target.expect (STEP-9-SPEC.md section 7.3), present only when target.integration is "mqtt". topic, value, and deadlineSeconds are omitted entirely for kind "none", which declares no expected response at all. This same schema is used for both the GET and the PUT request body: a GET response, PUT back unchanged, always validates. Only kind is required by THIS schema; topic and deadlineSeconds are required, and value is present or absent per kind's own rule (see value's own description), for every kind other than "none" - enforced by this coordinator's write-time validation rather than by this schema, matching ConfigShowActionTarget's identical escape one level up. */
         ConfigShowActionMQTTExpect: {
             /** @enum {string} */
             kind: "none" | "boolean" | "number" | "text" | "match";
             topic?: string;
-            /** @description Present only for kind "number" (optional — an absent value accepts receipt with no equality check) and kind "match" (required; an empty string is a valid, distinct match target). Never present for "none", "boolean", or "text". Always a JSON string on the wire in both directions, including for kind "number": the string is the operator's own typed text (e.g. "42"), validated as parseable as a number but stored and returned verbatim, never reformatted through a float — a JSON number that round-trips through a float64 is not guaranteed to come back byte-identical. A JSON number literal is rejected for kind "number": this field has exactly one wire representation per kind, not two. */
+            /** @description Present only for kind "number" (optional - an absent value accepts receipt with no equality check) and kind "match" (required; an empty string is a valid, distinct match target). Never present for "none", "boolean", or "text". Always a JSON string on the wire in both directions, including for kind "number": the string is the operator's own typed text (e.g. "42"), validated as parseable as a number but stored and returned verbatim, never reformatted through a float - a JSON number that round-trips through a float64 is not guaranteed to come back byte-identical. A JSON number literal is rejected for kind "number": this field has exactly one wire representation per kind, not two. */
             value?: string;
             deadlineSeconds?: number;
         };
-        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp, mqtt, or resolume fields directly, never nested a second level under an "fpp"/"mqtt"/"resolume" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's named-reference vocabulary (clip, deck, layer, column, persistent, bypassed, master) — never a Resolume object id. To submit a target, use ConfigShowActionTargetWrite instead. */
+        /** @description The STORED/READ shape of show.action.target (STEP-9-SPEC.md section 5.3): integration plus either the fpp, mqtt, or resolume fields directly, never nested a second level under an "fpp"/"mqtt"/"resolume" key. Only integration is required here; which of the remaining fields is present depends on integration's own value, enforced by this coordinator's write-time validation rather than by this schema. publish, when present, is always the resolved ConfigShowActionMQTTPublish shape. ref carries ADR-037's named-reference vocabulary (clip, deck, layer, column, persistent, bypassed, master) - never a Resolume object id. To submit a target, use ConfigShowActionTargetWrite instead. */
         ConfigShowActionTarget: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt" | "resolume";
+            integration: "fpp" | "mqtt" | "resolume" | "audio";
             instanceId?: string;
             primitive?: string;
+            /** @description An fpp primitive's own decoded params, or (audio-only) that audio operation's own command params, passed through undecoded to the node exactly as a direct audio.session.*\/ audio.gain.*\/audio.output.* API call's own params would be. */
             params?: {
                 [key: string]: unknown;
             };
@@ -3678,11 +3687,17 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
+            /** @description audio-only: the target audio node id. */
+            audioNodeId?: string;
+            /** @description audio-only: the target pkg/audio session id. */
+            audioSessionId?: string;
+            /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. */
+            audioAction?: string;
         };
         /** @description The WRITE shape of show.action.target. Identical to ConfigShowActionTarget except that publish, when present, is ConfigShowActionMQTTPublishWrite, which allows retain to be absent. The response to a successful write is always the resolved ConfigShowActionTarget shape, never this one. */
         ConfigShowActionTargetWrite: {
             /** @enum {string} */
-            integration: "fpp" | "mqtt" | "resolume";
+            integration: "fpp" | "mqtt" | "resolume" | "audio";
             instanceId?: string;
             primitive?: string;
             params?: {
@@ -3695,8 +3710,11 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
+            audioNodeId?: string;
+            audioSessionId?: string;
+            audioAction?: string;
         };
-        /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. */
+        /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. */
         ConfigShowAction: {
             show: string;
             label: string;
@@ -3736,7 +3754,7 @@ export interface components {
             class: "none" | "coordinator-required" | "silence";
             reason: string;
         };
-        /** @description The STORED/READ shape of one element of show.macro.steps, returned by GET and by a successful PUT. onFailure and onUnconfirmed are always the RESOLVED value (default or explicit), never absent — a stored revision states its own policy outright. To submit a step, use ConfigShowMacroStepWrite instead, which allows the two keys to be absent so the server-side default applies. */
+        /** @description The STORED/READ shape of one element of show.macro.steps, returned by GET and by a successful PUT. onFailure and onUnconfirmed are always the RESOLVED value (default or explicit), never absent - a stored revision states its own policy outright. To submit a step, use ConfigShowMacroStepWrite instead, which allows the two keys to be absent so the server-side default applies. */
         ConfigShowMacroStep: {
             id: string;
             action: string;
@@ -3756,7 +3774,7 @@ export interface components {
             onUnconfirmed?: "continue" | "abort";
             localFallback: components["schemas"]["ConfigShowMacroLocalFallback"];
         };
-        /** @description The STORED/READ shape of the "show.macro" configuration kind's decoded payload (STEP-9-SPEC.md section 5.4), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit a macro, use ConfigShowMacroWrite instead, which allows description to be absent. */
+        /** @description The STORED/READ shape of the "show.macro" configuration kind's decoded payload (STEP-9-SPEC.md section 5.4), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit a macro, use ConfigShowMacroWrite instead, which allows description to be absent. */
         ConfigShowMacro: {
             show: string;
             label: string;
@@ -3786,7 +3804,7 @@ export interface components {
             /** @enum {string} */
             source: "api";
         };
-        /** @description One element of MacroRunsListResponse.runs and of Snapshot.macroRuns: a run's own state without its steps (STEP-9-SPEC.md section 6.6). completed/confirmed are null while the run is still "running" (ADR-031 decision 3) — never defaulted to false. */
+        /** @description One element of MacroRunsListResponse.runs and of Snapshot.macroRuns: a run's own state without its steps (STEP-9-SPEC.md section 6.6). completed/confirmed are null while the run is still "running" (ADR-031 decision 3) - never defaulted to false. */
         MacroRunSummary: {
             id: string;
             macroObjectId: string;
@@ -3807,7 +3825,7 @@ export interface components {
             reason: string;
             attributionDegraded: boolean;
         };
-        /** @description States the FPP command a step dispatched, or explicitly why no command detail is available — never omitted (STEP-9-SPEC.md section 6.1's "not retained" rendering rule). state is "none" (no command at all — an mqtt step, or an fpp step not yet dispatched), "retained" (detail carries the command), or "not_retained" (retention has pruned the command row; id is still named). */
+        /** @description States the FPP command a step dispatched, or explicitly why no command detail is available - never omitted (STEP-9-SPEC.md section 6.1's "not retained" rendering rule). state is "none" (no command at all - an mqtt step, or an fpp step not yet dispatched), "retained" (detail carries the command), or "not_retained" (retention has pruned the command row; id is still named). */
         MacroRunStepCommand: {
             /** @enum {string} */
             state: "none" | "retained" | "not_retained";
@@ -3815,14 +3833,14 @@ export interface components {
             reason?: string;
             detail?: components["schemas"]["FPPCommandResult"];
         };
-        /** @description One element of MacroRun.steps. state is the step's own dispatch lifecycle: "pending" (not yet touched), "resolved" (an outcome was recorded), or "skipped" (an abort left this step never attempted) — a closed, three-member vocabulary. There is no "dispatched" intermediate: this package's own executor always resolves a step to a terminal outcome before it is ever written, so a value this producer cannot emit is not published here (a prior "dispatched" enum member was removed by review for exactly that reason). outcome is null while state is "pending" — most visibly, every 202 response from POST /macros/{id}/runs carries the full, just-created step list with outcome null on every step, since none has executed yet — and otherwise one of "confirmed", "unconfirmed", "unconfirmable", "failed", "skipped": section 6.4's exact five-member vocabulary, also closed. A blank string was considered and rejected: MacroRunSummary's own completed/confirmed are null rather than defaulted to false for an unresolved run specifically so a "not decided yet" state never reads as a definite, premature verdict, and an empty outcome string here would be that same premature verdict spelled as whitespace. outcomeState is a free-form, opaque status code and is intentionally NOT enumerated or otherwise typed: in practice it is drawn from at least four different, independently-evolving vocabularies depending on integration and on how resolution ended (the FPP dispatch seam's own evidence-state codes; a distinct set of MQTT response-contract codes; a handful of ad hoc codes this package emits itself for conditions neither of those cover; and reuse of this same struct's own "skipped"), so a mapping from producer to vocabulary would already be wrong the next time any one of them changes and is not published. Two of its values already collide by spelling with values in DIFFERENT fields on this same struct ("confirmed" also appears as an outcome value, "skipped" also appears as a state value) without meaning the same thing, so treat outcomeState as opaque, never compare it across fields, and render outcomeReason for a human — per the rule that a client ignores what it does not recognise. */
+        /** @description One element of MacroRun.steps. state is the step's own dispatch lifecycle: "pending" (not yet touched), "resolved" (an outcome was recorded), or "skipped" (an abort left this step never attempted) - a closed, three-member vocabulary. There is no "dispatched" intermediate: this package's own executor always resolves a step to a terminal outcome before it is ever written, so a value this producer cannot emit is not published here (a prior "dispatched" enum member was removed by review for exactly that reason). outcome is null while state is "pending" - most visibly, every 202 response from POST /macros/{id}/runs carries the full, just-created step list with outcome null on every step, since none has executed yet - and otherwise one of "confirmed", "unconfirmed", "unconfirmable", "failed", "skipped": section 6.4's exact five-member vocabulary, also closed. A blank string was considered and rejected: MacroRunSummary's own completed/confirmed are null rather than defaulted to false for an unresolved run specifically so a "not decided yet" state never reads as a definite, premature verdict, and an empty outcome string here would be that same premature verdict spelled as whitespace. outcomeState is a free-form, opaque status code and is intentionally NOT enumerated or otherwise typed: in practice it is drawn from at least four different, independently-evolving vocabularies depending on integration and on how resolution ended (the FPP dispatch seam's own evidence-state codes; a distinct set of MQTT response-contract codes; a handful of ad hoc codes this package emits itself for conditions neither of those cover; and reuse of this same struct's own "skipped"), so a mapping from producer to vocabulary would already be wrong the next time any one of them changes and is not published. Two of its values already collide by spelling with values in DIFFERENT fields on this same struct ("confirmed" also appears as an outcome value, "skipped" also appears as a state value) without meaning the same thing, so treat outcomeState as opaque, never compare it across fields, and render outcomeReason for a human - per the rule that a client ignores what it does not recognise. */
         MacroRunStep: {
             stepIndex: number;
             stepId: string;
             actionObjectId: string;
             actionRevision: number;
             /** @enum {string} */
-            integration: "fpp" | "mqtt" | "resolume";
+            integration: "fpp" | "mqtt" | "resolume" | "audio";
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             /** @enum {string} */
@@ -3868,7 +3886,7 @@ export interface components {
             serverTime: string;
             run: components["schemas"]["MacroRun"];
         };
-        /** @description The success body of POST /macros/{id}/runs (status 202 — ADR-031 decision 1: the run is accepted and not complete). */
+        /** @description The success body of POST /macros/{id}/runs (status 202 - ADR-031 decision 1: the run is accepted and not complete). */
         MacroRunSubmitResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -3886,7 +3904,7 @@ export interface components {
             macroObjectId: string;
             /** @enum {string} */
             class: "refused" | "rejected" | "unreachable";
-            /** @description 0 when there was no response at all — a real, distinct value. */
+            /** @description 0 when there was no response at all - a real, distinct value. */
             httpStatus: number;
             /** Format: date-time */
             at: string;
@@ -3905,7 +3923,7 @@ export interface components {
             label: string;
             show: string;
             /**
-             * @description "ok": the target resolved, unambiguously, against current integration state. "broken": the target did not resolve, or resolved ambiguously. "unknown": the check could not be performed at all — never a soft "ok", and never reported as "broken" for a check this coordinator simply could not run.
+             * @description "ok": the target resolved, unambiguously, against current integration state. "broken": the target did not resolve, or resolved ambiguously. "unknown": the check could not be performed at all - never a soft "ok", and never reported as "broken" for a check this coordinator simply could not run.
              * @enum {string}
              */
             state: "ok" | "broken" | "unknown";
@@ -3923,13 +3941,13 @@ export interface components {
             serverTime: string;
             bindings: components["schemas"]["ActionBinding"][];
         };
-        /** @description The body of POST /actions/{id}/invocations. idempotencyKey is required. requestedRevision optionally pins the exact show.action revision to execute: a durable/queued caller (e.g. a Track F cue) should always set it, so activating a newer revision after the cue was queued never changes what runs; an interactive caller may omit it to mean "whichever revision is active right now" — the response's revision field always states which revision actually ran. */
+        /** @description The body of POST /actions/{id}/invocations. idempotencyKey is required. requestedRevision optionally pins the exact show.action revision to execute: a durable/queued caller (e.g. a Track F cue) should always set it, so activating a newer revision after the cue was queued never changes what runs; an interactive caller may omit it to mean "whichever revision is active right now" - the response's revision field always states which revision actually ran. */
         ActionInvocationRequest: {
             idempotencyKey: string;
             /** Format: int64 */
             requestedRevision?: number;
         };
-        /** @description One invoked (or replayed) action's lifecycle and, once resolved, its outcome against this API's shared five-word outcome vocabulary — the same one ResolumeActionResult.outcome uses. */
+        /** @description One invoked (or replayed) action's lifecycle and, once resolved, its outcome against this API's shared five-word outcome vocabulary - the same one ResolumeActionResult.outcome uses. */
         ActionInvocationResult: {
             id: string;
             idempotencyKey: string;
@@ -3943,16 +3961,16 @@ export interface components {
             /** @description True when this response answers a REPLAYED idempotency key: nothing was dispatched by this request. */
             replay: boolean;
             /**
-             * @description This invocation's own lifecycle. "pending" means it has not yet resolved — either a replay observed mid-flight, or this coordinator's own outcome could not be durably recorded yet (ADR-003).
+             * @description This invocation's own lifecycle. "pending" means it has not yet resolved - either a replay observed mid-flight, or this coordinator's own outcome could not be durably recorded yet (ADR-003).
              * @enum {string}
              */
             state: "pending" | "resolved";
             /**
-             * @description null while state is "pending" — a pending result never carries a blank outcome pretending to be one. One of the five terminal words once state is "resolved".
+             * @description null while state is "pending" - a pending result never carries a blank outcome pretending to be one. One of the five terminal words once state is "resolved".
              * @enum {string|null}
              */
             outcome: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed" | null;
-            /** @description Always non-empty, in both states — while pending, states why no outcome exists yet (ADR-020 decision 5). */
+            /** @description Always non-empty, in both states - while pending, states why no outcome exists yet (ADR-020 decision 5). */
             outcomeReason: string;
             /**
              * @description Whether the pre-dispatch audit entry was written durably.
@@ -3979,7 +3997,7 @@ export interface components {
             serverTime: string;
             result: components["schemas"]["ActionInvocationResult"];
         };
-        /** @description The payload of a "macroRun.changed" SSE event (STEP-9-SPEC.md section 6.6): one run's state transition. Step-level detail is deliberately NOT carried here — a client wanting step detail fetches GET /macro-runs/{runId}. */
+        /** @description The payload of a "macroRun.changed" SSE event (STEP-9-SPEC.md section 6.6): one run's state transition. Step-level detail is deliberately NOT carried here - a client wanting step detail fetches GET /macro-runs/{runId}. */
         MacroRunChangedEvent: {
             /** @description Per-connection only; never a durable cursor. */
             seq: number;
@@ -4031,7 +4049,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description One FPP instance's latest accepted playlist-entry observation, as rendered by GET /integrations/fpp/playlist-entry-observations and the fppPlaylistEntry.changed stream event. position is absent when unavailable is set — an unavailable observation's identity fields carry no meaningful position. */
+        /** @description One FPP instance's latest accepted playlist-entry observation, as rendered by GET /integrations/fpp/playlist-entry-observations and the fppPlaylistEntry.changed stream event. position is absent when unavailable is set - an unavailable observation's identity fields carry no meaningful position. */
         FPPPlaylistEntryObservation: {
             instanceUuid: string;
             schemaVersion: number;
@@ -4059,7 +4077,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The payload of an "fppPlaylistEntry.changed" SSE event (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.6 step 10): one instance's latest observation, full-frame only — no ADR-023 delta narrowing exists for this resource. */
+        /** @description The payload of an "fppPlaylistEntry.changed" SSE event (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.6 step 10): one instance's latest observation, full-frame only - no ADR-023 delta narrowing exists for this resource. */
         FPPPlaylistEntryChangedEvent: {
             /** @description Per-connection only; never a durable cursor. */
             seq: number;
@@ -4177,12 +4195,12 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container — this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent — a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. */
+        /** @description The STORED/READ shape of the "show" configuration kind's decoded payload (Track E, ADR-027 decision 2: a Show is a namespace, not a container - this payload carries no list of surfaces, actions, or macros), returned by GET and by a successful PUT. notes is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit a show, use ConfigShowWrite instead, which allows notes to be absent. */
         ConfigShow: {
             name: string;
             notes: string;
         };
-        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required — an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
+        /** @description The WRITE shape of the "show" configuration kind's payload: the body PUT /config/show/{id} accepts. Identical to ConfigShow except that notes is not required - an absent key takes its documented default of empty (i.e. no notes), and a present `null` is rejected as invalid, the same absent-defaults rule ConfigShowActionWrite's own description field uses. This is still a FULL REPLACEMENT: a `notes` value from a previous revision is never carried forward. The response to a successful write stores and returns the resolved ConfigShow shape, never this one. */
         ConfigShowWrite: {
             name: string;
             notes?: string;
@@ -4209,29 +4227,29 @@ export interface components {
             /** @description The published minimum is 0 so a schema validator does not reject the exact "explicitly empty" request body this coordinator's own write-time validation exists to name and refuse with its own message; the server's real minimum is 1. */
             channelCount: number;
         };
-        /** @description show.surface.geometry (Track E, ADR-026). width * height * channelsPerPixel(pixelFormat) must equal the sibling channelRange.channelCount exactly — enforced server-side, since it is a rule across two sibling objects. */
+        /** @description show.surface.geometry (Track E, ADR-026). width * height * channelsPerPixel(pixelFormat) must equal the sibling channelRange.channelCount exactly - enforced server-side, since it is a rule across two sibling objects. */
         ConfigShowSurfaceGeometry: {
             width: number;
             height: number;
             /** @enum {string} */
             pixelFormat: "rgb" | "rgbw";
         };
-        /** @description show.surface.output.ndi (ADR-026 — NDI is the reference transport). */
+        /** @description show.surface.output.ndi (ADR-026 - NDI is the reference transport). */
         ConfigShowSurfaceNDIOutput: {
             sourceName: string;
         };
-        /** @description show.surface.output.hdmi (ADR-026 — HDMI is a supported alternate). */
+        /** @description show.surface.output.hdmi (ADR-026 - HDMI is a supported alternate). */
         ConfigShowSurfaceHDMI: {
             display: string;
         };
-        /** @description show.surface.output (Track E, ADR-026). Exactly one of ndi/hdmi must be present, and it must be the one named by transport — support for one transport is never evidence for the other, so this never defaults or infers a transport from whichever sub-object happens to be present. Only transport is required by THIS schema; which of ndi/hdmi accompanies it is enforced server-side. */
+        /** @description show.surface.output (Track E, ADR-026). Exactly one of ndi/hdmi must be present, and it must be the one named by transport - support for one transport is never evidence for the other, so this never defaults or infers a transport from whichever sub-object happens to be present. Only transport is required by THIS schema; which of ndi/hdmi accompanies it is enforced server-side. */
         ConfigShowSurfaceOutput: {
             /** @enum {string} */
             transport: "ndi" | "hdmi";
             ndi?: components["schemas"]["ConfigShowSurfaceNDIOutput"];
             hdmi?: components["schemas"]["ConfigShowSurfaceHDMI"];
         };
-        /** @description The "show.surface" configuration kind's decoded payload (Track E, ADR-026), returned by GET and accepted by PUT /config/show.surface/{id}. Every field is required on write — unlike ConfigShow, this payload has no optional/defaulted key, so one shape serves both the read and write side. `node` must name a declared node; this coordinator deliberately does not check the node's advertised NDI/HDMI capability (observed state, absent whenever the node is offline). A second surface assigned to the same node is a valid payload on its own terms (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule). */
+        /** @description The "show.surface" configuration kind's decoded payload (Track E, ADR-026), returned by GET and accepted by PUT /config/show.surface/{id}. Every field is required on write - unlike ConfigShow, this payload has no optional/defaulted key, so one shape serves both the read and write side. `node` must name a declared node; this coordinator deliberately does not check the node's advertised NDI/HDMI capability (observed state, absent whenever the node is offline). A second surface assigned to the same node is a valid payload on its own terms (ADR-026's `N=1` is a scope limit on the renderer, not a schema rule). */
         ConfigShowSurface: {
             show: string;
             name: string;
@@ -4419,7 +4437,7 @@ export interface components {
             endOfNightRepeat: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudio"];
         };
-        /** @description One entry of enterShow.cues or enterResting.cues (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the anchor — negative means before it. action must name an existing show.action object in the same show (server-side; not expressible here). onFailure defaults to "continue" (ADR-035) when absent. */
+        /** @description One entry of enterShow.cues or enterResting.cues (RESTING-MODE.md §7). offsetMs is SIGNED and relative to the anchor - negative means before it. action must name an existing show.action object in the same show (server-side; not expressible here). onFailure defaults to "continue" (ADR-035) when absent. */
         ConfigNightSessionCue: {
             name: string;
             /** @enum {string} */
@@ -4430,6 +4448,11 @@ export interface components {
             barrier: boolean;
             /** @enum {string} */
             onFailure: "continue" | "abort";
+            /**
+             * @description Meaningful only when role is "announcement"; rejected on any other role. Absent means the night.session's own announcementDefaultPolicy applies. interrupt uses resting.backgroundAudio's own resume/restart policy on the way back.
+             * @enum {string}
+             */
+            announcementPolicy?: "duck" | "mix" | "interrupt";
         };
         /** @description night.session.enterShow (RESTING-MODE.md §7.1). */
         ConfigNightSessionEnterShow: {
@@ -4441,7 +4464,7 @@ export interface components {
             cues: components["schemas"]["ConfigNightSessionCue"][];
             blackoutAfterShowMs: number;
         };
-        /** @description The WRITE shape of one entry of enterShow.cues/enterResting.cues: the body PUT /config/night.session/{id} accepts inside its cue lists. Identical to ConfigNightSessionCue except that barrier and onFailure are not required — an absent barrier takes its documented default of false, and an absent onFailure takes its documented default of "continue" (ADR-035). The response always stores and returns the resolved ConfigNightSessionCue shape, never this one. */
+        /** @description The WRITE shape of one entry of enterShow.cues/enterResting.cues: the body PUT /config/night.session/{id} accepts inside its cue lists. Identical to ConfigNightSessionCue except that barrier and onFailure are not required - an absent barrier takes its documented default of false, and an absent onFailure takes its documented default of "continue" (ADR-035). The response always stores and returns the resolved ConfigNightSessionCue shape, never this one. */
         ConfigNightSessionCueWrite: {
             name: string;
             /** @enum {string} */
@@ -4452,6 +4475,8 @@ export interface components {
             barrier?: boolean;
             /** @enum {string} */
             onFailure?: "continue" | "abort";
+            /** @enum {string} */
+            announcementPolicy?: "duck" | "mix" | "interrupt";
         };
         /** @description The WRITE shape of night.session.enterShow: identical to ConfigNightSessionEnterShow except that cues carries ConfigNightSessionCueWrite entries (barrier/onFailure optional). */
         ConfigNightSessionEnterShowWrite: {
@@ -4463,7 +4488,7 @@ export interface components {
             cues: components["schemas"]["ConfigNightSessionCueWrite"][];
             blackoutAfterShowMs: number;
         };
-        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required — an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). */
+        /** @description The WRITE shape of resting.backgroundAudio: identical to ConfigNightSessionBackgroundAudio except that repeat is not required - an absent repeat takes its documented default of "none". crossfadeMs is still required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). */
         ConfigNightSessionBackgroundAudioWrite: {
             items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
             /** @enum {string} */
@@ -4475,7 +4500,7 @@ export interface components {
             crossfadeMs?: number;
             maxGainDb: number;
         };
-        /** @description The WRITE shape of night.session.resting: identical to ConfigNightSessionResting except that endOfNightPlaylist and endOfNightRepeat are not required. endOfNightPlaylist, when present, must be non-empty (an explicit "" is refused, not collapsed into "absent" — RESTING-MODE.md's absent/null/empty distinction); when absent it defaults to `playlist`. endOfNightRepeat defaults to false when absent. backgroundAudio carries the ConfigNightSessionBackgroundAudioWrite shape. */
+        /** @description The WRITE shape of night.session.resting: identical to ConfigNightSessionResting except that endOfNightPlaylist and endOfNightRepeat are not required. endOfNightPlaylist, when present, must be non-empty (an explicit "" is refused, not collapsed into "absent" - RESTING-MODE.md's absent/null/empty distinction); when absent it defaults to `playlist`. endOfNightRepeat defaults to false when absent. backgroundAudio carries the ConfigNightSessionBackgroundAudioWrite shape. */
         ConfigNightSessionRestingWrite: {
             fppInstanceId: string;
             playlist: string;
@@ -4484,7 +4509,57 @@ export interface components {
             endOfNightRepeat?: boolean;
             backgroundAudio?: components["schemas"]["ConfigNightSessionBackgroundAudioWrite"];
         };
-        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, and enterResting carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a- documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one — matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks refusal, the same-show rule) applies identically here. */
+        /** @description A configured power binding under night.session.siteControl (RESTING-MODE.md §10.2, Track F seam F6). action must name an existing show.action object in this session's own show (server-side; not expressible here). domainProvenance "provider" is refused (server-side): no control provider in this build can authoritatively identify a power binding's physical targets, so every binding this build accepts is operator-declared. */
+        ConfigNightSessionPowerBinding: {
+            action: string;
+            /** @enum {string} */
+            powerDomain: "presentation" | "environmental" | "mixed" | "unknown";
+            /** @enum {string} */
+            domainProvenance: "provider" | "operator-declared";
+        };
+        /** @description One entry of presentationPowerOff.prerequisites, present only when removalPolicy is "after-actions" (RESTING-MODE.md §10.2). A "delay" entry carries delayMs and neither action nor requireConfirmation; an "action" or "evidence" entry carries action and, for "action" only, an optional requireConfirmation. action must not name this same presentation power-off binding's own action, directly or indirectly (server-side; not expressible here). */
+        ConfigNightSessionPrerequisite: {
+            /** @enum {string} */
+            kind: "action" | "delay" | "evidence";
+            action?: string;
+            requireConfirmation?: boolean;
+            delayMs?: number;
+        };
+        /** @description night.session.siteControl.presentationPowerOff (RESTING-MODE.md §10.2). powerDomain must be "presentation" (server-side): this binding is what power-down-presentation invokes, and every other domain is refused rather than guessed. removalPolicy "immediate" requires immediateSafeAttestation: true and forbids prerequisites; "after-actions" requires a non-empty prerequisites list and forbids immediateSafeAttestation (server-side; that either/or is not expressible in this schema alone). */
+        ConfigNightSessionPresentationPowerOff: {
+            action: string;
+            /** @enum {string} */
+            powerDomain: "presentation" | "environmental" | "mixed" | "unknown";
+            /** @enum {string} */
+            domainProvenance: "provider" | "operator-declared";
+            /** @enum {string} */
+            removalPolicy: "immediate" | "after-actions";
+            immediateSafeAttestation?: boolean;
+            prerequisites?: components["schemas"]["ConfigNightSessionPrerequisite"][];
+        };
+        /** @description night.session.siteControl (RESTING-MODE.md §10.2/§10.4, ADR-016, Track F seam F6): entirely optional, and every field within it is independently optional too; an empty object is refused (server-side) as configuration nothing enforces. requestThermalProfile, when present, names an existing show.action object in this session's own show (server-side). */
+        ConfigNightSessionSiteControl: {
+            requestThermalProfile?: string;
+            presentationPowerOn?: components["schemas"]["ConfigNightSessionPowerBinding"];
+            presentationPowerOff?: components["schemas"]["ConfigNightSessionPresentationPowerOff"];
+        };
+        /** @description One entry of night.session.interlocks (RESTING-MODE.md §10.1, Track F seam F6): a named rule attached to exactly one lifecycle phase, unique within a configuration revision. A "disabled" entry carries only name, phase, and posture; every other property below is refused for it (server-side). An "observe" entry must not set onUnavailable or overridePolicy; a "block" entry requires both, with no default (server-side; the exact combination rules are not expressible in this schema alone). signal names an existing show.action object that declares an mqtt target with expect.kind other than "none" (server-side): an interlock's evidence is that action's own request/response, the only mechanism this build has to reach a site sensor. */
+        ConfigNightSessionInterlock: {
+            name: string;
+            /** @enum {string} */
+            phase: "prepare-site" | "presentation-power-on" | "projector-strike" | "run-readiness" | "start-preshow" | "start-night" | "enter-resting" | "fade-out-night" | "power-down-presentation";
+            /** @enum {string} */
+            posture: "observe" | "block" | "disabled";
+            signal?: string;
+            /** @description Bounds how old the evidence this rule consults may be before it is treated as unavailable (server-side enforced). For a phase whose evidence is dispatched live at the instant the command runs (prepare-site, run-readiness, fade-out-night, power-down-presentation), evidence is always current and this has no effect. For a phase gated against a stored readiness result instead (start-preshow, start-night), the stricter of this value and the coordinator's own configured readiness max age is enforced; with no trusted result at all, or one older than either bound, this rule is evidence-unavailable regardless of what its stored check reports. */
+            freshnessSeconds?: number;
+            failureText?: string;
+            /** @enum {string} */
+            onUnavailable?: "block" | "allow";
+            /** @enum {string} */
+            overridePolicy?: "none" | "authorized-operator";
+        };
+        /** @description The WRITE shape of the "night.session" configuration kind's payload: the body PUT /config/night.session/{id} accepts. Identical to ConfigNightSession except that resting, enterShow, and enterResting carry their own *Write shapes, whose only difference is which of their own fields are optional-with-a- documented-default rather than always required. The response to a successful write stores and returns the resolved ConfigNightSession shape, never this one - matching ConfigShowWrite/ConfigShow's existing precedent one kind over. Every validation rule ConfigNightSession's own description states (the calendar/duration key ban, siteControl/interlocks validation, the same-show rule) applies identically here. */
         ConfigNightSessionWrite: {
             show: string;
             label: string;
@@ -4492,8 +4567,15 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionRestingWrite"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShowWrite"];
             enterResting: components["schemas"]["ConfigNightSessionEnterRestingWrite"];
+            /**
+             * @description Defaults to "duck" when absent. Used by any announcement-role cue that does not name its own announcementPolicy.
+             * @enum {string}
+             */
+            announcementDefaultPolicy?: "duck" | "mix" | "interrupt";
+            siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
+            interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
         };
-        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seam F1, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} — never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) — this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are specified (RESTING-MODE.md §10) but not implemented in this seam and are rejected if present. Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
+        /** @description The READ (fully resolved) shape of the "night.session" configuration kind's decoded payload (Track F seams F1 and F6, RESTING-MODE.md, ADR-038, ADR-039), returned by GET and by a successful PUT /config/night.session/{id} - never the shape PUT itself accepts; see ConfigNightSessionWrite for that. Every field defaulted on write (repeat, barrier, onFailure, endOfNightPlaylist, endOfNightRepeat) is always the RESOLVED value here, never absent standing in for "the default applies". A KEY named at, cron, schedule, time, date, weekday, or timezone, or a KEY that restates the resting FSEQ's own duration (restDuration, restSeconds, ...), is rejected anywhere in this object (server-side; not expressible in this schema) - this is a rule about field NAMES, not values, so an operator-authored label or action id that happens to contain a date or a time of day is an ordinary string, not a violation. `siteControl` and `interlocks` are entirely optional (RESTING-MODE.md §10's own opening line: a deployment that omits both runs the whole night loop unchanged). Every cross-object reference this object carries (cue actions, the resting timeline asset, every backgroundAudio item, every siteControl action, every interlock signal) must belong to this session's own `show` (ADR-027: a Show is a namespace). */
         ConfigNightSession: {
             show: string;
             label: string;
@@ -4501,6 +4583,10 @@ export interface components {
             resting: components["schemas"]["ConfigNightSessionResting"];
             enterShow: components["schemas"]["ConfigNightSessionEnterShow"];
             enterResting: components["schemas"]["ConfigNightSessionEnterResting"];
+            /** @enum {string} */
+            announcementDefaultPolicy: "duck" | "mix" | "interrupt";
+            siteControl?: components["schemas"]["ConfigNightSessionSiteControl"];
+            interlocks?: components["schemas"]["ConfigNightSessionInterlock"][];
         };
         /** @description The body of GET and PUT /config/night.session/{id}, and of GET /config/night.session/{id}/revisions/{revision} (one past, immutable revision's full payload). */
         NightSessionConfigResponse: {
@@ -4518,7 +4604,7 @@ export interface components {
             /** @enum {string} */
             source: "api";
         };
-        /** @description The "night.session.active" singleton configuration kind's decoded payload (Track F seam F1, ADR-039 rule 4): the body PUT /config/night.session.active accepts, and the "payload" member of GET /config/night.session.active's response. session is REQUIRED as a key but may be the empty string, which explicitly clears the pointer back to unset (the zero-to-one-and-back-to-zero transition) — a non-empty value must name an existing night.session object (server-side; not expressible here). */
+        /** @description The "night.session.active" singleton configuration kind's decoded payload (Track F seam F1, ADR-039 rule 4): the body PUT /config/night.session.active accepts, and the "payload" member of GET /config/night.session.active's response. session is REQUIRED as a key but may be the empty string, which explicitly clears the pointer back to unset (the zero-to-one-and-back-to-zero transition) - a non-empty value must name an existing night.session object (server-side; not expressible here). */
         ConfigNightSessionActive: {
             session: string;
         };
@@ -4538,21 +4624,21 @@ export interface components {
             /** @enum {string} */
             source: "api";
         };
-        /** @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape — exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) — the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass — but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed. */
+        /** @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed. */
         NightReadinessCheck: {
             name: string;
             /**
-             * @description pkg/observation's Health vocabulary, plus not_verifiable for a check that is structurally incapable of ever reporting anything else — excluded from the aggregate outcome but always listed. Missing evidence is always "unknown".
+             * @description pkg/observation's Health vocabulary, plus not_verifiable for a check that is structurally incapable of ever reporting anything else, and not_configured for a check whose own OPTIONAL configuration is simply absent - both excluded from the aggregate outcome but always listed. Missing evidence is always "unknown".
              * @enum {string}
              */
-            state: "healthy" | "degraded" | "failed" | "unknown" | "not_verifiable";
+            state: "healthy" | "degraded" | "failed" | "unknown" | "not_verifiable" | "not_configured";
             reason: string;
         };
         /** @description The current session's most recent run-readiness result, or its explicit absence, stated with a state and a reason rather than omitted (ADR-020). No precomputed age field (ADR-020 decision 6): compare `completedAt` against the envelope's own `serverTime`. `outcome`/`epochId`/`completedAt` are present only when `state` is `"recorded"`. `outcome` never withholds `start-night` by itself in this build; only the epoch/freshness gate does. */
         NightReadiness: {
             /** @enum {string} */
             state: "recorded" | "unknown" | "not_configured" | "not_available";
-            /** @description Distinguishes "no result recorded yet" from "the store could not be read" from "the result exists but its checks payload failed to decode" — never a single collapsed reason for all three. */
+            /** @description Distinguishes "no result recorded yet" from "the store could not be read" from "the result exists but its checks payload failed to decode" - never a single collapsed reason for all three. */
             reason: string;
             /** @enum {string} */
             outcome?: "ready" | "not_ready" | "unknown";
@@ -4569,7 +4655,7 @@ export interface components {
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             reason: string;
         };
-        /** @description One configured cue's outbox detail for the session's current cycle. `state` "not_dispatched" means no outbox row exists for this cycle. `state` and `outcome` are never collapsed into one field: a dispatched-but-unconfirmed cue reports `state` "resolved", `outcome` "unconfirmed" — never "failed". */
+        /** @description One configured cue's outbox detail for the session's current cycle. `state` "not_dispatched" means no outbox row exists for this cycle. `state` and `outcome` are never collapsed into one field: a dispatched-but-unconfirmed cue reports `state` "resolved", `outcome` "unconfirmed" - never "failed". */
         NightCue: {
             name: string;
             /**
@@ -4590,14 +4676,44 @@ export interface components {
             /** Format: date-time */
             resolvedAt: string | null;
         };
-        /** @description The current cycle's per-cue detail, or the stated reason it could not be read — never a silently empty list for either "no cues configured" or "read failed". */
+        /** @description The current cycle's per-cue detail, or the stated reason it could not be read - never a silently empty list for either "no cues configured" or "read failed". */
         NightCues: {
             /** @enum {string} */
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             reason: string;
             cues: components["schemas"]["NightCue"][];
         };
-        /** @description The night-session lifecycle controller's own persisted state — a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
+        /** @description One durable audio step Track F seam F5's own controller has recorded, across every cycle the session has lived through: either the resting bed's own playback sequence or an announcement session's clear and start. */
+        NightBackgroundAudioStep: {
+            /**
+             * @description Which of the controller's two audio sequences this step belongs to, so a failure is attributable without reading the internal phase string.
+             * @enum {string}
+             */
+            sequence: "background" | "announcement";
+            /** @description The internal outbox phase this step was recorded under - a diagnostic identifier, not a value to round-trip back into a request. */
+            phase: string;
+            cueName: string;
+            /** @enum {string} */
+            kind: "apply" | "gain" | "start" | "pause" | "resume" | "stop" | "announcementClear" | "announcementStart";
+            actionRevision: number;
+            /** @enum {string} */
+            state: "pending" | "dispatched" | "resolved" | "ambiguous";
+            /** @enum {string} */
+            outcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "failed" | "refused" | "ambiguous";
+            reason?: string;
+            /** Format: date-time */
+            dispatchedAt: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+        };
+        /** @description resting.backgroundAudio's own durable step log for the current cycle, or the stated reason it could not be read. Empty `steps` with `state` "recorded" means backgroundAudio is not configured at all, or has never been started this cycle. */
+        NightBackgroundAudio: {
+            /** @enum {string} */
+            state: "recorded" | "unknown" | "not_configured" | "not_available";
+            reason: string;
+            steps: components["schemas"]["NightBackgroundAudioStep"][];
+        };
+        /** @description The night-session lifecycle controller's own persisted state - a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
         NightSessionState: {
             id: string;
             configObjectId: string;
@@ -4624,6 +4740,7 @@ export interface components {
             powerPhase: components["schemas"]["NightPhaseEvidence"];
             transition: components["schemas"]["NightPhaseEvidence"];
             cues: components["schemas"]["NightCues"];
+            backgroundAudio: components["schemas"]["NightBackgroundAudio"];
             degraded: boolean;
             degradedReason?: string;
             /** @description True when this session's most recent command applied despite its audit entry failing to write (ADR-024 decision 11), or when an autonomous dispatch ran with no authorizing principal recorded. Never cleared once true. */
@@ -4650,11 +4767,25 @@ export interface components {
             serverTime: string;
             session: components["schemas"]["NightSessionState"];
         };
-        /** @description The optional body of POST /night/commands/{command}. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. */
+        /** @description The payload of a "nightSession.changed" SSE event (Track F seam F2): one kind, not one per transition — the full NightSessionState a GET returns, never a delta. No delta event kind exists for this resource, matching resolume.changed's own posture. */
+        NightSessionChangedEvent: {
+            /** @description Per-connection only; never a durable cursor. */
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            session: components["schemas"]["NightSessionState"];
+        };
+        /** @description One entry of NightCommandRequest.interlockOverrides (RESTING-MODE.md §10.1, Track F seam F6): a request to override a named "block" interlock rule currently withholding the command's own phase. Honored only when that rule declares `overridePolicy: authorized-operator`, the caller separately holds `night:override`, and the rule is actually withholding the phase being entered (server-side; not expressible here). Every accepted override is audited with the rule, phase, reason, and a bounded (this-invocation-only) scope. */
+        NightInterlockOverride: {
+            rule: string;
+            reason: string;
+        };
+        /** @description The optional body of POST /night/commands/{command}. Decoded strictly: an unrecognized key is refused, not silently ignored. `idempotencyKey` is honored only by `prepare-site`; every other command is already idempotent by lifecycle state and ignores it. `interlockOverrides` (Track F seam F6) is consulted by `prepare-site`, `run-readiness`, `start-preshow`, `start-night`, `fade-out-night`, and `power-down-presentation`, each against the "block" interlock rules declared for that command's own phase, described in full on `POST /night/commands/{command}` itself. `request-final-show` and `end-session` consult no interlock at all and REFUSE a non-empty `interlockOverrides` rather than silently ignoring it. */
         NightCommandRequest: {
             idempotencyKey?: string;
+            interlockOverrides?: components["schemas"]["NightInterlockOverride"][];
         };
-        /** @description What POST /night/commands/{command} accepted, and how — `idempotent_no_op` is a real, distinct outcome from `applied`. */
+        /** @description What POST /night/commands/{command} accepted, and how - `idempotent_no_op` is a real, distinct outcome from `applied`. */
         NightCommandResult: {
             command: string;
             /** @enum {string} */
@@ -4669,7 +4800,7 @@ export interface components {
             command: components["schemas"]["NightCommandResult"];
             session: components["schemas"]["NightSessionState"];
         };
-        /** @description One row of the coordinator's asset metadata store (Track E seam E3/E4, ADR-028): an artifact's identity, never its bytes. `target` mirrors the store's own TargetID — empty when `targetKind` is "show". `runtimeFilename` is preserved but carries no identity of its own: two different Asset values may share the same `runtimeFilename` (ADR-028 decision 1 — a filename is not an asset identity). */
+        /** @description One row of the coordinator's asset metadata store (Track E seam E3/E4, ADR-028): an artifact's identity, never its bytes. `target` mirrors the store's own TargetID - empty when `targetKind` is "show". `runtimeFilename` is preserved but carries no identity of its own: two different Asset values may share the same `runtimeFilename` (ADR-028 decision 1 - a filename is not an asset identity). */
         Asset: {
             id: string;
             show: string;
@@ -4709,7 +4840,7 @@ export interface components {
             serverTime: string;
             assets: components["schemas"]["Asset"][];
         };
-        /** @description POST /assets' multipart/form-data body. show, sequence, mediaType, and targetKind are required on every request; target is required only when targetKind is "node" (not expressible in this schema alone — see the operation's own description). Every field part MUST arrive before the file part. */
+        /** @description POST /assets' multipart/form-data body. show, sequence, mediaType, and targetKind are required on every request; target is required only when targetKind is "node" (not expressible in this schema alone - see the operation's own description). Every field part MUST arrive before the file part. */
         AssetUploadRequest: {
             /** Format: binary */
             file: string;
@@ -4722,7 +4853,7 @@ export interface components {
             /** @description Required, and must name a declared node, when targetKind is "node". */
             target?: string;
         };
-        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state — never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. */
+        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. */
         NodeAssetManifest: {
             node: string;
             /** @enum {string} */
@@ -4742,7 +4873,7 @@ export interface components {
             contentHash: string;
             sizeBytes: number;
         };
-        /** @description A sequence the active show has some current asset for, that a node carrying one or more surfaces in that show has no coverage for at all — inferred from the show's own asset rows, not a stored surface-to-sequence link. */
+        /** @description A sequence the active show has some current asset for, that a node carrying one or more surfaces in that show has no coverage for at all - inferred from the show's own asset rows, not a stored surface-to-sequence link. */
         AssetGap: {
             sequence: string;
             surfaces: string[];
@@ -4827,7 +4958,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description Neither same-origin signal was present: no `Sec-Fetch-Site: same-origin`, and no `Origin` header naming the host this request was addressed as (owner decision, 2026-08-12: strict; two-signal correction 2026-08-14 — the identical predicate `CSRFRejected` already applies to every other write, since there is deliberately one CSRF rule in this codebase, not two). Unlike `CSRFRejected`, there is no bearer exemption for this operation: it is unauthenticated by construction, so there is no pre-existing credential that could BE bearer-shaped in the first place. A `curl` login must pass one of the two headers explicitly. A browser reaching this response is no longer evidence of an old browser: it means the origin the browser used and the host this coordinator was addressed as disagree, which in practice is a proxy rewriting `Host`. The bearer-paste break-glass affordance (ADR-024 decision 5) remains the fallback path either way. */
+        /** @description Neither same-origin signal was present: no `Sec-Fetch-Site: same-origin`, and no `Origin` header naming the host this request was addressed as (owner decision, 2026-08-12: strict; two-signal correction 2026-08-14 - the identical predicate `CSRFRejected` already applies to every other write, since there is deliberately one CSRF rule in this codebase, not two). Unlike `CSRFRejected`, there is no bearer exemption for this operation: it is unauthenticated by construction, so there is no pre-existing credential that could BE bearer-shaped in the first place. A `curl` login must pass one of the two headers explicitly. A browser reaching this response is no longer evidence of an old browser: it means the origin the browser used and the host this coordinator was addressed as disagree, which in practice is a proxy rewriting `Host`. The bearer-paste break-glass affordance (ADR-024 decision 5) remains the fallback path either way. */
         LoginCSRFRejected: {
             headers: {
                 "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -4863,7 +4994,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description The request itself is valid, but this coordinator's current state makes it unsafe or meaningless to act on right now — the identical request would succeed at a different moment, which is what distinguishes this from `InvalidParameter` (a property of the request itself). Every operation that returns this response names its own specific cause in `detail`: `PUT /config/fpp.endpoints` (Step 7 seam A) refuses because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own process environment (RES-008 D1) and the identical body would be accepted the moment the variable is removed and this coordinator restarts once; `POST /discovery/runs` (Step 7 seam B) refuses because a run is already in progress. */
+        /** @description The request itself is valid, but this coordinator's current state makes it unsafe or meaningless to act on right now - the identical request would succeed at a different moment, which is what distinguishes this from `InvalidParameter` (a property of the request itself). Every operation that returns this response names its own specific cause in `detail`: `PUT /config/fpp.endpoints` (Step 7 seam A) refuses because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own process environment (RES-008 D1) and the identical body would be accepted the moment the variable is removed and this coordinator restarts once; `POST /discovery/runs` (Step 7 seam B) refuses because a run is already in progress. */
         Conflict: {
             headers: {
                 "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -4873,7 +5004,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description The coordinator failed to answer this request for a reason that has nothing to do with whether the requested resource exists or the request was well formed — an internal dependency (e.g. the store) failed. `detail` never carries the underlying error; it is logged coordinator-side only. */
+        /** @description The coordinator failed to answer this request for a reason that has nothing to do with whether the requested resource exists or the request was well formed - an internal dependency (e.g. the store) failed. `detail` never carries the underlying error; it is logged coordinator-side only. */
         InternalError: {
             headers: {
                 "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -4899,7 +5030,7 @@ export interface components {
     headers: {
         /** @description The API major version this response was served by. Present on every `/api/v1` response, success or error, with no exception (contract section 6.2). A client MAY also send this as a request header naming the version it expects; a coordinator that does not serve that version answers with the `UnsupportedAPIVersion` problem instead of a partial or best-guess render (contract section 6.6). */
         "ShowMesh-API-Version": "1";
-        /** @description Present only on a `405` response. The exact, comma-separated set of HTTP methods the requested path serves (e.g. `"GET, HEAD"`), computed from the routes actually registered — never a static or hand-maintained list. */
+        /** @description Present only on a `405` response. The exact, comma-separated set of HTTP methods the requested path serves (e.g. `"GET, HEAD"`), computed from the routes actually registered - never a static or hand-maintained list. */
         Allow: string;
     };
     pathItems: never;
@@ -5040,7 +5171,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) — a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5080,7 +5211,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) — a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5115,7 +5246,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) — a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5353,7 +5484,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5397,7 +5528,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5441,7 +5572,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5485,7 +5616,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5529,7 +5660,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5573,7 +5704,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5617,7 +5748,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5661,7 +5792,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5705,7 +5836,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5749,7 +5880,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5793,7 +5924,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5837,7 +5968,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5881,7 +6012,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one — never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` — also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
+            /** @description Two DISTINCT causes, decided in this order: (1) `idempotencyKey` was already used for a command whose `action` differs from this one - never answered as if it belonged to whichever command first claimed the key; (2) the SAME action but DIFFERENT `params`/`revision` - also a conflict, never a replay. Mint a fresh `idempotencyKey` for a genuinely new request. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -5926,7 +6057,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Three DISTINCT causes, three DISTINCT `type` values, decided in this order (see this operation's own description): (1) `idempotencyKey` was already used for a command whose `action`, `instanceId`, or normalized `params` differs from this request's own — a conflict, not a replay, `type` `conflict`, remedy "mint a fresh key"; decided BEFORE either guard below ever runs. Only once the key is confirmed genuinely new does `startPlaylist`'s own `ifBusy` guard get to refuse: (2) a DIFFERENT playlist is confirmed playing, `type` `fpp-start-playlist-busy`, remedy "resend with ifBusy: replace"; or (3) the evidence needed to decide that is not current, `type` `fpp-start-playlist-evidence-not-current`, remedy "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended". No two of these three share a `type`, specifically so a client branches on `type`, never on `detail` prose, since (1)'s remedy is the OPPOSITE of (2)'s and (3)'s. */
+            /** @description Three DISTINCT causes, three DISTINCT `type` values, decided in this order (see this operation's own description): (1) `idempotencyKey` was already used for a command whose `action`, `instanceId`, or normalized `params` differs from this request's own - a conflict, not a replay, `type` `conflict`, remedy "mint a fresh key"; decided BEFORE either guard below ever runs. Only once the key is confirmed genuinely new does `startPlaylist`'s own `ifBusy` guard get to refuse: (2) a DIFFERENT playlist is confirmed playing, `type` `fpp-start-playlist-busy`, remedy "resend with ifBusy: replace"; or (3) the evidence needed to decide that is not current, `type` `fpp-start-playlist-evidence-not-current`, remedy "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended". No two of these three share a `type`, specifically so a client branches on `type`, never on `detail` prose, since (1)'s remedy is the OPPOSITE of (2)'s and (3)'s. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6016,7 +6147,7 @@ export interface operations {
     streamChanges: {
         parameters: {
             query?: {
-                /** @description Opt this connection into `fpp.observations.changed` frames (ADR-023). Only the exact literal value `1` enables it; any other value — absent, empty, `0`, `true`, anything else — behaves identically to omitting this parameter entirely, which is deliberately the strictest possible reading rather than a lenient truthy check (see this operation's own description above for why: additive compatibility for every connection that has never heard of this parameter depends on it). */
+                /** @description Opt this connection into `fpp.observations.changed` frames (ADR-023). Only the exact literal value `1` enables it; any other value - absent, empty, `0`, `true`, anything else - behaves identically to omitting this parameter entirely, which is deliberately the strictest possible reading rather than a lenient truthy check (see this operation's own description above for why: additive compatibility for every connection that has never heard of this parameter depends on it). */
                 deltas?: string;
             };
             header?: never;
@@ -6157,7 +6288,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidParameter"];
-            /** @description The bootstrap code is invalid, already claimed, or expired — or no bootstrap code is currently available (a principal already exists). */
+            /** @description The bootstrap code is invalid, already claimed, or expired - or no bootstrap code is currently available (a principal already exists). */
             401: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6254,7 +6385,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) - see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6323,7 +6454,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            /** @description Either the principal does not hold `principal:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) - see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6641,7 +6772,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) - see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6707,7 +6838,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) - see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6798,7 +6929,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) - see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6889,7 +7020,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) - see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -6983,7 +7114,7 @@ export interface operations {
             };
             400: components["responses"]["InvalidParameter"];
             401: components["responses"]["Unauthorized"];
-            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) — see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`) - see `components.responses.Forbidden` and `components.responses.CSRFRejected`. */
             403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -7445,7 +7576,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description An idempotency key was already used for a command whose `action` or normalized `params` differs from this request's own — a conflict, not a replay, `type` `conflict`, remedy "mint a fresh key". */
+            /** @description An idempotency key was already used for a command whose `action` or normalized `params` differs from this request's own - a conflict, not a replay, `type` `conflict`, remedy "mint a fresh key". */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -7908,7 +8039,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description `idempotencyKey` was already used for a different action id — `type` `conflict`, remedy "mint a fresh key". */
+            /** @description `idempotencyKey` was already used for a different action id - `type` `conflict`, remedy "mint a fresh key". */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -7962,7 +8093,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Three DISTINCT causes, three DISTINCT `type` values (never the plain `conflict`): `macro-run-already-in-flight` (ADR-031 decision 6), `macro-run-idempotency-macro-conflict`, and `macro-run-idempotency-revision-conflict` (STEP-9-SPEC.md section 6.2) — `detail` names the in-flight or conflicting run. */
+            /** @description Three DISTINCT causes, three DISTINCT `type` values (never the plain `conflict`): `macro-run-already-in-flight` (ADR-031 decision 6), `macro-run-idempotency-macro-conflict`, and `macro-run-idempotency-revision-conflict` (STEP-9-SPEC.md section 6.2) - `detail` names the in-flight or conflicting run. */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -8879,7 +9010,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             405: components["responses"]["MethodNotAllowed"];
-            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
+            /** @description Three distinct causes, three distinct `type` values: `night-not-ready` (a precondition is not yet met, including a configured "block" interlock currently withholding this phase and not covered by a valid override, Track F seam F6), `night-state-rejected` (refused by the command's own closed state table for the session's current state), or `night-ambiguous` (the session is degraded; run `end-session` then `prepare-site` to recover). */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -9246,7 +9377,7 @@ export interface operations {
                 show?: string;
                 /** @description Narrow the list to this logical sequence id. */
                 sequence?: string;
-                /** @description Narrow the list to CURRENT assets targeted at this node specifically — never a show-wide asset, even one that node would also need. */
+                /** @description Narrow the list to CURRENT assets targeted at this node specifically - never a show-wide asset, even one that node would also need. */
                 node?: string;
             };
             header?: never;
@@ -9294,7 +9425,7 @@ export interface operations {
                     "application/json": components["schemas"]["AssetResponse"];
                 };
             };
-            /** @description Invalid or missing field (`invalid-parameter`), or `targetKind: "node"` with no `target` (`asset-target-required`) — see `detail` for which. */
+            /** @description Invalid or missing field (`invalid-parameter`), or `targetKind: "node"` with no `target` (`asset-target-required`) - see `detail` for which. */
             400: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
@@ -9316,7 +9447,7 @@ export interface operations {
                 };
             };
             405: components["responses"]["MethodNotAllowed"];
-            /** @description The uploaded file exceeds this coordinator's own upload size bound (`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`). Nothing was stored. Shares `type` `payload-too-large` with the identical refusal on `POST /config/resolume/composition` — one class, one URI. */
+            /** @description The uploaded file exceeds this coordinator's own upload size bound (`SHOWMESH_ASSET_MAX_UPLOAD_BYTES`). Nothing was stored. Shares `type` `payload-too-large` with the identical refusal on `POST /config/resolume/composition` - one class, one URI. */
             413: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];

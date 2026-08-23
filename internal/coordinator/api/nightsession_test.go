@@ -225,7 +225,11 @@ func TestPutNightSessionRejectsCalendarField(t *testing.T) {
 	}
 }
 
-func TestPutNightSessionRejectsSiteControl(t *testing.T) {
+// TestPutNightSessionRejectsEmptySiteControl: Track F seam F6 now decodes
+// siteControl for real (nightsitecontrol.go); an empty object is still
+// refused, but as ordinary field validation rather than the retired
+// "not implemented" problem.
+func TestPutNightSessionRejectsEmptySiteControl(t *testing.T) {
 	api, _, token := setupNightSessionFixture(t)
 	body := validNightSessionBody[:len(validNightSessionBody)-1] + `,"siteControl":{}}`
 	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/night.session/halloween-main", body, map[string]string{"Authorization": "Bearer " + token})
@@ -233,8 +237,8 @@ func TestPutNightSessionRejectsSiteControl(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body: %s", resp.StatusCode, respBody)
 	}
-	if !containsAll(string(respBody), "show-config-not-implemented") {
-		t.Fatalf("expected the not-implemented problem type; body: %s", respBody)
+	if !containsAll(string(respBody), "show-config-field-required") || !containsAll(string(respBody), "siteControl") {
+		t.Fatalf("expected a field-required problem naming siteControl; body: %s", respBody)
 	}
 }
 

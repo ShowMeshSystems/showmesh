@@ -223,13 +223,83 @@ const (
 	ValidationCodeDuplicateRestDuration = "duplicate-rest-duration"
 
 	// ValidationCodeNotImplemented means the payload named something the
-	// records specify but no code enforces yet: night.session's
-	// "siteControl" and "interlocks" blocks (RESTING-MODE.md §10, awaiting
-	// Track F F6) and show.playlist's reserved "showmesh" runner (ADR-043,
-	// no implementation). Accepting configuration nothing enforces is a
-	// surface asserting something false (owner decision, TRACK-F-F1 seam
-	// spec).
+	// records specify but no code enforces yet. Track F seam F1 produced it
+	// for night.session's "siteControl" and "interlocks"; seam F6
+	// (nightsitecontrol.go) now decodes and validates both, so that reason
+	// is gone. show.playlist's reserved "showmesh" runner still returns it
+	// (ADR-043, no implementation), so the Code is live, not retired.
+	// Accepting configuration nothing enforces is a surface asserting
+	// something false (owner decision, TRACK-F-F1 seam spec).
 	ValidationCodeNotImplemented = "not-implemented"
+
+	// The Codes below are Track F seam F6's own additions
+	// (nightsitecontrol.go, RESTING-MODE.md §10, ADR-016, ADR-029):
+	// interlocks and siteControl rules that are not "one field, one
+	// problem," the same reasoning ValidationCodeCueNameDuplicate and
+	// ValidationCodeCrossShowReference above already carry for F1's own
+	// structural rules.
+
+	// ValidationCodeInterlockNameDuplicate means two entries of
+	// night.session.interlocks declared the same name: RESTING-MODE.md
+	// §10.1: "Rule names are unique within a configuration revision."
+	ValidationCodeInterlockNameDuplicate = "interlock-name-duplicate"
+
+	// ValidationCodeInterlockSignalNotConfirmable means an interlock's
+	// signal named a show.action that cannot produce the evidence read an
+	// interlock needs: either its target is not mqtt, or its
+	// target.expect.kind is "none". An interlock is a request/response
+	// evidence read (orchestrator ruling, this seam's own build brief);
+	// an action nothing ever answers can never resolve one.
+	ValidationCodeInterlockSignalNotConfirmable = "interlock-signal-not-confirmable"
+
+	// ValidationCodePowerDomainRefused means a power binding declared a
+	// powerDomain this position in the schema does not accept:
+	// presentationPowerOn/presentationPowerOff both require
+	// "presentation" (RESTING-MODE.md §10.2: "power-down-presentation
+	// accepts only bindings declared as powerDomain: presentation. It
+	// rejects environmental, mixed, and unknown bindings rather than
+	// guessing," applied at write time to the binding the command actually
+	// invokes rather than deferred to the moment the command runs).
+	ValidationCodePowerDomainRefused = "power-domain-refused"
+
+	// ValidationCodeDomainProvenanceRefused means a power binding declared
+	// domainProvenance "provider": refused because no control provider in
+	// this build can authoritatively identify what is physically behind an
+	// mqtt/Home Assistant binding (RESTING-MODE.md §10.2, ADR-016): every
+	// binding this build can express is operator-declared, and trusting a
+	// "provider" claim here would be exactly the guess this field exists
+	// to prevent.
+	ValidationCodeDomainProvenanceRefused = "domain-provenance-refused"
+
+	// ValidationCodePrerequisitesEmpty means presentationPowerOff selected
+	// removalPolicy "after-actions" but supplied zero prerequisites;
+	// RESTING-MODE.md §10.2: "a non-empty ordered list."
+	ValidationCodePrerequisitesEmpty = "prerequisites-empty"
+
+	// ValidationCodePowerOffPrerequisiteCycle means an "after-actions"
+	// prerequisite named the SAME presentation power-off binding's own
+	// action: RESTING-MODE.md §10.2 says prerequisites "may not invoke the
+	// same power-off binding directly or indirectly." This build has
+	// exactly one presentation power-off binding per session and no
+	// action-to-action call graph, so the only reachable cycle is direct
+	// self-reference; see nightsitecontrol.go's own doc comment on
+	// decodeNightPrerequisite for why indirect reference is not a
+	// distinct, separately-detected case here.
+	ValidationCodePowerOffPrerequisiteCycle = "power-off-prerequisite-cycle"
+
+	// ValidationCodeInterlockShutdownPhaseRequiresOverride means a "block"
+	// rule declared on phase fade-out-night or power-down-presentation set
+	// overridePolicy "none": those two phases end the night, and a guard
+	// on either one must always have a human exit (RESTING-MODE.md
+	// §10.4, orchestrator ruling from this seam's own safety review).
+	ValidationCodeInterlockShutdownPhaseRequiresOverride = "interlock-shutdown-phase-requires-override"
+
+	// ValidationCodeInterlockSignalNoFalseAnswer means a "block" rule's
+	// signal action uses an mqtt expect kind that can never report a
+	// negative answer ("text", or "number" with no comparison value), so
+	// the rule could only ever withhold via onUnavailable, never via a
+	// real condition-false reading.
+	ValidationCodeInterlockSignalNoFalseAnswer = "interlock-signal-no-false-answer"
 
 	// ValidationCodeBackgroundAudioItemsEmpty means
 	// resting.backgroundAudio.items was present but held zero entries —
@@ -257,6 +327,19 @@ const (
 	// carries is checked against the session's own show, not merely
 	// checked for existence.
 	ValidationCodeCrossShowReference = "cross-show-reference"
+
+	// ValidationCodeBackgroundAudioMixedTargets means
+	// resting.backgroundAudio.items named more than one distinct asset
+	// target: a background-audio playlist plays on exactly one audio
+	// output, and each item's own "target" (ADR-028 asset identity) is
+	// this seam's only source of which audio.node id that is, so every
+	// item must agree.
+	ValidationCodeBackgroundAudioMixedTargets = "background-audio-mixed-targets"
+
+	// ValidationCodeAnnouncementPolicyNotApplicable means a cue named
+	// announcementPolicy while its own role was not "announcement": the
+	// duck/mix/interrupt policy only ever applies to an announcement.
+	ValidationCodeAnnouncementPolicyNotApplicable = "announcement-policy-not-applicable"
 	// ValidationCodeAudioNodeChannelDuplicate: audionode.go's own rule.
 	// programChannels lists the SAME physical route's channel indices, so a
 	// repeated index is a distinct refusal from an ordinary out-of-range
@@ -312,12 +395,39 @@ var showSafetyClasses = map[string]bool{
 	ShowSafetyClassPowerOff: true,
 }
 
-// The three members of show.action.target.integration.
+// The four members of show.action.target.integration. "audio" reaches
+// pkg/audio's session command surface through an ordinary logical action
+// binding (ADR-029), the same as fpp/mqtt/resolume — see
+// docs/build/IDENTIFIER-REGISTER.md's "show.action target integrations"
+// table.
 const (
 	ShowActionIntegrationFPP      = "fpp"
 	ShowActionIntegrationMQTT     = "mqtt"
 	ShowActionIntegrationResolume = "resolume"
+	ShowActionIntegrationAudio    = "audio"
 )
+
+// showActionAudioActions is every audio.session.*/audio.gain.*/
+// audio.output.* operation name this coordinator's agent-facing dispatch
+// already ships (internal/coordinator/api/audiodispatch.go's own
+// handleAudioSession*/handleAudioGain*/handleAudioOutput* route set) — an
+// audio show.action target names one of these, never a new operation
+// name.
+var showActionAudioActions = []string{
+	"audio.session.apply", "audio.session.prepare", "audio.session.start",
+	"audio.session.pause", "audio.session.resume", "audio.session.seek",
+	"audio.session.advance", "audio.session.stop", "audio.session.clear",
+	"audio.gain.set", "audio.gain.fade",
+	"audio.output.mute", "audio.output.unmute",
+}
+
+var showActionAudioActionSet = func() map[string]bool {
+	m := make(map[string]bool, len(showActionAudioActions))
+	for _, a := range showActionAudioActions {
+		m[a] = true
+	}
+	return m
+}()
 
 // The seven Resolume action names (internal/coordinator/collector/resolume.ActionName),
 // duplicated here by value rather than by import: this package must not
@@ -549,9 +659,18 @@ type ShowActionTarget struct {
 	Integration string `json:"integration"`
 
 	// fpp-only. Empty/nil when Integration is "mqtt".
-	InstanceID string         `json:"instanceId,omitempty"`
-	Primitive  string         `json:"primitive,omitempty"`
-	Params     map[string]any `json:"params,omitempty"`
+	InstanceID string `json:"instanceId,omitempty"`
+	Primitive  string `json:"primitive,omitempty"`
+
+	// Params is the integration's own parameter map: an fpp primitive's
+	// decoded/validated params (registry.DecodeActionParams), or an
+	// audio target's own command params, passed through undecoded — this
+	// package has no audio operation parameter registry (that vocabulary
+	// lives in internal/agent, across a layer this package must not
+	// import); the coordinator's audio dispatch path validates them at
+	// dispatch time the same way it already does for a direct
+	// audio.session.* API call.
+	Params map[string]any `json:"params,omitempty"`
 
 	// mqtt-only. Empty/nil when Integration is "fpp".
 	Broker  string                 `json:"broker,omitempty"`
@@ -564,6 +683,14 @@ type ShowActionTarget struct {
 	// persistent, bypassed, master) — never an object id (ADR-037).
 	Action string         `json:"action,omitempty"`
 	Ref    map[string]any `json:"ref,omitempty"`
+
+	// audio-only. Empty/nil unless Integration is "audio". AudioAction is
+	// one of [showActionAudioActions]; Params (above) carries that
+	// operation's own command params, exactly as a direct
+	// audio.session.*/audio.gain.*/audio.output.* API call would.
+	AudioNodeID    string `json:"audioNodeId,omitempty"`
+	AudioSessionID string `json:"audioSessionId,omitempty"`
+	AudioAction    string `json:"audioAction,omitempty"`
 }
 
 // ShowActionMQTTPublish is show.action.target.publish.
@@ -700,10 +827,12 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 		target, verr = decodeMQTTTarget(targetFields, brokers)
 	case ShowActionIntegrationResolume:
 		target, verr = decodeResolumeTarget(targetFields, safetyClass, resolver)
+	case ShowActionIntegrationAudio:
+		target, verr = decodeAudioTarget(targetFields, safetyClass)
 	default:
 		verr = &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "target.integration",
-			Detail: "integration must be \"fpp\", \"mqtt\", or \"resolume\"",
+			Detail: "integration must be \"fpp\", \"mqtt\", \"resolume\", or \"audio\"",
 		}
 	}
 	if verr != nil {
@@ -959,6 +1088,80 @@ func decodeMQTTExpect(fields map[string]json.RawMessage) (ShowActionMQTTExpect, 
 	}
 
 	return ShowActionMQTTExpect{Kind: kind, Topic: topic, Value: value, DeadlineSeconds: deadline}, nil
+}
+
+// audioActionDeclaredSafetyClass mirrors
+// resolumeActionDeclaredSafetyClass's role for the audio integration:
+// stop and clear are this subsystem's "stop show/session audio" action,
+// and output.mute is its blackout (audiodispatch.go's own doc comment:
+// "Muting the output is this subsystem's blackout"). Every other audio
+// action carries no safety class of its own.
+var audioActionDeclaredSafetyClass = map[string]string{
+	"audio.session.stop":  ShowSafetyClassStop,
+	"audio.session.clear": ShowSafetyClassStop,
+	"audio.output.mute":   ShowSafetyClassBlackout,
+}
+
+// decodeAudioTarget decodes and validates target.integration == "audio".
+// It does not check audioNodeId/audioSessionId against a live audio.node
+// or audio.session object: this package has no store access (this file's
+// own top doc comment), and unlike an fpp instance id or a resolume
+// composition reference, an audio session id is minted by the caller
+// (night-session driver or operator), not looked up — nightcue_readiness.go
+// and the coordinator's own dispatch path are where a missing node or
+// session surfaces, exactly as an unresolvable mqtt broker would if it
+// were removed after an action was bound to it.
+func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyClass string) (ShowActionTarget, *ValidationError) {
+	nodeID, verr := decodeRequiredString(targetFields, "audioNodeId", "target.audioNodeId")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	sessionID, verr := decodeRequiredString(targetFields, "audioSessionId", "target.audioSessionId")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	action, verr := decodeRequiredString(targetFields, "audioAction", "target.audioAction")
+	if verr != nil {
+		return ShowActionTarget{}, verr
+	}
+	if !showActionAudioActionSet[action] {
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeFieldUnknownReference, Field: "target.audioAction",
+			Detail: fmt.Sprintf("audioAction %q is not a supported audio operation (supported: %s)", action, strings.Join(showActionAudioActions, ", ")),
+		}
+	}
+
+	var params map[string]any
+	if raw, present := targetFields["params"]; present {
+		if isJSONNull(raw) {
+			return ShowActionTarget{}, &ValidationError{
+				Code: ValidationCodeFieldNull, Field: "target.params",
+				Detail: "target.params must not be null; omit it for an operation with no params",
+			}
+		}
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return ShowActionTarget{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "target.params",
+				Detail: "target.params must be a JSON object",
+			}
+		}
+	}
+
+	registeredClass := audioActionDeclaredSafetyClass[action]
+	if registeredClass == "" {
+		registeredClass = ShowSafetyClassNone
+	}
+	if registeredClass != declaredSafetyClass {
+		return ShowActionTarget{}, &ValidationError{
+			Code: ValidationCodeSafetyClassMismatch, Field: "safetyClass",
+			Detail: fmt.Sprintf("safetyClass %q does not match audio action %q's own required safety class %q", declaredSafetyClass, action, registeredClass),
+		}
+	}
+
+	return ShowActionTarget{
+		Integration: ShowActionIntegrationAudio, AudioNodeID: nodeID, AudioSessionID: sessionID,
+		AudioAction: action, Params: params,
+	}, nil
 }
 
 // decodeResolumeTarget decodes and validates target.integration ==

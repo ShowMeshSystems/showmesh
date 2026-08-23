@@ -112,7 +112,7 @@ func (h *handlers) nightCommitCueRow(ctx context.Context, now time.Time, rec sto
 // identity) and persists the outcome into the row, which must already
 // exist. It is the ONE code path both the ordinary advance and crash
 // recovery use — see [nightCueDispatchHooks] for its two crash windows.
-func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer) (store.NightCueOutboxRecord, error) {
+func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, idemKey string, issuer FPPCommandIssuer, actionRevision int64) (store.NightCueOutboxRecord, error) {
 	if h.hookAfterCommit(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
 	}
@@ -134,7 +134,7 @@ func (h *handlers) nightDispatchAndPersistCue(ctx context.Context, now time.Time
 		}
 	}
 
-	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey)
+	result := h.nightDispatchCueTarget(ctx, now, issuer, target, idemKey, actionRevision)
 
 	if h.hookAfterDispatch(cueName) {
 		return h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
@@ -179,7 +179,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			return store.NightCueOutboxRecord{}, err
 		}
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, action.Target, idemKey, issuer)
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, row.ActionRevision)
 
 	case nightCueStateDispatched:
 		action, err := nightResolveShowActionRevision(ctx, h.deps.Config, cue.Action, row.ActionRevision)
@@ -201,7 +201,7 @@ func (h *handlers) nightResumeCueRow(ctx context.Context, now time.Time, rec sto
 			return row, nil
 		}
 		idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, action.Target, idemKey, issuer)
+		return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, row.ActionRevision)
 
 	default:
 		return store.NightCueOutboxRecord{}, fmt.Errorf("api: night cue outbox row %s/%d/%s/%s has unrecognized state %q", rec.ID, rec.Cycle, phase, cue.Name, row.State)
@@ -257,7 +257,7 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 	}
 
 	idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cue.Name)
-	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, action.Target, idemKey, issuer)
+	return h.nightDispatchAndPersistCue(ctx, now, rec, phase, cue.Name, nightAnnouncementDeclaredTarget(cue, action.Target), idemKey, issuer, revision)
 }
 
 // nightBarrierResolutionDeadline bounds how long a barrier cue may hold
@@ -369,7 +369,7 @@ func sortedNightCues(cues []config.NightSessionCue) []config.NightSessionCue {
 // nightAdvanceCueList runs every due cue (offset relative to referenceE).
 // Only nightPhaseEnterShow carries the atomic show-commit boundary and a
 // launch barrier; enterResting and fadeOut are fire-and-forget.
-func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec store.NightSessionRecord, referenceE time.Time, phase string, cues []config.NightSessionCue) (barrierSatisfied bool, blockedReason string) {
+func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec store.NightSessionRecord, referenceE time.Time, phase string, cues []config.NightSessionCue, payload config.NightSessionPayload) (barrierSatisfied bool, blockedReason string) {
 	isEnterShow := phase == nightPhaseEnterShow
 	issuer := nightControllerIssuer(rec)
 	if nightAttributionMissing(rec) && len(cues) > 0 {
@@ -382,6 +382,18 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			continue
 		}
 		isFirst := isEnterShow && !firstCommitted
+		// An announcement cue carries its effective duck/mix/interrupt
+		// policy into its own dispatch, where the node enforces it
+		// (nightannouncement.go). Nothing here touches background audio.
+		cue = nightAnnouncementCueWithResolvedPolicy(cue, payload)
+		// Never before the atomic show-commit boundary: the clear is an
+		// outward-facing command, and the first outward-facing cue is
+		// itself that boundary (nightRunCue's isFirstOutwardCue). An
+		// announcement that IS the first outward cue simply goes without
+		// its clear, which costs it only the stale-apply protection.
+		if cue.Role == config.NightSessionCueRoleAnnouncement && !isFirst {
+			h.nightAdvanceAnnouncementClear(ctx, now, rec, phase, cue)
+		}
 		_, err := h.nightRunCue(ctx, now, rec, phase, cue, issuer, isFirst)
 		if err != nil {
 			if errors.Is(err, errNightCueSessionMoved) {
@@ -392,10 +404,15 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			} else {
 				h.logWarn("night loop: failed to run cue", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 			}
-			continue
-		}
-		if isFirst {
+		} else if isFirst {
 			firstCommitted = true
+		}
+		if cue.Role == config.NightSessionCueRoleAnnouncement {
+			// Unconditional, exactly like the dispatch above: an
+			// announcement whose apply did not confirm still gets its
+			// start, so a silent announcement is never the quiet
+			// outcome of a step this controller simply skipped.
+			h.nightAdvanceAnnouncementStart(ctx, now, rec, phase, cue)
 		}
 	}
 

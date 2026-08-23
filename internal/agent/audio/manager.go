@@ -342,6 +342,7 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	// duck/interrupt resolution needs to lock OTHER sessions, so it must
 	// run after s.mu is released — see [Manager.duckLowerPriority]'s doc
 	// comment on why this can never hold two sessions' locks at once.
+	started := res.executed && s.state == pkgaudio.StatePlaying
 	duck := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyDuck
 	interrupt := res.executed && s.state == pkgaudio.StatePlaying && s.desired.MixPolicy != nil && *s.desired.MixPolicy == pkgaudio.MixPolicyInterrupt
 	var role pkgaudio.SourceRole
@@ -355,6 +356,14 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 	}
 	if interrupt {
 		m.interruptLowerPriority(ctx, id, role)
+	}
+	// And the other direction: this session may itself have started
+	// underneath a higher-priority session already playing with a duck or
+	// interrupt policy. Runs regardless of whether this one ducks others
+	// - a show session can duck background and be ducked by an
+	// announcement at the same time.
+	if started {
+		m.submitToActivePolicies(ctx, id, role)
 	}
 	return res.outcome
 }

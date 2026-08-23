@@ -16,7 +16,7 @@ import (
 // Track F seam F3: the event-driven driver that advances a night session
 // out of the states F2's own command handlers never leave on their own
 // (transition-to-show, live, transition-to-resting, resting-intershow).
-// F4's cue outbox (night_cue_outbox) is untouched here — this seam has no
+// F4's cue outbox (night_cue_outbox) is untouched here - this seam has no
 // lighting/projection/audio cues to dispatch through it. The one
 // outward-facing action here is launching the show playlist itself, via
 // the existing startPlaylist primitive.
@@ -54,7 +54,7 @@ func NewNightLoop(deps Dependencies, opts Options) *NightLoop {
 }
 
 // Run ticks until ctx is done, then waits for any in-flight tick to finish
-// before returning — the caller (coordinator.go) treats Run's return as
+// before returning - the caller (coordinator.go) treats Run's return as
 // "this loop no longer touches the store," and a detached goroutine still
 // writing after that would violate it.
 func (l *NightLoop) Run(ctx context.Context) {
@@ -80,7 +80,7 @@ func (l *NightLoop) Run(ctx context.Context) {
 }
 
 // resolveFPPEndpoint looks up instanceID's currently configured endpoint
-// URL — nightasset.go's playlist-definition reads are the only other
+// URL - nightasset.go's playlist-definition reads are the only other
 // caller.
 func (h *handlers) resolveFPPEndpoint(ctx context.Context, instanceID string) (endpoint string, ok bool, err error) {
 	if instanceID == "" {
@@ -128,6 +128,36 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightAdvanceTransitionToResting(ctx, now, rec)
 	case nightStateFadingOut:
 		h.nightAdvanceFadingOut(ctx, now, rec)
+	}
+
+	// Track F seam F5: resting.backgroundAudio runs for the WHOLE resting
+	// presentation, not on one state's own tick alone - end-of-night-
+	// resting has no autonomous FPP action (this switch's own comment
+	// below), but background audio still advances there.
+	//
+	// transition-to-show deliberately does NOT stop it: RESTING-MODE.md
+	// section 7.1 stages the audio fade beginning at E minus the audio
+	// lead, with music deliberately continuing into darkness, rather than
+	// cutting it the instant this state is entered (found by review: an
+	// earlier version hard-stopped here, about 20 seconds early, which
+	// also made the enterShow duck/restore path dead code since the
+	// announcement always found an already-resolved stop). This
+	// coordinator has no enterShow.audio.fadeDuration/
+	// startBeforeTimelineEnd configuration field to stage that fade at
+	// its own precise offset (a contract gap filed separately, not
+	// invented here), so the bounded fix is: let it keep playing through
+	// the transition, and suspend only once boundary E has actually
+	// passed (nightStateLive) or the night otherwise leaves resting.
+	// Every OTHER non-resting state stops a still-playing background
+	// session idempotently; a session already stopped or never started
+	// costs nothing to check.
+	switch rec.State {
+	case nightStateRestingIntershow, nightStateEndOfNightResting:
+		h.nightAdvanceBackgroundAudio(ctx, now, rec)
+	case nightStateTransitionToShow:
+		// Intentionally no action: see this switch's own comment above.
+	default:
+		h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
 	}
 	// preparing, end-of-night-resting, stopped, inactive: no autonomous
 	// action here. end-of-night-resting's repeating resting playlist was
@@ -227,7 +257,7 @@ func nightRefusalIsTerminal(problem *v1.Problem) bool {
 
 // nightClockBackstepTolerance: a wall clock that reads earlier than an
 // anchor's own ObservedAt by more than this is a clock correction, not
-// measurement noise (poll/dispatch latency is sub-second per F0) — the
+// measurement noise (poll/dispatch latency is sub-second per F0) - the
 // persisted absolute ExpectedAt survives a restart, but a backward step
 // after it was armed must invalidate rather than silently sit unfired or
 // misfire once the clock catches back up.
@@ -235,7 +265,7 @@ const nightClockBackstepTolerance = 5 * time.Second
 
 // nightAdvanceRestingIntershow is rule 3's own load-bearing invalidation:
 // an anchor already flagged invalid (BoundaryJSON's own persisted state)
-// is never recomputed from — it was invalidated by
+// is never recomputed from - it was invalidated by
 // nightInvalidateAnchor, which cleared the observed half, so
 // nightEnsureAnchor's own pending-observation path re-derives a fresh
 // anchor from new evidence before this function will arm anything again.
@@ -273,7 +303,7 @@ func (h *handlers) nightAdvanceRestingIntershow(ctx context.Context, now time.Ti
 
 	// The anchor carries observed evidence, but a PRIOR tick may already
 	// have invalidated the boundary derived from it (contradiction found
-	// then, evidence agreeing again now) — that invalidation is
+	// then, evidence agreeing again now) - that invalidation is
 	// load-bearing and must not be silently recomputed past.
 	if persisted, hasBoundary := decodeNightBoundary(rec.BoundaryJSON); hasBoundary && persisted.State == nightBoundaryStateInvalid {
 		return
@@ -361,7 +391,7 @@ func (h *handlers) nightMarkAttributionDegraded(ctx context.Context, now time.Ti
 }
 
 // nightDegradeSession marks rec degraded with reason and stops advancing
-// it (nightTick's own top-level guard skips a degraded session) — used
+// it (nightTick's own top-level guard skips a degraded session) - used
 // where an assumption this state depends on (its own boundary, or the
 // clock) is no longer trustworthy, rather than silently substituting one.
 func (h *handlers) nightDegradeSession(ctx context.Context, now time.Time, rec store.NightSessionRecord, reason string) {
@@ -382,7 +412,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 
 	// The resting playback stays supervised through the lead window, up to
 	// the moment the show commits. Only a real resting-oneshot anchor is
-	// checked; start-night's own boundary has none — the first show has
+	// checked; start-night's own boundary has none - the first show has
 	// no playback to supervise.
 	if !rec.ShowCommitted {
 		if anchor, has := decodeNightContentAnchor(rec.ContentAnchorJSON); has && anchor.Purpose == nightAnchorPurposeRestingOneShot {
@@ -418,7 +448,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// A gap outside ordinary tick cadence, either direction, is a clock
 	// discontinuity: resync the checkpoint and wait for a sane gap before
 	// evaluating hold or the deadline again (also covers a restart
-	// benignly — one skipped tick, not a false "jumped" degrade).
+	// benignly - one skipped tick, not a false "jumped" degrade).
 	if b.LastTickAt != nil && (now.Before(b.LastTickAt.Add(-nightClockBackstepTolerance)) || now.After(b.LastTickAt.Add(nightClockForwardJumpTolerance))) {
 		lastTick := now
 		h.nightCommitBoundary(ctx, now, rec, nightBoundary{State: nightBoundaryStateArmed, ExpectedAt: &boundaryE, LastTickAt: &lastTick, Reason: "resynchronized after a clock discontinuity"})
@@ -429,7 +459,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 	// Cues run every tick regardless of hold: an offset cue may legitimately
 	// fire before the hold elapses. The launch itself (below) waits on both
 	// hold AND every barrier cue's own resolved outcome.
-	barrierOK, blockedReason := h.nightAdvanceCueList(ctx, now, rec, boundaryE, nightPhaseEnterShow, payload.EnterShow.Cues)
+	barrierOK, blockedReason := h.nightAdvanceCueList(ctx, now, rec, boundaryE, nightPhaseEnterShow, payload.EnterShow.Cues, payload)
 
 	hold := time.Duration(payload.EnterShow.BlackoutHoldMs) * time.Millisecond
 	if now.Before(boundaryE.Add(hold)) {
@@ -440,7 +470,7 @@ func (h *handlers) nightAdvanceTransitionToShow(ctx context.Context, now time.Ti
 		return
 	}
 	// ifBusy is decided ONCE here, from a snapshot read; the dispatch is a
-	// separate moment and is not re-checked a second time before it — see
+	// separate moment and is not re-checked a second time before it - see
 	// [handlers.nightShowLaunchIfBusy]'s own doc comment for why that is
 	// safe only because replace is granted solely on positive identity.
 	ifBusy := h.nightShowLaunchIfBusy(ctx, now, payload)
@@ -476,7 +506,7 @@ const nightShowLaunchEvidenceMaxAge = 5 * time.Second
 // current, equals payload.Resting.Playlist, and is no older than
 // nightShowLaunchEvidenceMaxAge. Every other case returns refuse.
 //
-// SAFETY: once this returns replace, nothing else checks again — replace
+// SAFETY: once this returns replace, nothing else checks again - replace
 // bypasses startPlaylist's own PreDispatchCheck by FPP's own design, so
 // this function is the ONLY guard against replacing an unrelated running
 // playlist. Refuse, not replace, gets a backstop (PreDispatchCheck
@@ -510,8 +540,8 @@ func (h *handlers) nightShowLaunchIfBusy(ctx context.Context, now time.Time, pay
 }
 
 // nightAdvanceLive is rule 4: completion evidence, never graceful-stop
-// acceptance. F0's own captured shape is the exact condition checked —
-// status_name is "idle" AND current_playlist has genuinely cleared —
+// acceptance. F0's own captured shape is the exact condition checked -
+// status_name is "idle" AND current_playlist has genuinely cleared -
 // which requires the playlist-name evidence to be CURRENT: an absent,
 // stale, or unsupported reading also decodes to "", indistinguishable
 // from genuine idle unless currency is checked separately.
@@ -562,7 +592,7 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 	// below: unlike enter-show, no atomic commit boundary or barrier gates
 	// entry into resting on their outcome (RESTING-MODE.md §7.2's ordering
 	// note: "show completion remains the authoritative anchor").
-	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseEnterResting, payload.EnterResting.Cues)
+	h.nightAdvanceCueList(ctx, now, rec, rec.StateEnteredAt, nightPhaseEnterResting, payload.EnterResting.Cues, payload)
 
 	hold := time.Duration(payload.EnterResting.BlackoutAfterShowMs) * time.Millisecond
 	if now.Sub(rec.StateEnteredAt) < hold {
@@ -615,7 +645,7 @@ func (h *handlers) nightAdvanceTransitionToResting(ctx context.Context, now time
 // rec's current ContentAnchorJSON, it either (a) finds a matching,
 // already-complete anchor and returns it unchanged; (b) finds a matching,
 // dispatched-but-not-yet-observed anchor (DispatchedAt set, ObservedAt
-// zero — including one nightInvalidateAnchor just reset) and polls
+// zero - including one nightInvalidateAnchor just reset) and polls
 // EXISTING evidence for it to complete, without dispatching again; or (c)
 // dispatches ONE startPlaylist call and folds in whatever evidence is
 // available once dispatchFPPCommand's own bounded confirmation returns.
@@ -668,7 +698,7 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 	// only happens once per purpose/cycle in the ordinary path, since a
 	// successful or refused dispatch persists DispatchedAt and the branch
 	// above then owns it): it protects against this ONE call being
-	// retried internally, not against a second tick redispatching — a
+	// retried internally, not against a second tick redispatching - a
 	// failed dispatch (err != nil, nothing persisted) legitimately mints
 	// a new key and retries on a later tick.
 	idemKey := fmt.Sprintf("night:%s:%d:%s:%d", rec.ID, rec.Cycle, purpose, now.UnixNano())
@@ -728,12 +758,12 @@ func (h *handlers) nightEnsureAnchor(ctx context.Context, now time.Time, rec sto
 
 // nightFillAnchorFromObservation completes anchor's observed half from
 // obs, using the POSITION signal's own CollectedAt as ObservedAt rather
-// than the status signal's — the two are read independently and can
+// than the status signal's - the two are read independently and can
 // disagree (finding: a 40s-old position paired with a fresh status
 // reading armed a boundary 40s late while reporting "armed"). Refuses
 // (returns false) when no position evidence is current at all, or when
 // the status and position observations' own CollectedAt differ by more
-// than nightAnchorEvidenceTolerance — either way the caller keeps polling
+// than nightAnchorEvidenceTolerance - either way the caller keeps polling
 // rather than anchor from mismatched evidence.
 func nightFillAnchorFromObservation(ctx context.Context, lister ObservationLister, instanceID string, obs nightPlaybackObservation, notBefore, now time.Time, anchor *nightContentAnchor) bool {
 	if !obs.PositionMSCurrent && !obs.PositionCurrent {
