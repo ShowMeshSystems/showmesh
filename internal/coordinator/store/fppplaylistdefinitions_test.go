@@ -31,9 +31,10 @@ func TestFPPPlaylistDefinitionSchemaVersionIsV15(t *testing.T) {
 
 	// Being LISTED in [migrations] is not the same as having actually
 	// applied against a real database: probe sqlite_master and
-	// pragma_table_info so this fails if schemaV15's SQL text ever stops
-	// matching its own version number, mirroring
-	// fppobservations_test.go's identical v14 strengthening.
+	// pragma_table_info so this pins that the table exists and has this
+	// shape after the full migration chain, mirroring
+	// fppobservations_test.go's identical v14 strengthening. It does not
+	// pin that migration 15 specifically is what created the table.
 	var tableName string
 	if err := st.db.QueryRowContext(context.Background(),
 		`SELECT name FROM sqlite_master WHERE type='table' AND name = 'fpp_playlist_definitions'`,

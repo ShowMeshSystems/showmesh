@@ -32,11 +32,11 @@ func TestFPPPlaylistEntryObservationSchemaVersionIsV14(t *testing.T) {
 
 	// Being LISTED in [migrations] is not the same as having actually
 	// applied against a real database: probe sqlite_master and
-	// pragma_table_info on a freshly opened store so this fails if
-	// schemaV14's SQL text ever stops matching its own version number
-	// (a copy-paste renumbering that left the SQL behind, or a merge
-	// that silently dropped it), mirroring store_test.go's own
-	// sqlite_master/pragma_table_info migration-pin pattern.
+	// pragma_table_info on a freshly opened store, which applies every
+	// migration in order, so this pins that the table exists and has this
+	// shape after the full migration chain, mirroring store_test.go's own
+	// sqlite_master/pragma_table_info migration-pin pattern. It does not
+	// pin that migration 14 specifically is what created the table.
 	st := openTestStore(t, nil)
 	var tableName string
 	if err := st.db.QueryRowContext(context.Background(),
