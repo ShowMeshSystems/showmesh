@@ -2,7 +2,7 @@
 
 [Build plan](BUILD-PLAN.md) · [Resting Mode specification](../architecture/RESTING-MODE.md) · [ADR-038](../decisions/ADR-038-fpp-authorizes-night-sessions.md) · [Track C](TRACK-C-audio-node.md) · [Track D](TRACK-D-resolume.md) · [Track E](TRACK-E-show-authoring-and-assets.md)
 
-Status: F0 through F4 and F7's API/CLI half built, reviewed, gated and committed on `track-f/night-session` (2026-08-18 and 2026-08-19). **F5 is blocked**: it consumes Track C's `pkg/audio`, which is not on `main`. F6 is optional configuration and not started. F7's UI half is not started. F8 cannot be attempted on this machine at all, because every one of its scenarios requires a real FPP and the deployed installation. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17; FPP brightness provider selected in RES-018 on 2026-08-18 but not implemented or real-host verified. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for gate evidence and review findings; nothing here has run against a real FPP or the deployed fleet.
+Status: F0 through F4 and F7's API/CLI half are merged to `main` (PR #23, `8367436`). F5, F6, and F7's UI half are built, reviewed, and gated on their own branches, none merged to `main`: F5 (audio integration) on `claude/sm-191-night-background-audio`, PR #51, head `9a65363`; F6 (optional site control, optional) on `claude/sm-192-night-site-control`, PR #46, head `b6e37e0`; F7's UI half on `claude/sm-193-night-session-ui`, PR #45, head `0658d5e`. **`pkg/audio`, which F5 consumes, is present on `main`** at commit `12ce0d8` via merge `6b0eb38` (2026-08-19); this document previously recorded it as absent, which was checked before that merge landed and is corrected here. F8 cannot be attempted on this machine at all, because every one of its scenarios requires a real FPP and the deployed installation. Specified 2026-08-16 from the owner's reference-show workflow; optional site-control/interlock posture clarified 2026-08-17; FPP brightness provider selected in RES-018 on 2026-08-18 but not implemented or real-host verified. See the 2026-08-18 dated entry in [BUILD-LOG.md](BUILD-LOG.md) for F0 through F4 gate evidence and review findings, and the 2026-08-22 dated entry for F5, F6, and F7's UI half. Nothing here has run against a real FPP, real audio hardware, a real site-control target, a browser, or the deployed fleet.
 
 ## Goal
 
@@ -82,15 +82,23 @@ Implement the RES-018 brightness contract through the ShowMesh FPP component: ob
 
 This is a purpose-built relative cue runner inside the night controller, not a general scheduler or a replacement macro language.
 
-### F5. Audio integration — BLOCKED, not started
+### F5. Audio integration: built, reviewed, and gated on branch `claude/sm-191-night-background-audio` (PR #51, head `9a65363`); not merged to `main`
 
-Blocked on Track C's `pkg/audio` reaching `main`; verified absent from `origin/main` on 2026-08-19. The contract itself is pinned on `track-c/audio-node` and has moved twice since pinning, so the drift is recorded on Linear SM-53 for whoever starts this.
+Built against Track C's `pkg/audio`, present on `main` since `6b0eb38` (2026-08-19). Adds `audio` as a fourth `show.action` target integration, applies the whole pinned `PlaylistRef` and lets the engine own item advancement, repeat, and resume per AUDIO-ENGINE section 3, and gives announcement ducking one owner, the node.
+
+Two independent review passes, run after the seam's own `make check` and `make test-integration` were already green, found and fixed: a wrong wire field name that silenced resting music after exactly one track; a compounded coordinator/node duck whose restore replayed a superseded value and stranded the bed at a quarter gain for the rest of the night; and an announcement path that could never duck, because ducking policy was declared on the one action shape that cannot resolve it. See the 2026-08-22 entry in [BUILD-LOG.md](BUILD-LOG.md) for the full list.
+
+**Unverified:** no audio has been heard on this branch. `FakeEngine` reports itself unavailable by design. No hardware, node, deployment, or browser evidence exists for any of this.
 
 Create and control the background and announcement sessions defined by Track C. Enforce maximum resting gain, fade curves with observable completion, exact local asset readiness, loop/resume policy, and the configured duck/mix/interrupt policy. Carry the night controller's stable cue invocation identity and desired revision through the audio command so recovery cannot duplicate an effect or let stale work reverse a newer state.
 
 Validate every output against the formats and reproduction capabilities it honestly declares without narrowing the generic asset store. This includes playlist selection/advancement and the requested sequential, gapless, or crossfade item transition. For an optional synchronized third-party output, missing provisioning/readiness evidence warns and does not block local/FM audio. If configuration marks it required and no status API exists, readiness may accept current attributed operator attestations pinned to the immutable destination-configuration revision or fingerprint and **every** exact audio/announcement content hash required by the pinned Night Session revision. One verified playlist item is insufficient; an attempted or acknowledged upload alone is not `ready`.
 
-### F6. Optional power, thermal, and interlock integration — not started, optional
+### F6. Optional power, thermal, and interlock integration: built, reviewed, and gated on branch `claude/sm-192-night-site-control` (PR #46, head `b6e37e0`); not merged to `main`, optional
+
+Implements RESTING-MODE section 10.1's closed behavior matrix over `observe`, `block`, and `disabled` postures, phase-filtered evaluation, power-domain/provenance declarations, the two removal policies, and the `night:override` scope. The finding that mattered: the stored readiness gate discarded evidence older than 30 minutes, which could let `end-session` reach `stopped` without ever issuing the FPP stop, leaving the show running with ShowMesh no longer tracking it; fixed by having shutdown-phase rules evaluate live evidence rather than the stored result, and by refusing at write time a blocking shutdown-phase rule with `overridePolicy: none`. See the 2026-08-22 entry in [BUILD-LOG.md](BUILD-LOG.md) for the full list.
+
+**Unverified:** no real projector, relay, thermostat, Home Assistant instance, or MQTT broker was exercised. The removal-policy runtime described below is not built.
 
 F1 rejects the `siteControl` and `interlocks` configuration blocks with a problem naming this deliverable, rather than accepting configuration nothing enforces. A deployment that omits site control, which is what the reference installation does, runs the full night loop without it.
 
@@ -102,11 +110,15 @@ Every presentation power-off binding explicitly selects `immediate` with an oper
 
 If a deployment configures `force-power-off`, ship it only as an explicit operator action with separate authorization and audit presentation. F6 is not a prerequisite for installations that omit site control.
 
-### F7. Operator surfaces — API and CLI half built (`50772b3`, 2026-08-19); UI half not started
+### F7. Operator surfaces: API and CLI half built (`50772b3`, 2026-08-19); UI half built, reviewed, and gated on branch `claude/sm-193-night-session-ui` (PR #45, head `0658d5e`); neither merged to `main`
 
-The API and `showmeshctl` now carry lifecycle state, final-cycle status, the content-derived boundary, pending intents, per-cue evidence (state, outcome, reason, pinned action revision, dispatch and resolution times), the reason a transition is held, and recovery guidance naming the recovery that exists. Optional phases render `not_configured`. Closes Linear SM-98.
+The API and `showmeshctl` now carry lifecycle state, final-cycle status, the content-derived boundary, pending intents, per-cue evidence (state, outcome, reason, pinned action revision, dispatch and resolution times), the reason a transition is held, and recovery guidance naming the recovery that exists. Optional phases render `not_configured`.
 
 **Not yet on any surface**: audio gain (F5), brightness ceiling and multiplier (no provider exists, RES-018), and interlock/site-control state (F6). Those three are absent because the capability behind each is absent, not because the surface was skipped.
+
+**F7's UI half is built**: the night operating view (the `night.session` list, create, and detail with revision history and per-revision read), the `night.session.active` pointer screen, all eight lifecycle commands behind `night:command` rendered disabled with a stated reason rather than hidden, and the three 409 problem types plus the 503 each distinguishable. It also documents `nightSession.changed` in the `/stream` event table with a `NightSessionChangedEvent` schema and handles the frame in the UI store, which had been dropping it through its default branch, and adds the `fppPlaylistEntry.changed` row the same table was already missing. An independent reviewer found 13 defects plus 2 confirmed suspicions, fixed at head `0658d5e`; two matter beyond style: a stale `GET /night/session` response could overwrite a newer stream frame until the next real transition, fixed by ordering on `updatedAt` rather than the per-connection, non-durable stream `seq`; and a failed reload discarded the loaded state entirely rather than preserving what was already shown, which is ADR-024 constraint 23's failure shape. See the 2026-08-22 entry in [BUILD-LOG.md](BUILD-LOG.md) for the full list.
+
+**Unverified:** proven only under jsdom against a mock HTTP and stream server. No browser run has occurred.
 
 Add CLI coverage first, then UI configuration and operation. Show lifecycle state, final-cycle status, content-derived boundary, next cue, pending intents, per-cue evidence, audio gain, brightness ceiling/multiplier, configured interlock/site-control state, and recovery guidance. Optional sections render as `not_configured`, not warnings. The UI contains no orchestration logic.
 
