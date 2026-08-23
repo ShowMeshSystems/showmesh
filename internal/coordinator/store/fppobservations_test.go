@@ -29,6 +29,45 @@ func TestFPPPlaylistEntryObservationSchemaVersionIsV14(t *testing.T) {
 	if !found {
 		t.Fatal("no migration entry has version 14 — schemaV14 was renumbered")
 	}
+
+	// Being LISTED in [migrations] is not the same as having actually
+	// applied against a real database: probe sqlite_master and
+	// pragma_table_info on a freshly opened store so this fails if
+	// schemaV14's SQL text ever stops matching its own version number
+	// (a copy-paste renumbering that left the SQL behind, or a merge
+	// that silently dropped it), mirroring store_test.go's own
+	// sqlite_master/pragma_table_info migration-pin pattern.
+	st := openTestStore(t, nil)
+	var tableName string
+	if err := st.db.QueryRowContext(context.Background(),
+		`SELECT name FROM sqlite_master WHERE type='table' AND name = 'fpp_playlist_entry_observations'`,
+	).Scan(&tableName); err != nil {
+		t.Fatalf("table fpp_playlist_entry_observations missing: %v", err)
+	}
+
+	for _, col := range []string{
+		"instance_uuid", "schema_version", "sequence", "body_hash",
+		"observation_json", "playlist_name", "playlist_hash", "section",
+		"position", "entry_key", "sequence_filename", "media_filename",
+		"action", "unavailable", "observed_at_millis",
+		"coalesced_since_previous_acknowledged", "received_at",
+	} {
+		var name string
+		err := st.db.QueryRowContext(context.Background(),
+			`SELECT name FROM pragma_table_info('fpp_playlist_entry_observations') WHERE name = ?`, col).Scan(&name)
+		if err != nil {
+			t.Errorf("fpp_playlist_entry_observations.%s missing: %v", col, err)
+		}
+	}
+
+	var pk int
+	if err := st.db.QueryRowContext(context.Background(),
+		`SELECT pk FROM pragma_table_info('fpp_playlist_entry_observations') WHERE name = 'instance_uuid'`).Scan(&pk); err != nil {
+		t.Fatalf("read instance_uuid pk flag: %v", err)
+	}
+	if pk != 1 {
+		t.Errorf("instance_uuid pk = %d, want 1 (PRIMARY KEY)", pk)
+	}
 }
 
 func fppObservationFixture(instanceUUID string, sequence int64) FPPPlaylistEntryObservationRecord {

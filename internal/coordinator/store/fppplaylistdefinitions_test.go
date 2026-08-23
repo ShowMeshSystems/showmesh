@@ -28,6 +28,53 @@ func TestFPPPlaylistDefinitionSchemaVersionIsV15(t *testing.T) {
 	if !found {
 		t.Fatal("no migration entry has version 15 — schemaV15 was renumbered or removed")
 	}
+
+	// Being LISTED in [migrations] is not the same as having actually
+	// applied against a real database: probe sqlite_master and
+	// pragma_table_info so this fails if schemaV15's SQL text ever stops
+	// matching its own version number, mirroring
+	// fppobservations_test.go's identical v14 strengthening.
+	var tableName string
+	if err := st.db.QueryRowContext(context.Background(),
+		`SELECT name FROM sqlite_master WHERE type='table' AND name = 'fpp_playlist_definitions'`,
+	).Scan(&tableName); err != nil {
+		t.Fatalf("table fpp_playlist_definitions missing: %v", err)
+	}
+
+	for _, col := range []string{
+		"instance_uuid", "playlist_hash", "playlist_name",
+		"definition_json", "captured_at_millis", "received_at",
+	} {
+		var name string
+		err := st.db.QueryRowContext(context.Background(),
+			`SELECT name FROM pragma_table_info('fpp_playlist_definitions') WHERE name = ?`, col).Scan(&name)
+		if err != nil {
+			t.Errorf("fpp_playlist_definitions.%s missing: %v", col, err)
+		}
+	}
+
+	// The (instance_uuid, playlist_hash) composite primary key: both
+	// columns must carry a nonzero pk ordinal, contract §3's own "one row
+	// per (instanceUuid, playlistHash)".
+	for _, col := range []string{"instance_uuid", "playlist_hash"} {
+		var pk int
+		if err := st.db.QueryRowContext(context.Background(),
+			`SELECT pk FROM pragma_table_info('fpp_playlist_definitions') WHERE name = ?`, col).Scan(&pk); err != nil {
+			t.Fatalf("read %s pk flag: %v", col, err)
+		}
+		if pk == 0 {
+			t.Errorf("%s pk = 0, want nonzero: it is part of the composite PRIMARY KEY", col)
+		}
+	}
+
+	// The retention/listing index migration 15 creates alongside the
+	// table.
+	var indexName string
+	if err := st.db.QueryRowContext(context.Background(),
+		`SELECT name FROM sqlite_master WHERE type='index' AND name = 'fpp_playlist_definitions_by_instance_received'`,
+	).Scan(&indexName); err != nil {
+		t.Fatalf("index fpp_playlist_definitions_by_instance_received missing: %v", err)
+	}
 }
 
 func fppDefinitionFixture(instanceUUID, playlistHash, name string, capturedAt time.Time) FPPPlaylistDefinitionRecord {
