@@ -648,13 +648,14 @@ The store schema version, bumped by migrations in
 | v6 | shipped | Step 7 seam 0 (atomic audit variant, strict login CSRF) |
 | v7 | shipped | Step 9 wave 1a (macro execution history, ADR-031) |
 | v8 | shipped | Track E (asset store tables, ADR-028) |
-| v9 | reserved | Track C (audio session desired state) |
-| v10 | reserved | Track F (night-session lifecycle, cue outbox) |
+| v9 | shipped | Track C seam C3 (audio session desired state, `audio_sessions`) |
+| v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox filled by seam F4) |
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
 | v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
 | v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
-| v15+ | unallocated | free |
+| v15 | shipped | Track H seam H2: FPP playlist definition storage (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3) |
+| v16+ | unallocated | free |
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are

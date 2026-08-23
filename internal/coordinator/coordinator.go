@@ -538,7 +538,16 @@ func Run() int {
 		// surface (RES-008 D1) — *store.Store already satisfies
 		// api.ConfigStore directly (see that interface's doc comment), no
 		// adapter needed, the same way Identity is wired directly above.
-		Config: st,
+		// The FPP plugin's two ingestion stores are st itself: its methods
+		// already match both interfaces with no adapter, the same property
+		// AudioSessions above relies on. Without these lines the nil-safe
+		// defaults apply, under which the observation POST answers an
+		// internal error naming the missing wiring and both GETs report an
+		// empty list, so an installed plugin would post evidence a real
+		// coordinator always refuses.
+		FPPObservations:        st,
+		FPPPlaylistDefinitions: st,
+		Config:                 st,
 		// Track E: *store.Store satisfies api.AssetStore directly, the same
 		// way it satisfies Config above.
 		Assets:       st,
@@ -547,6 +556,11 @@ func Run() int {
 		// interface (see that field's own doc comment for why), wired the
 		// same *st already used for Config/Assets/Commands/Discovery above.
 		AssetManifests: st,
+		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
+		// is the adapter api.FPPReconciliationStore's own doc comment
+		// describes, needed only so that field can carry a nil-safe
+		// refusing default (unlike AssetManifests above).
+		FPPReconciliation: api.StoreFPPReconciliation{Store: st, Logger: logger},
 		// AssetSettings is Track G seam G-4's live, no-restart view of the
 		// assets.settings configuration kind (ADR-039 decision 6): the SAME
 		// *assetsync.Service constructed above straight in. It already

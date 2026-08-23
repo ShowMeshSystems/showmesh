@@ -49,6 +49,7 @@ var migrations = []migration{
 	{version: 9, sql: schemaV9},
 	{version: 10, sql: schemaV10},
 	{version: 14, sql: schemaV14},
+	{version: 15, sql: schemaV15},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1212,6 +1213,39 @@ CREATE TABLE fpp_playlist_entry_observations (
     coalesced_since_previous_acknowledged INTEGER NOT NULL DEFAULT 0,
     received_at         TEXT NOT NULL
 );
+`
+
+// schemaV15 is Track H seam H2's own migration: the coordinator-side
+// store for FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3's playlist definition
+// publication, TRACK-H-H2-SPEC.md §3.
+//
+// One row per (instance_uuid, playlist_hash) — content-addressed, never
+// overwritten (fppplaylistdefinitions.go's PutFPPPlaylistDefinition is an
+// INSERT ... ON CONFLICT DO NOTHING, not an upsert). definition_json holds
+// the CANONICAL bytes the coordinator itself produced, not the raw bytes
+// a caller posted: H2 spec §3 says why storing the received bytes would
+// leave "any question of which of two byte sequences the row represents."
+// captured_at_millis mirrors fpp_playlist_entry_observations'
+// observed_at_millis convention: the wire carries epoch milliseconds
+// (contract §3.3's capturedAtMillis), so this column is INTEGER rather
+// than this package's usual TEXT/RFC3339Nano.
+const schemaV15 = `
+CREATE TABLE fpp_playlist_definitions (
+    instance_uuid       TEXT NOT NULL,
+    playlist_hash       TEXT NOT NULL,
+    playlist_name       TEXT NOT NULL,
+    definition_json     TEXT NOT NULL,
+    captured_at_millis  INTEGER NOT NULL,
+    received_at         TEXT NOT NULL,
+    PRIMARY KEY (instance_uuid, playlist_hash)
+);
+
+-- ListFPPPlaylistDefinitions and ListFPPPlaylistDefinitionsByInstance
+-- both order by received_at DESC; this index keeps "newest first" and
+-- retention's per-instance walk (pruneFPPPlaylistDefinitions) off a full
+-- table scan as the table grows.
+CREATE INDEX fpp_playlist_definitions_by_instance_received
+    ON fpp_playlist_definitions (instance_uuid, received_at DESC);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across
