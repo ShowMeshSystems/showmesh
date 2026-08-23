@@ -78,8 +78,12 @@ operator ever made.
    the H1 configuration path, unchanged and already validated there.
 
 Import proposes; it does not write configuration on its own. The operator
-chooses which Cue each entry becomes, and an entry may be left unbound: an FPP
-playlist may legitimately contain items ShowMesh has nothing to do.
+chooses which Cue each entry becomes, and a playlist position previewed by
+step 2 may be left with no entry authored for it at all: H1 requires `cue` on
+every entry a `show.playlist` actually carries, so there is no such thing as
+an entry with no Cue. An FPP playlist may legitimately contain items ShowMesh
+has nothing to do; the operator simply never authors an entry for that
+position.
 
 **Import never makes a filename the Cue identity.** The filenames are carried
 into the binding as validation evidence and are compared at reconciliation.
@@ -104,10 +108,19 @@ and was computed before this parser ever ran.
 Given an accepted observation for instance `U`, the coordinator resolves it in
 this order and stops at the first refusal:
 
-1. **Locate the binding.** Find the active Show's `show.playlist` objects
+1. **Locate the binding.** Find every `show.playlist` object, in any Show,
    whose runner is `fpp` and whose `fpp.instanceUuid` is `U`. When there is
    none, the observation is `unbound`: no ShowMesh output was ever authorized
    by this instance, so there is nothing to hold.
+
+   Searching every Show rather than only the active one is deliberate, and an
+   earlier draft of this document had it wrong. Restricting the search to the
+   active Show makes step 5 unreachable by construction, and turns the exact
+   case Track H exists to catch into the blandest possible answer: Christmas
+   active while FPP plays the Halloween playlist would report `unbound`,
+   which reads as "nothing here concerns ShowMesh", when what actually
+   happened is that FPP is playing another Show's content. It must report
+   `cross-show`.
 2. **Compare the hash.** When the observation's `playlistHash` differs from
    the binding's, the state is `stale-import`. The old binding is held, not
    remapped. This is the FPP-playlist-edited case, and it is the one the entry
@@ -121,9 +134,9 @@ this order and stops at the first refusal:
    state is `evidence-mismatch`. The filenames never select the entry; they
    only contradict it.
 5. **Check the Show.** A binding whose Show is not the active Show is
-   `cross-show`, and this check runs even though step 1 searched only the
-   active Show's playlists, because the active Show can change between
-   resolution and use.
+   `cross-show`. The active Show is re-read here rather than carried from
+   step 1, so a binding that was in the active Show when the search ran and
+   is not by the time this step runs is still caught.
 6. **Resolved.** The observation names exactly one Playlist, entry, and Cue,
    pinned to the Playlist and Cue revisions stored at that moment.
 
@@ -132,11 +145,16 @@ An `unavailable` observation, section 1.4 of the contracts record, resolves to
 key by contract, so there is nothing to match; treating its filenames as
 identity is exactly the fallback the contract exists to forbid.
 
-An observation whose `playlistHash` has no stored definition resolves to
-`definition-unavailable`. The binding may still match by entry key, because
-the key needs only the five identity fields, so this is not fatal to matching.
-It is fatal to readiness, since the operator cannot be shown what the entry
-contains.
+An observation whose `playlistHash` has no stored definition is never its own
+terminal outcome: a resolution is terminal, and "the binding may still match
+by entry key" and "this is a distinct outcome called `definition-unavailable`"
+cannot both hold. Instead the coordinator carries whether a definition is
+stored as an annotation (`definitionAvailable`) alongside whichever of steps 3
+through 6 the observation actually reaches (`unknown-entry`,
+`evidence-mismatch`, `cross-show`, or `resolved`), because the key needs only
+the five identity fields, so a missing definition is not fatal to matching by
+entry key. It is fatal to readiness, since the operator cannot be shown what
+the entry contains; section 6 is where that shows up.
 
 Every non-resolved outcome is a state with the observed evidence attached, and
 every one of them behaves under H0.2's `mismatchPolicy` when the Playlist is
