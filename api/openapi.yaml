@@ -1816,6 +1816,8 @@ paths:
           | `macroRun.changed` | `MacroRunChangedEvent` | every connection |
           | `resolume.changed` | `ResolumeChangedEvent` | every connection |
           | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
+          | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
+          | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded
@@ -11705,6 +11707,23 @@ components:
       description: The body of GET /night/session and GET /night/sessions/{id}.
       required: [serverTime, session]
       properties:
+        serverTime:
+          type: string
+          format: date-time
+        session:
+          $ref: "#/components/schemas/NightSessionState"
+    NightSessionChangedEvent:
+      type: object
+      description: >-
+        The payload of a "nightSession.changed" SSE event (Track F seam
+        F2): one kind, not one per transition — the full NightSessionState
+        a GET returns, never a delta. No delta event kind exists for this
+        resource, matching resolume.changed's own posture.
+      required: [seq, serverTime, session]
+      properties:
+        seq:
+          type: integer
+          description: Per-connection only; never a durable cursor.
         serverTime:
           type: string
           format: date-time
