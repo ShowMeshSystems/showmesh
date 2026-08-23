@@ -3,7 +3,7 @@
 // file from disk, run this coordinator's own implementation over each
 // case, and compare against the frozen expected values recorded in the
 // file. See README.md for the file formats and
-// docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3 for why these
+// docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 4 for why these
 // fixtures exist and are not a Go package the plugin could import
 // directly.
 //
