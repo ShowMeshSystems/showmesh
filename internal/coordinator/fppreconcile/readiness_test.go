@@ -123,9 +123,9 @@ func TestPlaylistReadinessCueNotReady(t *testing.T) {
 }
 
 // TestPlaylistReadinessCorruptedCueRevisionLogsWarnAndStillReportsCueNotReady
-// is review fix item 49-5: a cue whose stored revision fails to decode is
+// asserts that a cue whose stored revision fails to decode is
 // silently demoted to [ReadinessCueNotReady], the same closed-vocabulary
-// answer as "the cue does not exist" — but unlike that case, an operator
+// answer as "the cue does not exist"; unlike that case, though, an operator
 // looking only at the readiness reason has no way to learn a decode
 // failure, not a missing cue, was the actual cause. The returned readiness
 // value must not change (still ReadinessCueNotReady, still not Ready); a
@@ -137,7 +137,7 @@ func TestPlaylistReadinessCorruptedCueRevisionLogsWarnAndStillReportsCueNotReady
 	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
 	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
 
-	// Overwrite cue-1's own current revision with truncated JSON — the
+	// Overwrite cue-1's own current revision with truncated JSON, the
 	// same "an interrupted write could really leave this behind" shape
 	// reconcile_test.go's corrupted-payload test uses, written directly
 	// through CreateConfigRevision rather than the encoder (which would
