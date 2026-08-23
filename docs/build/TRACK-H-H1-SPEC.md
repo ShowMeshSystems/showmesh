@@ -137,10 +137,12 @@ disagree with its own inputs.
 
 This seam therefore adds an exported derivation over the stored payload,
 reusing `pkg/fppidentity` rather than re-implementing RFC 8785, and stores
-nothing. H2 resolves an observation to an entry by deriving the key for each
-entry of every candidate bound Playlist it finds across every Show and
-comparing, then separately checks that the matched binding belongs to the
-active Show.
+nothing. H2 searches every Show for candidate bound Playlists naming the
+observed instance, then narrows to the single candidate binding for that
+instance, checks its playlist hash against the observation's, and only then
+derives the key for each entry of that one binding and compares it to the
+observation's entry key. Whether the matched binding belongs to the active
+Show is checked separately, after the entry match.
 
 Validation refuses two entries with the same `(section, position)` pair,
 because they derive the same key and no runtime evidence could ever tell them
