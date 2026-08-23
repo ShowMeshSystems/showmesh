@@ -512,6 +512,30 @@ func TestListAssetsFilters(t *testing.T) {
 	}
 }
 
+// TestListAssetsNodeFilterExcludesSuperseded proves ListAssets(NodeID=...)
+// matches [Store.ListCurrentAssetsForTarget] in never returning a
+// superseded row: a node-scoped listing is spec §3.3's "current assets
+// only" promise, not a full history.
+func TestListAssetsNodeFilterExcludesSuperseded(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	if _, _, err := st.CreateAsset(ctx, newTestAsset("a1", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a1", "f.fseq")); err != nil {
+		t.Fatalf("create a1: %v", err)
+	}
+	if _, _, err := st.CreateAsset(ctx, newTestAsset("a2", "halloween-2026", "opening", AssetTargetKindNode, "render-01", "sha256:a2", "f.fseq")); err != nil {
+		t.Fatalf("create a2: %v", err)
+	}
+
+	byNode, err := st.ListAssets(ctx, AssetFilter{NodeID: "render-01"})
+	if err != nil {
+		t.Fatalf("list by node: %v", err)
+	}
+	if len(byNode) != 1 || byNode[0].ID != "a2" {
+		t.Fatalf("ListAssets(NodeID=render-01) = %+v, want exactly [a2] (a1 was superseded)", byNode)
+	}
+}
+
 // TestListCurrentAssetsForTargetExcludesSuperseded proves the manifest
 // primitive never returns a superseded row.
 func TestListCurrentAssetsForTargetExcludesSuperseded(t *testing.T) {

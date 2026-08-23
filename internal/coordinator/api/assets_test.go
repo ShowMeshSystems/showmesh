@@ -778,6 +778,36 @@ func TestListAssetsNodeFilterExcludesShowTargeted(t *testing.T) {
 	}
 }
 
+// TestListAssetsNodeFilterExcludesSuperseded proves GET /assets?node= only
+// returns the current asset for that node, never a row a later upload has
+// superseded.
+func TestListAssetsNodeFilterExcludesSuperseded(t *testing.T) {
+	api, _, auth := assetsAdminAPI(t)
+
+	if resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", []byte("first bytes"), auth); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first upload: status = %d, body: %s", resp.StatusCode, body)
+	}
+	resp, body := doAssetUpload(t, api.Handler, validAssetFields(), "a.fseq", []byte("second bytes"), auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second upload: status = %d, body: %s", resp.StatusCode, body)
+	}
+	var second v1AssetResponseForTest
+	if err := json.Unmarshal(body, &second); err != nil {
+		t.Fatalf("decode second upload response: %v\nbody: %s", err, body)
+	}
+
+	_, listBody := doRequest(t, api.Handler, "GET", "/api/v1/assets?node=render-01", auth)
+	var list struct {
+		Assets []v1AssetForTest `json:"assets"`
+	}
+	if err := json.Unmarshal(listBody, &list); err != nil {
+		t.Fatalf("decode list: %v\nbody: %s", err, listBody)
+	}
+	if len(list.Assets) != 1 || list.Assets[0].ID != second.Asset.ID {
+		t.Fatalf("?node=render-01 = %+v, want exactly the current asset %q (the superseded one must not appear)", list.Assets, second.Asset.ID)
+	}
+}
+
 // --- authorization ---
 
 func TestPostAssetUploadRequiresAssetWriteScope(t *testing.T) {
