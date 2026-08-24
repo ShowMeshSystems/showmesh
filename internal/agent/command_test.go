@@ -800,7 +800,7 @@ func TestHandleMessageAssetFetchFailureCarriesReasonAndSignal(t *testing.T) {
 
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
-	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := mqttproto.CmdPayload{
