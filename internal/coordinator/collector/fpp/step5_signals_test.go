@@ -202,6 +202,34 @@ func TestSchedulerNextPlaylistIsMeasuredSentenceNotInterpreted(t *testing.T) {
 	}
 }
 
+// --- uptime -----------------------------------------------------------
+
+// TestUptimeSecondsIsTheTotalNotTheSecondsRemainder is a regression test:
+// fpp.uptime.seconds must come from "uptimeTotalSeconds", not
+// "uptimeSeconds" — the latter is only the 0-59 seconds component of FPP's
+// days/hours/minutes/seconds breakdown and wraps every minute.
+// live_main_fppd_status.json is real fleet evidence that the two disagree
+// ("uptimeSeconds":12, "uptimeTotalSeconds":12432), so this test would fail
+// against the pre-fix behavior of reading "uptimeSeconds".
+func TestUptimeSecondsIsTheTotalNotTheSecondsRemainder(t *testing.T) {
+	body := loadTestdata(t, "live_main_fppd_status.json")
+	if !bytesContains(body, `"uptimeSeconds":12,`) || !bytesContains(body, `"uptimeTotalSeconds":12432,`) {
+		t.Fatalf("test fixture no longer carries the uptimeSeconds/uptimeTotalSeconds mismatch this test exists to check")
+	}
+
+	sigs, err := StatusSignals(body)
+	if err != nil {
+		t.Fatalf("StatusSignals() error = %v", err)
+	}
+	got := findSignalValue(t, sigs, SignalUptimeSeconds)
+	if got.Absence != "" {
+		t.Fatalf("signal %q Absence = %q, want a value", SignalUptimeSeconds, got.Absence)
+	}
+	if got.Value != float64(12432) {
+		t.Errorf("signal %q value = %v, want 12432 (uptimeTotalSeconds, not the 12-second uptimeSeconds remainder)", SignalUptimeSeconds, got.Value)
+	}
+}
+
 // --- warnings (contract section 3.4) ----------------------------------------
 
 // TestWarningsAbsentKeyIsUnsupported verifies the live evidence at the
