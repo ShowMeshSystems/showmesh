@@ -359,6 +359,70 @@ func TestNodeAssetManifestNotReadyNamesMissingAsset(t *testing.T) {
 	}
 }
 
+// TestNodeAssetManifestNotReadyStatesKnownFetchFailure pins this seam: a
+// node whose asset.fetch genuinely failed must say so, with the real
+// reason, instead of reading identically to "sync has not gotten to it
+// yet" (bare "missing 1 expected asset(s)"). This is the coordinator-side
+// half of the bug this seam exists to fix: the node already computes and
+// publishes the reason; this proves the manifest actually surfaces it.
+func TestNodeAssetManifestNotReadyStatesKnownFetchFailure(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	fake := &fakeAssetFetchFailureSource{}
+	deps := assetManifestTestDeps(t, svc, st)
+	deps.AssetFetchFailures = fake
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026","notes":""}`)
+	mustPutShowActive(t, api, token, "halloween-2026")
+	asset := uploadOneAsset(t, api, auth, "render-01", "opening", "Thriller.fseq", []byte("content"))
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01", nil,
+		store.NodeAssetReportRecord{ReportedAt: testNow, Complete: true}); err != nil {
+		t.Fatalf("seed empty report: %v", err)
+	}
+
+	const wantReason = "asset.fetch: download failed: dial tcp 203.0.113.1:443: connect: connection refused"
+	fake.set("render-01", asset.ContentHash, wantReason, testNow)
+
+	_, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if decoded.Manifest.State != "not_ready" {
+		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
+	}
+	if decoded.Manifest.Reason == nil || !containsAll(*decoded.Manifest.Reason, wantReason) {
+		t.Fatalf("reason = %v, want it to contain the node's own recorded failure reason %q", decoded.Manifest.Reason, wantReason)
+	}
+	if decoded.Manifest.Reason != nil && !containsAll(*decoded.Manifest.Reason, "missing 1 expected asset") {
+		t.Errorf("reason = %q, want it to still name the underlying missing-asset verdict too, not replace it", *decoded.Manifest.Reason)
+	}
+}
+
+// TestNodeAssetManifestNotReadyOmitsFetchFailureWhenNoneRecorded is the
+// counterpart: with no known failure on record (the default
+// noAssetFetchFailureSource, or a fake with nothing set), the reason must
+// not claim one; this fix states a fact, never fabricates one, per
+// ADR-011.
+func TestNodeAssetManifestNotReadyOmitsFetchFailureWhenNoneRecorded(t *testing.T) {
+	api, st, auth := assetManifestAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+	mustPutShowActive(t, api, token, "halloween-2026")
+	uploadOneAsset(t, api, auth, "render-01", "opening", "Thriller.fseq", []byte("content"))
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01", nil,
+		store.NodeAssetReportRecord{ReportedAt: testNow, Complete: true}); err != nil {
+		t.Fatalf("seed empty report: %v", err)
+	}
+
+	_, decoded, body := getNodeAssetManifest(t, api, auth, "render-01")
+	if decoded.Manifest.State != "not_ready" {
+		t.Fatalf("state = %q, want not_ready; body: %s", decoded.Manifest.State, body)
+	}
+	if decoded.Manifest.Reason != nil && containsAll(*decoded.Manifest.Reason, "last failed to fetch") {
+		t.Fatalf("reason = %q, want it NOT to claim a fetch failure when none is on record", *decoded.Manifest.Reason)
+	}
+}
+
 // --- P2: the sync-disabled reason reaches the manifest ---
 
 // TestNodeAssetManifestNotReadyStatesSyncDisabled pins P2:

@@ -334,6 +334,19 @@ type Dependencies struct {
 	// API failing" posture.
 	AssetSyncNudger AssetSyncNudger
 
+	// AssetFetchFailures exposes the coordinator's live view of the last
+	// asset.fetch failure per node/asset, so the manifest can say WHY a
+	// node is not_ready rather than only that it is; see
+	// [AssetFetchFailureSource]'s own doc comment. In practice the real
+	// value is *assetsync.Service, wired by coordinator.go, the SAME
+	// value wired as [Dependencies.AssetSyncNudger] and
+	// [Dependencies.AssetSettings]. A nil field is replaced by
+	// [noAssetFetchFailureSource], under which LastFetchFailure always
+	// reports ok=false: an unwired dependency renders identically to
+	// "no known failure", never a fabricated one, matching this struct's
+	// standing "an unwired dependency is not this API failing" posture.
+	AssetFetchFailures AssetFetchFailureSource
+
 	// AssetSettingsEnvVarsSet is [FPPEndpointsEnvVarSet]'s mirror for Track
 	// G seam G-4 (ADR-039 decision 4): whether ANY of the four
 	// SHOWMESH_ASSET_CONTENT_BASE_URL/SHOWMESH_ASSET_MAX_UPLOAD_BYTES/
@@ -577,6 +590,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetSyncNudger == nil {
 		d.AssetSyncNudger = noAssetSyncNudger{}
 	}
+	if d.AssetFetchFailures == nil {
+		d.AssetFetchFailures = noAssetFetchFailureSource{}
+	}
 	if d.Resolume == nil {
 		d.Resolume = noResolumeLister{}
 	}
@@ -751,6 +767,16 @@ func (noFPPMQTTSecretStore) ClearFPPMQTTPassword(context.Context) error {
 type noAssetSyncNudger struct{}
 
 func (noAssetSyncNudger) Nudge() {}
+
+// noAssetFetchFailureSource is [Dependencies.AssetFetchFailures]'s
+// nil-safe default: LastFetchFailure always reports ok=false, matching
+// [noAssetSyncNudger]'s identical "unwired reads as absent, never
+// fabricated" shape one field over.
+type noAssetFetchFailureSource struct{}
+
+func (noAssetFetchFailureSource) LastFetchFailure(string, string) (string, time.Time, bool) {
+	return "", time.Time{}, false
+}
 
 // defaultAssetManifestInventoryInterval mirrors
 // internal/coordinator/config's own defaultAssetInventoryInterval (2

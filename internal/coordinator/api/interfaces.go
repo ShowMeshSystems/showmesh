@@ -563,6 +563,33 @@ type AssetSettingsSource interface {
 	InventoryInterval() time.Duration
 }
 
+// AssetFetchFailureSource is this package's live view of the last known
+// asset.fetch failure for a node/content-hash pair, declared here at the
+// consumer for the identical reason [AssetSyncNudger] and
+// [AssetSettingsSource] are: the real implementation is
+// *assetsync.Service's own LastFetchFailure method, which already
+// satisfies this one-method interface with no adapter needed.
+//
+// This closes the bug this seam exists for: an asset.fetch that failed on
+// a node used to leave no trace anywhere on the coordinator: no event, no
+// reason, and the manifest's own "missing" reason read identically to a
+// sync pass that simply had not run yet. assetmanifest.go's notReadyReason
+// consults this to say WHY, not only THAT, a node cannot be confirmed
+// ready, whenever a real failure is on record for the exact asset it is
+// reporting missing.
+type AssetFetchFailureSource interface {
+	// LastFetchFailure reports the most recent asset.fetch failure this
+	// coordinator has observed for nodeID attempting contentHash, if any.
+	// ok is false when there is none on record, never fabricated as an
+	// empty-string reason, per ADR-011: absent evidence is unknown, not a
+	// manufactured negative. This can under-report (a real failure this
+	// coordinator process never learned about, or one it has since
+	// forgotten across a restart; see assetsync.Service.LastFetchFailure's
+	// own doc comment) but never over-reports a failure that did not
+	// happen.
+	LastFetchFailure(nodeID, contentHash string) (reason string, failedAt time.Time, ok bool)
+}
+
 // DeclarationStore is what this package needs from seam 0's
 // node_declarations and discovery_runs tables (RES-008 D2/D6, BUILD-PLAN
 // Step 7 seam B) — satisfied directly by *store.Store, matching

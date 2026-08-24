@@ -26,6 +26,12 @@ var _ AssetSyncNudger = (*assetsync.Service)(nil)
 // [Dependencies.AssetSettings] and [Dependencies.AssetSyncNudger].
 var _ AssetSettingsSource = (*assetsync.Service)(nil)
 
+// assetSyncServiceSatisfiesAssetFetchFailureSource is this seam's own
+// compile-time assertion, alongside the two above: *assetsync.Service's
+// LastFetchFailure method already satisfies [AssetFetchFailureSource] with
+// no adapter needed.
+var _ AssetFetchFailureSource = (*assetsync.Service)(nil)
+
 // This file is Track E seam E5's own HTTP surface: GET /assets/manifest
 // (every declared node) and GET /nodes/{nodeId}/assets (one node).
 // internal/coordinator/assetsync.ComputeNodeManifest — reached here only
@@ -66,7 +72,7 @@ func (h *handlers) handleAssetManifest(w http.ResponseWriter, r *http.Request) {
 	syncEnabled := h.deps.AssetSettings.ContentBaseURL() != ""
 	out := make([]v1.NodeAssetManifest, 0, len(manifests))
 	for _, m := range manifests {
-		out = append(out, mapNodeAssetManifest(m, syncEnabled))
+		out = append(out, mapNodeAssetManifest(m, syncEnabled, h.deps.AssetFetchFailures))
 	}
 	jsonWrite(w, v1.AssetManifestResponse{ServerTime: formatTime(now), Nodes: out})
 }
@@ -125,7 +131,7 @@ func (h *handlers) handleNodeAssetManifest(w http.ResponseWriter, r *http.Reques
 		h.writeInternalError(w, now, "build node asset manifest", err)
 		return
 	}
-	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: mapNodeAssetManifest(m, h.deps.AssetSettings.ContentBaseURL() != "")})
+	jsonWrite(w, v1.NodeAssetManifestResponse{ServerTime: formatTime(now), Manifest: mapNodeAssetManifest(m, h.deps.AssetSettings.ContentBaseURL() != "", h.deps.AssetFetchFailures)})
 }
 
 // --- mapping: assetsync.NodeManifest -> v1 wire types ---
@@ -150,7 +156,7 @@ func (h *handlers) handleNodeAssetManifest(w http.ResponseWriter, r *http.Reques
 // unaffected: a node with an unset content base URL is still genuinely
 // not_ready, never ready and never a different state, per this seam's own
 // "do not change its state" instruction.
-func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool) v1.NodeAssetManifest {
+func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool, failures AssetFetchFailureSource) v1.NodeAssetManifest {
 	out := v1.NodeAssetManifest{
 		Node:  m.NodeID,
 		State: string(m.State),
@@ -185,7 +191,7 @@ func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool) v1.NodeAss
 		// "the zero time when State is Unknown... there is no evidence an
 		// Unknown verdict rests on, so there is nothing to date it by."
 	case assetsync.ManifestNotReady:
-		reason := notReadyReason(missing, gaps, syncEnabled)
+		reason := notReadyReason(m.NodeID, missing, gaps, syncEnabled, failures)
 		out.Reason = &reason
 		observedAt := formatTime(m.ObservedAt)
 		out.ObservedAt = &observedAt
@@ -211,7 +217,16 @@ const assetSyncDisabledNote = "asset sync is disabled (assets.settings' contentB
 // [assetSyncDisabledNote] when syncEnabled is false, into one operator-facing
 // sentence — see mapNodeAssetManifest's own doc comment for why this exists
 // at the wire layer instead of in assetsync.
-func notReadyReason(missing []v1.MissingAsset, gaps []v1.AssetGap, syncEnabled bool) string {
+//
+// failures adds the one thing missing/gap counts alone cannot say: WHY a
+// missing asset is missing. Before this, a node whose asset.fetch had
+// genuinely failed (an unreachable content endpoint, a 404, a hash
+// mismatch) read identically to a node the sync service simply had not
+// gotten to yet: both rendered as bare "missing N expected asset(s)".
+// fetchFailureSummary below consults failures for every missing asset by
+// its own content hash and, for whichever ones have a known failure on
+// record, appends the real cause instead of leaving the reader to guess.
+func notReadyReason(nodeID string, missing []v1.MissingAsset, gaps []v1.AssetGap, syncEnabled bool, failures AssetFetchFailureSource) string {
 	var parts []string
 	if n := len(missing); n > 0 {
 		parts = append(parts, fmt.Sprintf("missing %d expected asset(s)", n))
@@ -219,8 +234,46 @@ func notReadyReason(missing []v1.MissingAsset, gaps []v1.AssetGap, syncEnabled b
 	if n := len(gaps); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d sequence(s) with no coverage on this node at all", n))
 	}
+	if s := fetchFailureSummary(nodeID, missing, failures); s != "" {
+		parts = append(parts, s)
+	}
 	if !syncEnabled {
 		parts = append(parts, assetSyncDisabledNote)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// fetchFailureSummary reports, for whichever of missing's assets
+// [AssetFetchFailureSource.LastFetchFailure] has a known asset.fetch
+// failure on record, the real cause instead of leaving a bare "missing"
+// verdict indistinguishable from "sync has not gotten to it yet". Distinct
+// reasons are reported once each with a count, rather than repeating the
+// identical text once per asset (a single unreachable content endpoint
+// fails every missing asset with the SAME reason), never conflating two
+// genuinely different causes into one, and never fabricating a reason for
+// an asset failures has no record of.
+func fetchFailureSummary(nodeID string, missing []v1.MissingAsset, failures AssetFetchFailureSource) string {
+	if failures == nil {
+		return ""
+	}
+	var order []string
+	counts := make(map[string]int)
+	for _, a := range missing {
+		reason, _, ok := failures.LastFetchFailure(nodeID, a.ContentHash)
+		if !ok {
+			continue
+		}
+		if counts[reason] == 0 {
+			order = append(order, reason)
+		}
+		counts[reason]++
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(order))
+	for _, reason := range order {
+		parts = append(parts, fmt.Sprintf("%d asset(s) last failed to fetch: %s", counts[reason], reason))
 	}
 	return strings.Join(parts, "; ")
 }

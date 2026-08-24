@@ -977,6 +977,59 @@ func TestAssetSyncSurvivesContentEndpointUnreachable(t *testing.T) {
 			t.Fatalf("Held.fseq is listed as missing after the content endpoint went unreachable; the node's own holding should still be reported")
 		}
 	}
+
+	// This is the seam this test now also proves: before it, a genuine
+	// asset.fetch failure surfaced NOWHERE on the coordinator: no event,
+	// and the manifest's "missing" reason read identically to a sync pass
+	// that simply had not run yet. Both must now say WHY.
+	// The wait above is satisfied as soon as the asset is EXPECTED and the
+	// node does not hold it, which is true before any fetch has been
+	// attempted, let alone failed. So poll for the reason itself rather
+	// than reading the manifest once: the failure reaches the coordinator
+	// on its own MQTT round trip, not on the sync tick that dispatched it.
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		r := nodeManifest(t, coord, token, nodeID).Reason
+		return r != nil && strings.Contains(*r, "last failed to fetch")
+	}, "manifest reason to state the node's own asset.fetch failure, not merely that the asset is missing")
+
+	// recordFetchFailure writes its in-memory record BEFORE appending the
+	// event, so the manifest reason appearing does not imply the event has
+	// landed yet. Poll for the event too.
+	var eventsResp ctlEventsResp
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		out := mustCtl(t, coord, token, []string{"events", "--limit", "500", "--output", "json"})
+		eventsResp = ctlEventsResp{}
+		if err := json.Unmarshal([]byte(out), &eventsResp); err != nil {
+			t.Fatalf("decode events json: %v\noutput:\n%s", err, out)
+		}
+		for _, e := range eventsResp.Events {
+			if e.Category == "asset_sync" && e.Resource.Kind == "node" && e.Resource.ID == nodeID {
+				return true
+			}
+		}
+		return false
+	}, "GET /api/v1/events to carry an asset_sync event for this node; the fetch failure must leave a trace")
+
+	var found bool
+	for _, e := range eventsResp.Events {
+		if e.Category != "asset_sync" || e.Resource.Kind != "node" || e.Resource.ID != nodeID {
+			continue
+		}
+		found = true
+		details, err := json.Marshal(e.Details)
+		if err != nil {
+			t.Fatalf("marshal event details: %v", err)
+		}
+		if !strings.Contains(string(details), "Unreachable.fseq") {
+			t.Errorf("asset_sync event Details = %s, want it to name the asset that failed", details)
+		}
+		if reason, _ := e.Details["reason"].(string); reason == "" {
+			t.Errorf("asset_sync event Details = %s, want a non-empty reason", details)
+		}
+	}
+	if !found {
+		t.Fatal("GET /api/v1/events (via showmeshctl events) has no asset_sync event for this node; the fetch failure left no trace")
+	}
 }
 
 // --- 8. Exit codes (acceptance criterion 8) ---
