@@ -369,6 +369,48 @@ type FPPInstance struct {
 
 	LastPollAt    *string `json:"lastPollAt"`
 	LastPollError *string `json:"lastPollError"`
+
+	// InstanceUUID is FPP's own SystemUUID, as most recently
+	// reported by this endpoint. Null until this endpoint has actually
+	// reported a uuid at least once, never an empty string, and never
+	// populated from a not_collected placeholder.
+	InstanceUUID *string `json:"instanceUuid"`
+
+	// InstanceUUIDFirstObservedAt is when this endpoint's CURRENT
+	// instanceUuid was first observed (RFC 3339). Null exactly when
+	// InstanceUUID is null.
+	InstanceUUIDFirstObservedAt *string `json:"instanceUuidFirstObservedAt"`
+
+	// InstanceUUIDChange is non-null exactly when this endpoint has a
+	// PENDING, unacknowledged uuid change: it reported a different
+	// instanceUuid than InstanceUUID before InstanceUUID's current value.
+	// This is the visible-conflict rule made concrete on the wire, an SD
+	// card clone, a restored backup, or a swapped controller (ADR-025)
+	// never silently re-associates an endpoint's identity. It stays
+	// non-null until an operator explicitly acknowledges it via
+	// POST /fpp/{instanceId}/instance-uuid/acknowledge.
+	InstanceUUIDChange *FPPInstanceUUIDChange `json:"instanceUuidChange"`
+
+	// DuplicateInstanceUUIDEndpointIDs lists every OTHER currently
+	// configured FPP instance reporting the SAME instanceUuid as this one
+	//, a stated finding, never a silently overwritten row. Empty, never
+	// null, when there is no duplicate.
+	DuplicateInstanceUUIDEndpointIDs []string `json:"duplicateInstanceUuidEndpointIds"`
+}
+
+// FPPInstanceUUIDChange is [FPPInstance.InstanceUUIDChange]'s shape: the
+// uuid this instance reported immediately before its current one, and
+// when that change was first observed.
+type FPPInstanceUUIDChange struct {
+	PreviousUUID string `json:"previousUuid"`
+	ChangedAt    string `json:"changedAt"`
+}
+
+// AcknowledgeFPPInstanceUUIDChangeResponse is the body of
+// POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge.
+type AcknowledgeFPPInstanceUUIDChangeResponse struct {
+	ServerTime string      `json:"serverTime"`
+	Instance   FPPInstance `json:"instance"`
 }
 
 // ResolumeInstanceComposition is one Resolume instance's "composition"

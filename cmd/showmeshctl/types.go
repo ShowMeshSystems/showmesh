@@ -222,6 +222,29 @@ type fppInstance struct {
 	Observations  []evidence `json:"observations"`
 	LastPollAt    *time.Time `json:"lastPollAt"`
 	LastPollError *string    `json:"lastPollError"`
+
+	// this endpoint's most recently observed FPP SystemUUID, its
+	// pending unacknowledged change (the changed-uuid rule: a changed uuid is a visible
+	// conflict, never a silent re-association), and every OTHER
+	// currently configured endpoint reporting the same uuid (the duplicate-uuid rule: a
+	// duplicate is a stated finding, never a silently overwritten row).
+	InstanceUUID                     *string                `json:"instanceUuid"`
+	InstanceUUIDFirstObservedAt      *time.Time             `json:"instanceUuidFirstObservedAt"`
+	InstanceUUIDChange               *fppInstanceUUIDChange `json:"instanceUuidChange"`
+	DuplicateInstanceUUIDEndpointIDs []string               `json:"duplicateInstanceUuidEndpointIds"`
+}
+
+// fppInstanceUUIDChange is fppInstance.InstanceUUIDChange's shape.
+type fppInstanceUUIDChange struct {
+	PreviousUUID string    `json:"previousUuid"`
+	ChangedAt    time.Time `json:"changedAt"`
+}
+
+// acknowledgeFPPInstanceUUIDChangeResponse is the body of
+// POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge.
+type acknowledgeFPPInstanceUUIDChangeResponse struct {
+	ServerTime time.Time   `json:"serverTime"`
+	Instance   fppInstance `json:"instance"`
 }
 
 // resourceRef is event.resource.

@@ -50,6 +50,23 @@ type FPPInstanceView struct {
 
 	LastPollAt    *time.Time
 	LastPollError *string
+
+	// InstanceUUID is this endpoint's most recently observed identity
+	//: FPP's own SystemUUID, decoded off the fpp.uuid signal and
+	// tracked separately from Observations because it carries its own
+	// conflict state (a pending, unacknowledged change per
+	// [store.FPPInstanceUUIDRecord.HasUnacknowledgedChange], the "never a
+	// silent re-association" rule) that a plain observation.Observation
+	// has no room for. Nil, never a zero value, until this endpoint has
+	// actually reported a uuid at least once.
+	InstanceUUID *store.FPPInstanceUUIDRecord
+
+	// DuplicateInstanceUUIDEndpointIDs lists every OTHER currently
+	// configured endpoint reporting the same uuid as InstanceUUID, the
+	// "two endpoints reporting the same uuid is a stated finding, never a
+	// silently overwritten row" rule. Empty, never nil, when there is no
+	// duplicate.
+	DuplicateInstanceUUIDEndpointIDs []string
 }
 
 // FPPLister lists the coordinator's configured FPP instances and their

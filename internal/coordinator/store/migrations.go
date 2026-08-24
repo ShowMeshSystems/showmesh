@@ -50,6 +50,7 @@ var migrations = []migration{
 	{version: 10, sql: schemaV10},
 	{version: 14, sql: schemaV14},
 	{version: 15, sql: schemaV15},
+	{version: 16, sql: schemaV16},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1246,6 +1247,37 @@ CREATE TABLE fpp_playlist_definitions (
 -- table scan as the table grows.
 CREATE INDEX fpp_playlist_definitions_by_instance_received
     ON fpp_playlist_definitions (instance_uuid, received_at DESC);
+`
+
+// schemaV16 adds the coordinator-side store for one
+// configured fpp.endpoints entry's observed uuid history (fppinstanceuuid.go's
+// own doc comment explains the identity gap this closes and the two rules
+// it must never violate). Keyed by endpoint_id, not uuid, precisely so a
+// second endpoint reporting a uuid already claimed by another gets its own
+// row rather than overwriting it (the duplicate-uuid rule). previous_uuid/changed_at and
+// the change_acknowledged_* columns default to ” rather than being
+// NULL-able, matching this package's existing convention for an optional
+// TEXT column on a row that is otherwise always fully populated (see
+// schemaV14's playlist_name/playlist_hash/etc.), fppinstanceuuid.go's own
+// scan function treats ” as "absent" for these three columns.
+const schemaV16 = `
+CREATE TABLE fpp_instance_uuid_observations (
+    endpoint_id                           TEXT PRIMARY KEY,
+    uuid                                   TEXT NOT NULL,
+    first_observed_at                     TEXT NOT NULL,
+    last_observed_at                      TEXT NOT NULL,
+    previous_uuid                         TEXT NOT NULL DEFAULT '',
+    changed_at                            TEXT NOT NULL DEFAULT '',
+    change_acknowledged_at                TEXT NOT NULL DEFAULT '',
+    change_acknowledged_by_principal_id   TEXT NOT NULL DEFAULT '',
+    change_acknowledged_by_principal_name TEXT NOT NULL DEFAULT '',
+    updated_at                            TEXT NOT NULL
+);
+
+-- ListFPPInstanceUUIDDuplicates and GetFPPInstanceUUIDByUUID both look up
+-- by uuid rather than by this table's primary key.
+CREATE INDEX fpp_instance_uuid_observations_by_uuid
+    ON fpp_instance_uuid_observations (uuid);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across

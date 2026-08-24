@@ -663,14 +663,31 @@ func mapFPPInstance(fv FPPInstanceView, now time.Time) v1.FPPInstance {
 		obsEvidence = append(obsEvidence, mapEvidence(o, now))
 	}
 
-	return v1.FPPInstance{
-		InstanceID:    fv.InstanceID,
-		Endpoint:      sanitizeEndpoint(fv.Endpoint),
-		Health:        string(deriveInstanceHealth(resolved, now)),
-		Observations:  obsEvidence,
-		LastPollAt:    formatTimePtr(fv.LastPollAt),
-		LastPollError: fv.LastPollError,
+	inst := v1.FPPInstance{
+		InstanceID:                       fv.InstanceID,
+		Endpoint:                         sanitizeEndpoint(fv.Endpoint),
+		Health:                           string(deriveInstanceHealth(resolved, now)),
+		Observations:                     obsEvidence,
+		LastPollAt:                       formatTimePtr(fv.LastPollAt),
+		LastPollError:                    fv.LastPollError,
+		DuplicateInstanceUUIDEndpointIDs: fv.DuplicateInstanceUUIDEndpointIDs,
 	}
+	if inst.DuplicateInstanceUUIDEndpointIDs == nil {
+		inst.DuplicateInstanceUUIDEndpointIDs = []string{}
+	}
+	if fv.InstanceUUID != nil {
+		uuid := fv.InstanceUUID.UUID
+		inst.InstanceUUID = &uuid
+		firstObserved := formatTime(fv.InstanceUUID.FirstObservedAt)
+		inst.InstanceUUIDFirstObservedAt = &firstObserved
+		if fv.InstanceUUID.HasUnacknowledgedChange() {
+			inst.InstanceUUIDChange = &v1.FPPInstanceUUIDChange{
+				PreviousUUID: fv.InstanceUUID.PreviousUUID,
+				ChangedAt:    formatTime(fv.InstanceUUID.ChangedAt),
+			}
+		}
+	}
+	return inst
 }
 
 // --- Resolume instances ---

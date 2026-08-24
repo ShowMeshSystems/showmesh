@@ -71,6 +71,18 @@ type FPPPlaylistEntryObservation struct {
 	ObservedAt                         string `json:"observedAt"`
 	CoalescedSincePreviousAcknowledged int64  `json:"coalescedSincePreviousAcknowledged"`
 	ReceivedAt                         string `json:"receivedAt"`
+
+	// EndpointID is the configured fpp.endpoints id whose most
+	// recently observed instance uuid matches InstanceUUID, resolved
+	// best-effort at read time, the correlation this API previously had
+	// no way to state (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5: "no
+	// binding between the authenticated principal and the instanceUuid it
+	// reports for"). Null when no currently configured endpoint has
+	// reported this uuid, or when more than one has (a duplicate, see
+	// GET /fpp's duplicateInstanceUuidEndpointIds, makes the
+	// correlation ambiguous, so this is null rather than an arbitrary
+	// pick).
+	EndpointID *string `json:"endpointId"`
 }
 
 // FPPPlaylistEntryObservationsResponse is GET's list response: the latest

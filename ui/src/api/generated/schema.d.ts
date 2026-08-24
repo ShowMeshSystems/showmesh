@@ -164,6 +164,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fpp/{instanceId}/instance-uuid/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge a pending FPP instance uuid change
+         * @description A coordinator-local state change behind `config:write`, the same scope `POST`/`DELETE /nodes/{nodeId}/declaration` use, because clearing this conflict is an operator-authored inventory decision, not a command sent to any device. Clears the ONLY marker that a configured FPP endpoint's observed instanceUuid changed since it was last seen (an SD card clone, a restored backup, or a swapped controller). Never happens automatically, and never changes the recorded instanceUuid itself, only the conflict marker. Refused with `409` when the instance has no pending unacknowledged change. ADR-024 decision 11's same-transaction rule applies in full.
+         */
+        post: operations["acknowledgeFPPInstanceUUIDChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/render/surfaces/{surfaceId}/apply": {
         parameters: {
             query?: never;
@@ -2479,6 +2502,29 @@ export interface components {
             /** Format: date-time */
             lastPollAt: string | null;
             lastPollError: string | null;
+            /** @description FPP's own SystemUUID, as most recently reported by this endpoint (decoded off the fpp.uuid signal, and off the FPP plugin's playlist-entry observations). Null until this endpoint has actually reported a uuid at least once; never populated from a not_collected placeholder. */
+            instanceUuid: string | null;
+            /**
+             * Format: date-time
+             * @description When this endpoint's CURRENT instanceUuid was first observed. Null exactly when instanceUuid is null.
+             */
+            instanceUuidFirstObservedAt: string | null;
+            /** @description Non-null exactly when this endpoint has a PENDING, unacknowledged uuid change: it previously reported a different instanceUuid than its current one. A uuid change on a known endpoint (an SD card clone, a restored backup, a swapped controller) is a visible conflict, never a silent re-association, this field stays non-null until an operator explicitly acknowledges it via POST /fpp/{instanceId}/instance-uuid/acknowledge. */
+            instanceUuidChange: components["schemas"]["FPPInstanceUUIDChange"] | null;
+            /** @description Every OTHER currently configured FPP instance reporting the SAME instanceUuid as this one, a stated finding, never a silently overwritten row. Empty, never null, when there is no duplicate. */
+            duplicateInstanceUuidEndpointIds: string[];
+        };
+        /** @description The uuid an FPP instance reported immediately before its current one, and when that change was first observed. */
+        FPPInstanceUUIDChange: {
+            previousUuid: string;
+            /** Format: date-time */
+            changedAt: string;
+        };
+        /** @description The body of `POST /fpp/{instanceId}/instance-uuid/acknowledge`. */
+        AcknowledgeFPPInstanceUUIDChangeResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            instance: components["schemas"]["FPPInstance"];
         };
         /** @description One recorded event: an element of GET /events, and the payload of an event.recorded stream event. `occurredAt` is null when the change was first learned from evidence of unknown age. */
         Event: {
@@ -4052,6 +4098,8 @@ export interface components {
         /** @description One FPP instance's latest accepted playlist-entry observation, as rendered by GET /integrations/fpp/playlist-entry-observations and the fppPlaylistEntry.changed stream event. position is absent when unavailable is set - an unavailable observation's identity fields carry no meaningful position. */
         FPPPlaylistEntryObservation: {
             instanceUuid: string;
+            /** @description the configured fpp.endpoints id whose most recently observed instance uuid matches instanceUuid, resolved best-effort at read time. Null when no currently configured endpoint has reported this uuid, or when more than one has (a duplicate, see GET /fpp's duplicateInstanceUuidEndpointIds , makes the correlation ambiguous). */
+            endpointId: string | null;
             schemaVersion: number;
             sequence: number;
             playlistName?: string;
@@ -5314,6 +5362,46 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    acknowledgeFPPInstanceUUIDChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as a node ID (contract section 7). */
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcknowledgeFPPInstanceUUIDChangeResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the authenticated principal does not hold `config:write` (ADR-024 decision 4, `detail` names the missing scope), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a bearer-token-authenticated request never receives the latter. Both share this one `Problem`-shaped response. */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

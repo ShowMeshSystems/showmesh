@@ -354,19 +354,63 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 // as the store returns them.
 func (h *handlers) handleListFPPPlaylistEntryObservations(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
-	recs, err := h.deps.FPPObservations.ListFPPPlaylistEntryObservations(r.Context())
+	ctx := r.Context()
+	recs, err := h.deps.FPPObservations.ListFPPPlaylistEntryObservations(ctx)
 	if err != nil {
 		h.writeInternalError(w, now, "list fpp playlist entry observations", err)
 		return
 	}
+
+	// resolve each observation's instanceUuid to a configured
+	// endpoint id, one lookup for the whole list rather than one per
+	// observation. Built from h.deps.FPP (the identical source GET /fpp
+	// itself renders from) so this can never disagree with what that
+	// endpoint reports for the same uuid.
+	endpointByUUID, err := h.fppEndpointIDsByInstanceUUID(ctx)
+	if err != nil {
+		h.writeInternalError(w, now, "resolve fpp endpoint ids for playlist entry observations", err)
+		return
+	}
+
 	out := make([]v1.FPPPlaylistEntryObservation, 0, len(recs))
 	for _, rec := range recs {
-		out = append(out, mapFPPPlaylistEntryObservation(rec))
+		mapped := mapFPPPlaylistEntryObservation(rec)
+		if id, ok := endpointByUUID[rec.InstanceUUID]; ok {
+			mapped.EndpointID = &id
+		}
+		out = append(out, mapped)
 	}
 	jsonWrite(w, v1.FPPPlaylistEntryObservationsResponse{
 		Observations: out,
 		ServerTime:   formatTime(now),
 	})
+}
+
+// fppEndpointIDsByInstanceUUID returns, for every uuid reported by exactly
+// ONE currently configured FPP endpoint, that endpoint's id. A uuid
+// reported by zero or by more than one endpoint (the duplicate-uuid rule's duplicate
+// finding, see GET /fpp's duplicateInstanceUuidEndpointIds) is simply
+// absent from the result, so a caller correlating against it renders "no
+// single endpoint owns this uuid" rather than guessing.
+func (h *handlers) fppEndpointIDsByInstanceUUID(ctx context.Context) (map[string]string, error) {
+	views, err := h.deps.FPP.ListInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byUUID := make(map[string][]string, len(views))
+	for _, fv := range views {
+		if fv.InstanceUUID == nil {
+			continue
+		}
+		byUUID[fv.InstanceUUID.UUID] = append(byUUID[fv.InstanceUUID.UUID], fv.InstanceID)
+	}
+	out := make(map[string]string, len(byUUID))
+	for uuid, ids := range byUUID {
+		if len(ids) == 1 {
+			out[uuid] = ids[0]
+		}
+	}
+	return out, nil
 }
 
 // mapFPPPlaylistEntryObservation renders rec for the wire, shared by the

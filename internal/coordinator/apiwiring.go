@@ -15,6 +15,7 @@ package coordinator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -292,6 +293,18 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 	if l.endpoints != nil {
 		endpoints = l.endpoints.Current(ctx)
 	}
+
+	// the duplicate-uuid rule: computed once per call against the WHOLE table, then
+	// filtered down to endpoints presently configured, a stale row left
+	// behind by a since-removed endpoint (this table is not pruned on
+	// removal; fppinstanceuuid.go's own doc comment) must never
+	// manufacture a duplicate finding against an endpoint that no longer
+	// exists.
+	duplicatesByEndpoint, err := l.duplicateInstanceUUIDsByEndpoint(ctx, endpoints)
+	if err != nil {
+		return nil, err
+	}
+
 	views := make([]api.FPPInstanceView, 0, len(endpoints))
 	for _, ep := range endpoints {
 		obs, err := l.st.ListObservations(ctx, store.ObservationFilter{
@@ -322,15 +335,79 @@ func (l fppInstanceLister) ListInstances(ctx context.Context) ([]api.FPPInstance
 			// review finding 3.8).
 			obs = notYetPolledObservations(ep.ID, time.Now())
 		}
+
+		// the endpoint's most recently observed identity, kept
+		// separate from Observations because it is not an ordinary
+		// signal, it carries its own conflict state (the changed-uuid rule) that a
+		// plain Evidence value has no room for. Nil, not a zero value,
+		// when this endpoint has never reported a uuid at all.
+		var instanceUUID *store.FPPInstanceUUIDRecord
+		uuidRec, err := l.st.GetFPPInstanceUUID(ctx, ep.ID)
+		switch {
+		case err == nil:
+			instanceUUID = &uuidRec
+		case errors.Is(err, store.ErrFPPInstanceUUIDNotFound):
+			// Expected for a freshly configured or never-yet-polled
+			// endpoint; leave instanceUUID nil.
+		default:
+			return nil, fmt.Errorf("coordinator: get fpp instance uuid for %q: %w", ep.ID, err)
+		}
+
 		views = append(views, api.FPPInstanceView{
-			InstanceID:    ep.ID,
-			Endpoint:      ep.URL,
-			Observations:  obs,
-			LastPollAt:    lastPollAt,
-			LastPollError: lastPollError,
+			InstanceID:                       ep.ID,
+			Endpoint:                         ep.URL,
+			Observations:                     obs,
+			LastPollAt:                       lastPollAt,
+			LastPollError:                    lastPollError,
+			InstanceUUID:                     instanceUUID,
+			DuplicateInstanceUUIDEndpointIDs: duplicatesByEndpoint[ep.ID],
 		})
 	}
 	return views, nil
+}
+
+// duplicateInstanceUUIDsByEndpoint returns, for every endpoint id
+// currently in endpoints, the OTHER currently configured endpoint ids
+// reporting the same instance uuid, the duplicate-uuid rule's stated finding. An endpoint
+// with no duplicate is simply absent from the returned map (callers
+// index it and treat a miss as "none", never as an error).
+func (l fppInstanceLister) duplicateInstanceUUIDsByEndpoint(ctx context.Context, endpoints []config.FPPEndpoint) (map[string][]string, error) {
+	configuredIDs := make(map[string]bool, len(endpoints))
+	for _, ep := range endpoints {
+		configuredIDs[ep.ID] = true
+	}
+
+	dups, err := l.st.ListFPPInstanceUUIDDuplicates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("coordinator: list fpp instance uuid duplicates: %w", err)
+	}
+
+	out := make(map[string][]string, len(dups))
+	for _, d := range dups {
+		var live []string
+		for _, id := range d.EndpointIDs {
+			if configuredIDs[id] {
+				live = append(live, id)
+			}
+		}
+		if len(live) < 2 {
+			// Fewer than two of this uuid's claimants are currently
+			// configured, so there is no CURRENT duplicate to report ,
+			// only a stale row from a removed endpoint plus, at most,
+			// one live one.
+			continue
+		}
+		for _, id := range live {
+			others := make([]string, 0, len(live)-1)
+			for _, other := range live {
+				if other != id {
+					others = append(others, other)
+				}
+			}
+			out[id] = others
+		}
+	}
+	return out, nil
 }
 
 // fppSignals is the STATIC subset of signals
@@ -657,7 +734,45 @@ func (s *fppSink) RecordObservations(ctx context.Context, observations []observa
 			}
 		}
 	}
+	s.recordInstanceUUIDs(ctx, observations)
 	if s.notify != nil && len(observations) > 0 {
 		s.notify()
+	}
+}
+
+// recordInstanceUUIDs hooks into the poll path: the fpp.uuid
+// signal already carries FPP's SystemUUID (signals.go's own doc comment;
+// docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 1.5 records that
+// nothing consumed it before this), and this is the one place every FPP
+// poll's observations pass through regardless of source (fpp-rest,
+// fpp-mqtt) or completeness. Only a genuinely present string value counts
+// , an absence observation (not_collected/collection_failed/unsupported)
+// carries no Value and must never be recorded as "this endpoint reported
+// an empty uuid", which would fabricate the changed-uuid rule's changed-uuid conflict out
+// of a poll that simply failed to reach the host.
+func (s *fppSink) recordInstanceUUIDs(ctx context.Context, observations []observation.Observation) {
+	for _, obs := range observations {
+		if obs.Resource.Kind != observation.ResourceFPP || obs.Signal != fpp.SignalUUID {
+			continue
+		}
+		uuid, ok := obs.Value.(string)
+		if !ok || uuid == "" || obs.ObservedAt == nil {
+			continue
+		}
+		_, changed, err := s.st.RecordFPPInstanceUUIDObservation(ctx, obs.Resource.ID, uuid, *obs.ObservedAt)
+		if err != nil {
+			s.logger.Error("coordinator: failed to record fpp instance uuid observation",
+				"endpoint_id", obs.Resource.ID, "error", err)
+			continue
+		}
+		if changed {
+			// Rule 1: never silent. The full conflict (previous vs.
+			// current uuid) is durable and rendered on the API/UI/CLI;
+			// this log line is a secondary, operator-facing breadcrumb
+			// for whoever is watching coordinator logs at the moment it
+			// happens, not the mechanism that makes it visible.
+			s.logger.Warn("coordinator: fpp endpoint reported a different instance uuid than previously observed",
+				"endpoint_id", obs.Resource.ID, "uuid", uuid)
+		}
 	}
 }
