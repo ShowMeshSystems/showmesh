@@ -43,24 +43,23 @@ type PersistedSession struct {
 	CurrentItemID string
 	Bookmark      *pkgaudio.Bookmark
 
-	// Muted and PreMuteGain record an operator-issued audio.output.mute
-	// still in effect: PreMuteGain is the gain audio.output.unmute
-	// restores. Nil PreMuteGain with Muted true means mute happened
-	// before any gain was ever set — Unmute restores unity.
-	Muted       bool
-	PreMuteGain *pkgaudio.Gain
+	// Muted records an operator-issued audio.output.mute still in
+	// effect. There is no separate restore-target field: the gain
+	// audio.output.unmute applies is derived fresh from Desired.Gain
+	// (the configured gain) and DuckedByAll at unmute time, never a
+	// value captured once and carried forward.
+	Muted bool
 
 	// DuckedByAll is every session whose duck mix policy is currently
 	// suppressing this session's gain — a set, not a single id, because
 	// two overlapping announcements ducking the same background session
-	// must both release it before gain is restored. Empty
-	// means this session is not ducked. PreDuckGain is the gain to
-	// restore once the set is empty. This pair is the restore-exactly-
-	// once guard across a restart: a restore removes and persists, so a
-	// repeated or racing restore attempt finds the id already absent and
-	// does nothing — see [Manager.removeDuckerLocked].
+	// must both release it before gain is restored. Empty means this
+	// session is not ducked. This is the restore-exactly-once guard
+	// across a restart: a restore removes and persists, so a repeated or
+	// racing restore attempt finds the id already absent and does
+	// nothing (see [Manager.removeDuckerLocked]). As with Muted, the
+	// restored gain is derived fresh, not carried in a second field.
 	DuckedByAll []pkgaudio.SessionID
-	PreDuckGain *pkgaudio.Gain
 
 	// InterruptedByAll is every session whose interrupt mix policy is
 	// currently suspending this session — the same set/restore shape as
@@ -194,11 +193,9 @@ type Session struct {
 	// and "never started" already look identical. See [FadeState].
 	fadeState FadeState
 
-	muted       bool
-	preMuteGain *pkgaudio.Gain
+	muted bool
 
 	duckedByAll map[pkgaudio.SessionID]struct{}
-	preDuckGain *pkgaudio.Gain
 
 	// interruptedByAll is every session whose interrupt mix policy is
 	// currently suspending this session — see [PersistedSession.
@@ -371,9 +368,7 @@ func (s *Session) persistedLocked() PersistedSession {
 		CurrentItemID:    s.currentItemID,
 		Bookmark:         s.bookmark,
 		Muted:            s.muted,
-		PreMuteGain:      s.preMuteGain,
 		DuckedByAll:      sortedSessionIDsLocked(s.duckedByAll),
-		PreDuckGain:      s.preDuckGain,
 		InterruptedByAll: sortedSessionIDsLocked(s.interruptedByAll),
 		Fault:            s.fault,
 		FaultReason:      s.faultReason,
@@ -534,6 +529,14 @@ func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem)
 	s.loadedIdentity = itemIdentity(item)
 	s.lastObservedAt = obs.ObservedAt
 	s.clearFaultLocked()
+	// A fresh handle from Load starts at the engine's own default gain,
+	// not this session's configured gain or its active mute/duck state.
+	// Every caller that reaches a successful Load through this function,
+	// Prepare, Start, playlist advance, and restore, must drive it to
+	// the correct effective gain here, once, rather than each repeating
+	// that logic or leaving a newly (re)prepared session briefly, or
+	// permanently on a failed restart, above its configured maximum.
+	s.mgr.applyEffectiveGainBestEffortLocked(ctx, s)
 	return obs, nil
 }
 
@@ -880,7 +883,12 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		snap.HasItem, snap.ItemID, snap.ItemIndex = true, item.ItemID, s.currentIndex
 	}
 	if s.desired.Gain != nil {
-		snap.HasGain, snap.Gain = true, *s.desired.Gain
+		// Reported as the EFFECTIVE gain, not the raw configured value:
+		// this is the wire-observable "what is this session actually
+		// outputting right now" (pkg/mqttproto, the coordinator's
+		// nodeaudio collector), which a mute or a duck must still be
+		// able to answer honestly.
+		snap.HasGain, snap.Gain = true, s.effectiveGainLocked()
 	}
 	if s.desired.Ceiling != nil {
 		snap.HasCeiling, snap.Ceiling = true, *s.desired.Ceiling

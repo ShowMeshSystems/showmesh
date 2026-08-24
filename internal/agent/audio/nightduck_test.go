@@ -51,9 +51,9 @@ func nightConfiguredGain(maxGainDb float64) pkgaudio.Gain {
 	return pkgaudio.Gain(math.Pow(10, maxGainDb/20))
 }
 
-// mutation target: removeDuckerLocked's gain restore. Delete the
-// `t.desired.Gain = &effective` / engine SetGain pair, or restore to
-// Gain(1) instead of preDuckGain, and the final assertion fails. This is
+// mutation target: removeDuckerLocked's applyEffectiveGainBestEffortLocked
+// call. Delete it, or have effectiveGainLocked fall back to Gain(1)
+// instead of the configured gain, and the final assertion fails. This is
 // the invariant the coordinator's own duck/restore used to duplicate: an
 // announcement ducks the bed and the bed returns to the CONFIGURED gain,
 // with no second mechanism involved.
@@ -86,18 +86,21 @@ func TestNightAnnouncementDucksBedAndRestoresConfiguredGain(t *testing.T) {
 	}
 }
 
-// mutation target: duckOneLocked's capture of effectiveGainLocked into
-// preDuckGain. Capture a constant and this stops observing what it
-// exists to observe.
+// mutation target: this package's own derived-gain composition
+// (configuredGainLocked plus the active suppression reasons). Replacing
+// it with a captured constant stops observing what this test exists to
+// observe.
 //
 // This is the compounding proof, and the reason the coordinator no
 // longer sends its own audio.gain.fade around an announcement. Run with
 // the exact values the night controller used to send: a fade to a
 // quarter of the configured gain before the announcement, and the node's
-// own duck on top of it. The node captures the ALREADY-ducked gain as
-// its pre-duck value and drives the session to silence, so the bed ends
-// up quieter than either mechanism asked for, and the value the node
-// will restore is a duck level rather than the configured gain.
+// own duck on top of it. The coordinator's own fade already overwrote
+// the bed's configured gain to the quarter level BEFORE the node's duck
+// ever started, so once the announcement ends, the node restores to that
+// quarter, not to the original full configured gain, even though nothing
+// in the node itself is broken: it composes correctly from whatever it
+// was told, and it was told a quarter.
 func TestNightTwoDuckMechanismsCompoundBelowEitherIntendedLevel(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
@@ -121,15 +124,17 @@ func TestNightTwoDuckMechanismsCompoundBelowEitherIntendedLevel(t *testing.T) {
 	// The node then ducks the same session on top of it.
 	startPlaying(t, m, ctx, "announcement-1", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
 
-	bed, _ := m.get("night-bg")
-	bed.mu.Lock()
-	live, preDuck := bed.effectiveGainLocked(), bed.preDuckGain
-	bed.mu.Unlock()
-	if live >= coordinatorDuck {
+	if live, _ := nightBedGain(t, m, "night-bg"); live >= coordinatorDuck {
 		t.Fatalf("bed gain under both mechanisms = %v, want strictly below the coordinator's own intended duck level %v", live, coordinatorDuck)
 	}
-	if preDuck == nil || *preDuck != coordinatorDuck {
-		t.Fatalf("the node captured %v as the gain to restore, want the already-ducked %v; this is the compounding, and it is what made the bed come back quiet", preDuck, coordinatorDuck)
+
+	m.Stop(ctx, "announcement-1", "ann-stop", 3)
+	restored, duckers := nightBedGain(t, m, "night-bg")
+	if duckers != 0 {
+		t.Fatalf("bed still has %d ducker(s) after the announcement stopped", duckers)
+	}
+	if restored != coordinatorDuck {
+		t.Fatalf("bed gain once the node's own duck released = %v, want the coordinator's own quarter-level fade target %v, not the original %v; this is the compounding", restored, coordinatorDuck, configured)
 	}
 }
 
@@ -211,11 +216,13 @@ func TestNightGainFadeDuringAnAnnouncementIsWhatTheBedComesBackAt(t *testing.T) 
 	}
 }
 
-// mutation target: rememberIntendedGainWhileDuckedLocked's
-// zero-duckers guard. Remove it and preDuckGain is written for a session
-// nobody is ducking, so the NEXT duck restores a value captured before it
-// ever existed instead of the gain the session actually held.
-func TestNightGainChangeOnAnUnduckedSessionLeavesPreDuckGainAlone(t *testing.T) {
+// mutation target: this package's derived-gain composition read through
+// a gain.set that lands on an UNducked session, then a duck/undock cycle
+// afterward. There is no separate restore slot for a duck to capture
+// here at all in this design: the configured gain a gain.set records is
+// what a later duck's own release always reads fresh, so a gain change
+// with nobody ducking has nothing else to disturb.
+func TestNightGainChangeOnAnUnduckedSessionSurvivesALaterDuckCycle(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
@@ -224,12 +231,8 @@ func TestNightGainChangeOnAnUnduckedSessionLeavesPreDuckGainAlone(t *testing.T) 
 
 	startPlaying(t, m, ctx, "night-bg", bedRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
 	m.GainSet(ctx, "night-bg", "bg-gain", 3, pkgaudio.Gain(0.4))
-	bed, _ := m.get("night-bg")
-	bed.mu.Lock()
-	preDuck := bed.preDuckGain
-	bed.mu.Unlock()
-	if preDuck != nil {
-		t.Fatalf("preDuckGain = %v on a session nobody has ducked, want nil", *preDuck)
+	if g, duckers := nightBedGain(t, m, "night-bg"); duckers != 0 || g != pkgaudio.Gain(0.4) {
+		t.Fatalf("bed after an unducked gain.set: gain=%v duckers=%d, want 0.4 and none", g, duckers)
 	}
 
 	// And the duck that follows still captures the gain in force now.
@@ -240,10 +243,10 @@ func TestNightGainChangeOnAnUnduckedSessionLeavesPreDuckGainAlone(t *testing.T) 
 	}
 }
 
-// mutation target: removeDuckerLocked's clampToCeilingLocked call.
-// Restore preDuckGain directly and this fails: a ceiling lowered while
-// the bed was ducked must still bound the restore, so nothing ever puts
-// the bed back above the configured maximum.
+// mutation target: effectiveGainLocked's own ceiling clamp. Skip it and
+// this fails: a ceiling lowered while the bed was ducked must still
+// bound the restore, so nothing ever puts the bed back above the
+// configured maximum.
 func TestNightDuckRestoreNeverExceedsTheCeiling(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
