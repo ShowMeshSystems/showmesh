@@ -101,6 +101,18 @@ const (
 	SubscribeHello    = nodesPrefix + "/+/" + segHello
 	SubscribeLWT      = nodesPrefix + "/+/" + segLWT
 	SubscribeObserved = nodesPrefix + "/+/" + segObserved + "/#"
+
+	// SubscribeResult matches every node's result topic family
+	// (showmesh/nodes/<node-id>/result/<cmd-id>), for a subscriber that
+	// dispatches commands fire-and-forget and needs to consume whatever
+	// result comes back without registering a per-command waiter. Unlike
+	// SubscribeHello/SubscribeLWT/SubscribeObserved, this is not part of
+	// the coordinator's default inventory subscription set: a subscriber
+	// opts into it deliberately (see internal/coordinator/assetsync's own
+	// use, the first consumer of it), because result topics carry many
+	// unrelated commands' traffic, not just the ones a given subscriber
+	// cares about.
+	SubscribeResult = nodesPrefix + "/+/" + segResult + "/+"
 )
 
 // nodeIDPattern is the node ID syntax: 1 to 64 characters of lowercase

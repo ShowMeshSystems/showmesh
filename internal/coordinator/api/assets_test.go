@@ -43,6 +43,39 @@ func (f *fakeAssetSettingsSource) ContentBaseURL() string           { return f.c
 func (f *fakeAssetSettingsSource) MaxUploadBytes() int64            { return f.maxUploadBytes }
 func (f *fakeAssetSettingsSource) InventoryInterval() time.Duration { return f.inventoryInterval }
 
+// fakeAssetFetchFailureSource is a test-only, mutable [AssetFetchFailureSource]:
+// a plain map a test populates directly, standing in for
+// *assetsync.Service's own LastFetchFailure in tests that need to prove
+// what a not_ready manifest's reason says about a known fetch failure,
+// without standing up a real Service and MQTT round trip.
+type fakeAssetFetchFailureSource struct {
+	failures map[[2]string]struct {
+		reason   string
+		failedAt time.Time
+	}
+}
+
+func (f *fakeAssetFetchFailureSource) set(nodeID, contentHash, reason string, failedAt time.Time) {
+	if f.failures == nil {
+		f.failures = make(map[[2]string]struct {
+			reason   string
+			failedAt time.Time
+		})
+	}
+	f.failures[[2]string{nodeID, contentHash}] = struct {
+		reason   string
+		failedAt time.Time
+	}{reason: reason, failedAt: failedAt}
+}
+
+func (f *fakeAssetFetchFailureSource) LastFetchFailure(nodeID, contentHash string) (string, time.Time, bool) {
+	rec, ok := f.failures[[2]string{nodeID, contentHash}]
+	if !ok {
+		return "", time.Time{}, false
+	}
+	return rec.reason, rec.failedAt, true
+}
+
 // assetsTestDeps mirrors showObjectsTestDeps, additionally wiring a real
 // VolumeBackend and a generous upload limit so ordinary tests never trip
 // the size bound; tests proving the bound itself override

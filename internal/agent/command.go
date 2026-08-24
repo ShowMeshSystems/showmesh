@@ -525,6 +525,24 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 	opResult, err := op(ctx, cmd.Params, h.now)
 	if err != nil {
 		result := h.failedResult(cmd, receivedAt, err.Error())
+		// opResult is still meaningful here: an OperationFunc that fails
+		// may still classify what it observed (assetFetchOperation.run
+		// returns Signal "node.asset.fetch_failed" alongside its error, for
+		// instance). err.Error() already carries the free-text cause,
+		// which is Reason above; Signal is an additional machine-readable
+		// classification the operation already computed, so it is carried
+		// onto the wire too rather than discarded along with the rest of
+		// opResult. ObservedAt is deliberately left nil (never
+		// opResult.ObservedAt's zero value) because a failed operation
+		// never populates it; a fabricated "year one" timestamp would
+		// violate ADR-011 more than reporting no observation time at all.
+		if opResult.Signal != "" {
+			result.Evidence = &mqttproto.ResultEvidence{
+				Signal:      opResult.Signal,
+				Value:       opResult.Value,
+				CollectedAt: h.now(),
+			}
+		}
 		h.cache.complete(cmd.IdempotencyKey, result)
 		h.publishResult(ctx, publisher, result)
 		return
@@ -656,7 +674,7 @@ func (h *CommandHandler) publishResult(ctx context.Context, publisher Publisher,
 		h.logger.Error("failed to publish command result", "command_id", result.CommandID, "action", result.Action, "outcome", result.Outcome, "error", err)
 		return
 	}
-	h.logger.Info("published command result", "command_id", result.CommandID, "action", result.Action, "outcome", result.Outcome)
+	h.logger.Info("published command result", "command_id", result.CommandID, "action", result.Action, "outcome", result.Outcome, "reason", result.Reason)
 }
 
 // publishAgentEcho marshals and publishes the retained

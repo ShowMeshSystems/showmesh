@@ -783,3 +783,66 @@ func TestHandleMessageAssetFetchEndToEnd(t *testing.T) {
 		t.Fatalf("assetFetchTrigger was not signalled after a completed asset.fetch")
 	}
 }
+
+// TestHandleMessageAssetFetchFailureCarriesReasonAndSignal pins this
+// seam's agent-side fix: a failed asset.fetch's published result must
+// carry BOTH the free-text Reason (err.Error(), already true before this
+// fix) AND the Evidence.Signal the operation itself computed
+// ("node.asset.fetch_failed", assets.go's downloadErr branch), which used
+// to be silently discarded by HandleMessage's error branch. The URL points
+// at a closed listener so the download fails for a genuine, nameable
+// reason (connection refused), the closest analog to this seam's original
+// incident (an unreachable content base URL).
+func TestHandleMessageAssetFetchFailureCarriesReasonAndSignal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	unreachableURL := srv.URL + "/asset"
+	srv.Close() // closed immediately: the port is now unreachable
+
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)}
+	h := newCommandHandler(testNodeID, dir, "", nil, nil, nil, nil, nil, clock.now, discardLogger())
+	pub := newFakePublisher()
+
+	cmd := mqttproto.CmdPayload{
+		CommandID:      "cmd-asset-fail-1",
+		IdempotencyKey: "idem-asset-fail-1",
+		Action:         "asset.fetch",
+		Target:         mqttproto.CmdTarget{Kind: "node", ID: testNodeID},
+		Params: map[string]any{
+			"assetId":     "asset-1",
+			"contentHash": "sha256:doesnotmatter",
+			"filename":    "Thriller.fseq",
+			"sizeBytes":   float64(1024),
+			"url":         unreachableURL,
+		},
+		Issuer:             mqttproto.CmdIssuer{PrincipalID: "principal-1", PrincipalName: "operator"},
+		ConfirmationMethod: confirmationMethodEvidence,
+	}
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	h.HandleMessage(context.Background(), pub, topic, payload)
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("len(calls) = %d, want 1 (result only)", len(calls))
+	}
+	result := decodeResultFromCall(t, calls[0])
+	if result.Outcome != mqttproto.OutcomeFailed {
+		t.Fatalf("Outcome = %q, want %q", result.Outcome, mqttproto.OutcomeFailed)
+	}
+	if result.Reason == "" || !strings.Contains(result.Reason, "asset.fetch: download failed") {
+		t.Fatalf("Reason = %q, want it to name the download failure", result.Reason)
+	}
+	if result.Evidence == nil {
+		t.Fatal("Evidence is nil, want the operation's own Signal (\"node.asset.fetch_failed\") carried through, not discarded")
+	}
+	if result.Evidence.Signal != "node.asset.fetch_failed" {
+		t.Errorf("Evidence.Signal = %q, want %q", result.Evidence.Signal, "node.asset.fetch_failed")
+	}
+	if result.Evidence.Value != "asset-1" {
+		t.Errorf("Evidence.Value = %v, want the asset ID %q", result.Evidence.Value, "asset-1")
+	}
+	if result.Evidence.ObservedAt != nil {
+		t.Errorf("Evidence.ObservedAt = %v, want nil: a failed fetch never populates it, and a zero-time fallback would fabricate evidence per ADR-011", *result.Evidence.ObservedAt)
+	}
+}

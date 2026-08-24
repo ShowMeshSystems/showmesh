@@ -2,13 +2,16 @@ package assetsync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
@@ -612,5 +615,173 @@ func TestServiceNudgeIsNonBlockingAndCoalesces(t *testing.T) {
 	case <-svc.nudge:
 		t.Fatal("Nudge() queued a second pending request; it should coalesce")
 	default:
+	}
+}
+
+// --- HandleMessage: consuming asset.fetch results ---
+
+// resultMessage builds a broker.Message carrying a result envelope for
+// nodeID/cmdID, matching what internal/agent/command.go's publishResult
+// actually puts on the wire.
+func resultMessage(t *testing.T, nodeID, cmdID string, result mqttproto.ResultPayload) broker.Message {
+	t.Helper()
+	result.CommandID = cmdID
+	if result.IdempotencyKey == "" {
+		result.IdempotencyKey = "idempotency-" + cmdID
+	}
+	env, err := mqttproto.NewResultEnvelope(time.Now, nodeID, result)
+	if err != nil {
+		t.Fatalf("NewResultEnvelope() error = %v", err)
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	topic, err := mqttproto.ResultTopic(nodeID, cmdID)
+	if err != nil {
+		t.Fatalf("ResultTopic() error = %v", err)
+	}
+	return broker.Message{Topic: topic, Payload: payload, Retained: false}
+}
+
+// dispatchOne ticks svc once against a store already seeded with exactly
+// one missing asset for nodeID, and returns the command ID the dispatch
+// used (decoded off the wire, the same way TestServiceDispatchesMissingAsset
+// does) so a test can then feed HandleMessage a matching result.
+func dispatchOne(t *testing.T, st *store.Store, pub *fakePublisher, svc *Service, nodeID string) string {
+	t.Helper()
+	svc.tick(context.Background())
+	calls := pub.callsFor(nodeID)
+	if len(calls) == 0 {
+		t.Fatalf("callsFor(%s) = 0 calls, want at least 1 dispatch to correlate against", nodeID)
+	}
+	env, err := mqttproto.DecodeEnvelope(calls[len(calls)-1].payload)
+	if err != nil {
+		t.Fatalf("DecodeEnvelope() error = %v", err)
+	}
+	cmd, err := mqttproto.DecodeCmdPayload(env)
+	if err != nil {
+		t.Fatalf("DecodeCmdPayload() error = %v", err)
+	}
+	return cmd.CommandID
+}
+
+func TestHandleMessageRecordsFailedFetchReason(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	cmdID := dispatchOne(t, st, pub, svc, "render-01")
+
+	const wantReason = "asset.fetch: download failed: dial tcp 127.0.0.1:1: connect: connection refused"
+	svc.HandleMessage(resultMessage(t, "render-01", cmdID, mqttproto.ResultPayload{
+		Action: "asset.fetch", Outcome: mqttproto.OutcomeFailed, Reason: wantReason,
+	}))
+
+	reason, _, ok := svc.LastFetchFailure("render-01", "sha256:aaa")
+	if !ok {
+		t.Fatal("LastFetchFailure() ok = false, want true after a recorded failure")
+	}
+	if reason != wantReason {
+		t.Errorf("LastFetchFailure() reason = %q, want %q", reason, wantReason)
+	}
+
+	events, _, err := st.ListEvents(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	var found bool
+	for _, ev := range events {
+		if ev.Resource.ID == "render-01" && ev.Category == "asset_sync" {
+			found = true
+			if !strings.Contains(string(ev.Details), wantReason) {
+				t.Errorf("event Details = %s, want it to contain %q", ev.Details, wantReason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no asset_sync event was appended for the failed fetch; GET /api/v1/events would show nothing")
+	}
+}
+
+func TestHandleMessageIgnoresUnknownCommandID(t *testing.T) {
+	st := openTestStore(t)
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+
+	// A result for a command this Service never dispatched (e.g. some
+	// other command sharing the same topic wildcard, or a stale delivery
+	// after a restart) must be a silent no-op, never a panic or a
+	// fabricated failure record.
+	svc.HandleMessage(resultMessage(t, "render-01", "not-a-tracked-command", mqttproto.ResultPayload{
+		Action: "asset.fetch", Outcome: mqttproto.OutcomeFailed, Reason: "irrelevant",
+	}))
+
+	if _, _, ok := svc.LastFetchFailure("render-01", "sha256:aaa"); ok {
+		t.Fatal("LastFetchFailure() ok = true for an untracked command; want false")
+	}
+}
+
+func TestHandleMessageIgnoresRetainedDelivery(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	cmdID := dispatchOne(t, st, pub, svc, "render-01")
+
+	msg := resultMessage(t, "render-01", cmdID, mqttproto.ResultPayload{
+		Action: "asset.fetch", Outcome: mqttproto.OutcomeFailed, Reason: "should never be recorded",
+	})
+	msg.Retained = true
+	svc.HandleMessage(msg)
+
+	if _, _, ok := svc.LastFetchFailure("render-01", "sha256:aaa"); ok {
+		t.Fatal("LastFetchFailure() ok = true for a retained delivery; result topics are never retained and this must be discarded defensively")
+	}
+}
+
+func TestHandleMessageConfirmedClearsPriorFailure(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
+	seedEmptyCompleteReport(t, st, "render-01", time.Now())
+
+	pub := &fakePublisher{}
+	svc := newTestService(t, st, pub)
+	firstCmdID := dispatchOne(t, st, pub, svc, "render-01")
+	svc.HandleMessage(resultMessage(t, "render-01", firstCmdID, mqttproto.ResultPayload{
+		Action: "asset.fetch", Outcome: mqttproto.OutcomeFailed, Reason: "first attempt failed",
+	}))
+	if _, _, ok := svc.LastFetchFailure("render-01", "sha256:aaa"); !ok {
+		t.Fatal("LastFetchFailure() ok = false after a recorded failure, want true")
+	}
+
+	// pruneExpiredInFlight already removed the failed dispatch's byCmdID
+	// entry (HandleMessage's own one-shot delete); the in-flight record
+	// itself still occupies the budget until inFlightExpiry passes, so
+	// force that here rather than waiting it out, then redispatch and
+	// confirm the SECOND attempt.
+	svc.mu.Lock()
+	svc.inFlight = map[dispatchKey]dispatchRecord{}
+	svc.mu.Unlock()
+	secondCmdID := dispatchOne(t, st, pub, svc, "render-01")
+	svc.HandleMessage(resultMessage(t, "render-01", secondCmdID, mqttproto.ResultPayload{
+		Action: "asset.fetch", Outcome: mqttproto.OutcomeConfirmed,
+	}))
+
+	if _, _, ok := svc.LastFetchFailure("render-01", "sha256:aaa"); ok {
+		t.Fatal("LastFetchFailure() ok = true after a subsequent confirmed result; the stale failure should have been cleared")
 	}
 }

@@ -12,8 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Publisher is the coordinator's own MQTT publish capability this package
@@ -57,6 +59,36 @@ type dispatchKey struct {
 type dispatchRecord struct {
 	dispatchedAt time.Time
 	expiresAt    time.Time
+
+	// commandID, assetID, and filename identify the specific asset.fetch
+	// this record tracks, beyond dispatchKey's own node/content-hash pair:
+	// commandID correlates an inbound result-topic delivery back to this
+	// record (see byCmdID and [Service.HandleMessage]); assetID and
+	// filename are carried only so a recorded failure ([Service.
+	// recordFetchFailure]) can name the asset without a second store
+	// lookup.
+	commandID string
+	assetID   string
+	filename  string
+}
+
+// FetchFailureRecord is the most recent asset.fetch failure [Service] has
+// observed for one node/content-hash pair, from that node's own result-
+// topic evidence; see [Service.LastFetchFailure].
+type FetchFailureRecord struct {
+	// Reason is the node's own ResultPayload.Reason: the full free-text
+	// cause it computed, e.g. "asset.fetch: download failed: dial tcp
+	// ...: connection refused". Never fabricated or summarized here.
+	Reason string
+	// FailedAt is when this coordinator process observed the failure
+	// (this Service's own clock at the moment [Service.HandleMessage]
+	// processed it): bookkeeping, not evidence of when the node's own
+	// attempt happened, matching store.EventRecord.RecordedAt's identical
+	// distinction from OccurredAt.
+	FailedAt time.Time
+	// AssetID and Filename name the asset that failed.
+	AssetID  string
+	Filename string
 }
 
 // Settings is this service's live, no-restart-able configuration — Track G
@@ -116,6 +148,20 @@ type Service struct {
 
 	mu       sync.Mutex
 	inFlight map[dispatchKey]dispatchRecord
+
+	// byCmdID correlates an inbound result-topic delivery's CommandID back
+	// to the dispatchKey [Service.maybeDispatch] recorded it under, since
+	// a result payload carries only CommandID/Action/Outcome/Reason/
+	// Evidence, never the original dispatch's content hash. Guarded by mu,
+	// like inFlight.
+	byCmdID map[string]dispatchKey
+
+	// failures is this Service's live view of the last known asset.fetch
+	// failure per dispatchKey, consulted through [Service.
+	// LastFetchFailure]. In-memory only, like inFlight; see that
+	// method's own doc comment for why that is the honest ADR-011 answer
+	// rather than a gap to close. Guarded by mu.
+	failures map[dispatchKey]FetchFailureRecord
 }
 
 // NewService constructs a Service holding initial. See [Settings]' own
@@ -129,6 +175,7 @@ func NewService(st *store.Store, pub Publisher, logger *slog.Logger, initial Set
 		st: st, pub: pub, logger: logger, now: time.Now,
 		settings: initial,
 		nudge:    make(chan struct{}, 1), inFlight: make(map[dispatchKey]dispatchRecord),
+		byCmdID: make(map[string]dispatchKey), failures: make(map[dispatchKey]FetchFailureRecord),
 	}
 }
 
@@ -411,6 +458,7 @@ func (s *Service) pruneExpiredInFlight() {
 	for key, rec := range s.inFlight {
 		if !now.Before(rec.expiresAt) {
 			delete(s.inFlight, key)
+			delete(s.byCmdID, rec.commandID)
 		}
 	}
 }
@@ -441,18 +489,24 @@ func (s *Service) maybeDispatch(ctx context.Context, nodeID string, asset Expect
 		s.mu.Unlock()
 		return
 	}
+	commandID := uuid.NewString()
 	now := s.now()
-	s.inFlight[key] = dispatchRecord{dispatchedAt: now, expiresAt: now.Add(inFlightExpiry(asset.SizeBytes))}
+	s.inFlight[key] = dispatchRecord{
+		dispatchedAt: now, expiresAt: now.Add(inFlightExpiry(asset.SizeBytes)),
+		commandID: commandID, assetID: asset.AssetID, filename: asset.Filename,
+	}
+	s.byCmdID[commandID] = key
 	s.mu.Unlock()
 
-	if err := s.dispatchFetch(ctx, nodeID, asset); err != nil {
+	if err := s.dispatchFetch(ctx, nodeID, asset, commandID); err != nil {
 		s.logger.Warn("asset sync: failed to dispatch asset.fetch", "node_id", nodeID, "asset_id", asset.AssetID, "error", err)
 		s.mu.Lock()
 		delete(s.inFlight, key)
+		delete(s.byCmdID, commandID)
 		s.mu.Unlock()
 		return
 	}
-	s.logger.Info("asset sync: dispatched asset.fetch", "node_id", nodeID, "asset_id", asset.AssetID, "content_hash", asset.ContentHash, "size_bytes", asset.SizeBytes)
+	s.logger.Info("asset sync: dispatched asset.fetch", "node_id", nodeID, "asset_id", asset.AssetID, "content_hash", asset.ContentHash, "size_bytes", asset.SizeBytes, "command_id", commandID)
 }
 
 // dispatchFetch publishes one asset.fetch [mqttproto.CmdPayload] to
@@ -462,14 +516,21 @@ func (s *Service) maybeDispatch(ctx context.Context, nodeID string, asset Expect
 // parseAssetFetchParams refuses anything not at least 1, so a zero-size
 // asset record (which [store.createAsset] already refuses to write) can
 // never reach the agent as a value it would accept.
-func (s *Service) dispatchFetch(ctx context.Context, nodeID string, asset ExpectedAsset) error {
+//
+// commandID is generated by the caller ([Service.maybeDispatch]), not
+// here, so it can be recorded in [Service.inFlight]/[Service.byCmdID]
+// BEFORE the publish is attempted, the same "reserve, then attempt"
+// order maybeDispatch already uses for its own concurrency budget, and
+// so [Service.HandleMessage] can later correlate this exact command's
+// result back to the dispatch that produced it.
+func (s *Service) dispatchFetch(ctx context.Context, nodeID string, asset ExpectedAsset, commandID string) error {
 	topic, err := mqttproto.CmdTopic(nodeID)
 	if err != nil {
 		return fmt.Errorf("build cmd topic: %w", err)
 	}
 
 	payload := mqttproto.CmdPayload{
-		CommandID:      uuid.NewString(),
+		CommandID:      commandID,
 		IdempotencyKey: uuid.NewString(),
 		Action:         "asset.fetch",
 		Target:         mqttproto.CmdTarget{Kind: "node", ID: nodeID},
@@ -501,4 +562,209 @@ func (s *Service) dispatchFetch(ctx context.Context, nodeID string, asset Expect
 // /api/v1/assets/{id}/content.
 func (s *Service) fetchURL(assetID string) string {
 	return strings.TrimRight(s.ContentBaseURL(), "/") + "/api/v1/assets/" + assetID + "/content"
+}
+
+// --- consuming asset.fetch results ---
+//
+// The node already computes and publishes the exact reason an asset.fetch
+// failed (internal/agent/command.go's failedResult, ResultPayload.Reason)
+// to its own result topic. Before this, nothing on the coordinator ever
+// subscribed to that topic family: the sync loop dispatched and moved on,
+// and a dispatch that failed looked identical, forever, to one the sync
+// service simply had not gotten to yet: a never-confirmed in-flight
+// record just silently expired ([pruneExpiredInFlight]) and was retried
+// next tick with no record anything went wrong. Subscriptions/HandleMessage
+// below close that gap.
+//
+// Mechanism chosen: extend this Service's own subscription set, rather
+// than reuse internal/coordinator/broker/response.go's per-request
+// AwaitResponse/registerResponseWaiter machinery. That machinery is built
+// for Step 9's macro mqtt action: issue one command, block the calling
+// goroutine until a live matching reply or a deadline, then return.
+// [Service.maybeDispatch] cannot adopt that shape without changing this
+// package's whole dispatch cadence: a sync tick fires up to
+// maxInFlightTotal asset.fetch commands across many nodes, fire-and-forget,
+// and must never hold a goroutine (and the concurrency budget it
+// represents) open waiting on any one of their results, especially not for
+// a large-file transfer that can legitimately take up to
+// assetstore.UploadBudget to complete. A subscription-based handler
+// consumes whatever result arrives, whenever it arrives, with no per-
+// dispatch goroutine or deadline of its own; retry/expiry stays exactly
+// [pruneExpiredInFlight]'s job, unchanged.
+//
+// Retained-message and restart semantics: mqttproto.ResultDeliveryPolicy is
+// Retain:false (a result is a point-in-time message, not durable state,
+// see that policy's own doc comment), so there is no retained-replay
+// staleness question here the way there is for broker.BrokerManager's own
+// evidence-staleness rule (broker.go's evidenceStalenessWindow) or for
+// hello/observed's retained topics: a coordinator that restarts learns
+// nothing about a fetch dispatched before the restart, the same as
+// [Service.inFlight] itself, which is also in-memory only and does not
+// survive a restart. That is the honest ADR-011 answer (an unmeasured
+// value is unknown, never a manufactured "still pending" or "no failure")
+// rather than a gap worth closing with a persisted correlation table: the
+// sync loop redispatches a never-confirmed asset on its own next tick
+// regardless, so a restart costs at most one extra round trip before fresh
+// evidence exists again. See [Service.HandleMessage]'s defensive RETAIN
+// check below for why this is verified, not merely assumed.
+func (s *Service) Subscriptions() []broker.Subscription {
+	return []broker.Subscription{{Filter: mqttproto.SubscribeResult, QoS: 1}}
+}
+
+// HandleMessage consumes one inbound result-topic delivery; it is a
+// broker.MessageHandler (see that type's own doc comment for what a
+// handler must not block on). Every inbound message on
+// mqttproto.SubscribeResult reaches this method, for every command every
+// node executes, not only asset.fetch, so this is also the filter down
+// to the ones this Service tracks.
+func (s *Service) HandleMessage(msg broker.Message) {
+	if msg.Retained {
+		// See [Service.Subscriptions]'s own doc comment: a result topic is
+		// never retained in this codebase today (mqttproto.
+		// ResultDeliveryPolicy), so this is defence in depth against a
+		// misbehaving publisher or a future policy change, matching
+		// broker/response.go's identical RETAIN check on the same class of
+		// topic.
+		s.logger.Warn("asset sync: ignoring unexpectedly retained delivery on a result topic", "topic", msg.Topic)
+		return
+	}
+
+	topic, err := mqttproto.ParseTopic(msg.Topic)
+	if err != nil || topic.Kind != mqttproto.TopicKindResult {
+		// mqttproto.SubscribeResult only ever delivers a well-formed
+		// result topic; this is a defensive skip, not an expected path.
+		return
+	}
+
+	env, err := mqttproto.DecodeEnvelope(msg.Payload)
+	if err != nil {
+		s.logger.Warn("asset sync: dropping malformed result envelope", "node_id", topic.NodeID, "error", err)
+		return
+	}
+	if err := mqttproto.CheckNodeID(env, topic.NodeID); err != nil {
+		s.logger.Warn("asset sync: dropping result envelope with a node ID mismatch", "node_id", topic.NodeID, "error", err)
+		return
+	}
+	result, err := mqttproto.DecodeResultPayload(env)
+	if err != nil {
+		s.logger.Warn("asset sync: dropping malformed result payload", "node_id", topic.NodeID, "error", err)
+		return
+	}
+	if result.Action != "asset.fetch" {
+		// Some other command's result, sharing the same topic wildcard,
+		// not this Service's concern.
+		return
+	}
+
+	s.mu.Lock()
+	key, tracked := s.byCmdID[result.CommandID]
+	var rec dispatchRecord
+	if tracked {
+		rec = s.inFlight[key]
+		// One-shot: delete on first delivery so a redelivered/replayed
+		// result for the same command_id (internal/agent/command.go's own
+		// idempotency-cache replay path) is silently ignored rather than
+		// recorded, and re-logged as an event, a second time.
+		delete(s.byCmdID, result.CommandID)
+	}
+	s.mu.Unlock()
+
+	if !tracked {
+		// Not a dispatch this Service instance is currently tracking:
+		// already resolved by an earlier delivery, already pruned by
+		// [pruneExpiredInFlight], or dispatched before a coordinator
+		// restart (in-flight tracking is in-memory only; see
+		// [Service.Subscriptions]'s own doc comment). Nothing to
+		// correlate this result against.
+		return
+	}
+
+	switch result.Outcome {
+	case mqttproto.OutcomeConfirmed:
+		// Corroborating evidence, on top of (not instead of) the
+		// inventory-report-based confirmation [FetchConfirmed] already
+		// performs: clear any stale failure record for this exact asset so
+		// the manifest stops citing a cause that no longer applies.
+		s.mu.Lock()
+		delete(s.failures, key)
+		s.mu.Unlock()
+	case mqttproto.OutcomeFailed, mqttproto.OutcomeRefused, mqttproto.OutcomeUnconfirmed:
+		// All three are a genuine non-success this Service did not
+		// previously have any record of: OutcomeFailed is §5.1's "download
+		// failed"/verification-mismatch case, OutcomeRefused is the agent
+		// declining the command outright (deadline already elapsed, not on
+		// its allowlist), and OutcomeUnconfirmed is "applied, but the
+		// post-write read-back evidence did not match", never fabricated
+		// as a plain success. result.Reason is the node's own free-text
+		// cause in every one of these three; never synthesized here.
+		s.recordFetchFailure(context.Background(), topic.NodeID, key.contentHash, result.Outcome, result.Reason, rec)
+	}
+}
+
+// recordFetchFailure records key's failure both in this Service's own live
+// view (consulted through [Service.LastFetchFailure]) and, durably, as a
+// store.EventRecord so GET /api/v1/events shows it: reason, outcome comes
+// straight from the node's own result, never fabricated or summarized.
+// Best-effort: an append failure is logged rather than propagated, matching
+// every other event producer in this codebase (internal/coordinator/
+// inventory.Manager.observeLiveness/appendRenderEvent, internal/
+// coordinator/macro/events.go): a lost event must never block or fail the
+// caller that is merely trying to record what already happened.
+func (s *Service) recordFetchFailure(ctx context.Context, nodeID, contentHash, outcome, reason string, rec dispatchRecord) {
+	failedAt := s.now()
+	key := dispatchKey{nodeID: nodeID, contentHash: contentHash}
+	s.mu.Lock()
+	s.failures[key] = FetchFailureRecord{Reason: reason, FailedAt: failedAt, AssetID: rec.assetID, Filename: rec.filename}
+	s.mu.Unlock()
+
+	s.logger.Warn("asset sync: asset.fetch did not succeed", "node_id", nodeID, "asset_id", rec.assetID, "filename", rec.filename, "content_hash", contentHash, "outcome", outcome, "reason", reason)
+
+	detail := map[string]any{
+		"nodeId":      nodeID,
+		"assetId":     rec.assetID,
+		"filename":    rec.filename,
+		"contentHash": contentHash,
+		"outcome":     outcome,
+		"reason":      reason,
+	}
+	details, err := json.Marshal(detail)
+	if err != nil {
+		// Unreachable: every value above is a plain string. Recorded
+		// rather than dropped, matching appendRenderEvent's identical
+		// guard one package over.
+		s.logger.Error("asset sync: failed to encode asset.fetch failure event details", "node_id", nodeID, "asset_id", rec.assetID, "error", err)
+		details = nil
+	}
+
+	if _, err := s.st.AppendEvent(ctx, store.EventRecord{
+		Source:   "asset-sync",
+		Resource: observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID},
+		Category: "asset_sync",
+		Severity: "warning",
+		Summary:  fmt.Sprintf("asset.fetch %s for node %s: %s (%s)", outcome, nodeID, rec.filename, reason),
+		Details:  json.RawMessage(details),
+	}); err != nil {
+		s.logger.Error("asset sync: failed to append asset.fetch failure event", "node_id", nodeID, "asset_id", rec.assetID, "error", err)
+	}
+}
+
+// LastFetchFailure reports the most recent asset.fetch failure this
+// Service has observed for nodeID attempting contentHash, if any. Consumed
+// by internal/coordinator/api's manifest rendering (assetmanifest.go) so a
+// node whose fetch genuinely failed says so, rather than reading
+// identically to "sync has not gotten to it yet". See [Service.
+// Subscriptions]'s own doc comment for why this is in-memory,
+// process-lifetime state rather than a persisted one: the durable record
+// of what happened lives in the events history this same failure was
+// already appended to ([Service.recordFetchFailure]), not here; a
+// coordinator restart forgetting this live view is the honest ADR-011
+// answer (unknown, not a fabricated "no failure"), not a gap to close.
+func (s *Service) LastFetchFailure(nodeID, contentHash string) (reason string, failedAt time.Time, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, found := s.failures[dispatchKey{nodeID: nodeID, contentHash: contentHash}]
+	if !found {
+		return "", time.Time{}, false
+	}
+	return rec.Reason, rec.FailedAt, true
 }

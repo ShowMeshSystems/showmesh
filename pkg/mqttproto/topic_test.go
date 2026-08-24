@@ -193,6 +193,20 @@ func TestSubscriptionFilters(t *testing.T) {
 	if SubscribeObserved != "showmesh/nodes/+/observed/#" {
 		t.Fatalf("SubscribeObserved = %q", SubscribeObserved)
 	}
+	if SubscribeResult != "showmesh/nodes/+/result/+" {
+		t.Fatalf("SubscribeResult = %q", SubscribeResult)
+	}
+	// SubscribeResult must actually match a real result topic, or a
+	// subscriber (internal/coordinator/assetsync's own use) would silently
+	// receive nothing.
+	topic, err := ResultTopic("render-01", "cmd-1")
+	if err != nil {
+		t.Fatalf("ResultTopic() error = %v", err)
+	}
+	parsed, err := ParseTopic(topic)
+	if err != nil || parsed.Kind != TopicKindResult {
+		t.Fatalf("ParseTopic(%q) = %+v, %v; want TopicKindResult, no error", topic, parsed, err)
+	}
 }
 
 // TestTopicBuildersRejectBadNodeID proves every node-scoped topic builder,

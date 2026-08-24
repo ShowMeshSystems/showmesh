@@ -32,6 +32,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -264,7 +265,29 @@ func Run() int {
 
 	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
 
-	bm, err = broker.NewBrokerManager(ctx, cfg, logger, inv.Subscriptions(), inv.HandleMessage)
+	// assetSync is constructed further down (it needs bm itself as its
+	// Publisher), but bm's OWN construction needs assetSync.HandleMessage
+	// wired in as part of the ONE process-wide message handler, the
+	// identical forward-reference shape as onHello/bm just above, the
+	// other direction: assetSyncHandler is a closure taking the pointer's
+	// CURRENT value on every call, not its value at closure-creation time,
+	// so a message delivered before assetSync exists (there should be none
+	// this early, but nothing guarantees it) is silently a no-op rather
+	// than a nil-pointer panic. mqttproto.SubscribeResult is added to bm's
+	// fixed subscription set here as a literal, matching
+	// assetsync.Service.Subscriptions()'s own filter exactly, rather than
+	// calling that method on an instance that does not exist yet.
+	var assetSync *assetsync.Service
+	assetSyncHandler := func(m broker.Message) {
+		if assetSync != nil {
+			assetSync.HandleMessage(m)
+		}
+	}
+	subs := append(inv.Subscriptions(), broker.Subscription{Filter: mqttproto.SubscribeResult, QoS: 1})
+	bm, err = broker.NewBrokerManager(ctx, cfg, logger, subs, func(m broker.Message) {
+		inv.HandleMessage(m)
+		assetSyncHandler(m)
+	})
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		_ = st.Close()
@@ -306,7 +329,7 @@ func Run() int {
 	// returns — when it is false (see assetsync.Service.Run's own doc
 	// comment) — there is no separate "if configured" gate here, matching
 	// that method's own contract rather than duplicating its condition.
-	assetSync := assetsync.NewService(st, bm, logger, toAssetSyncSettings(assetSettings))
+	assetSync = assetsync.NewService(st, bm, logger, toAssetSyncSettings(assetSettings))
 	// Seeded with the boot-resolved settings so a deferred migration (or a
 	// store read failing before the source's first successful read) keeps
 	// the reconciler answering these values rather than the defaults.
@@ -583,6 +606,12 @@ func Run() int {
 		// capability existed and was tested but had no production caller
 		// until this line.
 		AssetSyncNudger: assetSync,
+		// AssetFetchFailures wires the SAME *assetsync.Service in a third
+		// time: its LastFetchFailure method already satisfies
+		// api.AssetFetchFailureSource with no adapter needed, so
+		// assetmanifest.go's notReadyReason can say WHY a node's fetch
+		// failed, not just that the node is still not_ready.
+		AssetFetchFailures: assetSync,
 		// AssetSettingsEnvVarsSet/AssetSettingsMigrationDeferred are Track G
 		// seam G-4's mirror of ResolumeInstancesEnvVarSet/
 		// ResolumeInstancesMigrationDeferred above — see those two fields'
