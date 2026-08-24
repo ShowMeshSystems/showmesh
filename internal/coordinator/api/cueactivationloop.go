@@ -262,6 +262,23 @@ func cueActivationSystemPrincipalID(instanceUUID string) string {
 // not exist.
 const blackAndSilenceAudioSessionID = cueactivation.AudioSessionID
 
+// blackAndSilenceAudioSessionIDs is every audio session H0.2's
+// blackAndSilence policy stops (TRACK-H-cues-and-playlists.md section H5
+// build item 4's own fix): H5 created two more well-known sessions after
+// H0.2 was written — [cueactivation.BackgroundSessionID] (a ShowMesh bed)
+// and [cueactivation.AnnouncementSessionID] (an in-flight announcement) —
+// and blackAndSilence used to stop only [blackAndSilenceAudioSessionID],
+// leaving both of H5's own sessions completely outside every silence path:
+// "the renderer blacks its surfaces and ShowMesh-owned audio silences" (H0.2)
+// was never true for either one. H5 created these sessions, so extending
+// this policy to reach them is H5's own debt, even though the show-switch
+// transition this policy also participates in is broader than H5.
+var blackAndSilenceAudioSessionIDs = []string{
+	blackAndSilenceAudioSessionID,
+	cueactivation.BackgroundSessionID,
+	cueactivation.AnnouncementSessionID,
+}
+
 // blackAndSilenceEpisode is defect 3's own episode dimension for the
 // blackAndSilence clear/silence idempotency keys: obs.InstanceUUID and its
 // EntryOccurrenceSequence (schemaV18's own entry-start identity, computed
@@ -333,17 +350,18 @@ func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, n
 	}
 }
 
-// dispatchBlackAndSilenceAudioStop stops [blackAndSilenceAudioSessionID]
-// on nodeID — this seam's own audio half of H0.2's blackAndSilence policy
-// — if and only if nodeID has declared an audio.node object at all. A
-// dispatch failure or refusal is logged, never silently swallowed
-// (TRACK-H-H3-SPEC.md section 6's "a refusal is a state with evidence,
-// never a silent no-op" applied here to a policy effect rather than an
-// authorization check): an operator who chose blackAndSilence specifically
-// to avoid the wrong content reaching an audience must be able to see that
-// the silence attempt itself failed, not just infer it from continued
-// audio on the wall. episode is [blackAndSilenceEpisode]'s own value; see
-// that function's own doc comment for why the idempotency key carries it.
+// dispatchBlackAndSilenceAudioStop stops every session in
+// [blackAndSilenceAudioSessionIDs] on nodeID — this seam's own audio half
+// of H0.2's blackAndSilence policy — if and only if nodeID has declared an
+// audio.node object at all. A dispatch failure or refusal is logged, never
+// silently swallowed (TRACK-H-H3-SPEC.md section 6's "a refusal is a state
+// with evidence, never a silent no-op" applied here to a policy effect
+// rather than an authorization check): an operator who chose
+// blackAndSilence specifically to avoid the wrong content reaching an
+// audience must be able to see that the silence attempt itself failed, not
+// just infer it from continued audio on the wall. episode is
+// [blackAndSilenceEpisode]'s own value; see that function's own doc
+// comment for why the idempotency key carries it.
 func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, episode string) {
 	hasAudioNode, err := nodeHasAudioNodeObject(ctx, h.deps.Config, nodeID)
 	if err != nil {
@@ -353,8 +371,19 @@ func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now tim
 	if !hasAudioNode {
 		return
 	}
+	for _, sessionID := range blackAndSilenceAudioSessionIDs {
+		h.dispatchBlackAndSilenceAudioStopSession(ctx, now, nodeID, sessionID, issuer, episode)
+	}
+}
 
-	idempotencyKey := "cueact-silence-" + nodeID + "-" + episode
+// dispatchBlackAndSilenceAudioStopSession is
+// [dispatchBlackAndSilenceAudioStop] narrowed to one sessionID — split out
+// so the same stop logic (idempotency key, revision derivation, dispatch,
+// and every log line) applies identically to all three of
+// [blackAndSilenceAudioSessionIDs] rather than being written once for the
+// show session and copied by hand for the other two.
+func (h *handlers) dispatchBlackAndSilenceAudioStopSession(ctx context.Context, now time.Time, nodeID, sessionID string, issuer cueActivationIssuer, episode string) {
+	idempotencyKey := "cueact-silence-" + nodeID + "-" + sessionID + "-" + episode
 	// stopAt is the LATER of this coordinator's own now and the EvidenceAt
 	// of the last cue.activate this coordinator itself dispatched to
 	// nodeID — never a bare now, because now is THIS coordinator's clock
@@ -398,9 +427,9 @@ func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now tim
 	// as stale for the life of the session.
 	revision := cueactivation.AudioSessionRevision(stopAt, cueactivation.AudioSessionStepStop)
 	in := audioDispatchInput{
-		Action: "audio.session.stop", NodeID: nodeID, SessionID: blackAndSilenceAudioSessionID,
+		Action: "audio.session.stop", NodeID: nodeID, SessionID: sessionID,
 		Params: map[string]any{
-			"sessionId": blackAndSilenceAudioSessionID, "invocationId": idempotencyKey, "revision": revision,
+			"sessionId": sessionID, "invocationId": idempotencyKey, "revision": revision,
 		},
 		Revision: revision, IdempotencyKey: idempotencyKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
@@ -409,13 +438,13 @@ func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now tim
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, in)
 	switch {
 	case err != nil:
-		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch failed", "nodeId", nodeID, "episode", episode, "error", err)
+		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch failed", "nodeId", nodeID, "sessionId", sessionID, "episode", episode, "error", err)
 	case problem != nil:
-		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch refused", "nodeId", nodeID, "episode", episode, "detail", problem.Detail)
+		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch refused", "nodeId", nodeID, "sessionId", sessionID, "episode", episode, "detail", problem.Detail)
 	case result.Replay:
 		// Not a failure: see the identical case in dispatchBlackAndSilence
 		// above — a suppressed dispatch is logged, never silent.
-		h.logDebug("cue activation loop: blackAndSilence audio stop suppressed as a replay of an unchanged episode", "nodeId", nodeID, "episode", episode)
+		h.logDebug("cue activation loop: blackAndSilence audio stop suppressed as a replay of an unchanged episode", "nodeId", nodeID, "sessionId", sessionID, "episode", episode)
 	}
 }
 

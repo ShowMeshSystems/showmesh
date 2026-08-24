@@ -39,6 +39,16 @@ func putCue(t *testing.T, st *store.Store, cueID, showID string, payload config.
 	putConfig(t, st, config.ShowCueConfigKind, cueID, raw)
 }
 
+// cueOutputsByID returns cueID's own Outputs out of entries, if present.
+func cueOutputsByID(entries []cuecatalog.Entry, cueID string) (cuecatalog.Outputs, bool) {
+	for _, e := range entries {
+		if e.CueID == cueID {
+			return e.Outputs, true
+		}
+	}
+	return cuecatalog.Outputs{}, false
+}
+
 func putPlaylist(t *testing.T, st *store.Store, playlistID string, payload config.ShowPlaylistPayload) {
 	t.Helper()
 	raw, err := config.EncodeShowPlaylistPayload(payload)
@@ -387,11 +397,24 @@ func TestCueCatalogIncludesAudioOutputsOnlyForNodeWithAudioNode(t *testing.T) {
 	declareNode(t, st, "render-01")
 	putShow(t, st, "halloween-2026", "Halloween 2026")
 	putAudioNode(t, st, "audio-01")
+	// "thriller" (audio + ltc) and "cue-ann" (audio + announcement) are
+	// deliberately two SEPARATE Cues, never one Cue declaring both: TRACK-
+	// H-cues-and-playlists.md section H5 build item 5's own authoring-time
+	// refusal (config/showcue.go's decodeShowCueOutputs) now rejects a
+	// Cue that declares both ltc and announcement — a node has one LTC
+	// generator, tied to the program-audio clock domain, and the
+	// announcement session is not that domain.
 	putCue(t, st, "thriller", "halloween-2026", config.ShowCuePayload{
 		Name: "Thriller",
 		Outputs: config.ShowCueOutputs{
-			Audio:        &config.ShowCueAudioOutput{Asset: "thriller-audio"},
-			LTC:          &config.ShowCueLTCOutput{},
+			Audio: &config.ShowCueAudioOutput{Asset: "thriller-audio"},
+			LTC:   &config.ShowCueLTCOutput{},
+		},
+	})
+	putCue(t, st, "cue-ann", "halloween-2026", config.ShowCuePayload{
+		Name: "Announcement",
+		Outputs: config.ShowCueOutputs{
+			Audio:        &config.ShowCueAudioOutput{Asset: "ann-audio"},
 			Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyMix},
 		},
 	})
@@ -407,24 +430,30 @@ func TestCueCatalogIncludesAudioOutputsOnlyForNodeWithAudioNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveCueCatalog (audio-01): %v", err)
 	}
-	if len(withAudioNode.Entries) != 1 {
-		t.Fatalf("ResolveCueCatalog (audio-01) entries = %+v, want exactly one", withAudioNode.Entries)
+	// cue-ann is included even though no Playlist references it (build
+	// item 7: a Cue declaring `announcement` is directly activatable).
+	if len(withAudioNode.Entries) != 2 {
+		t.Fatalf("ResolveCueCatalog (audio-01) entries = %+v, want exactly two (thriller + cue-ann)", withAudioNode.Entries)
 	}
-	out := withAudioNode.Entries[0].Outputs
-	if out.Audio == nil || out.LTC == nil || out.Announcement == nil {
-		t.Fatalf("ResolveCueCatalog (audio-01) outputs = %+v, want audio/ltc/announcement all present (audio-01 has an audio.node object)", out)
+	thrillerOut, ok := cueOutputsByID(withAudioNode.Entries, "thriller")
+	if !ok || thrillerOut.Audio == nil || thrillerOut.LTC == nil {
+		t.Fatalf("ResolveCueCatalog (audio-01) thriller outputs = %+v, want audio and ltc present (audio-01 has an audio.node object)", thrillerOut)
+	}
+	annOut, ok := cueOutputsByID(withAudioNode.Entries, "cue-ann")
+	if !ok || annOut.Audio == nil || annOut.Announcement == nil {
+		t.Fatalf("ResolveCueCatalog (audio-01) cue-ann outputs = %+v, want audio and announcement present (audio-01 has an audio.node object)", annOut)
 	}
 
 	withoutAudioNode, err := ResolveCueCatalog(ctx, st, active, "render-01")
 	if err != nil {
 		t.Fatalf("ResolveCueCatalog (render-01): %v", err)
 	}
-	if len(withoutAudioNode.Entries) != 1 {
-		t.Fatalf("ResolveCueCatalog (render-01) entries = %+v, want exactly one", withoutAudioNode.Entries)
+	if len(withoutAudioNode.Entries) != 2 {
+		t.Fatalf("ResolveCueCatalog (render-01) entries = %+v, want exactly two (thriller + cue-ann, both with no audio/ltc/announcement outputs)", withoutAudioNode.Entries)
 	}
-	out2 := withoutAudioNode.Entries[0].Outputs
-	if out2.Audio != nil || out2.LTC != nil || out2.Announcement != nil {
-		t.Fatalf("ResolveCueCatalog (render-01) outputs = %+v, want audio/ltc/announcement all absent (render-01 has no audio.node object)", out2)
+	out2, ok := cueOutputsByID(withoutAudioNode.Entries, "thriller")
+	if !ok || out2.Audio != nil || out2.LTC != nil || out2.Announcement != nil {
+		t.Fatalf("ResolveCueCatalog (render-01) thriller outputs = %+v, want audio/ltc/announcement all absent (render-01 has no audio.node object)", out2)
 	}
 
 	if withAudioNode.Revision == withoutAudioNode.Revision {

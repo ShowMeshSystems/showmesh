@@ -248,6 +248,26 @@ func decodeShowCueOutputs(top map[string]json.RawMessage) (ShowCueOutputs, *Vali
 		}
 	}
 
+	// A Cue must not declare both ltc and announcement. A node has exactly
+	// one LTC generator, tied to the program-audio clock domain
+	// (ADR-018) — the show session's own Start/Seek path
+	// (internal/agent/cueactivationaudio.go's activateAudio). An
+	// announcement Cue runs in a SEPARATE session
+	// ([cueactivation.AnnouncementSessionID], never the show session), so
+	// there is no program-audio clock for its own ltc declaration to run
+	// from. Refusing the combination here, at authoring, is TRACK-H-cues-and-playlists.md
+	// section H5 build item 5's own ruling: "refuse the combination
+	// visibly rather than implementing a second LTC owner" — a Cue that
+	// declares both would otherwise reach a node whose activateAudio
+	// silently never starts LTC for it (startLTCLocked gates on the show
+	// role), which is exactly the silent drop that ruling forbids.
+	if outputs.LTC != nil && outputs.Announcement != nil {
+		return ShowCueOutputs{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "outputs.ltc",
+			Detail: "outputs.ltc must not be combined with outputs.announcement: a node has one LTC generator tied to the program-audio clock domain (ADR-018), and the announcement session is not that domain",
+		}
+	}
+
 	return outputs, nil
 }
 

@@ -174,6 +174,17 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		h.writeInternalError(w, now, "resolve cue catalog", err)
 		return
 	}
+	// TRACK-H-cues-and-playlists.md section H5 build item 2's own ruling: a
+	// claim conflict is DATA on the resolved catalog (assetsync.Catalog.
+	// Conflicts), never an error out of ResolveCueCatalog — but deployment
+	// itself still refuses outright rather than pushing a catalog it knows
+	// two Cues cannot both safely execute. Named, operator-visible, and
+	// reachable through this API (and showmeshctl, which prints a Problem's
+	// Detail verbatim), not only a log line.
+	if len(catalog.Conflicts) > 0 {
+		writeProblem(w, h.logger, now, cueCatalogClaimConflictProblem(nodeID, catalog.Conflicts))
+		return
+	}
 
 	raw, err := json.Marshal(cueCatalogDeployWireParams{
 		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision, Entries: catalog.Entries,
@@ -346,6 +357,15 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		}); err != nil {
 			h.logWarn("failed to record cue catalog acknowledgement after a confirmed deploy", "node", nodeID, "error", err)
 		}
+		// TRACK-H-cues-and-playlists.md section H5 build item 1: a node that just proved it holds the
+		// active Show's authorized Cue catalog is exactly the node this
+		// coordinator applies that Show's showmesh-audio background
+		// Playlist to (if any, and if nodeID has an audio.node object at
+		// all) — see showmeshaudiodispatch.go. Best-effort, matching the
+		// cue-catalog-ack write immediately above: the deploy itself
+		// already succeeded regardless of whether this follow-on apply
+		// does.
+		h.applyShowmeshAudioPlaylistIfAny(ctx, h.now(), nodeID, active)
 	}
 
 	resolvedFmt := formatTime(resolvedAt)

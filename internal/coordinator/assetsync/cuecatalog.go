@@ -23,9 +23,12 @@ import (
 // active's Show, per H3 spec section 3:
 //
 //  1. Collect every show.cue this Show's show.playlist objects reference
-//     (an entry's cue, or a "safeCue" mismatchPolicy's safeCueRef). A Cue
-//     no Playlist references and no policy names is a draft and is never
-//     included (step 2).
+//     (an entry's cue, or a "safeCue" mismatchPolicy's safeCueRef), PLUS
+//     every show.cue that declares the `announcement` output (H0.4: "An
+//     announcement Cue... is directly activatable and is not required to
+//     be a Playlist entry" — such a Cue is not a draft merely because no
+//     Playlist references it). A Cue neither referenced nor declaring
+//     announcement is a draft and is never included (step 2).
 //  2. For each referenced Cue, resolve only the outputs that concern
 //     nodeID: render.sequence when nodeID holds at least one show.surface
 //     in this Show, and audio/ltc/announcement when nodeID has an
@@ -72,7 +75,7 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 	}
 	nodeHasSurface := len(surfaceIDs) > 0
 
-	nodeHasAudioNode, err := hasAudioNode(ctx, st, nodeID)
+	audioNode, nodeHasAudioNode, err := loadAudioNodePayload(ctx, st, nodeID)
 	if err != nil {
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}
@@ -81,15 +84,33 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 	if err != nil {
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: list show.cue objects: %w", err)
 	}
+	// Sorted for a deterministic pass: [detectClaimConflicts] registers
+	// claims into a shared map in loop order, and the FIRST cue to claim a
+	// resource becomes [claimant] "holder" the SECOND one is reported
+	// against — st.ListConfigObjects makes no ordering guarantee, so
+	// without this sort the reported conflict PAIR (which one is named
+	// "holder" versus the new claimant) would depend on store iteration
+	// order rather than being a stable fact about the catalog.
+	sort.Slice(cueObjs, func(i, j int) bool { return cueObjs[i].ID < cueObjs[j].ID })
+
+	referencingPlaylists, err := cueReferencingPlaylistIDs(ctx, st, showID)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
+	}
+
+	claimCtx := config.ShowCueClaimContext{
+		RenderSurfaceIDs: surfaceIDs,
+	}
+	if nodeHasAudioNode {
+		claimCtx.ProgramAudioNode, claimCtx.ProgramAudioRoute = nodeID, audioNode.ProgramRoute
+		claimCtx.LTCNode, claimCtx.LTCRoute = nodeID, audioNode.LTCRoute
+		claimCtx.AnnouncementNode = nodeID
+	}
+	claimants := make(map[config.ShowCueClaim]claimant)
+	var conflicts []CatalogConflict
 
 	entries := make([]cuecatalog.Entry, 0, len(referencedCues))
 	for _, obj := range cueObjs {
-		if !referencedCues[obj.ID] {
-			// Not referenced by any Playlist entry or safeCueRef in this
-			// Show: a draft. Deploying drafts is how a half-authored Cue
-			// would reach a node (H3 spec section 3, point 2).
-			continue
-		}
 		rev, err := st.GetConfigRevision(ctx, config.ShowCueConfigKind, obj.ID, obj.CurrentRevision)
 		if err != nil {
 			return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
@@ -106,11 +127,33 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 			continue
 		}
 
+		// Included when a Playlist entry or a "safeCue" safeCueRef
+		// references this Cue, OR when it declares the `announcement`
+		// output — H0.4: "An announcement Cue... is directly activatable
+		// and is not required to be a Playlist entry." A Cue that
+		// declares announcement is not a draft even with zero Playlist
+		// references; anything else with zero references is a draft, and
+		// deploying drafts is how a half-authored Cue would reach a node
+		// (H3 spec section 3, point 2).
+		directlyActivatableAnnouncement := payload.Outputs.Announcement != nil
+		if !referencedCues[obj.ID] && !directlyActivatableAnnouncement {
+			continue
+		}
+
 		entries = append(entries, cuecatalog.Entry{
 			CueID:       obj.ID,
 			CueRevision: obj.CurrentRevision,
 			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, assetsBySequence),
 		})
+
+		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode)
+		conflict, err := detectClaimConflicts(claimants, claimant{cueID: obj.ID, playlists: referencingPlaylists[obj.ID]}, scoped, claimCtx)
+		if err != nil {
+			return Catalog{}, err
+		}
+		if conflict != nil {
+			conflicts = append(conflicts, *conflict)
+		}
 	}
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].CueID < entries[j].CueID })
@@ -124,18 +167,47 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 
 	return Catalog{
 		Show: showID, Generation: active.Generation, Node: nodeID,
-		Entries: entries, Revision: revision,
+		Entries: entries, Revision: revision, Conflicts: conflicts,
 	}, nil
 }
 
 // Catalog is [ResolveCueCatalog]'s result: one node's resolved Cue
 // catalog for the active Show at one generation, plus its own revision.
+//
+// Conflicts is DATA, never an error: TRACK-H-cues-and-playlists.md section
+// H5 build item 2's own ruling. A claim conflict is a readiness fact about
+// the catalog, not a resolution failure — [cueactivate.Decide], [Authorize],
+// and [participatingNodesForShow] must keep working for every OTHER Cue in
+// the Show even while one colliding pair exists, and a caller that must
+// refuse (deployment) reads this field and refuses explicitly, naming both
+// Cues and the exact claim, rather than the whole resolver returning an
+// opaque error that broke the live activation loop for the entire fleet
+// for the rest of the show.
 type Catalog struct {
 	Show       string
 	Generation int64
 	Node       string
 	Entries    []cuecatalog.Entry
 	Revision   string
+	Conflicts  []CatalogConflict
+}
+
+// CatalogConflict is one H0.5 exclusive-claim collision [ResolveCueCatalog]
+// found between two Cues neither authoring-time validation nor
+// [sameSinglePlaylist]'s exemption ruled out. CueA/CueB are sorted
+// (CueA < CueB) so the reported pair is deterministic regardless of which
+// Cue this resolver happened to visit first.
+type CatalogConflict struct {
+	CueA  string
+	CueB  string
+	Claim config.ShowCueClaim
+}
+
+// Detail renders c for an operator-visible refusal: TRACK-H-cues-and-playlists.md
+// section H5 build item 2's ruling requires naming both Cue ids and the
+// exact [config.ShowCueClaim.String] value, never only a log line.
+func (c CatalogConflict) Detail() string {
+	return fmt.Sprintf("cues %q and %q both hold exclusive claim %q; a concurrent claim is refused, never silently preempted (H0.5)", c.CueA, c.CueB, c.Claim.String())
 }
 
 // resolveCueOutputs projects payload's declared outputs onto
@@ -182,19 +254,204 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 	return out
 }
 
-// hasAudioNode reports whether nodeID has a current audio.node object —
-// an audio.node object id IS the node id ([config.ValidateAudioNodeObjectID]),
-// so existence alone (not its payload) is what gates audio/ltc/announcement
-// output inclusion.
-func hasAudioNode(ctx context.Context, st *store.Store, nodeID string) (bool, error) {
-	_, err := st.GetConfigObject(ctx, config.AudioNodeConfigKind, nodeID)
+// loadAudioNodePayload reports whether nodeID has a current audio.node
+// object — an audio.node object id IS the node id
+// ([config.ValidateAudioNodeObjectID]), so existence alone (not its
+// payload) is what gates audio/ltc/announcement output inclusion — and,
+// when it does, its decoded payload: [ResolveCueCatalog]'s own claim
+// arbitration (see [detectClaimConflicts]) needs nodeID's own
+// ProgramRoute/LTCRoute, not merely that an audio.node object exists.
+func loadAudioNodePayload(ctx context.Context, st *store.Store, nodeID string) (config.AudioNodePayload, bool, error) {
+	obj, err := st.GetConfigObject(ctx, config.AudioNodeConfigKind, nodeID)
 	if errors.Is(err, store.ErrConfigObjectNotFound) {
-		return false, nil
+		return config.AudioNodePayload{}, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("get audio.node %q: %w", nodeID, err)
+		return config.AudioNodePayload{}, false, fmt.Errorf("get audio.node %q: %w", nodeID, err)
 	}
-	return true, nil
+	rev, err := st.GetConfigRevision(ctx, config.AudioNodeConfigKind, obj.ID, obj.CurrentRevision)
+	if err != nil {
+		return config.AudioNodePayload{}, false, fmt.Errorf("read audio.node %q revision %d: %w", nodeID, obj.CurrentRevision, err)
+	}
+	payload, verr := config.DecodeAudioNodePayload(rev.PayloadJSON)
+	if verr != nil {
+		return config.AudioNodePayload{}, false, fmt.Errorf("decode audio.node %q: %s", nodeID, verr.Detail)
+	}
+	return payload, true, nil
+}
+
+// scopeShowCueOutputsForNode narrows payload's declared outputs to the
+// ones that concern THIS node, exactly the same restriction
+// [resolveCueOutputs] applies when it builds this node's own
+// [cuecatalog.Outputs] a few lines above — necessary because
+// [config.DeriveShowCueClaims] refuses an output whose
+// [config.ShowCueClaimContext] field is empty (its own doc comment: "a
+// field ctx must supply for a claim p's outputs actually produce, left
+// empty, is refused"), and a node with no show.surface, or no audio.node,
+// leaves those context fields empty by construction. Without this
+// narrowing, a Cue declaring render (and this node having no surface at
+// all) would refuse catalog resolution outright instead of correctly
+// producing no render claim for a node the render output was never
+// meant to concern.
+func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode bool) config.ShowCuePayload {
+	scoped := payload
+	if !nodeHasSurface {
+		scoped.Outputs.Render = nil
+	}
+	if !nodeHasAudioNode {
+		scoped.Outputs.Audio = nil
+		scoped.Outputs.LTC = nil
+		scoped.Outputs.Announcement = nil
+	}
+	return scoped
+}
+
+// claimant is one Cue's own identity for [detectClaimConflicts]: its id
+// and the set of show.playlist ids that reference it as an entry (empty
+// for a Cue no Playlist references at all — a directly-activatable
+// announcement Cue, or a safeCueRef).
+type claimant struct {
+	cueID     string
+	playlists map[string]bool
+}
+
+// sameSinglePlaylist reports whether a and b could NEVER be concurrently
+// active, per H0.6's "cues that could be concurrently active" test: they
+// share at least one playlist. Within any one playlist, only one entry
+// plays at a time (H1 spec section 4's "two entries of one Playlist are
+// never concurrently active"), so two Cues that are both entries — or a
+// safeCueRef and an entry, [cueReferencingPlaylistIDs]'s own doc comment —
+// of the SAME playlist are always alternatives in time there, never
+// simultaneous, regardless of what ELSE either one is also referenced by.
+//
+// This name predates the fix that made it a genuine intersection test
+// (originally "both belong to exactly one playlist, the same one") — see
+// TRACK-H-cues-and-playlists.md section H5 build item 2's own ruling. That
+// narrower rule broke on a Cue referenced by more than one playlist: it
+// stopped exempting against ANYTHING, including an ordinary sibling entry
+// of a playlist it also happened to belong to, so authoring an otherwise
+// unremarkable multi-entry Playlist refused itself the moment one of its
+// Cues was reused elsewhere (as another playlist's entry, or as a
+// safeCueRef). A shared-playlist test still exempts every case the
+// original rule correctly exempted (a single shared playlist, referenced
+// by nothing else, is the len==1-both-sides case) and additionally covers
+// the one it wrongly caught. It does not attempt to model whether two
+// DIFFERENT playlists neither shares can themselves run concurrently
+// (H0.5's only blessed case is FPP-plus-one-showmesh-audio-playlist);
+// a Cue authored into two playlists that could genuinely run at the same
+// time, colliding with a third Cue only one of them references, is a
+// known residual gap this test does not close — see this seam's own
+// build report.
+func sameSinglePlaylist(a, b claimant) bool {
+	if len(a.playlists) == 0 || len(b.playlists) == 0 {
+		return false
+	}
+	for id := range a.playlists {
+		if b.playlists[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// detectClaimConflicts derives payload's H0.5 claims via
+// [config.DeriveShowCueClaims] against ctx and reports the first claim
+// already held by a DIFFERENT Cue that is not [sameSinglePlaylist] with
+// this one — as DATA (a non-nil *[CatalogConflict]), never as an error:
+// TRACK-H-cues-and-playlists.md section H5 build item 2's own ruling. A
+// claim conflict is a readiness fact about the catalog, not a resolution
+// failure: [ResolveCueCatalog]'s own callers (cueactivate.Decide,
+// Authorize, participatingNodesForShow — two of which loop over every
+// node) must keep resolving every OTHER Cue correctly even while one
+// colliding pair exists, which an error return could not do. claimants is
+// mutated in place — the running map every prior Cue in this
+// [ResolveCueCatalog] pass registered its own claims into — so this
+// function is deliberately called once per Cue, in the SAME loop that
+// builds catalog entries, rather than as a separate post-pass.
+//
+// [config.ShowCueClaimKindAnnouncementSession] is deliberately EXEMPTED:
+// H0.5 states "Exclusive. One announcement at a time," but that
+// exclusivity is already enforced by there being exactly one well-known
+// announcement session ([cueactivation.AnnouncementSessionID]) a node
+// ever runs — pkg/audio's own duck/mix/interrupt precedence (this seam's
+// own TRACK-H-cues-and-playlists.md section H5 ruling 1) is what decides which announcement plays when
+// two are triggered close together, not an authoring-time refusal.
+// Refusing a Show for authoring more than one announcement Cue would be
+// wrong: authoring several announcements meant to play one at a time,
+// sequentially, over the life of a show is the ordinary case this output
+// exists for.
+func detectClaimConflicts(claimants map[config.ShowCueClaim]claimant, this claimant, payload config.ShowCuePayload, ctx config.ShowCueClaimContext) (*CatalogConflict, error) {
+	claims, err := config.DeriveShowCueClaims(payload, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("assetsync: resolve cue catalog: derive claims for cue %q: %w", this.cueID, err)
+	}
+	for _, claim := range claims {
+		if claim.Kind == config.ShowCueClaimKindAnnouncementSession {
+			continue
+		}
+		holder, held := claimants[claim]
+		if held && holder.cueID != this.cueID && !sameSinglePlaylist(holder, this) {
+			cueA, cueB := holder.cueID, this.cueID
+			if cueB < cueA {
+				cueA, cueB = cueB, cueA
+			}
+			return &CatalogConflict{CueA: cueA, CueB: cueB, Claim: claim}, nil
+		}
+		claimants[claim] = this
+	}
+	return nil, nil
+}
+
+// cueReferencingPlaylistIDs returns, for every Cue any show.playlist in
+// showID references as an entry, the set of playlist ids that reference
+// it — [claimant.playlists]' own source. A Cue referenced only via a
+// "safeCue" mismatchPolicy's safeCueRef, or not referenced by any
+// Playlist at all (a directly-activatable announcement Cue), is simply
+// absent from the returned map, which [claimant]'s own zero-value
+// (empty, non-exempting) already handles correctly.
+func cueReferencingPlaylistIDs(ctx context.Context, st *store.Store, showID string) (map[string]map[string]bool, error) {
+	objs, err := st.ListConfigObjects(ctx, config.ShowPlaylistConfigKind)
+	if err != nil {
+		return nil, fmt.Errorf("list show.playlist objects: %w", err)
+	}
+	out := make(map[string]map[string]bool)
+	for _, obj := range objs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := st.GetConfigRevision(ctx, config.ShowPlaylistConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			return nil, fmt.Errorf("read show.playlist %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
+		}
+		payload, err := decodeStoredShowPlaylistPayload(rev.PayloadJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode stored show.playlist %q: %w", obj.ID, err)
+		}
+		if payload.Show != showID {
+			continue
+		}
+		for _, entry := range payload.Entries {
+			if out[entry.Cue] == nil {
+				out[entry.Cue] = make(map[string]bool)
+			}
+			out[entry.Cue][obj.ID] = true
+		}
+		// A "safeCue" mismatchPolicy's safeCueRef is never concurrently
+		// active with this SAME playlist's own entries — it runs INSTEAD
+		// of whichever entry would otherwise be active, exactly the
+		// either/or relationship [sameSinglePlaylist] already exempts
+		// entries of one playlist from each other for. Folding it into
+		// the identical playlist-id set (rather than a separate "safe
+		// cue" concept) is what lets that one exemption cover both
+		// shapes without a second rule.
+		if payload.MismatchPolicy == config.ShowPlaylistMismatchPolicySafeCue && payload.SafeCueRef != "" {
+			if out[payload.SafeCueRef] == nil {
+				out[payload.SafeCueRef] = make(map[string]bool)
+			}
+			out[payload.SafeCueRef][obj.ID] = true
+		}
+	}
+	return out, nil
 }
 
 // resolveAssetFor returns the sorted, de-duplicated content hashes of

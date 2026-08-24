@@ -75,16 +75,19 @@ func TestOpenAPIShowCuePlaylistResponsesMatchRealResponses(t *testing.T) {
 	_, revCueBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.cue/thriller/revisions", auth)
 	assertMatchesSchema(t, c, "ConfigRevisionsResponse", revCueBody)
 
-	// A Cue with every output populated, to prove ltc/announcement's own
-	// schemas too.
+	// Two Cues, to prove ltc's and announcement's own schemas — never
+	// together on one Cue: TRACK-H-cues-and-playlists.md section H5 build
+	// item 5's own authoring-time refusal (config/showcue.go's
+	// decodeShowCueOutputs) rejects a Cue declaring both, since a node has
+	// one LTC generator tied to the program-audio clock domain and the
+	// announcement session is not that domain.
 	fullCueBody := `{
 		"show": "halloween-2026",
 		"name": "Full Cue",
 		"outputs": {
 			"render": {"sequence": "thriller"},
 			"audio": {"asset": "thriller-audience", "startOffsetMillis": 0},
-			"ltc": {"startOffsetMillis": 0},
-			"announcement": {"policy": "duck", "duckGainDb": -18, "fadeMillis": 300}
+			"ltc": {"startOffsetMillis": 0}
 		}
 	}`
 	putFullCueReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.cue/full", fullCueBody, auth)
@@ -93,6 +96,22 @@ func TestOpenAPIShowCuePlaylistResponsesMatchRealResponses(t *testing.T) {
 		t.Fatalf("PUT show.cue (full): status = %d, want 200; body: %s", putFullCueResp.StatusCode, putFullCueRespBody)
 	}
 	assertMatchesSchema(t, c, "ShowCueConfigResponse", putFullCueRespBody)
+
+	announcementCueBody := `{
+		"show": "halloween-2026",
+		"name": "Announcement Cue",
+		"outputs": {
+			"render": {"sequence": "thriller"},
+			"audio": {"asset": "thriller-audience", "startOffsetMillis": 0},
+			"announcement": {"policy": "duck", "duckGainDb": -18, "fadeMillis": 300}
+		}
+	}`
+	putAnnouncementCueReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.cue/announcement-full", announcementCueBody, auth)
+	putAnnouncementCueResp, putAnnouncementCueRespBody := doRawRequest(t, api.Handler, putAnnouncementCueReq)
+	if putAnnouncementCueResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.cue (announcement): status = %d, want 200; body: %s", putAnnouncementCueResp.StatusCode, putAnnouncementCueRespBody)
+	}
+	assertMatchesSchema(t, c, "ShowCueConfigResponse", putAnnouncementCueRespBody)
 
 	// --- kind "show.playlist" ---
 	playlistBody := `{

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
@@ -34,6 +36,18 @@ type cueActivationOperation struct {
 	catalogStore *heldcatalog.FileStore
 	render       *renderOperations
 	audioMgr     *audio.Manager
+	nodeID       string
+
+	// announcementMu guards announcementActivationID/announcementCueID:
+	// TRACK-H-cues-and-playlists.md section H5 build item 3's own state,
+	// tracking the identity of whichever announcement Cue this node most
+	// recently accepted into [cueactivation.AnnouncementSessionID] — see
+	// concurrentAnnouncementRefusalReason's own doc comment for why this is
+	// needed at all (pkg/audio's own session state carries no Cue
+	// identity to read back).
+	announcementMu           sync.Mutex
+	announcementActivationID string
+	announcementCueID        string
 }
 
 // heldStateAndEntry loads this node's held catalog (if any) and projects
@@ -203,10 +217,23 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 		}
 	}
 	if entry.Outputs.Audio != nil {
+		concurrentAnnouncementReason := ""
+		if entry.Outputs.Announcement != nil {
+			concurrentAnnouncementReason = o.concurrentAnnouncementRefusalReason(ctx, act)
+		}
 		if o.audioMgr == nil {
 			applyErrs = append(applyErrs, "cue declares an audio output but this node has no audio engine configured")
-		} else if err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC); err != nil {
+		} else if concurrentAnnouncementReason != "" {
+			// TRACK-H-cues-and-playlists.md section H5 build item 3's own
+			// ruling: a second announcement arriving while one is Playing
+			// is REFUSED, never superseded — activateAudio is not even
+			// called, so its own Apply/Prepare never tears down the
+			// in-flight announcement mid-sentence.
+			applyErrs = append(applyErrs, concurrentAnnouncementReason)
+		} else if err := activateAudio(ctx, o.audioMgr, o.assetDir, act, *entry.Outputs.Audio, entry.Outputs.LTC, entry.Outputs.Announcement); err != nil {
 			applyErrs = append(applyErrs, err.Error())
+		} else if entry.Outputs.Announcement != nil {
+			o.recordAnnouncementActivation(act)
 		}
 	} else if entry.Outputs.LTC != nil {
 		// H0.3/H4: LTC is emitted from the program-audio clock domain via
@@ -238,4 +265,78 @@ func (o *cueActivationOperation) activate(ctx context.Context, params map[string
 		},
 		ExecutedAt: executedAt, ObservedAt: observedAt,
 	}, nil
+}
+
+// concurrentAnnouncementRefusalReason is TRACK-H-cues-and-playlists.md
+// section H5 build item 3's own fix: internal/agent/cueactivationaudio.go's
+// activateAudio routes every announcement Cue to the SAME well-known
+// session ([cueactivation.AnnouncementSessionID]), so a second
+// announcement's own Apply used to call the engine's releaseEngineLocked
+// and tear down whatever was already playing there mid-sentence — reported
+// Confirmed, never refused. H0.5 says a second announcement is refused,
+// never silently preempted, and the refusal names both Cues and the exact
+// claim string.
+//
+// Returns "" when there is nothing to refuse: no audio engine, the
+// announcement session is not currently Playing, or the arriving act is a
+// REDELIVERY of the SAME activation already accepted (act.ActivationID
+// matches the one recorded — pkg/audio's own RevisionState already
+// resolves that as an idempotent replay one layer down, at
+// activateAudio's own Apply call, so it must not be refused here first).
+// pkg/audio's own session state carries no Cue identity to read back
+// (SessionSnapshot has none), which is why this node-agent-level state is
+// needed at all, rather than deriving the answer purely from
+// [audio.Manager.Snapshot].
+func (o *cueActivationOperation) concurrentAnnouncementRefusalReason(ctx context.Context, act cueactivation.Activation) string {
+	if o.audioMgr == nil {
+		return ""
+	}
+	id := pkgaudio.SessionID(cueactivation.AnnouncementSessionID)
+	var playing bool
+	for _, snap := range o.audioMgr.Snapshot(ctx) {
+		if snap.ID == id && snap.State == pkgaudio.StatePlaying {
+			playing = true
+			break
+		}
+	}
+	if !playing {
+		return ""
+	}
+
+	o.announcementMu.Lock()
+	priorActivationID, priorCueID := o.announcementActivationID, o.announcementCueID
+	o.announcementMu.Unlock()
+
+	if priorActivationID == act.ActivationID {
+		// A redelivery of the SAME activation this node already accepted
+		// — not a second announcement.
+		return ""
+	}
+	if priorCueID == "" {
+		// The announcement session is Playing but this node never
+		// recorded which Cue put it there (e.g. a restart lost the
+		// in-memory record). Still refuse — H0.5's exclusivity does not
+		// depend on this node being able to name the prior Cue — but say
+		// so honestly rather than fabricating an id.
+		priorCueID = "unknown (this node did not record it)"
+	}
+	// announcement-session:<node> matches config.ShowCueClaim{Kind:
+	// ShowCueClaimKindAnnouncementSession, Node: nodeID}.String()'s own
+	// format (internal/coordinator/config/showcue.go) — reproduced by
+	// value rather than imported, since internal/agent must not import
+	// internal/coordinator/config.
+	claim := fmt.Sprintf("announcement-session:%s", o.nodeID)
+	return fmt.Sprintf(
+		"cue.activate: announcement Cue %q refused: Cue %q is already playing in the announcement session (claim %q); a second announcement is refused, never superseded (H0.5)",
+		act.CueID, priorCueID, claim)
+}
+
+// recordAnnouncementActivation records act as the last accepted
+// announcement activation, so a later concurrent arrival can name it in a
+// refusal and a redelivery of act itself is not refused as "concurrent
+// with itself".
+func (o *cueActivationOperation) recordAnnouncementActivation(act cueactivation.Activation) {
+	o.announcementMu.Lock()
+	o.announcementActivationID, o.announcementCueID = act.ActivationID, act.CueID
+	o.announcementMu.Unlock()
 }

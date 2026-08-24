@@ -179,10 +179,15 @@ func putAudioNodeForTest(t *testing.T, st *store.Store, nodeID string) {
 }
 
 // TestDispatchBlackAndSilenceStopsAudioOnlyForNodesWithAudioNode proves
-// this seam's own fix: H0.2's blackAndSilence policy stops
-// [blackAndSilenceAudioSessionID] on every node that has declared an
-// audio.node object, and dispatches nothing audio-related to a node that
-// has not (nothing to silence there — ADR-018).
+// this seam's own fix: H0.2's blackAndSilence policy stops EVERY session
+// in [blackAndSilenceAudioSessionIDs] (TRACK-H-cues-and-playlists.md
+// section H5 build item 4 extended this from the one show session to all
+// three: the show session, the showmesh-audio background session, and the
+// announcement session — H5 created the latter two, and blackAndSilence
+// used to leave both completely outside every silence path) on every node
+// that has declared an audio.node object, and dispatches nothing
+// audio-related to a node that has not (nothing to silence there —
+// ADR-018).
 func TestDispatchBlackAndSilenceStopsAudioOnlyForNodesWithAudioNode(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
 	putAudioNodeForTest(t, setup.st, "audio-01")
@@ -195,19 +200,21 @@ func TestDispatchBlackAndSilenceStopsAudioOnlyForNodesWithAudioNode(t *testing.T
 
 	setup.pub.mu.Lock()
 	defer setup.pub.mu.Unlock()
-	count := 0
+	gotSessions := map[string]bool{}
 	for _, d := range setup.pub.dispatched {
 		if d.Action != "audio.session.stop" {
 			continue
 		}
-		count++
 		sessionID, _ := d.Params["sessionId"].(string)
-		if sessionID != blackAndSilenceAudioSessionID {
-			t.Fatalf("audio.session.stop dispatched with sessionId = %q, want %q", sessionID, blackAndSilenceAudioSessionID)
-		}
+		gotSessions[sessionID] = true
 	}
-	if count != 1 {
-		t.Fatalf("audio.session.stop dispatch count = %d, want exactly 1 (only audio-01 has an audio.node object; render-01 must be skipped)", count)
+	if len(gotSessions) != len(blackAndSilenceAudioSessionIDs) {
+		t.Fatalf("audio.session.stop dispatched to sessions %v, want exactly %v (only audio-01 has an audio.node object; render-01 must be skipped)", gotSessions, blackAndSilenceAudioSessionIDs)
+	}
+	for _, want := range blackAndSilenceAudioSessionIDs {
+		if !gotSessions[want] {
+			t.Fatalf("audio.session.stop was never dispatched against session %q; got %v", want, gotSessions)
+		}
 	}
 }
 
@@ -244,18 +251,22 @@ func TestDispatchBlackAndSilenceRedispatchesOnANewEpisode(t *testing.T) {
 
 	// Two ticks of the SAME episode (a continuing mismatch the coordinator
 	// re-reads the identical stored observation for every tick): the
-	// second must be suppressed as a replay, not published again.
+	// second must be suppressed as a replay, not published again. Each
+	// tick dispatches one stop per session in blackAndSilenceAudioSessionIDs
+	// (build item 4), so a genuinely fresh dispatch of one episode counts
+	// len(blackAndSilenceAudioSessionIDs), not 1.
+	perEpisode := len(blackAndSilenceAudioSessionIDs)
 	h.dispatchBlackAndSilence(context.Background(), testNow, []string{"audio-01"}, issuer, "inst-1-1")
 	h.dispatchBlackAndSilence(context.Background(), testNow, []string{"audio-01"}, issuer, "inst-1-1")
-	if got := countStops(); got != 1 {
-		t.Fatalf("audio.session.stop dispatch count after two ticks of ONE episode = %d, want 1 (a repeat tick must not republish)", got)
+	if got := countStops(); got != perEpisode {
+		t.Fatalf("audio.session.stop dispatch count after two ticks of ONE episode = %d, want %d (a repeat tick must not republish)", got, perEpisode)
 	}
 
 	// A later, genuinely separate mismatch episode — a new
 	// EntryOccurrenceSequence — on the SAME node must dispatch again.
 	h.dispatchBlackAndSilence(context.Background(), testNow, []string{"audio-01"}, issuer, "inst-1-2")
-	if got := countStops(); got != 2 {
-		t.Fatalf("audio.session.stop dispatch count after a NEW episode = %d, want 2 (a later, separate mismatch must dispatch again)", got)
+	if got := countStops(); got != 2*perEpisode {
+		t.Fatalf("audio.session.stop dispatch count after a NEW episode = %d, want %d (a later, separate mismatch must dispatch again)", got, 2*perEpisode)
 	}
 }
 

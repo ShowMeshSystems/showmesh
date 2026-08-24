@@ -212,7 +212,7 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		// authorized-or-refused against the held catalog, and only the
 		// apply step for a configured output actually executes (see
 		// cueActivationOperation.activate).
-		cueActivate := &cueActivationOperation{assetDir: assetDir, catalogStore: catalogStore, render: render, audioMgr: audioMgr}
+		cueActivate := &cueActivationOperation{assetDir: assetDir, catalogStore: catalogStore, render: render, audioMgr: audioMgr, nodeID: nodeID}
 		ops["cue.activate"] = cueActivate.activate
 	}
 	for action, op := range audioSessionOperations(audioMgr) {
