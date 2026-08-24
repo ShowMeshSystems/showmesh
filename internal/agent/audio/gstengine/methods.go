@@ -151,26 +151,34 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 	return b.observe(e.cfg.now()), nil
 }
 
-// Pause freezes the branch's position at its live value, then halts its
-// own elements — the shared mixer's ignore-inactive-pads keeps the rest
-// of the program bus running unaffected.
+// Pause halts the branch's own contribution to the mix by blocking its
+// data flow (see blockFlow) and freezes its reported position at the
+// value it held the instant before the block took effect, never a
+// SetState(PAUSED) on elements that are siblings inside a pipeline that
+// stays PLAYING, which does not reliably stop dataflow there and was the
+// root cause of a paused branch continuing to decode and reach EOS on its
+// own. The shared mixer's ignore-inactive-pads keeps the rest of the
+// program bus running unaffected.
 func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	pos := b.queryPosition()
-	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
-		return agentaudio.EngineObservation{}, err
-	}
+	b.blockFlow()
 	b.freezeAt(pos)
 	b.setState(pkgaudio.StatePaused)
 	return b.observe(e.cfg.now()), nil
 }
 
-// Resume re-anchors playback to the branch's current decode position, not
-// to the position Pause reported: decode keeps running while frozen, so a
-// held pause's own duration folds into the position Resume starts from.
+// Resume re-anchors the mixer offset to the branch's frozen position
+// before letting flow resume: with Pause now genuinely blocking data
+// flow, that frozen bookmark is the branch's real decode position, not a
+// stale one: decode does not advance while blocked, unlike the defect
+// this replaces, where Resume had to read a live decode position because
+// the "frozen" one had already drifted for the whole pause duration.
+// resyncMixerPadsToLivePosition must run before unblockFlow: the pad
+// offset has to be set before the next buffer can reach the mixer.
 func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -178,9 +186,7 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 	}
 	b.resyncMixerPadsToLivePosition()
 	b.unfreeze()
-	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
-		return agentaudio.EngineObservation{}, err
-	}
+	b.unblockFlow()
 	b.setState(pkgaudio.StatePlaying)
 	return b.observe(e.cfg.now()), nil
 }
@@ -198,17 +204,18 @@ func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, posit
 	return b.observe(e.cfg.now()), nil
 }
 
-// Stop ends playback, freezing position and marking Stopped — permanently
-// distinct from a branch that reaches Completed on its own.
+// Stop ends playback, blocking data flow exactly as Pause does and
+// freezing position, and marking Stopped, permanently distinct from a
+// branch that reaches Completed on its own. The flow block is released
+// only by Resume or by teardown at Release; a Stopped branch has none
+// left to give the mix.
 func (e *Engine) Stop(ctx context.Context, handle agentaudio.EngineHandle) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	pos := b.queryPosition()
-	if err := b.setElementsState(ctx, gst.StatePaused); err != nil {
-		return agentaudio.EngineObservation{}, err
-	}
+	b.blockFlow()
 	b.freezeAt(pos)
 	b.setState(pkgaudio.StateStopped)
 	return b.observe(e.cfg.now()), nil
@@ -250,8 +257,7 @@ func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade 
 		return agentaudio.EngineObservation{}, errFadeBeforeStart
 	}
 	baseLocal := b.localRunningTime(b.queryPosition())
-	baseRunning := b.pipelineRunningTime()
-	if err := b.startFade(fade, baseLocal, baseRunning); err != nil {
+	if err := b.startFade(fade, baseLocal); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEnginePipelineCrash, err)
 	}
 	return b.observe(e.cfg.now()), nil
@@ -339,6 +345,10 @@ func (b *branch) teardown(ctx context.Context) error {
 	b.mu.Unlock()
 
 	b.engine.unindexBranch(b)
+	// A blocked pad holds a streaming thread waiting inside the probe;
+	// the state change below must never race that wait, so the block is
+	// always released first, whether or not this branch was ever paused.
+	b.unblockFlow()
 	if err := b.setElementsState(ctx, gst.StateNull); err != nil {
 		slog.Warn("gstengine: branch teardown did not reach NULL in time; leaving its elements in the pipeline rather than removing them concurrently with the abandoned state change", "branch", b.id, "error", err)
 		return err

@@ -64,13 +64,20 @@ type branch struct {
 
 	fadeActive bool
 	// fadeStartLocal anchors the GstController ramp itself (see
-	// localRunningTime); fadeStartRunning (see pipelineRunningTime)
-	// additionally bounds FadeActive while frozen, when fadeStartLocal's
-	// own clock does not advance.
-	fadeStartLocal   time.Duration
-	fadeStartRunning time.Duration
-	fadeDuration     time.Duration
-	fadeTargetGain   pkgaudio.Gain
+	// localRunningTime): the ramp advances only when this branch's own
+	// segment does, which a genuine flow block also freezes, so it alone
+	// bounds fade completion correctly whether or not the branch is held.
+	fadeStartLocal time.Duration
+	fadeDuration   time.Duration
+	fadeTargetGain pkgaudio.Gain
+
+	// blockProbeID is the pad probe holding this branch's own contribution
+	// to the mix at queue's sink pad, or 0 when flow is not blocked. It is
+	// how Pause and Stop genuinely halt data flow inside a pipeline that
+	// stays PLAYING: unlike SetState(PAUSED) on a sibling of a PLAYING
+	// bin, a blocking probe is authoritative regardless of the parent
+	// bin's own state.
+	blockProbeID uint32
 
 	released bool
 }
@@ -365,13 +372,12 @@ const fadeGainTolerance = 1e-3
 func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 	pos := b.queryPosition()
 	local := b.localRunningTime(pos)
-	running := b.pipelineRunningTime()
 	gain := b.currentGain()
 
 	b.mu.Lock()
 	state := b.state
 	fadeActive := b.fadeActive
-	if fadeActive && fadeArrived(local, b.fadeStartLocal, running, b.fadeStartRunning, b.fadeDuration, gain, b.fadeTargetGain) {
+	if fadeActive && fadeArrived(local, b.fadeStartLocal, b.fadeDuration, gain, b.fadeTargetGain) {
 		fadeActive = false
 		b.fadeActive = false
 	}
@@ -386,16 +392,28 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 	}
 }
 
-// fadeArrived reports whether a fade started at (fadeStartLocal,
-// fadeStartRunning) with fadeDuration should clear FadeActive, given the
-// branch's current local and pipeline running time and its current gain
-// against the fade's target. The interface promises FadeActive clears
-// only once Gain equals the target, so a fade either clock says is due
-// but whose gain has not arrived stays reported in progress rather than
-// falsely complete — a stuck pending fade must be visible, a falsely
-// completed one must not.
-func fadeArrived(local, fadeStartLocal, running, fadeStartRunning, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
-	elapsed := local-fadeStartLocal >= fadeDuration || running-fadeStartRunning >= fadeDuration
+// fadeArrived reports whether a fade started at fadeStartLocal with
+// fadeDuration should clear FadeActive, given the branch's current local
+// running time and its current gain against the fade's target.
+//
+// The bound is local time alone, deliberately not the shared pipeline's
+// running time: an earlier version of this check also accepted the
+// pipeline's own wall-clock elapsed time, compensating for a since-fixed
+// defect where a "paused" branch's ramp kept running in real time
+// regardless of the hold. With Pause and Stop now genuinely blocking this
+// branch's own flow (see blockFlow), local running time freezes exactly
+// when the ramp does and resumes exactly when the ramp does, so it alone
+// is sufficient; a wall-clock term would instead go stale-true purely
+// from real time passing while held, papered over only by the gain
+// check below happening not to match by coincidence.
+//
+// The interface promises FadeActive clears only once Gain equals the
+// target, so a fade local time says is due but whose gain has not
+// arrived, such as one Pause or Stop has held short of target, stays
+// reported in progress rather than falsely complete: a stuck pending
+// fade must be visible, a falsely completed one must not.
+func fadeArrived(local, fadeStartLocal, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
+	elapsed := local-fadeStartLocal >= fadeDuration
 	return elapsed && gainWithin(gain, target, fadeGainTolerance)
 }
 
@@ -424,6 +442,44 @@ func (b *branch) hasStarted() bool {
 	return b.state != pkgaudio.StateReady
 }
 
+// blockFlow halts this branch's contribution to the mix by blocking
+// queue's sink pad, the point immediately downstream of volume and
+// upstream of the bounded queue (see queueMaxSizeTime): once the probe
+// holds, queue can drain but never refill, so the block backpressures
+// through volume, capsfilter, audioresample, audioconvert, and decodebin
+// within one queue's worth of buffering, stopping decode itself rather
+// than merely a downstream tap. Idempotent: a second call while already
+// blocked is a no-op.
+func (b *branch) blockFlow() {
+	b.mu.Lock()
+	if b.blockProbeID != 0 {
+		b.mu.Unlock()
+		return
+	}
+	b.mu.Unlock()
+
+	pad := b.queue.GetStaticPad("sink")
+	id := pad.AddProbe(gst.PadProbeTypeBlockDownstream, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		return gst.PadProbeOK
+	})
+
+	b.mu.Lock()
+	b.blockProbeID = id
+	b.mu.Unlock()
+}
+
+// unblockFlow releases a block installed by blockFlow, letting this
+// branch's data flow resume. A no-op when nothing is blocked.
+func (b *branch) unblockFlow() {
+	b.mu.Lock()
+	id := b.blockProbeID
+	b.blockProbeID = 0
+	b.mu.Unlock()
+	if id != 0 {
+		b.queue.GetStaticPad("sink").RemoveProbe(id)
+	}
+}
+
 func (b *branch) freezeAt(pos time.Duration) {
 	b.mu.Lock()
 	b.frozen = true
@@ -443,7 +499,7 @@ func (b *branch) unfreeze() {
 // latter maps a 0..1 control value onto the property's full 0..10 range
 // and turns a requested gain of 1.0 into a 10x boost (measured in the
 // phase 1 spike, bench/audio-node/spike-phase1).
-func (b *branch) startFade(fade pkgaudio.Fade, baseLocal, baseRunning time.Duration) error {
+func (b *branch) startFade(fade pkgaudio.Fade, baseLocal time.Duration) error {
 	volObj := b.volume.(gst.Object)
 	volObj.SetControlBindingDisabled("volume", false)
 
@@ -471,7 +527,6 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseLocal, baseRunning time.Durat
 	b.mu.Lock()
 	b.fadeActive = true
 	b.fadeStartLocal = baseLocal
-	b.fadeStartRunning = baseRunning
 	b.fadeDuration = fade.Duration
 	b.fadeTargetGain = fade.TargetGain
 	b.mu.Unlock()
