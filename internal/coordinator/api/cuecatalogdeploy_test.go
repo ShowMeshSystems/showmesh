@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -285,6 +286,34 @@ func TestCueCatalogDeployRefusesWithNoActiveShow(t *testing.T) {
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("deploy with no active show: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (nothing should have been dispatched)", pub.count())
+	}
+}
+
+// TestCueCatalogDeployRefusesUnknownField proves this route rejects an
+// unrecognized top-level field instead of silently ignoring it, matching
+// api/openapi.yaml's CueCatalogDeployRequest (additionalProperties: false)
+// and the identical refusal POST .../cue-catalog/acknowledge already gives
+// (decodeCueCatalogAcknowledgeBody, cuecatalog.go).
+func TestCueCatalogDeployRefusesUnknownField(t *testing.T) {
+	api, _, pub, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy",
+		`{"idempotencyKey":"key-1","somethingElse":true}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("deploy with an unknown field: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	var problem v1.Problem
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem body: %v", err)
+	}
+	if problem.Type != ProblemTypeInvalidParameter {
+		t.Fatalf("deploy with an unknown field: problem type = %q, want %q", problem.Type, ProblemTypeInvalidParameter)
 	}
 	if pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 (nothing should have been dispatched)", pub.count())

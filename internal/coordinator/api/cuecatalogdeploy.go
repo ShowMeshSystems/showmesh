@@ -108,6 +108,10 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 
 	var body cueCatalogDeployRequestBody
 	dec := json.NewDecoder(io.LimitReader(r.Body, maxCueCatalogDeployRequestBodyBytes+1))
+	// Strict on unknown fields for the identical reason
+	// decodeCueCatalogAcknowledgeBody is (cuecatalog.go): a misspelled
+	// field must never decode silently as "absent".
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		writeProblem(w, h.logger, now, invalidParameterProblem(`request body must be a JSON object matching {"idempotencyKey":string?}`))
 		return
