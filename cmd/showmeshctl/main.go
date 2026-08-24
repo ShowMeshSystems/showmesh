@@ -82,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
 		return cmdAssets(rest, stdout, stderr, clock)
+	case "cuecatalog":
+		return cmdCueCatalog(rest, stdout, stderr, clock)
 	case "principal":
 		return cmdPrincipal(rest, stdout, stderr, clock)
 	case "token":
@@ -214,6 +216,10 @@ Commands:
   assets manifest [--node <id>] [--require-ready]
                            what each node should hold for the active show,
                            versus what it actually holds (Track E seam E5)
+  cuecatalog get <nodeId>              one node's resolved Cue catalog (Track H seam H3)
+  cuecatalog acknowledge <nodeId> <revision> -show <show> -generation <n>
+                                        report which catalog revision this node holds (write,
+                                        requires node:observe; NOT readiness)
   resolume status [id]                 show the configured Resolume instance's health, loaded
                                         composition, and every resolume.* observation
   render settings get                  show the active render.settings configuration (Track B,

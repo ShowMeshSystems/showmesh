@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
+	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -169,17 +170,20 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 
 // newOperationRegistry returns this agent's entire command allowlist:
 // "agent.echo", "asset.fetch", "audio.device.probe" (Track C seam C1a),
-// "audio.media.probe" (Track C seam C2), and Track B's four render.*
-// operations (seam B2a's apply/clear/restart, seam B4's transport.probe). Per
+// "audio.media.probe" (Track C seam C2), Track B's four render.*
+// operations (seam B2a's apply/clear/restart, seam B4's transport.probe),
+// and "cuecatalog.deploy" (Track H seam H3: the coordinator pushing a
+// resolved Cue catalog onto this node — see cuecatalogops.go). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
 // this map itself IS the enforcement mechanism — [CommandHandler.
 // HandleMessage] refuses any Action that is not a key here, never executes
 // it, and never silently ignores it. assetDir and assetAPIToken configure
 // "asset.fetch" (see assets.go); render configures the four render.*
-// operations (see renderops.go). Adding a further allowlisted operation
-// later means adding a further entry to this map, not building a second
-// enforcement path.
-func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding) map[string]OperationFunc {
+// operations (see renderops.go); nodeID and catalogStore configure
+// "cuecatalog.deploy". Adding a further allowlisted operation later means
+// adding a further entry to this map, not building a second enforcement
+// path.
+func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
@@ -194,6 +198,10 @@ func newOperationRegistry(assetDir, assetAPIToken string, render *renderOperatio
 		ops["render.surface.clear"] = render.clearSurface
 		ops["render.pipeline.restart"] = render.restartPipeline
 		ops["render.transport.probe"] = render.probeTransport
+	}
+	if catalogStore != nil {
+		catalogDeploy := &catalogDeployOperation{nodeID: nodeID, store: catalogStore}
+		ops["cuecatalog.deploy"] = catalogDeploy.deploy
 	}
 	for action, op := range audioSessionOperations(audioMgr) {
 		ops[action] = op
@@ -364,18 +372,20 @@ type CommandHandler struct {
 
 // newCommandHandler builds a CommandHandler for nodeID, wiring
 // [newOperationRegistry]'s allowlist (configured with assetDir and
-// assetAPIToken for "asset.fetch", and render for the three render.*
-// operations — nil disables them, which every test in this package that
-// does not exercise rendering does) and a fresh [idempotencyCache]. It
+// assetAPIToken for "asset.fetch", render for the four render.*
+// operations, and catalogStore for "cuecatalog.deploy" — nil/nil disables
+// what they configure, which every test in this package that does not
+// exercise rendering or the held catalog does) and a fresh
+// [idempotencyCache]. It
 // takes no Publisher: mqtt.go constructs a fresh *mqttConn per connection
 // (matching how advertise.go and heartbeat.go already do), so
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
 		nodeID:            nodeID,
-		ops:               newOperationRegistry(assetDir, assetAPIToken, render, audioMgr, binding),
+		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore),
 		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
 		now:               now,
 		logger:            logger,

@@ -174,7 +174,7 @@ func TestMediaProbeRejectsUnsafeFilename(t *testing.T) {
 // TestMediaProbeIsAllowlisted proves "audio.media.probe" is a real key in
 // the agent's command allowlist — Step 6's own lesson, applied here.
 func TestMediaProbeIsAllowlisted(t *testing.T) {
-	ops := newOperationRegistry(t.TempDir(), "", nil, nil, nil)
+	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil)
 	if _, ok := ops["audio.media.probe"]; !ok {
 		t.Fatal(`newOperationRegistry() does not contain "audio.media.probe"`)
 	}

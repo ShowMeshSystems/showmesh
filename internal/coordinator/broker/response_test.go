@@ -845,6 +845,16 @@ func TestAwaitResponseReleasesWaiterOnPublishFailure(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("AwaitResponse: err = %v, want it to wrap the publish failure", err)
 	}
+	// The publish itself failed, so nothing reached the wire - the same
+	// "nothing to confirm" case a failed subscribe already reports via
+	// ErrResponseFailedBeforePublish (see TestAwaitResponseSubscribeFailureFailsBeforePublish).
+	// A caller (cuecatalogdeploy.go, audiodispatch.go) tells "nothing
+	// published" from "published but unconfirmed" only via errors.Is
+	// against this sentinel; a caller-visible dispatchedAt must never be
+	// set for a publish that never happened.
+	if !errors.Is(err, ErrResponseFailedBeforePublish) {
+		t.Fatalf("AwaitResponse: err = %v, want it to also wrap ErrResponseFailedBeforePublish (a publish failure means nothing reached the wire)", err)
+	}
 
 	if cm.unsubscribeCount() != 1 {
 		t.Errorf("unsubscribeCount = %d after a publish failure, want 1 (the waiter must still be released)", cm.unsubscribeCount())

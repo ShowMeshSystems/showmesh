@@ -505,19 +505,26 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("marshal cmd envelope: %w", err)
 	}
 
+	// From here on, every write is on bgCtx: the command is already
+	// durably recorded and about to be dispatched, and a caller walking
+	// away (an abandoned HTTP client) must not be able to abort the
+	// dispatch, the confirmation poll, or the post-dispatch bookkeeping —
+	// matching audiodispatch.go's identical bgCtx cutover.
+	bgCtx := context.WithoutCancel(ctx)
+
 	dispatchedAt := now
-	if err := h.deps.RenderPublisher.Publish(ctx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, rawEnv); err != nil {
+	if err := h.deps.RenderPublisher.Publish(bgCtx, topic, mqttproto.CmdDeliveryPolicy.QoS, mqttproto.CmdDeliveryPolicy.Retain, rawEnv); err != nil {
 		// The command row already exists (state "pending", never
 		// dispatched) — that is an honest record of an attempted dispatch
 		// that could not reach the broker, not something to unwind.
-		h.writeRenderAudit(ctx, now, identity.AuditDispatch, in, inserted, "publish failed: "+err.Error())
+		h.writeRenderAudit(bgCtx, now, identity.AuditDispatch, in, inserted, "publish failed: "+err.Error())
 		return v1.RenderCommandResult{}, nil, fmt.Errorf("publish command: %w", err)
 	}
 
-	_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
+	_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 		DispatchedAt: &dispatchedAt, State: strPtr("dispatched"),
 	})
-	h.writeRenderAudit(ctx, now, identity.AuditDispatch, in, inserted, "")
+	h.writeRenderAudit(bgCtx, now, identity.AuditDispatch, in, inserted, "")
 
 	var confirmed bool
 	var outcomeState, outcomeReason string
@@ -529,7 +536,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		// No desired STATE to match (unlike apply/clear/restart): a probe
 		// that correctly reports the runtime absent is just as confirmed
 		// as one that reports it present — see confirmRenderTransportProbe.
-		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(ctx, in.NodeID, in.SurfaceID, dispatchedAt)
+		confirmed, outcomeState, outcomeReason = h.confirmRenderTransportProbe(bgCtx, in.NodeID, in.SurfaceID, dispatchedAt)
 	} else {
 		// render.pipeline.restart's wantState "running" is what the surface
 		// already was before this command (that is the whole point of a
@@ -546,7 +553,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		// operator-issued one, so requiring it to move would make every
 		// render.pipeline.restart command time out. Confirmed against a
 		// real agent (test/integration/render_dispatch_test.go).
-		confirmed, outcomeState, outcomeReason, pipelineFailed = h.confirmRenderCommand(ctx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
+		confirmed, outcomeState, outcomeReason, pipelineFailed = h.confirmRenderCommand(bgCtx, in.NodeID, in.SurfaceID, in.DesiredState, dispatchedAt)
 	}
 	resolvedAt := h.now()
 	outcome := "unconfirmed"
@@ -554,7 +561,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		outcome = "confirmed"
 	}
 	resultJSON, _ := json.Marshal(commandResultPayload{Outcome: outcome, PipelineFailed: pipelineFailed})
-	_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
+	_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 		ResolvedAt: &resolvedAt, State: strPtr("resolved"),
 		ResultJSON: strPtr(string(resultJSON)), OutcomeState: &outcomeState, OutcomeReason: &outcomeReason,
 	})
@@ -567,7 +574,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		Outcome: outcome, OutcomeState: outcomeState, OutcomeReason: outcomeReason,
 	}
 	if h.deps.Identity != nil {
-		if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
+		if err := h.deps.Identity.WriteAudit(bgCtx, entry); err != nil {
 			// The event this entry records already happened and cannot be
 			// un-recorded; refusing the response here would only deny the
 			// operator the record of it, never protect them from

@@ -55,6 +55,7 @@ var renderApplyKnownKeys = map[string]bool{
 	"surfaceId": true, "show": true, "name": true, "node": true,
 	"channelRange": true, "geometry": true, "frameRate": true, "output": true,
 	"fseqFilename": true, "fseqContentHash": true, "idleOutput": true,
+	"generation": true, "catalogRevision": true,
 }
 
 // idleOutputKnown is this package's own copy of render.settings.idleOutput's
@@ -124,6 +125,61 @@ func parseSurfaceID(action string, params map[string]any) (string, error) {
 		return "", fmt.Errorf("%s: params.surfaceId %q is not a safe identifier (must match %s)", action, v, surfaceIDPattern.String())
 	}
 	return v, nil
+}
+
+// parseAssignmentAuth extracts params' optional TRACK-H-H3-SPEC.md section 7
+// authorization tuple ("generation", "catalogRevision", plus "show") for
+// persisting on the resulting [pipeline.Assignment]. Absent means an
+// assignment applied before H3's boot-clearing rule existed, or one applied
+// by a coordinator that has not yet started sending H4's full activation
+// envelope — both are the same "no tuple" case downstream (build item 4:
+// treated as unauthorized at boot, never grandfathered), so this function
+// returns (nil, nil) rather than a zero-value tuple, and the caller
+// distinguishes the two via the pointer.
+//
+// "show" is NOT part of this presence test: it was already a
+// renderApplyKnownKeys member and a required top-level render.surface.apply
+// field before this seam existed (internal/coordinator/api/renderdispatch.go's
+// renderApplyParamsPayload.Show has no omitempty and is always populated by
+// the real coordinator), so every real apply already carries it regardless
+// of whether H3's tuple is present. Only "generation" and "catalogRevision"
+// are new with this seam, so only they gate whether the tuple is present at
+// all; a caller sending exactly one of those two (and not the other) is a
+// bug upstream, not a case to silently paper over with a mixed real/zero
+// tuple that could pass a later boot comparison by accident. "show" is read
+// for the tuple once the other two are present.
+func parseAssignmentAuth(action string, params map[string]any) (*pipeline.AssignmentAuth, error) {
+	_, hasGeneration := params["generation"]
+	_, hasCatalogRevision := params["catalogRevision"]
+	if !hasGeneration && !hasCatalogRevision {
+		return nil, nil
+	}
+	if !hasGeneration || !hasCatalogRevision {
+		return nil, fmt.Errorf("%s: params.generation and params.catalogRevision must be supplied together or not at all", action)
+	}
+
+	show, ok := params["show"].(string)
+	if !ok || show == "" {
+		return nil, fmt.Errorf("%s: params.show must be a non-empty string, got %T", action, params["show"])
+	}
+	catalogRevision, ok := params["catalogRevision"].(string)
+	if !ok || catalogRevision == "" {
+		return nil, fmt.Errorf("%s: params.catalogRevision must be a non-empty string, got %T", action, params["catalogRevision"])
+	}
+
+	var generation int64
+	switch v := params["generation"].(type) {
+	case float64:
+		generation = int64(v)
+	case int64:
+		generation = v
+	case int:
+		generation = int64(v)
+	default:
+		return nil, fmt.Errorf("%s: params.generation must be a number, got %T", action, params["generation"])
+	}
+
+	return &pipeline.AssignmentAuth{Show: show, Generation: generation, CatalogRevision: catalogRevision}, nil
 }
 
 // rejectUnknownKeys reports an error naming the first unrecognized key in
@@ -585,6 +641,10 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	if err := rejectUnknownKeys(action, params, renderApplyKnownKeys); err != nil {
 		return OperationResult{}, err
 	}
+	auth, err := parseAssignmentAuth(action, params)
+	if err != nil {
+		return OperationResult{}, err
+	}
 
 	rawParams, err := json.Marshal(params)
 	if err != nil {
@@ -606,7 +666,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 		return OperationResult{}, err
 	}
 
-	if err := o.store.Upsert(pipeline.Assignment{SurfaceID: surfaceID, RawParams: rawParams, AppliedAt: executedAt}); err != nil {
+	if err := o.store.Upsert(pipeline.Assignment{SurfaceID: surfaceID, RawParams: rawParams, AppliedAt: executedAt, Auth: auth}); err != nil {
 		if f != nil {
 			_ = f.Close()
 		}

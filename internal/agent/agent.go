@@ -18,6 +18,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
+	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
@@ -179,14 +180,52 @@ func Run() int {
 
 	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, showMode, logger)
 
+	// catalogStore is this node's held Cue catalog (TRACK-H-H3-SPEC.md
+	// section 4) — constructed here, outside newMQTTConn, for the same
+	// "must survive a broker reconnect" reason sup and cmdHandler are.
+	catalogStore := heldcatalog.NewFileStore(cfg.AssetDir)
+	heldCatalog, hasCatalog, err := catalogStore.Load()
+	if err != nil {
+		// A corrupt held-catalog file is exactly as untrustworthy as no
+		// catalog at all — see decideBootResume's hasCatalog=false branch —
+		// so every persisted render assignment below is discarded, the
+		// same as a genuinely fresh node. Never treated as "silently keep
+		// whatever the node last knew," which would let stale evidence a
+		// disk error masked pass every boot-clearing check by accident.
+		logger.Warn("failed to load held cue catalog at startup; treating this node as holding none", "error", err)
+		hasCatalog = false
+	}
+
 	// Reload every persisted surface assignment and re-apply it, so a node
 	// that restarts with no coordinator reachable resumes rendering
 	// (Track B build contract ruling 4) rather than sitting idle until a
-	// coordinator reappears to resend an assignment it already sent once.
+	// coordinator reappears to resend an assignment it already sent once —
+	// UNLESS TRACK-H-H3-SPEC.md section 7's boot-clearing rule says this
+	// particular assignment is no longer authorized, in which case it is
+	// discarded instead (decideBootResume), never silently resumed.
 	if persisted, err := assignmentStore.Load(); err != nil {
 		logger.Warn("failed to load persisted render assignments at startup; starting with none", "error", err)
 	} else {
 		for _, a := range persisted {
+			if decision := decideBootResume(a, heldCatalog, hasCatalog); !decision.Authorized {
+				logger.Warn("discarding a persisted render assignment at startup: authorization tuple did not match this node's held Cue catalog", "surface_id", a.SurfaceID, "reason", decision.Reason)
+				reason := decision.Reason
+				if err := assignmentStore.Remove(a.SurfaceID); err != nil {
+					// The surface still ends up StateFailed either way (never
+					// half-cleared), but a failed disk write here means the
+					// discarded assignment is still ON DISK and would resume
+					// again next boot if the underlying disk problem clears
+					// without an operator ever having been told — a bare log
+					// Warn is easy to miss, so the state reason itself names
+					// it, matching the "state with evidence, never a silent
+					// no-op" posture every other refusal in this seam follows.
+					logger.Warn("failed to remove a discarded render assignment from disk", "surface_id", a.SurfaceID, "error", err)
+					reason = fmt.Sprintf("%s (also failed to remove the discarded assignment from disk: %v)", reason, err)
+				}
+				sup.MarkResumeFailed(a.SurfaceID, reason)
+				continue
+			}
+
 			var params map[string]any
 			if err := json.Unmarshal(a.RawParams, &params); err != nil {
 				logger.Warn("skipping a persisted render assignment with unparseable params", "surface_id", a.SurfaceID, "error", err)
@@ -253,7 +292,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, time.Now, logger)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
 	if err != nil {

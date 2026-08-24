@@ -86,13 +86,14 @@ var ErrPublishNotAuthorized = errors.New("broker: publish rejected by broker (no
 // is expected to map it to its own "unconfirmed" step outcome.
 var ErrResponseDeadlineExceeded = errors.New("broker: deadline exceeded waiting for a live matching response")
 
-// ErrResponseFailedBeforePublish wraps any error AwaitResponse returns
-// before it calls Publish: deadline validation, response-topic validation,
-// a Match nil check, a broker-unavailable subscribe, a rejected SUBSCRIBE,
-// or ctx canceled during subscribe. A caller uses errors.Is against this to
-// tell "nothing reached the wire" from a failure at or after the publish
-// call, which is what determines whether dispatch evidence such as
-// PublishAttempted and dispatchedAt may be recorded as non-null.
+// ErrResponseFailedBeforePublish wraps any error AwaitResponse returns for
+// which nothing reached the wire: deadline validation, response-topic
+// validation, a Match nil check, a broker-unavailable subscribe, a
+// rejected SUBSCRIBE, ctx canceled during subscribe, or the Publish call
+// itself failing. A caller uses errors.Is against this to tell "nothing
+// reached the wire" from a failure at or after a successful publish, which
+// is what determines whether dispatch evidence such as PublishAttempted
+// and dispatchedAt may be recorded as non-null.
 var ErrResponseFailedBeforePublish = errors.New("broker: response wait failed before any publish was attempted")
 
 // ErrInvalidResponseTopic is wrapped by the error AwaitResponse returns
@@ -573,12 +574,13 @@ func (b *BrokerManager) releaseResponseWaiter(w *pendingWaiter) {
 // On success the returned Message is the live delivery that matched, with
 // Retained always false. On failure the zero Message is returned alongside
 // an error: [ErrResponseDeadlineExceeded] (wrapped, naming the topic and
-// deadline) if Deadline elapsed with nothing matching,
-// [ErrBrokerUnavailable] or a subscribe/publish error if either the
-// subscribe or the publish itself failed, or ctx's own error if ctx was
-// canceled first. These are always distinguishable with errors.Is —
-// AwaitResponse never reports success for a deadline expiry, and never
-// returns a bare error with no stated reason.
+// deadline) if Deadline elapsed with nothing matching, or
+// [ErrResponseFailedBeforePublish] (wrapped, alongside [ErrBrokerUnavailable]
+// or the underlying subscribe/publish error) if either the subscribe or
+// the publish itself failed, or ctx's own error if ctx was canceled first.
+// These are always distinguishable with errors.Is — AwaitResponse never
+// reports success for a deadline expiry, and never returns a bare error
+// with no stated reason.
 func (b *BrokerManager) AwaitResponse(ctx context.Context, req ResponseRequest) (Message, error) {
 	if req.Deadline <= 0 {
 		return Message{}, fmt.Errorf("%w: broker: AwaitResponse deadline must be positive, got %v", ErrResponseFailedBeforePublish, req.Deadline)
@@ -601,7 +603,11 @@ func (b *BrokerManager) AwaitResponse(ctx context.Context, req ResponseRequest) 
 	// the publish and wrongly discarded by step 5 above.
 	publishedAt := time.Now()
 	if err := b.Publish(ctx, req.PublishTopic, req.PublishQoS, req.PublishRetain, req.PublishPayload); err != nil {
-		return Message{}, fmt.Errorf("publishing to %q while awaiting response on %q: %w", req.PublishTopic, req.ResponseTopic, err)
+		// The publish call itself failing means nothing reached the wire,
+		// the identical outcome a failed subscribe already reports —
+		// wrapped in the same sentinel so every caller's existing
+		// errors.Is check classifies it correctly.
+		return Message{}, fmt.Errorf("%w: publishing to %q while awaiting response on %q: %w", ErrResponseFailedBeforePublish, req.PublishTopic, req.ResponseTopic, err)
 	}
 
 	deadlineAt := publishedAt.Add(req.Deadline)

@@ -1812,6 +1812,23 @@ func New(deps Dependencies, opts Options) *API {
 	// doc comment — so this is not a route ordering hazard.
 	mux.HandleFunc("GET /api/v1/assets/manifest", h.readAnyGuard(showConfigReadScopes, h.handleAssetManifest))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/assets", h.readAnyGuard(showConfigReadScopes, h.handleNodeAssetManifest))
+
+	// TRACK-H-H3-SPEC.md §4: the resolved Cue catalog read route and its
+	// per-node acknowledgement. GET stays under observation:read (the
+	// spec's own posture, matching every other FPP/observation read
+	// surface — NOT showConfigReadScopes, which is show.action/show.macro's
+	// own posture, not this seam's). POST is node-facing ingestion behind
+	// node:observe (cuecatalog.go's own doc comment), never config:write —
+	// an acknowledgement is not a configuration write.
+	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/cue-catalog", h.readGuard(identity.ScopeObservationRead, h.handleGetNodeCueCatalog))
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/acknowledge", h.writeGuard(&scopeNodeObserve, h.handlePostNodeCueCatalogAcknowledge))
+	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
+	// resolve, dispatch cuecatalog.deploy, and record the node's own
+	// reported revision through the same PutNodeCueCatalogAck path the
+	// acknowledge route above uses. cuecatalog:deploy (admin only),
+	// matching scopeCueCatalogDeploy's own doc comment on why it mints a
+	// dedicated scope rather than reusing asset:write.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/deploy", h.writeGuard(&scopeCueCatalogDeploy, h.handlePostNodeCueCatalogDeploy))
 	// GET /api/v1/resolume/recovery (Track D seam D-3a): the open read —
 	// never gated, per ADR-024's reads-stay-open posture and the build
 	// contract §1.3's own "the dashboard renders with no session"

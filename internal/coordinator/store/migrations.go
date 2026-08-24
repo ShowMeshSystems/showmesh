@@ -51,6 +51,7 @@ var migrations = []migration{
 	{version: 14, sql: schemaV14},
 	{version: 15, sql: schemaV15},
 	{version: 16, sql: schemaV16},
+	{version: 17, sql: schemaV17},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1278,6 +1279,26 @@ CREATE TABLE fpp_instance_uuid_observations (
 -- by uuid rather than by this table's primary key.
 CREATE INDEX fpp_instance_uuid_observations_by_uuid
     ON fpp_instance_uuid_observations (uuid);
+`
+
+// schemaV17 is Track H seam H3's own migration: the coordinator-side store
+// for a node's cue-catalog acknowledgement (TRACK-H-H3-SPEC.md section 4),
+// mirroring node_asset_reports' exact shape (schemaV8, node_assets.go) —
+// one row per node, upserted, so "the revision this node last reported
+// holding" is a fact independent of whatever the coordinator resolves NOW.
+// show_id and generation are stored alongside revision as the node's own
+// evidence for what it was acknowledging, not re-derived from the
+// coordinator's current state: an acknowledgement is a report of a past
+// fact, and the comparison against "what the coordinator resolves now"
+// happens at read time (assetsync/cuecatalog.go), never at write time.
+const schemaV17 = `
+CREATE TABLE node_cue_catalog_ack (
+    node_id         TEXT PRIMARY KEY,
+    revision        TEXT NOT NULL,
+    show_id         TEXT NOT NULL,
+    generation      INTEGER NOT NULL,
+    acknowledged_at TEXT NOT NULL
+);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across
