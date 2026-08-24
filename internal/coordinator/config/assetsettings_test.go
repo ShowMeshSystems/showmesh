@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -163,5 +164,116 @@ func TestValidateAssetSettingsRejectsMissingHost(t *testing.T) {
 	s.ContentBaseURL = "https:///path"
 	if err := ValidateAssetSettings(s); err == nil {
 		t.Error("ValidateAssetSettings() error = nil, want an error for a URL with no host")
+	}
+}
+
+// TestContentBaseURLIsLoopback pins the exact set of hosts this predicate
+// must catch (a node fetching from any of these fetches from itself, or
+// from nothing at all) and the exact set it must not.
+func TestContentBaseURLIsLoopback(t *testing.T) {
+	loopback := []string{
+		"http://localhost:8080",
+		"http://LOCALHOST:8080",
+		"http://127.0.0.1:8080",
+		"http://127.0.0.5:8080",
+		"http://[::1]:8080",
+		"http://0.0.0.0:8080",
+		"http://[::]:8080",
+		"http://0x7f000001:8080",
+		"http://2130706433:8080",
+		"http://017700000001:8080",
+		"http://127.1:8080",
+		"http://127.000.000.001:8080",
+		"http://0:8080",
+		"http://localhost.:8080",
+		"http://127.0.1:8080",
+		"http://0x7f.0.0.1:8080",
+		"http://127.0x1:8080",
+		"http://0177.1:8080",
+	}
+	for _, u := range loopback {
+		if !ContentBaseURLIsLoopback(u) {
+			t.Errorf("ContentBaseURLIsLoopback(%q) = false, want true", u)
+		}
+	}
+
+	routable := []string{
+		"",
+		"http://coordinator:8080",
+		"http://coordinator.example.lan:8080",
+		"http://192.168.1.50:8080",
+		"not a url",
+		"http://8.8.8.8:8080",
+		"http://203.0.113.5:8080",
+		"http://999.1:8080",
+		"http://134744072:8080",
+		"http://4294967295:8080",
+		"http://0x100000000:8080",
+		"http://0.0.0.256:8080",
+		"http://1.2.3.4.5:8080",
+		"http://08:8080",
+		"http://0x:8080",
+	}
+	for _, u := range routable {
+		if ContentBaseURLIsLoopback(u) {
+			t.Errorf("ContentBaseURLIsLoopback(%q) = true, want false", u)
+		}
+	}
+}
+
+// TestValidateAssetSettingsRejectsLoopbackContentBaseURL pins the new
+// refusal: a node fetching asset bytes from a loopback address fetches
+// from itself, not from the coordinator, and this must be caught before it
+// ever reaches a fleet.
+func TestValidateAssetSettingsRejectsLoopbackContentBaseURL(t *testing.T) {
+	for _, u := range []string{
+		"http://localhost:8080",
+		"http://127.0.0.1:8080",
+		"http://0.0.0.0:8080",
+		"http://0x7f000001:8080",
+		"http://2130706433:8080",
+		"http://017700000001:8080",
+		"http://127.1:8080",
+		"http://127.000.000.001:8080",
+		"http://0:8080",
+	} {
+		s := testAssetSettings
+		s.ContentBaseURL = u
+		if err := ValidateAssetSettings(s); err == nil {
+			t.Errorf("ValidateAssetSettings() error = nil for contentBaseUrl %q, want an error", u)
+		}
+	}
+}
+
+// TestValidateAssetSettingsAcceptsRoutableContentBaseURL proves the new
+// loopback check does not reject a legitimate, remotely-reachable value.
+func TestValidateAssetSettingsAcceptsRoutableContentBaseURL(t *testing.T) {
+	s := testAssetSettings
+	s.ContentBaseURL = "http://coordinator:8080"
+	if err := ValidateAssetSettings(s); err != nil {
+		t.Errorf("ValidateAssetSettings() error = %v, want nil for a routable contentBaseUrl", err)
+	}
+}
+
+// TestValidateAssetSettingsLoopbackErrorNamesTheShowmeshctlRemedyFirst pins
+// commit e2d6c47's ordering convention (see fppmqtt_test.go's identical
+// assertion for ValidateFPPMQTTHostIDs): the refusal must lead with the
+// `showmeshctl assets settings set` remedy and name
+// SHOWMESH_ASSET_CONTENT_BASE_URL only as a trailing hedge for a
+// coordinator that has not migrated yet.
+func TestValidateAssetSettingsLoopbackErrorNamesTheShowmeshctlRemedyFirst(t *testing.T) {
+	s := testAssetSettings
+	s.ContentBaseURL = "http://localhost:8080"
+	err := ValidateAssetSettings(s)
+	if err == nil {
+		t.Fatal("ValidateAssetSettings() error = nil, want an error for a loopback contentBaseUrl")
+	}
+	got := err.Error()
+	remedyIdx := strings.Index(got, "showmeshctl assets settings set")
+	if remedyIdx < 0 {
+		t.Fatalf("error = %q, want it to lead with the `showmeshctl assets settings set` remedy", got)
+	}
+	if idx := strings.Index(got, "SHOWMESH_ASSET_CONTENT_BASE_URL"); idx >= 0 && idx < remedyIdx {
+		t.Errorf("error = %q, want the showmeshctl remedy to lead and SHOWMESH_ASSET_CONTENT_BASE_URL to appear only as a trailing hedge", got)
 	}
 }

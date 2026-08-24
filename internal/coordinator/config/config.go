@@ -1275,6 +1275,21 @@ func ValidateResolumeIDAgainstFPPEndpoints(resolumeID string, endpoints []FPPEnd
 // this function gates the rest of its checks on — AssetDir and
 // AssetMaxUploadBytes matter to the (separately built) upload/store
 // surface regardless of whether the sync service is enabled.
+//
+// Deliberately NOT checked here: [ContentBaseURLIsLoopback]. A coordinator
+// that has never migrated (ADR-039) has no principal to blame for a
+// startup refusal over a value that is only WRONG on a multi-host
+// deployment. test/integration's own single-process harness legitimately
+// points this variable at its own http://127.0.0.1:<port> (see
+// test/integration/assets_test.go's startAssetCoordinator), so a refusal
+// here would reject a configuration this project's own test suite relies
+// on being valid. [ValidateAssetSettings] enforces the same rule instead,
+// on the two paths that DO have an accountable operator (the API PUT and
+// `showmeshctl assets settings set`); this env path's own loopback value
+// gets a startup WARNING instead, logged once the store's authoritative
+// assets.settings is resolved (internal/coordinator's Run, right after
+// resolveAuthoritativeAssetSettings), which also catches an
+// already-migrated store nobody has fixed since.
 func validateAssetConfig(c Config) error {
 	if c.AssetDir == "" {
 		return fmt.Errorf("%s must not be empty", envAssetDir)
