@@ -52,6 +52,7 @@ var migrations = []migration{
 	{version: 15, sql: schemaV15},
 	{version: 16, sql: schemaV16},
 	{version: 17, sql: schemaV17},
+	{version: 18, sql: schemaV18},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1301,7 +1302,7 @@ CREATE TABLE node_cue_catalog_ack (
 );
 `
 
-// schemaV17 is Track H seam H4's own migration: entry_occurrence_sequence
+// schemaV18 is Track H seam H4's own migration: entry_occurrence_sequence
 // on fpp_playlist_entry_observations, the entry-START identity
 // [cueactivate.activationID] (internal/coordinator/cueactivate/decide.go)
 // hashes so a looping FPP playlist re-activates its Cues rather than
@@ -1326,7 +1327,7 @@ CREATE TABLE node_cue_catalog_ack (
 // (none exist in practice, this table is never seeded outside a live
 // coordinator) would read as occurrence 0, which is a safe, ordinary value
 // here rather than a sentinel.
-const schemaV17 = `
+const schemaV18 = `
 ALTER TABLE fpp_playlist_entry_observations
     ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
 `

@@ -600,7 +600,7 @@ func (d Dependencies) withDefaults() Dependencies {
 	}
 	if d.AssetFetchFailures == nil {
 		d.AssetFetchFailures = noAssetFetchFailureSource{}
-
+	}
 	if d.CueActivationNudger == nil {
 		d.CueActivationNudger = noCueActivationNudger{}
 	}

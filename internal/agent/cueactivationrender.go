@@ -127,7 +127,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	params["catalogRevision"] = act.CatalogRevision
 
 	// Validate the NEW file before anything about the OLD one is touched.
-	spec, f, parsedA, _, err := buildAssignedSpec(action, o.assetDir, a.SurfaceID, params)
+	spec, f, parsedA, _, err := buildAssignedSpec(action, o.assetDir, a.SurfaceID, params, o.logger)
 	if err != nil {
 		return fmt.Errorf("surface %q: %w", a.SurfaceID, err)
 	}
