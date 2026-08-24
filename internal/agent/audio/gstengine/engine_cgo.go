@@ -249,27 +249,30 @@ func (e *Engine) buildPipeline() error {
 	if interleave == nil {
 		return errors.New("could not create interleave")
 	}
-	// positionBits is one GstAudioChannelPosition bitmask per output
-	// channel (see [channelPositionBits]), or nil when e.cfg.ChannelCount
-	// has no standard positioned fallback layout. channel-positions-from-input
-	// true only when positionBits is set: each channel's own capsfilter
-	// below then carries an explicit single-bit channel-mask, and
-	// interleave adopts it verbatim rather than emitting the unpositioned
-	// mask a positioned sink (e.g. a raw hw: ALSA route) refuses.
-	positionBits := channelPositionBits(e.cfg.ChannelCount)
-	interleave.SetObjectProperty("channel-positions-from-input", len(positionBits) > 0)
-	if !bin.Add(interleave) {
-		return errors.New("could not add interleave to pipeline")
-	}
 
 	sink, err := newSinkFactoryElement(e.cfg)
 	if err != nil {
 		return err
 	}
+	// positionBits is one GstAudioChannelPosition bitmask per output
+	// channel (see [channelPositionBits]), or nil when the sink itself
+	// does not require a positioned layout at e.cfg.ChannelCount --
+	// discovered by querying sink's own accepted caps (see
+	// [probeSinkChannelPositions]) rather than assumed from the channel
+	// count alone. channel-positions-from-input is true only when
+	// positionBits is set: each channel's own capsfilter below then
+	// carries an explicit single-bit channel-mask, and interleave adopts
+	// it verbatim rather than emitting the unpositioned mask a positioned
+	// sink (e.g. a raw hw: ALSA route) refuses.
+	positionBits := probeSinkChannelPositions(sink, e.cfg.ChannelCount, e.cfg.SampleRate)
+	interleave.SetObjectProperty("channel-positions-from-input", len(positionBits) > 0)
+	if !bin.Add(interleave) {
+		return errors.New("could not add interleave to pipeline")
+	}
 	if !bin.Add(sink) {
 		return errors.New("could not add sink to pipeline")
 	}
-	if err := linkInterleaveToSink(bin, interleave, sink, e.cfg.ChannelCount); err != nil {
+	if err := linkInterleaveToSink(bin, interleave, sink, e.cfg.ChannelCount, positionBits); err != nil {
 		return err
 	}
 
@@ -389,6 +392,22 @@ var newSinkFactoryElement = func(cfg Config) (gst.Element, error) {
 	return sink, nil
 }
 
+// channelCapsString builds the single-channel caps string every chain
+// feeding one of interleave's request pads negotiates: the fixed interior
+// format and rate, and, when maskBit is nonzero, an explicit
+// channel-mask claiming exactly the one [channelPositionBits] position
+// assigned to that channel. maskBit is 0 for a sink
+// [probeSinkChannelPositions] found no positioned layout for, in which
+// case the caps carry no mask and interleave falls back to its own
+// unpositioned output.
+func channelCapsString(sampleRate int, maskBit uint64) string {
+	caps := fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, sampleRate)
+	if maskBit != 0 {
+		caps += fmt.Sprintf(",channel-mask=(bitmask)0x%x", maskBit)
+	}
+	return caps
+}
+
 // linkInterleaveToSink connects interleave's output to sink through an
 // audioconvert/audioresample pair, so the sink negotiates its own format
 // and rate rather than being handed the interior pipeline's fixed
@@ -405,42 +424,36 @@ var newSinkFactoryElement = func(cfg Config) (gst.Element, error) {
 // is not a special case here, it just rides the same interleave-to-sink
 // boundary every other channel does.
 //
-// channelCount is pinned in a capsfilter placed after the resampler.
-// This does not make every channel-count mismatch fail loudly on its
-// own -- for a channelCount [channelPositionBits] has no fallback layout
-// for, interleave's own channel-positions-from-input=false still emits
-// an unpositioned channel-mask, and audioconvert already refuses to
-// remix one unpositioned multi-channel layout onto another, pinned
-// capsfilter or not (measured). What the pin is proven to stop is
-// narrower and still real: a single unpositioned channel has no such
-// ambiguity, so without this capsfilter audioconvert will silently
-// upmix a mono program or the LTC/silence channels onto a wider fixed
-// sink layout instead of refusing it (measured) -- exactly the kind of
-// silent channel reassignment a show's output layout must never get.
-// channelCapsString builds the single-channel caps string every chain
-// feeding one of interleave's request pads negotiates: the fixed interior
-// format and rate, and, when maskBit is nonzero, an explicit
-// channel-mask claiming exactly the one [channelPositionBits] position
-// assigned to that channel. maskBit is 0 for a channel count
-// [channelPositionBits] has no fallback layout for, in which case the
-// caps carry no mask and interleave falls back to its own unpositioned
-// output.
-func channelCapsString(sampleRate int, maskBit uint64) string {
-	caps := fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, sampleRate)
-	if maskBit != 0 {
-		caps += fmt.Sprintf(",channel-mask=(bitmask)0x%x", maskBit)
-	}
-	return caps
-}
-
-func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCount int) error {
+// channelCount, and positionBits' combined mask when positionBits is
+// set, are pinned in a capsfilter placed after the resampler.
+// Pinning channelCount alone is not enough once interleave can emit a
+// positioned layout: audioconvert refuses to remix one unpositioned
+// layout onto another (measured, and still what protects an
+// unpositioned channelCount this sink has no fallback for), but given
+// two positioned layouts it will build a downmix/remix matrix between
+// them rather than refuse -- measured directly: with only channelCount
+// pinned, a sink fixed to a positioned mask interleave was NOT assigned
+// still negotiates, and each output channel becomes a silent blend of
+// several input channels instead of the exact one it was assigned. The
+// mask pin turns that into a loud link-time refusal instead, because a
+// show channel silently landing on the wrong physical output, or
+// several blended together, is worse than this route failing to open.
+func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCount int, positionBits []uint64) error {
 	convert := gst.ElementFactoryMake("audioconvert", "sink-convert")
 	resample := gst.ElementFactoryMake("audioresample", "sink-resample")
 	caps := gst.ElementFactoryMake("capsfilter", "sink-caps")
 	if convert == nil || resample == nil || caps == nil {
 		return errors.New("could not create sink-side format adaptation chain")
 	}
-	caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,channels=%d", channelCount)))
+	sinkCaps := fmt.Sprintf("audio/x-raw,channels=%d", channelCount)
+	if len(positionBits) > 0 {
+		var mask uint64
+		for _, bit := range positionBits {
+			mask |= bit
+		}
+		sinkCaps += fmt.Sprintf(",channel-mask=(bitmask)0x%x", mask)
+	}
+	caps.SetObjectProperty("caps", gst.CapsFromString(sinkCaps))
 	for _, el := range []gst.Element{convert, resample, caps} {
 		if !bin.Add(el) {
 			return errors.New("could not add sink format adaptation element to pipeline")
