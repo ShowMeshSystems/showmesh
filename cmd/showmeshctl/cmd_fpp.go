@@ -36,6 +36,12 @@ var fppWriteSubcommands = map[string]func(args []string, stdout, stderr io.Write
 	// side evidence — but it shares this map's dispatch shape (a single
 	// write subcommand keyed by verb name) and its own fpp:command scope.
 	"reset-observation-sequence": cmdFPPResetObservationSequence,
+	// acknowledge-instance-uuid-change shares this map's dispatch
+	// shape for the identical reason reset-observation-sequence does: it
+	// clears coordinator-side evidence (here, a conflict marker) rather
+	// than dispatching an FPP command, behind config:write rather than
+	// fpp:command, see cmd_fpp_acknowledge_instance_uuid_change.go.
+	"acknowledge-instance-uuid-change": cmdFPPAcknowledgeInstanceUUIDChange,
 }
 
 func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -86,6 +92,7 @@ func cmdFPP(args []string, stdout, stderr io.Writer, clock func() time.Time) int
 		_, _ = fmt.Fprintln(stderr, "  prev-playlist-item         <instance-id>")
 		_, _ = fmt.Fprintln(stderr, "  set-volume                 <instance-id> <volume 0-100>")
 		_, _ = fmt.Fprintln(stderr, "  reset-observation-sequence --confirm <instance-id>  (TRACK-H-H2-SPEC.md §5.1)")
+		_, _ = fmt.Fprintln(stderr, "  acknowledge-instance-uuid-change --confirm <instance-id> ")
 		_, _ = fmt.Fprintln(stderr, "\n<verb> playlist-definitions dispatches FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3's")
 		_, _ = fmt.Fprintln(stderr, "read-only playlist definition surface:")
 		_, _ = fmt.Fprintln(stderr, "  playlist-definitions list")

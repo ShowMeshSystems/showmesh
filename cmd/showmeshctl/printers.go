@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -157,12 +158,29 @@ func printFPPTable(w io.Writer, resp fppResponse) {
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tENDPOINT\tHEALTH\tLAST POLL\tLAST POLL ERROR")
+	_, _ = fmt.Fprintln(tw, "INSTANCE ID\tENDPOINT\tHEALTH\tLAST POLL\tLAST POLL ERROR\tINSTANCE UUID")
 	for _, f := range resp.Instances {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			f.InstanceID, f.Endpoint, healthGlyph(f.Health), timeOrDash(f.LastPollAt), stringOrDash(f.LastPollError))
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			f.InstanceID, f.Endpoint, healthGlyph(f.Health), timeOrDash(f.LastPollAt), stringOrDash(f.LastPollError),
+			stringOrDash(f.InstanceUUID))
 	}
 	_ = tw.Flush()
+
+	// the changed-uuid and duplicate-uuid rules rendered as explicit, unmissable lines, never
+	// folded silently into the table above, which has no room to explain
+	// WHY a uuid changed or WHICH other endpoint shares it.
+	for _, f := range resp.Instances {
+		if f.InstanceUUIDChange != nil {
+			_, _ = fmt.Fprintf(w, "CONFLICT: %s now reports instance uuid %s, previously %s (changed %s), "+
+				"acknowledge with \"showmeshctl fpp acknowledge-instance-uuid-change %s\" once verified\n",
+				f.InstanceID, stringOrDash(f.InstanceUUID), f.InstanceUUIDChange.PreviousUUID,
+				f.InstanceUUIDChange.ChangedAt.Format(time.RFC3339), f.InstanceID)
+		}
+		if len(f.DuplicateInstanceUUIDEndpointIDs) > 0 {
+			_, _ = fmt.Fprintf(w, "DUPLICATE: %s reports the same instance uuid (%s) as: %s\n",
+				f.InstanceID, stringOrDash(f.InstanceUUID), strings.Join(f.DuplicateInstanceUUIDEndpointIDs, ", "))
+		}
+	}
 
 	for _, f := range resp.Instances {
 		_, _ = fmt.Fprintf(w, "\n%s observations:\n", f.InstanceID)

@@ -275,6 +275,10 @@ export function makeMainInstance(overrides: Partial<FPPInstance> = {}): FPPInsta
     observations,
     lastPollAt: FLEET_NOW,
     lastPollError: null,
+    instanceUuid: null,
+    instanceUuidFirstObservedAt: null,
+    instanceUuidChange: null,
+    duplicateInstanceUuidEndpointIds: [],
     ...overrides,
   }
 }
@@ -348,6 +352,10 @@ export function makeRemote01Instance(overrides: Partial<FPPInstance> = {}): FPPI
     observations,
     lastPollAt: FLEET_NOW,
     lastPollError: null,
+    instanceUuid: null,
+    instanceUuidFirstObservedAt: null,
+    instanceUuidChange: null,
+    duplicateInstanceUuidEndpointIds: [],
     ...overrides,
   }
 }
@@ -430,6 +438,10 @@ export function makeRemote04Instance(overrides: Partial<FPPInstance> = {}): FPPI
     observations,
     lastPollAt: FLEET_NOW,
     lastPollError: null,
+    instanceUuid: null,
+    instanceUuidFirstObservedAt: null,
+    instanceUuidChange: null,
+    duplicateInstanceUuidEndpointIds: [],
     ...overrides,
   }
 }
@@ -487,6 +499,10 @@ export function makeGhostFpp01Instance(overrides: Partial<FPPInstance> = {}): FP
     observations,
     lastPollAt: null,
     lastPollError: null,
+    instanceUuid: null,
+    instanceUuidFirstObservedAt: null,
+    instanceUuidChange: null,
+    duplicateInstanceUuidEndpointIds: [],
     ...overrides,
   }
 }

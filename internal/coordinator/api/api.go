@@ -1408,6 +1408,13 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/fpp", h.readGuard(identity.ScopeFPPRead, h.handleFPPList))
 	mux.HandleFunc("GET /api/v1/fpp/{instanceId}", h.readGuard(identity.ScopeFPPRead, h.handleFPPInstance))
 
+	// POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge:
+	// clears a pending, unacknowledged instance uuid change (the changed-uuid rule) ,
+	// an operator-authored inventory decision, so it shares
+	// scopeConfigWrite with POST/DELETE /nodes/{nodeId}/declaration
+	// rather than fpp:command's device-facing scope.
+	mux.HandleFunc("POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge", h.writeGuard(&scopeConfigWrite, h.handleAcknowledgeFPPInstanceUUIDChange))
+
 	// POST /api/v1/fpp/{instanceId}/commands (Step 7 seam C): the first
 	// write endpoint this project has ever shipped, and the only one
 	// touching FPP. Behind fpp:command (ADR-024 decision 4, defined by

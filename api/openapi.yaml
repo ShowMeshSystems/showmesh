@@ -460,6 +460,65 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /fpp/{instanceId}/instance-uuid/acknowledge:
+    parameters:
+      - name: instanceId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Same ID syntax as a node ID (contract section 7).
+    post:
+      operationId: acknowledgeFPPInstanceUUIDChange
+      summary: Acknowledge a pending FPP instance uuid change
+      description: >-
+        A coordinator-local state change behind `config:write`, the same
+        scope `POST`/`DELETE /nodes/{nodeId}/declaration` use, because
+        clearing this conflict is an operator-authored inventory decision,
+        not a command sent to any device. Clears the ONLY marker that a
+        configured FPP endpoint's observed instanceUuid changed since it
+        was last seen (an SD card clone, a restored backup, or a swapped
+        controller). Never happens automatically, and never changes the
+        recorded instanceUuid itself, only the conflict marker. Refused
+        with `409` when the instance has no pending unacknowledged change.
+        ADR-024 decision 11's same-transaction rule applies in full.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcknowledgeFPPInstanceUUIDChangeResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the authenticated principal does not hold `config:write`
+            (ADR-024 decision 4, `detail` names the missing scope), or a
+            cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (ADR-024 decision 6) - a
+            bearer-token-authenticated request never receives the latter.
+            Both share this one `Problem`-shaped response.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /nodes/{nodeId}/render/surfaces/{surfaceId}/apply:
     post:
       operationId: dispatchRenderSurfaceApply
@@ -7391,7 +7450,8 @@ components:
         ever rendered).
       required:
         [instanceId, endpoint, health, observations, lastPollAt,
-         lastPollError]
+         lastPollError, instanceUuid, instanceUuidFirstObservedAt,
+         instanceUuidChange, duplicateInstanceUuidEndpointIds]
       properties:
         instanceId:
           type: string
@@ -7410,6 +7470,73 @@ components:
           format: date-time
         lastPollError:
           type: [string, "null"]
+        instanceUuid:
+          type: [string, "null"]
+          description: >-
+            FPP's own SystemUUID, as most recently reported by this
+            endpoint (decoded off the fpp.uuid signal, and off the FPP
+            plugin's playlist-entry observations). Null until this
+            endpoint has actually reported a uuid at least once; never
+            populated from a not_collected placeholder.
+        instanceUuidFirstObservedAt:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When this endpoint's CURRENT instanceUuid was first observed.
+            Null exactly when instanceUuid is null.
+        instanceUuidChange:
+          oneOf:
+            - $ref: "#/components/schemas/FPPInstanceUUIDChange"
+            - type: "null"
+          description: >-
+            Non-null exactly when this endpoint has a PENDING,
+            unacknowledged uuid change: it previously reported a
+            different instanceUuid than its current one. A uuid change on
+            a known endpoint (an SD card clone, a restored backup, a
+            swapped controller) is a visible conflict, never a silent
+            re-association, this field stays non-null until an operator
+            explicitly acknowledges it via
+            POST /fpp/{instanceId}/instance-uuid/acknowledge.
+        duplicateInstanceUuidEndpointIds:
+          type: array
+          description: >-
+            Every OTHER currently configured FPP instance reporting the
+            SAME instanceUuid as this one, a stated finding, never a
+            silently overwritten row. Empty, never null, when there is no
+            duplicate.
+          items:
+            type: string
+    FPPInstanceUUIDChange:
+      type: object
+      description: >-
+        The uuid an FPP instance reported immediately before its current
+        one, and when that change was first observed.
+      required: [previousUuid, changedAt]
+      properties:
+        previousUuid:
+          type: string
+        changedAt:
+          type: string
+          format: date-time
+    AcknowledgeFPPInstanceUUIDChangeResponse:
+      type: object
+      description: The body of `POST /fpp/{instanceId}/instance-uuid/acknowledge`.
+      required: [serverTime, instance]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        instance:
+          description: >-
+            Null exactly when the acknowledgment committed but the
+            instance is no longer among the currently configured
+            fpp.endpoints (an operator removed it between the write and
+            this response rendering it). The acknowledgment itself still
+            succeeded and is not undone; there is just no current
+            FPPInstance view left to render. Never null otherwise.
+          oneOf:
+            - $ref: "#/components/schemas/FPPInstance"
+            - type: "null"
     Event:
       type: object
       description: >-
@@ -11608,10 +11735,19 @@ components:
         fields carry no meaningful position.
       required:
         [instanceUuid, schemaVersion, sequence, action, observedAt,
-         coalescedSincePreviousAcknowledged, receivedAt]
+         coalescedSincePreviousAcknowledged, receivedAt, endpointId]
       properties:
         instanceUuid:
           type: string
+        endpointId:
+          type: [string, "null"]
+          description: >-
+            the configured fpp.endpoints id whose most recently
+            observed instance uuid matches instanceUuid, resolved
+            best-effort at read time. Null when no currently configured
+            endpoint has reported this uuid, or when more than one has (a
+            duplicate, see GET /fpp's duplicateInstanceUuidEndpointIds ,
+            makes the correlation ambiguous).
         schemaVersion:
           type: integer
         sequence:

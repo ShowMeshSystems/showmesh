@@ -37,6 +37,11 @@ type fppPlaylistEntryObservation struct {
 	ObservedAt                         string `json:"observedAt"`
 	CoalescedSincePreviousAcknowledged int64  `json:"coalescedSincePreviousAcknowledged"`
 	ReceivedAt                         string `json:"receivedAt"`
+
+	// EndpointID is the configured fpp.endpoints id this
+	// observation's instanceUuid resolves to, best-effort. Nil when no
+	// single currently configured endpoint owns this uuid.
+	EndpointID *string `json:"endpointId"`
 }
 
 type fppPlaylistEntryObservationsResponse struct {
@@ -217,10 +222,13 @@ func cmdFPPPlaylistEntryReconciliation(args []string, stdout, stderr io.Writer, 
 
 func printFPPPlaylistEntryObservationsTable(w io.Writer, resp fppPlaylistEntryObservationsResponse) {
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "INSTANCE\tPLAYLIST\tSECTION\tACTION\tUNAVAILABLE\tRECEIVED")
+	// ENDPOINT is the fpp.endpoints id this instanceUuid
+	// resolves to, best-effort, "-" when no single currently configured
+	// endpoint owns this uuid (never yet observed there, or a duplicate).
+	_, _ = fmt.Fprintln(tw, "INSTANCE\tENDPOINT\tPLAYLIST\tSECTION\tACTION\tUNAVAILABLE\tRECEIVED")
 	for _, o := range resp.Observations {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			o.InstanceUUID, o.PlaylistName, o.Section, o.Action, o.Unavailable, o.ReceivedAt)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			o.InstanceUUID, stringOrDash(o.EndpointID), o.PlaylistName, o.Section, o.Action, o.Unavailable, o.ReceivedAt)
 	}
 	_ = tw.Flush()
 }

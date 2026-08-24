@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,7 +20,9 @@ import (
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
@@ -1656,6 +1659,93 @@ func TestStreamFPPChangedResolvesMultiSourceDuplicates(t *testing.T) {
 
 	if n := strings.Count(data, `"signal":"fpp.status"`); n != 1 {
 		t.Fatalf("fpp.changed frame carries %d fpp.status entries for dup-01, want 1 — mapFPPInstance must resolve multi-source duplicates before the hub renders (Step 5 review finding 1); data: %s", n, data)
+	}
+}
+
+// TestStreamFPPPlaylistEntryChangedIncludesEndpointID is finding 1's
+// regression guard: GET
+// /api/v1/integrations/fpp/playlist-entry-observations enriches an
+// observation with the configured endpoint id that owns its instanceUuid
+// (fppobservations.go's handleListFPPPlaylistEntryObservations), and the
+// fppPlaylistEntry.changed stream frame for the SAME observation must
+// carry the identical endpointId rather than always rendering null, per
+// mapFPPPlaylistEntryObservation's own "both surfaces render one
+// instance's latest observation identically" doc comment.
+func TestStreamFPPPlaylistEntryChangedIncludesEndpointID(t *testing.T) {
+	dir := t.TempDir()
+	clock := fixedClock(testNow)
+	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(clock))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	svc := identity.NewService(st, clock, filepath.Join(dir, "data"), identity.WithLogger(testLogger()))
+
+	const instanceUUID = "11111111-1111-1111-1111-111111111111"
+	fpp := &mutableFPPLister{}
+	fpp.setViews([]FPPInstanceView{{
+		InstanceID: "front-yard",
+		Endpoint:   "http://10.0.1.20",
+		InstanceUUID: &store.FPPInstanceUUIDRecord{
+			EndpointID: "front-yard", UUID: instanceUUID,
+			FirstObservedAt: testNow, LastObservedAt: testNow,
+		},
+	}})
+
+	api := newStreamTestAPI(Dependencies{
+		Nodes: &fakeNodeLister{}, FPP: fpp, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+		Identity: svc, FPPObservations: st,
+	})
+
+	scheduler := mustCreatePrincipal(t, svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, svc, scheduler.ID)
+	if resp, body := mustPostObservation(t, api, fppObservationBody(t, instanceUUID, 1, "showmesh-test", "main", 0), token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("post observation: status = %d, want 200; body: %v", resp.StatusCode, body)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.Hub.Run(ctx)
+
+	srv := httptest.NewServer(api.Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("first event = %q, want stream.start", event)
+	}
+
+	api.Hub.Notify()
+	// The same render pass also announces the FPP instance itself
+	// (fpp.changed, its own first appearance) alongside
+	// fppPlaylistEntry.changed; order between resource kinds within one
+	// pass is not a contract this test cares about, so scan past
+	// whichever else arrives first.
+	var event, data string
+	for i := 0; i < 5; i++ {
+		event, data = readEventWithTimeout(t, r, 5*time.Second)
+		if event == "fppPlaylistEntry.changed" {
+			break
+		}
+	}
+	if event != "fppPlaylistEntry.changed" {
+		t.Fatalf("event = %q, want fppPlaylistEntry.changed; data: %s", event, data)
+	}
+
+	m := decodeMap(t, []byte(data))
+	obs, _ := m["observation"].(map[string]any)
+	if obs == nil {
+		t.Fatalf("frame carries no observation object; data: %s", data)
+	}
+	if got, want := obs["endpointId"], "front-yard"; got != want {
+		t.Fatalf("fppPlaylistEntry.changed observation.endpointId = %v, want %q; data: %s", got, want, data)
 	}
 }
 

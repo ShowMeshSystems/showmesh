@@ -125,6 +125,10 @@ export function makeFPPInstance(instanceId: string, overrides: Partial<FPPInstan
     observations: [],
     lastPollAt: NOW,
     lastPollError: null,
+    instanceUuid: null,
+    instanceUuidFirstObservedAt: null,
+    instanceUuidChange: null,
+    duplicateInstanceUuidEndpointIds: [],
     ...overrides,
   }
 }

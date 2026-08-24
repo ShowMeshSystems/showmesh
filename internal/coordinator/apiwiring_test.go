@@ -813,3 +813,167 @@ func countPortRows(obs []observation.Observation) int {
 type fixedFPPEndpoints []config.FPPEndpoint
 
 func (f fixedFPPEndpoints) Current(context.Context) []config.FPPEndpoint { return f }
+
+// --- fppSink records observed instance uuids; fppInstanceLister
+// surfaces a changed-uuid conflict and a duplicate-uuid finding ---
+
+// TestFPPSinkRecordsInstanceUUIDObservation proves the collector.Sink hook
+// (fppSink.recordInstanceUUIDs) actually persists the fpp.uuid signal
+// against the reporting endpoint, the gap
+// docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5 records: the
+// coordinator already decoded this value and discarded it.
+func TestFPPSinkRecordsInstanceUUIDObservation(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &fppSink{st: st, logger: testLogger()}
+
+	sink.RecordObservations(ctx, []observation.Observation{
+		mustMeasured(t, "front-yard", fpp.SignalUUID, "M4-uuid-a"),
+	}, false)
+
+	rec, err := st.GetFPPInstanceUUID(ctx, "front-yard")
+	if err != nil {
+		t.Fatalf("GetFPPInstanceUUID: %v", err)
+	}
+	if rec.UUID != "M4-uuid-a" {
+		t.Errorf("UUID = %q, want M4-uuid-a", rec.UUID)
+	}
+	if rec.HasUnacknowledgedChange() {
+		t.Errorf("HasUnacknowledgedChange() = true on first sighting, want false")
+	}
+}
+
+// TestFPPSinkIgnoresAbsentUUIDObservation proves an absence observation
+// (not_collected/collection_failed/unsupported, no Value at all) is
+// never mistaken for "this endpoint reported an empty uuid", which would
+// fabricate the changed-uuid rule's changed-uuid conflict out of a poll that simply
+// failed to reach the host.
+func TestFPPSinkIgnoresAbsentUUIDObservation(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sink := &fppSink{st: st, logger: testLogger()}
+
+	absent, err := observation.NotCollected(
+		observation.ResourceRef{Kind: observation.ResourceFPP, ID: "front-yard"},
+		fpp.SignalUUID, "no poll has completed yet",
+	)
+	if err != nil {
+		t.Fatalf("build not_collected observation: %v", err)
+	}
+	sink.RecordObservations(ctx, []observation.Observation{absent}, false)
+
+	if _, err := st.GetFPPInstanceUUID(ctx, "front-yard"); !errors.Is(err, store.ErrFPPInstanceUUIDNotFound) {
+		t.Errorf("GetFPPInstanceUUID after an absence observation: err = %v, want ErrFPPInstanceUUIDNotFound", err)
+	}
+}
+
+// TestFPPInstanceListerSurfacesChangedUUIDConflict is the changed-uuid rule end to end
+// through the read path GET /fpp actually uses: a changed uuid on a known
+// endpoint (an SD card clone, a restored backup, the ADR-025 case) must
+// render as a visible, unacknowledged conflict, never a silent
+// re-association.
+func TestFPPInstanceListerSurfacesChangedUUIDConflict(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "front-yard", "uuid-a", time.Now()); err != nil {
+		t.Fatalf("record first uuid: %v", err)
+	}
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "front-yard", "uuid-b", time.Now()); err != nil {
+		t.Fatalf("record second uuid: %v", err)
+	}
+
+	lister := fppInstanceLister{st: st, endpoints: fixedFPPEndpoints{{ID: "front-yard", URL: "http://10.0.1.20"}}}
+	views, err := lister.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("len(views) = %d, want 1", len(views))
+	}
+	fv := views[0]
+	if fv.InstanceUUID == nil {
+		t.Fatalf("InstanceUUID = nil, want a populated record")
+	}
+	if fv.InstanceUUID.UUID != "uuid-b" {
+		t.Errorf("InstanceUUID.UUID = %q, want uuid-b (the endpoint's current report)", fv.InstanceUUID.UUID)
+	}
+	if !fv.InstanceUUID.HasUnacknowledgedChange() {
+		t.Fatalf("HasUnacknowledgedChange() = false, want true, the changed uuid must be a visible conflict")
+	}
+	if fv.InstanceUUID.PreviousUUID != "uuid-a" {
+		t.Errorf("PreviousUUID = %q, want uuid-a", fv.InstanceUUID.PreviousUUID)
+	}
+}
+
+// TestFPPInstanceListerSurfacesDuplicateUUID is the duplicate-uuid rule end to end: two
+// currently configured endpoints reporting the SAME uuid must both
+// render the finding, and neither endpoint's own row is affected by the
+// other's.
+func TestFPPInstanceListerSurfacesDuplicateUUID(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "front-yard", "uuid-shared", time.Now()); err != nil {
+		t.Fatalf("record front-yard: %v", err)
+	}
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "back-yard", "uuid-shared", time.Now()); err != nil {
+		t.Fatalf("record back-yard: %v", err)
+	}
+
+	lister := fppInstanceLister{st: st, endpoints: fixedFPPEndpoints{
+		{ID: "front-yard", URL: "http://10.0.1.20"},
+		{ID: "back-yard", URL: "http://10.0.1.21"},
+	}}
+	views, err := lister.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	byID := map[string]api.FPPInstanceView{}
+	for _, fv := range views {
+		byID[fv.InstanceID] = fv
+	}
+	front, back := byID["front-yard"], byID["back-yard"]
+	if len(front.DuplicateInstanceUUIDEndpointIDs) != 1 || front.DuplicateInstanceUUIDEndpointIDs[0] != "back-yard" {
+		t.Errorf("front-yard DuplicateInstanceUUIDEndpointIDs = %v, want [back-yard]", front.DuplicateInstanceUUIDEndpointIDs)
+	}
+	if len(back.DuplicateInstanceUUIDEndpointIDs) != 1 || back.DuplicateInstanceUUIDEndpointIDs[0] != "front-yard" {
+		t.Errorf("back-yard DuplicateInstanceUUIDEndpointIDs = %v, want [front-yard]", back.DuplicateInstanceUUIDEndpointIDs)
+	}
+	// Rule 2, made concrete: neither row was overwritten by the other.
+	if front.InstanceUUID == nil || front.InstanceUUID.UUID != "uuid-shared" {
+		t.Errorf("front-yard InstanceUUID = %+v, want uuid-shared", front.InstanceUUID)
+	}
+	if back.InstanceUUID == nil || back.InstanceUUID.UUID != "uuid-shared" {
+		t.Errorf("back-yard InstanceUUID = %+v, want uuid-shared", back.InstanceUUID)
+	}
+}
+
+// TestFPPInstanceListerDuplicateExcludesRemovedEndpoint proves a stale
+// row left behind by a since-removed endpoint (this table is not pruned
+// on removal, fppinstanceuuid.go's own doc comment) never manufactures a
+// duplicate finding against an endpoint that is no longer configured.
+func TestFPPInstanceListerDuplicateExcludesRemovedEndpoint(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "front-yard", "uuid-shared", time.Now()); err != nil {
+		t.Fatalf("record front-yard: %v", err)
+	}
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "removed-endpoint", "uuid-shared", time.Now()); err != nil {
+		t.Fatalf("record removed-endpoint: %v", err)
+	}
+
+	// Only front-yard is currently configured.
+	lister := fppInstanceLister{st: st, endpoints: fixedFPPEndpoints{{ID: "front-yard", URL: "http://10.0.1.20"}}}
+	views, err := lister.ListInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("len(views) = %d, want 1", len(views))
+	}
+	if len(views[0].DuplicateInstanceUUIDEndpointIDs) != 0 {
+		t.Errorf("DuplicateInstanceUUIDEndpointIDs = %v, want empty (the other claimant is not currently configured)", views[0].DuplicateInstanceUUIDEndpointIDs)
+	}
+}
