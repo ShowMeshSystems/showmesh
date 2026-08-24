@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/internal/agent/audio/gstengine"
@@ -67,37 +68,55 @@ func staticGstEngineConfig(assetDir string, node audioNodeConfig) gstengine.Conf
 // package-level var, matching audioDiscoverer's own injection
 // convention, so audioengine_test.go can prove [audioEngineRebuilder.rebuild]'s
 // ordering with an engine double instead of linking GStreamer.
+//
+// [gstengine.New] returns a non-nil error ONLY when cfg fails
+// cfg.Validate(); a genuinely bad or busy device never surfaces as an
+// error here (that surfaces later, from the built engine's own
+// Available). rebuild's own err != nil branch below is therefore
+// unreachable in production, since it only ever calls newGstEngine with
+// a cfg already proven to pass Validate() (see rebuild's earlier
+// staticCfg.Validate() call, which differs only in SampleRate, and
+// [resolveNodeSampleRate] never returns a value <= 0). It is kept as a
+// defensive backstop, not as the meaningful failure path for a bad
+// device: that path is [gstengine.Engine.Available] reporting false,
+// which rebuild binds and logs like any other outcome.
 var newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
 	return gstengine.New(cfg)
 }
 
 // audioEngineRebuilder rebuilds this node's real playback engine every
 // time a genuinely newer audio.node binding arrives ([audioBinding]'s
-// onNode callback). A gstengine holds its output device until it is
-// closed (see [closeReplacedEngine]), so [audioEngineRebuilder.rebuild]
-// validates the new binding structurally, THEN closes the outgoing
-// engine, THEN probes the route and builds the replacement — never the
-// reverse, or the probe observes the device still busy and the
-// replacement is opened against a device that is not free (the defect
-// this ordering exists to avoid). [audio.Manager.RebindEngine] both
-// invalidates every session with a live engine handle and detaches the
-// outgoing engine from [audio.SwitchableEngine], in that order, so a
-// session in flight is failed visibly before its handle can reach a
-// closed engine, and no in-flight call can reach the outgoing engine
-// after this method starts closing it.
+// onNode callback). onNode runs with its own lock released, so two
+// deliveries can call [audioEngineRebuilder.rebuild] from different
+// goroutines; mu serializes them so a slower rebuild can never overwrite
+// a faster, later one without releasing what it displaces (see
+// [audioEngineRebuilder.bind]).
 //
-// If building the replacement fails after the outgoing engine is
-// already closed, this node is deliberately left with no engine bound
-// (switchable reports [audio.SwitchableEngineNoBindingReason]) rather
-// than a broken one: every call fails a clean, visible refusal instead
-// of silently misbehaving against a handle that was never loaded, and
-// the node recovers automatically the next time a genuinely newer
-// audio.node binding arrives and this method runs again.
+// A gstengine holds its output device until it is closed (see
+// [closeReplacedEngine]), so rebuild validates the new binding
+// structurally, THEN closes the outgoing engine, THEN probes the route
+// and builds the replacement, never the reverse, or the probe observes
+// the device still busy and the replacement is opened against a device
+// that is not free (the defect this ordering exists to avoid).
+// [audio.Manager.RebindEngine] both invalidates every session with a
+// live engine handle and detaches the outgoing engine from
+// [audio.SwitchableEngine], in that order, so a session in flight is
+// failed visibly before its handle can reach a closed engine, and no
+// in-flight call can reach the outgoing engine after this method starts
+// closing it. While the outgoing engine is closed and the replacement is
+// not yet bound, [audio.SwitchableEngine] reports
+// [audio.SwitchableEngineRebindInProgressReason] rather than
+// [audio.SwitchableEngineNoBindingReason]: a binding WAS delivered, so a
+// caller must not read this window as "never configured", and a session
+// command attempted in it classifies as [pkgaudio.FaultRouteChanged]
+// rather than [pkgaudio.FaultOther].
 type audioEngineRebuilder struct {
 	assetDir   string
 	switchable *audio.SwitchableEngine
 	mgr        *audio.Manager
 	logger     *slog.Logger
+
+	mu sync.Mutex
 }
 
 func newAudioEngineRebuilder(assetDir string, switchable *audio.SwitchableEngine, mgr *audio.Manager, logger *slog.Logger) *audioEngineRebuilder {
@@ -111,6 +130,9 @@ func newAudioEngineRebuilder(assetDir string, switchable *audio.SwitchableEngine
 const validationSampleRate = 1
 
 func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	staticCfg := staticGstEngineConfig(r.assetDir, node)
 	staticCfg.SampleRate = validationSampleRate
 	if err := staticCfg.Validate(); err != nil {
@@ -126,6 +148,9 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 	cfg, rateSource, channelCountSource := buildGstEngineConfig(context.Background(), r.assetDir, node)
 	engine, err := newGstEngine(cfg)
 	if err != nil {
+		// See newGstEngine's doc comment: production never reaches this
+		// branch, since cfg already passed the identical structural
+		// Validate() above. Kept as a defensive backstop only.
 		if r.logger != nil {
 			r.logger.Error("failed to build the real audio engine after releasing the outgoing one; this node has no audio engine until the next audio.node.configure", "revision", node.Revision, "error", err)
 		}
@@ -139,7 +164,21 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 			"channel_count", cfg.ChannelCount, "channel_count_source", channelCountSource,
 			"available", ok, "unavailable_reason", reason)
 	}
-	r.switchable.Set(engine)
+	r.bind(engine)
+}
+
+// bind installs engine as this node's current engine and releases
+// whatever it replaces. [audio.SwitchableEngine.Set]'s own contract
+// requires the caller to close the engine its return value names, since
+// a gstengine keeps holding its output device until something closes
+// it; under [audioEngineRebuilder.rebuild]'s own mu, that return value
+// is always nil in the current call graph (rebuild's earlier
+// RebindEngine/closeReplacedEngine step already released whatever this
+// node held before probing and building the replacement), so this call
+// is a defensive backstop against any future caller of Set, not the
+// meaningful release path today.
+func (r *audioEngineRebuilder) bind(engine audio.Engine) {
+	closeReplacedEngine(r.switchable.Set(engine), r.logger)
 }
 
 // audioSettingsFromWire converts a decoded "audio.settings.configure"
@@ -160,7 +199,10 @@ func audioSettingsFromWire(p audioSettingsConfig) audio.Settings {
 // closeReplacedEngine releases an outgoing engine's own resources. A
 // gstengine holds its output device until it is closed, so a rebind that
 // skipped this would leave the replacement unable to open the same
-// device.
+// device. This assumes [audio.Engine.Close] accurately reports the
+// device as released: the real gstengine's Close always returns nil even
+// if its SetState(NULL) teardown exceeded its own timeout, so a stuck
+// teardown is not detected here.
 func closeReplacedEngine(prev audio.Engine, logger *slog.Logger) {
 	closer, ok := prev.(interface{ Close() error })
 	if !ok {

@@ -108,3 +108,38 @@ func TestRebindEngineInvalidatesInFlightSessions(t *testing.T) {
 		t.Errorf("switchable.Available() after RebindEngine = (%v, %q), want (false, %q)", ok, reason, FakeEngineUnavailableReason)
 	}
 }
+
+// TestSwitchableEngineDetachedAfterBindingReportsRebindInProgress proves
+// a SwitchableEngine that has ALREADY been bound to a real engine, and is
+// then detached again (the window a rebind opens between releasing the
+// outgoing engine and binding its replacement), reports
+// [SwitchableEngineRebindInProgressReason] rather than
+// [SwitchableEngineNoBindingReason]: a binding WAS delivered, so this
+// must not read the same as a node that was never configured. A command
+// attempted in that window must also classify as
+// [pkgaudio.FaultRouteChanged], not [pkgaudio.FaultOther]: the node's
+// engine changed out from under it, the same fact a live session's
+// invalidation already reports.
+func TestSwitchableEngineDetachedAfterBindingReportsRebindInProgress(t *testing.T) {
+	e := NewSwitchableEngine()
+
+	// Never bound: the classic "never configured" reason.
+	if ok, reason := e.Available(); ok || reason != SwitchableEngineNoBindingReason {
+		t.Fatalf("precondition: Available() = (%v, %q), want (false, %q)", ok, reason, SwitchableEngineNoBindingReason)
+	}
+
+	e.Set(NewFakeEngine(time.Now))
+	e.Set(nil) // detach again, as a rebind does mid-flight
+
+	if ok, reason := e.Available(); ok || reason != SwitchableEngineRebindInProgressReason {
+		t.Errorf("Available() after a binding then a detach = (%v, %q), want (false, %q)", ok, reason, SwitchableEngineRebindInProgressReason)
+	}
+
+	_, err := e.Load(context.Background(), "h", pkgaudio.MediaRef{}, time.Second)
+	if err == nil {
+		t.Fatal("Load on a detached-after-binding SwitchableEngine returned nil error, want a refusal")
+	}
+	if fault := pkgaudio.ClassifyFault(err); fault != pkgaudio.FaultRouteChanged {
+		t.Errorf("ClassifyFault(err) = %s, want %s: err=%v", fault, pkgaudio.FaultRouteChanged, err)
+	}
+}

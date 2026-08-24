@@ -266,7 +266,7 @@ func (fakeAssetDecoder) Decode(_ context.Context, _ string) audio.DecodeResult {
 
 // writeTestAudioAsset writes content under dir and returns a
 // [pkgaudio.MediaRef] whose identity matches it, so ProbeAsset's real
-// identity check passes — mirrors internal/agent/audio's own
+// identity check passes; mirrors internal/agent/audio's own
 // writeTestAsset test helper (unexported there).
 func writeTestAudioAsset(t *testing.T, dir, filename, assetID string, content []byte) pkgaudio.MediaRef {
 	t.Helper()
@@ -282,7 +282,7 @@ func writeTestAudioAsset(t *testing.T, dir, filename, assetID string, content []
 
 // closeObservingEngine is an [audio.Engine] double whose Close reports
 // whether the session it was built to observe had already been failed
-// by the time Close ran — proof of ORDER, not merely that both events
+// by the time Close ran: proof of ORDER, not merely that both events
 // eventually happened.
 type closeObservingEngine struct {
 	audio.Engine
@@ -299,7 +299,7 @@ func (e *closeObservingEngine) Close() error {
 
 // TestRebuildInvalidatesSessionsBeforeClosingTheOutgoingEngine proves a
 // session with a live engine handle is failed against the OLD binding
-// before the outgoing engine's device is released — never after, which
+// before the outgoing engine's device is released, never after, which
 // would let a call in flight reach a closed engine with a handle it no
 // longer owns.
 func TestRebuildInvalidatesSessionsBeforeClosingTheOutgoingEngine(t *testing.T) {
@@ -353,12 +353,17 @@ func TestRebuildInvalidatesSessionsBeforeClosingTheOutgoingEngine(t *testing.T) 
 	}
 }
 
-// TestRebuildLeavesNoEngineBoundWhenTheReplacementFailsToBuild proves
-// the deliberate, tested choice for the window this reordering opens: if
-// building the replacement fails AFTER the outgoing engine is already
-// closed, the node is left with no engine bound (reporting
-// [audio.SwitchableEngineNoBindingReason]) rather than a broken one, and
-// the device the outgoing engine held is still released.
+// TestRebuildLeavesNoEngineBoundWhenTheReplacementFailsToBuild guards a
+// defensive backstop, not a path production can reach: [newGstEngine]'s
+// doc comment explains that [gstengine.New] returns a non-nil error only
+// when cfg fails cfg.Validate(), and rebuild only ever calls it with a
+// cfg that already passed the identical structural Validate() earlier
+// in the same call. This test forces the branch anyway (via the
+// [newGstEngine] test seam) to prove the deliberate, tested choice for
+// IF it is ever reached: the node is left with no engine bound
+// (reporting [audio.SwitchableEngineRebindInProgressReason], since a
+// binding was in fact delivered) rather than a broken one, and the
+// device the outgoing engine held is still released.
 func TestRebuildLeavesNoEngineBoundWhenTheReplacementFailsToBuild(t *testing.T) {
 	origNewEngine := newGstEngine
 	t.Cleanup(func() { newGstEngine = origNewEngine })
@@ -381,8 +386,8 @@ func TestRebuildLeavesNoEngineBoundWhenTheReplacementFailsToBuild(t *testing.T) 
 	if outgoing.closed != 1 {
 		t.Errorf("outgoing engine closed %d times, want 1: its device must still be released even though the replacement failed", outgoing.closed)
 	}
-	if ok, reason := switchable.Available(); ok || reason != audio.SwitchableEngineNoBindingReason {
-		t.Errorf("switchable.Available() after a failed rebuild = (%v, %q), want (false, %q): no broken engine left bound", ok, reason, audio.SwitchableEngineNoBindingReason)
+	if ok, reason := switchable.Available(); ok || reason != audio.SwitchableEngineRebindInProgressReason {
+		t.Errorf("switchable.Available() after a failed rebuild = (%v, %q), want (false, %q): a binding WAS delivered, so this must not read as never-configured, and no broken engine is left bound", ok, reason, audio.SwitchableEngineRebindInProgressReason)
 	}
 }
 
@@ -419,5 +424,141 @@ func TestRebuildRejectsAnInvalidBindingWithoutTouchingTheOutgoingEngine(t *testi
 	}
 	if ok, reason := switchable.Available(); ok || reason != audio.FakeEngineUnavailableReason {
 		t.Errorf("switchable.Available() after a rejected binding = (%v, %q), want (%v, %q): still delegating to the outgoing engine, not detached", ok, reason, false, audio.FakeEngineUnavailableReason)
+	}
+}
+
+// TestAudioEngineRebuilderBindReleasesTheEngineItReplaces proves
+// [audioEngineRebuilder.bind] honors [audio.SwitchableEngine.Set]'s own
+// contract: the caller must close whatever engine Set's return value
+// names, since a gstengine keeps holding its output device until
+// something closes it. This is the regression a direct
+// r.switchable.Set(engine) (discarding the return) introduced: the
+// engine a bind replaces would never be released.
+func TestAudioEngineRebuilderBindReleasesTheEngineItReplaces(t *testing.T) {
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+
+	first := &closeCountingEngine{Engine: audio.NewFakeEngine(time.Now)}
+	r.bind(first)
+	if first.closed != 0 {
+		t.Fatalf("bind closed the engine it just installed: closed=%d, want 0", first.closed)
+	}
+
+	second := &closeCountingEngine{Engine: audio.NewFakeEngine(time.Now)}
+	r.bind(second)
+	if first.closed != 1 {
+		t.Errorf("bind did not release the engine it replaced: first.closed=%d, want 1", first.closed)
+	}
+}
+
+// orderedCloseEngine is an [audio.Engine] double that records whether it
+// was ever closed, safe for concurrent use: TestRebuildSerializesConcurrentRebuilds
+// closes it from whichever goroutine's rebuild call displaces it.
+type orderedCloseEngine struct {
+	audio.Engine
+	mu     sync.Mutex
+	closed bool
+}
+
+func (e *orderedCloseEngine) Close() error {
+	e.mu.Lock()
+	e.closed = true
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *orderedCloseEngine) isClosed() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.closed
+}
+
+// TestRebuildSerializesConcurrentRebuilds reproduces the regression a
+// reviewer confirmed by running: two audio.node.configure deliveries
+// reach audioBinding.onNode from different goroutines (onNode runs with
+// its own lock released), so two rebuild calls can be genuinely
+// concurrent. Without serialization, a slower rebuild whose probe or
+// build takes longer can Set its engine AFTER a faster, later rebuild
+// already Set its own, orphaning the faster rebuild's engine: it is
+// never closed, and it keeps holding the ALSA device forever. This test
+// engineers exactly that interleaving (first rebuild's build blocks,
+// second rebuild's build is fast) and asserts both that the second
+// rebuild cannot even reach its build step until the first one finishes
+// (serialization), and that exactly one of the two built engines ends up
+// closed (no orphan, no double-close).
+func TestRebuildSerializesConcurrentRebuilds(t *testing.T) {
+	origNewEngine := newGstEngine
+	t.Cleanup(func() { newGstEngine = origNewEngine })
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+
+	var mu sync.Mutex
+	var built []*orderedCloseEngine
+	release1 := make(chan struct{})
+	build1Started := make(chan struct{})
+	build2Started := make(chan struct{})
+
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		mu.Lock()
+		idx := len(built)
+		e := &orderedCloseEngine{Engine: audio.NewFakeEngine(time.Now)}
+		built = append(built, e)
+		mu.Unlock()
+		if idx == 0 {
+			close(build1Started)
+			<-release1
+		} else {
+			close(build2Started)
+		}
+		return e, nil
+	}
+
+	node1 := audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1}
+	node2 := node1
+	node2.Revision = 2
+
+	done1 := make(chan struct{})
+	go func() {
+		defer close(done1)
+		r.rebuild(node1)
+	}()
+	<-build1Started
+
+	done2 := make(chan struct{})
+	go func() {
+		defer close(done2)
+		r.rebuild(node2)
+	}()
+
+	select {
+	case <-build2Started:
+		t.Fatal("the second rebuild reached its own build step while the first rebuild's build was still in flight: rebuilds are not serialized")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release1)
+	<-done1
+	<-done2
+	<-build2Started
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(built) != 2 {
+		t.Fatalf("built %d engines, want 2", len(built))
+	}
+	closedCount := 0
+	for _, e := range built {
+		if e.isClosed() {
+			closedCount++
+		}
+	}
+	if closedCount != 1 {
+		t.Errorf("closed %d of 2 built engines, want exactly 1: 0 means an orphaned engine still holding the device, 2 means the surviving engine was wrongly closed too", closedCount)
 	}
 }
