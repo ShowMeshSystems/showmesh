@@ -324,10 +324,10 @@ registers on fppd's own web server: on FPP 10 through Plugin API 6's
 **This route is unauthenticated.** It accepts any caller reachable on the
 show LAN, matching the posture SECURITY.md already records for cleartext
 commands on that isolated network: fppd's own web server is unauthenticated
-by default, and a ShowMesh-issued credential placed on the FPP host would be
-readable by anyone who can reach the host regardless. A bearer credential for
-this route is deferred to a future season as a separate tracked item; see
-section 2.3 for what that leaves unenforced this season.
+by default. A deferred bearer credential would refuse a casual or accidental
+LAN caller, but not anyone with shell access on the FPP host, which RES-015
+already records as the accepted limit for the plugin's existing outbound
+credential; see section 2.3 for what this season leaves unenforced.
 
 Body:
 
