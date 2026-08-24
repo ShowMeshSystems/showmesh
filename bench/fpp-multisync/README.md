@@ -52,7 +52,7 @@ bench/fpp-multisync/
   docker-compose.macvlan.yml  Mode B overlay: redefines the network as external macvlan
   probe.Dockerfile            Bench-only build for showmesh-multisync-probe
   .env.example                Copy to .env and adjust
-  captures/                   Default landing spot for JSONL captures (git-ignored)
+  captures/                   Default landing spot for captures; JSONL/log output is git-ignored
 ```
 
 ## Prerequisites
@@ -320,13 +320,14 @@ miss it.
    defaults, an FPP 10 `fpp-master` sends nothing this probe will ever
    receive, on any transport, and neither side logs an error. **This is not
    a bench defect**; it is the exact configuration RES-002 exists to
-   document, and it is what "Probe output against a default FPP 10 player"
-   below shows the probe correctly reporting as expected FPP 10 behavior
-   rather than as a fault. To make a 10.0 `fpp-master` actually reach
-   `probe`, add the probe's address to `MultiSyncRemotes` (or
-   `MultiSyncExtraRemotes`) under **Settings → MultiSync** — this applies
-   live on FPP 10 with no `fppd` restart — or enable
-   `MultiSyncBroadcast`/`MultiSyncMulticast` explicitly.
+   document, and it is what the
+   [FPP 10 default-transport capture](captures/sm209/FPP10-DEFAULT-TRANSPORT.md)
+   shows the probe correctly reporting as expected FPP 10 behavior rather
+   than as a fault. To make a 10.0 `fpp-master` actually reach `probe`, add
+   the probe's address to `MultiSyncRemotes` (or `MultiSyncExtraRemotes`)
+   under **Settings → MultiSync** — this applies live on FPP 10 with no
+   `fppd` restart — or enable `MultiSyncBroadcast`/`MultiSyncMulticast`
+   explicitly.
 
 3. **Get a sequence onto the master.** Under **Content Setup → Sequences**,
    upload a `.fseq` file — one of your own from xLights is the realistic
