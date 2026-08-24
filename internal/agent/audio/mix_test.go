@@ -1070,3 +1070,253 @@ func TestFadePendingResolvedByStopAfterEngineRebind(t *testing.T) {
 		t.Fatalf("fade outcome after being stranded by an engine rebind = %+v, want Unconfirmable", result)
 	}
 }
+
+// muteDuckFixture starts a background session at a known configured gain
+// and an announcement session that ducks it, returning both sessions so
+// a test can drive mute/unmute and duck end/start in whatever order it
+// needs. bg's configured gain is 0.8 and it is ducked to 0 by ann before
+// this returns.
+func muteDuckFixture(t *testing.T, m *Manager, ctx context.Context) (bg, ann *Session) {
+	t.Helper()
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	if r := m.GainSet(ctx, "bg", "inv-bg-gain", 3, pkgaudio.Gain(0.8)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain set on bg unexpectedly refused: %+v", r)
+	}
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	bg, _ = m.get("bg")
+	ann, _ = m.get("ann")
+
+	bg.mu.Lock()
+	_, ducked := bg.duckedByAll["ann"]
+	gain := *bg.desired.Gain
+	bg.mu.Unlock()
+	if !ducked || gain != 0 {
+		t.Fatalf("precondition failed: bg after ann started = ducked %v gain %v, want ducked to 0", ducked, gain)
+	}
+	return bg, ann
+}
+
+// Reproduces the mute/duck restore defect: mute during a duck, unmute
+// during the same duck, then end the duck. bg's configured gain (0.8)
+// must be what is left once both the mute and the duck have released,
+// not the ducked level muteLocked captured as preMuteGain.
+func TestMuteThenUnmuteDuringDuckThenDuckEndsRestoresConfiguredGain(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	bg, _ := muteDuckFixture(t, m, ctx)
+
+	if r := m.Mute(ctx, "bg", "inv-bg-mute", 4); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("mute unexpectedly refused: %+v", r)
+	}
+	if r := m.Unmute(ctx, "bg", "inv-bg-unmute", 5); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("unmute unexpectedly refused: %+v", r)
+	}
+
+	bg.mu.Lock()
+	gainStillDucked := *bg.desired.Gain
+	bg.mu.Unlock()
+	if gainStillDucked != 0 {
+		t.Fatalf("gain after unmuting while still ducked = %v, want the duck level 0 (the announcement is still playing)", gainStillDucked)
+	}
+
+	if r := m.Stop(ctx, "ann", "inv-ann-stop", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("stop unexpectedly refused: %+v", r)
+	}
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if len(bg.duckedByAll) != 0 {
+		t.Fatalf("bg still shows duckedByAll=%v after the ducking session stopped", bg.duckedByAll)
+	}
+	if *bg.desired.Gain != pkgaudio.Gain(0.8) {
+		t.Fatalf("bg gain once mute and duck have both released = %v, want the configured 0.8", *bg.desired.Gain)
+	}
+}
+
+// Mute during a duck, end the duck while still muted, then unmute. The
+// session must stay silent while muted even after the duck it was also
+// under has released, and land on its configured gain only once unmuted.
+func TestMuteThenDuckEndsWhileMutedThenUnmuteRestoresConfiguredGain(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	bg, _ := muteDuckFixture(t, m, ctx)
+
+	if r := m.Mute(ctx, "bg", "inv-bg-mute", 4); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("mute unexpectedly refused: %+v", r)
+	}
+
+	if r := m.Stop(ctx, "ann", "inv-ann-stop", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("stop unexpectedly refused: %+v", r)
+	}
+
+	bg.mu.Lock()
+	gainWhileMutedAfterDuckEnded := *bg.desired.Gain
+	stillMuted := bg.muted
+	bg.mu.Unlock()
+	if !stillMuted {
+		t.Fatal("bg reports unmuted after only the duck released; mute was never lifted")
+	}
+	if gainWhileMutedAfterDuckEnded != 0 {
+		t.Fatalf("gain while still muted after the duck released = %v, want 0 (mute must not be bypassed by the duck restore)", gainWhileMutedAfterDuckEnded)
+	}
+
+	if r := m.Unmute(ctx, "bg", "inv-bg-unmute", 5); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("unmute unexpectedly refused: %+v", r)
+	}
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if *bg.desired.Gain != pkgaudio.Gain(0.8) {
+		t.Fatalf("bg gain once mute and duck have both released = %v, want the configured 0.8", *bg.desired.Gain)
+	}
+}
+
+// Duck during a mute, end the duck, then unmute. Mirrors the previous
+// case with mute applied first, exercising the duck side's own capture
+// of the pre-duck gain while already muted.
+func TestDuckDuringMuteThenDuckEndsThenUnmuteRestoresConfiguredGain(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	if r := m.GainSet(ctx, "bg", "inv-bg-gain", 3, pkgaudio.Gain(0.8)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain set on bg unexpectedly refused: %+v", r)
+	}
+	if r := m.Mute(ctx, "bg", "inv-bg-mute", 4); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("mute unexpectedly refused: %+v", r)
+	}
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	bg, _ := m.get("bg")
+	bg.mu.Lock()
+	_, ducked := bg.duckedByAll["ann"]
+	bg.mu.Unlock()
+	if !ducked {
+		t.Fatal("precondition failed: bg was not ducked by ann while muted")
+	}
+
+	if r := m.Stop(ctx, "ann", "inv-ann-stop", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("stop unexpectedly refused: %+v", r)
+	}
+
+	if r := m.Unmute(ctx, "bg", "inv-bg-unmute", 5); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("unmute unexpectedly refused: %+v", r)
+	}
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if *bg.desired.Gain != pkgaudio.Gain(0.8) {
+		t.Fatalf("bg gain once mute and duck have both released = %v, want the configured 0.8", *bg.desired.Gain)
+	}
+}
+
+// Mute before a duck starts, then unmute while the duck is still active.
+// Unmuting must return the session to the duck level, not to the
+// configured gain: the announcement is still playing, and unmuteLocked
+// restoring preMuteGain unconditionally would drive the engine straight
+// past the duck to full volume.
+func TestUnmuteWhileStillDuckedReturnsToDuckLevelNotConfiguredGain(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	if r := m.GainSet(ctx, "bg", "inv-bg-gain", 3, pkgaudio.Gain(0.8)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain set unexpectedly refused: %+v", r)
+	}
+	if r := m.Mute(ctx, "bg", "inv-bg-mute", 4); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("mute unexpectedly refused: %+v", r)
+	}
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	if r := m.Unmute(ctx, "bg", "inv-bg-unmute", 5); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("unmute unexpectedly refused: %+v", r)
+	}
+
+	bg, _ := m.get("bg")
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if len(bg.duckedByAll) == 0 {
+		t.Fatal("precondition failed: bg is not ducked by ann")
+	}
+	if *bg.desired.Gain != 0 {
+		t.Fatalf("gain after unmuting while still ducked = %v, want the duck level 0, not the configured gain (the announcement is still playing)", *bg.desired.Gain)
+	}
+}
+
+// No ordering of mute/duck across a ceiling may drive the session above
+// its configured maximum, including transiently while unmuting under an
+// active duck.
+func TestMuteUnmuteAcrossDuckNeverExceedsCeiling(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	const ceiling = pkgaudio.Ceiling(0.5)
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	req := pkgaudio.ApplyRequest{
+		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleBackground),
+		Media:      pkgaudio.SetField(bgRef),
+		MixPolicy:  pkgaudio.SetField(pkgaudio.MixPolicyMix),
+		Ceiling:    pkgaudio.SetField(ceiling),
+	}
+	if r := m.Apply(ctx, "bg", "bg-apply", 1, req); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply refused: %+v", r)
+	}
+	if r := m.Start(ctx, "bg", "bg-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start refused: %+v", r)
+	}
+	if r := m.GainSet(ctx, "bg", "inv-bg-gain", 3, pkgaudio.Gain(1.0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain set refused: %+v", r)
+	}
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	bg, _ := m.get("bg")
+	assertNeverAboveCeiling := func(label string) {
+		t.Helper()
+		bg.mu.Lock()
+		gain := *bg.desired.Gain
+		bg.mu.Unlock()
+		if gain > pkgaudio.Gain(ceiling) {
+			t.Fatalf("%s: gain = %v, exceeds configured ceiling %v", label, gain, ceiling)
+		}
+	}
+	assertNeverAboveCeiling("after duck starts")
+
+	if r := m.Mute(ctx, "bg", "inv-bg-mute", 4); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("mute unexpectedly refused: %+v", r)
+	}
+	assertNeverAboveCeiling("after mute")
+
+	if r := m.Unmute(ctx, "bg", "inv-bg-unmute", 5); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("unmute unexpectedly refused: %+v", r)
+	}
+	assertNeverAboveCeiling("after unmute while still ducked")
+
+	if r := m.Stop(ctx, "ann", "inv-ann-stop", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("stop unexpectedly refused: %+v", r)
+	}
+	assertNeverAboveCeiling("after duck ends")
+
+	bg.mu.Lock()
+	final := *bg.desired.Gain
+	bg.mu.Unlock()
+	if final != pkgaudio.Gain(ceiling) {
+		t.Fatalf("final gain = %v, want clamped to ceiling %v", final, ceiling)
+	}
+}

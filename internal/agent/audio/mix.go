@@ -79,7 +79,7 @@ func (s *Session) setGainLocked(ctx context.Context, requested pkgaudio.Gain) pk
 	}
 	effective := result.Effective
 	s.desired.Gain = &effective
-	s.rememberIntendedGainWhileDuckedLocked(effective)
+	s.rememberIntendedGainWhileSuppressedLocked(effective)
 	s.persistBestEffortLocked("state change")
 
 	if !s.handleLoaded {
@@ -142,7 +142,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 
 	f := fade
 	s.desired.Fade = &f
-	s.rememberIntendedGainWhileDuckedLocked(result.Effective)
+	s.rememberIntendedGainWhileSuppressedLocked(result.Effective)
 	s.fadePending = true
 	s.fadeInvocation = invocation
 	s.fadeHandleNeverFaded = false
@@ -295,7 +295,7 @@ func (s *Session) muteLocked(ctx context.Context) pkgaudio.OutcomeResult {
 	if s.muted {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain, Reason: "already muted"}
 	}
-	prior := s.effectiveGainLocked()
+	prior := s.preSuppressionGainLocked()
 	s.preMuteGain = &prior
 	s.muted = true
 	return s.applyGainForMuteLocked(ctx, duckTargetGain)
@@ -328,6 +328,13 @@ func (s *Session) unmuteLocked(ctx context.Context) pkgaudio.OutcomeResult {
 	}
 	s.muted = false
 	s.preMuteGain = nil
+	// Mute and duck are independent reasons to be quieter than the
+	// configured gain: unmuting while a duck is still active must land
+	// on the duck's own level, because the announcement is still
+	// playing, not on the gain mute was hiding underneath it.
+	if len(s.duckedByAll) > 0 {
+		restore = duckTargetGain
+	}
 	return s.applyGainForMuteLocked(ctx, restore)
 }
 
@@ -447,30 +454,61 @@ func (m *Manager) submitToActivePolicies(ctx context.Context, id pkgaudio.Sessio
 	}
 }
 
-// rememberIntendedGainWhileDuckedLocked keeps a ducked session's restore
-// target in step with the newest gain anyone has actually asked for.
+// preSuppressionGainLocked returns the gain s would carry if neither mute
+// nor duck were currently suppressing it: the currently-active
+// suppression's own remembered restore target, or the live desired gain
+// when neither is active. Mute is checked first because a session that is
+// both muted and ducked always applies mute on top — see
+// [Session.unmuteLocked] and [Manager.removeDuckerLocked].
 //
-// [Manager.removeDuckerLocked] returns a session to preDuckGain, which is
-// captured once, at the moment the first ducker arrives. Without this, a
-// gain change that lands DURING a duck moved the session's desired gain
-// and was then silently replayed away by the restore, putting the session
-// back at whatever it held before the duck. That is not merely a lost
-// setting: a bed whose configured gain never reached this node before the
-// duck sits at the default of unity, and the restore would put it back
-// there, playing louder than the configured maximum until something else
-// changed it. A failure path is exactly when that happens, because a
-// failure path is what makes a caller retry a gain step late.
-//
-// Only the restore target moves here. Whether a gain change should also
-// be allowed to drive the engine out of the duck while the duck is still
-// active is a separate question about what audio.gain.set means mid-duck,
-// deliberately not decided here. Caller holds s.mu.
-func (s *Session) rememberIntendedGainWhileDuckedLocked(effective pkgaudio.Gain) {
-	if len(s.duckedByAll) == 0 {
-		return
+// This exists to seed a NEWLY applied suppression's own restore memory:
+// [Session.muteLocked] muting a session that is currently ducked, or
+// [Manager.duckOneLocked] ducking a session that is currently muted, must
+// each capture the gain the other suppression is already holding, not the
+// already-suppressed live value — capturing the live value is the exact
+// defect this composition exists to prevent (muting during a duck used to
+// capture the duck level as preMuteGain, so unmuting restored the ducked
+// level forever instead of the configured gain once the duck also
+// released). Caller holds s.mu.
+func (s *Session) preSuppressionGainLocked() pkgaudio.Gain {
+	if s.muted && s.preMuteGain != nil {
+		return *s.preMuteGain
 	}
-	g := effective
-	s.preDuckGain = &g
+	if len(s.duckedByAll) > 0 && s.preDuckGain != nil {
+		return *s.preDuckGain
+	}
+	return s.effectiveGainLocked()
+}
+
+// rememberIntendedGainWhileSuppressedLocked keeps a muted and/or ducked
+// session's restore targets in step with the newest gain anyone has
+// actually asked for.
+//
+// [Manager.removeDuckerLocked] and [Session.unmuteLocked] return a
+// session to preDuckGain/preMuteGain, each captured once, at the moment
+// mute or the first ducker arrived. Without this, a gain change that
+// lands DURING a duck or a mute moved the session's desired gain and was
+// then silently replayed away by the restore, putting the session back at
+// whatever it held before. That is not merely a lost setting: a bed whose
+// configured gain never reached this node before the duck sits at the
+// default of unity, and the restore would put it back there, playing
+// louder than the configured maximum until something else changed it. A
+// failure path is exactly when that happens, because a failure path is
+// what makes a caller retry a gain step late.
+//
+// Only the restore targets move here. Whether a gain change should also
+// be allowed to drive the engine out of a duck or a mute while either is
+// still active is a separate question about what audio.gain.set means
+// mid-suppression, deliberately not decided here. Caller holds s.mu.
+func (s *Session) rememberIntendedGainWhileSuppressedLocked(effective pkgaudio.Gain) {
+	if len(s.duckedByAll) > 0 {
+		g := effective
+		s.preDuckGain = &g
+	}
+	if s.muted {
+		g := effective
+		s.preMuteGain = &g
+	}
 }
 
 // duckOneLocked adds duckerID to t's set of active duckers. t's gain is
@@ -486,7 +524,7 @@ func (m *Manager) duckOneLocked(ctx context.Context, t *Session, duckerID pkgaud
 		return
 	}
 	if len(t.duckedByAll) == 0 {
-		prior := t.effectiveGainLocked()
+		prior := t.preSuppressionGainLocked()
 		t.preDuckGain = &prior
 		t.desired.Gain = ptrGain(duckTargetGain)
 		if t.handleLoaded {
@@ -535,12 +573,24 @@ func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID p
 	if t.preDuckGain != nil {
 		restore = *t.preDuckGain
 	}
+	t.preDuckGain = nil
+
+	if t.muted {
+		// Mute is still active: the duck's own memory of the configured
+		// gain becomes mute's restore target, but nothing is driven
+		// audibly until unmute — releasing a duck must never make a
+		// muted session audible.
+		g := restore
+		t.preMuteGain = &g
+		t.persistBestEffortLocked("state change")
+		return
+	}
+
 	result, err := t.clampToCeilingLocked(restore)
 	effective := restore
 	if err == nil {
 		effective = result.Effective
 	}
-	t.preDuckGain = nil
 	t.desired.Gain = &effective
 	if t.handleLoaded {
 		if _, err := m.engine.SetGain(ctx, t.handle, effective); err != nil {
