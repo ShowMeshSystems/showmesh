@@ -514,10 +514,16 @@ func TestSampleRateNilUntilWindowCompletes(t *testing.T) {
 	if fw.currentRate != nil {
 		t.Fatalf("currentRate after the anchoring call = %v, want nil", fw.currentRate)
 	}
+	if !fw.framesObservedAt.IsZero() {
+		t.Fatalf("framesObservedAt after the anchoring call = %v, want zero (this issue: an unmeasured value must be zero, never defaulted to \"now\")", fw.framesObservedAt)
+	}
 
 	fw.sampleRate(base.Add(2*time.Second), 81) // 2s elapsed, short of the window
 	if fw.currentRate != nil {
 		t.Fatalf("currentRate before the window completes = %v, want nil", fw.currentRate)
+	}
+	if !fw.framesObservedAt.IsZero() {
+		t.Fatalf("framesObservedAt before the window completes = %v, want zero", fw.framesObservedAt)
 	}
 
 	fw.sampleRate(base.Add(6*time.Second), 241) // 6s elapsed since the anchor: window closes
@@ -528,6 +534,14 @@ func TestSampleRateNilUntilWindowCompletes(t *testing.T) {
 	want := float64(241-1) / (6 * time.Second).Seconds() // frames since the anchor / elapsed since the anchor
 	if got < want-0.01 || got > want+0.01 {
 		t.Fatalf("currentRate = %v, want ~%v (achieved, not the configured stepTime rate)", got, want)
+	}
+
+	// This issue's own fix: the window-close instant is stamped onto its
+	// own framesObservedAt, independent of any pipeline.Snapshot.ObservedAt.
+	// reportCounts is what carries this to Supervisor.SetFrameCounts.
+	wantObservedAt := base.Add(6 * time.Second)
+	if !fw.framesObservedAt.Equal(wantObservedAt) {
+		t.Fatalf("framesObservedAt after the window completes = %v, want %v (the window-close instant)", fw.framesObservedAt, wantObservedAt)
 	}
 }
 

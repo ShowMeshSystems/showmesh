@@ -164,14 +164,27 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	// review fix, finding 2/finding 7.
 	observedAt := sf.ObservedAt
 
+	// framesObservedAt is the frame writer's OWN evidence timestamp
+	// (pipeline.FrameWriter.sampleRate's window-close stamp, carried over
+	// the wire as sf.FramesObservedAt), deliberately not sf.ObservedAt.
+	// FramesWritten/FramesLate/FramesDropped/FramesRate are continuously
+	// sampled counters, not a pipeline lifecycle transition, so they must
+	// never be judged for staleness against a timestamp that only moves
+	// when PipelineState changes: that conflation is exactly what made
+	// every render signal read as permanently stale 45s after any apply on
+	// a healthy, continuously-advancing pipeline. Zero means the frame
+	// writer has not yet closed its first sampling window, handled the
+	// same way FramesRate's own nil case already is one line down.
+	framesObservedAt := sf.FramesObservedAt
+
 	obs := []observation.Observation{
 		buildValue(nodeID, res, SignalSurfacePipelineState, sf.PipelineState, observedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceReason, sf.Reason, observedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceRestartCount, sf.RestartCount, observedAt, rep),
 		buildValue(nodeID, res, SignalSurfaceConsecutiveFailures, sf.ConsecutiveFailures, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, observedAt, rep),
-		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesWritten, sf.FramesWritten, framesObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesLate, sf.FramesLate, framesObservedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceFramesDropped, sf.FramesDropped, framesObservedAt, rep),
 	}
 
 	// FramesRate is nil whenever the frame writer has not yet completed a
@@ -183,7 +196,7 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		obs = append(obs, notCollected(res, SignalSurfaceFramesRate, SourceFor(nodeID),
 			"frame rate has not yet been measured for this surface (no completed sampling window)", rep.receivedAt))
 	} else {
-		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, observedAt, rep))
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceFramesRate, *sf.FramesRate, framesObservedAt, rep))
 	}
 
 	// TransportAvailable is nil whenever this surface's transport has never
@@ -291,8 +304,9 @@ func nodeMultiSyncObservations(nodeID string, rep report) []observation.Observat
 }
 
 // buildValue stamps ObservedAt from the caller's own per-field,
-// NODE-REPORTED evidence timestamp (sf.ObservedAt for a surface field,
-// rep.payload.MultiSyncObservedAt for a node field), unlike
+// NODE-REPORTED evidence timestamp (sf.ObservedAt for a pipeline-lifecycle
+// surface field, sf.FramesObservedAt for the four frame-counter surface
+// fields, rep.payload.MultiSyncObservedAt for a node field), unlike
 // fppmqtt.Collector.buildObservation one package over: FPP sends no sample
 // time on its own wire, so that collector has only rep.retained to reason
 // about age. This agent stamps every field it reports at the moment of a

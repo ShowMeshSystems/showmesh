@@ -93,6 +93,20 @@ type Snapshot struct {
 	// configured target rate echoed back).
 	FramesRate *float64
 
+	// FramesObservedAt is when FrameWriter.sampleRate actually sampled
+	// FramesWritten/FramesLate/FramesDropped/FramesRate: its own
+	// timestamp, deliberately separate from the shared ObservedAt below.
+	// These four counters are continuously sampled measurements, not a
+	// lifecycle transition, so they must never borrow ObservedAt's
+	// setState-only stamp (that would either go stale the instant a report
+	// republishes with no new counter evidence, or start moving on every
+	// tick and defeat setState's own "a fresh ObservedAt means the state
+	// actually moved" invariant, the same shape of bug
+	// TransportObservedAt exists to avoid one field up). Zero until the
+	// frame writer's first sampling window has closed (ADR-011: an
+	// unmeasured value is nil/zero, never defaulted to "now").
+	FramesObservedAt time.Time
+
 	// Transport, TransportAvailable and TransportReason are "" / nil / ""
 	// until [runner.setTransportProbe] records a real probe result — see
 	// [mqttproto.RenderSurfaceReport.TransportAvailable]'s doc comment on
@@ -351,16 +365,20 @@ func (r *runner) setCounters(restartCount, consecutiveFailures int64, lastExitCo
 // setFrameCounts overwrites the reported frame counters and, once
 // measured, the achieved frame rate, called by B3's FrameWriter as it runs.
 // rate is nil until FrameWriter.sampleRate has completed its first window —
-// never defaulted or synthesized here. Deliberately does not touch
-// State/Reason/Since/ObservedAt: frame counts are a separate evidence
-// stream from pipeline lifecycle state and must not perturb AwaitState's
-// post-dispatch confirmation check (see [Supervisor.AwaitState]).
-func (r *runner) setFrameCounts(written, late, dropped int64, rate *float64) {
+// never defaulted or synthesized here. observedAt is that same sampling
+// window's own close-of-window timestamp (zero until the first window
+// closes), stored on FramesObservedAt, never on the shared ObservedAt.
+// Deliberately does not touch State/Reason/Since/ObservedAt: frame counts
+// are a separate evidence stream from pipeline lifecycle state and must not
+// perturb AwaitState's post-dispatch confirmation check (see [Supervisor.
+// AwaitState]).
+func (r *runner) setFrameCounts(written, late, dropped int64, rate *float64, observedAt time.Time) {
 	r.mu.Lock()
 	r.snap.FramesWritten = written
 	r.snap.FramesLate = late
 	r.snap.FramesDropped = dropped
 	r.snap.FramesRate = rate
+	r.snap.FramesObservedAt = observedAt
 	r.mu.Unlock()
 }
 
@@ -563,14 +581,16 @@ func (r *runner) loop() {
 				// A fresh Apply is a new rendering session: frame counts
 				// from whatever surface (or spec) was previously applied to
 				// this ID describe a session that has ended, not this one.
-				r.setFrameCounts(0, 0, 0, nil)
+				// FramesObservedAt resets to zero along with them: no
+				// sampling window has closed yet for this new session.
+				r.setFrameCounts(0, 0, 0, nil, time.Time{})
 				r.setCleared(false)
 				r.setDegradedReason(spec.OutputDegradedReason)
 				attemptStart()
 			case cmdClear:
 				stopCurrent()
 				haveSpec = false
-				r.setFrameCounts(0, 0, 0, nil)
+				r.setFrameCounts(0, 0, 0, nil, time.Time{})
 				r.setDegradedReason("")
 				r.setState(StateStopped, "cleared by operator")
 				r.setCleared(true)
@@ -834,18 +854,21 @@ func (s *Supervisor) Stdin(surfaceID string) (io.Writer, error) {
 }
 
 // SetFrameCounts overwrites surfaceID's reported frame counters and
-// achieved rate (nil rate until measured — see FrameWriter.sampleRate). A no-op
-// (never creates a runner) if surfaceID has never been applied — the frame
-// writer that would call this only exists after Apply has already created
-// one.
-func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int64, rate *float64) {
+// achieved rate (nil rate until measured, see FrameWriter.sampleRate).
+// observedAt is that sampling window's own close-of-window instant (zero
+// until the first window closes), recorded onto Snapshot.FramesObservedAt
+// only, never the shared Snapshot.ObservedAt setState alone stamps. A
+// no-op (never creates a runner) if surfaceID has never been applied: the
+// frame writer that would call this only exists after Apply has already
+// created one.
+func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int64, rate *float64, observedAt time.Time) {
 	s.mu.Lock()
 	r, ok := s.runners[surfaceID]
 	s.mu.Unlock()
 	if !ok {
 		return
 	}
-	r.setFrameCounts(written, late, dropped, rate)
+	r.setFrameCounts(written, late, dropped, rate, observedAt)
 }
 
 // SetDrawState overwrites surfaceID's reported timeline/drawing evidence —
