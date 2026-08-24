@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -170,13 +171,71 @@ func ContentBaseURLIsLoopback(rawURL string) bool {
 	if host == "" {
 		return false
 	}
-	if host == "localhost" {
+	if strings.TrimSuffix(host, ".") == "localhost" {
 		return true
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		return ip.IsLoopback() || ip.IsUnspecified()
 	}
+	if ip := parseInetAtonIPv4(host); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
 	return false
+}
+
+// parseInetAtonIPv4 accepts inet_aton's numeric forms (1-4 dot-separated
+// decimal, octal, or hex parts, the last absorbing the remaining bytes) and
+// returns nil for anything else. [net.ParseIP] rejects these as
+// non-canonical, but the OS resolver still dials them.
+func parseInetAtonIPv4(host string) net.IP {
+	parts := strings.Split(host, ".")
+	if len(parts) > 4 {
+		return nil
+	}
+	vals := make([]uint64, len(parts))
+	for i, p := range parts {
+		if p == "" {
+			return nil
+		}
+		base := 10
+		switch {
+		case strings.HasPrefix(p, "0x") || strings.HasPrefix(p, "0X"):
+			base = 16
+			p = p[2:]
+		case len(p) > 1 && p[0] == '0':
+			base = 8
+			p = p[1:]
+		}
+		if p == "" {
+			return nil
+		}
+		v, err := strconv.ParseUint(p, base, 64)
+		if err != nil {
+			return nil
+		}
+		vals[i] = v
+	}
+	// Every part but the last is exactly one byte; the last absorbs the
+	// remaining 4-len(parts)+1 bytes.
+	for i := 0; i < len(vals)-1; i++ {
+		if vals[i] > 0xff {
+			return nil
+		}
+	}
+	lastBits := uint(8 * (5 - len(vals)))
+	if vals[len(vals)-1] >= (uint64(1) << lastBits) {
+		return nil
+	}
+	var b [4]byte
+	for i := 0; i < len(vals)-1; i++ {
+		b[i] = byte(vals[i])
+	}
+	last := vals[len(vals)-1]
+	for i := 3; i >= len(vals)-1; i-- {
+		b[i] = byte(last)
+		last >>= 8
+	}
+	return net.IPv4(b[0], b[1], b[2], b[3])
 }
 
 // ValidateAssetSettings validates one assets.settings config payload: a

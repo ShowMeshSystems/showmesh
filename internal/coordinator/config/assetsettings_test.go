@@ -179,6 +179,17 @@ func TestContentBaseURLIsLoopback(t *testing.T) {
 		"http://[::1]:8080",
 		"http://0.0.0.0:8080",
 		"http://[::]:8080",
+		"http://0x7f000001:8080",
+		"http://2130706433:8080",
+		"http://017700000001:8080",
+		"http://127.1:8080",
+		"http://127.000.000.001:8080",
+		"http://0:8080",
+		"http://localhost.:8080",
+		"http://127.0.1:8080",
+		"http://0x7f.0.0.1:8080",
+		"http://127.0x1:8080",
+		"http://0177.1:8080",
 	}
 	for _, u := range loopback {
 		if !ContentBaseURLIsLoopback(u) {
@@ -192,6 +203,16 @@ func TestContentBaseURLIsLoopback(t *testing.T) {
 		"http://coordinator.example.lan:8080",
 		"http://192.168.1.50:8080",
 		"not a url",
+		"http://8.8.8.8:8080",
+		"http://203.0.113.5:8080",
+		"http://999.1:8080",
+		"http://134744072:8080",
+		"http://4294967295:8080",
+		"http://0x100000000:8080",
+		"http://0.0.0.256:8080",
+		"http://1.2.3.4.5:8080",
+		"http://08:8080",
+		"http://0x:8080",
 	}
 	for _, u := range routable {
 		if ContentBaseURLIsLoopback(u) {
@@ -205,7 +226,17 @@ func TestContentBaseURLIsLoopback(t *testing.T) {
 // from itself, not from the coordinator, and this must be caught before it
 // ever reaches a fleet.
 func TestValidateAssetSettingsRejectsLoopbackContentBaseURL(t *testing.T) {
-	for _, u := range []string{"http://localhost:8080", "http://127.0.0.1:8080", "http://0.0.0.0:8080"} {
+	for _, u := range []string{
+		"http://localhost:8080",
+		"http://127.0.0.1:8080",
+		"http://0.0.0.0:8080",
+		"http://0x7f000001:8080",
+		"http://2130706433:8080",
+		"http://017700000001:8080",
+		"http://127.1:8080",
+		"http://127.000.000.001:8080",
+		"http://0:8080",
+	} {
 		s := testAssetSettings
 		s.ContentBaseURL = u
 		if err := ValidateAssetSettings(s); err == nil {
