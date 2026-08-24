@@ -88,9 +88,14 @@ var newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
 // time a genuinely newer audio.node binding arrives ([audioBinding]'s
 // onNode callback). onNode runs with its own lock released, so two
 // deliveries can call [audioEngineRebuilder.rebuild] from different
-// goroutines; mu serializes them so a slower rebuild can never overwrite
-// a faster, later one without releasing what it displaces (see
-// [audioEngineRebuilder.bind]).
+// goroutines; mu serializes them so at most one rebuild runs at a time,
+// and each fully releases what it displaces before the next one starts
+// (see [audioEngineRebuilder.bind]). Serialization alone does not order
+// revisions: an older delivery's rebuild can still acquire mu AFTER a
+// newer delivery's rebuild already bound its engine. builtRevision and
+// haveBuilt (also guarded by mu) are what make a slower rebuild unable to
+// overwrite a faster, later one: rebuild drops any revision older than
+// the one already bound instead of running.
 //
 // A gstengine holds its output device until it is closed (see
 // [closeReplacedEngine]), so rebuild validates the new binding
@@ -116,7 +121,9 @@ type audioEngineRebuilder struct {
 	mgr        *audio.Manager
 	logger     *slog.Logger
 
-	mu sync.Mutex
+	mu            sync.Mutex
+	haveBuilt     bool
+	builtRevision int64
 }
 
 func newAudioEngineRebuilder(assetDir string, switchable *audio.SwitchableEngine, mgr *audio.Manager, logger *slog.Logger) *audioEngineRebuilder {
@@ -132,6 +139,19 @@ const validationSampleRate = 1
 func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// applyNode orders acceptance, not execution: it records a newer
+	// revision and releases its own lock before calling onNode, so an
+	// older delivery's rebuild can still reach mu after a newer one has
+	// already bound its engine. Running it would tear the newer binding
+	// down and leave the node playing a superseded one.
+	if r.haveBuilt && node.Revision < r.builtRevision {
+		if r.logger != nil {
+			r.logger.Warn("dropped an audio.node revision older than the one currently bound",
+				"revision", node.Revision, "bound_revision", r.builtRevision)
+		}
+		return
+	}
 
 	staticCfg := staticGstEngineConfig(r.assetDir, node)
 	staticCfg.SampleRate = validationSampleRate
@@ -165,6 +185,10 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 			"available", ok, "unavailable_reason", reason)
 	}
 	r.bind(engine)
+	// Advanced only on a revision whose engine is actually bound, so the
+	// guard above never drops a revision on the strength of a failed build.
+	r.builtRevision = node.Revision
+	r.haveBuilt = true
 }
 
 // bind installs engine as this node's current engine and releases

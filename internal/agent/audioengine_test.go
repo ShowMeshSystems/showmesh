@@ -562,3 +562,126 @@ func TestRebuildSerializesConcurrentRebuilds(t *testing.T) {
 		t.Errorf("closed %d of 2 built engines, want exactly 1: 0 means an orphaned engine still holding the device, 2 means the surviving engine was wrongly closed too", closedCount)
 	}
 }
+
+// raceCloseEngine is an [audio.Engine] double that counts how many times
+// Close was called, safe for concurrent use:
+// TestRebuildDropsAnOlderRevisionThatLostTheLockRace uses the count to
+// prove the surviving engine is never double-closed and a dropped
+// engine, if one was ever built, is not orphaned.
+type raceCloseEngine struct {
+	audio.Engine
+	mu    sync.Mutex
+	count int
+}
+
+func (e *raceCloseEngine) Close() error {
+	e.mu.Lock()
+	e.count++
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *raceCloseEngine) closeCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.count
+}
+
+// TestRebuildDropsAnOlderRevisionThatLostTheLockRace pins the ordering
+// invariant rebuild owns beyond plain mutual exclusion.
+// [audioBinding.applyNode] records a newer revision and releases its own
+// lock BEFORE calling onNode, so two deliveries (an older revision and a
+// newer one) can call [audioEngineRebuilder.rebuild] from different
+// goroutines. rebuild serializes on r.mu, but serialization alone does
+// not order revisions: if the older revision's rebuild happens to
+// acquire r.mu SECOND, after the newer revision's rebuild already bound
+// its engine, it still runs to completion, closes the newer engine, and
+// binds its own, leaving the node's [audio.SwitchableEngine] bound to a
+// stale configuration.
+//
+// This test forces exactly that ordering, deterministically, with no
+// dependence on scheduling for WHICH goroutine wins the lock: the newer
+// revision's rebuild is started first and, because it is uncontested, is
+// guaranteed to acquire r.mu before anything else runs. It then blocks
+// inside the injected newGstEngine hook WHILE STILL HOLDING r.mu. The
+// older revision's rebuild is only started after that point, so its own
+// r.mu.Lock() call is guaranteed to block until the newer revision's
+// rebuild finishes and releases r.mu, regardless of goroutine scheduling.
+func TestRebuildDropsAnOlderRevisionThatLostTheLockRace(t *testing.T) {
+	origNewEngine := newGstEngine
+	t.Cleanup(func() { newGstEngine = origNewEngine })
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+
+	var mu sync.Mutex
+	var built []*raceCloseEngine
+	releaseNewer := make(chan struct{})
+	newerBuildStarted := make(chan struct{})
+
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		mu.Lock()
+		idx := len(built)
+		e := &raceCloseEngine{Engine: audio.NewFakeEngine(time.Now)}
+		built = append(built, e)
+		mu.Unlock()
+		if idx == 0 {
+			close(newerBuildStarted)
+			<-releaseNewer
+		}
+		return e, nil
+	}
+
+	older := audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 5}
+	newer := older
+	newer.Revision = 6
+
+	doneNewer := make(chan struct{})
+	go func() {
+		defer close(doneNewer)
+		r.rebuild(newer)
+	}()
+	// By the time newerBuildStarted closes, rebuild(newer) already holds
+	// r.mu: it locks r.mu before ever calling newGstEngine. Starting the
+	// older revision's rebuild only after this point guarantees it
+	// blocks on r.mu.
+	<-newerBuildStarted
+
+	doneOlder := make(chan struct{})
+	go func() {
+		defer close(doneOlder)
+		r.rebuild(older)
+	}()
+
+	close(releaseNewer)
+	<-doneNewer
+	<-doneOlder
+
+	mu.Lock()
+	n := len(built)
+	newerEngine := built[0]
+	var olderEngine *raceCloseEngine
+	if n > 1 {
+		olderEngine = built[1]
+	}
+	mu.Unlock()
+
+	sentinel := audio.NewFakeEngine(time.Now)
+	bound := switchable.Set(sentinel)
+
+	if bound != audio.Engine(newerEngine) {
+		t.Errorf("final bound engine is not revision 6's engine: revision 5's rebuild won the lock race second and overwrote it with a stale binding")
+	}
+	if got := newerEngine.closeCount(); got != 0 {
+		t.Errorf("revision 6's engine was closed %d times, want 0: it is the engine that should still be bound", got)
+	}
+	if n != 1 {
+		t.Errorf("built %d engines, want exactly 1: the dropped revision must return before it reaches the build step, not build an engine and then close it", n)
+	}
+	if olderEngine != nil && olderEngine.closeCount() != 1 {
+		t.Errorf("revision 5's engine was built and closed %d times, want exactly 1: 0 orphans a device handle, more than 1 double-closes it", olderEngine.closeCount())
+	}
+}
