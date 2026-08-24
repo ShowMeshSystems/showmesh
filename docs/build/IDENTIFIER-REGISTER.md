@@ -340,6 +340,7 @@ after shipping a breaking change to stored history.
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
+| `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
 `announce` and `duck` mint no operation of their own.** §14 permits combining
@@ -403,6 +404,7 @@ register entry comes from the code and never from a plan.
 | `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 | `fpp.instance_uuid.acknowledge` | shipped | per-endpoint observed FPP instance uuid conflict acknowledgment |
 | `cuecatalog.acknowledge` | shipped | Track H seam H3: a node's cue-catalog acknowledgement |
+| `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -411,12 +413,14 @@ the verb (`principal.reset_password`, `fpp.stop_playlist_gracefully`).
 rewrites the meaning of history that is already stored, so the rule going
 forward is `<noun>.<verb>`, and the existing outliers stay.
 
-**Three of these names are shared with other namespaces, deliberately and
-harmlessly.** `asset.fetch` and the four `render.*` names are also agent
-operation names, and the `fpp.*` and `resolume.*` audit actions echo their
-primitive and action names. They are different tables reached by different
-code, and an audit action that matched its operation is easier to read than
-one that did not. Do not "fix" the duplication.
+**Four of these names are shared with other namespaces, deliberately and
+harmlessly.** `asset.fetch`, the four `render.*` names, and `cue.activate`
+are also agent operation names (the same MQTT action string the "Agent
+operation names" table above reserves), and the `fpp.*` and `resolume.*`
+audit actions echo their primitive and action names. They are different
+tables reached by different code, and an audit action that matched its
+operation is easier to read than one that did not. Do not "fix" the
+duplication.
 
 ## Observation resource kinds and signal namespaces
 

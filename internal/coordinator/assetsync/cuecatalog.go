@@ -144,25 +144,29 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 	var out cuecatalog.Outputs
 
 	if payload.Outputs.Render != nil && nodeHasSurface {
+		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Render.Sequence)
 		out.Render = &cuecatalog.RenderOutput{
 			Sequence:    payload.Outputs.Render.Sequence,
-			AssetHashes: contentHashesFor(assetsBySequence, payload.Outputs.Render.Sequence),
+			Filename:    filename,
+			AssetHashes: hashes,
 		}
 	}
 	if payload.Outputs.Audio != nil && nodeHasAudioNode {
+		// assetsBySequence is keyed by AssetRecord.SequenceID, and
+		// payload.Outputs.Audio.Asset IS that same identity, not
+		// AssetRecord.ID: every asset, audio or render, is uploaded
+		// under a "sequence" parameter (internal/coordinator/api/
+		// assets.go's fields.sequence) that becomes SequenceID
+		// regardless of MediaType, so an audio Cue output names the
+		// same identity space a render Cue output's Sequence does —
+		// only ShowCueAudioOutput's own field is called "asset" rather
+		// than "sequence".
+		filename, hashes := resolveAssetFor(assetsBySequence, payload.Outputs.Audio.Asset)
 		out.Audio = &cuecatalog.AudioOutput{
 			Asset:             payload.Outputs.Audio.Asset,
+			Filename:          filename,
 			StartOffsetMillis: payload.Outputs.Audio.StartOffsetMillis,
-			// assetsBySequence is keyed by AssetRecord.SequenceID, and
-			// payload.Outputs.Audio.Asset IS that same identity, not
-			// AssetRecord.ID: every asset, audio or render, is uploaded
-			// under a "sequence" parameter (internal/coordinator/api/
-			// assets.go's fields.sequence) that becomes SequenceID
-			// regardless of MediaType, so an audio Cue output names the
-			// same identity space a render Cue output's Sequence does —
-			// only ShowCueAudioOutput's own field is called "asset" rather
-			// than "sequence".
-			AssetHashes: contentHashesFor(assetsBySequence, payload.Outputs.Audio.Asset),
+			AssetHashes:       hashes,
 		}
 	}
 	if payload.Outputs.LTC != nil && nodeHasAudioNode {
@@ -193,24 +197,40 @@ func hasAudioNode(ctx context.Context, st *store.Store, nodeID string) (bool, er
 	return true, nil
 }
 
-// contentHashesFor returns the sorted, de-duplicated content hashes of
-// every asset assetsBySequence holds for sequenceID — never nil, so two
-// callers resolving an output with no matching asset yet (nothing
-// uploaded) agree on an empty array rather than one producing null and
-// the other []: [cuecatalog.RevisionInput]'s own determinism requirement.
-func contentHashesFor(assetsBySequence map[string][]ExpectedAsset, sequenceID string) []string {
+// resolveAssetFor returns the sorted, de-duplicated content hashes of
+// every asset assetsBySequence holds for sequenceID (never nil, so two
+// callers resolving an output with no matching asset yet — nothing
+// uploaded — agree on an empty array rather than one producing null and
+// the other []: [cuecatalog.RevisionInput]'s own determinism requirement),
+// plus the ONE runtime filename a node must actually open: the filename
+// paired with hashes[0] (the alphabetically-first content hash), the same
+// hash [firstAssetHash] in internal/agent/cueactivationrender.go picks
+// when it later verifies that file. Pairing filename and hash from the
+// SAME underlying [ExpectedAsset] row is what a node's own "open by
+// filename, then verify the opened file's hash" convention
+// (renderApplyParamsPayload's own established shape) requires — a
+// filename resolved independently of which hash it is meant to
+// corroborate would let the two silently drift apart. The ordinary case
+// is exactly one asset per sequence per node; a sequence with more than
+// one current asset (a node-targeted upload alongside a show-wide one)
+// still resolves deterministically, picking whichever asset's hash sorts
+// first.
+func resolveAssetFor(assetsBySequence map[string][]ExpectedAsset, sequenceID string) (filename string, hashes []string) {
 	assets := assetsBySequence[sequenceID]
-	seen := make(map[string]bool, len(assets))
-	hashes := make([]string, 0, len(assets))
+	filenameByHash := make(map[string]string, len(assets))
+	hashes = make([]string, 0, len(assets))
 	for _, a := range assets {
-		if seen[a.ContentHash] {
+		if _, seen := filenameByHash[a.ContentHash]; seen {
 			continue
 		}
-		seen[a.ContentHash] = true
+		filenameByHash[a.ContentHash] = a.Filename
 		hashes = append(hashes, a.ContentHash)
 	}
 	sort.Strings(hashes)
-	return hashes
+	if len(hashes) > 0 {
+		filename = filenameByHash[hashes[0]]
+	}
+	return filename, hashes
 }
 
 // referencedCueIDs returns every show.cue id that some show.playlist in

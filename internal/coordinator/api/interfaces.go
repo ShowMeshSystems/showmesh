@@ -556,6 +556,27 @@ type AssetSyncNudger interface {
 	Nudge()
 }
 
+// CueActivationNudger requests that [CueActivationLoop]'s current (or
+// next) tick run promptly instead of waiting out its own periodic
+// interval — [AssetSyncNudger]'s identical pattern, one seam over, for
+// Track H seam H4's own activation loop (cueactivationloop.go). Declared
+// here, at the consumer (fppobservations.go), for the identical reason
+// [AssetSyncNudger] is: the real implementation is *CueActivationLoop
+// itself, which already satisfies this one-method interface with no
+// adapter needed.
+//
+// Calling Nudge from the FPP playlist-entry observation POST handler does
+// NOT give ingestion execution authority (fppobservations.go's own
+// standing rule): Nudge only asks the loop to re-evaluate promptly: the
+// loop itself still independently reconciles, decides, and authorizes
+// every activation exactly as it would on its own next tick. Without
+// this, a fresh observation was invisible to a wall for up to
+// [Options.CueActivationLoopInterval] (1 second) — long enough to be
+// operator-visible on a real show.
+type CueActivationNudger interface {
+	Nudge()
+}
+
 // AssetSettingsSource is Track G seam G-4's live, no-restart view of the
 // assets.settings configuration kind (ADR-039 decision 6): the three
 // settings this package itself needs to read on every request rather than

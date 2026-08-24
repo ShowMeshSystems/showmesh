@@ -20,19 +20,41 @@ import (
 )
 
 // RenderOutput is one Cue's resolved render output for one node: the
-// logical sequence name plus the content hashes of the assets it needs
-// (H3 spec section 3, reusing Track E's own asset identity rather than a
-// second expectation model). AssetHashes is sorted and de-duplicated by
-// the caller before this type is populated, so two callers resolving the
-// identical output always produce byte-identical JSON.
+// logical sequence name, the runtime filename a node must open to render
+// it, and the content hashes of the assets it needs (H3 spec section 3,
+// reusing Track E's own asset identity rather than a second expectation
+// model). Sequence is a LOGICAL identity (copied from show.cue's own
+// outputs.render.sequence) and is never itself a filename a node may
+// open — see Filename's own doc comment. AssetHashes is sorted and
+// de-duplicated by the caller before this type is populated, so two
+// callers resolving the identical output always produce byte-identical
+// JSON.
 type RenderOutput struct {
-	Sequence    string   `json:"sequence"`
+	Sequence string `json:"sequence"`
+
+	// Filename is the runtime filename this Cue's resolved asset is
+	// stored under on a node's asset directory — the same identity
+	// renderApplyParamsPayload.FSEQFilename carries for a plain (non-Cue)
+	// render.surface.apply. A node MUST open this filename and verify the
+	// opened file's content hash against AssetHashes before rendering it;
+	// Sequence is a logical identity only, never something a node opens
+	// directly (ADR-043 decision 6 — filename/sequence identity is
+	// corroboration, never selection authority). Empty when the resolved
+	// catalog has no asset uploaded for this Cue's declared sequence yet.
+	Filename string `json:"filename"`
+
 	AssetHashes []string `json:"assetHashes"`
 }
 
-// AudioOutput is one Cue's resolved audio output for one node.
+// AudioOutput is one Cue's resolved audio output for one node. Asset is a
+// LOGICAL identity (the same "sequence" space RenderOutput.Sequence
+// occupies — see internal/coordinator/assetsync/cuecatalog.go's own
+// comment on resolveCueOutputs' Audio branch); Filename is the runtime
+// filename a node must actually open, mirroring RenderOutput.Filename's
+// identical rule one output over.
 type AudioOutput struct {
 	Asset             string   `json:"asset"`
+	Filename          string   `json:"filename"`
 	StartOffsetMillis int      `json:"startOffsetMillis"`
 	AssetHashes       []string `json:"assetHashes"`
 }
@@ -75,10 +97,15 @@ type Entry struct {
 
 // RevisionInput is EXACTLY what the catalog revision hash covers (H3 spec
 // section 3.1): "the Show id, the generation, the node id, and every Cue
-// id, Cue revision, resolved output, and asset hash in the catalog."
-// Nothing else — a catalog's display-only fields (asset filenames, sizes)
-// must never be added here, because the coordinator and a node would then
-// only agree on a revision when those display fields ALSO matched, which
+// id, Cue revision, resolved output, and asset hash in the catalog." A
+// resolved output's own Filename IS part of "resolved output" and is
+// covered here, through Entries — it is what a node must actually open,
+// not a display-only label the way an asset's size in bytes would be:
+// two catalogs that differ only in which runtime filename a node must
+// open to reach identical bytes are different catalogs, and must hash
+// differently. Only genuinely display-only fields (sizes, upload
+// timestamps, and the like) are excluded, because the coordinator and a
+// node would then only agree on a revision when those ALSO matched, which
 // is not what section 3.1 promises ("the revision identifies the content,
 // not the delivery"). Entries must be sorted by CueID, and each Entry's
 // AssetHashes sorted, by the caller before this type is built: JSON Schema

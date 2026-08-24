@@ -14005,11 +14005,17 @@ components:
             $ref: "#/components/schemas/NodeAssetManifest"
     CueCatalogRenderOutput:
       type: object
-      description: One Cue's resolved render output for a node (Track H seam H3).
+      description: >-
+        One Cue's resolved render output for a node (Track H seam H3/H4).
+        sequence is a logical identity only; filename is the runtime
+        filename a node must open (and verify against assetHashes) to
+        render it.
       additionalProperties: false
-      required: [sequence, assetHashes]
+      required: [sequence, filename, assetHashes]
       properties:
         sequence:
+          type: string
+        filename:
           type: string
         assetHashes:
           type: array
@@ -14017,11 +14023,17 @@ components:
             type: string
     CueCatalogAudioOutput:
       type: object
-      description: One Cue's resolved audio output for a node (Track H seam H3).
+      description: >-
+        One Cue's resolved audio output for a node (Track H seam H3/H4).
+        asset is a logical identity only; filename is the runtime
+        filename a node must open (and verify against assetHashes) to
+        play it.
       additionalProperties: false
-      required: [asset, startOffsetMillis, assetHashes]
+      required: [asset, filename, startOffsetMillis, assetHashes]
       properties:
         asset:
+          type: string
+        filename:
           type: string
         startOffsetMillis:
           type: integer

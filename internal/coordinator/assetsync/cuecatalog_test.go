@@ -516,6 +516,10 @@ func TestCueCatalogAudioOutputResolvesHashesBySequenceIDNotAssetRowID(t *testing
 		t.Fatalf("ResolveCueCatalog entries[0].Outputs.Audio.AssetHashes = %+v, want [%q] (looked up by SequenceID %q, not AssetID %q)",
 			out.Audio.AssetHashes, contentHash, "thriller-audio", rec.ID)
 	}
+	if out.Audio.Filename != "thriller-audio.wav" {
+		t.Fatalf("ResolveCueCatalog entries[0].Outputs.Audio.Filename = %q, want %q (the runtime filename a node must actually open, not the logical asset id)",
+			out.Audio.Filename, "thriller-audio.wav")
+	}
 }
 
 // cueCatalogDeployWireParamsForTest mirrors internal/agent/cuecatalogops.go's
@@ -630,6 +634,13 @@ func TestCueCatalogRevisionAgreesAfterWireRoundTrip(t *testing.T) {
 	gotHashes := map[string]bool{openerEntry.Outputs.Render.AssetHashes[0]: true, openerEntry.Outputs.Render.AssetHashes[1]: true}
 	if !gotHashes[hashA] || !gotHashes[hashB] {
 		t.Fatalf("opener entry render asset hashes = %+v, want %q and %q in some order", openerEntry.Outputs.Render.AssetHashes, hashA, hashB)
+	}
+	// hashA sorts first ("aaaa..." < "bbbb..."), so the paired runtime
+	// filename must be the node-targeted upload's own filename, never the
+	// empty string or a filename paired with the OTHER hash.
+	if openerEntry.Outputs.Render.Filename != "opener-node.fseq" {
+		t.Fatalf("opener entry render filename = %q, want %q (paired with the alphabetically-first hash %q)",
+			openerEntry.Outputs.Render.Filename, "opener-node.fseq", hashA)
 	}
 	if announceEntry.Outputs.Announcement == nil || announceEntry.Outputs.Announcement.DuckGainDb == nil || *announceEntry.Outputs.Announcement.DuckGainDb != duckGain {
 		t.Fatalf("announce entry announcement output = %+v, want DuckGainDb = %v", announceEntry.Outputs.Announcement, duckGain)

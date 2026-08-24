@@ -5090,14 +5090,16 @@ export interface components {
             serverTime: string;
             nodes: components["schemas"]["NodeAssetManifest"][];
         };
-        /** @description One Cue's resolved render output for a node (Track H seam H3). */
+        /** @description One Cue's resolved render output for a node (Track H seam H3/H4). sequence is a logical identity only; filename is the runtime filename a node must open (and verify against assetHashes) to render it. */
         CueCatalogRenderOutput: {
             sequence: string;
+            filename: string;
             assetHashes: string[];
         };
-        /** @description One Cue's resolved audio output for a node (Track H seam H3). */
+        /** @description One Cue's resolved audio output for a node (Track H seam H3/H4). asset is a logical identity only; filename is the runtime filename a node must open (and verify against assetHashes) to play it. */
         CueCatalogAudioOutput: {
             asset: string;
+            filename: string;
             startOffsetMillis: number;
             assetHashes: string[];
         };

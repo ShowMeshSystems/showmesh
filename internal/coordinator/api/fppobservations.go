@@ -337,6 +337,17 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 	// an idempotent replay, it stored nothing and changed nothing. The
 	// stream hub's own next render pass picks up a real change from the
 	// store; nothing here publishes synchronously.
+	//
+	// A genuinely new (non-replay) observation DOES nudge Track H seam
+	// H4's own activation loop to reconcile promptly (see
+	// [CueActivationNudger]'s own doc comment for why this is not "this
+	// handler grants execution authority"): the loop itself still
+	// independently decides and authorizes; this only asks it not to wait
+	// out its own periodic tick to notice fresh evidence exists.
+	if !replay {
+		h.deps.CueActivationNudger.Nudge()
+	}
+
 	jsonWrite(w, v1.FPPPlaylistEntryObservationResponse{
 		SchemaVersion: req.SchemaVersion,
 		InstanceUUID:  rec.InstanceUUID,
