@@ -1825,8 +1825,9 @@ func New(deps Dependencies, opts Options) *API {
 	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
 	// resolve, dispatch cuecatalog.deploy, and record the node's own
 	// reported revision through the same PutNodeCueCatalogAck path the
-	// acknowledge route above uses. asset:write, matching this route's own
-	// doc comment on why it reuses that scope rather than minting one.
+	// acknowledge route above uses. cuecatalog:deploy (admin only),
+	// matching scopeCueCatalogDeploy's own doc comment on why it mints a
+	// dedicated scope rather than reusing asset:write.
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/deploy", h.writeGuard(&scopeCueCatalogDeploy, h.handlePostNodeCueCatalogDeploy))
 	// GET /api/v1/resolume/recovery (Track D seam D-3a): the open read —
 	// never gated, per ADR-024's reads-stay-open posture and the build
