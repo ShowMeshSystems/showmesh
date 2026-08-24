@@ -64,7 +64,21 @@ func newManagerTestEngine(t *testing.T, assetDir string) *Engine {
 	if ok, reason := e.Available(); !ok {
 		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
 	}
-	t.Cleanup(func() { e.pipeline.SetState(gst.StateNull) })
+	t.Cleanup(func() {
+		// Bounded, not a bare SetState: a test that deliberately abandons a
+		// state change leaves a goroutine inside gst_element_set_state
+		// holding that element's state lock, and this bin-level transition
+		// recurses into the same element. An unbounded call here blocks the
+		// whole test binary until its timeout rather than the branch alone.
+		ctx, cancel := context.WithTimeout(context.Background(), testCleanupTimeout)
+		defer cancel()
+		if err := boundedCall(ctx, func() error {
+			e.pipeline.SetState(gst.StateNull)
+			return nil
+		}); err != nil {
+			t.Logf("test engine cleanup abandoned the pipeline's NULL transition: %v", err)
+		}
+	})
 	return e
 }
 

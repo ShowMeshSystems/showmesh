@@ -47,6 +47,9 @@ func resolveByRuntimeFilename(m pkgaudio.MediaRef) (string, error) {
 // newTestEngine skips the calling test when this environment cannot
 // actually build and run the output pipeline (missing GStreamer plugins,
 // no fakesink) rather than failing on an environment gap that isn't a
+// testCleanupTimeout bounds the harness's own pipeline teardown.
+const testCleanupTimeout = 5 * time.Second
+
 // bug in this package.
 func newTestEngine(t *testing.T) *Engine {
 	t.Helper()
@@ -58,7 +61,19 @@ func newTestEngine(t *testing.T) *Engine {
 		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
 	}
 	t.Cleanup(func() {
-		e.pipeline.SetState(gst.StateNull)
+		// Bounded, not a bare SetState: a test that deliberately abandons a
+		// state change leaves a goroutine inside gst_element_set_state
+		// holding that element's state lock, and this bin-level transition
+		// recurses into the same element. An unbounded call here blocks the
+		// whole test binary until its timeout rather than the branch alone.
+		ctx, cancel := context.WithTimeout(context.Background(), testCleanupTimeout)
+		defer cancel()
+		if err := boundedCall(ctx, func() error {
+			e.pipeline.SetState(gst.StateNull)
+			return nil
+		}); err != nil {
+			t.Logf("test engine cleanup abandoned the pipeline's NULL transition: %v", err)
+		}
 	})
 	return e
 }
@@ -183,6 +198,18 @@ func TestBoundedCallReturnsOnContextDeadline(t *testing.T) {
 	}
 }
 
+// exhaustedLoadDeadline is deliberately not a small positive duration
+// like a millisecond: Load was measured at 1.5-2.7ms on this
+// environment, so a 1ms budget is genuinely marginal rather than
+// reliably exhausted, and a change to setElementsState's own bounded-call
+// shape (unrelated to correctness here) shifted that race enough to make
+// both tests below flake at roughly 50% under repeated runs. A
+// nanosecond deadline is already expired by the time Load is entered
+// regardless of Load's own duration, which is what "an exhausted
+// deadline" actually requires; see the same technique used throughout
+// this package's other timed-out-call tests.
+const exhaustedLoadDeadline = time.Nanosecond
+
 // TestLoadDeadlineDoesNotLeakElements proves a Load that fails because its
 // own ctx deadline fired before setElementsState(PAUSED) returned still
 // tears the branch's elements out of the pipeline, rather than handing
@@ -196,7 +223,7 @@ func TestLoadDeadlineDoesNotLeakElements(t *testing.T) {
 	nextID := e.nextID.Load() + 1
 	filesrcName := fmt.Sprintf("h%d-filesrc", nextID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), exhaustedLoadDeadline)
 	defer cancel()
 	if _, err := e.Load(ctx, "leak1", mediaRef(wav), 3*time.Second); err == nil {
 		t.Fatalf("Load with an exhausted deadline: err = nil, want an error")
@@ -226,7 +253,7 @@ func TestLoadTimeoutIsWrappedWithDistinctSentinel(t *testing.T) {
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 3)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), exhaustedLoadDeadline)
 	defer cancel()
 	_, err := e.Load(ctx, "timeout1", mediaRef(wav), 3*time.Second)
 	if err == nil {
