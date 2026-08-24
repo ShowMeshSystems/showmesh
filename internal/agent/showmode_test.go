@@ -259,3 +259,26 @@ func TestRunShowModeWatchLogsTheHeldTransitionAndReturnsOnCancel(t *testing.T) {
 		t.Fatal("runShowModeWatch did not return after its context was cancelled")
 	}
 }
+
+// TestShowModeHolderBehavesAsShowReadsCurrentValue proves the holder's own
+// one-call read, which is what a consumer deciding something at the point
+// of decision uses: it follows the held value on every call, and an unknown
+// mode behaves as show (ADR-033 decision 5).
+func TestShowModeHolderBehavesAsShowReadsCurrentValue(t *testing.T) {
+	h := NewShowModeHolder(time.Now)
+	if !h.BehavesAsShow() {
+		t.Fatalf("BehavesAsShow = false before any mode was received, want true (unknown behaves as show)")
+	}
+	if !h.Set(mqttproto.ShowModeProgram, 1, time.Now()) {
+		t.Fatalf("Set(program) was refused")
+	}
+	if h.BehavesAsShow() {
+		t.Fatalf("BehavesAsShow = true after being told program, want false")
+	}
+	if !h.Set(mqttproto.ShowModeShow, 2, time.Now()) {
+		t.Fatalf("Set(show) was refused")
+	}
+	if !h.BehavesAsShow() {
+		t.Fatalf("BehavesAsShow = false after being told show, want true")
+	}
+}

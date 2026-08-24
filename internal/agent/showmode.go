@@ -9,6 +9,7 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -16,11 +17,10 @@ import (
 // operating mode so any subsystem on this node can read it AT THE POINT OF
 // DECISION.
 //
-// Nothing on this node reads it yet. That is deliberate: the renderer's own
-// mode-dependent behaviour is a separate seam, and this one ships the value
-// and its semantics so that seam has something correct to read instead of
-// inventing a second answer, which is the exact failure ADR-033 exists to
-// prevent.
+// The renderer's frame writer is the first consumer on this node: it reads
+// the holder on the frame a coverage-gap failure happens on, to decide
+// whether that failure reaches the wall as an unmistakable alert field or
+// as black (internal/agent/pipeline/frame.go).
 //
 // The shape is [resolume.FootprintControls]' shape, named by ADR-033 and by
 // TRACK-D-D2-SPEC.md §3.3 as the pattern for this: an atomic-backed value
@@ -30,6 +30,10 @@ import (
 // THE AGENT DERIVES THE MODE FROM NOTHING. Not playback state, not the
 // presence of an assignment, not whether a pipeline is running. The only
 // input is a message from the coordinator on [mqttproto.ShowModeTopic].
+
+// Compile-time check that a holder can be handed straight to a frame
+// writer as its mode source (internal/agent/pipeline's ShowModeSource).
+var _ pipeline.ShowModeSource = (*ShowModeHolder)(nil)
 
 // ShowModeUnknown is what this node reports when it has never been told the
 // mode. Per ADR-033 decision 5 it BEHAVES AS SHOW, which is what
@@ -154,6 +158,18 @@ func (h *ShowModeHolder) Current() ShowModeState {
 	}
 }
 
+// BehavesAsShow is [ShowModeState.BehavesAsShow] asked of the holder
+// itself, which is the whole read a consumer deciding one thing needs: it
+// re-reads the current value on every call, so a consumer that keeps the
+// holder (never a value taken from it) satisfies ADR-036 decision 1's
+// point-of-decision rule by construction.
+//
+// This is also what makes *ShowModeHolder a [pipeline.ShowModeSource]
+// without that package importing this one.
+func (h *ShowModeHolder) BehavesAsShow() bool {
+	return h.Current().BehavesAsShow()
+}
+
 // registerShowMode binds holder to receive the retained installation-wide
 // mode and subscribes to its topic, both fresh on every call (that is,
 // every OnConnectionUp), for [registerCommandHandling]'s reason: a
@@ -232,14 +248,13 @@ const showModeHeldWatchInterval = ShowModeFreshnessWindow / 2
 // runShowModeWatch logs the mode's current-to-held transitions and back,
 // until ctx is cancelled.
 //
-// This exists because nothing on this node reads the mode yet, and a value
-// nobody can observe is a value nobody can trust. ADR-011's rule is that
-// absence of evidence must be visible rather than silent; a coordinator
-// that has stopped confirming the mode is exactly that, and an operator
-// reading a node's logs after an outage needs to see that the node is
-// running on a held value rather than a current one. When a real consumer
-// lands, it reads [ShowModeHolder.Current] directly and this loop stays
-// what it is: the observability half.
+// This exists because a value nobody can observe is a value nobody can
+// trust. ADR-011's rule is that absence of evidence must be visible rather
+// than silent; a coordinator that has stopped confirming the mode is
+// exactly that, and an operator reading a node's logs after an outage needs
+// to see that the node is running on a held value rather than a current
+// one. A consumer reads the holder directly at its own point of decision;
+// this loop is the observability half and nothing depends on it.
 func runShowModeWatch(ctx context.Context, holder *ShowModeHolder, logger *slog.Logger, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

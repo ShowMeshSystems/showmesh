@@ -512,6 +512,13 @@ type agentConfig struct {
 	// package sets this explicitly to a t.TempDir() subdirectory so it
 	// knows exactly where to look for (or corrupt) a node's held bytes.
 	assetDir string
+
+	// extraEnv is appended verbatim to the agent's environment, as
+	// "KEY=value" entries. For real, operator-settable agent variables a
+	// single test needs (SHOWMESH_GST_LAUNCH, SHOWMESH_MULTISYNC_LISTEN_ADDR)
+	// rather than for anything test-only: the agent under test still reads
+	// its own production configuration path.
+	extraEnv []string
 }
 
 // testAgent wraps one real showmesh-agent subprocess: a genuine OS process
@@ -581,6 +588,7 @@ func startAgent(t *testing.T, cfg agentConfig) *testAgent {
 	if cfg.assetDir != "" {
 		env = append(env, "SHOWMESH_ASSET_DIR="+cfg.assetDir)
 	}
+	env = append(env, cfg.extraEnv...)
 
 	cmd := exec.Command(agentBinPath)
 	cmd.Env = env
@@ -1320,6 +1328,7 @@ topic write showmesh/nodes/%s/lwt
 topic write showmesh/nodes/%s/observed/#
 topic write showmesh/nodes/%s/result/+
 topic read  showmesh/nodes/%s/cmd
+topic read  showmesh/events/show_mode
 `, username, username, username, username, username, username, username)
 		appendACL := exec.Command("docker", "exec", "-i", mosquittoContainer,
 			"sh", "-ec", "cat >> /mosquitto/config/acl.generated.conf")

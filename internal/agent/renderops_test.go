@@ -18,7 +18,7 @@ import (
 // used to call newRenderOperations(sup, store) directly before B3 added the
 // asset dir / timeline / logger parameters.
 func newTestRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, dir string, clock *fakeClock) *renderOperations {
-	return newRenderOperations(sup, store, dir, multisync.NewTimeline(clock.now, multisync.Config{}), discardLogger())
+	return newRenderOperations(sup, store, dir, multisync.NewTimeline(clock.now, multisync.Config{}), nil, discardLogger())
 }
 
 // newRenderTestSupervisor builds a Supervisor over fakeRenderStarter, whose

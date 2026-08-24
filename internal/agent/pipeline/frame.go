@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,20 @@ type FrameSource interface {
 // [FrameSource].
 type TimelineSource interface {
 	Snapshot() multisync.Snapshot
+}
+
+// ShowModeSource answers, at the instant it is asked, whether this node
+// must behave as Show Mode. ADR-036 decision 1: the answer is read AT THE
+// POINT OF DECISION, never captured into a field at construction, so a mode
+// flip changes what a running frame writer draws without anything tearing
+// the writer down and rebuilding it.
+//
+// An interface, not internal/agent's holder type, because this package is
+// imported by that one; internal/agent's ShowModeHolder satisfies it
+// directly. A nil source behaves as Show Mode, which is the same answer
+// ADR-033 decision 5 gives a node that has never been told the mode.
+type ShowModeSource interface {
+	BehavesAsShow() bool
 }
 
 // idleContentStates is the set of [multisync.State] values for which the
@@ -64,6 +79,27 @@ const (
 	diagnosticBackgroundFill byte = 0x30
 	diagnosticBarFill        byte = 0xFF
 )
+
+// alertPixelFill is what [FailureOutputAlert] paints on every pixel of a
+// surface whose channel stride this writer can resolve: full red, every
+// other channel of the pixel off. Red is the choice because no healthy
+// state of this renderer ever produces it, and because the failure it
+// reports is essentially only reachable while an operator is configuring
+// the show: black would be indistinguishable from a correct idle, and a
+// dead cable or an unpowered surface is also black, never red.
+//
+// On an RGBW pixel the fourth channel stays 0, so the white element is off
+// and the pixel is red rather than a washed-out pink. On a surface whose
+// channel count is not a whole number of pixels (resolveGeometry's
+// degenerate case, where the stride is unknown) every byte is set to
+// alertUnknownStrideFill instead, since "red" is not expressible without a
+// stride: full-on is still maximally distant from the black a healthy idle
+// draws, which is the property that matters.
+var alertPixelFill = [4]byte{0xFF, 0x00, 0x00, 0x00}
+
+// alertUnknownStrideFill is [FailureOutputAlert]'s fallback byte for a
+// surface with no resolvable pixel stride. See [alertPixelFill].
+const alertUnknownStrideFill byte = 0xFF
 
 // diagnosticBarWidthDivisor sets [IdleOutputDiagnostic]'s moving bar width
 // to the surface's own width divided by this, clamped to at least one
@@ -118,6 +154,12 @@ type FrameWriter struct {
 	// internal/agent/renderops.go's parseIdleOutput.
 	idleOutput string
 
+	// showMode is read fresh on every failed extraction, never at
+	// construction (ADR-036 decision 1); see [ShowModeSource]. nil means
+	// this writer was built with no mode source at all and behaves as Show
+	// Mode, the same conservative answer an unknown mode gets.
+	showMode ShowModeSource
+
 	// buf, idleBuf, and diagBuf are all reused every frame (never
 	// (re)allocated on the hot path) — see build contract's "avoid an
 	// allocation per frame" rule. idleBuf is all-zero and never written to
@@ -128,13 +170,16 @@ type FrameWriter struct {
 	// and no copy. diagBuf is filled once at construction with the
 	// background constant and then mutated IN PLACE, one bar column at a
 	// time, by idleOutputFor — never reallocated and never rewritten in
-	// full (see idleOutputFor's own comment). Every byte diagBuf ever holds
+	// full (see idleOutputFor's own comment). alertBuf is filled once at
+	// construction with [FailureOutputAlert]'s pattern and never written
+	// to again. Every byte diagBuf ever holds
 	// is one of two constants written at a computed offset: a fill, never a
 	// render, which is what keeps this on ShowMesh's side of ADR-040's line
 	// (it locates and copies bytes; it never reads, scales, or blends one).
-	buf     []byte
-	idleBuf []byte
-	diagBuf []byte
+	buf      []byte
+	idleBuf  []byte
+	diagBuf  []byte
+	alertBuf []byte
 
 	// diagWidth, diagHeight, diagRowBytes, and diagBarWidthBytes are
 	// [IdleOutputDiagnostic]'s geometry, resolved once at construction from
@@ -196,6 +241,7 @@ type FrameWriter struct {
 	timelinePositionMS *int64
 	drawing            string
 	idleModeNow        string
+	failureOutputNow   string
 
 	stop chan struct{}
 	done chan struct{}
@@ -213,19 +259,34 @@ type FrameWriter struct {
 // including "" — is treated as [IdleOutputBlack], the safe default:
 // callers that resolve a concrete value (internal/agent/renderops.go)
 // already validate it against the known set before reaching here, so this
-// is defense in depth, never the place that rule is enforced.
+// is defense in depth, never the place that rule is enforced. The
+// coercion is LOGGED rather than silent: it changes what this surface
+// draws for the whole life of the writer, and a surface quietly drawing
+// black because one string upstream was wrong is the failure this seam
+// exists to stop.
+//
+// showMode may be nil, which behaves as Show Mode; see [ShowModeSource].
 //
 // width and height are the surface's own show.surface.geometry — used only
 // to give [IdleOutputDiagnostic]'s moving bar row/column coordinates (see
 // resolveGeometry); every other idle mode and the content path ignore them
 // entirely and keep working from channelStart/channelCount alone exactly as
 // before.
-func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, idleOutput string, logger Logger) (*FrameWriter, error) {
+func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, idleOutput string, showMode ShowModeSource, logger Logger) (*FrameWriter, error) {
+	// A source with no frames cannot cover any channel range, so the
+	// construction-time probe below has nothing to prove and every tick
+	// this writer would ever run is already known to fail. Refused here,
+	// with the count stated, rather than started so it can discover the
+	// same thing 40 times a second: skipping the probe for this case is
+	// how a broken assignment used to reach the runtime fallback instead
+	// of being refused up front.
+	if source.FrameCount() <= 0 {
+		return nil, fmt.Errorf("pipeline: surface %q: the assigned sequence has %d frames, so channels %d..%d can never be extracted from it",
+			surfaceID, source.FrameCount(), channelStart+1, channelStart+channelCount)
+	}
 	probe := make([]byte, channelCount)
-	if source.FrameCount() > 0 {
-		if err := source.ChannelRange(0, channelStart, channelCount, probe); err != nil {
-			return nil, err
-		}
+	if err := source.ChannelRange(0, channelStart, channelCount, probe); err != nil {
+		return nil, err
 	}
 
 	stepTime := time.Duration(source.StepTimeMS()) * time.Millisecond
@@ -234,10 +295,16 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 	}
 
 	if idleOutput != IdleOutputHold && idleOutput != IdleOutputDiagnostic {
+		if idleOutput != IdleOutputBlack {
+			logger.Warn("frame writer: unrecognized idle output; this surface will draw black whenever it is idle",
+				"surface_id", surfaceID, "requested_idle_output", idleOutput, "using", IdleOutputBlack)
+		}
 		idleOutput = IdleOutputBlack
 	}
 
 	diagW, diagH, diagBPP := resolveGeometry(width, height, channelCount)
+	alertBuf := make([]byte, channelCount)
+	fillAlert(alertBuf, diagBPP)
 	diagBuf := make([]byte, channelCount)
 	for i := range diagBuf {
 		diagBuf[i] = diagnosticBackgroundFill
@@ -260,6 +327,8 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		buf:               make([]byte, channelCount),
 		idleBuf:           make([]byte, channelCount), // zero-valued: black for rgb/rgbw alike
 		diagBuf:           diagBuf,
+		alertBuf:          alertBuf,
+		showMode:          showMode,
 		diagWidth:         diagW,
 		diagHeight:        diagH,
 		diagRowBytes:      diagW * diagBPP,
@@ -270,6 +339,27 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		done:              make(chan struct{}),
 	}
 	return fw, nil
+}
+
+// fillAlert paints [FailureOutputAlert]'s pattern across dst once, at
+// construction: one red pixel per bytesPerPixel-wide stride when that
+// stride carries a colour (3 or 4 bytes: rgb, or rgbw with the white
+// element left off), every byte full-on otherwise, including
+// resolveGeometry's degenerate case where the surface's channel count is
+// not a whole number of pixels and "red" has no expressible layout. A
+// trailing partial pixel is filled with the leading bytes of the same
+// pattern rather than left black, so the surface has no correct-looking
+// stripe along its last pixel.
+func fillAlert(dst []byte, bytesPerPixel int) {
+	if bytesPerPixel < 3 || bytesPerPixel > len(alertPixelFill) {
+		for i := range dst {
+			dst[i] = alertUnknownStrideFill
+		}
+		return
+	}
+	for i := range dst {
+		dst[i] = alertPixelFill[i%bytesPerPixel]
+	}
 }
 
 // resolveGeometry turns a surface's own width/height/channelCount into the
@@ -344,6 +434,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	var positionMS *int64
 	drawing := DrawingContent
 	idleMode := ""
+	failureOutput := ""
 	if idleContentStates[snap.State] {
 		drawing = DrawingIdle
 		idleMode = fw.idleOutput
@@ -355,17 +446,37 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 			fw.dropped.Add(1)
 			if !fw.loggedRangeErr {
 				fw.loggedRangeErr = true
-				fw.logger.Warn("frame writer: channel range extraction failed; drawing idle output until this recovers",
-					"surface_id", fw.surfaceID, "frame", frameIdx, "error", err)
+				fw.logger.Warn("frame writer: channel range extraction failed; this surface is drawing the failure output until it recovers",
+					"surface_id", fw.surfaceID, "frame", frameIdx,
+					"failure_output", failureOutputFor(fw.behavesAsShow()), "error", err)
 			}
-			outBuf = fw.idleBuf
 			// A coverage-gap fallback is an extraction FAILURE, not a
-			// deliberate idle transition — always reported as black
-			// regardless of this surface's configured idleOutput, so a
-			// broken assignment never gets mislabelled as a normal
-			// operator-chosen idle cycle (e.g. "hold").
-			drawing = DrawingIdle
-			idleMode = IdleOutputBlack
+			// deliberate idle transition, and it is reported as its own
+			// drawing state so a broken assignment can never be
+			// mislabelled as a normal operator-chosen idle cycle. It used
+			// to report idle-with-black for that reason, which kept the
+			// EVIDENCE honest and left the WALL saying nothing was wrong:
+			// black is exactly what a healthy idle looks like to the
+			// person standing in front of it.
+			//
+			// So the mode decides what reaches the wall, read HERE, on the
+			// failing frame, never captured at construction (ADR-036
+			// decision 1): an unmistakable alert field in Program Mode,
+			// black in Show Mode. Red in front of an audience is worse
+			// than black; black in front of an operator who is
+			// programming is worse than useless, and this failure is
+			// essentially only reachable at configuration time. A node
+			// that has never been told the mode reads unknown, which
+			// behaves as show (ADR-033 decision 5), so the conservative
+			// side is also the default.
+			drawing = DrawingFailure
+			idleMode = ""
+			failureOutput = failureOutputFor(fw.behavesAsShow())
+			if failureOutput == FailureOutputAlert {
+				outBuf = fw.alertBuf
+			} else {
+				outBuf = fw.idleBuf
+			}
 		} else {
 			fw.loggedRangeErr = false
 			outBuf = fw.buf
@@ -377,6 +488,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	fw.timelinePositionMS = positionMS
 	fw.drawing = drawing
 	fw.idleModeNow = idleMode
+	fw.failureOutputNow = failureOutput
 
 	w, err := fw.sup.Stdin(fw.surfaceID)
 	if err != nil {
@@ -407,6 +519,29 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	fw.written.Add(1)
 
 	fw.recordTick(start, tickTime, true)
+}
+
+// failureOutputFor names the fallback a failing frame draws for one answer
+// to "must this node behave as Show Mode", so the log line and the
+// evidence cannot disagree about what reached the wall.
+func failureOutputFor(behavesAsShow bool) string {
+	if behavesAsShow {
+		return FailureOutputBlack
+	}
+	return FailureOutputAlert
+}
+
+// behavesAsShow is this writer's point-of-decision read of the node's
+// operating mode (ADR-036 decision 1): called on the failing frame itself,
+// never cached, so an operator switching modes changes what a LIVE surface
+// draws with no re-apply and no rebuilt writer. A writer built with no mode
+// source behaves as Show Mode, the same answer ADR-033 decision 5 gives an
+// unknown mode.
+func (fw *FrameWriter) behavesAsShow() bool {
+	if fw.showMode == nil {
+		return true
+	}
+	return fw.showMode.BehavesAsShow()
 }
 
 // countTickerDrops detects ticks Run's time.Ticker itself silently dropped
@@ -627,7 +762,13 @@ func (fw *FrameWriter) frameIndexFor(positionMS int64) int {
 
 func (fw *FrameWriter) reportCounts() {
 	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load(), fw.currentRate, fw.framesObservedAt)
-	fw.sup.SetDrawState(fw.surfaceID, fw.timelineState, fw.timelinePositionMS, fw.drawing, fw.idleModeNow)
+	fw.sup.SetDrawState(fw.surfaceID, DrawState{
+		TimelineState: fw.timelineState,
+		PositionMS:    fw.timelinePositionMS,
+		Drawing:       fw.drawing,
+		IdleMode:      fw.idleModeNow,
+		FailureOutput: fw.failureOutputNow,
+	})
 }
 
 // Compile-time check that *fseq.File satisfies FrameSource.

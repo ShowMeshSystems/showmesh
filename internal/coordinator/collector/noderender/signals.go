@@ -56,6 +56,14 @@ const (
 	// drawing content, mirroring SignalSurfaceTransportReason's identical
 	// required-whenever-the-flag-says-so pattern.
 	SignalSurfaceOutputIdleMode observation.SignalID = "surface.output.idle_mode"
+
+	// SignalSurfaceOutputFailure is only ever emitted alongside
+	// SignalSurfaceOutputMode="failure": which fallback the writer put on
+	// the wire when it could not extract the frame it was asked for
+	// ("alert" or "black", the node's operating mode deciding which). The
+	// mode is why the same failure looks different on two nights, so the
+	// report has to say which one the operator is looking at.
+	SignalSurfaceOutputFailure observation.SignalID = "surface.output.failure"
 )
 
 // Two more signals minted alongside the four above, but under the "node"
@@ -89,6 +97,7 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceTimelinePositionMS,
 	SignalSurfaceOutputMode,
 	SignalSurfaceOutputIdleMode,
+	SignalSurfaceOutputFailure,
 }
 
 // AllNodeSignalIDs is every NODE-resource signal this package emits, in the

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
 // This file exercises ADR-024 decision 10 against the exact shipped
@@ -555,4 +557,33 @@ func TestTwoProvisionedAgentsAppearInInventory(t *testing.T) {
 		_, okB := tc.findNode(t, nodeB)
 		return okA && okB
 	}, fmt.Sprintf("both %s and %s to appear in coordinator inventory", nodeA, nodeB))
+}
+
+// TestAgentReadsShowModeTopicButCannotPublishIt proves the one events
+// topic a node may see is readable and read-only. Without the read grant
+// the retained mode never reaches a node, which then reads unknown and
+// behaves as show forever with nothing saying why; with a write grant a
+// node could tell the installation what mode it is in, which ADR-033
+// forbids (the agent derives the mode from nothing and publishes none).
+func TestAgentReadsShowModeTopicButCannotPublishIt(t *testing.T) {
+	requireBroker(t)
+	if mosquittoContainer == "" {
+		t.Skipf("%s is not set; this test needs the real shipped ACL from `make test-integration`", envMosquittoContainer)
+	}
+
+	agentID := "acl-show-mode-" + uniqueSuffix()
+	username, password := provisionBrokerCredential(t, agentID)
+	agent := rawConnect(t, username, password)
+
+	topic := mqttproto.ShowModeTopic()
+	publisher := rawConnect(t, testMQTTCoordinatorUsername, testMQTTCoordinatorPassword)
+	if rc := rawPublishRetainedReasonCode(t, publisher, topic); rc >= 0x80 {
+		t.Fatalf("coordinator retained PUBLISH to %q: reason code %d, want < 0x80", topic, rc)
+	}
+	if !rawSubscribeReceives(t, agent, topic, 2*time.Second) {
+		t.Errorf("provisioned agent never received the retained message on %q: a node cannot be told the operating mode at all", topic)
+	}
+	if rc := rawPublishReasonCode(t, rawConnect(t, username, password), topic); rc < 0x80 {
+		t.Errorf("agent PUBLISH to %q: reason code %d, want >= 0x80 (rejected): a node consumes the mode and never publishes one", topic, rc)
+	}
 }

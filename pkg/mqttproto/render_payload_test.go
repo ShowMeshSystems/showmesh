@@ -149,6 +149,74 @@ func TestRenderPayloadValidateRejectsIdleWithNoIdleMode(t *testing.T) {
 	}
 }
 
+// TestRenderPayloadValidateRejectsFailureWithNoFailureOutput proves the
+// failure drawing state carries IdleMode's identical rule: a report that
+// says a surface failed must also say what that failure put on the wire,
+// because "alert" and "black" look nothing alike to the audience.
+func TestRenderPayloadValidateRejectsFailureWithNoFailureOutput(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				Drawing:       RenderDrawingFailure,
+				FailureOutput: "", // invalid: required whenever drawing is "failure"
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+	err := p.Validate()
+	if err == nil {
+		t.Fatalf("Validate() returned no error for drawing=failure with an empty failureOutput")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
+	}
+}
+
+// TestRenderPayloadValidateAcceptsFailureDrawing proves the third drawing
+// state is a legal report, with no idleMode: a coverage-gap failure is not
+// an idle cycle, and reporting it as one is what let a broken assignment
+// read as normal.
+func TestRenderPayloadValidateAcceptsFailureDrawing(t *testing.T) {
+	for _, out := range []string{RenderFailureOutputAlert, RenderFailureOutputBlack} {
+		p := RenderPayload{
+			Surfaces: []RenderSurfaceReport{
+				{
+					SurfaceID:     "surface-1",
+					PipelineState: RenderPipelineStateRunning,
+					Drawing:       RenderDrawingFailure,
+					FailureOutput: out,
+					ObservedAt:    time.Now(),
+				},
+			},
+		}
+		if err := p.Validate(); err != nil {
+			t.Fatalf("Validate() with failureOutput %q returned an error: %v", out, err)
+		}
+	}
+}
+
+// TestRenderPayloadValidateRejectsUnrecognizedFailureOutput proves
+// FailureOutput's own closed vocabulary is enforced rather than merely
+// documented, the same way Drawing's is below.
+func TestRenderPayloadValidateRejectsUnrecognizedFailureOutput(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				Drawing:       RenderDrawingFailure,
+				FailureOutput: "magenta",
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+	if err := p.Validate(); err == nil {
+		t.Fatalf("Validate() returned no error for an unrecognized failureOutput")
+	}
+}
+
 // TestRenderPayloadValidateRejectsUnrecognizedDrawing proves Drawing's
 // closed vocabulary is actually enforced, not merely documented.
 func TestRenderPayloadValidateRejectsUnrecognizedDrawing(t *testing.T) {

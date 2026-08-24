@@ -492,6 +492,7 @@ listed because the last row was minted after the others had shipped:
 | `surface.timeline.position_ms` | shipped | Track B review fix, finding 7 |
 | `surface.output.mode` | shipped | Track B review fix, finding 7 |
 | `surface.output.idle_mode` | shipped | Track B review fix, finding 7 |
+| `surface.output.failure` | shipped | Owner ruling: a broken assignment must not look like a healthy idle |
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 
@@ -616,6 +617,16 @@ are per surface. The last two are **node-level rather than surface-level**,
 deliberately: one MultiSync listener serves every surface on a node, so
 attributing its failure to a surface would report the same fact N times and
 imply N independent faults.
+
+**`surface.output.failure` is what one owner ruling costs.** The frame
+writer's coverage-gap fallback used to report `surface.output.mode` as
+`idle` with `surface.output.idle_mode` as `black`, which kept a broken
+assignment from being mislabelled as a `hold` idle and, in the same move,
+made it indistinguishable from a surface an operator had deliberately set to
+idle black. `surface.output.mode` now carries a third value, `failure`, and
+this signal says which fallback that failure actually put on the wire:
+`alert` in Program Mode, `black` in Show Mode. It is `not_collected` with a
+stated reason for every other drawing state.
 
 **`surface.frames.rate` is what ADR-040 costs.** That record makes matrix
 size a performance parameter rather than an architectural boundary, so

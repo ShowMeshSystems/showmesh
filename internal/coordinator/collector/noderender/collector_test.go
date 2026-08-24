@@ -715,3 +715,64 @@ func TestNodeFromSourceRejectsUnrelatedSource(t *testing.T) {
 		}
 	}
 }
+
+// TestPollFailureDrawingRendersFailureOutput proves the coverage-gap
+// failure reaches an operator's dashboard as a failure with the output it
+// actually drew, not as an idle cycle: a node whose assignment is broken
+// used to report drawing=idle with idleMode=black, which is exactly what a
+// healthy surface reports.
+func TestPollFailureDrawingRendersFailureOutput(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].Drawing = mqttproto.RenderDrawingFailure
+	payload.Surfaces[0].FailureOutput = mqttproto.RenderFailureOutputAlert
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	mode := findObs(t, obs, SignalSurfaceOutputMode)
+	if v, ok := mode.Value.(string); !ok || v != mqttproto.RenderDrawingFailure {
+		t.Errorf("surface.output.mode: Value = %v, want %q", mode.Value, mqttproto.RenderDrawingFailure)
+	}
+
+	failure := findObs(t, obs, SignalSurfaceOutputFailure)
+	if failure.Absence != "" {
+		t.Errorf("surface.output.failure: Absence = %q, want empty", failure.Absence)
+	}
+	if v, ok := failure.Value.(string); !ok || v != mqttproto.RenderFailureOutputAlert {
+		t.Errorf("surface.output.failure: Value = %v, want %q", failure.Value, mqttproto.RenderFailureOutputAlert)
+	}
+
+	idle := findObs(t, obs, SignalSurfaceOutputIdleMode)
+	if idle.Absence != observation.StateNotCollected {
+		t.Errorf("surface.output.idle_mode during a failure: Absence = %q, want %q", idle.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestPollIdleDrawingLeavesFailureOutputNotCollected is the counterpart: a
+// healthy idle states that the failure signal does not apply rather than
+// fabricating a value for it.
+func TestPollIdleDrawingLeavesFailureOutputNotCollected(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].Drawing = mqttproto.RenderDrawingIdle
+	payload.Surfaces[0].IdleMode = mqttproto.RenderIdleOutputBlack
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	failure := findObs(t, obs, SignalSurfaceOutputFailure)
+	if failure.Absence != observation.StateNotCollected {
+		t.Errorf("surface.output.failure while idle: Absence = %q, want %q", failure.Absence, observation.StateNotCollected)
+	}
+	if failure.Reason == "" {
+		t.Errorf("surface.output.failure while idle: Reason is empty, want a stated reason")
+	}
+
+	idle := findObs(t, obs, SignalSurfaceOutputIdleMode)
+	if v, ok := idle.Value.(string); !ok || v != mqttproto.RenderIdleOutputBlack {
+		t.Errorf("surface.output.idle_mode while idle: Value = %v, want %q", idle.Value, mqttproto.RenderIdleOutputBlack)
+	}
+}

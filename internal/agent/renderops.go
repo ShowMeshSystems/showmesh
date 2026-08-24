@@ -78,9 +78,14 @@ var idleOutputKnown = map[string]bool{
 // defaulted: the coordinator always resolves and sends a concrete value
 // going forward, so a malformed one here means something upstream is wrong,
 // not that nothing was configured.
-func parseIdleOutput(action string, params map[string]any) (string, error) {
+func parseIdleOutput(action, surfaceID string, params map[string]any, logger pipeline.Logger) (string, error) {
 	raw, ok := params["idleOutput"]
 	if !ok {
+		// Logged, not silent: black is a real choice about what this
+		// surface shows an operator for the whole life of the assignment,
+		// and one nobody made here.
+		logger.Warn("render assignment carries no idle output; this surface will draw black whenever it is idle",
+			"action", action, "surface_id", surfaceID, "using", pipeline.IdleOutputBlack)
 		return pipeline.IdleOutputBlack, nil
 	}
 	v, isStr := raw.(string)
@@ -169,6 +174,14 @@ type renderOperations struct {
 	timeline *multisync.Timeline
 	logger   pipeline.Logger
 
+	// showMode is handed to every frame writer this type starts, which
+	// reads it fresh at the point of decision (ADR-036 decision 1). It is
+	// deliberately NOT resolved here into a value baked into an
+	// assignment: a mode flip must change what a live surface draws, not
+	// tear down and rebuild its frame writer. May be nil, which behaves as
+	// Show Mode.
+	showMode pipeline.ShowModeSource
+
 	mu      sync.Mutex
 	writers map[string]*frameWriterHandle
 
@@ -189,12 +202,13 @@ type renderOperations struct {
 	probeStarter pipeline.ProcessStarter
 }
 
-func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, logger pipeline.Logger) *renderOperations {
+func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, logger pipeline.Logger) *renderOperations {
 	return &renderOperations{
 		sup:      sup,
 		store:    store,
 		assetDir: assetDir,
 		timeline: timeline,
+		showMode: showMode,
 		logger:   logger,
 		writers:  make(map[string]*frameWriterHandle),
 	}
@@ -305,7 +319,7 @@ func (o *renderOperations) releaseTimelineStepTimeIfOwner(surfaceID string) {
 // valid request for B2a's test-pattern pipeline, matching
 // renderApplyKnownKeys' existing "accepted and persisted, not yet all
 // consumed" posture.
-func buildFSEQAssignment(action string, params map[string]any) (a fseqAssignment, ok bool, err error) {
+func buildFSEQAssignment(action, surfaceID string, params map[string]any, logger pipeline.Logger) (a fseqAssignment, ok bool, err error) {
 	rawFilename, has := params["fseqFilename"]
 	if !has {
 		return fseqAssignment{}, false, nil
@@ -371,7 +385,7 @@ func buildFSEQAssignment(action string, params map[string]any) (a fseqAssignment
 		return fseqAssignment{}, false, verr
 	}
 
-	idleOutput, verr := parseIdleOutput(action, params)
+	idleOutput, verr := parseIdleOutput(action, surfaceID, params, logger)
 	if verr != nil {
 		return fseqAssignment{}, false, verr
 	}
@@ -459,8 +473,8 @@ func requireInt(action string, params map[string]any, key, label string) (int, e
 // requires a node never resolve an asset by filename alone trusting the
 // coordinator's say-so blindly, so a content-hash mismatch refuses the
 // assignment rather than rendering unverified bytes.
-func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
-	a, ok, err := buildFSEQAssignment(action, params)
+func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any, logger pipeline.Logger) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
+	a, ok, err := buildFSEQAssignment(action, surfaceID, params, logger)
 	if err != nil {
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, err
 	}
@@ -516,7 +530,7 @@ func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any
 func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]any) error {
 	const action = "render.surface.apply (resumed at boot)"
 
-	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.logger)
 	if err != nil {
 		return err
 	}
@@ -587,7 +601,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	// was told the apply failed, so nothing looked wrong, but the next boot
 	// would resume the broken one (or fail per finding 9) with the good one
 	// permanently gone. Validate, then persist only what actually passed.
-	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params)
+	spec, f, a, sinkOutcome, err := buildAssignedSpec(action, o.assetDir, surfaceID, params, o.logger)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -639,7 +653,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 // the writer's own lifetime (via [renderOperations.stopFrameWriter]) owns
 // closing it.
 func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fseqAssignment) error {
-	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, a.idleOutput, o.logger)
+	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, a.idleOutput, o.showMode, o.logger)
 	if err != nil {
 		return err
 	}

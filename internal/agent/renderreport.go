@@ -132,6 +132,7 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 		TimelinePositionMS:  s.TimelinePositionMS,
 		Drawing:             s.Drawing,
 		IdleMode:            s.IdleMode,
+		FailureOutput:       s.FailureOutput,
 	}
 }
 

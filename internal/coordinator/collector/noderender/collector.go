@@ -232,7 +232,7 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 // "running" (build contract: "the process is up" is not "frames are
 // arriving somewhere"). sf.Drawing == "" means this surface has no active
 // FrameWriter at all — a Track B seam B2a test-pattern-only pipeline with
-// no FSEQ assigned — so all four signals are NotCollected together with
+// no FSEQ assigned, so all five signals are NotCollected together with
 // one reason, rather than a fabricated empty string or zero position.
 func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
 	if sf.Drawing == "" {
@@ -242,6 +242,7 @@ func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf
 			notCollected(res, SignalSurfaceTimelinePositionMS, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalSurfaceOutputMode, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalSurfaceOutputIdleMode, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceOutputFailure, SourceFor(nodeID), reason, rep.receivedAt),
 		}
 	}
 
@@ -268,7 +269,18 @@ func surfaceDrawStateObservations(nodeID string, res observation.ResourceRef, sf
 		obs = append(obs, buildValue(nodeID, res, SignalSurfaceOutputIdleMode, sf.IdleMode, observedAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSurfaceOutputIdleMode, SourceFor(nodeID),
-			"not applicable while drawing content", rep.receivedAt))
+			"not applicable unless the writer is drawing a configured idle output", rep.receivedAt))
+	}
+
+	// FailureOutput is IdleMode's counterpart for the third drawing state:
+	// meaningful only while the writer could not extract the frame it was
+	// asked for, and stated as inapplicable rather than fabricated
+	// otherwise.
+	if sf.Drawing == mqttproto.RenderDrawingFailure {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceOutputFailure, sf.FailureOutput, observedAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSurfaceOutputFailure, SourceFor(nodeID),
+			"not applicable unless the writer failed to extract a frame", rep.receivedAt))
 	}
 
 	return obs
