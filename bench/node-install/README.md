@@ -19,7 +19,7 @@ systemd unit is syntactically valid, every directive name in it included
 (`systemd-analyze verify --recursive-errors=one`, which unlike a bare
 `systemd-analyze verify` exits non-zero on an unknown directive rather
 than only warning; the bench re-runs that same check against a
-deliberately typo'd copy of the unit and fails if it is accepted).
+deliberately typo'd copy of the unit and fails if it is accepted); the unit's restart policy is `Restart=on-failure` (not `always`, which would relaunch the agent after a clean `systemctl stop`); and the upgrade path (install.sh re-run over an existing binary) enforces the same `SHOWMESH_NODE_ID` check the fresh-install path does, refusing to call `systemctl restart` when `agent.env` has never been edited.
 
 **Cannot prove, and does not claim to**: that the service actually starts
 and stays running under systemd. A plain `docker run` container does not

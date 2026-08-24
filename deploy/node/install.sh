@@ -125,18 +125,22 @@ if ! systemctl daemon-reload 2>/tmp/showmesh-install-systemctl-err; then
 fi
 
 if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
+  systemctl enable "$UNIT_NAME" >/dev/null
   if [ "$UPGRADE" -eq 1 ]; then
     echo "install.sh: existing binary found; upgrading in place (state directory contents are not touched)"
-    systemctl enable "$UNIT_NAME" >/dev/null
-    systemctl restart "$UNIT_NAME"
+    ACTIVATE_VERB="restart"
   else
     echo "install.sh: fresh install"
-    systemctl enable "$UNIT_NAME" >/dev/null
-    if [ -s "$ENV_FILE" ] && grep -q '^SHOWMESH_NODE_ID=.\+' "$ENV_FILE" 2>/dev/null; then
-      systemctl start "$UNIT_NAME"
-    else
-      echo "install.sh: $ENV_FILE has no SHOWMESH_NODE_ID set yet. Edit it (at minimum SHOWMESH_NODE_ID, SHOWMESH_MQTT_BROKER, SHOWMESH_MQTT_USERNAME, SHOWMESH_MQTT_PASSWORD), then run: systemctl start $UNIT_NAME"
-    fi
+    ACTIVATE_VERB="start"
+  fi
+  # Enforce the SHOWMESH_NODE_ID check on both paths: an upgrade with an
+  # unedited agent.env must not (re)start the agent any more than a fresh
+  # install would, or the agent falls back to the hostname as its node id
+  # and crash-loops against the broker.
+  if [ -s "$ENV_FILE" ] && grep -q '^SHOWMESH_NODE_ID=.\+' "$ENV_FILE" 2>/dev/null; then
+    systemctl "$ACTIVATE_VERB" "$UNIT_NAME"
+  else
+    echo "install.sh: $ENV_FILE has no SHOWMESH_NODE_ID set yet. Edit it (at minimum SHOWMESH_NODE_ID, SHOWMESH_MQTT_BROKER, SHOWMESH_MQTT_USERNAME, SHOWMESH_MQTT_PASSWORD), then run: systemctl $ACTIVATE_VERB $UNIT_NAME"
   fi
   echo "install.sh: done. Check status with: systemctl status $UNIT_NAME"
 else

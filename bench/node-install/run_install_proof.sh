@@ -17,7 +17,14 @@
 #   - the installed unit file is syntactically valid systemd, including
 #     that every directive name in it is one systemd recognises (proved by
 #     re-running the same check against a deliberately typo'd copy and
-#     requiring it to fail).
+#     requiring it to fail);
+#   - the unit's restart policy is on-failure, not always, so a clean
+#     `systemctl stop` is honoured instead of being relaunched two seconds
+#     later;
+#   - the upgrade path (an install.sh re-run over an existing binary)
+#     enforces the same SHOWMESH_NODE_ID check the fresh-install path does,
+#     and does not call `systemctl restart` when agent.env has never been
+#     edited.
 #
 # What this does NOT prove, because a plain container is not a systemd
 # machine: that the service actually starts, stays running, or plays any
@@ -94,7 +101,7 @@ echo
 
 echo "=== 7b. Proving check 7 can actually fail (typo'd directive) ==="
 BOGUS_UNIT=$(mktemp -d)/showmesh-agent-bogus.service
-sed 's/^Restart=always$/Restart=always\nDefinitelyNotADirective=true/' \
+sed 's/^RestartSec=/DefinitelyNotADirective=true\nRestartSec=/' \
   /etc/systemd/system/showmesh-agent.service > "$BOGUS_UNIT"
 if systemd-analyze verify --recursive-errors=one "$BOGUS_UNIT" 2>/dev/null; then
   echo "FAIL: systemd-analyze verify accepted a unit with an unknown directive;" >&2
@@ -103,6 +110,50 @@ if systemd-analyze verify --recursive-errors=one "$BOGUS_UNIT" 2>/dev/null; then
 fi
 rm -rf "$(dirname "$BOGUS_UNIT")"
 echo "OK: an unknown directive is rejected, so check 7 is a real gate"
+echo
+
+echo "=== 8. Unit restart policy is on-failure, not always ==="
+if grep -q '^Restart=always$' /etc/systemd/system/showmesh-agent.service; then
+  echo "FAIL: Restart=always relaunches the agent after a clean 'systemctl stop', turning stop into a two-second pause" >&2
+  exit 1
+fi
+grep -q '^Restart=on-failure$' /etc/systemd/system/showmesh-agent.service
+echo "OK: unit sets Restart=on-failure"
+echo
+
+echo "=== 9. Upgrade path enforces the SHOWMESH_NODE_ID check ==="
+# This container has no PID 1 systemd, so install.sh's real
+# 'systemctl daemon-reload' probe fails and activation is skipped
+# entirely (see checks 2/5 above). To exercise the enable/start/restart
+# branch that actually contains the bug this proves against, stub
+# systemctl on PATH so install.sh believes systemd is available, and
+# record what it calls instead of touching a real service manager.
+STUBDIR=$(mktemp -d)
+cat > "$STUBDIR/systemctl" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "$*" >> /tmp/showmesh-systemctl-calls.log
+exit 0
+STUBEOF
+chmod +x "$STUBDIR/systemctl"
+rm -f /tmp/showmesh-systemctl-calls.log
+
+# The env file from check 2's fresh install has no SHOWMESH_NODE_ID set
+# (the bench never edits it). The binary is already installed from check
+# 2, so this run.sh call is guaranteed to take the upgrade path.
+PATH="$STUBDIR:$PATH" ./install.sh "$REPO/bin/showmesh-agent-native" > /tmp/showmesh-upgrade-install.log 2>&1
+
+if grep -q '^restart showmesh-agent.service$' /tmp/showmesh-systemctl-calls.log; then
+  echo "FAIL: upgrade path called 'systemctl restart' with SHOWMESH_NODE_ID unset" >&2
+  cat /tmp/showmesh-upgrade-install.log >&2
+  exit 1
+fi
+if ! grep -q 'no SHOWMESH_NODE_ID set yet' /tmp/showmesh-upgrade-install.log; then
+  echo "FAIL: upgrade path did not print the operator-facing no-node-id message" >&2
+  cat /tmp/showmesh-upgrade-install.log >&2
+  exit 1
+fi
+echo "OK: upgrade path refused to (re)start the agent and printed the operator message"
+rm -rf "$STUBDIR" /tmp/showmesh-systemctl-calls.log /tmp/showmesh-upgrade-install.log
 echo
 
 echo "=== ALL CHECKS PASSED ==="

@@ -30,7 +30,7 @@ ExecStart=/usr/local/bin/showmesh-agent-native
 WorkingDirectory=/var/lib/showmesh
 StateDirectory=showmesh
 StateDirectoryMode=0750
-Restart=always
+Restart=on-failure
 RestartSec=2s
 
 # Conservative process-level hardening that does not touch device access.
