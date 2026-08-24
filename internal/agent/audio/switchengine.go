@@ -10,21 +10,39 @@ import (
 )
 
 // SwitchableEngineNoBindingReason is [SwitchableEngine.Available]'s
-// reason before [SwitchableEngine.Set] is ever called: a node that has
-// never received an audio.node configuration must not claim it can play.
+// reason before [SwitchableEngine.Set] is ever called with a real
+// engine: a node that has never received an audio.node configuration
+// must not claim it can play. Once a binding HAS been delivered, a later
+// detached state reports [SwitchableEngineRebindInProgressReason]
+// instead, never this: a caller must be able to tell "never configured"
+// apart from "configured, currently between engines".
 const SwitchableEngineNoBindingReason = "no audio.node configuration has been delivered to this node yet; nothing plays audio"
+
+// SwitchableEngineRebindInProgressReason is [SwitchableEngine.Available]'s
+// reason while a rebind has detached the outgoing engine and has not yet
+// bound its replacement (see [Manager.RebindEngine] and
+// audioEngineRebuilder.rebuild in the agent package). A binding WAS
+// delivered here, so a caller must not read this the way it would read
+// [SwitchableEngineNoBindingReason].
+const SwitchableEngineRebindInProgressReason = "an audio.node.configure rebuild is replacing this node's engine; no engine is bound yet"
 
 // SwitchableEngine is an [Engine] whose backing implementation can be
 // replaced at runtime, so a [Manager] built once at agent startup can be
 // bound to a real engine once an audio.node configuration is delivered,
 // and rebound again whenever that configuration changes, without
 // restarting the agent (ADR-036). Every call delegates to whatever
-// engine is currently set; before the first [SwitchableEngine.Set],
-// Available reports [SwitchableEngineNoBindingReason] and every other
-// method fails with the same reason.
+// engine is currently set; before the first [SwitchableEngine.Set] with a
+// real engine, Available reports [SwitchableEngineNoBindingReason] and
+// every other method fails with the same reason. After that, a later
+// detached state (current nil again) reports
+// [SwitchableEngineRebindInProgressReason] instead, classified as
+// [pkgaudio.FaultRouteChanged] rather than [pkgaudio.FaultOther]: the
+// node's engine changed out from under a caller, the same fact
+// [Manager.RebindEngine] already reports to a session it invalidates.
 type SwitchableEngine struct {
-	mu      sync.RWMutex
-	current Engine
+	mu        sync.RWMutex
+	current   Engine
+	everBound bool
 }
 
 // NewSwitchableEngine returns a SwitchableEngine with no backing engine
@@ -44,6 +62,9 @@ func (e *SwitchableEngine) Set(engine Engine) Engine {
 	e.mu.Lock()
 	prev := e.current
 	e.current = engine
+	if engine != nil {
+		e.everBound = true
+	}
 	e.mu.Unlock()
 	return prev
 }
@@ -54,25 +75,40 @@ func (e *SwitchableEngine) get() (Engine, bool) {
 	return e.current, e.current != nil
 }
 
+// unbound reports the reason and classifiable error for a detached
+// current engine: [SwitchableEngineNoBindingReason] before any real
+// engine was ever bound, [SwitchableEngineRebindInProgressReason] after
+// (wrapping [pkgaudio.ErrEngineRouteChanged] so [pkgaudio.ClassifyFault]
+// reports [pkgaudio.FaultRouteChanged] rather than [pkgaudio.FaultOther]
+// for a command attempted in that window).
+func (e *SwitchableEngine) unbound() (reason string, err error) {
+	e.mu.RLock()
+	everBound := e.everBound
+	e.mu.RUnlock()
+	if everBound {
+		return SwitchableEngineRebindInProgressReason,
+			fmt.Errorf("%w: %s", pkgaudio.ErrEngineRouteChanged, SwitchableEngineRebindInProgressReason)
+	}
+	return SwitchableEngineNoBindingReason, fmt.Errorf("audio: %s", SwitchableEngineNoBindingReason)
+}
+
 // Available reports the currently set engine's own availability, or
-// false with [SwitchableEngineNoBindingReason] when nothing has ever
-// been set.
+// false with [SwitchableEngine.unbound]'s reason when nothing is
+// currently set.
 func (e *SwitchableEngine) Available() (bool, string) {
 	cur, ok := e.get()
 	if !ok {
-		return false, SwitchableEngineNoBindingReason
+		reason, _ := e.unbound()
+		return false, reason
 	}
 	return cur.Available()
-}
-
-func (e *SwitchableEngine) errNoBinding() error {
-	return fmt.Errorf("audio: %s", SwitchableEngineNoBindingReason)
 }
 
 func (e *SwitchableEngine) Load(ctx context.Context, handle EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Load(ctx, handle, media, duration)
 }
@@ -80,7 +116,8 @@ func (e *SwitchableEngine) Load(ctx context.Context, handle EngineHandle, media 
 func (e *SwitchableEngine) Start(ctx context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Start(ctx, handle, position)
 }
@@ -88,7 +125,8 @@ func (e *SwitchableEngine) Start(ctx context.Context, handle EngineHandle, posit
 func (e *SwitchableEngine) Pause(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Pause(ctx, handle)
 }
@@ -96,7 +134,8 @@ func (e *SwitchableEngine) Pause(ctx context.Context, handle EngineHandle) (Engi
 func (e *SwitchableEngine) Resume(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Resume(ctx, handle)
 }
@@ -104,7 +143,8 @@ func (e *SwitchableEngine) Resume(ctx context.Context, handle EngineHandle) (Eng
 func (e *SwitchableEngine) Seek(ctx context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Seek(ctx, handle, position)
 }
@@ -112,7 +152,8 @@ func (e *SwitchableEngine) Seek(ctx context.Context, handle EngineHandle, positi
 func (e *SwitchableEngine) Stop(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Stop(ctx, handle)
 }
@@ -120,7 +161,8 @@ func (e *SwitchableEngine) Stop(ctx context.Context, handle EngineHandle) (Engin
 func (e *SwitchableEngine) SetGain(ctx context.Context, handle EngineHandle, gain pkgaudio.Gain) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.SetGain(ctx, handle, gain)
 }
@@ -128,7 +170,8 @@ func (e *SwitchableEngine) SetGain(ctx context.Context, handle EngineHandle, gai
 func (e *SwitchableEngine) Fade(ctx context.Context, handle EngineHandle, fade pkgaudio.Fade) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Fade(ctx, handle, fade)
 }
@@ -147,7 +190,8 @@ func (e *SwitchableEngine) Release(ctx context.Context, handle EngineHandle) err
 func (e *SwitchableEngine) Observe(ctx context.Context, handle EngineHandle) (EngineObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return EngineObservation{}, e.errNoBinding()
+		_, err := e.unbound()
+		return EngineObservation{}, err
 	}
 	return cur.Observe(ctx, handle)
 }
@@ -159,7 +203,8 @@ func (e *SwitchableEngine) Observe(ctx context.Context, handle EngineHandle) (En
 func (e *SwitchableEngine) StartLTC(ctx context.Context, spec LTCSpec) (LTCObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return LTCObservation{State: LTCUnsupported, Reason: SwitchableEngineNoBindingReason, ObservedAt: time.Now()}, e.errNoBinding()
+		reason, err := e.unbound()
+		return LTCObservation{State: LTCUnsupported, Reason: reason, ObservedAt: time.Now()}, err
 	}
 	gen, ok := cur.(LTCGenerator)
 	if !ok {
@@ -171,7 +216,8 @@ func (e *SwitchableEngine) StartLTC(ctx context.Context, spec LTCSpec) (LTCObser
 func (e *SwitchableEngine) StopLTC(ctx context.Context) (LTCObservation, error) {
 	cur, ok := e.get()
 	if !ok {
-		return LTCObservation{State: LTCUnsupported, Reason: SwitchableEngineNoBindingReason, ObservedAt: time.Now()}, e.errNoBinding()
+		reason, err := e.unbound()
+		return LTCObservation{State: LTCUnsupported, Reason: reason, ObservedAt: time.Now()}, err
 	}
 	gen, ok := cur.(LTCGenerator)
 	if !ok {
@@ -183,7 +229,8 @@ func (e *SwitchableEngine) StopLTC(ctx context.Context) (LTCObservation, error) 
 func (e *SwitchableEngine) ObserveLTC(ctx context.Context) LTCObservation {
 	cur, ok := e.get()
 	if !ok {
-		return LTCObservation{State: LTCUnsupported, Reason: SwitchableEngineNoBindingReason, ObservedAt: time.Now()}
+		reason, _ := e.unbound()
+		return LTCObservation{State: LTCUnsupported, Reason: reason, ObservedAt: time.Now()}
 	}
 	return ObserveEngineLTC(ctx, cur, time.Now())
 }
