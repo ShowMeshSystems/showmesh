@@ -63,7 +63,13 @@ func StatusSignals(body []byte) ([]SignalValue, error) {
 	out = append(out, numberSignalValue(doc, SignalPositionSeconds, "seconds_played", "seconds"))
 	out = append(out, numberSignalValue(doc, SignalPositionRemaining, "seconds_remaining", "seconds"))
 	out = append(out, multiSyncEnabledSignalValue(doc))
-	out = append(out, numberSignalValue(doc, SignalUptimeSeconds, "uptimeSeconds", "seconds"))
+	// "uptimeSeconds" is only the SECONDS component of FPP's
+	// days/hours/minutes/seconds uptime breakdown (0-59, wrapping every
+	// minute) — "uptimeTotalSeconds" is the actual total, true on every FPP
+	// version this package has captured (9.4, 9.5.3) and confirmed true on
+	// 10.0 as well. This collector previously read "uptimeSeconds" here
+	// and published a value that wrapped every 60 seconds.
+	out = append(out, numberSignalValue(doc, SignalUptimeSeconds, "uptimeTotalSeconds", "seconds"))
 	out = append(out, stringSignalValue(doc, SignalSongName, "current_song"))
 
 	// Playback signals whose absence is explained by the host being in

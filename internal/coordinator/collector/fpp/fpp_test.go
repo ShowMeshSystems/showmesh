@@ -181,17 +181,24 @@ func TestPollHealthyStatusAllSignals(t *testing.T) {
 	obs, _ := c.Poll(context.Background())
 
 	wantValue := map[observation.SignalID]any{
-		SignalReachable:              true,
-		SignalVersion:                "9.5.3",
-		SignalMode:                   "player",
-		SignalStatus:                 "idle",
-		SignalPlaylistName:           "",
-		SignalSequenceName:           "",
-		SignalPositionSeconds:        float64(0),
-		SignalPositionRemaining:      float64(0),
-		SignalMultiSyncEnabled:       true,
-		SignalMultiSyncSystems:       int64(1),
-		SignalSchedulerStatus:        "idle",
+		SignalReachable:         true,
+		SignalVersion:           "9.5.3",
+		SignalMode:              "player",
+		SignalStatus:            "idle",
+		SignalPlaylistName:      "",
+		SignalSequenceName:      "",
+		SignalPositionSeconds:   float64(0),
+		SignalPositionRemaining: float64(0),
+		SignalMultiSyncEnabled:  true,
+		SignalMultiSyncSystems:  int64(1),
+		SignalSchedulerStatus:   "idle",
+		// This bench capture's uptime is under a minute, so
+		// uptimeSeconds and uptimeTotalSeconds happen to agree here and
+		// this assertion alone cannot catch a regression (reading the wrong
+		// field). See
+		// TestUptimeSecondsIsTheTotalNotTheSecondsRemainder in
+		// step5_signals_test.go for the regression test against a real
+		// capture whose uptime exceeds a minute.
 		SignalUptimeSeconds:          float64(37),
 		SignalSongName:               "",
 		SignalPlaylistRepeatMode:     int64(0),
