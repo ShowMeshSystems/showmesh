@@ -118,6 +118,22 @@ type branch struct {
 	// ever going to clear again, parking a streaming thread inside the
 	// probe for the life of the process.
 	teardownClaimed bool
+
+	// teardownGate admits one caller at a time into doTeardown: if two
+	// callers ever held this branch at once, both would otherwise pass
+	// the released check while it is still false and both would run
+	// setElementsState(NULL), ReleaseRequestPad, and bin.Remove over the
+	// same elements and request pads. Lazily initialized under b.mu (see
+	// teardown) rather than at construction, since a branch built by a
+	// test literal has no constructor to call. See teardown's doc
+	// comment for the invariant this buys.
+	teardownGate chan struct{}
+}
+
+// newTeardownGate returns a one-slot gate ready for immediate acquire,
+// for use as branch.teardownGate.
+func newTeardownGate() chan struct{} {
+	return make(chan struct{}, 1)
 }
 
 // elements returns every GStreamer element this branch owns, in link

@@ -170,10 +170,10 @@ func TestTimedOutStartMarksAnchorUnknown(t *testing.T) {
 // forced onto the vulnerable window from Go (see
 // TestCloseMarksBrokenBeforeAnyTeardownStep in closeorder_test.go for the
 // same argument applied to a different ordering hazard in this package),
-// so this is checked structurally instead: doTeardown's body (teardown
-// itself only checks b.released before calling doTeardown, see
-// TestRetriedTeardownEventuallySucceedsOnceThePendingChangeDrains in
-// closeincomplete_test.go for the dynamic retry behavior that guard
+// so this is checked structurally instead: doTeardown's body (reached
+// only while teardown holds teardownGate, after teardown's own
+// b.released check; see TestRetriedTeardownEventuallySucceedsOnceThePendingChangeDrains
+// in closeincomplete_test.go for the dynamic retry behavior that guard
 // exists for) must call awaitNoElementRace before it calls
 // setElementsState or touches b.channelMixerPads / bin.Remove.
 func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {

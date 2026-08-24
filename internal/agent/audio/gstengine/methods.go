@@ -123,7 +123,7 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineMediaDisappeared, statErr)
 	}
 
-	b := &branch{id: e.nextID.Add(1), engine: e, media: media, duration: duration, state: pkgaudio.StateReady, frozen: true}
+	b := &branch{id: e.nextID.Add(1), engine: e, media: media, duration: duration, state: pkgaudio.StateReady, frozen: true, teardownGate: newTeardownGate()}
 	if err := b.build(path); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEngineDecodeFailure, err)
 	}
@@ -423,19 +423,61 @@ func bestEffortTeardown(b *branch) error {
 // Only a genuine success is cached (see released): a deferred attempt
 // returns errTeardownDeferredForRace but is retried fresh on the next
 // call, since the condition that caused it can clear.
+//
+// At most one caller runs doTeardown for this branch at a time.
+// teardownGate admits only one caller to the real attempt; a caller that
+// loses that race blocks on ctx rather than on an uninterruptible lock,
+// so it can never be held past its own budget by the winner's attempt.
+// Once admitted, it re-checks released: if the winner it waited behind
+// already succeeded, it returns nil rather than repeating doTeardown,
+// and if the winner instead deferred, it proceeds to run doTeardown
+// itself, fresh. This guards against two callers ever holding the same
+// branch at once (see teardownGate's field comment); only one caller can
+// obtain a given branch today, so the gate is presently uncontended
+// defense in depth, not a resolution of a live race.
 func (b *branch) teardown(ctx context.Context) error {
+	b.mu.Lock()
+	if b.teardownGate == nil {
+		b.teardownGate = newTeardownGate()
+	}
+	gate := b.teardownGate
+	if b.released {
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
+
+	// Tried non-blocking first so an uncontended caller is never turned
+	// away by an already-expired ctx: doTeardown's own ctx handling
+	// (setElementsState, awaitNoElementRace) is what must decide an
+	// uncontended call's outcome. Only a genuinely contended caller
+	// blocks here, and then only up to ctx, never past it.
+	select {
+	case gate <- struct{}{}:
+	default:
+		select {
+		case gate <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	defer func() { <-gate }()
+
 	b.mu.Lock()
 	if b.released {
 		b.mu.Unlock()
 		return nil
 	}
 	b.mu.Unlock()
+
 	return b.doTeardown(ctx)
 }
 
-// doTeardown is teardown's real attempt. Unlike a genuine success, a
-// deferral is never cached, so a retried teardown reaches here again and
-// re-checks pendingStateChanges fresh.
+// doTeardown is teardown's real attempt, reached only while teardown
+// holds teardownGate: it never runs concurrently with itself on the
+// same branch. Unlike a genuine success, a deferral is never cached, so
+// a retried teardown reaches here again and re-checks pendingStateChanges
+// fresh.
 func (b *branch) doTeardown(ctx context.Context) error {
 	b.mu.Lock()
 	b.teardownClaimed = true
