@@ -241,3 +241,62 @@ func TestEngineRefusesToWidenAMonoChannelOntoAWiderFixedSink(t *testing.T) {
 		t.Errorf("buffers reached the sink pad = %d, want 0: no data should have flowed once the layout was refused", got)
 	}
 }
+
+// TestEngineOpensAPositionedFourChannelSink reproduces the engine's
+// inability to open a device that demands a positioned channel layout, a
+// real, data-consuming sink shaped exactly like a MOTU M4 on a raw hw:
+// route: S32_LE, 4 channels, and a channel-mask fixed to 0x33 (front
+// left, front right, rear left, rear right) -- the caps alsasink itself
+// was measured negotiating against that device. ProgramChannels {1,2}
+// and LTCChannel 3 mirror a realistic binding; channel 4 is left silent.
+// Before this package assigned channel positions, interleave's own
+// channel-positions-from-input=false emitted an unpositioned mask no
+// positioned sink accepts, and the pipeline went not-negotiated.
+func TestEngineOpensAPositionedFourChannelSink(t *testing.T) {
+	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=4,channel-mask=(bitmask)0x33")
+	useSinkElement(t, sink.element)
+
+	cfg := Config{
+		SinkFactory:     "fakesink",
+		ProgramChannels: []int{1, 2},
+		LTCChannel:      3,
+		ChannelCount:    4,
+		SampleRate:      48000,
+		Resolve:         resolveByRuntimeFilename,
+	}
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	requireSustainedPlayback(t, e, sink.buffers)
+}
+
+// TestEngineOpensAPositionedThreeChannelSink is
+// TestEngineOpensAPositionedFourChannelSink's three-channel sibling,
+// matching this package's own other tests' typical channel count (see
+// e.g. config_ltc_test.go, engine_real_integration_test.go): a single
+// program channel plus LTC on channel 2, channel 3 left silent, against
+// a sink fixed to GStreamer's own documented 3-channel fallback mask
+// 0xb (front left, front right, LFE1) -- see [channelPositionBits].
+func TestEngineOpensAPositionedThreeChannelSink(t *testing.T) {
+	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=3,channel-mask=(bitmask)0xb")
+	useSinkElement(t, sink.element)
+
+	cfg := Config{
+		SinkFactory:     "fakesink",
+		ProgramChannels: []int{1},
+		LTCChannel:      2,
+		ChannelCount:    3,
+		SampleRate:      48000,
+		Resolve:         resolveByRuntimeFilename,
+	}
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	requireSustainedPlayback(t, e, sink.buffers)
+}

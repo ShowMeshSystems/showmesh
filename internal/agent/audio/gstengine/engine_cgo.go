@@ -249,7 +249,15 @@ func (e *Engine) buildPipeline() error {
 	if interleave == nil {
 		return errors.New("could not create interleave")
 	}
-	interleave.SetObjectProperty("channel-positions-from-input", false)
+	// positionBits is one GstAudioChannelPosition bitmask per output
+	// channel (see [channelPositionBits]), or nil when e.cfg.ChannelCount
+	// has no standard positioned fallback layout. channel-positions-from-input
+	// true only when positionBits is set: each channel's own capsfilter
+	// below then carries an explicit single-bit channel-mask, and
+	// interleave adopts it verbatim rather than emitting the unpositioned
+	// mask a positioned sink (e.g. a raw hw: ALSA route) refuses.
+	positionBits := channelPositionBits(e.cfg.ChannelCount)
+	interleave.SetObjectProperty("channel-positions-from-input", len(positionBits) > 0)
 	if !bin.Add(interleave) {
 		return errors.New("could not add interleave to pipeline")
 	}
@@ -276,6 +284,10 @@ func (e *Engine) buildPipeline() error {
 		if sinkPad == nil {
 			return fmt.Errorf("interleave refused a sink pad request for channel %d", ch)
 		}
+		var maskBit uint64
+		if len(positionBits) > 0 {
+			maskBit = positionBits[ch-1]
+		}
 		if pos, isProgram := programSet[ch]; isProgram {
 			mixer := gst.ElementFactoryMake("audiomixer", fmt.Sprintf("mixer-ch%d", ch))
 			if mixer == nil {
@@ -294,7 +306,7 @@ func (e *Engine) buildPipeline() error {
 			if mixerCaps == nil {
 				return fmt.Errorf("could not create mixer output capsfilter for channel %d", ch)
 			}
-			mixerCaps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, e.cfg.SampleRate)))
+			mixerCaps.SetObjectProperty("caps", gst.CapsFromString(channelCapsString(e.cfg.SampleRate, maskBit)))
 			if !bin.Add(mixerCaps) {
 				return fmt.Errorf("could not add mixer output capsfilter for channel %d", ch)
 			}
@@ -312,7 +324,7 @@ func (e *Engine) buildPipeline() error {
 		}
 
 		if ch == e.cfg.LTCChannel {
-			ltc, err := newLTCChannel(bin, e.cfg.SampleRate)
+			ltc, err := newLTCChannel(bin, e.cfg.SampleRate, maskBit)
 			if err != nil {
 				return fmt.Errorf("could not build LTC chain for channel %d: %w", ch, err)
 			}
@@ -334,7 +346,7 @@ func (e *Engine) buildPipeline() error {
 		if conv == nil || caps == nil {
 			return fmt.Errorf("could not create silence chain for channel %d", ch)
 		}
-		caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, e.cfg.SampleRate)))
+		caps.SetObjectProperty("caps", gst.CapsFromString(channelCapsString(e.cfg.SampleRate, maskBit)))
 		for _, el := range []gst.Element{silenceSrc, conv, caps} {
 			if !bin.Add(el) {
 				return fmt.Errorf("could not add silence element to pipeline for channel %d", ch)
@@ -395,15 +407,32 @@ var newSinkFactoryElement = func(cfg Config) (gst.Element, error) {
 //
 // channelCount is pinned in a capsfilter placed after the resampler.
 // This does not make every channel-count mismatch fail loudly on its
-// own -- interleave's own channel-positions-from-input=false already
-// emits an unpositioned channel-mask, and audioconvert already refuses
-// to remix one unpositioned multi-channel layout onto another, pinned
+// own -- for a channelCount [channelPositionBits] has no fallback layout
+// for, interleave's own channel-positions-from-input=false still emits
+// an unpositioned channel-mask, and audioconvert already refuses to
+// remix one unpositioned multi-channel layout onto another, pinned
 // capsfilter or not (measured). What the pin is proven to stop is
 // narrower and still real: a single unpositioned channel has no such
 // ambiguity, so without this capsfilter audioconvert will silently
 // upmix a mono program or the LTC/silence channels onto a wider fixed
 // sink layout instead of refusing it (measured) -- exactly the kind of
 // silent channel reassignment a show's output layout must never get.
+// channelCapsString builds the single-channel caps string every chain
+// feeding one of interleave's request pads negotiates: the fixed interior
+// format and rate, and, when maskBit is nonzero, an explicit
+// channel-mask claiming exactly the one [channelPositionBits] position
+// assigned to that channel. maskBit is 0 for a channel count
+// [channelPositionBits] has no fallback layout for, in which case the
+// caps carry no mask and interleave falls back to its own unpositioned
+// output.
+func channelCapsString(sampleRate int, maskBit uint64) string {
+	caps := fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, sampleRate)
+	if maskBit != 0 {
+		caps += fmt.Sprintf(",channel-mask=(bitmask)0x%x", maskBit)
+	}
+	return caps
+}
+
 func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCount int) error {
 	convert := gst.ElementFactoryMake("audioconvert", "sink-convert")
 	resample := gst.ElementFactoryMake("audioresample", "sink-resample")
