@@ -225,6 +225,15 @@ func Run() int {
 	audioBind := newAudioBinding(audioRebuilder.rebuild, func(p audioSettingsConfig) {
 		audioMgr.SetSettings(audioSettingsFromWire(p))
 	})
+	// A same-revision audio.node.configure replay (the coordinator's
+	// hello push resends the same revision on every reconnect) must
+	// still rebuild when this node's own engine cannot produce sound —
+	// otherwise a broken output pipeline never recovers short of an
+	// agent restart or an artificial revision bump.
+	audioBind.SetNodeBrokenCheck(func() bool {
+		ok, _ := audioEngine.Available()
+		return !ok
+	})
 
 	if err := audioMgr.RestoreAll(sigCtx); err != nil {
 		logger.Warn("failed to restore persisted audio sessions at startup", "error", err)
@@ -284,7 +293,7 @@ func Run() int {
 		defer close(audioReportDone)
 		ticker := time.NewTicker(cfg.AudioReportInterval)
 		defer ticker.Stop()
-		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, time.Now, ticker.C, logger)
+		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, audioEngine, time.Now, ticker.C, logger)
 	}()
 
 	// runShowModeWatch is the observability half of ADR-033 decision 5: it

@@ -192,3 +192,41 @@ func TestResolveNodeChannelCount(t *testing.T) {
 		})
 	}
 }
+
+// TestAudioBindingApplyNodeReplayRebuildsWhenEngineBroken reproduces the
+// gap left by a coordinator's hello push resending the SAME revision
+// this node already holds. Before this test, that replay was
+// unconditionally a no-op (TestAudioBindingApplyNodeReplayIsNoOp), so a
+// broken output pipeline never got rebuilt by anything short of an
+// artificial revision bump or an agent restart. Once
+// [audioBinding.SetNodeBrokenCheck] reports the engine broken, the exact
+// same replay must call onNode again.
+func TestAudioBindingApplyNodeReplayRebuildsWhenEngineBroken(t *testing.T) {
+	var calls int
+	b := newAudioBinding(func(audioNodeConfig) { calls++ }, nil)
+	broken := false
+	b.SetNodeBrokenCheck(func() bool { return broken })
+
+	if err := b.applyNode(validAudioNodeConfig(5)); err != nil {
+		t.Fatalf("applyNode(5): unexpected error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls after first apply = %d, want 1", calls)
+	}
+
+	broken = true
+	if err := b.applyNode(validAudioNodeConfig(5)); err != nil {
+		t.Fatalf("applyNode(5) replay while broken: unexpected error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls after exact-revision replay while broken = %d, want 2 (the replay must act as a rebuild request)", calls)
+	}
+
+	broken = false
+	if err := b.applyNode(validAudioNodeConfig(5)); err != nil {
+		t.Fatalf("applyNode(5) replay while healthy: unexpected error: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls after exact-revision replay while healthy = %d, want still 2 (a healthy engine's replay stays a no-op)", calls)
+	}
+}

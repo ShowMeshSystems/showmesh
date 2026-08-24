@@ -32,6 +32,19 @@ type ltcObserver interface {
 	ObserveLTC(ctx context.Context) audio.LTCObservation
 }
 
+// engineAvailability is the live playback engine evidence this report
+// loop consults on every tick — the same [audio.SwitchableEngine.
+// Available] method agent.go already wires into hello capabilities
+// (audiocapabilities.go's audioEngineAvailable var), asked here too so
+// the published audio report can never disagree with what the node
+// would actually claim in its hello advertisement. A nil
+// engineAvailability leaves EngineAvailable/EngineReason at the startup
+// discovery cache's value, matching this loop's other nil-safe optional
+// sources.
+type engineAvailability interface {
+	Available() (bool, string)
+}
+
 // noLTCObserverReason is what a nil ltcObserver reports: no LTC source is
 // wired into this report loop at all, which is a different fact from an
 // engine that cannot generate LTC.
@@ -61,7 +74,7 @@ const noLTCObserverReason = "no LTC source is wired into this node's audio repor
 // runAudioReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runRenderReport's identical
 // contract.
-func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, ltc ltcObserver, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
+func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audioSessionSnapshotter, ltc ltcObserver, engine engineAvailability, now func() time.Time, ticks <-chan time.Time, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "audio")
 	if err != nil {
 		// nodeID is validated at config load, matching runRenderReport's
@@ -86,8 +99,30 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			payload.ObservedAt = &tickAt
 			payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
 			applyLTCObservation(ctx, &payload, ltc)
+			applyEngineAvailability(&payload, engine)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
+	}
+}
+
+// applyEngineAvailability overwrites payload's EngineAvailable/
+// EngineReason with engine's live evidence, fresh on every call — the
+// startup discovery cache buildAudioPayload seeded them from otherwise
+// never updates for the life of the process, so a pipeline that goes
+// broken hours into a show (device unplug, a fatal sink error) would
+// keep reporting the discovery-time verdict forever. A nil engine (no
+// asset directory configured on this node, matching
+// audioSessionSnapshotter/ltcObserver's identical nil convention) leaves
+// the discovery cache's value in place.
+func applyEngineAvailability(payload *mqttproto.AudioPayload, engine engineAvailability) {
+	if engine == nil {
+		return
+	}
+	ok, reason := engine.Available()
+	payload.EngineAvailable = ok
+	payload.EngineReason = reason
+	if !ok && payload.EngineReason == "" {
+		payload.EngineReason = "audio engine probe did not reach PLAYING"
 	}
 }
 

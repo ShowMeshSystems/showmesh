@@ -432,8 +432,13 @@ func (m *Manager) watchTick(ctx context.Context) {
 				// A background poll failing to read a loaded, playing
 				// handle is itself evidence: this is where a real
 				// engine's crash or freeze is most likely to surface
-				// first, ahead of any operator-dispatched command.
+				// first, ahead of any operator-dispatched command. The
+				// state must be downgraded here, not just the fault
+				// field: a session the operator sees as Playing while
+				// its own engine cannot even be observed is exactly the
+				// fail-silent gap this exists to close.
 				s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+				s.state = pkgaudio.StateFailed
 			} else {
 				s.lastObservedAt = obs.ObservedAt
 				if obs.State == pkgaudio.StateCompleted {

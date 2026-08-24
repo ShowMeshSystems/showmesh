@@ -895,7 +895,14 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		obs, err := s.mgr.engine.Observe(obsCtx, s.handle)
 		cancel()
 		if err != nil {
+			// Mirrors watchTick's identical Observe-failure handling
+			// (restore.go): a session this snapshot cannot even observe
+			// must not still be reported as Playing.
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			s.state = pkgaudio.StateFailed
+			snap.State = s.state
+			snap.Fault = s.fault
+			snap.FaultReason = s.faultReason
 		} else {
 			s.lastObservedAt = obs.ObservedAt
 			snap.PositionKnown = true
