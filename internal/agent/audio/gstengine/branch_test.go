@@ -39,13 +39,13 @@ func TestLocalRunningTimeClampsToZero(t *testing.T) {
 // elapsed fade whose gain has not reached its target must stay reported
 // in progress, since a caller detects completion by Gain equalling the
 // target, never by inferring it from fade.Duration having elapsed. It
-// also proves the bound is local running time alone, per fadeArrived's
+// also proves the bound is raw stream position alone, per fadeArrived's
 // doc comment.
 func TestFadeArrivedRequiresGainAtTarget(t *testing.T) {
 	const fadeDuration = 3 * time.Second
 	cases := []struct {
 		name   string
-		local  time.Duration
+		pos    time.Duration
 		gain   pkgaudio.Gain
 		target pkgaudio.Gain
 		want   bool
@@ -59,10 +59,10 @@ func TestFadeArrivedRequiresGainAtTarget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := fadeArrived(tc.local, 0, fadeDuration, tc.gain, tc.target)
+			got := fadeArrived(tc.pos, 0, fadeDuration, tc.gain, tc.target)
 			if got != tc.want {
-				t.Fatalf("fadeArrived(local=%s, gain=%v, target=%v) = %v, want %v",
-					tc.local, tc.gain, tc.target, got, tc.want)
+				t.Fatalf("fadeArrived(pos=%s, gain=%v, target=%v) = %v, want %v",
+					tc.pos, tc.gain, tc.target, got, tc.want)
 			}
 		})
 	}

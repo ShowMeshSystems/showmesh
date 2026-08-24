@@ -457,7 +457,12 @@ func TestFadeHeldByPauseStaysActiveAndCompletesOnResume(t *testing.T) {
 	if _, err := e.Start(ctx, "fp1", 0); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitForPosition(t, e, "fp1", 100*time.Millisecond, 5*time.Second)
+	// A multi-second pre-fade wait, not a token 100ms one: fadeStartPos
+	// must be large enough that a broken segment-relative anchor (reset
+	// toward zero by Resume's own re-anchoring seek) would visibly throw
+	// FadeActive's completion far off, rather than hiding the defect
+	// under a wait so short the miscalculation rounds away.
+	waitForPosition(t, e, "fp1", 2*time.Second, 5*time.Second)
 
 	if _, err := e.Fade(ctx, "fp1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0}); err != nil {
 		t.Fatalf("Fade: %v", err)
@@ -535,6 +540,86 @@ func TestFadeHeldByPauseStaysActiveAndCompletesOnResume(t *testing.T) {
 	}
 
 	_ = e.Release(context.Background(), "fp1")
+}
+
+// TestFadeAnchorSurvivesResumeSeek proves the fade completion bound
+// (fadeArrived) is unaffected by Resume's own flushing seek. That seek
+// resets segmentStart, which is the branch position localRunningTime
+// measures from; a fadeStartPos of several seconds, not the ~100ms a
+// fade dispatched right after Start would give, is what exposes a bound
+// still keyed off segment-relative local running time, since a small
+// fadeStartPos rounds the resulting error away under this test's own
+// deadline.
+func TestFadeAnchorSurvivesResumeSeek(t *testing.T) {
+	const fileDuration = 20 * time.Second
+	const preFadeWait = 4 * time.Second
+	const fadeDuration = 2 * time.Second
+	const pauseIntoFade = 700 * time.Millisecond
+	const holdDuration = 1 * time.Second
+
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, fileDuration.Seconds())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "fa1", mediaRef(wav), fileDuration); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "fa1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "fa1", preFadeWait, 10*time.Second)
+
+	if _, err := e.Fade(ctx, "fa1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0}); err != nil {
+		t.Fatalf("Fade: %v", err)
+	}
+	time.Sleep(pauseIntoFade)
+	if _, err := e.Pause(ctx, "fa1"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	time.Sleep(holdDuration)
+
+	resumedAt := time.Now()
+	resumeObs, err := e.Resume(ctx, "fa1")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	t.Logf("resumed at position %s, %s into a %s fade at Pause", resumeObs.Position, pauseIntoFade, fadeDuration)
+
+	// The remaining ramp is roughly fadeDuration-pauseIntoFade; allow a
+	// generous margin for scheduling jitter and the queue's own settle,
+	// but nowhere near fadeStartPos (preFadeWait, ~4s) or fadeDuration
+	// itself (2s): a broken segment-relative anchor reported this test's
+	// own scenario clearing 5.85s after Resume, not the ~1.3s expected.
+	const clearWithin = 3 * time.Second
+	deadline := time.Now().Add(clearWithin)
+	var last agentaudio.EngineObservation
+	for time.Now().Before(deadline) {
+		obs, err := e.Observe(ctx, "fa1")
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		last = obs
+		if !obs.FadeActive {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	elapsedSinceResume := time.Since(resumedAt)
+	t.Logf("FadeActive=%v gain=%v position=%v elapsed since Resume=%s", last.FadeActive, last.Gain, last.Position, elapsedSinceResume)
+
+	if last.FadeActive {
+		t.Fatalf("FadeActive still true %s after Resume (want cleared within %s): position=%s gain=%v, "+
+			"a fade that finished is being reported as still in progress", elapsedSinceResume, clearWithin, last.Position, last.Gain)
+	}
+	if last.Gain > 0.05 {
+		t.Fatalf("gain once FadeActive cleared = %v, want close to 0", last.Gain)
+	}
+
+	_ = e.Release(context.Background(), "fa1")
 }
 
 // TestFadeHeldByStopStaysActive proves Stop, like Pause, genuinely halts

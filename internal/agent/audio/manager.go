@@ -603,6 +603,11 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		if !s.handleLoaded {
+			// A fade can be left pending here too: invalidateActiveSessions
+			// (an engine rebind after a route change) clears handleLoaded
+			// without resolving one. Same hazard as the loaded branch
+			// below, reached a different way.
+			s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
 			s.state = pkgaudio.StateStopped
 			s.bookmark = nil
 			s.setGapUnknownLocked("session is stopped")

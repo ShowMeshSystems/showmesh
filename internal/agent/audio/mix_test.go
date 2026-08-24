@@ -1000,3 +1000,73 @@ func TestFadePendingResolvedByDeferredStopCompletion(t *testing.T) {
 		t.Fatalf("fade outcome after being stranded by a deferred stop = %+v, want Unconfirmable", result)
 	}
 }
+
+// TestFadePendingResolvedByStopAfterEngineRebind proves Stop's own
+// no-handle-loaded branch resolves a fade invalidateActiveSessions (an
+// engine rebind after a route change, see RebindEngine) left pending: a
+// route change clears handleLoaded directly, without going through
+// checkFadeCompletionLocked or resolveFadePendingStrandedLocked itself,
+// so the very next Stop is the only remaining chance to close it out.
+func TestFadePendingResolvedByStopAfterEngineRebind(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	switchable := NewSwitchableEngine()
+	first := NewFakeEngine(c.now)
+	switchable.Set(first)
+
+	m := NewManager(switchable, store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, id, fadeInvocation, 3, pkgaudio.FadeCurveLinear, 5*time.Second, pkgaudio.Gain(0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("fade unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	if !s.fadePending {
+		s.mu.Unlock()
+		t.Fatal("precondition: fade should be pending")
+	}
+	s.mu.Unlock()
+
+	second := NewFakeEngine(c.now)
+	m.RebindEngine(switchable, second, "test rebind")
+
+	s.mu.Lock()
+	if s.handleLoaded {
+		s.mu.Unlock()
+		t.Fatal("precondition: handle should no longer be loaded after RebindEngine")
+	}
+	if !s.fadePending {
+		s.mu.Unlock()
+		t.Fatal("precondition: fade should still be pending: RebindEngine does not resolve it on its own")
+	}
+	s.mu.Unlock()
+
+	if r := m.Stop(ctx, id, "inv-stop", 4); r.Outcome == pkgaudio.OutcomeFailed {
+		t.Fatalf("stop: unexpectedly failed: %+v", r)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fadePending {
+		t.Fatal("fadePending is still true after Stop's no-handle-loaded branch ran; it will never reach a terminal outcome")
+	}
+	result, ok := s.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("the fade's own invocation has no recorded outcome")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome after being stranded by an engine rebind = %+v, want Unconfirmable", result)
+	}
+}

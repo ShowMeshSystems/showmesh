@@ -126,13 +126,15 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	policy := interruptResumePolicyLocked(t)
 	handleStillValid := t.handleLoaded && t.loadedIdentity == itemIdentity(item)
 
-	// The common case — Resume, handle untouched since the pause — uses
-	// the exact same [Engine.Resume] call an operator-issued
+	// The common case, Resume with the handle untouched since the pause,
+	// uses the exact same [Engine.Resume] call an operator-issued
 	// [Manager.Resume] makes: continue the still-paused handle from
-	// exactly the position [Engine.Pause] froze it at. This is
-	// deliberately NOT [Engine.Start] with a resolved position: seeking a
-	// handle that is merely paused (never released) has no reason to
-	// exist when Resume already does the same thing without a seek.
+	// exactly the position [Engine.Pause] froze it at (Resume issues its
+	// own internal seek to that position; this call site does not pass
+	// one of its own). This is deliberately NOT [Engine.Start] with a
+	// resolved position: a handle that is merely paused (never released)
+	// has no reason for this call site to seek it a second time when
+	// Resume already re-anchors it.
 	if policy == pkgaudio.ResumePolicyResume && handleStillValid {
 		obs, err := m.engine.Resume(ctx, t.handle)
 		if err != nil {

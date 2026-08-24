@@ -223,6 +223,12 @@ func (e *FakeEngine) Start(_ context.Context, handle EngineHandle, position time
 	h.position = position
 	h.state = pkgaudio.StatePlaying
 	h.playStartedAt = e.now()
+	// Matches the real engine's Start, which always clears any flow
+	// block a prior Stop left behind (see gstengine's blockFlow/
+	// unblockFlow): a fade Stop froze mid-ramp must resume advancing
+	// once Start brings the handle back to Playing, not stay frozen
+	// forever because only Resume ever thawed it.
+	e.resumeFade(h)
 	return e.obs(h), nil
 }
 

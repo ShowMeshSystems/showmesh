@@ -112,6 +112,67 @@ func TestFakeEngineResumeContinuesFadeFromHeldGain(t *testing.T) {
 	}
 }
 
+// TestFakeEngineStartResumesFadeFrozenByStop proves Start, like Resume,
+// lets a fade Stop froze mid-ramp start advancing again: a fake handle
+// stopped mid-fade and then Started must not keep that ramp frozen
+// forever, matching the real engine's Start, which always clears any
+// flow block a prior Stop left behind.
+func TestFakeEngineStartResumesFadeFrozenByStop(t *testing.T) {
+	c := newClock(time.Now())
+	e := NewFakeEngine(c.now)
+	ctx := context.Background()
+	const handle = EngineHandle("h1")
+
+	if _, err := e.Load(ctx, handle, pkgaudio.MediaRef{}, 10*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := e.Fade(ctx, handle, pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: time.Second, TargetGain: 0}); err != nil {
+		t.Fatalf("Fade: %v", err)
+	}
+	c.advance(300 * time.Millisecond)
+	stopObs, err := e.Stop(ctx, handle)
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	heldGain := stopObs.Gain
+
+	// Wall time passes well past the fade's own duration while stopped.
+	c.advance(2 * time.Second)
+
+	if _, err := e.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("Start after Stop: %v", err)
+	}
+
+	// Immediately after Start, gain must not have jumped: no wall time
+	// has passed since this Start itself.
+	obs, err := e.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if obs.Gain != heldGain {
+		t.Fatalf("gain jumped immediately on Start: was %v, now %v", heldGain, obs.Gain)
+	}
+	if !obs.FadeActive {
+		t.Fatalf("FadeActive cleared immediately on Start, before the remaining ramp had any time to run")
+	}
+
+	// The remaining ~700ms of the ramp completes from here.
+	c.advance(800 * time.Millisecond)
+	obs, err = e.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if obs.FadeActive {
+		t.Fatalf("fade never resumed advancing after Start: still FadeActive=true well past its remaining duration")
+	}
+	if obs.Gain != 0 {
+		t.Fatalf("gain after the fade completed = %v, want 0", obs.Gain)
+	}
+}
+
 // TestFakeEngineStopFreezesFadeGain proves Stop, like Pause, halts an
 // in-progress fade's ramp: the FakeEngine counterpart to gstengine's
 // TestFadeHeldByStopStaysActive.
@@ -151,5 +212,61 @@ func TestFakeEngineStopFreezesFadeGain(t *testing.T) {
 	}
 	if !obs.FadeActive {
 		t.Fatalf("FadeActive cleared after Stop held the fade short of its target")
+	}
+}
+
+// TestFakeEngineFadeDispatchedWhilePausedStartsFrozen proves Fade issued
+// on an already-paused handle starts its ramp frozen, not running: wall
+// time passing before Resume must not move gain at all, matching a fade
+// dispatched while already playing then immediately paused.
+func TestFakeEngineFadeDispatchedWhilePausedStartsFrozen(t *testing.T) {
+	c := newClock(time.Now())
+	e := NewFakeEngine(c.now)
+	ctx := context.Background()
+	const handle = EngineHandle("h1")
+
+	if _, err := e.Load(ctx, handle, pkgaudio.MediaRef{}, 10*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := e.Pause(ctx, handle); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	fadeObs, err := e.Fade(ctx, handle, pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: time.Second, TargetGain: 0})
+	if err != nil {
+		t.Fatalf("Fade: %v", err)
+	}
+	startGain := fadeObs.Gain
+
+	// Wall time passes well past the fade's own duration while the
+	// handle stays paused throughout.
+	c.advance(2 * time.Second)
+	obs, err := e.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if obs.Gain != startGain {
+		t.Fatalf("gain moved on a fade dispatched while paused, before any Resume: was %v, now %v", startGain, obs.Gain)
+	}
+	if !obs.FadeActive {
+		t.Fatalf("FadeActive cleared on a fade dispatched while paused, before any Resume")
+	}
+
+	if _, err := e.Resume(ctx, handle); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	c.advance(1100 * time.Millisecond)
+	obs, err = e.Observe(ctx, handle)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if obs.FadeActive {
+		t.Fatalf("fade did not complete after its own duration elapsed post-Resume")
+	}
+	if obs.Gain != 0 {
+		t.Fatalf("gain after the fade completed = %v, want 0", obs.Gain)
 	}
 }

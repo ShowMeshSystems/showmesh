@@ -264,8 +264,7 @@ func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade 
 	if !b.hasStarted() {
 		return agentaudio.EngineObservation{}, errFadeBeforeStart
 	}
-	baseLocal := b.localRunningTime(b.queryPosition())
-	if err := b.startFade(fade, baseLocal); err != nil {
+	if err := b.startFade(fade, b.queryPosition()); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEnginePipelineCrash, err)
 	}
 	return b.observe(e.cfg.now()), nil
