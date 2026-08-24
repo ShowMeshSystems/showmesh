@@ -6813,6 +6813,117 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/cue-catalog:
+    get:
+      operationId: getNodeCueCatalog
+      summary: One node's resolved Cue catalog (Track H seam H3)
+      description: >-
+        What the active Show's `show.cue`/`show.playlist` configuration
+        resolves to for this node right now: every Cue some Playlist
+        references or a `safeCue` `mismatchPolicy` names (an unreferenced
+        Cue is a draft and never appears here), each Cue's outputs
+        resolved for this node, and the content hashes of the assets those
+        outputs need (reusing the same asset identity `GET
+        /nodes/{nodeId}/assets` uses, never a second expectation model).
+        `revision` is a SHA-256 over a canonical serialization covering
+        the Show id, `generation`, this node's id, and every Cue id,
+        revision, resolved output, and asset hash - the coordinator and a
+        node compute it with the same function, so disagreement is
+        detectable rather than assumed away.
+
+
+        `configured` is `false`, with `show`/`generation`/`revision`
+        absent and `entries` empty, exactly when no `show.active` is
+        configured: the honest-absence case, never a fabricated
+        `generation` of `0` that could be mistaken for a real grant. `404`
+        when `nodeId` does not name a declared node, matching `GET
+        /nodes/{nodeId}/assets`'s identical posture.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >-
+            Same ID syntax as an MQTT node ID: 1-64 characters, lowercase
+            letters/digits/hyphens, not starting or ending with a hyphen.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueCatalogResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/cue-catalog/acknowledge:
+    post:
+      operationId: postNodeCueCatalogAcknowledge
+      summary: A node reports which Cue catalog revision it holds (Track H seam H3)
+      description: >-
+        Behind `node:observe`: an authenticated node reporting the catalog
+        revision (for the show and generation it was resolved from) it now
+        holds. Stored beside the node's asset report, the same shape
+        Track E already uses for the per-node asset manifest.
+
+
+        `status` is `"catalog-current"` only when the acknowledged
+        revision equals the one this coordinator resolves right now for
+        this node; otherwise `"catalog-stale"`, naming both revisions -
+        there is no partial state. **Acknowledging a catalog is explicitly
+        NOT readiness**: this response says nothing about asset presence,
+        which stays `GET /nodes/{nodeId}/assets`'s own answer. `404` when
+        `nodeId` does not name a declared node.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >-
+            Same ID syntax as an MQTT node ID: 1-64 characters, lowercase
+            letters/digits/hyphens, not starting or ending with a hyphen.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CueCatalogAcknowledgeRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueCatalogAcknowledgeResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -13826,3 +13937,140 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NodeAssetManifest"
+    CueCatalogRenderOutput:
+      type: object
+      description: One Cue's resolved render output for a node (Track H seam H3).
+      additionalProperties: false
+      required: [sequence, assetHashes]
+      properties:
+        sequence:
+          type: string
+        assetHashes:
+          type: array
+          items:
+            type: string
+    CueCatalogAudioOutput:
+      type: object
+      description: One Cue's resolved audio output for a node (Track H seam H3).
+      additionalProperties: false
+      required: [asset, startOffsetMillis, assetHashes]
+      properties:
+        asset:
+          type: string
+        startOffsetMillis:
+          type: integer
+        assetHashes:
+          type: array
+          items:
+            type: string
+    CueCatalogLTCOutput:
+      type: object
+      description: One Cue's resolved LTC output (Track H seam H3).
+      additionalProperties: false
+      required: [startOffsetMillis]
+      properties:
+        startOffsetMillis:
+          type: integer
+    CueCatalogAnnouncementOutput:
+      type: object
+      description: One Cue's resolved announcement policy (Track H seam H3).
+      additionalProperties: false
+      required: [policy, fadeMillis]
+      properties:
+        policy:
+          type: string
+          enum: [duck, mix, interrupt]
+        duckGainDb:
+          type: number
+        fadeMillis:
+          type: integer
+    CueCatalogOutputs:
+      type: object
+      description: >-
+        One Cue's resolved outputs, restricted to the ones that concern
+        the requested node (Track H seam H3). A member is absent when that
+        output either was not declared on the Cue, or does not concern
+        this node.
+      additionalProperties: false
+      properties:
+        render:
+          $ref: "#/components/schemas/CueCatalogRenderOutput"
+        audio:
+          $ref: "#/components/schemas/CueCatalogAudioOutput"
+        ltc:
+          $ref: "#/components/schemas/CueCatalogLTCOutput"
+        announcement:
+          $ref: "#/components/schemas/CueCatalogAnnouncementOutput"
+    CueCatalogEntry:
+      type: object
+      description: One Cue's row in a resolved catalog (Track H seam H3).
+      additionalProperties: false
+      required: [cueId, cueRevision, outputs]
+      properties:
+        cueId:
+          type: string
+        cueRevision:
+          type: integer
+        outputs:
+          $ref: "#/components/schemas/CueCatalogOutputs"
+    CueCatalogResponse:
+      type: object
+      description: The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3).
+      additionalProperties: false
+      required: [serverTime, node, configured, entries]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        node:
+          type: string
+        configured:
+          type: boolean
+        show:
+          type: string
+        generation:
+          type: integer
+        revision:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/CueCatalogEntry"
+    CueCatalogAcknowledgeRequest:
+      type: object
+      description: The body of POST /nodes/{nodeId}/cue-catalog/acknowledge.
+      additionalProperties: false
+      required: [revision, show, generation]
+      properties:
+        revision:
+          type: string
+          minLength: 1
+        show:
+          type: string
+          minLength: 1
+        generation:
+          type: integer
+          minimum: 1
+    CueCatalogAcknowledgeResponse:
+      type: object
+      description: The response body of POST /nodes/{nodeId}/cue-catalog/acknowledge.
+      additionalProperties: false
+      required: [serverTime, node, configured, status, acknowledgedRevision, acknowledgedAt]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        node:
+          type: string
+        configured:
+          type: boolean
+        status:
+          type: string
+          enum: [catalog-current, catalog-stale]
+        acknowledgedRevision:
+          type: string
+        currentRevision:
+          type: string
+        acknowledgedAt:
+          type: string
+          format: date-time

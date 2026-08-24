@@ -60,6 +60,21 @@ const (
 // credential must not be able to forge plugin evidence.
 const ScopeFPPObserve Scope = "fpp:observe"
 
+// ScopeNodeObserve gates POST /api/v1/nodes/{nodeId}/cue-catalog/acknowledge
+// (TRACK-H-H3-SPEC.md section 4): an authenticated node reporting which Cue
+// catalog revision it currently holds. Deliberately not [ScopeConfigWrite]
+// — an acknowledgement is not a configuration write, it is a node
+// reporting evidence about itself, the same relationship [ScopeFPPObserve]
+// has to the plugin's own observation route — and deliberately not folded
+// into any existing read scope: widening a read scope to also cover a
+// write is exactly the mistake [ScopeFPPObserve]'s own doc comment already
+// warns against one seam earlier. Admin-only for now (adminOnlyScopes
+// below): this codebase has no dedicated "node" machine role yet, so a
+// deployment issues an admin-scoped machine token to each node agent for
+// this route, the same interim posture [ScopeFPPObserve] has before a
+// role narrower than admin exists to hold it.
+const ScopeNodeObserve Scope = "node:observe"
+
 // Write scopes. Step 6 adds no endpoint that consumes ScopeShowMacroRun,
 // ScopeDevicePower, or ScopeFPPCommand — they exist so the vocabulary is
 // fixed by the record that decided it (ADR-024) rather than invented by
@@ -182,7 +197,7 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // ScopeNightOverride sits here, not in operatorActionScopes, per its own
 // doc comment: bypassing a blocking interlock is deliberately not implied
 // by holding [ScopeNightCommand].
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride}
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a

@@ -15,6 +15,18 @@ import (
 type ActiveShow struct {
 	Configured bool
 	ShowID     string
+
+	// Generation is show.active's own config revision number
+	// (TRACK-H-H3-SPEC.md section 2): the value that changes whenever
+	// show.active changes or is deliberately reissued, because
+	// writeShowConfigRevision computes nextRevisionNo unconditionally
+	// rather than deduplicating an identical payload. Nothing new is
+	// minted here — every consumer of ResolveActiveShow gets it for free.
+	// Meaningful ONLY when Configured is true: an unconfigured show.active
+	// has no generation and authorizes nothing (the existing honest-
+	// absence case, not generation zero), so Generation stays the zero
+	// value and no caller may treat that zero as a real grant.
+	Generation int64
 }
 
 // alwaysTrue is passed to config.DecodeShowActivePayload/
@@ -47,7 +59,7 @@ func ResolveActiveShow(ctx context.Context, st *store.Store) (ActiveShow, error)
 	if verr != nil {
 		return ActiveShow{}, fmt.Errorf("assetsync: resolve active show: decode stored payload: %s", verr.Detail)
 	}
-	return ActiveShow{Configured: true, ShowID: payload.Show}, nil
+	return ActiveShow{Configured: true, ShowID: payload.Show, Generation: obj.CurrentRevision}, nil
 }
 
 // ExpectedAsset is one asset a node is expected to hold, per §4.1 point 2:

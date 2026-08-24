@@ -78,7 +78,7 @@ func TestRoleScopes(t *testing.T) {
 	}{
 		{RoleViewer, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead}},
 		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand}},
-		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride}},
+		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve}},
 		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve}},
 	}
 	for _, tc := range cases {

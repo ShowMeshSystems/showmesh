@@ -31,6 +31,33 @@ type Assignment struct {
 	SurfaceID string          `json:"surfaceId"`
 	RawParams json.RawMessage `json:"rawParams"`
 	AppliedAt time.Time       `json:"appliedAt"`
+
+	// Auth is the authorization tuple (TRACK-H-H3-SPEC.md section 5's
+	// Show/Generation/CatalogRevision, restricted to the three fields a
+	// boot-time resume decision needs) this assignment was applied under,
+	// or nil when the params that produced it carried none. nil is NOT
+	// the same as an authorized-under-nothing tuple: TRACK-H-H3-SPEC.md
+	// section 7 requires an assignment persisted before this field
+	// existed to be treated as unauthorized at boot (cleared, never
+	// grandfathered in), and a caller distinguishing "no tuple" from "a
+	// tuple that happens to be the zero value" needs the pointer, not an
+	// empty struct, to tell the two apart.
+	Auth *AssignmentAuth `json:"auth,omitempty"`
+}
+
+// AssignmentAuth is the subset of TRACK-H-H3-SPEC.md section 5's
+// authorization tuple a boot-time resume decision compares against the
+// node's currently held Cue catalog (section 7: "a resumed assignment
+// whose authorization tuple does not match the node's current authorized
+// Show, generation, and catalog revision is discarded rather than
+// applied"). It deliberately carries no Cue identity: a render assignment
+// is scoped to a surface, not a Cue, so only the three fields that gate
+// whether the Show/generation/catalog it was authorized under is still
+// current belong here.
+type AssignmentAuth struct {
+	Show            string `json:"show"`
+	Generation      int64  `json:"generation"`
+	CatalogRevision string `json:"catalogRevision"`
 }
 
 // AssignmentStore persists and reloads the set of currently-applied surface
