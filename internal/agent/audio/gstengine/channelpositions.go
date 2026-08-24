@@ -106,7 +106,7 @@ func probeSinkChannelPositions(sinkEl gst.Element, channelCount, sampleRate int)
 	}
 
 	positioned := gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=%d,channel-mask=(bitmask)0x%x", sampleRate, channelCount, fallbackMask))
-	if accepted.CanIntersect(positioned) {
+	if pad.QueryAcceptCaps(positioned) {
 		return fallback
 	}
 	return nil
