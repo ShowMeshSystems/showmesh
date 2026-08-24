@@ -32,6 +32,13 @@ type fakeRenderPublisher struct {
 	topics  []string
 	payload []mqttCmdEnvelopeForTest
 	err     error
+
+	// onPublish, when set, runs synchronously right after a publish is
+	// recorded - a test's only way to inject an event (such as canceling
+	// the caller's own request context) at the exact moment a real
+	// publish would have already reached the wire, without a real
+	// broker.
+	onPublish func()
 }
 
 // mqttCmdEnvelopeForTest decodes just enough of the published envelope for
@@ -56,6 +63,9 @@ func (f *fakeRenderPublisher) Publish(_ context.Context, topic string, _ byte, _
 	var env mqttCmdEnvelopeForTest
 	_ = json.Unmarshal(payload, &env)
 	f.payload = append(f.payload, env)
+	if f.onPublish != nil {
+		f.onPublish()
+	}
 	return nil
 }
 
@@ -420,6 +430,82 @@ func TestRenderApplyDispatchesCompleteAssignmentAndConfirms(t *testing.T) {
 	}
 	if result.Command.Outcome != "confirmed" {
 		t.Fatalf("outcome = %q, want confirmed; body: %s", result.Command.Outcome, body)
+	}
+}
+
+// TestRenderDispatchOutcomeSurvivesClientDisconnect proves this route's
+// post-dispatch bookkeeping (recording dispatchedAt, polling for
+// confirmation evidence, recording the resolved outcome, and writing the
+// outcome audit entry) is not cancellable by a client that walks away
+// mid-request - matching TestFPPCommandOutcomeSurvivesClientDisconnect's
+// and audiodispatch.go's own bgCtx cutover. The request's own context is
+// canceled from inside the fake publisher right after the publish that
+// dispatch already recorded, simulating an abandoned HTTP client; despite
+// that, the command must still resolve in the store with dispatchedAt,
+// resolvedAt, and a real outcome audit entry.
+func TestRenderDispatchOutcomeSurvivesClientDisconnect(t *testing.T) {
+	renderCommandConfirmDeadline = 2 * time.Second
+	renderCommandPollInterval = 10 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	setup := newRenderDispatchTestSetup(t, fixedClock(testNow))
+	renderPutShow(t, setup.st, "halloween-2026", "Halloween 2026")
+	renderPutActiveShow(t, setup.st, "halloween-2026")
+	renderPutSurface(t, setup.st, "wall-1", "halloween-2026", "media-01")
+	renderCreateAsset(t, setup.st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", "hash-a", "opener.fseq")
+
+	operator := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, operator.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	setup.pub.onPublish = func() {
+		cancel()
+		// Evidence arrives after the client disconnects but before the
+		// confirm deadline — proves the confirmation wait keeps running
+		// server-side past the disconnect rather than merely recording
+		// an already-decided outcome.
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			setup.obs.setObs([]observation.Observation{surfacePipelineStateObs("media-01", "wall-1", "running", testNow.Add(time.Second), testNow.Add(time.Second))})
+		}()
+	}
+
+	req := newRenderRequest(t, http.MethodPost, "/api/v1/nodes/media-01/render/surfaces/wall-1/apply",
+		`{"sequenceId":"opener","idempotencyKey":"key-1"}`, token)
+	resp, body := doRawRequest(t, api.Handler, req.WithContext(ctx))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ServeHTTP still completes even though the request's own context was canceled mid-wait); body: %s", resp.StatusCode, body)
+	}
+
+	var result struct {
+		Command struct {
+			CommandID string `json:"commandId"`
+			Outcome   string `json:"outcome"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Command.Outcome != "confirmed" {
+		t.Fatalf("outcome = %q, want confirmed — the client's own disconnect must not abort the server-side confirmation wait; body: %s", result.Command.Outcome, body)
+	}
+
+	rec, err := setup.st.GetCommand(context.Background(), result.Command.CommandID)
+	if err != nil {
+		t.Fatalf("GetCommand: %v", err)
+	}
+	if rec.State != "resolved" {
+		t.Fatalf("stored command state = %q, want resolved (the request's own cancellation must not leave it stuck)", rec.State)
+	}
+	if rec.DispatchedAt == nil {
+		t.Fatalf("stored command dispatchedAt is nil, want set")
+	}
+	if rec.ResolvedAt == nil {
+		t.Fatalf("stored command resolvedAt is nil, want set")
 	}
 }
 
