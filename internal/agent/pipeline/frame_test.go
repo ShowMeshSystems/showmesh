@@ -122,7 +122,7 @@ func TestFrameWriterWritesContentWhilePlaying(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestFrameWriterReportsDrawStateOnSupervisorSnapshot(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 250) // 250ms / 25ms = frame 10
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputDiagnostic, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputDiagnostic, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestFrameWriterDrawsIdleOutputWhenStopped(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StateStopped, 5000)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestFrameWriterHoldDrawsLastContentFrame(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 50) // 50ms / 5ms = frame 10 -> byte value 11
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputHold, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputHold, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestFrameWriterDiagnosticNeverBlackAndNeverFrozen(t *testing.T) {
 	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: -1}
 	tl := &fakeTimelineSource{}
 
-	fw, err := NewFrameWriter(nil, "surface-1", source, tl, 0, diagWidth, diagWidth, 1, IdleOutputDiagnostic, testLogger{})
+	fw, err := NewFrameWriter(nil, "surface-1", source, tl, 0, diagWidth, diagWidth, 1, IdleOutputDiagnostic, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestFrameWriterCountsDroppedOnStdinFailure(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 0)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestNewFrameWriterRefusesUncoveredChannelRange(t *testing.T) {
 	source := &fakeFrameSource{frameCount: 1000, stepTimeMS: 25, uncoveredFrom: 0} // every frame uncovered
 	tl := &fakeTimelineSource{}
 
-	if _, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{}); err == nil {
+	if _, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{}); err == nil {
 		t.Fatalf("NewFrameWriter with an uncovered channel range: want error, got nil")
 	}
 }
@@ -601,7 +601,7 @@ func TestFrameWriterRateDropsToZeroAfterPipelineStalls(t *testing.T) {
 	tl := &fakeTimelineSource{}
 	tl.set(multisync.StatePlaying, 0)
 
-	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, testLogger{})
+	fw, err := NewFrameWriter(sup, surfaceID, source, tl, 0, 8, 8, 1, IdleOutputBlack, nil, testLogger{})
 	if err != nil {
 		t.Fatalf("NewFrameWriter: %v", err)
 	}

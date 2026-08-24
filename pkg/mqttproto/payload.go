@@ -692,33 +692,69 @@ type RenderSurfaceReport struct {
 
 	// TimelinePositionMS is the timeline position this surface's most
 	// recent CONTENT frame (Drawing == [RenderDrawingContent]) was
-	// extracted from. nil whenever Drawing is [RenderDrawingIdle] or "":
+	// extracted from. nil whenever Drawing is [RenderDrawingIdle],
+	// [RenderDrawingFailure], or "":
 	// a position is only meaningful when content is actually being read
 	// from it (ADR-011: nil is genuinely inapplicable here, never a stale
 	// or zero position echoed back).
 	TimelinePositionMS *int64 `json:"timelinePositionMs"`
 
 	// Drawing is what this surface's frame writer actually wrote to the
-	// pipeline's stdin on its most recent tick: [RenderDrawingContent] or
-	// [RenderDrawingIdle]. "" means no frame writer is currently active
-	// for this surface. This is the evidence this build contract names
-	// explicitly: PipelineState=="running" alone cannot tell an operator
-	// "rendering content" from "emitting black at 40fps," and this field
-	// is what can (Track B finding 7).
+	// pipeline's stdin on its most recent tick: [RenderDrawingContent],
+	// [RenderDrawingIdle], or [RenderDrawingFailure]. "" means no frame
+	// writer is currently active for this surface. This is the evidence
+	// this build contract names explicitly: PipelineState=="running" alone
+	// cannot tell an operator "rendering content" from "emitting black at
+	// 40fps," and this field is what can (Track B finding 7).
 	Drawing string `json:"drawing"`
 
 	// IdleMode is the configured idle output ([RenderIdleOutputBlack],
 	// [RenderIdleOutputHold], or [RenderIdleOutputDiagnostic]) whenever
 	// Drawing is [RenderDrawingIdle]; "" otherwise, matching Reason's and
 	// TransportReason's identical required-whenever-the-flag-says-so rule.
+	// Never carries a value while Drawing is [RenderDrawingFailure]: a
+	// failure is not an idle mode, and reporting one there is what let a
+	// broken assignment read as a normal idle cycle.
 	IdleMode string `json:"idleMode"`
+
+	// FailureOutput is what a [RenderDrawingFailure] tick actually put on
+	// the wire, [RenderFailureOutputAlert] or [RenderFailureOutputBlack];
+	// "" whenever Drawing is anything else. Required whenever Drawing is
+	// [RenderDrawingFailure], IdleMode's identical rule one field up,
+	// because the two failure outputs look nothing alike at the wall and
+	// an operator reading this report has to know which one is in front of
+	// the audience.
+	FailureOutput string `json:"failureOutput"`
 }
 
-// RenderDrawingContent and RenderDrawingIdle are the two values
-// [RenderSurfaceReport.Drawing] can carry.
+// RenderDrawingContent, RenderDrawingIdle, and RenderDrawingFailure are the
+// three values [RenderSurfaceReport.Drawing] can carry.
+//
+// RenderDrawingFailure is neither of the other two on purpose: the writer
+// could not extract the frame it was asked for, so what reached the wire is
+// a fallback nobody configured. Reporting that as "idle" with an idle mode
+// (which this payload did until an owner ruling) makes a broken assignment
+// read as an operator-chosen idle cycle in every report that renders it.
 const (
 	RenderDrawingContent = "content"
 	RenderDrawingIdle    = "idle"
+	RenderDrawingFailure = "failure"
+)
+
+// RenderFailureOutputAlert and RenderFailureOutputBlack are the two values
+// [RenderSurfaceReport.FailureOutput] can carry: this package's own copy of
+// internal/agent/pipeline's identical FailureOutputAlert/FailureOutputBlack
+// constants, independently reproduced for the same reason the idle-output
+// constants below are.
+//
+// Which one a node draws is the operating mode's decision, made fresh at
+// the frame the failure happens on (ADR-033, ADR-036): an unmistakable
+// alert field in Program Mode, black in Show Mode and whenever the mode is
+// unknown. Black in front of an audience beats red; black in front of an
+// operator who is programming says "fine" about a broken assignment.
+const (
+	RenderFailureOutputAlert = "alert"
+	RenderFailureOutputBlack = "black"
 )
 
 // RenderIdleOutputBlack, RenderIdleOutputHold, and RenderIdleOutputDiagnostic
@@ -831,13 +867,21 @@ func (p RenderPayload) Validate() error {
 			return fmt.Errorf("%w: surfaces[%d].lastStderr is %d bytes, max %d (must be truncated before publish, with %q appended)",
 				ErrPayloadTooLarge, i, len(s.LastStderr), maxRenderStderrBytes, RenderStderrTruncatedSuffix)
 		}
-		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle {
-			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, or empty",
-				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle)
+		if s.Drawing != "" && s.Drawing != RenderDrawingContent && s.Drawing != RenderDrawingIdle && s.Drawing != RenderDrawingFailure {
+			return fmt.Errorf("%w: surfaces[%d].drawing %q must be %q, %q, %q, or empty",
+				ErrPayloadInvalidDrawing, i, s.Drawing, RenderDrawingContent, RenderDrawingIdle, RenderDrawingFailure)
 		}
 		if s.Drawing == RenderDrawingIdle && s.IdleMode == "" {
 			return fmt.Errorf("%w: surfaces[%d].idleMode (required whenever drawing is %q)",
 				ErrPayloadMissingField, i, RenderDrawingIdle)
+		}
+		if s.Drawing == RenderDrawingFailure && s.FailureOutput == "" {
+			return fmt.Errorf("%w: surfaces[%d].failureOutput (required whenever drawing is %q)",
+				ErrPayloadMissingField, i, RenderDrawingFailure)
+		}
+		if s.FailureOutput != "" && s.FailureOutput != RenderFailureOutputAlert && s.FailureOutput != RenderFailureOutputBlack {
+			return fmt.Errorf("%w: surfaces[%d].failureOutput %q must be %q, %q, or empty",
+				ErrPayloadInvalidDrawing, i, s.FailureOutput, RenderFailureOutputAlert, RenderFailureOutputBlack)
 		}
 	}
 	return nil
@@ -1145,8 +1189,8 @@ func (p AudioPayload) Validate() error {
 }
 
 // ErrPayloadInvalidDrawing is wrapped by [RenderPayload.Validate] when a
-// surface's Drawing is set but is not one of [RenderDrawingContent] or
-// [RenderDrawingIdle], matching [ErrPayloadInvalidOutcome]'s identical
+// surface's Drawing or FailureOutput is set to a value outside its own
+// closed vocabulary, matching [ErrPayloadInvalidOutcome]'s identical
 // closed-vocabulary role for [ResultPayload].
 var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognized value")
 

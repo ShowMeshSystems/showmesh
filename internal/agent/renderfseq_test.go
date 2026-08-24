@@ -284,7 +284,7 @@ func TestApplySurfaceSetsSharedTimelineStepTimeFromFSEQ(t *testing.T) {
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
 	timeline := multisync.NewTimeline(clock.now, multisync.Config{})
-	renderOps := newRenderOperations(sup, store, dir, timeline, discardLogger())
+	renderOps := newRenderOperations(sup, store, dir, timeline, nil, discardLogger())
 
 	params := fseqApplyParams("surface-1", "surface-1.fseq", hash, 1, 12, 2, 2, "rgb", 40)
 	if _, err := renderOps.applySurface(context.Background(), params, clock.now); err != nil {
@@ -438,7 +438,7 @@ func TestApplySurfaceConfirmationRequiresNewGenerationNotStaleRunning(t *testing
 // resumed at boot per build contract ruling 4) still resumes, defaulting to
 // black rather than refusing the whole assignment.
 func TestParseIdleOutputAbsentDefaultsToBlack(t *testing.T) {
-	got, err := parseIdleOutput("render.surface.apply", map[string]any{"surfaceId": "surface-1"})
+	got, err := parseIdleOutput("render.surface.apply", "surface-1", map[string]any{"surfaceId": "surface-1"}, discardLogger())
 	if err != nil {
 		t.Fatalf("parseIdleOutput with an absent key: %v, want no error", err)
 	}
@@ -452,7 +452,7 @@ func TestParseIdleOutputAbsentDefaultsToBlack(t *testing.T) {
 // value are three different things, and only absent (a genuinely older
 // assignment) gets the default.
 func TestParseIdleOutputRejectsExplicitNull(t *testing.T) {
-	if _, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": nil}); err == nil {
+	if _, err := parseIdleOutput("render.surface.apply", "surface-1", map[string]any{"idleOutput": nil}, discardLogger()); err == nil {
 		t.Fatalf("parseIdleOutput with an explicit null: want error, got nil")
 	}
 }
@@ -462,7 +462,7 @@ func TestParseIdleOutputRejectsExplicitNull(t *testing.T) {
 // sends a concrete resolved value, so an empty one here means something
 // upstream is wrong.
 func TestParseIdleOutputRejectsEmptyString(t *testing.T) {
-	if _, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": ""}); err == nil {
+	if _, err := parseIdleOutput("render.surface.apply", "surface-1", map[string]any{"idleOutput": ""}, discardLogger()); err == nil {
 		t.Fatalf("parseIdleOutput with an empty string: want error, got nil")
 	}
 }
@@ -470,7 +470,7 @@ func TestParseIdleOutputRejectsEmptyString(t *testing.T) {
 // TestParseIdleOutputRejectsUnrecognizedValue proves a value outside
 // black/hold/diagnostic is refused rather than silently coerced.
 func TestParseIdleOutputRejectsUnrecognizedValue(t *testing.T) {
-	if _, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": "strobe"}); err == nil {
+	if _, err := parseIdleOutput("render.surface.apply", "surface-1", map[string]any{"idleOutput": "strobe"}, discardLogger()); err == nil {
 		t.Fatalf("parseIdleOutput with an unrecognized value: want error, got nil")
 	}
 }
@@ -479,7 +479,7 @@ func TestParseIdleOutputRejectsUnrecognizedValue(t *testing.T) {
 // permitted values round-trips unchanged.
 func TestParseIdleOutputAcceptsEveryKnownValue(t *testing.T) {
 	for _, v := range []string{pipeline.IdleOutputBlack, pipeline.IdleOutputHold, pipeline.IdleOutputDiagnostic} {
-		got, err := parseIdleOutput("render.surface.apply", map[string]any{"idleOutput": v})
+		got, err := parseIdleOutput("render.surface.apply", "surface-1", map[string]any{"idleOutput": v}, discardLogger())
 		if err != nil {
 			t.Fatalf("parseIdleOutput(%q): %v, want no error", v, err)
 		}
@@ -498,7 +498,7 @@ func TestBuildFSEQAssignmentCarriesIdleOutput(t *testing.T) {
 	params := fseqApplyParams("surface-1", "surface-1.fseq", "sha256:whatever", 1, 12, 2, 2, "rgb", 40)
 	params["idleOutput"] = pipeline.IdleOutputHold
 
-	a, ok, err := buildFSEQAssignment("render.surface.apply", params)
+	a, ok, err := buildFSEQAssignment("render.surface.apply", "surface-1", params, discardLogger())
 	if err != nil {
 		t.Fatalf("buildFSEQAssignment: %v", err)
 	}

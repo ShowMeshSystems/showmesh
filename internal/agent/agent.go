@@ -167,7 +167,17 @@ func Run() int {
 		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, logger)
 	}()
 
-	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, logger)
+	// showMode is ADR-033's installation-wide operating mode as this node
+	// currently understands it. Constructed once, outside newMQTTConn and
+	// reused across every reconnect, for cmdHandler's reason: it is this
+	// process's memory of the last mode it was told, and a reconnect must
+	// not reset it to unknown. Constructed HERE, ahead of everything that
+	// reads it, and handed to those consumers as a holder they read fresh
+	// at the point of decision (ADR-036 decision 1), never as a resolved
+	// value copied at construction.
+	showMode := NewShowModeHolder(time.Now)
+
+	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, showMode, logger)
 
 	// Reload every persisted surface assignment and re-apply it, so a node
 	// that restarts with no coordinator reachable resumes rendering
@@ -235,14 +245,6 @@ func Run() int {
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
 	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, time.Now, logger)
-
-	// showMode is ADR-033's installation-wide operating mode as this node
-	// currently understands it. Constructed once, outside newMQTTConn and
-	// reused across every reconnect, for cmdHandler's reason: it is this
-	// process's memory of the last mode it was told, and a reconnect must
-	// not reset it to unknown. Nothing on this node reads it yet; see
-	// showmode.go for why it ships anyway.
-	showMode := NewShowModeHolder(time.Now)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
 	if err != nil {

@@ -143,7 +143,8 @@ type Snapshot struct {
 	TimelinePositionMS *int64
 
 	// Drawing is what the writer actually wrote to the pipeline's stdin on
-	// its most recent tick: [DrawingContent] or [DrawingIdle]. This is the
+	// its most recent tick: [DrawingContent], [DrawingIdle], or
+	// [DrawingFailure]. This is the
 	// evidence the build contract names explicitly: "the process is up" is
 	// not "frames are arriving somewhere," and a report that only carries
 	// PipelineState=running cannot tell an operator apart from a node
@@ -152,8 +153,14 @@ type Snapshot struct {
 
 	// IdleMode is the configured idle output ([IdleOutputBlack],
 	// [IdleOutputHold], or [IdleOutputDiagnostic]) whenever Drawing is
-	// [DrawingIdle]; "" when Drawing is [DrawingContent].
+	// [DrawingIdle]; "" for every other Drawing value, [DrawingFailure]
+	// included, because a failure is not an idle mode.
 	IdleMode string
+
+	// FailureOutput is what a [DrawingFailure] tick actually wrote,
+	// [FailureOutputAlert] or [FailureOutputBlack]; "" for every other
+	// Drawing value.
+	FailureOutput string
 
 	// Generation identifies which process attempt r.snap's State currently
 	// describes — see [runner.bumpProcGen]. Used internally by [Supervisor.
@@ -382,13 +389,34 @@ func (r *runner) setFrameCounts(written, late, dropped int64, rate *float64, obs
 	r.mu.Unlock()
 }
 
-// DrawingContent and DrawingIdle are the two values [Snapshot.Drawing] (and
-// [mqttproto.RenderSurfaceReport.Drawing]) can carry — see frame.go's
-// FrameWriter, the only writer of this evidence.
+// DrawingContent, DrawingIdle, and DrawingFailure are the three values
+// [Snapshot.Drawing] (and [mqttproto.RenderSurfaceReport.Drawing]) can
+// carry. See frame.go's FrameWriter, the only writer of this evidence.
 const (
 	DrawingContent = "content"
 	DrawingIdle    = "idle"
+	DrawingFailure = "failure"
 )
+
+// FailureOutputAlert and FailureOutputBlack are the two values
+// [Snapshot.FailureOutput] can carry: which fallback a [DrawingFailure]
+// tick actually put on the wire, decided by the node's operating mode at
+// the moment of the failure (see frame.go's FrameWriter).
+const (
+	FailureOutputAlert = "alert"
+	FailureOutputBlack = "black"
+)
+
+// DrawState is one tick's draw evidence, passed whole rather than as five
+// positional arguments so a caller cannot silently transpose two strings
+// that mean very different things.
+type DrawState struct {
+	TimelineState string
+	PositionMS    *int64
+	Drawing       string
+	IdleMode      string
+	FailureOutput string
+}
 
 // setDrawState records what a surface's FrameWriter actually wrote to the
 // pipeline's stdin on its most recent tick — finding 7's fix. Deliberately
@@ -396,12 +424,13 @@ const (
 // separate evidence stream from pipeline lifecycle state, the same rule
 // [runner.setFrameCounts] already follows and for the same reason (must
 // never perturb AwaitState's post-dispatch confirmation check).
-func (r *runner) setDrawState(timelineState string, positionMS *int64, drawing, idleMode string) {
+func (r *runner) setDrawState(st DrawState) {
 	r.mu.Lock()
-	r.snap.TimelineState = timelineState
-	r.snap.TimelinePositionMS = positionMS
-	r.snap.Drawing = drawing
-	r.snap.IdleMode = idleMode
+	r.snap.TimelineState = st.TimelineState
+	r.snap.TimelinePositionMS = st.PositionMS
+	r.snap.Drawing = st.Drawing
+	r.snap.IdleMode = st.IdleMode
+	r.snap.FailureOutput = st.FailureOutput
 	r.mu.Unlock()
 }
 
@@ -875,14 +904,14 @@ func (s *Supervisor) SetFrameCounts(surfaceID string, written, late, dropped int
 // finding 7's agent-side fix, called by B3's FrameWriter every tick. A no-op
 // (never creates a runner) if surfaceID has never been applied, matching
 // [Supervisor.SetFrameCounts]'s identical rule.
-func (s *Supervisor) SetDrawState(surfaceID, timelineState string, positionMS *int64, drawing, idleMode string) {
+func (s *Supervisor) SetDrawState(surfaceID string, st DrawState) {
 	s.mu.Lock()
 	r, ok := s.runners[surfaceID]
 	s.mu.Unlock()
 	if !ok {
 		return
 	}
-	r.setDrawState(timelineState, positionMS, drawing, idleMode)
+	r.setDrawState(st)
 }
 
 // Generation reports surfaceID's current process-attempt generation, or 0 if
