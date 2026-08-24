@@ -2,12 +2,24 @@
 
 [RES-018](../research/RES-018-fpp-brightness-control.md) · [ADR-043](../decisions/ADR-043-show-scoped-cues-and-playlist-authority.md) · [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) · [Track F](TRACK-F-resting-mode.md) · [Track H](TRACK-H-cues-and-playlists.md) · [SM-63 handoff](SM-63-FPP-PLUGIN-HANDOFF.md)
 
-Status: frozen 2026-08-21, extended 2026-08-22. This record fixes the wire
-contracts the ShowMesh FPP plugin runtime shares with the coordinator:
-playlist-entry observation ingestion, the coordinator-owned brightness
-transition gain, and playlist definition publication.
+Status: frozen 2026-08-21, extended 2026-08-22, corrected 2026-08-23. This
+record fixes the wire contracts the ShowMesh FPP plugin runtime shares with
+the coordinator: playlist-entry observation ingestion, the coordinator-owned
+brightness transition gain, and playlist definition publication.
 RES-018 decided the design; this file fixes the exact bytes so the plugin and
 the coordinator can be built independently and still meet.
+
+**2026-08-23 correction:** section 3.1 previously claimed the plugin "has no
+HTTP server and deliberately registers no route" and cited ADR-013 for that
+claim. That contradicted section 2.2, which has always required the plugin to
+serve an inbound brightness route, and ADR-013 is about UDP 32320 MultiSync
+port sharing, not HTTP routing; it says nothing that forbids a route. Per
+owner ruling (2026-08-23): the plugin opens no listening socket of its own,
+but it may register narrow, idempotent, evidence-returning routes on fppd's
+own web server, and section 2.2's brightness route ships unauthenticated this
+season, matching SECURITY.md's accepted cleartext-command posture on the
+isolated show LAN. A bearer credential is deferred to a future season as a
+separate tracked item. See sections 2.2, 2.3, and 3.1.
 
 Nothing here has run against a real FPP host. The contract is verified by unit
 tests and by the shared fixtures in
@@ -304,6 +316,19 @@ resident plugin component, on the FPP host, at the plugin's own HTTP path:
 POST /api/plugin/showmesh/brightness/transition-gain
 ```
 
+The plugin opens no listening socket of its own to serve this. The route
+registers on fppd's own web server: on FPP 10 through Plugin API 6's
+`registerPluginApi`, on FPP 9 through the libhttpserver adapter. See section
+3.1 for the general rule this instance of a plugin-served route follows.
+
+**This route is unauthenticated.** It accepts any caller reachable on the
+show LAN, matching the posture SECURITY.md already records for cleartext
+commands on that isolated network: fppd's own web server is unauthenticated
+by default, and a ShowMesh-issued credential placed on the FPP host would be
+readable by anyone who can reach the host regardless. A bearer credential for
+this route is deferred to a future season as a separate tracked item; see
+section 2.3 for what that leaves unenforced this season.
+
 Body:
 
 | Field | Type | Required | Meaning |
@@ -330,6 +355,16 @@ an HTTP 200: `{"schemaVersion":1,"applied":true,"gainStart":100,"gainTarget":75,
 - No FPP Action, MQTT topic, or command binding for the gain.
 - A ceiling change during a gain fade takes effect immediately, and a later
   gain of 100 reveals the current ceiling, never a cached earlier one.
+
+**Accepted limitation:** section 2.2's route is unauthenticated, so this
+single-writer rule is a contract the night-session controller alone is
+expected to honor, not one the route can enforce against another caller on
+the show LAN this season. Any host on that LAN can POST a competing value.
+This is an accepted risk for this season, not an oversight: a bearer
+credential that would let the route refuse other callers is deferred to a
+future season as a separate tracked item, per owner ruling (2026-08-23). The
+rule stays written here as the intended contract; only its enforceability is
+what this season gives up.
 
 ### 2.4 What remains unbuilt
 
@@ -378,13 +413,22 @@ would arrive on show night looking like a permanent unexplained mismatch
 rather than like the wrong import path it actually was. So the rule is: **the
 bytes the plugin hashed are the bytes the coordinator imports.**
 
-The plugin publishes rather than serving a read for one further reason. The
-plugin has no HTTP server and deliberately registers no route, which is what
-lets the FPP 10 adapter be unmapped safely and what keeps ADR-013's
-no-second-control-port rule intact. It does need an outbound client for
-section 1 regardless. One more outbound POST is a small addition to work
-already required; an inbound listener is a new surface on a component that
-has gone out of its way not to have one.
+The plugin publishes rather than serving a read for one further reason, and it
+is narrower than it once looked. The plugin opens no listening socket of its
+own; the general rule is that it **may** register narrow, idempotent,
+evidence-returning inbound routes on fppd's own web server — on FPP 10
+through Plugin API 6's `registerPluginApi`, on FPP 9 through the
+libhttpserver adapter — as section 2.2's brightness route already does. It
+never opens a second listener, never proxies FPP, and never serves a value
+the coordinator has not verified. That general permission does not, by
+itself, favor a read route for the definition: the plugin already needs an
+outbound client for section 1's observations, and one more outbound POST is a
+small addition to work already required, while a definition-read route would
+still leave the coordinator fetching through a representation the plugin does
+not control between hash and read. Push keeps the bytes the plugin hashed and
+the bytes the coordinator imports identical without adding that risk; it is
+not something the plugin is forced into by an inability to serve routes at
+all.
 
 ### 3.2 The route
 
