@@ -223,14 +223,18 @@ func (e *Engine) Close() error {
 		if e.ltc != nil {
 			close(e.ltc.stopFeed)
 		}
-		// anyTeardownIncomplete already reflects every branch teardown
-		// that has ever deferred, including one from a Release this
-		// fan-out never saw. Setting the bin to NULL recurses into every
-		// child element, so running it here anyway would perform the
-		// very concurrent SetState the branch-level guard exists to
-		// prevent against that branch's still-abandoned elements, so it
-		// is better to leave the pipeline running than race it.
-		if e.pipeline != nil && !e.anyTeardownIncomplete.Load() {
+		// This still attempts the pipeline's own transition to NULL even
+		// when a branch teardown already deferred: skipping it answers
+		// the only question a caller like closeReplacedEngine asks,
+		// whether the device is free, with a permanent no, converting a
+		// branch-scoped element leak into a device-scoped one recoverable
+		// only by restarting the process. Setting the bin to NULL does
+		// recurse into any still-abandoned child element a deferred
+		// branch left attached, which is the same concurrent SetState
+		// the branch-level guard exists to avoid causing itself, but this
+		// call is bounded by ctx, so the worst case is one bounded wait
+		// before reporting incomplete, not an unbounded hang.
+		if e.pipeline != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
 			err := boundedCall(ctx, func() error {
 				if e.pipeline.SetState(gst.StateNull) == gst.StateChangeFailure {

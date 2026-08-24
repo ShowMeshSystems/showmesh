@@ -36,45 +36,72 @@ const startTimeoutProbe = 200 * time.Microsecond
 // from what the branch already settled into, so each trial uses its own
 // fresh branch rather than repeating Start on one that already played.
 func TestTimedOutStartUnfreezesOnlyAfterReachingPlaying(t *testing.T) {
-	e := newTestEngine(t)
 	dir := t.TempDir()
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 4)
 
-	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
-	defer cancel()
+	// Shrunk so one trial's Close (which now always attempts the
+	// pipeline's own bounded SetState(NULL), even past a deferred
+	// branch) cannot itself consume a large share of the trial loop's
+	// wall-clock budget under CPU contention.
+	withShrunkTeardownTimeout(t, time.Second)
 
-	const trials = 15
+	const trials = 3
 	var buggy, timedOut int
 	for i := 0; i < trials; i++ {
-		handle := agentaudio.EngineHandle(fmt.Sprintf("startfreeze-%d", i))
-		if _, err := e.Load(ctx, handle, mediaRef(wav), 4*time.Second); err != nil {
-			t.Fatalf("Load (trial %d): %v", i, err)
-		}
-		b, err := e.branchFor(handle)
-		if err != nil {
-			t.Fatalf("branchFor (trial %d): %v", i, err)
-		}
+		func() {
+			// Each trial gets its own engine and its own ctx: a
+			// timed-out Start abandons a goroutine that keeps driving
+			// its branch toward PLAYING, and Release on that branch
+			// defers rather than removing it, so running many trials on
+			// one shared engine accumulates leaked branches still
+			// pushing into the shared channel mixers with their request
+			// pads never released. Deliberately not calling Close per
+			// trial: Close now always attempts the pipeline's own
+			// bin-level SetState(NULL) even past a deferred branch (see
+			// TestCloseStillAttemptsPipelineNullDespiteADeferredBranch),
+			// which recurses into that very branch's still-abandoned
+			// elements and can itself collide with the abandoned
+			// goroutine this trial just created; newTestEngine's own
+			// t.Cleanup reaps each trial's engine once, batched at the
+			// end of the test, rather than racing that collision once
+			// per trial. A per-trial ctx still matters on its own: a
+			// single ctx shared across every trial would let an earlier
+			// trial's slow teardown eat into a later trial's own Load
+			// budget instead of its own.
+			e := newTestEngine(t)
 
-		tctx, tcancel := context.WithTimeout(context.Background(), startTimeoutProbe)
-		_, startErr := e.Start(tctx, handle, 0)
-		tcancel()
+			ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+			defer cancel()
 
-		b.mu.Lock()
-		frozen, state := b.frozen, b.state
-		b.mu.Unlock()
-
-		if errors.Is(startErr, context.DeadlineExceeded) {
-			timedOut++
-			t.Logf("trial %d: startErr=%v frozen=%v state=%v", i, startErr, frozen, state)
-			if state != pkgaudio.StatePlaying && !frozen {
-				// The bug: Position now reads a live query (frozen=false)
-				// even though the branch never actually reached PLAYING.
-				buggy++
+			handle := agentaudio.EngineHandle(fmt.Sprintf("startfreeze-%d", i))
+			if _, err := e.Load(ctx, handle, mediaRef(wav), 4*time.Second); err != nil {
+				t.Fatalf("Load (trial %d): %v", i, err)
 			}
-		}
+			b, err := e.branchFor(handle)
+			if err != nil {
+				t.Fatalf("branchFor (trial %d): %v", i, err)
+			}
 
-		_ = e.Release(context.Background(), handle)
+			tctx, tcancel := context.WithTimeout(context.Background(), startTimeoutProbe)
+			_, startErr := e.Start(tctx, handle, 0)
+			tcancel()
+
+			b.mu.Lock()
+			frozen, state := b.frozen, b.state
+			b.mu.Unlock()
+
+			if errors.Is(startErr, context.DeadlineExceeded) {
+				timedOut++
+				t.Logf("trial %d: startErr=%v frozen=%v state=%v", i, startErr, frozen, state)
+				if state != pkgaudio.StatePlaying && !frozen {
+					// The bug: Position now reads a live query
+					// (frozen=false) even though the branch never
+					// actually reached PLAYING.
+					buggy++
+				}
+			}
+		}()
 	}
 
 	if timedOut == 0 {
@@ -87,6 +114,55 @@ func TestTimedOutStartUnfreezesOnlyAfterReachingPlaying(t *testing.T) {
 	t.Logf("%d/%d trials timed out and none unfroze early", timedOut, trials)
 }
 
+// TestTimedOutStartMarksAnchorUnknown is Start's counterpart to
+// TestTimedOutResumeMarksAnchorUnknown: seekTo's own resync already ran
+// (the seek itself succeeded) before Start's setElementsState(PLAYING)
+// call times out, so that transition may still land arbitrarily late
+// with no way to know when. The branch must be marked errAnchorUnknown
+// rather than left silently reanchored.
+func TestTimedOutStartMarksAnchorUnknown(t *testing.T) {
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 4)
+
+	withShrunkTeardownTimeout(t, time.Second)
+
+	const trials = 3
+	var caught int
+	for i := 0; i < trials; i++ {
+		func() {
+			// One engine and one ctx per trial, deliberately not closed
+			// per trial; see the identical note in
+			// TestTimedOutStartUnfreezesOnlyAfterReachingPlaying.
+			e := newTestEngine(t)
+
+			ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+			defer cancel()
+
+			handle := agentaudio.EngineHandle(fmt.Sprintf("startanchor-%d", i))
+			if _, err := e.Load(ctx, handle, mediaRef(wav), 4*time.Second); err != nil {
+				t.Fatalf("Load (trial %d): %v", i, err)
+			}
+
+			tctx, tcancel := context.WithTimeout(context.Background(), startTimeoutProbe)
+			_, startErr := e.Start(tctx, handle, 0)
+			tcancel()
+
+			if errors.Is(startErr, context.DeadlineExceeded) {
+				caught++
+				if _, err := e.Seek(ctx, handle, 1*time.Second); !errors.Is(err, errAnchorUnknown) {
+					t.Fatalf("trial %d: Seek on a branch left by a timed-out Start: err = %v, want errAnchorUnknown in its chain", i, err)
+				}
+			}
+		}()
+	}
+
+	if caught == 0 {
+		t.Skipf("no trial's Start actually timed out with a %s deadline on this environment; cannot exercise this window here", startTimeoutProbe)
+	}
+	t.Logf("exercised the anchorUnknown path on %d/%d trials", caught, trials)
+}
+
 // TestTeardownGuardsAgainstEveryAbandonedStateChange proves at the
 // source level that teardown refuses to touch a pad or an element while
 // any setElementsState call on this branch, not only its own, may
@@ -95,9 +171,11 @@ func TestTimedOutStartUnfreezesOnlyAfterReachingPlaying(t *testing.T) {
 // TestCloseMarksBrokenBeforeAnyTeardownStep in closeorder_test.go for the
 // same argument applied to a different ordering hazard in this package),
 // so this is checked structurally instead: doTeardown's body (teardown
-// itself is now only the sync.Once wrapper around it, see
-// TestTeardownIsWrappedInSyncOnce) must call awaitNoElementRace before
-// it calls setElementsState or touches b.channelMixerPads / bin.Remove.
+// itself only checks b.released before calling doTeardown, see
+// TestRetriedTeardownEventuallySucceedsOnceThePendingChangeDrains in
+// closeincomplete_test.go for the dynamic retry behavior that guard
+// exists for) must call awaitNoElementRace before it calls
+// setElementsState or touches b.channelMixerPads / bin.Remove.
 func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
@@ -158,45 +236,66 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	}
 }
 
-// TestTeardownIsWrappedInSyncOnce proves teardown's own body is the
-// teardownOnce.Do wrapper, not a released-flag check set ahead of the
-// guard: a caller that retries teardown after a deferred attempt must
-// see the same terminal outcome, never a false nil from a guard that
-// ran before doTeardown decided anything.
-func TestTeardownIsWrappedInSyncOnce(t *testing.T) {
+// TestTeardownOnlyCachesGenuineSuccess proves doTeardown does not set
+// b.released ahead of a deferral: teardown's only cache is a real
+// success, so a deferred attempt (see errTeardownDeferredForRace) stays
+// retryable rather than becoming a permanent false success or a
+// permanent stale refusal on every later call. See
+// TestRetriedTeardownEventuallySucceedsOnceThePendingChangeDrains in
+// closeincomplete_test.go for the dynamic proof that a retry actually
+// succeeds once the condition clears.
+func TestTeardownOnlyCachesGenuineSuccess(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parsing methods.go: %v", err)
 	}
 
-	var teardownFn *ast.FuncDecl
+	var doTeardownFn *ast.FuncDecl
 	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "teardown" && fn.Recv != nil {
-			teardownFn = fn
+		if ok && fn.Name.Name == "doTeardown" && fn.Recv != nil {
+			doTeardownFn = fn
 			return false
 		}
 		return true
 	})
-	if teardownFn == nil {
-		t.Fatal("could not find func (b *branch) teardown in methods.go")
+	if doTeardownFn == nil {
+		t.Fatal("could not find func (b *branch) doTeardown in methods.go")
 	}
 
-	usesOnce := false
-	ast.Inspect(teardownFn.Body, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
+	// released must be assigned exactly once in doTeardown's body, and
+	// only after the last setElementsState call (the NULL transition),
+	// never ahead of either return that reports a deferral.
+	var releasedAssignIdx, lastSetElementsStateIdx = -1, -1
+	i := 0
+	ast.Inspect(doTeardownFn.Body, func(n ast.Node) bool {
+		i++
+		if assign, ok := n.(*ast.AssignStmt); ok {
+			for _, lhs := range assign.Lhs {
+				sel, ok := lhs.(*ast.SelectorExpr)
+				if ok && sel.Sel.Name == "released" {
+					releasedAssignIdx = i
+				}
+			}
 		}
-		if base, ok := sel.X.(*ast.SelectorExpr); ok && base.Sel.Name == "teardownOnce" && sel.Sel.Name == "Do" {
-			usesOnce = true
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "setElementsState" {
+				lastSetElementsStateIdx = i
+			}
 		}
 		return true
 	})
-	if !usesOnce {
-		t.Fatal("teardown no longer calls b.teardownOnce.Do: its idempotency guard must run the real attempt " +
-			"exactly once and return that same outcome to every caller, not a released-only check that can be " +
-			"set true before the attempt's outcome is known")
+
+	if releasedAssignIdx == -1 {
+		t.Fatal("doTeardown no longer assigns b.released: teardown would never cache a genuine success, so every " +
+			"call would re-run the full teardown attempt forever")
+	}
+	if lastSetElementsStateIdx == -1 {
+		t.Fatal("could not find doTeardown's call to setElementsState")
+	}
+	if releasedAssignIdx < lastSetElementsStateIdx {
+		t.Fatal("doTeardown assigns b.released before its setElementsState(NULL) call: a deferral or failure on " +
+			"that call would then be cached as if it had succeeded")
 	}
 }

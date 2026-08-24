@@ -103,24 +103,20 @@ type branch struct {
 	pendingStateChanges atomic.Int32
 
 	// released is true once teardown has actually removed this branch's
-	// elements from the pipeline. teardownOnce/teardownResult are the
-	// idempotency guard around the whole of teardown: every call, first
-	// or repeated, returns the one outcome the first real attempt
-	// computed, a deferred attempt (see errTeardownDeferredForRace)
-	// must keep reporting that same outcome to every later caller,
-	// never a false nil from a released-only guard set before the
-	// attempt is known to have succeeded.
-	released       bool
-	teardownOnce   sync.Once
-	teardownResult error
+	// elements from the pipeline: the only outcome teardown caches. A
+	// deferred attempt (see errTeardownDeferredForRace) is deliberately
+	// not cached, so a retried teardown re-checks pendingStateChanges
+	// fresh rather than repeating a stale refusal forever after the
+	// condition that caused it has actually cleared.
+	released bool
 
 	// teardownClaimed is true from the moment teardown's real attempt
-	// starts, whether or not that attempt ends up succeeding. blockFlow
-	// needs this rather than released: teardown releases the flow block
-	// as its very first act, so a blockFlow that ran concurrently after
-	// that point would reinstall a block nothing is ever going to clear
-	// again, parking a streaming thread inside the probe for the life of
-	// the process.
+	// first starts, whether or not that attempt ends up succeeding.
+	// blockFlow needs this rather than released: teardown releases the
+	// flow block as its very first act, so a blockFlow that ran
+	// concurrently after that point would reinstall a block nothing is
+	// ever going to clear again, parking a streaming thread inside the
+	// probe for the life of the process.
 	teardownClaimed bool
 }
 
@@ -356,10 +352,11 @@ func setElementsStateNow(b *branch, state gst.State) error {
 // full timeout merely because ctx asked for less. It reports whether
 // pendingStateChanges actually drained.
 func (b *branch) awaitNoElementRace(ctx context.Context, timeout time.Duration) bool {
+	// ctx.Done() alone already unblocks on both a deadline and an
+	// explicit cancel, so deadline here only needs to track timeout: a
+	// separate ctx.Deadline() narrowing would be redundant with the
+	// select's ctx.Done() case below, not an independent second bound.
 	deadline := time.Now().Add(timeout)
-	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
-		deadline = dl
-	}
 	for {
 		if b.pendingStateChanges.Load() == 0 {
 			return true

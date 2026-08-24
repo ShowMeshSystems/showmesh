@@ -151,15 +151,14 @@ func TestCloseReportsIncompleteAfterAPriorDeferredRelease(t *testing.T) {
 		t.Fatalf("Close after a prior deferred Release returned %v, want errCloseIncomplete", closeErr)
 	}
 
-	// And Close must not have run SetState(NULL) on the shared pipeline:
-	// that recurses into every child element, including this branch's
-	// still-abandoned ones, which is exactly the concurrent SetState the
-	// branch-level guard exists to prevent. The pipeline should still be
-	// PLAYING, never having been asked to reach NULL.
-	current, _, _ := e.pipeline.GetState(0)
-	if current == gst.StateNull {
-		t.Fatalf("pipeline reached NULL despite a deferred branch teardown: Close ran the guarded SetState(NULL) anyway")
-	}
+	// errCloseIncomplete here comes from the earlier branch-level
+	// deferral (see markTeardownDeferred), latched before Close's own
+	// pipeline attempt runs. teardownTimeout is shrunk in this test for
+	// Release's own sake, which also bounds Close's pipeline attempt
+	// tightly enough that its own outcome is not a reliable signal here;
+	// see TestCloseStillAttemptsPipelineNullDespiteADeferredBranch for a
+	// dedicated check, at the default timeout, that Close does not skip
+	// that attempt.
 }
 
 // TestRetriedTeardownReportsTheSameDeferralNotAFalseSuccess proves a
@@ -310,5 +309,148 @@ func TestTeardownBoundedByCallerCtxNotOnlyTeardownTimeout(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("teardown(shortCtx) took %s, want it bounded by the caller's %s ctx rather than the much larger teardownTimeout default of %s", elapsed, callerBudget, teardownTimeout)
+	}
+}
+
+// TestCloseStillAttemptsPipelineNullDespiteADeferredBranch proves Close
+// does not skip its own bounded transition to NULL merely because a
+// branch teardown already deferred: skipping it would answer "is the
+// device free" with a permanent no for every branch, not only the one
+// that deferred, converting a branch-scoped leak into a device-scoped
+// one recoverable only by restarting the process. teardownTimeout here
+// is shrunk only enough to keep this test fast, not so tight that a
+// real, uncontended SetState(NULL) cannot complete in time.
+func TestCloseStillAttemptsPipelineNullDespiteADeferredBranch(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 3)
+
+	withShrunkTeardownTimeout(t, 2*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+	const handle = "closestillattempts1"
+	if _, err := e.Load(ctx, handle, mediaRef(wav), 3*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	b, err := e.branchFor(handle)
+	if err != nil {
+		t.Fatalf("branchFor: %v", err)
+	}
+	// A permanently pending state change, standing in for one abandoned
+	// to a timed-out Start: this branch's own teardown will defer.
+	b.pendingStateChanges.Add(1)
+
+	closeErr := e.Close()
+	if !errors.Is(closeErr, errCloseIncomplete) {
+		t.Fatalf("Close with a deferred branch returned %v, want errCloseIncomplete", closeErr)
+	}
+
+	current, _, _ := e.pipeline.GetState(0)
+	if current != gst.StateNull {
+		t.Fatalf("pipeline state after Close = %v, want StateNull: Close must still attempt its own SetState(NULL) rather than skip it because a branch teardown deferred", current)
+	}
+}
+
+// TestRetriedTeardownEventuallySucceedsOnceThePendingChangeDrains proves
+// a deferred teardown is retryable rather than a permanent refusal: a
+// pending state change that drains on its own after the first (short
+// context) attempt defers must let a second attempt, made once it has
+// actually drained, tear the branch down for real. A teardown that
+// cached the deferral forever would burn the branch's one attempt on a
+// race that was about to clear.
+func TestRetriedTeardownEventuallySucceedsOnceThePendingChangeDrains(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+	const handle = "retrysucceeds1"
+	if _, err := e.Load(ctx, handle, mediaRef(wav), 3*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	b, err := e.branchFor(handle)
+	if err != nil {
+		t.Fatalf("branchFor: %v", err)
+	}
+
+	b.pendingStateChanges.Add(1)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		b.pendingStateChanges.Add(-1)
+	}()
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer shortCancel()
+	first := b.teardown(shortCtx)
+	if !errors.Is(first, errTeardownDeferredForRace) {
+		t.Fatalf("first teardown (short ctx, still pending) = %v, want errTeardownDeferredForRace", first)
+	}
+
+	// Give the background goroutine time to actually drain before the
+	// retry, well past the 300ms it sleeps.
+	time.Sleep(500 * time.Millisecond)
+	if pending := b.pendingStateChanges.Load(); pending != 0 {
+		t.Fatalf("pendingStateChanges = %d after the settle wait, want 0 for this retry to prove anything", pending)
+	}
+
+	second := b.teardown(context.Background())
+	if second != nil {
+		t.Fatalf("retried teardown after the pending change drained = %v, want nil: a deferral must not be cached permanently", second)
+	}
+
+	bin, ok := e.pipeline.(gst.Bin)
+	if !ok {
+		t.Fatalf("engine pipeline is not a gst.Bin")
+	}
+	if bin.GetByName(b.filesrcName) != nil {
+		t.Fatalf("branch element %q still present after a retried teardown that reported success", b.filesrcName)
+	}
+}
+
+// TestTeardownMarksDeferredWhenNullTransitionItselfTimesOut isolates the
+// second call to markTeardownDeferred in doTeardown from the first: a
+// healthy branch (nothing pending, so awaitNoElementRace returns
+// immediately) whose own setElementsState(NULL) call times out because
+// ctx is already exhausted must still latch anyTeardownIncomplete, the
+// same as the awaitNoElementRace-deferred path does. This is the sibling
+// of the false-clean Close bug fixed earlier: without this call, a
+// branch whose NULL transition alone timed out would report success to
+// Close's caller.
+func TestTeardownMarksDeferredWhenNullTransitionItselfTimesOut(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+	const handle = "nulltimeout1"
+	if _, err := e.Load(ctx, handle, mediaRef(wav), 3*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	b, err := e.branchFor(handle)
+	if err != nil {
+		t.Fatalf("branchFor: %v", err)
+	}
+	if pending := b.pendingStateChanges.Load(); pending != 0 {
+		t.Fatalf("pendingStateChanges = %d before teardown, want 0 so awaitNoElementRace returns immediately", pending)
+	}
+
+	tinyCtx, tinyCancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer tinyCancel()
+	teardownErr := b.teardown(tinyCtx)
+	if errors.Is(teardownErr, errTeardownDeferredForRace) {
+		t.Fatalf("teardown returned errTeardownDeferredForRace, want the setElementsState(NULL) path's own ctx error: awaitNoElementRace should have returned immediately with nothing pending")
+	}
+	if !errors.Is(teardownErr, context.DeadlineExceeded) {
+		t.Fatalf("teardown with an already-exhausted ctx returned %v, want context.DeadlineExceeded in its chain", teardownErr)
+	}
+
+	if !e.anyTeardownIncomplete.Load() {
+		t.Fatalf("anyTeardownIncomplete not latched after setElementsState(NULL) itself timed out")
 	}
 }

@@ -413,22 +413,29 @@ func bestEffortTeardown(b *branch) error {
 // a pad or an element, leaking them rather than manipulating elements a
 // still-running abandoned goroutine holds. The same hazard applies when
 // an earlier operation on this branch, a timed-out Start left running
-// toward PLAYING, say, abandoned its own state change: teardown waits
-// for every such call to finish before it starts its own, and refuses to
-// touch elements at all rather than race one still outstanding past its
-// bound. teardownOnce makes every call, first or repeated, return the
-// one outcome the first real attempt computed: a caller that retries
-// after a deferred teardown must see that same refusal again, never a
-// false success from a guard that ran before the outcome was known.
+// toward PLAYING, say, abandoned its own state change: teardown checks
+// pendingStateChanges and waits for it to drain before touching
+// elements, which narrows the window rather than closing it.
+// awaitNoElementRace holds no lock across that check, so a Start already
+// past branchFor but not yet at its own setElementsState call can still
+// slip in between teardown's check and its own SetState(NULL); this is a
+// pre-existing, real hazard this change reduces but does not eliminate.
+// Only a genuine success is cached (see released): a deferred attempt
+// returns errTeardownDeferredForRace but is retried fresh on the next
+// call, since the condition that caused it can clear.
 func (b *branch) teardown(ctx context.Context) error {
-	b.teardownOnce.Do(func() {
-		b.teardownResult = b.doTeardown(ctx)
-	})
-	return b.teardownResult
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
+	return b.doTeardown(ctx)
 }
 
-// doTeardown is teardown's one real attempt, run exactly once per branch
-// via teardownOnce.
+// doTeardown is teardown's real attempt. Unlike a genuine success, a
+// deferral is never cached, so a retried teardown reaches here again and
+// re-checks pendingStateChanges fresh.
 func (b *branch) doTeardown(ctx context.Context) error {
 	b.mu.Lock()
 	b.teardownClaimed = true
