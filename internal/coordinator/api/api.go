@@ -1800,6 +1800,25 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/render.settings", h.writeGuard(&scopeConfigWrite, h.handlePutRenderSettingsConfig))
 	mux.HandleFunc("GET /api/v1/config/render.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetRenderSettingsConfigRevisions))
 
+	// GET/PUT /api/v1/config/show.mode (ADR-033): the installation-wide
+	// operating mode singleton. The ONLY configuration kind whose
+	// current-value GET is not gated on config:write, and that is
+	// deliberate rather than an oversight — ADR-033 decision 3 requires
+	// the mode to be persistently visible in the Operator UI, and the
+	// operator standing at the console holds observation:read and
+	// show:macro:run, not config:write. observation:read is the narrowest
+	// existing scope every signed-in role already holds; no new scope is
+	// minted. readGuard, not requireScope, so this read follows ADR-024
+	// decision 2's open-by-default posture and closes only when
+	// [Options.CloseReads] closes every other read. The revisions list
+	// keeps the ordinary config:write gate (history carrying principal
+	// names is not what decision 3 asks to be visible), and the write is
+	// config:write via writeGuard exactly like every other kind. See
+	// showmode.go's own header comment for the full argument.
+	mux.HandleFunc("GET /api/v1/config/show.mode", h.readGuard(identity.ScopeObservationRead, h.handleGetShowModeConfig))
+	mux.HandleFunc("PUT /api/v1/config/show.mode", h.writeGuard(&scopeConfigWrite, h.handlePutShowModeConfig))
+	mux.HandleFunc("GET /api/v1/config/show.mode/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetShowModeConfigRevisions))
+
 	// GET/PUT /api/v1/config/audio.settings (Track C seam C1b, ADR-039):
 	// the engine-wide operator-settings singleton. Mirrors
 	// /config/render.settings' config:write-only posture exactly

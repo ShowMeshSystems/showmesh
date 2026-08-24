@@ -2,6 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { ConnectionBanner } from '../components/ConnectionBanner'
 import { TokenPrompt } from '../components/TokenPrompt'
 import { SessionPanel } from '../components/SessionPanel'
+import { ShowModeIndicator } from '../components/ShowModeIndicator'
 import { useHighContrast } from './useHighContrast'
 import { useModelContext } from './ModelContext'
 
@@ -134,6 +135,14 @@ export function Layout({ onSubmitToken }: LayoutProps) {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header className="app-header">
           <h1 className="app-header__title">ShowMesh Operator</h1>
+          {/* ADR-033 decision 3: the installation-wide operating mode is
+              visible PERSISTENTLY, on every route, not on a settings page.
+              It sits in this header for the same reason SessionPanel below
+              is not gated on `blockContent`: an operator must be able to
+              see which mode they are in even while the rest of the page is
+              showing "no data yet", because that is exactly the moment
+              every surface behaves differently and nothing says why. */}
+          <ShowModeIndicator />
           <button
             type="button"
             className="icon-button"

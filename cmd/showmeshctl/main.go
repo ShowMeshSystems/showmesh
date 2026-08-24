@@ -168,6 +168,10 @@ Commands:
   show revisions <id>                 list show revision history, newest first
   show active                         print the currently active show (404 if none set)
   show activate <id>                  make <id> the active show (write, full replacement)
+  show mode                           print the installation-wide operating mode, program or
+                                       show (ADR-033; needs only observation:read)
+  show mode set <program|show>        set the operating mode (write, requires config:write)
+  show mode revisions                 list show.mode revision history, newest first
   surface list [--show <id>]          enumerate show.surface objects, optionally by show
   surface get <id>                    show one surface's full definition
   surface set <id>                    write a new surface revision (write, full replacement)

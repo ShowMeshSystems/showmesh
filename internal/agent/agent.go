@@ -236,7 +236,15 @@ func Run() int {
 	// mqtt.go's registerCommandHandling.
 	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, time.Now, logger)
 
-	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, logger)
+	// showMode is ADR-033's installation-wide operating mode as this node
+	// currently understands it. Constructed once, outside newMQTTConn and
+	// reused across every reconnect, for cmdHandler's reason: it is this
+	// process's memory of the last mode it was told, and a reconnect must
+	// not reset it to unknown. Nothing on this node reads it yet; see
+	// showmode.go for why it ships anyway.
+	showMode := NewShowModeHolder(time.Now)
+
+	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		return 1
@@ -277,6 +285,17 @@ func Run() int {
 		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, time.Now, ticker.C, logger)
 	}()
 
+	// runShowModeWatch is the observability half of ADR-033 decision 5: it
+	// logs when this node's mode stops being confirmed and starts being
+	// held. It publishes nothing, so it cannot race the final offline
+	// publish, but it is still joined below like every other loop here so
+	// nothing is left running when Run returns.
+	showModeWatchDone := make(chan struct{})
+	go func() {
+		defer close(showModeWatchDone)
+		runShowModeWatch(sigCtx, showMode, logger, showModeHeldWatchInterval)
+	}()
+
 	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
@@ -298,6 +317,7 @@ func Run() int {
 	<-audioReportDone
 	<-audioWatchDone
 	<-multiSyncDone
+	<-showModeWatchDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()

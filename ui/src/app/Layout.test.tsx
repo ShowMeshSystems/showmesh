@@ -1,11 +1,35 @@
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Layout } from './Layout'
 import { ModelContext } from './ModelContext'
 import type { ConnectionState, Model, SessionResponse } from './types'
 
-afterEach(cleanup)
+// ShowModeIndicator fetches on mount, so its one API call is mocked here
+// rather than left to hit the real client. See the ADR-033 tests at the
+// bottom of this file for what that indicator's presence is proving.
+const { getShowModeConfig } = vi.hoisted(() => ({ getShowModeConfig: vi.fn() }))
+vi.mock('../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api')>()
+  return { ...actual, getShowModeConfig }
+})
+
+const SHOW_MODE_RESPONSE = {
+  serverTime: '2026-08-11T12:00:00.000Z',
+  kind: 'show.mode',
+  revision: 4,
+  payload: { mode: 'show' },
+  updatedAt: '2026-08-11T12:00:00.000Z',
+  createdByPrincipalId: 'p-1',
+  createdByPrincipalName: 'admin-1',
+  source: 'api',
+  resolumeWebSocketEffect: 'show mode: the Resolume WebSocket wake-up channel is held CLOSED.',
+}
+
+afterEach(() => {
+  cleanup()
+  getShowModeConfig.mockReset()
+})
 
 function model(
   connection: ConnectionState,
@@ -132,5 +156,38 @@ describe('Layout', () => {
     const link = screen.getByRole('link', { name: 'FPP & Resolume' })
     expect(link).toHaveAttribute('href', '/config')
     expect(screen.queryByText('FPP endpoints')).not.toBeInTheDocument()
+  })
+
+  // ADR-033 decision 3: "the mode appears on the Operator UI persistently,
+  // not on a settings page." These two tests are what hold that claim
+  // structurally, exactly as the SessionPanel pair above holds its own:
+  // the indicator has to be present on an ordinary route AND still
+  // present when the main content is blocked, because a mode that
+  // disappears the moment the coordinator connection degrades is missing
+  // at the moment an operator most needs it.
+  it('renders the persistent show mode indicator on an ordinary route', async () => {
+    getShowModeConfig.mockResolvedValue(SHOW_MODE_RESPONSE)
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+
+    await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/Show/))
+  })
+
+  it('renders the show mode indicator even while content is blocked - it must not be gated on blockContent', async () => {
+    getShowModeConfig.mockResolvedValue(SHOW_MODE_RESPONSE)
+    renderLayout(
+      model({ kind: 'incompatible', requiredVersion: 2, supportedVersions: [1], detail: 'nope' }, 12345),
+    )
+
+    // The main content IS blocked...
+    expect(screen.queryByText('underlying view marker')).not.toBeInTheDocument()
+    // ...and the mode indicator is still there.
+    await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/Show/))
+  })
+
+  it('renders the show mode indicator before any snapshot has ever arrived', async () => {
+    getShowModeConfig.mockResolvedValue(SHOW_MODE_RESPONSE)
+    renderLayout(model({ kind: 'connecting' }, null))
+
+    await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/Show/))
   })
 })

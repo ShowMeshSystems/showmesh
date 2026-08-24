@@ -82,6 +82,8 @@ func cmdShow(args []string, stdout, stderr io.Writer, clock func() time.Time) in
 		return cmdShowActive(rest, stdout, stderr, clock)
 	case "activate":
 		return cmdShowActivate(rest, stdout, stderr, clock)
+	case "mode":
+		return cmdShowMode(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl show: unknown subcommand %q\n\n", sub)
 		printShowUsage(stderr)
@@ -107,6 +109,13 @@ Subcommands:
   activate <id>    make <id> the active show (write, full replacement of
                    the show.active singleton; audited like any other
                    configuration write)
+  mode             print the installation-wide operating mode (ADR-033);
+                   "mode set <program|show>" writes it and "mode
+                   revisions" lists its history. The mode is a different
+                   thing from the active show: it says whether the
+                   installation is being programmed or is running a show,
+                   and it is readable with observation:read so an operator
+                   can always see which mode they are in
 
 Run "showmeshctl show <subcommand> --help" for flags specific to one
 subcommand.

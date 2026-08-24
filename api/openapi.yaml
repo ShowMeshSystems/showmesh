@@ -3522,6 +3522,140 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/show.mode:
+    get:
+      operationId: getShowModeConfig
+      summary: The installation-wide operating mode (ADR-033)
+      description: >-
+        The one mode value for this installation: `program` or `show`. Not
+        per-node, not per-device, and never a per-subsystem flag.
+
+
+        Requires `observation:read`, and this is a DELIBERATE DEPARTURE
+        from every other configuration singleton, all of which gate even
+        their `GET` on `config:write`. ADR-033 decision 3 requires the mode
+        to be persistently visible in the Operator UI and reported by
+        `showmeshctl`; the operator standing at the console during a show
+        holds `observation:read` and `show:macro:run`, not `config:write`,
+        and an indicator only an admin can see is not persistent
+        visibility. `observation:read` is the narrowest existing scope
+        every signed-in role already holds - no new scope is minted for
+        this. `GET /config/show.mode/revisions` keeps the ordinary
+        `config:write` gate, and the `PUT` is unchanged from every other
+        kind.
+
+
+        Never `404`s: the payload has a well-defined default, reported with
+        `revision` `0` and `source` `"default"` when nothing has ever been
+        written. That default is `program`, because a fresh install is by
+        definition being set up. It is NOT the same thing as ADR-033
+        decision 5's `unknown`: `unknown` means a NODE could not read the
+        mode at all, behaves as `show`, and never appears in this payload.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowModeConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putShowModeConfig
+      summary: Set the installation-wide operating mode (ADR-033)
+      description: >-
+        Requires `config:write` (admin only). A full replacement: `mode` is
+        required and non-null on every write, so an absent key is refused
+        by name rather than silently defaulting or carrying the old value
+        forward. On success, appends a new immutable revision and activates
+        it in the SAME transaction as its audit log entry (ADR-024 decision
+        11). A cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a
+        bearer-token-authenticated request is exempt.
+
+
+        The mode changes what the system DOES, never who may do it (ADR-033
+        decision 6), and it gates no command path anywhere: no mode may
+        refuse, delay, or degrade blackout, stop, or power-off (ADR-033
+        decision 4).
+
+
+        Applies without a restart, in both directions (ADR-036): entering
+        `show` closes the Resolume WebSocket wake-up channel and returning
+        to `program` reopens it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigShowModePayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShowModeConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.mode/revisions:
+    get:
+      operationId: getShowModeConfigRevisions
+      summary: show.mode revision history, newest first (ADR-033)
+      description: >-
+        Requires `config:write`. Metadata only, mirroring `GET
+        /config/render.settings/revisions`. The history is gated where the
+        current value is not: revision metadata carries principal names and
+        is audit-adjacent, and it is not what ADR-033 decision 3 asks to be
+        persistently visible.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/audio.settings:
     get:
       operationId: getAudioSettingsConfig
@@ -8973,6 +9107,7 @@ components:
         /config/show/{id}/revisions, GET
         /config/show.surface/{id}/revisions, GET
         /config/show.active/revisions, GET
+        /config/show.mode/revisions, GET
         /config/show.cue/{id}/revisions, GET
         /config/show.playlist/{id}/revisions, GET
         /config/resolume.recovery/revisions, GET
@@ -8987,8 +9122,8 @@ components:
         Step 7-only and never revisited when this schema gained more
         callers; Track E added three more, Track D seam D-3a another,
         Track B seam B2c another, Track G seams G-2, G-3, and G-4 one
-        each more, audio.settings/audio.node two more, and Track H seam
-        H1 two more).
+        each more, audio.settings/audio.node two more, Track H seam
+        H1 two more, and ADR-033's show.mode one more).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -8996,7 +9131,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
         revisions:
           type: array
           items:
@@ -9931,6 +10066,67 @@ components:
             surface - there is no config-push path to a node beyond that
             assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always
             non-empty.
+    ConfigShowModePayload:
+      type: object
+      description: >-
+        The "show.mode" configuration kind's decoded payload (ADR-033): the
+        body PUT /config/show.mode accepts (a full replacement - `mode`
+        required and non-null), and the "payload" member of GET
+        /config/show.mode's response.
+
+
+        The vocabulary is closed and has exactly two members. `unknown` is
+        deliberately NOT among them: it is a node-side held-value state
+        (ADR-033 decision 5) meaning a node could not read the mode at all,
+        it behaves as `show`, and no operator can ever write it.
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [program, show]
+          description: >-
+            The installation-wide operating mode. The wire value and the
+            operator-facing label are the same word, deliberately (ADR-033
+            decision 1).
+    ShowModeConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/show.mode. Never `404`s: the
+        payload has a well-defined default (`program`), reported with
+        `revision` `0` and `source` `"default"` when nothing has ever been
+        written.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source,
+         resolumeWebSocketEffect]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigShowModePayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+        resolumeWebSocketEffect:
+          type: string
+          description: >-
+            What the CURRENT mode does to the only behaviour that reads the
+            mode in this build: the Resolume WebSocket footprint switch
+            (ADR-033 decision 2), held open in `program` and closed in
+            `show`. Names the mode as the reason, which is ADR-033 decision
+            3's requirement that a behaviour caused by the mode says so
+            where the operator can see it. Always non-empty.
     ConfigAudioSettingsPayload:
       type: object
       description: >-

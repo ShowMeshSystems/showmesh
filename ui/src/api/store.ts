@@ -114,6 +114,9 @@ type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeReco
 // Track B seam B2c (ADR-039): the render.settings configuration singleton.
 type SchemaRenderSettingsConfigResponse = components['schemas']['RenderSettingsConfigResponse']
 type SchemaConfigRenderSettingsPayload = components['schemas']['ConfigRenderSettingsPayload']
+// ADR-033: the show.mode installation-wide operating mode singleton.
+type SchemaShowModeConfigResponse = components['schemas']['ShowModeConfigResponse']
+type SchemaConfigShowModePayload = components['schemas']['ConfigShowModePayload']
 type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
 type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
@@ -848,6 +851,50 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         '/config/render.settings/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  // -- ADR-033: the installation-wide operating mode -------------------
+  //
+  // Same plain pass-through posture as the render.settings methods above.
+  // The GET is the one configuration read this UI can make without
+  // config:write: ADR-033 decision 3 requires the mode to be persistently
+  // visible, and the operator at the console does not hold config:write.
+
+  /** `GET /api/v1/config/show.mode` (ADR-033). Requires only observation:read. Never 404s, reports the built-in default "program". */
+  async getShowModeConfig(): Promise<SchemaShowModeConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowModeConfigResponse>('/config/show.mode', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `PUT /api/v1/config/show.mode` (ADR-033). Requires config:write. A full replacement. */
+  async putShowModeConfig(payload: SchemaConfigShowModePayload): Promise<SchemaShowModeConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowModeConfigResponse>(
+        '/config/show.mode',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.mode/revisions` (ADR-033). Requires config:write, unlike the current-value read above. */
+  async getShowModeConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/show.mode/revisions',
         controller.signal,
       )
     } finally {

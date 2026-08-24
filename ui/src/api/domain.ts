@@ -185,6 +185,12 @@ export type ConfigRenderRestartPolicy = components['schemas']['ConfigRenderResta
 export type ConfigRenderSettingsPayload = components['schemas']['ConfigRenderSettingsPayload']
 export type RenderSettingsConfigResponse = components['schemas']['RenderSettingsConfigResponse']
 
+// ADR-033: the installation-wide operating mode. Aliased for the same
+// ADR-015 reason as every type above, and NOT part of `Model`: it is
+// configuration, not a resource the change stream models.
+export type ConfigShowModePayload = components['schemas']['ConfigShowModePayload']
+export type ShowModeConfigResponse = components['schemas']['ShowModeConfigResponse']
+
 // Track D seam D-4: Resolume as an observability resource (seam E) and the
 // seven-action vocabulary (D-3/seam B). Aliased for the identical reason
 // as every type above (ADR-015). `ResolumeInstance` IS part of `Model`
