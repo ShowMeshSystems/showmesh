@@ -1279,6 +1279,7 @@ CREATE TABLE fpp_instance_uuid_observations (
 -- by uuid rather than by this table's primary key.
 CREATE INDEX fpp_instance_uuid_observations_by_uuid
     ON fpp_instance_uuid_observations (uuid);
+`
 
 // schemaV17 is Track H seam H3's own migration: the coordinator-side store
 // for a node's cue-catalog acknowledgement (TRACK-H-H3-SPEC.md section 4),
