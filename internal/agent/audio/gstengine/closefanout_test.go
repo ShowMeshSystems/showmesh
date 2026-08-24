@@ -15,7 +15,7 @@ import (
 // [Engine.Close] added: every branch teardown runs on its own goroutine
 // rather than sequentially. Every other Close-related test in this
 // package loads zero or one branch, which proves nothing about that
-// fan-out — this is the missing case, three loaded and playing branches
+// fan-out. This is the missing case: three loaded and playing branches
 // torn down at once, run under -race like the rest of the suite.
 func TestCloseTearsDownThreeConcurrentPlayingBranches(t *testing.T) {
 	e := newTestEngine(t)

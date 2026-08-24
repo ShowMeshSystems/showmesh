@@ -61,3 +61,40 @@ func TestTimedOutSeekRefusesFurtherAnchoring(t *testing.T) {
 
 	_ = e.Release(context.Background(), handle)
 }
+
+// TestExplicitlyCanceledSeekAlsoMarksAnchorUnknown proves the other half
+// of seekTo's ctx-abandonment check: an explicitly canceled ctx (not
+// merely an elapsed deadline) also leaves the underlying seek free to
+// land later from its abandoned goroutine, so it must mark anchorUnknown
+// exactly as a deadline does.
+func TestExplicitlyCanceledSeekAlsoMarksAnchorUnknown(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 6)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	const handle = "seekcanceled1"
+	if _, err := e.Load(ctx, handle, mediaRef(wav), 6*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, handle, 200*time.Millisecond, 5*time.Second)
+
+	cctx, ccancel := context.WithCancel(context.Background())
+	ccancel() // already canceled before Seek ever runs
+	_, err := e.Seek(cctx, handle, 4*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Seek with an already-canceled ctx: err = %v, want context.Canceled in its chain", err)
+	}
+
+	if _, err := e.Start(ctx, handle, 1*time.Second); !errors.Is(err, errAnchorUnknown) {
+		t.Fatalf("Start after an explicitly canceled Seek: err = %v, want errAnchorUnknown in its chain", err)
+	}
+
+	_ = e.Release(context.Background(), handle)
+}

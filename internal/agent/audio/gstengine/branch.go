@@ -4,6 +4,7 @@ package gstengine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -62,11 +63,13 @@ type branch struct {
 	// resumed position into the shared pipeline's running time.
 	segmentStart time.Duration
 
-	// anchorUnknown is set once a seek's own ctx deadline fires before its
-	// underlying call returns: the seek was still issued and can land
-	// later in the abandoned goroutine with no way for this package to
-	// learn if or when it did, so segmentStart can no longer be trusted
-	// to match GStreamer's real segment. It never clears — see
+	// anchorUnknown is set once a seek's or a PLAYING transition's own
+	// ctx deadline fires before its underlying call returns: the call was
+	// still issued (or, for a transition, the mixer pads were already
+	// re-anchored ahead of it) and can land later in the abandoned
+	// goroutine with no way for this package to learn if or when it did,
+	// so segmentStart or the mixer pad offsets can no longer be trusted
+	// to match GStreamer's real segment. It never clears; see
 	// errAnchorUnknown.
 	anchorUnknown bool
 
@@ -96,10 +99,29 @@ type branch struct {
 	// deadline fired before the underlying GStreamer call returned: that
 	// call keeps running against this branch's elements in the
 	// background. teardown must not touch a pad or an element while this
-	// is nonzero — see awaitNoElementRace.
+	// is nonzero; see awaitNoElementRace.
 	pendingStateChanges atomic.Int32
 
-	released bool
+	// released is true once teardown has actually removed this branch's
+	// elements from the pipeline. teardownOnce/teardownResult are the
+	// idempotency guard around the whole of teardown: every call, first
+	// or repeated, returns the one outcome the first real attempt
+	// computed, a deferred attempt (see errTeardownDeferredForRace)
+	// must keep reporting that same outcome to every later caller,
+	// never a false nil from a released-only guard set before the
+	// attempt is known to have succeeded.
+	released       bool
+	teardownOnce   sync.Once
+	teardownResult error
+
+	// teardownClaimed is true from the moment teardown's real attempt
+	// starts, whether or not that attempt ends up succeeding. blockFlow
+	// needs this rather than released: teardown releases the flow block
+	// as its very first act, so a blockFlow that ran concurrently after
+	// that point would reinstall a block nothing is ever going to clear
+	// again, parking a streaming thread inside the probe for the life of
+	// the process.
+	teardownClaimed bool
 }
 
 // elements returns every GStreamer element this branch owns, in link
@@ -289,8 +311,8 @@ func (b *branch) onEOS() {
 
 // setElementsState sets every branch element to state, bounded by ctx.
 // A call abandoned to ctx's deadline keeps running against this branch's
-// elements in the background — cgo has no mechanism to interrupt it —
-// so pendingStateChanges stays incremented until it actually finishes,
+// elements in the background: cgo has no mechanism to interrupt it, so
+// pendingStateChanges stays incremented until it actually finishes,
 // letting teardown (see awaitNoElementRace) tell whether one of these
 // may still be touching this branch's elements before it starts
 // touching them itself.
@@ -314,7 +336,7 @@ func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
 }
 
 // setElementsStateNow runs the actual GStreamer state change for every
-// element b owns, with no bound of its own — setElementsState is what
+// element b owns, with no bound of its own; setElementsState is what
 // bounds the caller's wait for it.
 func setElementsStateNow(b *branch, state gst.State) error {
 	for _, el := range b.elements() {
@@ -325,27 +347,43 @@ func setElementsStateNow(b *branch, state gst.State) error {
 	return nil
 }
 
-// awaitNoElementRace blocks until no setElementsState call — including
-// one abandoned to its own ctx's deadline — is still running against
-// this branch's elements, or until timeout elapses first. It reports
-// whether pendingStateChanges actually drained.
-func (b *branch) awaitNoElementRace(timeout time.Duration) bool {
+// awaitNoElementRace blocks until no setElementsState call, including
+// one abandoned to its own ctx's deadline, is still running against
+// this branch's elements, or until ctx is done or timeout elapses,
+// whichever comes first. Bounding by ctx as well as timeout is what
+// keeps a caller like Release from being held past its own deadline: a
+// caller holding a lock across Release must never be stalled for the
+// full timeout merely because ctx asked for less. It reports whether
+// pendingStateChanges actually drained.
+func (b *branch) awaitNoElementRace(ctx context.Context, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
 	for {
 		if b.pendingStateChanges.Load() == 0 {
 			return true
 		}
-		if time.Now().After(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return b.pendingStateChanges.Load() == 0
 		}
-		time.Sleep(5 * time.Millisecond)
+		wait := 5 * time.Millisecond
+		if remaining < wait {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return b.pendingStateChanges.Load() == 0
+		case <-time.After(wait):
+		}
 	}
 }
 
 // checkAnchorKnown returns errAnchorUnknown once a prior timed-out seek
-// has made this branch's segmentStart unreliable — see anchorUnknown.
-// Every method that would anchor the mixer or a fade to segmentStart
-// calls this before doing so.
+// or PLAYING transition has made this branch's anchoring unreliable;
+// see anchorUnknown. Every method that would anchor the mixer or a fade
+// to segmentStart calls this before doing so.
 func (b *branch) checkAnchorKnown() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -353,6 +391,21 @@ func (b *branch) checkAnchorKnown() error {
 		return errAnchorUnknown
 	}
 	return nil
+}
+
+// markAnchorUnknownOnCtxTimeout sets anchorUnknown when err is exactly
+// the caller's own ctx giving up (a deadline or an explicit cancel),
+// never for a genuine GStreamer refusal returned by the underlying call
+// itself. Callers use this after any step that mutated segmentStart or
+// the mixer pad offsets unconditionally ahead of a state change whose
+// own ctx can still time out: seekTo's seek, and Start/Resume's
+// transition to PLAYING after their own resync already ran.
+func (b *branch) markAnchorUnknownOnCtxTimeout(err error) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		b.mu.Lock()
+		b.anchorUnknown = true
+		b.mu.Unlock()
+	}
 }
 
 // queryPosition returns the branch's live position, or the last frozen
@@ -515,7 +568,7 @@ func (b *branch) hasStarted() bool {
 // once already blocked, and once teardown has claimed the branch.
 func (b *branch) blockFlow() {
 	b.mu.Lock()
-	if b.released || b.blockProbeID != 0 {
+	if b.teardownClaimed || b.released || b.blockProbeID != 0 {
 		b.mu.Unlock()
 		return
 	}
@@ -527,7 +580,7 @@ func (b *branch) blockFlow() {
 	})
 
 	b.mu.Lock()
-	if b.released {
+	if b.teardownClaimed || b.released {
 		b.mu.Unlock()
 		pad.RemoveProbe(id)
 		return

@@ -20,7 +20,7 @@ import (
 // the same deadline calibrated in timedoutstart_test.go to reliably land
 // inside setElementsState's real transition rather than before or after
 // it, and repeats across fresh branches until it has actually caught the
-// window at least once — a run that never lands in the window proves
+// window at least once; a run that never lands in the window proves
 // nothing about the guard. See TestTeardownGuardsAgainstEveryAbandonedStateChange
 // in timedoutstart_test.go for the unconditional, source-level proof
 // this repository already uses elsewhere (closeorder_test.go) for
@@ -67,7 +67,7 @@ func TestTeardownWaitsForAbandonedStartTransition(t *testing.T) {
 		// The abandoned goroutine had not yet finished when Release was
 		// called: teardown must have either waited it out (releaseErr
 		// nil, pendingStateChanges now 0) or refused rather than race it
-		// (releaseErr wraps errTeardownDeferredForRace) — never proceeded
+		// (releaseErr wraps errTeardownDeferredForRace), never proceeded
 		// to touch elements while the count was still nonzero.
 		if releaseErr != nil && !errors.Is(releaseErr, errTeardownDeferredForRace) {
 			t.Fatalf("trial %d: Release after a timed-out Start returned %v, want nil or errTeardownDeferredForRace", i, releaseErr)

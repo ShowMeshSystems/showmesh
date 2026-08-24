@@ -183,6 +183,18 @@ func TestBoundedCallReturnsOnContextDeadline(t *testing.T) {
 	}
 }
 
+// exhaustedLoadDeadline is deliberately not a small positive duration
+// like a millisecond: Load was measured at 1.5-2.7ms on this
+// environment, so a 1ms budget is genuinely marginal rather than
+// reliably exhausted, and a change to setElementsState's own bounded-call
+// shape (unrelated to correctness here) shifted that race enough to make
+// both tests below flake at roughly 50% under repeated runs. A
+// nanosecond deadline is already expired by the time Load is entered
+// regardless of Load's own duration, which is what "an exhausted
+// deadline" actually requires; see the same technique used throughout
+// this package's other timed-out-call tests.
+const exhaustedLoadDeadline = time.Nanosecond
+
 // TestLoadDeadlineDoesNotLeakElements proves a Load that fails because its
 // own ctx deadline fired before setElementsState(PAUSED) returned still
 // tears the branch's elements out of the pipeline, rather than handing
@@ -196,7 +208,7 @@ func TestLoadDeadlineDoesNotLeakElements(t *testing.T) {
 	nextID := e.nextID.Load() + 1
 	filesrcName := fmt.Sprintf("h%d-filesrc", nextID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), exhaustedLoadDeadline)
 	defer cancel()
 	if _, err := e.Load(ctx, "leak1", mediaRef(wav), 3*time.Second); err == nil {
 		t.Fatalf("Load with an exhausted deadline: err = nil, want an error")
@@ -226,7 +238,7 @@ func TestLoadTimeoutIsWrappedWithDistinctSentinel(t *testing.T) {
 	wav := filepath.Join(dir, "fixture.wav")
 	generateWAV(t, wav, 3)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), exhaustedLoadDeadline)
 	defer cancel()
 	_, err := e.Load(ctx, "timeout1", mediaRef(wav), 3*time.Second)
 	if err == nil {

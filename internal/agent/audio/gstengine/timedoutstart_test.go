@@ -31,9 +31,9 @@ const startTimeoutProbe = 200 * time.Microsecond
 // own ctx deadline fires before its transition to PLAYING returns must
 // not have already switched Position reporting to a live query while the
 // session's own state stays non-playing. Only the first Start after Load
-// exercises the vulnerable window — once a branch has reached PLAYING
+// exercises the vulnerable window: once a branch has reached PLAYING
 // once, a later Start's own timeout no longer moves frozen or state away
-// from what the branch already settled into — so each trial uses its own
+// from what the branch already settled into, so each trial uses its own
 // fresh branch rather than repeating Start on one that already played.
 func TestTimedOutStartUnfreezesOnlyAfterReachingPlaying(t *testing.T) {
 	e := newTestEngine(t)
@@ -89,14 +89,15 @@ func TestTimedOutStartUnfreezesOnlyAfterReachingPlaying(t *testing.T) {
 
 // TestTeardownGuardsAgainstEveryAbandonedStateChange proves at the
 // source level that teardown refuses to touch a pad or an element while
-// any setElementsState call on this branch — not only its own — may
+// any setElementsState call on this branch, not only its own, may
 // still be running. A live timing race against a real pipeline cannot be
 // forced onto the vulnerable window from Go (see
 // TestCloseMarksBrokenBeforeAnyTeardownStep in closeorder_test.go for the
 // same argument applied to a different ordering hazard in this package),
-// so this is checked structurally instead: teardown's body must call
-// awaitNoElementRace before it calls setElementsState or touches
-// b.channelMixerPads / bin.Remove.
+// so this is checked structurally instead: doTeardown's body (teardown
+// itself is now only the sync.Once wrapper around it, see
+// TestTeardownIsWrappedInSyncOnce) must call awaitNoElementRace before
+// it calls setElementsState or touches b.channelMixerPads / bin.Remove.
 func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
@@ -107,14 +108,14 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	var teardownFn *ast.FuncDecl
 	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "teardown" && fn.Recv != nil {
+		if ok && fn.Name.Name == "doTeardown" && fn.Recv != nil {
 			teardownFn = fn
 			return false
 		}
 		return true
 	})
 	if teardownFn == nil {
-		t.Fatal("could not find func (b *branch) teardown in methods.go")
+		t.Fatal("could not find func (b *branch) doTeardown in methods.go")
 	}
 
 	var awaitIdx, setNullIdx = -1, -1
@@ -143,7 +144,7 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 	})
 
 	if awaitIdx == -1 {
-		t.Fatal("teardown does not call awaitNoElementRace — an abandoned state change from an earlier operation " +
+		t.Fatal("teardown does not call awaitNoElementRace: an abandoned state change from an earlier operation " +
 			"(a timed-out Start left running toward PLAYING) is not guarded against before teardown touches " +
 			"this branch's elements, which is the same hazard its own comment already documents for its own " +
 			"abandoned NULL transition")
@@ -152,7 +153,50 @@ func TestTeardownGuardsAgainstEveryAbandonedStateChange(t *testing.T) {
 		t.Fatal("could not find teardown's call to setElementsState")
 	}
 	if awaitIdx > setNullIdx {
-		t.Fatal("teardown calls setElementsState before awaitNoElementRace — the guard must run first, or it does " +
+		t.Fatal("teardown calls setElementsState before awaitNoElementRace: the guard must run first, or it does " +
 			"not prevent the race it exists to prevent")
+	}
+}
+
+// TestTeardownIsWrappedInSyncOnce proves teardown's own body is the
+// teardownOnce.Do wrapper, not a released-flag check set ahead of the
+// guard: a caller that retries teardown after a deferred attempt must
+// see the same terminal outcome, never a false nil from a guard that
+// ran before doTeardown decided anything.
+func TestTeardownIsWrappedInSyncOnce(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing methods.go: %v", err)
+	}
+
+	var teardownFn *ast.FuncDecl
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "teardown" && fn.Recv != nil {
+			teardownFn = fn
+			return false
+		}
+		return true
+	})
+	if teardownFn == nil {
+		t.Fatal("could not find func (b *branch) teardown in methods.go")
+	}
+
+	usesOnce := false
+	ast.Inspect(teardownFn.Body, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if base, ok := sel.X.(*ast.SelectorExpr); ok && base.Sel.Name == "teardownOnce" && sel.Sel.Name == "Do" {
+			usesOnce = true
+		}
+		return true
+	})
+	if !usesOnce {
+		t.Fatal("teardown no longer calls b.teardownOnce.Do: its idempotency guard must run the real attempt " +
+			"exactly once and return that same outcome to every caller, not a released-only check that can be " +
+			"set true before the attempt's outcome is known")
 	}
 }

@@ -14,7 +14,7 @@ import (
 // real pipeline before any fix: seekTo issues a real, blocking seek on a
 // goroutine of its own, then hands boundedCall's ctx a deadline so tight
 // it always fires first. The seek keeps running in that abandoned
-// goroutine and, given time, lands for real — this test waits for that to
+// goroutine and, given time, lands for real; this test waits for that to
 // happen and then shows segmentStart was never moved to match it, so
 // localRunningTime is now off by the whole missed seek delta.
 func TestTimedOutSeekLeavesSegmentStartStale(t *testing.T) {
@@ -52,7 +52,7 @@ func TestTimedOutSeekLeavesSegmentStartStale(t *testing.T) {
 	// Sample across a settle window: the abandoned goroutine's seek is
 	// real GStreamer work and needs time to land, and once it lands the
 	// position must keep tracking real time from there rather than
-	// bouncing back — a single instantaneous read would not tell the two
+	// bouncing back; a single instantaneous read would not tell the two
 	// apart.
 	const settleWait = 5 * time.Second
 	deadline := time.Now().Add(settleWait)

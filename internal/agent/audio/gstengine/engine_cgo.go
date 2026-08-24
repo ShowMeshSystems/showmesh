@@ -70,6 +70,16 @@ type Engine struct {
 	brokenMu     sync.Mutex
 	brokenReason string
 
+	// anyTeardownIncomplete latches true the moment any branch teardown
+	// ever defers (see errTeardownDeferredForRace) or the final pipeline
+	// transition to NULL times out. It is engine-scoped rather than
+	// derived from Close's own fan-out because a branch can defer during
+	// a Release that ran before Close and already deleted the handle
+	// from e.handles, so Close's fan-out over the handles it still holds
+	// would otherwise never see that branch and would report a false
+	// clean Close.
+	anyTeardownIncomplete atomic.Bool
+
 	closeOnce sync.Once
 	closeErr  error
 	done      chan struct{}
@@ -159,13 +169,21 @@ const closedReason = "engine was closed and released its output device"
 
 // errCloseIncomplete marks a Close whose teardown did not fully finish
 // within its bound: a branch teardown deferred to an abandoned state
-// change, or the final pipeline transition to NULL itself timed out. A
-// caller sees Available()==false and every further call refused either
-// way, but this distinguishes "torn down cleanly, the device is free"
-// from "teardown abandoned, elements or the device itself may still be
-// live" — the difference [closeReplacedEngine]'s caller needs before it
-// probes and builds a replacement engine against the same device.
-var errCloseIncomplete = fmt.Errorf("%w: gstengine: Close's teardown did not fully complete before its timeout; some elements or the output device itself may still be live", pkgaudio.ErrEnginePipelineCrash)
+// change (whether during this Close's own fan-out, or earlier via a
+// Release Close never got to run itself), or the final pipeline
+// transition to NULL itself timed out. A caller sees Available()==false
+// and every further call refused either way, but this distinguishes
+// "torn down cleanly, the device is free" from "teardown abandoned,
+// elements or the device itself may still be live", the fact a caller
+// rebuilding a replacement engine against the same device needs before
+// assuming the device was actually released. No caller in this
+// repository consumes that distinction yet. Not wrapped in
+// [pkgaudio.ErrEnginePipelineCrash]: Close itself, and the branch or
+// pipeline-NULL timeout that produced this, are not the shared pipeline
+// reporting its own bus-level failure, the class brokenErr reports, so
+// this classifies as [pkgaudio.FaultOther] instead of overloading a
+// class that means something more specific elsewhere in this same file.
+var errCloseIncomplete = fmt.Errorf("gstengine: Close's teardown did not fully complete before its timeout; some elements or the output device itself may still be live")
 
 // Close tears every branch down, stops the bus watcher, and returns the
 // output pipeline to NULL so the device it held is released. Required
@@ -189,15 +207,12 @@ func (e *Engine) Close() error {
 			delete(e.handles, h)
 		}
 		e.mu.Unlock()
-		var incomplete atomic.Bool
 		var wg sync.WaitGroup
 		for _, b := range branches {
 			wg.Add(1)
 			go func(b *branch) {
 				defer wg.Done()
-				if err := bestEffortTeardown(b); err != nil {
-					incomplete.Store(true)
-				}
+				_ = bestEffortTeardown(b)
 			}(b)
 		}
 		wg.Wait()
@@ -208,7 +223,14 @@ func (e *Engine) Close() error {
 		if e.ltc != nil {
 			close(e.ltc.stopFeed)
 		}
-		if e.pipeline != nil {
+		// anyTeardownIncomplete already reflects every branch teardown
+		// that has ever deferred, including one from a Release this
+		// fan-out never saw. Setting the bin to NULL recurses into every
+		// child element, so running it here anyway would perform the
+		// very concurrent SetState the branch-level guard exists to
+		// prevent against that branch's still-abandoned elements, so it
+		// is better to leave the pipeline running than race it.
+		if e.pipeline != nil && !e.anyTeardownIncomplete.Load() {
 			ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
 			err := boundedCall(ctx, func() error {
 				if e.pipeline.SetState(gst.StateNull) == gst.StateChangeFailure {
@@ -219,7 +241,7 @@ func (e *Engine) Close() error {
 			cancel()
 			if err != nil {
 				slog.Warn("gstengine: output pipeline did not reach NULL within the shutdown timeout", "error", err)
-				incomplete.Store(true)
+				e.anyTeardownIncomplete.Store(true)
 			}
 		}
 		if e.ltc != nil {
@@ -233,11 +255,18 @@ func (e *Engine) Close() error {
 			e.ltc.closeEncoder()
 		}
 
-		if incomplete.Load() {
+		if e.anyTeardownIncomplete.Load() {
 			e.closeErr = errCloseIncomplete
 		}
 	})
 	return e.closeErr
+}
+
+// markTeardownDeferred latches anyTeardownIncomplete; see its doc
+// comment for why this must be engine-scoped rather than derived only
+// from Close's own fan-out.
+func (e *Engine) markTeardownDeferred() {
+	e.anyTeardownIncomplete.Store(true)
 }
 
 func (e *Engine) markBroken(reason string) {
