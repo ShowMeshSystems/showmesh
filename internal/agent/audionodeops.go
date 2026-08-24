@@ -67,10 +67,33 @@ type audioBinding struct {
 
 	onNode     func(audioNodeConfig)
 	onSettings func(audioSettingsConfig)
+
+	// nodeBroken reports whether this node's current playback engine
+	// cannot produce sound right now. nil means never broken (a node
+	// with no audio manager wired, and every existing caller that never
+	// sets it). Consulted only on an exact-revision replay of
+	// audio.node.configure — see [audioBinding.applyNode].
+	nodeBroken func() bool
 }
 
 func newAudioBinding(onNode func(audioNodeConfig), onSettings func(audioSettingsConfig)) *audioBinding {
 	return &audioBinding{onNode: onNode, onSettings: onSettings}
+}
+
+// SetNodeBrokenCheck wires the query [audioBinding.applyNode] uses to
+// decide whether an exact-revision replay of audio.node.configure should
+// still be treated as a no-op. A coordinator's hello push resends the
+// SAME revision this node already holds, so a broken output
+// pipeline (device unplug, a fatal sink error, a negotiation failure)
+// stayed broken until an agent restart or an artificial revision bump —
+// nothing about the delivered configuration ever changed, so the old
+// no-op rule never gave the node a reason to rebuild. Wiring this lets
+// that same unchanged push double as a rebuild request whenever f
+// reports true.
+func (b *audioBinding) SetNodeBrokenCheck(f func() bool) {
+	b.mu.Lock()
+	b.nodeBroken = f
+	b.mu.Unlock()
 }
 
 // applyNode refuses p.Revision older than the currently held one, is a
@@ -86,8 +109,13 @@ func (b *audioBinding) applyNode(p audioNodeConfig) error {
 			return fmt.Errorf("audio.node.configure: revision %d is older than the currently held revision %d; refused", p.Revision, b.nodeRevision)
 		}
 		if p.Revision == b.nodeRevision {
-			b.mu.Unlock()
-			return nil
+			broken := b.nodeBroken != nil && b.nodeBroken()
+			if !broken {
+				b.mu.Unlock()
+				return nil
+			}
+			// Fall through: an exact-revision replay against a broken
+			// engine is treated as a rebuild request, not a no-op.
 		}
 	}
 	b.node = p

@@ -160,7 +160,7 @@ func TestRunAudioReportPublishesOnEachTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -223,7 +223,7 @@ func TestRunAudioReportNilLTCObserverReportsUnsupportedWithReason(t *testing.T) 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
 	}()
 
 	ticks <- time.Now()
@@ -265,7 +265,7 @@ func TestRunAudioReportRebuildsLTCStateEveryTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, gen, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, gen, nil, time.Now, ticks, discardLogger())
 	}()
 
 	for i := 0; i < 2; i++ {
@@ -322,7 +322,7 @@ func TestRunAudioReportProbesOnceAcrossMultipleTicks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, time.Now, ticks, discardLogger())
 	}()
 
 	for i := 0; i < 3; i++ {
@@ -375,7 +375,7 @@ func TestRunAudioReportObservedAtAdvancesWhileDiscoveredAtStaysPinned(t *testing
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", nil, nil, now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", nil, nil, nil, now, ticks, discardLogger())
 	}()
 
 	const numTicks = 3
@@ -461,7 +461,7 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", mgr, nil, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", mgr, nil, nil, time.Now, ticks, discardLogger())
 	}()
 
 	for i := 0; i < 2; i++ {
@@ -531,7 +531,7 @@ func TestRunAudioReportPublishesFreshLTCFromRealManager(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runAudioReport(ctx, pub, "audio-01", mgr, mgr, time.Now, ticks, discardLogger())
+		runAudioReport(ctx, pub, "audio-01", mgr, mgr, nil, time.Now, ticks, discardLogger())
 	}()
 
 	if _, err := engine.StartLTC(ctx, audio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate30, StartTimecode: "01:00:00:00"}); err != nil {
@@ -568,5 +568,77 @@ func TestRunAudioReportPublishesFreshLTCFromRealManager(t *testing.T) {
 	}
 	if second.LTCTimecodeKnown {
 		t.Error("second tick reports TimecodeKnown, want false: the real Manager's engine evidence must be re-read, not cached from the first tick")
+	}
+}
+
+// stubEngineAvailability is a scriptable [engineAvailability]: each call
+// returns the next entry in results, mirroring stubLTCObserver's own
+// shape, so a test can simulate the live engine going from available to
+// broken between ticks.
+type stubEngineAvailability struct {
+	results []struct {
+		ok     bool
+		reason string
+	}
+	calls int
+}
+
+func (s *stubEngineAvailability) Available() (bool, string) {
+	i := s.calls
+	if i >= len(s.results) {
+		i = len(s.results) - 1
+	}
+	s.calls++
+	r := s.results[i]
+	return r.ok, r.reason
+}
+
+// TestRunAudioReportEngineAvailableReflectsLiveEngineNotStartupDiscovery
+// proves the published report's EngineAvailable must track the live
+// playback engine on every tick, not the one-time
+// startup discovery cache that seeds buildAudioPayload. Discovery here
+// claims the engine is usable (as it would be at boot, before the
+// engine ever broke); the live engine then reports itself broken, and
+// the published report must say so rather than repeating the stale
+// startup verdict.
+func TestRunAudioReportEngineAvailableReflectsLiveEngineNotStartupDiscovery(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true, Routes: []audio.RouteEvidence{
+			{Device: "hw:CARD=X,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100, Format: "S16LE"}},
+		}}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	engine := &stubEngineAvailability{results: []struct {
+		ok     bool
+		reason string
+	}{{ok: false, reason: "output pipeline reported a fatal sink error"}}}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+	}()
+
+	ticks <- time.Now()
+	<-pub.notify
+
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(calls))
+	}
+	got := decodeAudioReport(t, calls[0].payload)
+	if got.EngineAvailable {
+		t.Error("EngineAvailable = true, want false: the live engine reports broken, and the report must not repeat the startup discovery cache's healthy verdict")
+	}
+	if got.EngineReason != "output pipeline reported a fatal sink error" {
+		t.Errorf("EngineReason = %q, want the live engine's own reason", got.EngineReason)
 	}
 }
