@@ -14200,7 +14200,13 @@ components:
           description: The catalog revision this coordinator resolved and dispatched.
         outcome:
           type: string
-          enum: ["confirmed", "unconfirmed", "refused", "failed"]
+          enum: ["confirmed", "unconfirmed", "refused", "failed", ""]
+          description: >-
+            Empty only for a REPLAY response returned before the original
+            request's own dispatch/confirmation has finished - the same
+            accepted-empty case FPPCommandResult.outcome documents, a
+            real, honest value (ADR-020's absence-is-stated rule), not an
+            omission.
         reason:
           type: string
         acknowledgedRevision:
@@ -14209,8 +14215,11 @@ components:
             The revision the node reported holding after this deploy.
             Present only when outcome is "confirmed".
         dispatchedAt:
-          type: string
+          type: [string, "null"]
           format: date-time
+          description: >-
+            Null for a command whose publish has not completed, or whose
+            publish failed before reaching the wire.
         resolvedAt:
           type: [string, "null"]
           format: date-time

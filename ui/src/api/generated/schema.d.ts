@@ -5177,13 +5177,19 @@ export interface components {
             generation: number;
             /** @description The catalog revision this coordinator resolved and dispatched. */
             revision: string;
-            /** @enum {string} */
-            outcome: "confirmed" | "unconfirmed" | "refused" | "failed";
+            /**
+             * @description Empty only for a REPLAY response returned before the original request's own dispatch/confirmation has finished - the same accepted-empty case FPPCommandResult.outcome documents, a real, honest value (ADR-020's absence-is-stated rule), not an omission.
+             * @enum {string}
+             */
+            outcome: "confirmed" | "unconfirmed" | "refused" | "failed" | "";
             reason?: string;
             /** @description The revision the node reported holding after this deploy. Present only when outcome is "confirmed". */
             acknowledgedRevision?: string;
-            /** Format: date-time */
-            dispatchedAt: string;
+            /**
+             * Format: date-time
+             * @description Null for a command whose publish has not completed, or whose publish failed before reaching the wire.
+             */
+            dispatchedAt: string | null;
             /** Format: date-time */
             resolvedAt?: string | null;
         };

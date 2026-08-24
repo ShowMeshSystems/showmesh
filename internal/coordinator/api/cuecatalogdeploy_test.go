@@ -213,6 +213,66 @@ func TestCueCatalogDeployReplayReturnsExistingOutcomeWithoutRepublishing(t *test
 	}
 }
 
+// TestCueCatalogDeployReplayOfAnInFlightCommandReportsAbsentOutcome proves a
+// second request carrying an idempotency key whose ORIGINAL command has not
+// resolved yet (State "pending", ResolvedAt nil, ResultJSON the "{}"
+// insertCommand writes for an empty result) reports that absence honestly:
+// outcome "" and dispatchedAt null, api/openapi.yaml's CueCatalogDeployResult
+// admits both (ADR-020's absence-is-stated rule), the same accepted-empty
+// case FPPCommandResult.outcome documents. This seeds the store directly
+// rather than racing goroutines, so the in-flight state is deterministic.
+func TestCueCatalogDeployReplayOfAnInFlightCommandReportsAbsentOutcome(t *testing.T) {
+	api, st, pub, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	const idempotencyKey = "idem-inflight"
+	_, err := st.InsertCommand(context.Background(), store.CommandRecord{
+		ID: "cmd-inflight", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
+		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
+		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
+		RequestedRevision:  `{"node":"render-01","show":"halloween-2026","generation":1}`,
+		ConfirmationMethod: "evidence", State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("seed in-flight command: %v", err)
+	}
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy",
+		`{"idempotencyKey":"`+idempotencyKey+`"}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("replayed deploy against an in-flight command: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (a replay must never dispatch)", pub.count())
+	}
+
+	// Asserted on the raw JSON, not a decoded struct: a decoded *string
+	// cannot distinguish a present empty string from JSON null, and this
+	// test exists specifically to prove dispatchedAt is null, not "".
+	var raw struct {
+		Command struct {
+			Replay       bool            `json:"replay"`
+			Outcome      string          `json:"outcome"`
+			DispatchedAt json.RawMessage `json:"dispatchedAt"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode replay response: %v", err)
+	}
+	if !raw.Command.Replay {
+		t.Fatalf("replayed deploy response: replay = false, want true")
+	}
+	if raw.Command.Outcome != "" {
+		t.Fatalf("replayed in-flight deploy outcome = %q, want \"\" (the command has not resolved yet); body: %s", raw.Command.Outcome, body)
+	}
+	if string(raw.Command.DispatchedAt) != "null" {
+		t.Fatalf("replayed in-flight deploy dispatchedAt = %s, want JSON null; body: %s", raw.Command.DispatchedAt, body)
+	}
+	assertMatchesSchema(t, newOpenAPICompiler(t), "CueCatalogDeployResponse", body)
+}
+
 // TestCueCatalogDeployRefusesWithNoActiveShow proves this route resolves
 // its own catalog rather than accepting one, and refuses outright when
 // there is nothing to resolve.

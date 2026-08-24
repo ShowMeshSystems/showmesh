@@ -115,7 +115,10 @@ const (
 // pkg/mqttproto's own closed vocabulary ("confirmed", "unconfirmed",
 // "refused", "failed") verbatim, since cuecatalog.deploy's node-side
 // result already reports in exactly that vocabulary with no
-// project-specific narrowing the way audio.session.* needed.
+// project-specific narrowing the way audio.session.* needed. Outcome is
+// also "" and DispatchedAt is nil for a REPLAY of a command still in
+// flight, the same accepted-empty case FPPCommandResult.outcome
+// documents.
 // AcknowledgedRevision is the revision the node reported holding, present
 // only when Outcome is "confirmed".
 type CueCatalogDeployResult struct {
@@ -132,7 +135,7 @@ type CueCatalogDeployResult struct {
 	Reason               string `json:"reason,omitempty"`
 	AcknowledgedRevision string `json:"acknowledgedRevision,omitempty"`
 
-	DispatchedAt string  `json:"dispatchedAt"`
+	DispatchedAt *string `json:"dispatchedAt"`
 	ResolvedAt   *string `json:"resolvedAt,omitempty"`
 }
 

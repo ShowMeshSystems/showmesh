@@ -289,7 +289,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 				CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
 				Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
 				Outcome: mqttproto.OutcomeUnconfirmed, Reason: reason,
-				DispatchedAt: formatTime(dispatchedAt),
+				DispatchedAt: strPtr(formatTime(dispatchedAt)),
 			},
 		})
 		return
@@ -344,7 +344,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 			CommandID: commandID, IdempotencyKey: idempotencyKey, Node: nodeID,
 			Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision,
 			Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: acknowledgedRevision,
-			DispatchedAt: formatTime(dispatchedAt), ResolvedAt: &resolvedFmt,
+			DispatchedAt: strPtr(formatTime(dispatchedAt)), ResolvedAt: &resolvedFmt,
 		},
 	})
 }
@@ -396,13 +396,17 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 	}
 	var res cueCatalogDeployResultPayload
 	_ = json.Unmarshal([]byte(existing.ResultJSON), &res)
+	// A blank Outcome and a nil DispatchedAt are the honest state of a
+	// command still in flight, or one whose publish failed before the
+	// wire: reported as-is, never substituted (ADR-020), matching
+	// renderCommandResultFromRecord's identical accepted-empty case.
 	var resolvedAt *string
 	if existing.ResolvedAt != nil {
 		resolvedAt = strPtr(formatTime(*existing.ResolvedAt))
 	}
-	dispatchedAt := ""
+	var dispatchedAt *string
 	if existing.DispatchedAt != nil {
-		dispatchedAt = formatTime(*existing.DispatchedAt)
+		dispatchedAt = strPtr(formatTime(*existing.DispatchedAt))
 	}
 	var reqID cueCatalogDeployRequestIdentity
 	_ = json.Unmarshal([]byte(existing.RequestedRevision), &reqID)
