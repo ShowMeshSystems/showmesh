@@ -46,10 +46,10 @@ func channelPositionBits(channelCount int) []uint64 {
 }
 
 // probeSinkChannelPositions decides whether sinkEl's own accepted caps,
-// at channelCount channels and sampleRate, require a positioned layout,
-// and if so returns [channelPositionBits]'s candidate for channelCount;
-// otherwise it returns nil, leaving interleave's pre-existing unpositioned
-// output in place.
+// at channelCount channels and sampleRate, will take a positioned
+// layout, and if so returns [channelPositionBits]'s candidate for
+// channelCount; otherwise it returns nil, leaving interleave's
+// pre-existing unpositioned output in place.
 //
 // A real ALSA sink reports its actual device-restricted caps only once
 // it has opened the device, which happens on the NULL->READY state
@@ -61,22 +61,26 @@ func channelPositionBits(channelCount int) []uint64 {
 // PLAYING is reported the same way it always was, through the bus and
 // Available().)
 //
-// The decision is made by intersecting the sink's accepted caps against
-// two candidates -- an explicitly unpositioned one (channel-mask=0x0)
-// and channelPositionBits(channelCount)'s combined mask -- rather than
-// by inspecting the accepted caps' own channel-mask field, because a
-// sink with no positional opinion (most test sinks, and any device that
-// does not itself constrain the mask) accepts both, and the existing
-// unpositioned behavior must still be the answer in that case: it is
-// what today's callers, including several already-passing tests fixed
-// to a bare "channels=N" with no mask field, depend on. Measured on this
-// exact query shape: a 2-channel sink with no mask field accepts both
-// candidates (unpositioned wins); a sink fixed to channelPositionBits'
-// own mask (e.g. the MOTU M4's negotiated 0x33 at 4 channels) accepts
-// only the positioned candidate; a sink fixed to some other mask (e.g.
-// 0x0f) accepts neither, so this returns nil and the mismatch fails
-// loudly at link time via [linkInterleaveToSink]'s own mask pin rather
-// than silently remixing.
+// The decision prefers positioned over unpositioned, falling back to
+// unpositioned only when the sink's accepted caps are not compatible
+// with channelPositionBits(channelCount)'s combined mask -- MEASURED
+// against a real MOTU M4 on hw:0,0 to be the only order that works: a
+// capsfilter explicitly fixed to channel-mask=0x0 links to alsasink
+// fine there, but fails at streaming with not-negotiated once data
+// actually flows, while 0x33 (channelPositionBits' own candidate for 4
+// channels) plays to completion. alsasink's own queried caps intersect
+// BOTH an unpositioned and a positioned candidate on that device, so a
+// sink accepting either is telling this probe only what caps it can
+// parse, not what the underlying device driver will actually take once
+// opened -- the more specific, positioned layout is the safer choice
+// whenever the sink can express it, and unpositioned is the fallback
+// reserved for a sink whose caps genuinely rule positioned out. A sink
+// fixed to some other, mismatched positioned mask (e.g. 0x0f) accepts
+// neither candidate, so this still returns nil for that case; on a real
+// device that mismatch was also measured to fail only once data starts
+// streaming, not at link time, so [linkInterleaveToSink]'s own mask pin
+// is a runtime refusal there, not the link-time one a fixed-caps test
+// sink shows.
 func probeSinkChannelPositions(sinkEl gst.Element, channelCount, sampleRate int) []uint64 {
 	fallback := channelPositionBits(channelCount)
 	if len(fallback) == 0 {
@@ -101,10 +105,6 @@ func probeSinkChannelPositions(sinkEl gst.Element, channelCount, sampleRate int)
 		return nil
 	}
 
-	unpositioned := gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=%d,channel-mask=(bitmask)0x0", sampleRate, channelCount))
-	if accepted.CanIntersect(unpositioned) {
-		return nil
-	}
 	positioned := gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=%d,channel-mask=(bitmask)0x%x", sampleRate, channelCount, fallbackMask))
 	if accepted.CanIntersect(positioned) {
 		return fallback

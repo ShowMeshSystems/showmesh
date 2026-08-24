@@ -386,20 +386,26 @@ func negotiatedSinkCaps(t *testing.T, sink capsRestrictedSink) string {
 	return caps.String()
 }
 
-// TestEnginePrefersUnpositionedWhenASinkAcceptsEither is
-// [probeSinkChannelPositions]'s tie-break case: a sink whose caps
-// explicitly list BOTH channel-mask 0x0 (unpositioned) and 0x33
-// ([channelPositionBits]'s own 4-channel candidate) as acceptable.
-// Both TestEngineOpensAPositionedFourChannelSink (sink fixed only to
-// 0x33) and TestEngineStillOpensAnExplicitlyUnpositionedSink (sink
-// fixed only to 0x0) each leave only one candidate able to negotiate at
-// all, so neither exercises the actual preference when both would work.
-// This does: probeSinkChannelPositions's own doc comment states the
-// existing unpositioned behavior must still win when a sink has no
-// positional opinion, and this is the direct, deterministic evidence for
-// that -- the negotiated caps' own channel-mask field, not merely that
-// the pipeline reached PLAYING (which would look identical either way).
-func TestEnginePrefersUnpositionedWhenASinkAcceptsEither(t *testing.T) {
+// TestEnginePrefersPositionedWhenASinkAcceptsEither is
+// [probeSinkChannelPositions]'s tie-break case, and the one that makes
+// the MOTU M4 regression-proof: a sink whose caps explicitly list BOTH
+// channel-mask 0x0 (unpositioned) and 0x33 ([channelPositionBits]'s own
+// 4-channel candidate) as acceptable -- exactly the shape alsasink's own
+// queried caps have on that device before it opens the hardware. Both
+// TestEngineOpensAPositionedFourChannelSink (sink fixed only to 0x33)
+// and TestEngineStillOpensAnExplicitlyUnpositionedSink (sink fixed only
+// to 0x0) each leave only one candidate able to negotiate at all, so
+// neither exercises the actual preference when both would work. This
+// does: MEASURED on a real MOTU M4, a capsfilter explicitly fixed to
+// channel-mask=0x0 links to alsasink fine but fails at streaming with
+// not-negotiated once data actually flows, while 0x33 plays to
+// completion -- a sink whose query accepts both is telling this probe
+// only what caps it can parse, not what the device driver underneath
+// will actually take, so the more specific positioned layout must win.
+// This asserts the negotiated caps' own channel-mask field, not merely
+// that the pipeline reached PLAYING (which would look identical either
+// way).
+func TestEnginePrefersPositionedWhenASinkAcceptsEither(t *testing.T) {
 	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=4,channel-mask=(bitmask){0x0,0x33}")
 	useSinkElement(t, sink.element)
 
@@ -420,7 +426,7 @@ func TestEnginePrefersUnpositionedWhenASinkAcceptsEither(t *testing.T) {
 	requireSustainedPlayback(t, e, sink.buffers)
 
 	got := negotiatedSinkCaps(t, sink)
-	if !strings.Contains(got, "channel-mask=(bitmask)0x0000000000000000") {
-		t.Errorf("negotiated caps = %q, want channel-mask 0x0 (unpositioned): a sink with no positional opinion must keep the pre-existing unpositioned behavior", got)
+	if !strings.Contains(got, "channel-mask=(bitmask)0x0000000000000033") {
+		t.Errorf("negotiated caps = %q, want channel-mask 0x33 (positioned): a sink that merely tolerates unpositioned caps must still get the more specific, positioned layout when it can express it", got)
 	}
 }
