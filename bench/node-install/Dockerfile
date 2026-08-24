@@ -24,10 +24,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Go toolchain, pinned to go.mod's own `go 1.25.0` directive rather than
 # whatever golang-go happens to package on trixie.
-ARG GOARCH=arm64
-RUN curl -fsSL "https://go.dev/dl/go1.25.0.linux-${GOARCH}.tar.gz" -o /tmp/go.tar.gz \
+#
+# BuildKit sets TARGETARCH from the platform actually being built, so the
+# toolchain matches the image on an amd64 host and an arm64 host alike. A
+# hardcoded default would silently install the wrong toolchain on whichever
+# architecture it did not name. `go version` runs here so a mismatch fails
+# the build instead of surfacing as an exec-format error mid-bench.
+ARG TARGETARCH
+ARG GOARCH=${TARGETARCH}
+RUN test -n "${GOARCH}" || { echo "GOARCH is empty: BuildKit did not set TARGETARCH. Pass --build-arg GOARCH=amd64|arm64." >&2; exit 1; } \
+    && curl -fsSL "https://go.dev/dl/go1.25.0.linux-${GOARCH}.tar.gz" -o /tmp/go.tar.gz \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
-    && rm /tmp/go.tar.gz
+    && rm /tmp/go.tar.gz \
+    && /usr/local/go/bin/go version
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 WORKDIR /work

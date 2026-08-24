@@ -14,7 +14,10 @@
 #     file or state directory contents;
 #   - preflight.sh reports every check it claims to, including the
 #     informational ndisink line;
-#   - the installed unit file is syntactically valid systemd.
+#   - the installed unit file is syntactically valid systemd, including
+#     that every directive name in it is one systemd recognises (proved by
+#     re-running the same check against a deliberately typo'd copy and
+#     requiring it to fail).
 #
 # What this does NOT prove, because a plain container is not a systemd
 # machine: that the service actually starts, stays running, or plays any
@@ -76,13 +79,30 @@ echo "=== 6. preflight.sh ==="
 echo
 
 echo "=== 7. systemd unit syntax ==="
-if command -v systemd-analyze >/dev/null 2>&1; then
-  systemd-analyze verify /etc/systemd/system/showmesh-agent.service
-  echo "OK: systemd-analyze verify reports the unit syntactically valid"
-else
+if ! command -v systemd-analyze >/dev/null 2>&1; then
   echo "systemd-analyze not available; skipped unit verification" >&2
   exit 1
 fi
+# --recursive-errors=one is load-bearing: without it systemd-analyze verify
+# exits 0 on an unknown directive name (it only warns, because PID 1 would
+# warn-and-ignore too), so a typo'd directive would pass this check. `one`
+# turns the named unit's own warnings into a non-zero exit while leaving
+# warnings from its dependency units informational.
+systemd-analyze verify --recursive-errors=one /etc/systemd/system/showmesh-agent.service
+echo "OK: systemd-analyze verify reports the unit syntactically valid"
+echo
+
+echo "=== 7b. Proving check 7 can actually fail (typo'd directive) ==="
+BOGUS_UNIT=$(mktemp -d)/showmesh-agent-bogus.service
+sed 's/^Restart=always$/Restart=always\nDefinitelyNotADirective=true/' \
+  /etc/systemd/system/showmesh-agent.service > "$BOGUS_UNIT"
+if systemd-analyze verify --recursive-errors=one "$BOGUS_UNIT" 2>/dev/null; then
+  echo "FAIL: systemd-analyze verify accepted a unit with an unknown directive;" >&2
+  echo "      check 7 is not actually verifying anything." >&2
+  exit 1
+fi
+rm -rf "$(dirname "$BOGUS_UNIT")"
+echo "OK: an unknown directive is rejected, so check 7 is a real gate"
 echo
 
 echo "=== ALL CHECKS PASSED ==="

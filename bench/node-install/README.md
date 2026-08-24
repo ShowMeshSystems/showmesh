@@ -15,7 +15,11 @@ running `install.sh` a second time is idempotent and does not touch
 `/var/lib/showmesh` (proved by writing a sentinel into both before the
 second run and diffing checksums after); `preflight.sh` runs every check it
 claims to and reports the informational NDI line; and the installed
-systemd unit is syntactically valid (`systemd-analyze verify`).
+systemd unit is syntactically valid, every directive name in it included
+(`systemd-analyze verify --recursive-errors=one`, which unlike a bare
+`systemd-analyze verify` exits non-zero on an unknown directive rather
+than only warning; the bench re-runs that same check against a
+deliberately typo'd copy of the unit and fails if it is accepted).
 
 **Cannot prove, and does not claim to**: that the service actually starts
 and stays running under systemd. A plain `docker run` container does not
@@ -39,13 +43,20 @@ The container mounts the repository read-write at `/repo` so the script
 can `go build` against it; it installs into the container's own
 filesystem, not the host's.
 
+The image picks its Go toolchain from BuildKit's `TARGETARCH`, so the
+same `docker build` is correct on an amd64 host and an arm64 host without
+extra flags. Pass `--build-arg GOARCH=amd64` (or `arm64`) only to
+cross-build deliberately.
+
 ## Layout
 
 ```
 bench/node-install/
   Dockerfile               Debian 13 + the build/runtime package set +
-                           pinned Go 1.25.0 + systemd-analyze
+                           pinned Go 1.25.0 (matched to TARGETARCH) +
+                           systemd-analyze
   run_install_proof.sh     Builds the agent, runs install.sh twice
                            (idempotency + sentinel check), preflight.sh,
-                           and systemd-analyze verify
+                           systemd-analyze verify, and a negative check
+                           proving that verification can fail
 ```
