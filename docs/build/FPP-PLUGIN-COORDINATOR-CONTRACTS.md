@@ -17,8 +17,8 @@ port sharing, not HTTP routing; it says nothing that forbids a route. Per
 owner ruling (2026-08-23): the plugin opens no listening socket of its own,
 but it may register narrow, idempotent, evidence-returning routes on fppd's
 own web server, and section 2.2's brightness route ships unauthenticated this
-season, matching SECURITY.md's accepted cleartext-command posture on the
-isolated show LAN. A bearer credential is deferred to a future season as a
+season, matching the unauthenticated-by-default posture SECURITY.md and
+RES-015 §7.4 already record for fppd's own web UI and API. A bearer credential is deferred to a future season as a
 separate tracked item. See sections 2.2, 2.3, and 3.1.
 
 Nothing here has run against a real FPP host. The contract is verified by unit
@@ -322,12 +322,18 @@ registers on fppd's own web server: on FPP 10 through Plugin API 6's
 3.1 for the general rule this instance of a plugin-served route follows.
 
 **This route is unauthenticated.** It accepts any caller reachable on the
-show LAN, matching the posture SECURITY.md already records for cleartext
-commands on that isolated network: fppd's own web server is unauthenticated
-by default. A deferred bearer credential would refuse a casual or accidental
-LAN caller, but not anyone with shell access on the FPP host, which RES-015
-already records as the accepted limit for the plugin's existing outbound
-credential; see section 2.3 for what this season leaves unenforced.
+show LAN. The accepted posture it matches is FPP's own: SECURITY.md and
+RES-015 §7.4 record that fppd's web UI and API are unauthenticated by
+default, and list that among the FPP exposures ShowMesh designs around rather
+than files as its own defect. SECURITY.md's separate acceptance of cleartext
+commands is a transport rule about what crosses the show LAN in the clear; it
+does not by itself say a route may go unauthenticated, so it is not the
+citation for this decision. A deferred bearer credential would refuse a
+casual or accidental LAN caller, but the plugin would have to hold the
+expected secret on the FPP host to check one, and RES-015 §7.4 records that
+any ShowMesh credential placed on an FPP host must be treated as readable by
+anyone who can reach that host's web UI, not only by someone with a shell on
+it. See section 2.3 for what this season leaves unenforced.
 
 Body:
 
