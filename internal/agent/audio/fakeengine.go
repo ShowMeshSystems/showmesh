@@ -69,13 +69,18 @@ type fakeHandle struct {
 }
 
 // fakeFade is one in-progress [Engine.Fade] ramp: linear interpolation
-// between the gain the fade started at and its target, over its
-// duration, timed against the engine's own injected clock.
+// between the gain the fade started at and its target, timed against the
+// engine's own injected clock. elapsed accumulates only the wall time
+// this ramp has actually spent running; runningSince is when it last
+// started counting toward elapsed, and is zero while Pause or Stop holds
+// it, matching the real engine, where a genuinely blocked branch cannot
+// advance its own ramp either (see gstengine's blockFlow).
 type fakeFade struct {
-	startGain  pkgaudio.Gain
-	targetGain pkgaudio.Gain
-	duration   time.Duration
-	startedAt  time.Time
+	startGain    pkgaudio.Gain
+	targetGain   pkgaudio.Gain
+	duration     time.Duration
+	elapsed      time.Duration
+	runningSince time.Time
 }
 
 // NewFakeEngine returns a FakeEngine using now for its internal clock.
@@ -134,7 +139,10 @@ func (e *FakeEngine) currentGain(h *fakeHandle) pkgaudio.Gain {
 	if h.fade == nil {
 		return h.gain
 	}
-	elapsed := e.now().Sub(h.fade.startedAt)
+	elapsed := h.fade.elapsed
+	if !h.fade.runningSince.IsZero() {
+		elapsed += e.now().Sub(h.fade.runningSince)
+	}
 	if elapsed >= h.fade.duration {
 		h.gain = h.fade.targetGain
 		h.fade = nil
@@ -143,6 +151,27 @@ func (e *FakeEngine) currentGain(h *fakeHandle) pkgaudio.Gain {
 	frac := float64(elapsed) / float64(h.fade.duration)
 	span := float64(h.fade.targetGain) - float64(h.fade.startGain)
 	return pkgaudio.Gain(float64(h.fade.startGain) + span*frac)
+}
+
+// freezeFade holds h's in-progress fade exactly where currentGain
+// reports it right now: no further wall-clock time counts toward the
+// ramp until resumeFade runs. A no-op when there is no fade, or it is
+// already frozen. Callers hold e.mu.
+func (e *FakeEngine) freezeFade(h *fakeHandle) {
+	if h.fade == nil || h.fade.runningSince.IsZero() {
+		return
+	}
+	h.fade.elapsed += e.now().Sub(h.fade.runningSince)
+	h.fade.runningSince = time.Time{}
+}
+
+// resumeFade lets a fade freezeFade held start advancing again from
+// where it was left. A no-op when there is no fade. Callers hold e.mu.
+func (e *FakeEngine) resumeFade(h *fakeHandle) {
+	if h.fade == nil {
+		return
+	}
+	h.fade.runningSince = e.now()
 }
 
 // currentPosition advances h.state to Completed, and clamps position to
@@ -194,6 +223,12 @@ func (e *FakeEngine) Start(_ context.Context, handle EngineHandle, position time
 	h.position = position
 	h.state = pkgaudio.StatePlaying
 	h.playStartedAt = e.now()
+	// Matches the real engine's Start, which always clears any flow
+	// block a prior Stop left behind (see gstengine's blockFlow/
+	// unblockFlow): a fade Stop froze mid-ramp must resume advancing
+	// once Start brings the handle back to Playing, not stay frozen
+	// forever because only Resume ever thawed it.
+	e.resumeFade(h)
 	return e.obs(h), nil
 }
 
@@ -208,6 +243,7 @@ func (e *FakeEngine) Pause(_ context.Context, handle EngineHandle) (EngineObserv
 		return EngineObservation{}, err
 	}
 	h.position = e.currentPosition(h)
+	e.freezeFade(h)
 	if h.state == pkgaudio.StatePlaying {
 		h.state = pkgaudio.StatePaused
 	}
@@ -230,6 +266,7 @@ func (e *FakeEngine) Resume(_ context.Context, handle EngineHandle) (EngineObser
 	}
 	h.state = pkgaudio.StatePlaying
 	h.playStartedAt = e.now()
+	e.resumeFade(h)
 	return e.obs(h), nil
 }
 
@@ -260,6 +297,7 @@ func (e *FakeEngine) Stop(_ context.Context, handle EngineHandle) (EngineObserva
 	if err := e.takeFailure(handle); err != nil {
 		return EngineObservation{}, err
 	}
+	e.freezeFade(h)
 	h.state = pkgaudio.StateStopped
 	h.playStartedAt = time.Time{}
 	return e.obs(h), nil
@@ -285,7 +323,16 @@ func (e *FakeEngine) Fade(_ context.Context, handle EngineHandle, fade pkgaudio.
 		return EngineObservation{}, err
 	}
 	start := e.currentGain(h)
-	h.fade = &fakeFade{startGain: start, targetGain: fade.TargetGain, duration: fade.Duration, startedAt: e.now()}
+	f := &fakeFade{startGain: start, targetGain: fade.TargetGain, duration: fade.Duration}
+	// A fade dispatched while paused or stopped starts already frozen:
+	// the real engine's Fade can be issued in either state too (Fade
+	// only refuses a branch that has never been Start'd), and its ramp
+	// cannot advance without flow any more than one already in progress
+	// can.
+	if h.state == pkgaudio.StatePlaying {
+		f.runningSince = e.now()
+	}
+	h.fade = f
 	return e.obs(h), nil
 }
 

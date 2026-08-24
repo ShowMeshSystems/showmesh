@@ -603,6 +603,11 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		if !s.handleLoaded {
+			// A fade can be left pending here too: invalidateActiveSessions
+			// (an engine rebind after a route change) clears handleLoaded
+			// without resolving one. Same hazard as the loaded branch
+			// below, reached a different way.
+			s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
 			s.state = pkgaudio.StateStopped
 			s.bookmark = nil
 			s.setGapUnknownLocked("session is stopped")
@@ -627,6 +632,12 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
 		}
+		// A fade this Stop interrupted has no engine handle left to
+		// report its own completion against (checkFadeCompletionLocked
+		// requires handleLoaded), so it must resolve here or it never
+		// resolves at all: fadePending would stay true and the
+		// invocation that dispatched it would never receive an outcome.
+		s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
 		s.handleLoaded = false
 		s.loadedIdentity = ""
 		s.state = pkgaudio.StateStopped
@@ -658,6 +669,10 @@ func (m *Manager) Clear(ctx context.Context, id pkgaudio.SessionID, invocation p
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
 		m.stopLTCLocked(ctx, s)
 		s.releaseEngineLocked(ctx)
+		// Same hazard Stop resolves: a fade this Clear interrupted has no
+		// engine handle left to report against, so it strands forever
+		// unless resolved here.
+		s.resolveFadePendingStrandedLocked("session cleared before its pending fade resolved")
 		s.desired = pkgaudio.SessionDesiredState{}
 		s.state = pkgaudio.StateStopped
 		s.currentIndex = -1

@@ -433,15 +433,14 @@ func TestFadeReachesTargetGain(t *testing.T) {
 	_ = e.Release(context.Background(), "f1")
 }
 
-// TestFadeActiveClearsDuringPauseBecauseDecodeKeepsRunning proves
-// FadeActive clears during a held Pause today, but only as a consequence
-// of "paused" audio not actually being frozen: decode keeps running while
-// the branch is marked frozen, so the fade's own ramp (anchored to the
-// branch's local clock) keeps advancing and reaches its target while the
-// operator believes playback is held. This is not a proof that fading
-// through a pause is the wanted behavior; once a held Pause actually
-// stops decode, this test's premise is gone and it must be re-derived.
-func TestFadeActiveClearsDuringPauseBecauseDecodeKeepsRunning(t *testing.T) {
+// TestFadeHeldByPauseStaysActiveAndCompletesOnResume proves a fade Pause
+// catches mid-ramp is genuinely held, not merely reported held: gain does
+// not move further while paused (the ramp cannot advance without flow),
+// FadeActive stays true for as long as it is held short of target (see
+// fadeArrived's doc comment), and Resume lets the remaining ramp play out
+// to completion, at which point FadeActive finally clears and gain
+// reports the target.
+func TestFadeHeldByPauseStaysActiveAndCompletesOnResume(t *testing.T) {
 	const fadeDuration = 300 * time.Millisecond
 
 	e := newTestEngine(t)
@@ -458,35 +457,181 @@ func TestFadeActiveClearsDuringPauseBecauseDecodeKeepsRunning(t *testing.T) {
 	if _, err := e.Start(ctx, "fp1", 0); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitForPosition(t, e, "fp1", 100*time.Millisecond, 5*time.Second)
+	// A multi-second pre-fade wait, not a token 100ms one: fadeStartPos
+	// must be large enough that a broken segment-relative anchor (reset
+	// toward zero by Resume's own re-anchoring seek) would visibly throw
+	// FadeActive's completion far off, rather than hiding the defect
+	// under a wait so short the miscalculation rounds away.
+	waitForPosition(t, e, "fp1", 2*time.Second, 5*time.Second)
 
 	if _, err := e.Fade(ctx, "fp1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0}); err != nil {
 		t.Fatalf("Fade: %v", err)
 	}
+	// Catch the ramp while it is still clearly in flight, well short of
+	// fadeDuration, so pausing genuinely interrupts it rather than racing
+	// its natural completion.
+	time.Sleep(fadeDuration / 3)
 	pauseObs, err := e.Pause(ctx, "fp1")
 	if err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	t.Logf("stopped mid-fade: state=%s gain=%v fadeActive=%v", pauseObs.State, pauseObs.Gain, pauseObs.FadeActive)
+	t.Logf("paused mid-fade: state=%s gain=%v fadeActive=%v", pauseObs.State, pauseObs.Gain, pauseObs.FadeActive)
+	if !pauseObs.FadeActive {
+		t.Fatalf("immediately after Pause interrupted a fade short of its target: FadeActive = false, want true")
+	}
+	if pauseObs.Gain <= 0 {
+		t.Fatalf("gain at Pause = %v, want > 0 (fade must not have already reached its 0 target)", pauseObs.Gain)
+	}
 
-	for i := 1; i <= 3; i++ {
-		time.Sleep(time.Second)
+	// The block sits upstream of queue (see blockFlow's doc comment), so
+	// up to one queue's worth of already-buffered, already-ramped content
+	// still reaches volume immediately after Pause, bounded by
+	// queueMaxSizeTime. Settle past that bound before treating gain as
+	// the held value the rest of this test checks stays put; that brief
+	// drain is not the defect this test is proving.
+	time.Sleep(4 * queueMaxSizeTime)
+	settled, err := e.Observe(ctx, "fp1")
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	heldGain := settled.Gain
+
+	// Held well past fadeDuration: a genuinely blocked ramp cannot
+	// advance, so gain must stay exactly where the settled value was and
+	// FadeActive must stay reported true throughout, never flipping false
+	// from wall-clock time alone.
+	deadline := time.Now().Add(fadeDuration * 5)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
 		obs, err := e.Observe(ctx, "fp1")
 		if err != nil {
 			t.Fatalf("Observe: %v", err)
 		}
-		t.Logf("  +%ds: state=%s gain=%v fadeActive=%v", i, obs.State, obs.Gain, obs.FadeActive)
-		if i == 3 && obs.FadeActive {
-			t.Fatalf("%d seconds after Pause interrupted a %s fade: FadeActive = true, want false", i, fadeDuration)
+		if obs.Gain != heldGain {
+			t.Fatalf("gain moved while paused mid-fade: was %v, now %v", heldGain, obs.Gain)
 		}
+		if !obs.FadeActive {
+			t.Fatalf("FadeActive cleared while the fade was held by Pause short of its target (gain=%v, target=0)", obs.Gain)
+		}
+	}
+
+	if _, err := e.Resume(ctx, "fp1"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	deadline = time.Now().Add(engineOpTimeout)
+	var last agentaudio.EngineObservation
+	for time.Now().Before(deadline) {
+		obs, err := e.Observe(ctx, "fp1")
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		last = obs
+		if !obs.FadeActive {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if last.FadeActive {
+		t.Fatalf("FadeActive never cleared after Resume let the remaining ramp play out")
+	}
+	if last.Gain > 0.05 {
+		t.Fatalf("gain after Resume completed the fade = %v, want close to 0", last.Gain)
 	}
 
 	_ = e.Release(context.Background(), "fp1")
 }
 
-// TestFadeCompletesAcrossStop proves FadeActive still clears when Stop
-// interrupts a fade, the canonical fade-out-then-stop show operation.
-func TestFadeCompletesAcrossStop(t *testing.T) {
+// TestFadeAnchorSurvivesResumeSeek proves the fade completion bound
+// (fadeArrived) is unaffected by Resume's own flushing seek. That seek
+// resets segmentStart, which is the branch position localRunningTime
+// measures from; a fadeStartPos of several seconds, not the ~100ms a
+// fade dispatched right after Start would give, is what exposes a bound
+// still keyed off segment-relative local running time, since a small
+// fadeStartPos rounds the resulting error away under this test's own
+// deadline.
+func TestFadeAnchorSurvivesResumeSeek(t *testing.T) {
+	const fileDuration = 20 * time.Second
+	const preFadeWait = 4 * time.Second
+	const fadeDuration = 2 * time.Second
+	const pauseIntoFade = 700 * time.Millisecond
+	const holdDuration = 1 * time.Second
+
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, fileDuration.Seconds())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "fa1", mediaRef(wav), fileDuration); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "fa1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "fa1", preFadeWait, 10*time.Second)
+
+	if _, err := e.Fade(ctx, "fa1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0}); err != nil {
+		t.Fatalf("Fade: %v", err)
+	}
+	time.Sleep(pauseIntoFade)
+	if _, err := e.Pause(ctx, "fa1"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	time.Sleep(holdDuration)
+
+	resumedAt := time.Now()
+	resumeObs, err := e.Resume(ctx, "fa1")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	t.Logf("resumed at position %s, %s into a %s fade at Pause", resumeObs.Position, pauseIntoFade, fadeDuration)
+
+	// The remaining ramp is roughly fadeDuration-pauseIntoFade; allow a
+	// generous margin for scheduling jitter and the queue's own settle,
+	// but nowhere near fadeStartPos (preFadeWait, ~4s) or fadeDuration
+	// itself (2s): a broken segment-relative anchor reported this test's
+	// own scenario clearing 5.85s after Resume, not the ~1.3s expected.
+	const clearWithin = 3 * time.Second
+	deadline := time.Now().Add(clearWithin)
+	var last agentaudio.EngineObservation
+	for time.Now().Before(deadline) {
+		obs, err := e.Observe(ctx, "fa1")
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		last = obs
+		if !obs.FadeActive {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	elapsedSinceResume := time.Since(resumedAt)
+	t.Logf("FadeActive=%v gain=%v position=%v elapsed since Resume=%s", last.FadeActive, last.Gain, last.Position, elapsedSinceResume)
+
+	if last.FadeActive {
+		t.Fatalf("FadeActive still true %s after Resume (want cleared within %s): position=%s gain=%v, "+
+			"a fade that finished is being reported as still in progress", elapsedSinceResume, clearWithin, last.Position, last.Gain)
+	}
+	if last.Gain > 0.05 {
+		t.Fatalf("gain once FadeActive cleared = %v, want close to 0", last.Gain)
+	}
+
+	_ = e.Release(context.Background(), "fa1")
+}
+
+// TestFadeHeldByStopStaysActive proves Stop, like Pause, genuinely halts
+// a fade's ramp rather than merely reporting it halted: catching a fade
+// short of its target and then Stopping must hold both gain and
+// FadeActive exactly where Stop left them, since with flow genuinely
+// blocked (see Stop's and blockFlow's doc comments) nothing remains to
+// carry the ramp the rest of the way. This engine call never resolves
+// the fade to a terminal outcome on its own; see Manager.Stop and
+// resolveFadePendingStrandedLocked in package audio for the layer that
+// does.
+func TestFadeHeldByStopStaysActive(t *testing.T) {
 	const fadeDuration = 300 * time.Millisecond
 
 	e := newTestEngine(t)
@@ -508,11 +653,29 @@ func TestFadeCompletesAcrossStop(t *testing.T) {
 	if _, err := e.Fade(ctx, "fs1", pkgaudio.Fade{Curve: pkgaudio.FadeCurveLinear, Duration: fadeDuration, TargetGain: 0}); err != nil {
 		t.Fatalf("Fade: %v", err)
 	}
+	time.Sleep(fadeDuration / 3)
 	stopObs, err := e.Stop(ctx, "fs1")
 	if err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	t.Logf("stopped mid-fade: state=%s gain=%v fadeActive=%v", stopObs.State, stopObs.Gain, stopObs.FadeActive)
+	if !stopObs.FadeActive {
+		t.Fatalf("immediately after Stop interrupted a fade short of its target: FadeActive = false, want true")
+	}
+	if stopObs.Gain <= 0 {
+		t.Fatalf("gain at Stop = %v, want > 0 (fade must not have already reached its 0 target)", stopObs.Gain)
+	}
+
+	// See TestFadeHeldByPauseStaysActiveAndCompletesOnResume for why this
+	// settle happens before the held value is captured: the block sits
+	// upstream of queue, so up to one queue's worth of already-buffered
+	// content still drains immediately after Stop.
+	time.Sleep(4 * queueMaxSizeTime)
+	settled, err := e.Observe(ctx, "fs1")
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	heldGain := settled.Gain
 
 	var last agentaudio.EngineObservation
 	for i := 1; i <= 3; i++ {
@@ -524,8 +687,11 @@ func TestFadeCompletesAcrossStop(t *testing.T) {
 		last = obs
 		t.Logf("  +%ds: state=%s gain=%v fadeActive=%v", i, obs.State, obs.Gain, obs.FadeActive)
 	}
-	if last.FadeActive {
-		t.Fatalf("3 seconds after Stop interrupted a %s fade: FadeActive = true, want false", fadeDuration)
+	if last.Gain != heldGain {
+		t.Fatalf("gain moved after Stop interrupted a fade: was %v, now %v", heldGain, last.Gain)
+	}
+	if !last.FadeActive {
+		t.Fatalf("3 seconds after Stop interrupted a %s fade short of target: FadeActive = false, want true", fadeDuration)
 	}
 
 	_ = e.Release(context.Background(), "fs1")

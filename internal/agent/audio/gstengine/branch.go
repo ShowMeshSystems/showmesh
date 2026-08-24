@@ -63,14 +63,26 @@ type branch struct {
 	segmentStart time.Duration
 
 	fadeActive bool
-	// fadeStartLocal anchors the GstController ramp itself (see
-	// localRunningTime); fadeStartRunning (see pipelineRunningTime)
-	// additionally bounds FadeActive while frozen, when fadeStartLocal's
-	// own clock does not advance.
-	fadeStartLocal   time.Duration
-	fadeStartRunning time.Duration
-	fadeDuration     time.Duration
-	fadeTargetGain   pkgaudio.Gain
+	// fadeStartPos anchors both the GstController ramp itself and the
+	// completion bound in the branch's own raw stream position
+	// (queryPosition), not segmentStart-relative local running time.
+	// GstController evaluates a buffer's control value against the
+	// buffer's own PTS, which is stream time and stays continuous across
+	// a same-position seek (Resume's own re-anchor included); local
+	// running time does not, since seekTo resets segmentStart to the
+	// seek target on every seek, including one back to where a paused
+	// branch already was.
+	fadeStartPos   time.Duration
+	fadeDuration   time.Duration
+	fadeTargetGain pkgaudio.Gain
+
+	// blockProbeID is the pad probe holding this branch's own contribution
+	// to the mix at queue's sink pad, or 0 when flow is not blocked. It is
+	// how Pause and Stop genuinely halt data flow inside a pipeline that
+	// stays PLAYING: unlike SetState(PAUSED) on a sibling of a PLAYING
+	// bin, a blocking probe is authoritative regardless of the parent
+	// bin's own state.
+	blockProbeID uint32
 
 	released bool
 }
@@ -324,6 +336,19 @@ func (b *branch) pipelineRunningTime() time.Duration {
 // data flow. atPos is a value the caller already committed to (a seek
 // target, or a position sampled immediately before calling this), so
 // only pipelineRunningTime is read here.
+//
+// This synchronous read is measurably early by however long it then
+// takes decode to actually restart and this branch's own queue to
+// refill: a deferred version that instead computed and applied the
+// offset from inside a probe on each pad's first post-resync buffer was
+// attempted and reverted: it regressed TestStartAfterLoadGapPlaysFrom
+// NamedPosition and TestSeekAfterGapReanchors outright (the branch build
+// pad-added path installs its own first-buffer block probe on the same
+// pad, and a second, later-registered one did not reliably still fire
+// once the first satisfied the block), and did not improve
+// TestResumeDoesNotDiscardTheHeldDuration either. See
+// docs/build/BUILD-LOG.md for the measured per-resume loss this leaves
+// as a named limitation rather than a silently accepted one.
 func (b *branch) resyncMixerPads(atPos time.Duration) {
 	offset := int64(b.pipelineRunningTime()) - b.localRunningTime(atPos).Nanoseconds()
 	for _, pad := range b.channelMixerPads {
@@ -331,21 +356,6 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 			pad.SetOffset(offset)
 		}
 	}
-}
-
-// resyncMixerPadsToLivePosition re-anchors exactly as resyncMixerPads,
-// reading atPos from queryPosition, the frozen Pause bookmark at every
-// current call site: Resume always invokes this before unfreeze.
-func (b *branch) resyncMixerPadsToLivePosition() time.Duration {
-	running := b.pipelineRunningTime()
-	atPos := b.queryPosition()
-	offset := int64(running) - b.localRunningTime(atPos).Nanoseconds()
-	for _, pad := range b.channelMixerPads {
-		if pad != nil {
-			pad.SetOffset(offset)
-		}
-	}
-	return atPos
 }
 
 func (b *branch) currentGain() pkgaudio.Gain {
@@ -364,14 +374,12 @@ const fadeGainTolerance = 1e-3
 // observation reports on.
 func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 	pos := b.queryPosition()
-	local := b.localRunningTime(pos)
-	running := b.pipelineRunningTime()
 	gain := b.currentGain()
 
 	b.mu.Lock()
 	state := b.state
 	fadeActive := b.fadeActive
-	if fadeActive && fadeArrived(local, b.fadeStartLocal, running, b.fadeStartRunning, b.fadeDuration, gain, b.fadeTargetGain) {
+	if fadeActive && fadeArrived(pos, b.fadeStartPos, b.fadeDuration, gain, b.fadeTargetGain) {
 		fadeActive = false
 		b.fadeActive = false
 	}
@@ -386,16 +394,16 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 	}
 }
 
-// fadeArrived reports whether a fade started at (fadeStartLocal,
-// fadeStartRunning) with fadeDuration should clear FadeActive, given the
-// branch's current local and pipeline running time and its current gain
-// against the fade's target. The interface promises FadeActive clears
-// only once Gain equals the target, so a fade either clock says is due
-// but whose gain has not arrived stays reported in progress rather than
-// falsely complete — a stuck pending fade must be visible, a falsely
-// completed one must not.
-func fadeArrived(local, fadeStartLocal, running, fadeStartRunning, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
-	elapsed := local-fadeStartLocal >= fadeDuration || running-fadeStartRunning >= fadeDuration
+// fadeArrived reports whether a fade started at fadeStartPos with
+// fadeDuration should clear FadeActive: raw stream position must have
+// advanced the fade's own duration past fadeStartPos AND Gain must
+// actually equal target (see docs/build/BUILD-LOG.md for why the bound
+// is stream position, not local running time or the shared pipeline's
+// wall clock). A fade whose own clock says is due but whose gain has not
+// arrived stays reported in progress rather than falsely complete: a
+// stuck pending fade must be visible, a falsely completed one must not.
+func fadeArrived(pos, fadeStartPos, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
+	elapsed := pos-fadeStartPos >= fadeDuration
 	return elapsed && gainWithin(gain, target, fadeGainTolerance)
 }
 
@@ -424,6 +432,51 @@ func (b *branch) hasStarted() bool {
 	return b.state != pkgaudio.StateReady
 }
 
+// blockFlow halts this branch's contribution to the mix by blocking
+// queue's sink pad, where volume's output enters queue. Blocking there
+// parks the thread doing the pushing: decodebin's own streaming thread,
+// which runs the whole convert/resample/capsfilter/volume chain
+// synchronously, so decode itself stops immediately, not merely a tap
+// further downstream. queue sits on the far side of the block: it keeps
+// draining whatever it already held (bounded by queueMaxSizeTime), which
+// is the small amount of audio that still reaches the mixer right after
+// Pause, not a delay before decode actually stops. Idempotent: a no-op
+// once already blocked, and once teardown has claimed the branch.
+func (b *branch) blockFlow() {
+	b.mu.Lock()
+	if b.released || b.blockProbeID != 0 {
+		b.mu.Unlock()
+		return
+	}
+	b.mu.Unlock()
+
+	pad := b.queue.GetStaticPad("sink")
+	id := pad.AddProbe(gst.PadProbeTypeBlockDownstream, func(self gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		return gst.PadProbeOK
+	})
+
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		pad.RemoveProbe(id)
+		return
+	}
+	b.blockProbeID = id
+	b.mu.Unlock()
+}
+
+// unblockFlow releases a block installed by blockFlow, letting this
+// branch's data flow resume. A no-op when nothing is blocked.
+func (b *branch) unblockFlow() {
+	b.mu.Lock()
+	id := b.blockProbeID
+	b.blockProbeID = 0
+	b.mu.Unlock()
+	if id != 0 {
+		b.queue.GetStaticPad("sink").RemoveProbe(id)
+	}
+}
+
 func (b *branch) freezeAt(pos time.Duration) {
 	b.mu.Lock()
 	b.frozen = true
@@ -442,8 +495,11 @@ func (b *branch) unfreeze() {
 // from it. NewDirectControlBindingAbsolute is required, not New() — the
 // latter maps a 0..1 control value onto the property's full 0..10 range
 // and turns a requested gain of 1.0 into a 10x boost (measured in the
-// phase 1 spike, bench/audio-node/spike-phase1).
-func (b *branch) startFade(fade pkgaudio.Fade, baseLocal, baseRunning time.Duration) error {
+// phase 1 spike, bench/audio-node/spike-phase1). basePos is the branch's
+// raw stream position when the fade starts, the same clock GstController
+// itself evaluates buffers against (their own PTS), not
+// segmentStart-relative local running time, which a later seek resets.
+func (b *branch) startFade(fade pkgaudio.Fade, basePos time.Duration) error {
 	volObj := b.volume.(gst.Object)
 	volObj.SetControlBindingDisabled("volume", false)
 
@@ -459,7 +515,7 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseLocal, baseRunning time.Durat
 	csObj.SetObjectProperty("mode", gstcontroller.InterpolationModeLinear)
 
 	start := float64(b.currentGain())
-	base := gst.ClockTime(baseLocal.Nanoseconds())
+	base := gst.ClockTime(basePos.Nanoseconds())
 	tvcs.Set(base, start)
 	tvcs.Set(base+gst.ClockTime(fade.Duration), float64(fade.TargetGain))
 
@@ -470,8 +526,7 @@ func (b *branch) startFade(fade pkgaudio.Fade, baseLocal, baseRunning time.Durat
 
 	b.mu.Lock()
 	b.fadeActive = true
-	b.fadeStartLocal = baseLocal
-	b.fadeStartRunning = baseRunning
+	b.fadeStartPos = basePos
 	b.fadeDuration = fade.Duration
 	b.fadeTargetGain = fade.TargetGain
 	b.mu.Unlock()
