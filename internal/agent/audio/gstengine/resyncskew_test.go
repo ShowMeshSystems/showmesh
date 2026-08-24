@@ -9,10 +9,16 @@ import (
 	"testing"
 )
 
-// TestResumeSamplesPositionAndRunningTimeBackToBack guards Resume against
-// reading position via a separate queryPosition call instead of through
-// resyncMixerPadsToLivePosition, colocated with the running-time read.
-func TestResumeSamplesPositionAndRunningTimeBackToBack(t *testing.T) {
+// TestResumeReanchorsViaFlushingSeek guards Resume against going back to
+// an offset-only re-anchor (resyncMixerPads/resyncMixerPadsToLivePosition
+// called on their own, without a seek): GstAudioAggregator keeps
+// advancing its own output clock for the whole hold, so buffers still
+// carrying pre-hold timestamps land in its past and are discarded
+// outright rather than played back late. Only a real seek gives the
+// branch a fresh segment the aggregator will actually accept; see
+// engine_real_integration_test.go's resume-continuity tests for the
+// flow-level proof.
+func TestResumeReanchorsViaFlushingSeek(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
 	if err != nil {
@@ -32,8 +38,7 @@ func TestResumeSamplesPositionAndRunningTimeBackToBack(t *testing.T) {
 		t.Fatal("could not find func (e *Engine) Resume in methods.go")
 	}
 
-	callsLivePosition := false
-	callsQueryPositionDirectly := false
+	callsSeekTo := false
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -43,22 +48,14 @@ func TestResumeSamplesPositionAndRunningTimeBackToBack(t *testing.T) {
 		if !ok {
 			return true
 		}
-		switch sel.Sel.Name {
-		case "resyncMixerPadsToLivePosition":
-			callsLivePosition = true
-		case "queryPosition":
-			callsQueryPositionDirectly = true
+		if sel.Sel.Name == "seekTo" {
+			callsSeekTo = true
 		}
 		return true
 	})
 
-	if !callsLivePosition {
-		t.Fatal("Resume no longer calls resyncMixerPadsToLivePosition — if it went back to a separately captured " +
-			"position, the two-clock reads are a function boundary apart again")
-	}
-	if callsQueryPositionDirectly {
-		t.Fatal("Resume calls queryPosition directly, in addition to resyncMixerPadsToLivePosition — the position " +
-			"read must happen only inside resyncMixerPadsToLivePosition, immediately adjacent to the running-time " +
-			"read, not captured separately first")
+	if !callsSeekTo {
+		t.Fatal("Resume no longer calls seekTo: an offset-only re-anchor discards the entire held duration once " +
+			"GstAudioAggregator's own output clock has moved past the branch's pre-hold segment")
 	}
 }

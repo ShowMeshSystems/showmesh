@@ -838,3 +838,165 @@ func TestFadePendingResolvedWhenSessionCompletesNaturally(t *testing.T) {
 		t.Fatalf("fade outcome after being stranded by completion = %+v, want Unconfirmable", result)
 	}
 }
+
+// TestFadePendingResolvedByStop proves the ordinary fade-out-then-stop
+// operation resolves the fade rather than leaving fadePending true
+// forever: Stop releases the engine handle, and checkFadeCompletionLocked
+// requires one (it bails on !handleLoaded), so a fade Stop interrupts has
+// no other path to a terminal outcome.
+func TestFadePendingResolvedByStop(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, id, fadeInvocation, 3, pkgaudio.FadeCurveLinear, 5*time.Second, pkgaudio.Gain(0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("fade unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	if !s.fadePending {
+		s.mu.Unlock()
+		t.Fatal("precondition: fade should be pending")
+	}
+	s.mu.Unlock()
+
+	// The fade's own 5s duration has not elapsed: Stop interrupts it well
+	// short of its target, the canonical end-of-cue path.
+	c.advance(time.Second)
+	if r := m.Stop(ctx, id, "inv-stop", 4); r.Outcome == pkgaudio.OutcomeFailed {
+		t.Fatalf("stop: unexpectedly failed: %+v", r)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fadePending {
+		t.Fatal("fadePending is still true after Stop interrupted it; it will never reach a terminal outcome")
+	}
+	result, ok := s.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("the fade's own invocation has no recorded outcome")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome after being stranded by Stop = %+v, want Unconfirmable", result)
+	}
+}
+
+// TestFadePendingResolvedByClear proves Clear resolves a still-pending
+// fade exactly as Stop does: the same hazard, since Clear also releases
+// the engine handle checkFadeCompletionLocked requires.
+func TestFadePendingResolvedByClear(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, id, fadeInvocation, 3, pkgaudio.FadeCurveLinear, 5*time.Second, pkgaudio.Gain(0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("fade unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+
+	c.advance(time.Second)
+	m.Clear(ctx, id, "inv-clear", 4)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fadePending {
+		t.Fatal("fadePending is still true after Clear interrupted it; it will never reach a terminal outcome")
+	}
+	result, ok := s.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("the fade's own invocation has no recorded outcome")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome after being stranded by Clear = %+v, want Unconfirmable", result)
+	}
+}
+
+// TestFadePendingResolvedByDeferredStopCompletion proves the other half
+// of the stop path also resolves a stranded fade: a session left in
+// StateStopping by a failed Engine.Stop, later re-resolved by
+// checkStopCompletionLocked once engine evidence shows it actually
+// stopped, see TestWatchTickResolvesStuckStoppingSession for that path
+// on its own, must not leave fadePending true forever either.
+func TestFadePendingResolvedByDeferredStopCompletion(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	m.Start(ctx, id, "inv-start", 2)
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatal("session was not created")
+	}
+	s.mu.Lock()
+	handle := s.handle
+	s.mu.Unlock()
+
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, id, fadeInvocation, 3, pkgaudio.FadeCurveLinear, 5*time.Second, pkgaudio.Gain(0)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("fade unexpectedly refused: %+v", r)
+	}
+
+	fake, ok := m.engine.(*FakeEngine)
+	if !ok {
+		t.Fatalf("test manager's engine is %T, want *FakeEngine", m.engine)
+	}
+	fake.InjectFailure(handle, pkgaudio.ErrEnginePipelineCrash)
+	m.Stop(ctx, id, "inv-stop", 4)
+
+	s.mu.Lock()
+	if s.state != pkgaudio.StateStopping {
+		s.mu.Unlock()
+		t.Fatalf("precondition: session state = %q, want stopping", s.state)
+	}
+	if !s.fadePending {
+		s.mu.Unlock()
+		t.Fatal("precondition: fade should still be pending: the failed Stop must not have resolved it")
+	}
+	s.mu.Unlock()
+
+	// The engine actually reaches Stopped on its own, out from under the
+	// failed call above, exactly as TestWatchTickResolvesStuckStoppingSession
+	// simulates.
+	if _, err := fake.Stop(ctx, handle); err != nil {
+		t.Fatalf("fake.Stop: %v", err)
+	}
+
+	m.watchTick(ctx)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fadePending {
+		t.Fatal("fadePending is still true after the deferred stop resolved; it will never reach a terminal outcome")
+	}
+	result, ok := s.executedResults[fadeInvocation]
+	if !ok {
+		t.Fatal("the fade's own invocation has no recorded outcome")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome after being stranded by a deferred stop = %+v, want Unconfirmable", result)
+	}
+}

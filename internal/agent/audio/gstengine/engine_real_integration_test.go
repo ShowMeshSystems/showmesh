@@ -439,10 +439,7 @@ func TestFadeReachesTargetGain(t *testing.T) {
 // FadeActive stays true for as long as it is held short of target (see
 // fadeArrived's doc comment), and Resume lets the remaining ramp play out
 // to completion, at which point FadeActive finally clears and gain
-// reports the target. This replaces a test that asserted the opposite
-// (FadeActive clearing purely from wall-clock time passing during a
-// Pause that did not actually stop decode); see fadeArrived and Pause's
-// doc comments for why that was the defect, not the contract.
+// reports the target.
 func TestFadeHeldByPauseStaysActiveAndCompletesOnResume(t *testing.T) {
 	const fadeDuration = 300 * time.Millisecond
 
@@ -545,12 +542,10 @@ func TestFadeHeldByPauseStaysActiveAndCompletesOnResume(t *testing.T) {
 // short of its target and then Stopping must hold both gain and
 // FadeActive exactly where Stop left them, since with flow genuinely
 // blocked (see Stop's and blockFlow's doc comments) nothing remains to
-// carry the ramp the rest of the way, and no code reaches this branch's
-// position to resume it (the canonical fade-out-then-stop show
-// operation does not expect the branch to keep quietly fading in the
-// background). This replaces a test that asserted FadeActive clearing on
-// its own a few seconds after Stop, which was only true because Stop did
-// not actually stop the ramp.
+// carry the ramp the rest of the way. This engine call never resolves
+// the fade to a terminal outcome on its own; see Manager.Stop and
+// resolveFadePendingStrandedLocked in package audio for the layer that
+// does.
 func TestFadeHeldByStopStaysActive(t *testing.T) {
 	const fadeDuration = 300 * time.Millisecond
 

@@ -39,10 +39,8 @@ func TestLocalRunningTimeClampsToZero(t *testing.T) {
 // elapsed fade whose gain has not reached its target must stay reported
 // in progress, since a caller detects completion by Gain equalling the
 // target, never by inferring it from fade.Duration having elapsed. It
-// also proves the bound is local running time alone: a shared-pipeline
-// wall-clock term was removed (see fadeArrived's doc comment) because it
-// only ever compensated for a since-fixed defect where a paused branch's
-// ramp kept running in real time regardless of the hold.
+// also proves the bound is local running time alone, per fadeArrived's
+// doc comment.
 func TestFadeArrivedRequiresGainAtTarget(t *testing.T) {
 	const fadeDuration = 3 * time.Second
 	cases := []struct {

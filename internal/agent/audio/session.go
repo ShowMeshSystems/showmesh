@@ -769,6 +769,10 @@ func (s *Session) checkStopCompletionLocked(ctx context.Context) {
 		s.mgr.logf("audio session %s: engine release failed while resolving stop: %v", s.id, err)
 		return
 	}
+	// Same hazard [Manager.Stop] resolves on its own success path: this
+	// is the other half of the same operation completing, and a fade
+	// still pending here has no engine handle left to report against.
+	s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
 	s.handleLoaded = false
 	s.loadedIdentity = ""
 	s.state = pkgaudio.StateStopped

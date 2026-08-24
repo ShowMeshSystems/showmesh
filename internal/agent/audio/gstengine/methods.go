@@ -134,12 +134,17 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 // begins producing from the position it names rather than from wherever
 // the branch had drifted to. A source that refuses this seek — including
 // at position 0 — fails Start as [pkgaudio.ErrEngineDecodeFailure],
-// indistinguishable from an undecodable asset.
+// indistinguishable from an undecodable asset. Start also clears any flow
+// block a prior Stop left behind: its own contract promises playback, not
+// only that it requires a Resume first, and a Start that reports Playing
+// while nothing flows is exactly the kind of stale claim this package
+// must not make.
 func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, position time.Duration) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
+	b.unblockFlow()
 	if err := b.seekTo(ctx, position, func() { b.resyncMixerPads(position) }); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
@@ -153,12 +158,11 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 
 // Pause halts the branch's own contribution to the mix by blocking its
 // data flow (see blockFlow) and freezes its reported position at the
-// value it held the instant before the block took effect, never a
-// SetState(PAUSED) on elements that are siblings inside a pipeline that
-// stays PLAYING, which does not reliably stop dataflow there and was the
-// root cause of a paused branch continuing to decode and reach EOS on its
-// own. The shared mixer's ignore-inactive-pads keeps the rest of the
-// program bus running unaffected.
+// value it held the instant before the block took effect. Setting an
+// element's own state to PAUSED does not reliably stop dataflow while it
+// remains a sibling inside a pipeline that stays PLAYING, so this never
+// does that. The shared mixer's ignore-inactive-pads keeps the rest of
+// the program bus running unaffected.
 func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -171,20 +175,24 @@ func (e *Engine) Pause(ctx context.Context, handle agentaudio.EngineHandle) (age
 	return b.observe(e.cfg.now()), nil
 }
 
-// Resume re-anchors the mixer offset to the branch's frozen position
-// before letting flow resume: with Pause now genuinely blocking data
-// flow, that frozen bookmark is the branch's real decode position, not a
-// stale one: decode does not advance while blocked, unlike the defect
-// this replaces, where Resume had to read a live decode position because
-// the "frozen" one had already drifted for the whole pause duration.
-// resyncMixerPadsToLivePosition must run before unblockFlow: the pad
-// offset has to be set before the next buffer can reach the mixer.
+// Resume issues a flushing seek back to the branch's own frozen position,
+// exactly as Start does for a branch that sat loaded and frozen for a
+// while: an offset-only re-anchor is not enough, because
+// GstAudioAggregator keeps advancing its own output clock for the whole
+// hold, and buffers carrying pre-hold timestamps land in its past and are
+// discarded outright, not merely played back too fast. A flushing seek
+// gives the branch a fresh segment at the current pipeline running time,
+// which is what actually makes the resumed audio continuous instead of
+// dropping the entire held duration.
 func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	b.resyncMixerPadsToLivePosition()
+	pos := b.queryPosition()
+	if err := b.seekTo(ctx, pos, func() { b.resyncMixerPads(pos) }); err != nil {
+		return agentaudio.EngineObservation{}, err
+	}
 	b.unfreeze()
 	b.unblockFlow()
 	b.setState(pkgaudio.StatePlaying)

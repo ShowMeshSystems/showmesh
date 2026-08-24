@@ -340,21 +340,6 @@ func (b *branch) resyncMixerPads(atPos time.Duration) {
 	}
 }
 
-// resyncMixerPadsToLivePosition re-anchors exactly as resyncMixerPads,
-// reading atPos from queryPosition, the frozen Pause bookmark at every
-// current call site: Resume always invokes this before unfreeze.
-func (b *branch) resyncMixerPadsToLivePosition() time.Duration {
-	running := b.pipelineRunningTime()
-	atPos := b.queryPosition()
-	offset := int64(running) - b.localRunningTime(atPos).Nanoseconds()
-	for _, pad := range b.channelMixerPads {
-		if pad != nil {
-			pad.SetOffset(offset)
-		}
-	}
-	return atPos
-}
-
 func (b *branch) currentGain() pkgaudio.Gain {
 	v := b.volume.(gst.Object).ObjectProperty("volume")
 	f, _ := v.(float64)
@@ -393,25 +378,13 @@ func (b *branch) observe(now time.Time) agentaudio.EngineObservation {
 }
 
 // fadeArrived reports whether a fade started at fadeStartLocal with
-// fadeDuration should clear FadeActive, given the branch's current local
-// running time and its current gain against the fade's target.
-//
-// The bound is local time alone, deliberately not the shared pipeline's
-// running time: an earlier version of this check also accepted the
-// pipeline's own wall-clock elapsed time, compensating for a since-fixed
-// defect where a "paused" branch's ramp kept running in real time
-// regardless of the hold. With Pause and Stop now genuinely blocking this
-// branch's own flow (see blockFlow), local running time freezes exactly
-// when the ramp does and resumes exactly when the ramp does, so it alone
-// is sufficient; a wall-clock term would instead go stale-true purely
-// from real time passing while held, papered over only by the gain
-// check below happening not to match by coincidence.
-//
-// The interface promises FadeActive clears only once Gain equals the
-// target, so a fade local time says is due but whose gain has not
-// arrived, such as one Pause or Stop has held short of target, stays
-// reported in progress rather than falsely complete: a stuck pending
-// fade must be visible, a falsely completed one must not.
+// fadeDuration should clear FadeActive: local running time must have
+// elapsed the fade's own duration AND Gain must actually equal target
+// (see docs/build/BUILD-LOG.md for why the bound is local time alone, not
+// also the shared pipeline's wall clock). A fade local time says is due
+// but whose gain has not arrived stays reported in progress rather than
+// falsely complete: a stuck pending fade must be visible, a falsely
+// completed one must not.
 func fadeArrived(local, fadeStartLocal, fadeDuration time.Duration, gain, target pkgaudio.Gain) bool {
 	elapsed := local-fadeStartLocal >= fadeDuration
 	return elapsed && gainWithin(gain, target, fadeGainTolerance)
@@ -443,16 +416,18 @@ func (b *branch) hasStarted() bool {
 }
 
 // blockFlow halts this branch's contribution to the mix by blocking
-// queue's sink pad, the point immediately downstream of volume and
-// upstream of the bounded queue (see queueMaxSizeTime): once the probe
-// holds, queue can drain but never refill, so the block backpressures
-// through volume, capsfilter, audioresample, audioconvert, and decodebin
-// within one queue's worth of buffering, stopping decode itself rather
-// than merely a downstream tap. Idempotent: a second call while already
-// blocked is a no-op.
+// queue's sink pad, where volume's output enters queue. Blocking there
+// parks the thread doing the pushing: decodebin's own streaming thread,
+// which runs the whole convert/resample/capsfilter/volume chain
+// synchronously, so decode itself stops immediately, not merely a tap
+// further downstream. queue sits on the far side of the block: it keeps
+// draining whatever it already held (bounded by queueMaxSizeTime), which
+// is the small amount of audio that still reaches the mixer right after
+// Pause, not a delay before decode actually stops. Idempotent: a no-op
+// once already blocked, and once teardown has claimed the branch.
 func (b *branch) blockFlow() {
 	b.mu.Lock()
-	if b.blockProbeID != 0 {
+	if b.released || b.blockProbeID != 0 {
 		b.mu.Unlock()
 		return
 	}
@@ -464,6 +439,11 @@ func (b *branch) blockFlow() {
 	})
 
 	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		pad.RemoveProbe(id)
+		return
+	}
 	b.blockProbeID = id
 	b.mu.Unlock()
 }

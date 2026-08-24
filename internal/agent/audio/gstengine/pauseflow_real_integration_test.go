@@ -268,3 +268,179 @@ func TestPausedBranchDoesNotReachEOS(t *testing.T) {
 
 	_ = e.Release(context.Background(), "pe1")
 }
+
+// TestResumeDoesNotDiscardTheHeldDuration proves Resume from a
+// multi-second Pause plays out the remainder of the file in real time
+// rather than dropping the held duration: GstAudioAggregator keeps
+// advancing its own output clock through the hold, so an offset-only
+// re-anchor lands post-hold buffers in its past and it silently
+// discards them, reaching EOS far sooner than the remaining file's own
+// length. Resume's flushing seek gives the branch a fresh segment the
+// aggregator accepts instead, so EOS should land close to when the
+// remaining audio actually ends.
+func TestResumeDoesNotDiscardTheHeldDuration(t *testing.T) {
+	const fileDuration = 10 * time.Second
+	const holdDuration = 3 * time.Second
+
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, fileDuration.Seconds())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "rc1", mediaRef(wav), fileDuration); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "rc1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "rc1", 400*time.Millisecond, 5*time.Second)
+
+	pauseObs, err := e.Pause(ctx, "rc1")
+	if err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	pausedAt := pauseObs.Position
+
+	time.Sleep(holdDuration)
+
+	resumedAt := time.Now()
+	resumeObs, err := e.Resume(ctx, "rc1")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if resumeObs.Position < pausedAt-100*time.Millisecond || resumeObs.Position > pausedAt+100*time.Millisecond {
+		t.Fatalf("position at Resume = %s, want close to the paused position %s (no drift while held)", resumeObs.Position, pausedAt)
+	}
+
+	remaining := fileDuration - resumeObs.Position
+	deadline := time.Now().Add(45 * time.Second)
+	var last agentaudio.EngineObservation
+	for time.Now().Before(deadline) {
+		obs, err := e.Observe(ctx, "rc1")
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		last = obs
+		if obs.State == pkgaudio.StateCompleted {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if last.State != pkgaudio.StateCompleted {
+		t.Fatalf("branch never reached Completed after Resume; last observed state %q position %s", last.State, last.Position)
+	}
+	elapsed := time.Since(resumedAt)
+
+	t.Logf("paused at %s, resumed at %s, %s of file remained; EOS reached %s of wall clock after Resume",
+		pausedAt, resumeObs.Position, remaining, elapsed)
+
+	// A generous tolerance for real-time playback plus scheduling jitter,
+	// never a fraction of remaining: the discard defect this proves
+	// compressed roughly 9.4s of remaining file into roughly 3.7s of wall
+	// clock, a ratio no jitter tolerance this wide would let through.
+	minElapsed := remaining - 500*time.Millisecond
+	maxElapsed := remaining + 3*time.Second
+	if elapsed < minElapsed || elapsed > maxElapsed {
+		t.Fatalf("AUDIO DISCARDED: %s of file remained but EOS reached %s of wall clock after Resume, want close to %s",
+			remaining, elapsed, remaining)
+	}
+
+	_ = e.Release(context.Background(), "rc1")
+}
+
+// TestStartAfterStopResumesFlow proves Start clears any flow block a
+// prior Stop left behind. Start's own contract promises playback, not
+// only that it requires a Resume first, so a Start that reports Playing
+// while producing nothing would be exactly the kind of stale claim this
+// package must not make.
+func TestStartAfterStopResumesFlow(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 5)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "sr1", mediaRef(wav), 5*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, "sr1", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, "sr1", 200*time.Millisecond, 5*time.Second)
+
+	if _, err := e.Stop(ctx, "sr1"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	startObs, err := e.Start(ctx, "sr1", 0)
+	if err != nil {
+		t.Fatalf("Start after Stop: %v", err)
+	}
+	if startObs.State != pkgaudio.StatePlaying {
+		t.Fatalf("after Start following Stop: state = %q, want playing", startObs.State)
+	}
+
+	count := countQueueSrcBuffers(t, e, "sr1")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && count() == 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Logf("after Start-following-Stop: state=%s pos=%s buffers=%d", startObs.State, startObs.Position, count())
+	if count() == 0 {
+		t.Fatalf("SILENT RESTART: Start after Stop reported success but no buffers flowed in 3s")
+	}
+
+	_ = e.Release(context.Background(), "sr1")
+}
+
+// TestBlockFlowNoopsOnceReleased proves blockFlow refuses to install a
+// probe on a branch teardown has already claimed, closing the race where
+// a concurrent Pause or Stop lands between teardown marking the branch
+// released and its own unblockFlow call: without this guard, a probe
+// installed into that window is never released, and the state change
+// that follows waits forever on a streaming thread parked inside it.
+func TestBlockFlowNoopsOnceReleased(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	if _, err := e.Load(ctx, "bf1", mediaRef(wav), 2*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	b, err := e.branchFor("bf1")
+	if err != nil {
+		t.Fatalf("branchFor: %v", err)
+	}
+
+	// Simulate the exact window teardown opens: released is already
+	// true, but nothing has removed a block yet.
+	b.mu.Lock()
+	b.released = true
+	b.mu.Unlock()
+
+	b.blockFlow()
+
+	b.mu.Lock()
+	id := b.blockProbeID
+	b.mu.Unlock()
+	if id != 0 {
+		t.Fatalf("blockFlow installed a probe (id=%d) on a branch already marked released", id)
+	}
+
+	// released was flipped directly rather than through a real teardown,
+	// so the engine still owns this branch's elements; release it for
+	// real so Close does not also have to.
+	b.mu.Lock()
+	b.released = false
+	b.mu.Unlock()
+	_ = e.Release(context.Background(), "bf1")
+}
