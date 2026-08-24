@@ -514,6 +514,53 @@ func TestSetTransportProbeNeverMovesStateObservedAt(t *testing.T) {
 	}
 }
 
+// TestSetFrameCountsNeverMovesStateObservedAt is this issue's own
+// regression test, the same shape as TestSetTransportProbeNeverMovesState
+// ObservedAt one seam up: the frame writer's counters are a continuously
+// sampled evidence stream, not a pipeline lifecycle transition, so
+// SetFrameCounts must land its own timestamp on FramesObservedAt only and
+// never touch the shared State/ObservedAt pair the coordinator's own
+// render-command confirmation fences on.
+func TestSetFrameCountsNeverMovesStateObservedAt(t *testing.T) {
+	clock := newFakeClock(time.Now())
+	fs := &fakeStarter{}
+	sup := NewSupervisor(clock.Now, fs.Start, testLogger{})
+	shutdownSupervisor(t, sup)
+
+	if err := sup.Apply(testSpec("s1")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	before, ok := sup.AwaitState(ctx, "s1", []State{StateRunning}, time.Time{}, -1, 5*time.Millisecond)
+	if !ok {
+		t.Fatalf("did not observe StateRunning; last snapshot: %+v", before)
+	}
+
+	clock.Advance(time.Hour)
+	rate := 39.997
+	framesAt := clock.Now()
+	sup.SetFrameCounts("s1", 1200, 3, 1, &rate, framesAt)
+
+	after, ok := sup.Snapshot("s1")
+	if !ok {
+		t.Fatalf("no snapshot for s1 after SetFrameCounts")
+	}
+	if !after.ObservedAt.Equal(before.ObservedAt) {
+		t.Fatalf("State ObservedAt moved from %s to %s after SetFrameCounts with no state transition, which is exactly the render-signal staleness bug: the shared ObservedAt must never be perturbed by a continuously sampled counter",
+			before.ObservedAt, after.ObservedAt)
+	}
+	if after.State != StateRunning {
+		t.Fatalf("State = %q after SetFrameCounts, want unchanged %q", after.State, StateRunning)
+	}
+	if !after.FramesObservedAt.Equal(framesAt) {
+		t.Fatalf("FramesObservedAt = %s, want %s (the counters' own evidence must still be recorded, just not on the shared ObservedAt)", after.FramesObservedAt, framesAt)
+	}
+	if after.FramesWritten != 1200 || after.FramesLate != 3 || after.FramesDropped != 1 {
+		t.Fatalf("frame counters = %d/%d/%d, want 1200/3/1", after.FramesWritten, after.FramesLate, after.FramesDropped)
+	}
+}
+
 // TestRestartOnNeverAppliedSurfaceErrorsAndCreatesNoPhantom is Finding 18:
 // a typo'd or stale surface id passed to Restart must be refused, and must
 // never manufacture a runner that SnapshotAll then reports forever with no

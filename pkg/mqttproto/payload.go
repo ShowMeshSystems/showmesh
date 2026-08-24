@@ -663,6 +663,25 @@ type RenderSurfaceReport struct {
 	// distinct from Since (when the state itself began).
 	ObservedAt time.Time `json:"observedAt"`
 
+	// FramesObservedAt is when this surface's frame writer actually closed
+	// a sampling window and sampled FramesWritten/FramesLate/
+	// FramesDropped/FramesRate together: its own timestamp, deliberately
+	// independent of ObservedAt above. ObservedAt only moves when
+	// PipelineState transitions (pipeline.runner.setState); the frame
+	// counters are continuously sampled measurements, not a lifecycle
+	// transition, and sharing ObservedAt made every render signal read as
+	// permanently stale 45s after any apply on an otherwise healthy
+	// pipeline, because ObservedAt then never moved again while the
+	// counters kept climbing. Zero (IsZero()) means the frame writer has
+	// not yet completed its first sampling window (ADR-011: zero/nil is
+	// unknown, never defaulted to "now" or to the report's own publish
+	// time), not enforced as required by Validate, matching
+	// RenderPayload.MultiSyncObservedAt's identical additive-compatibility
+	// reasoning one field over: this field is added after
+	// RenderSurfaceReport first shipped, and a hard requirement here would
+	// reject every fixture and payload built before it existed.
+	FramesObservedAt time.Time `json:"framesObservedAt"`
+
 	// TimelineState is the multisync.Timeline state ("playing",
 	// "unsynchronized", "opened", "stopping", "stopped", "unknown") this
 	// surface's frame writer most recently sampled. "" means no frame

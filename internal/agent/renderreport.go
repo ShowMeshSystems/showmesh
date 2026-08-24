@@ -123,6 +123,7 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 		FramesLate:          s.FramesLate,
 		FramesDropped:       s.FramesDropped,
 		FramesRate:          s.FramesRate,
+		FramesObservedAt:    s.FramesObservedAt,
 		Transport:           s.Transport,
 		TransportAvailable:  s.TransportAvailable,
 		TransportReason:     s.TransportReason,

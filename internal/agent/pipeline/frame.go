@@ -159,13 +159,19 @@ type FrameWriter struct {
 	// measurement (see writeOneFrame's rate-sampling block): the wall-clock
 	// time and written-count at the start of the current sampling window.
 	// currentRate is the most recently completed window's frames/second,
-	// nil until one full window has elapsed. All three are touched only
-	// from writeOneFrame, which runs exclusively on Run's own goroutine —
-	// reportCounts, called at the end of the same tick, reads currentRate
-	// on that same goroutine, so nothing here needs a lock or an atomic.
+	// nil until one full window has elapsed. framesObservedAt is the
+	// wall-clock instant that window closed at: the evidence timestamp
+	// reported for FramesWritten/FramesLate/FramesDropped/FramesRate alike
+	// (see sampleRate's doc comment for why one shared, window-close
+	// stamp covers all four rather than each counter getting the instant
+	// it happened to be read). All four are touched only from
+	// writeOneFrame, which runs exclusively on Run's own goroutine,
+	// same as reportCounts, called at the end of the same tick, reading
+	// them on that same goroutine, so nothing here needs a lock or an atomic.
 	rateWindowStart   time.Time
 	rateWindowWritten int64
 	currentRate       *float64
+	framesObservedAt  time.Time
 
 	// loggedRangeErrOnce and loggedWriteErrOnce keep this loop from log-
 	// spamming at up to 40Hz when a condition (e.g. the process is down, or
@@ -560,6 +566,19 @@ const frameRateWindow = 5 * time.Second
 // wall-clock elapsed time and frames actually written in it — never from
 // fw.stepTime or any other configured/target value, which is what keeps
 // this an achieved measurement rather than the target echoed back.
+//
+// framesObservedAt is stamped here, at window close, to now, and this is
+// the evidence timestamp reportCounts later attaches to ALL FOUR counters
+// (FramesWritten/FramesLate/FramesDropped/FramesRate), not only FramesRate.
+// FramesWritten/Late/Dropped are cumulative and actually change on every
+// tick, so a window-close stamp can lag their true sample instant by up to
+// frameRateWindow (5s), well inside the 45s DefaultValidFor a stale
+// pipeline.Supervisor.Snapshot.ObservedAt this issue is fixing gets judged
+// against. A per-tick stamp would be more precise, but it would also be
+// indistinguishable from a heartbeat: this issue is about the counters
+// carrying a REAL measurement instant, and the rate window is the only
+// place in this writer that already represents one. Sharing it is a
+// deliberate choice, not an oversight.
 func (fw *FrameWriter) sampleRate(now time.Time, written int64) {
 	if fw.rateWindowStart.IsZero() {
 		fw.rateWindowStart = now
@@ -573,6 +592,7 @@ func (fw *FrameWriter) sampleRate(now time.Time, written int64) {
 	frames := written - fw.rateWindowWritten
 	rate := float64(frames) / elapsed.Seconds()
 	fw.currentRate = &rate
+	fw.framesObservedAt = now
 	fw.rateWindowStart = now
 	fw.rateWindowWritten = written
 }
@@ -606,7 +626,7 @@ func (fw *FrameWriter) frameIndexFor(positionMS int64) int {
 }
 
 func (fw *FrameWriter) reportCounts() {
-	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load(), fw.currentRate)
+	fw.sup.SetFrameCounts(fw.surfaceID, fw.written.Load(), fw.late.Load(), fw.dropped.Load(), fw.currentRate, fw.framesObservedAt)
 	fw.sup.SetDrawState(fw.surfaceID, fw.timelineState, fw.timelinePositionMS, fw.drawing, fw.idleModeNow)
 }
 

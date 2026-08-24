@@ -16,6 +16,13 @@ func boolPtr(b bool) *bool { return &b }
 // tests, so a test that mixes the two up fails loudly.
 var sampleObservedAt = time.Unix(2000, 0).UTC()
 
+// sampleFramesObservedAt is samplePayload's frame-counter evidence
+// timestamp, deliberately distinct from sampleObservedAt (the pipeline
+// lifecycle one) so a test that mixes the two up fails loudly. This is the
+// timestamp this issue's fix threads through independently of
+// sampleObservedAt.
+var sampleFramesObservedAt = time.Unix(2200, 0).UTC()
+
 func samplePayload(state string) mqttproto.RenderPayload {
 	return mqttproto.RenderPayload{
 		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
@@ -34,6 +41,7 @@ func samplePayload(state string) mqttproto.RenderPayload {
 				Transport:           "ndi",
 				TransportAvailable:  boolPtr(true),
 				ObservedAt:          sampleObservedAt,
+				FramesObservedAt:    sampleFramesObservedAt,
 			},
 		},
 	}
@@ -276,6 +284,90 @@ func TestPollStaleIsNeverHealthy(t *testing.T) {
 	stale := nodeObservedAt.Add(DefaultValidFor + time.Second)
 	if state.StateAt(stale) != observation.StateStale {
 		t.Errorf("after ValidFor elapses: StateAt = %s, want stale", state.StateAt(stale))
+	}
+}
+
+// TestPollFramesSignalsAgeFromTheirOwnObservedAtNotPipelineState is this
+// issue's own regression test: FramesWritten/FramesLate/FramesDropped/
+// FramesRate must be judged for staleness against sf.FramesObservedAt, the
+// frame writer's own window-close evidence timestamp, never against
+// sf.ObservedAt, the pipeline-lifecycle timestamp that only moves on a
+// state transition (setState). Before the fix, every render signal shared
+// sf.ObservedAt: on a real node, PipelineState stayed "running" (no further
+// transitions) while frame counts kept climbing every 15s report, so
+// ObservedAt never advanced again and every signal read stale 45s after
+// the apply, on a pipeline sustaining 39.997fps. Here, samplePayload gives
+// the two timestamps deliberately different values (sampleObservedAt vs.
+// sampleFramesObservedAt), and the frame signals' own StateAt windows must
+// track sampleFramesObservedAt, not sampleObservedAt.
+func TestPollFramesSignalsAgeFromTheirOwnObservedAtNotPipelineState(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	measured := 39.997
+	payload.Surfaces[0].FramesRate = &measured
+	st.Put("render-01", payload, false, time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC))
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceFramesWritten,
+		SignalSurfaceFramesLate,
+		SignalSurfaceFramesDropped,
+		SignalSurfaceFramesRate,
+	} {
+		o := findObs(t, obs, sig)
+
+		fresh := sampleFramesObservedAt.Add(DefaultValidFor - time.Second)
+		if o.StateAt(fresh) != observation.StateCurrent {
+			t.Errorf("%s just before its own ValidFor elapses: StateAt = %s, want current", sig, o.StateAt(fresh))
+		}
+
+		stale := sampleFramesObservedAt.Add(DefaultValidFor + time.Second)
+		if o.StateAt(stale) != observation.StateStale {
+			t.Errorf("%s after its own ValidFor elapses: StateAt = %s, want stale", sig, o.StateAt(stale))
+		}
+
+		// A window pinned at sampleObservedAt (the DIFFERENT, older
+		// pipeline-lifecycle timestamp) would already have gone stale by
+		// sampleObservedAt+DefaultValidFor+1s. Prove the frame signal does
+		// NOT use that timestamp: it must still read current there,
+		// because sampleFramesObservedAt is later.
+		pipelineWindowStale := sampleObservedAt.Add(DefaultValidFor + time.Second)
+		if o.StateAt(pipelineWindowStale) != observation.StateCurrent {
+			t.Errorf("%s at pipeline-state's own stale boundary (%s): StateAt = %s, want current, this signal must age from its own FramesObservedAt, not sf.ObservedAt",
+				sig, pipelineWindowStale, o.StateAt(pipelineWindowStale))
+		}
+	}
+}
+
+// TestPollFramesZeroObservedAtIsUnknownAge proves ADR-011's converse this
+// issue must respect: until the frame writer's first sampling window
+// closes, sf.FramesObservedAt is the zero value, and the four frame
+// signals must render as unknown age, never "now", and never borrowing
+// sf.ObservedAt (which may itself be set, from an earlier pipeline
+// transition) as a substitute.
+func TestPollFramesZeroObservedAtIsUnknownAge(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].FramesObservedAt = time.Time{}
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceFramesWritten,
+		SignalSurfaceFramesLate,
+		SignalSurfaceFramesDropped,
+	} {
+		o := findObs(t, obs, sig)
+		if o.ObservedAt != nil {
+			t.Errorf("%s: ObservedAt = %v, want nil (FramesObservedAt is zero: age is genuinely unknown)", sig, o.ObservedAt)
+		}
+		if o.StateAt(time.Now()) != observation.StateUnknownAge {
+			t.Errorf("%s: StateAt(now) = %s, want unknown_age", sig, o.StateAt(time.Now()))
+		}
 	}
 }
 

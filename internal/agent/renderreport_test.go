@@ -32,13 +32,17 @@ func decodeRenderReport(t *testing.T, payload []byte) mqttproto.RenderPayload {
 // too, including staying nil when unmeasured — never a fabricated zero.
 func TestToRenderSurfaceReportCarriesRealFrameCounters(t *testing.T) {
 	rate := 39.4
+	framesAt := time.Date(2026, 8, 17, 12, 0, 45, 0, time.UTC)
+	stateAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC) // deliberately earlier than framesAt
 	snap := pipeline.Snapshot{
-		SurfaceID:     "wall-1",
-		State:         pipeline.StateRunning,
-		FramesWritten: 1234,
-		FramesLate:    12,
-		FramesDropped: 3,
-		FramesRate:    &rate,
+		SurfaceID:        "wall-1",
+		State:            pipeline.StateRunning,
+		FramesWritten:    1234,
+		FramesLate:       12,
+		FramesDropped:    3,
+		FramesRate:       &rate,
+		FramesObservedAt: framesAt,
+		ObservedAt:       stateAt,
 	}
 	got := toRenderSurfaceReport(snap)
 	if got.FramesWritten != 1234 {
@@ -54,9 +58,22 @@ func TestToRenderSurfaceReportCarriesRealFrameCounters(t *testing.T) {
 		t.Errorf("FramesRate = %v, want %v", got.FramesRate, rate)
 	}
 
+	// This issue's own fix: FramesObservedAt is carried independently of
+	// ObservedAt, never collapsed onto it. Proven here with two
+	// deliberately different values.
+	if !got.FramesObservedAt.Equal(framesAt) {
+		t.Errorf("FramesObservedAt = %v, want %v (the frame writer's own window-close timestamp)", got.FramesObservedAt, framesAt)
+	}
+	if !got.ObservedAt.Equal(stateAt) {
+		t.Errorf("ObservedAt = %v, want %v (the pipeline-lifecycle timestamp, unperturbed by frame evidence)", got.ObservedAt, stateAt)
+	}
+
 	unmeasured := toRenderSurfaceReport(pipeline.Snapshot{SurfaceID: "wall-1", State: pipeline.StateRunning})
 	if unmeasured.FramesRate != nil {
 		t.Errorf("FramesRate = %v for an unmeasured snapshot, want nil (never a fabricated zero)", unmeasured.FramesRate)
+	}
+	if !unmeasured.FramesObservedAt.IsZero() {
+		t.Errorf("FramesObservedAt = %v for a snapshot whose frame writer never sampled, want zero", unmeasured.FramesObservedAt)
 	}
 }
 
