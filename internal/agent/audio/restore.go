@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -170,11 +171,20 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 			}
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
+			if errors.Is(err, ErrNoEngineBinding) {
+				m.deferRestoreLocked(ctx, s, id)
+				return nil
+			}
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
 		}
+		// engine.Start is never reached here with an unbound
+		// SwitchableEngine: prepareLocked's own Load call above goes
+		// through the same m.engine and already fails first, so the
+		// only no-binding case this branch can hit is the one checked
+		// there.
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)
@@ -197,6 +207,10 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 			return nil
 		}
 		if _, err := s.prepareLocked(ctx, item); err != nil {
+			if errors.Is(err, ErrNoEngineBinding) {
+				m.deferRestoreLocked(ctx, s, id)
+				return nil
+			}
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
@@ -217,6 +231,9 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 				position = resolved
 			}
 		}
+		// Same reasoning as the Playing/Preparing branch: prepareLocked's
+		// Load above already fails first on an unbound engine, so
+		// neither Start nor Pause here can hit the no-binding case.
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
@@ -275,6 +292,38 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 		}
 	}
 	return nil
+}
+
+// deferRestoreLocked handles the "cannot restore yet" case restoreOne's
+// prepareLocked call hits whenever no audio.node binding has arrived:
+// m.engine is a [SwitchableEngine] and prepareLocked's own engine.Load
+// call fails with [ErrNoEngineBinding] until its first Set — the
+// earliest engine call on every restore path, so it is the only place
+// this check is ever reachable. That is not a restore failure — it is a
+// not-yet, and it must never overwrite the on-disk persisted record with
+// StateFailed, because that overwrite is exactly the permanent damage
+// this defers to avoid: s.state is left as whatever restoreOne already
+// loaded from disk (Playing/Preparing/Paused), and nothing is persisted
+// here.
+//
+// s is left with no engine handle (any partial Load this attempt
+// produced is released), so [Manager.invalidateActiveSessions] must
+// never treat this session as having a live handle to invalidate — see
+// that method's own handleLoaded check. id is recorded in
+// m.pendingEngineRestore so [Manager.retryDeferredRestores] re-runs
+// restoreOne for it the moment RebindEngine actually sets a real
+// engine — see that method's doc comment for why a session already
+// resolved here can never be retried twice. Caller holds s.mu.
+func (m *Manager) deferRestoreLocked(ctx context.Context, s *Session, id pkgaudio.SessionID) {
+	s.releaseEngineLocked(ctx)
+	s.handle = ""
+	m.mu.Lock()
+	if m.pendingEngineRestore == nil {
+		m.pendingEngineRestore = make(map[pkgaudio.SessionID]struct{})
+	}
+	m.pendingEngineRestore[id] = struct{}{}
+	m.mu.Unlock()
+	m.logf("audio session %s: no audio engine bound yet, deferring restore until an audio.node binding arrives", id)
 }
 
 // sourceStillActiveOnDisk reports whether id's persisted record shows a

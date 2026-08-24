@@ -46,6 +46,15 @@ type Manager struct {
 	// addressable by a command, but reported by [Manager.Snapshot] so it
 	// is retained fault evidence rather than a silent disappearance.
 	corruptSessions []CorruptSessionRecord
+
+	// pendingEngineRestore holds every session id whose restore hit "no
+	// engine bound yet" rather than a genuine failure — see
+	// restore.go's deferRestoreLocked. RebindEngine drains this set via
+	// retryDeferredRestores once an engine is actually set, so a
+	// startup that races ahead of the first audio.node binding still
+	// resumes once that binding arrives, instead of staying stuck with
+	// no engine handle and no persisted Failed record to explain why.
+	pendingEngineRestore map[pkgaudio.SessionID]struct{}
 }
 
 // NewManager builds a Manager. decoder is [RealDecoder]{} in production
@@ -76,12 +85,45 @@ const RebindReasonEngineRebind = "audio output configuration changed; this sessi
 // changes identity.
 func (m *Manager) RebindEngine(engine *SwitchableEngine, next Engine, reason string) Engine {
 	m.invalidateActiveSessions(reason)
-	return engine.Set(next)
+	prev := engine.Set(next)
+	m.retryDeferredRestores(context.Background())
+	return prev
+}
+
+// retryDeferredRestores re-runs restoreOne for every session
+// deferRestoreLocked deferred, now that engine.Set has just given
+// m.engine a real backing implementation. Draining the set before
+// looping, rather than while iterating it, makes a second RebindEngine
+// firing concurrently with this one race onto a snapshot rather than a
+// live map, and it guarantees a session already retried here is removed
+// from pendingEngineRestore win or lose (restoreOne itself resolves it
+// to either Playing/Paused or a genuine Failed), so a later RebindEngine
+// call — the next audio.node binding, or any rebind after that — never
+// re-triggers it and never double-starts it.
+func (m *Manager) retryDeferredRestores(ctx context.Context) {
+	m.mu.Lock()
+	ids := make([]pkgaudio.SessionID, 0, len(m.pendingEngineRestore))
+	for id := range m.pendingEngineRestore {
+		ids = append(ids, id)
+	}
+	m.pendingEngineRestore = nil
+	m.mu.Unlock()
+
+	for _, id := range ids {
+		if err := m.restoreOne(ctx, id); err != nil {
+			m.logf("audio session %s: deferred restore failed: %v", id, err)
+		}
+	}
 }
 
 // invalidateActiveSessions fails every session currently in a state that
 // implies a live engine handle. Called before [SwitchableEngine.Set]
-// swaps the backing engine out from under every existing handle.
+// swaps the backing engine out from under every existing handle. A
+// session deferRestoreLocked left in Playing/Preparing/Paused with no
+// engine handle actually loaded (handleLoaded false) is deliberately
+// excluded: it never held a handle on the outgoing engine, so there is
+// nothing here to invalidate, and failing it here would be exactly the
+// defect this deferral exists to prevent.
 func (m *Manager) invalidateActiveSessions(reason string) {
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
@@ -92,7 +134,7 @@ func (m *Manager) invalidateActiveSessions(reason string) {
 
 	for _, s := range sessions {
 		s.mu.Lock()
-		if sessionStateImpliesHandleLocked(s.state) {
+		if sessionStateImpliesHandleLocked(s.state) && s.handleLoaded {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.FaultRouteChanged, reason)
 			s.handle = ""
