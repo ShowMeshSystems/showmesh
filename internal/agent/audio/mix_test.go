@@ -1669,3 +1669,111 @@ func TestMuteUnmuteAcrossDuckNeverExceedsCeiling(t *testing.T) {
 		t.Fatalf("final engine gain = %v, want clamped to ceiling %v", got, ceiling)
 	}
 }
+
+// mutation target: snapshotLocked's gate on reporting HasGain/Gain.
+// Muting or ducking a session that never received an explicit
+// audio.gain.set must still report a gain: those are themselves reasons
+// effectiveGainLocked has a well-defined answer (unity reduced by the
+// active suppression), and gating on desired.Gain alone leaves a
+// suppressed session reporting no gain at all, which is real
+// operator-visibility evidence lost, not merely an unset field.
+func TestSnapshotReportsGainWhenSuppressedWithoutAnyExplicitGainSet(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	// Muted, never gain.set.
+	const mutedID = pkgaudio.SessionID("muted")
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-a", []byte("a"))
+	startPlaying(t, m, ctx, mutedID, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	if r := m.Mute(ctx, mutedID, "inv-mute", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("mute unexpectedly refused: %+v", r)
+	}
+	muted, _ := m.get(mutedID)
+	muted.mu.Lock()
+	snap := muted.snapshotLocked(ctx)
+	muted.mu.Unlock()
+	if !snap.HasGain {
+		t.Fatal("muted session with no gain.set ever sent reports HasGain=false, want true")
+	}
+	if snap.Gain != 0 {
+		t.Fatalf("muted session with no gain.set ever sent reports Gain=%v, want 0", snap.Gain)
+	}
+
+	// Ducked, never gain.set.
+	const bgID = pkgaudio.SessionID("bg-unducked-gain")
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, bgID, bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+	bg, _ := m.get(bgID)
+	bg.mu.Lock()
+	ducked := len(bg.duckedByAll) != 0
+	snap = bg.snapshotLocked(ctx)
+	bg.mu.Unlock()
+	if !ducked {
+		t.Fatal("precondition failed: bg was not ducked by ann")
+	}
+	if !snap.HasGain {
+		t.Fatal("ducked session with no gain.set ever sent reports HasGain=false, want true")
+	}
+	if snap.Gain != 0 {
+		t.Fatalf("ducked session with no gain.set ever sent reports Gain=%v, want 0", snap.Gain)
+	}
+}
+
+// mutation target: checkFadeCompletionLocked judging completion against
+// fadeDispatchedTarget rather than the current effective gain. A mute
+// landing mid-fade cancels the ramp (applyEffectiveGainLocked drives the
+// engine to its own target via SetGain, which the fake engine's own
+// SetGain clears any in-progress fade for) short of the fade's own
+// dispatched target. The fade's own invocation must report
+// Unconfirmable, honestly stating the target it was actually judged
+// against never being reached, not FadeComplete: the CURRENT effective
+// gain happens to equal the engine's evidence only because mute also
+// forces 0, which is a coincidence of the suppression's own target, not
+// evidence the requested fade reached anywhere near its real target.
+func TestFadeCancelledByMuteReportsUnconfirmableNotComplete(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	// availableFakeEngine: this test checks the fade invocation's own
+	// ungated outcome, which Manager.gateAvailability rewrites to
+	// unconfirmable against an engine that never reports itself
+	// available.
+	m := NewManager(availableFakeEngine{NewFakeEngine(c.now)}, NewFileSessionStore(dir), dir, staticDecoder{duration: 30 * time.Second}, c.now, nil)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("s1")
+
+	ref := writeTestAsset(t, m.assetDir, "a.wav", "asset-1", []byte("x"))
+	startPlaying(t, m, ctx, id, ref, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	if r := m.GainSet(ctx, id, "inv-gain", 3, pkgaudio.Gain(0.1)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain.set unexpectedly refused: %+v", r)
+	}
+	const fadeInvocation = pkgaudio.InvocationID("inv-fade")
+	if r := m.GainFade(ctx, id, fadeInvocation, 4, pkgaudio.FadeCurveLinear, 10*time.Second, pkgaudio.Gain(0.9)); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("gain.fade unexpectedly refused: %+v", r)
+	}
+
+	// 10% of the way through a real ramp toward 0.9, well short of it.
+	c.advance(1 * time.Second)
+
+	if r := m.Mute(ctx, id, "inv-mute", 5); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("mute unexpectedly refused: %+v", r)
+	}
+	m.watchTick(ctx)
+
+	s, _ := m.get(id)
+	s.mu.Lock()
+	result, ok := s.executedResults[fadeInvocation]
+	handle := s.handle
+	s.mu.Unlock()
+	if !ok {
+		t.Fatal("the fade invocation's own outcome was never recorded")
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("fade outcome once mute cancelled it partway = %+v, want unconfirmable (the fade's own dispatched target, 0.9, was never reached)", result)
+	}
+	if got := observedGain(t, m, ctx, handle); got != 0 {
+		t.Fatalf("engine gain after the mute that cancelled the fade = %v, want 0", got)
+	}
+}

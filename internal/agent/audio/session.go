@@ -180,6 +180,21 @@ type Session struct {
 	fadePending    bool
 	fadeInvocation pkgaudio.InvocationID
 
+	// fadeDispatchedTarget is the gain [Session.startFadeLocked] actually
+	// told the engine to ramp toward, which is the CURRENT effective
+	// gain at dispatch time, not necessarily the fade's own configured
+	// target: a fade dispatched while suppressed ramps toward
+	// duckTargetGain instead. [Session.checkFadeCompletionLocked] judges
+	// completion against this, not against a value recomputed later,
+	// because a mute or a duck landing mid-fade drives the engine to a
+	// NEW gain via SetGain (see [Session.applyEffectiveGainLocked]),
+	// which cancels the ramp partway. Judging the cancelled fade against
+	// whatever effectiveGainLocked returns after that would compare the
+	// engine's evidence to the wrong question and report a cancelled
+	// fade as having completed. Not persisted: a restart takes the
+	// fadeHandleNeverFaded path instead, which never reads this field.
+	fadeDispatchedTarget pkgaudio.Gain
+
 	// fadeHandleNeverFaded marks a fadePending inherited from disk onto a
 	// handle that was never given that fade. Such a handle reports
 	// FadeActive false from the moment it loads, which is otherwise
@@ -882,12 +897,15 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	if item, ok := s.currentItemLocked(); ok {
 		snap.HasItem, snap.ItemID, snap.ItemIndex = true, item.ItemID, s.currentIndex
 	}
-	if s.desired.Gain != nil {
+	if s.desired.Gain != nil || s.muted || len(s.duckedByAll) > 0 {
 		// Reported as the EFFECTIVE gain, not the raw configured value:
 		// this is the wire-observable "what is this session actually
 		// outputting right now" (pkg/mqttproto, the coordinator's
 		// nodeaudio collector), which a mute or a duck must still be
-		// able to answer honestly.
+		// able to answer honestly, and each is itself enough evidence to
+		// report a gain even before any audio.gain.set has ever landed:
+		// effectiveGainLocked's own default (unity, reduced by whichever
+		// suppression is active) is well defined regardless.
 		snap.HasGain, snap.Gain = true, s.effectiveGainLocked()
 	}
 	if s.desired.Ceiling != nil {

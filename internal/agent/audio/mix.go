@@ -207,6 +207,7 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 
 	engineFade := fade
 	engineFade.TargetGain = s.effectiveGainLocked()
+	s.fadeDispatchedTarget = engineFade.TargetGain
 	dispatchedAt := s.mgr.now()
 	obs, err := s.mgr.engine.Fade(ctx, s.handle, engineFade)
 	if err != nil {
@@ -230,15 +231,20 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 // transition true-to-false, never from fade.Duration having elapsed. It
 // also writes the fade's terminal outcome back onto the invocation that
 // dispatched it: [pkgaudio.OutcomeFadeComplete] when the engine's own
-// evidence shows the CURRENT effective gain actually reached (the
-// configured target when s is neither muted nor ducked, the suppressed
-// target otherwise), [pkgaudio.OutcomeUnconfirmable] otherwise, gated
-// through [Manager.gateAvailability] exactly as every other outcome in
-// this package is. s's own configured gain was already recorded at
-// dispatch time in [Session.startFadeLocked]; this never rewrites it
-// from the engine's observed value, which would reintroduce the
-// desired/observed conflation this package's evidence rules forbid.
-// Caller holds s.mu.
+// evidence shows s.fadeDispatchedTarget actually reached,
+// [pkgaudio.OutcomeUnconfirmable] otherwise, gated through
+// [Manager.gateAvailability] exactly as every other outcome in this
+// package is. Judged against the target actually dispatched, not
+// against the CURRENT effective gain: a mute or a duck landing mid-fade
+// cancels the ramp by driving the engine to its own target through
+// [Session.applyEffectiveGainLocked]'s own SetGain call, and a fade
+// judged against the current effective gain at that point would compare
+// the engine's evidence to a question the dispatched fade was never
+// asked, reporting a cancelled fade as complete. s's own configured
+// gain was already recorded at dispatch time in
+// [Session.startFadeLocked]; this never rewrites it from the engine's
+// observed value, which would reintroduce the desired/observed
+// conflation this package's evidence rules forbid. Caller holds s.mu.
 func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	if !s.fadePending || !s.handleLoaded {
 		return
@@ -261,7 +267,7 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 		return
 	}
 
-	target := s.effectiveGainLocked()
+	target := s.fadeDispatchedTarget
 	var outcome pkgaudio.OutcomeResult
 	if gainsEqual(obs.Gain, target) {
 		outcome = pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFadeComplete}
