@@ -113,11 +113,11 @@ func TestRebindEngineHandsBackTheEngineItReplaced(t *testing.T) {
 	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(t.TempDir()), t.TempDir(), audio.RealDecoder{}, time.Now, nil)
 
 	first := audio.NewFakeEngine(time.Now)
-	if prev := mgr.RebindEngine(switchable, first, audio.RebindReasonEngineRebind); prev != nil {
+	if prev := mgr.RebindEngine(context.Background(), switchable, first, audio.RebindReasonEngineRebind); prev != nil {
 		t.Fatalf("first rebind returned %v, want nil: nothing was bound before it", prev)
 	}
 	second := audio.NewFakeEngine(time.Now)
-	prev := mgr.RebindEngine(switchable, second, audio.RebindReasonEngineRebind)
+	prev := mgr.RebindEngine(context.Background(), switchable, second, audio.RebindReasonEngineRebind)
 	if prev != audio.Engine(first) {
 		t.Fatal("rebind did not hand back the engine it replaced, so nothing can release it")
 	}
@@ -232,7 +232,7 @@ func TestRebuildReleasesTheDeviceBeforeProbingAndBuildingTheReplacement(t *testi
 	dir := t.TempDir()
 	switchable := audio.NewSwitchableEngine()
 	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
-	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 
 	node := audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1}
 	r.rebuild(node) // first engine occupies the device; nothing to observe it busy yet.
@@ -338,7 +338,7 @@ func TestRebuildInvalidatesSessionsBeforeClosingTheOutgoingEngine(t *testing.T) 
 		return audio.NewFakeEngine(time.Now), nil
 	}
 
-	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 5})
 
 	if !outgoing.closed {
@@ -380,7 +380,7 @@ func TestRebuildLeavesNoEngineBoundWhenTheReplacementFailsToBuild(t *testing.T) 
 		return nil, os.ErrInvalid
 	}
 
-	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1})
 
 	if outgoing.closed != 1 {
@@ -414,7 +414,7 @@ func TestRebuildRejectsAnInvalidBindingWithoutTouchingTheOutgoingEngine(t *testi
 	outgoing := &closeCountingEngine{Engine: audio.NewFakeEngine(time.Now)}
 	switchable.Set(outgoing)
 
-	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 	// ProgramChannels is empty: cfg.Validate() must reject this before
 	// anything else runs.
 	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", Revision: 1})
@@ -438,7 +438,7 @@ func TestAudioEngineRebuilderBindReleasesTheEngineItReplaces(t *testing.T) {
 	dir := t.TempDir()
 	switchable := audio.NewSwitchableEngine()
 	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
-	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 
 	first := &closeCountingEngine{Engine: audio.NewFakeEngine(time.Now)}
 	r.bind(first)
@@ -496,7 +496,7 @@ func TestRebuildSerializesConcurrentRebuilds(t *testing.T) {
 	dir := t.TempDir()
 	switchable := audio.NewSwitchableEngine()
 	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
-	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 
 	var mu sync.Mutex
 	var built []*orderedCloseEngine
@@ -615,7 +615,7 @@ func TestRebuildDropsAnOlderRevisionThatLostTheLockRace(t *testing.T) {
 	dir := t.TempDir()
 	switchable := audio.NewSwitchableEngine()
 	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
-	r := newAudioEngineRebuilder(dir, switchable, mgr, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
 
 	var mu sync.Mutex
 	var built []*raceCloseEngine

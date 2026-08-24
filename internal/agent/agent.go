@@ -221,7 +221,7 @@ func Run() int {
 	audioEngineAvailable = audioEngine.Available
 
 	audioMgr := audio.NewManager(audioEngine, audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
-	audioRebuilder := newAudioEngineRebuilder(cfg.AssetDir, audioEngine, audioMgr, logger)
+	audioRebuilder := newAudioEngineRebuilder(sigCtx, cfg.AssetDir, audioEngine, audioMgr, logger)
 	audioBind := newAudioBinding(audioRebuilder.rebuild, func(p audioSettingsConfig) {
 		audioMgr.SetSettings(audioSettingsFromWire(p))
 	})

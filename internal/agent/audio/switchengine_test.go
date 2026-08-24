@@ -83,7 +83,7 @@ func TestRebindEngineInvalidatesInFlightSessions(t *testing.T) {
 	s.mu.Unlock()
 
 	second := NewFakeEngine(c.now)
-	m.RebindEngine(switchable, second, "test rebind")
+	m.RebindEngine(context.Background(), switchable, second, "test rebind")
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

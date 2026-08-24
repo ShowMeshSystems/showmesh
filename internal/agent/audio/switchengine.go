@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,6 +26,13 @@ const SwitchableEngineNoBindingReason = "no audio.node configuration has been de
 // delivered here, so a caller must not read this the way it would read
 // [SwitchableEngineNoBindingReason].
 const SwitchableEngineRebindInProgressReason = "an audio.node.configure rebuild is replacing this node's engine; no engine is bound yet"
+
+// ErrNoEngineBinding is the sentinel every SwitchableEngine call fails
+// with before its first Set. Callers that need to tell "no engine bound
+// yet" apart from a genuine engine failure — restoreOne does, see
+// restore.go's deferRestoreLocked — check for this with errors.Is rather
+// than matching SwitchableEngineNoBindingReason's text.
+var ErrNoEngineBinding = errors.New(SwitchableEngineNoBindingReason)
 
 // SwitchableEngine is an [Engine] whose backing implementation can be
 // replaced at runtime, so a [Manager] built once at agent startup can be
@@ -77,7 +85,8 @@ func (e *SwitchableEngine) get() (Engine, bool) {
 
 // unbound reports the reason and classifiable error for a detached
 // current engine: [SwitchableEngineNoBindingReason] before any real
-// engine was ever bound, [SwitchableEngineRebindInProgressReason] after
+// engine was ever bound (wrapping [ErrNoEngineBinding] so restore can
+// defer rather than fail, see restore.go), [SwitchableEngineRebindInProgressReason] after
 // (wrapping [pkgaudio.ErrEngineRouteChanged] so [pkgaudio.ClassifyFault]
 // reports [pkgaudio.FaultRouteChanged] rather than [pkgaudio.FaultOther]
 // for a command attempted in that window).
@@ -89,7 +98,7 @@ func (e *SwitchableEngine) unbound() (reason string, err error) {
 		return SwitchableEngineRebindInProgressReason,
 			fmt.Errorf("%w: %s", pkgaudio.ErrEngineRouteChanged, SwitchableEngineRebindInProgressReason)
 	}
-	return SwitchableEngineNoBindingReason, fmt.Errorf("audio: %s", SwitchableEngineNoBindingReason)
+	return SwitchableEngineNoBindingReason, fmt.Errorf("audio: %w", ErrNoEngineBinding)
 }
 
 // Available reports the currently set engine's own availability, or
