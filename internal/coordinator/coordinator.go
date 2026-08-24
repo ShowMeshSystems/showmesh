@@ -294,6 +294,22 @@ func Run() int {
 		return 1
 	}
 
+	// A loopback/localhost/unspecified content base URL is not refused
+	// here (config.validateAssetConfig's own doc comment explains why:
+	// test/integration's single-process harness legitimately uses one),
+	// but it is never usable by a real remote render node either: every
+	// node fetches asset bytes from ITSELF at that address, not from this
+	// coordinator, and the first fetch just fails with no clue why. Warn
+	// loudly on every startup this is true, whether the value just got
+	// migrated from SHOWMESH_ASSET_CONTENT_BASE_URL or was already sitting
+	// in the store from an earlier one.
+	if config.ContentBaseURLIsLoopback(assetSettings.ContentBaseURL) {
+		logger.Warn("assets.settings contentBaseUrl is a loopback/localhost/unspecified address; no render node "+
+			"other than one running on this exact machine can ever fetch asset bytes from it. Fix it with "+
+			"`showmeshctl assets settings set --content-base-url <url-every-node-can-reach>`.",
+			"content_base_url", assetSettings.ContentBaseURL)
+	}
+
 	// Track E seam E5/E6: the asset manifest's sync service (ADR-028
 	// decision 7). Constructed unconditionally, over the SAME
 	// *broker.BrokerManager (bm) inventory just subscribed through, since

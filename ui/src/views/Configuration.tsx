@@ -888,6 +888,11 @@ function AssetsSettingsSection() {
         this coordinator&rsquo;s own store. <code>SHOWMESH_ASSET_DIR</code> is unaffected — it stays
         environment-only.
       </p>
+      <p className="text-muted">
+        Content base URL must be an address every render node can reach, not this coordinator&rsquo;s
+        own loopback or localhost address. A node fetching asset bytes from loopback fetches from
+        itself, not from this coordinator.
+      </p>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
       {state.kind === 'error' && (

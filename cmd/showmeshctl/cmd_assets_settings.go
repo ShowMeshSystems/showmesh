@@ -162,7 +162,7 @@ func cmdAssetsSettingsSet(args []string, stdout, stderr io.Writer, clock func() 
 	var contentBaseURL string
 	var maxUploadBytes int64
 	var syncInterval, inventoryInterval time.Duration
-	fs.StringVar(&contentBaseURL, "content-base-url", "", `the base URL nodes fetch asset bytes from, e.g. http://coordinator:8080 (pass "" to disable sync)`)
+	fs.StringVar(&contentBaseURL, "content-base-url", "", `the base URL nodes fetch asset bytes from, e.g. http://coordinator:8080 (pass "" to disable sync); must be reachable from every node, never a loopback/localhost address`)
 	fs.Int64Var(&maxUploadBytes, "max-upload-bytes", 0, "the maximum size of a single asset upload, in bytes")
 	fs.DurationVar(&syncInterval, "sync-interval", 0, "how often the sync service recomputes every node's gap, e.g. 5m")
 	fs.DurationVar(&inventoryInterval, "inventory-interval", 0, "this coordinator's own copy of the agent's inventory-report cadence, e.g. 2m")
