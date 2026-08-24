@@ -623,8 +623,12 @@ func portElementSignals(elem rawDoc, key string) []SignalValue {
 // verified against live_remote01_fppd_ports.json /
 // live_remote04_fppd_ports.json, where every one of the 16/32
 // smartReceivers-carrying elements has no "ma" key at all. On an output
-// element (never observed missing "ma" in any live capture) it falls back
-// to a generic Unsupported rather than fabricating a value.
+// element it also falls back to Unsupported rather than fabricating a
+// value: never observed missing "ma" on the live fleet (FPP 9.4/master),
+// but expected on FPP 10.0 whenever a port has no current sensor —
+// OutputMonitor::appendTo (src/OutputMonitor.cpp, confirmed against
+// refs/tags/10.0^{}, commit 370e62ed7) only writes "ma" when
+// currentMonitor is non-null, where 9.5.3 had no such gate.
 func portCurrentMASignal(elem rawDoc, sig observation.SignalID, hasSR bool) SignalValue {
 	raw, ok := elem["ma"]
 	if !ok {
@@ -635,7 +639,7 @@ func portCurrentMASignal(elem rawDoc, sig observation.SignalID, hasSR bool) Sign
 				Reason:  "smart receiver position: pre-V5 receivers report no per-port current",
 			}
 		}
-		return SignalValue{Signal: sig, Absence: observation.StateUnsupported, Reason: `"ma" absent from this port element`}
+		return SignalValue{Signal: sig, Absence: observation.StateUnsupported, Reason: "this port has no current sensor"}
 	}
 	// "ma" is PRESENT here (the ok=true branch): a JSON null value is a
 	// different claim from the key being absent altogether (the branch
@@ -656,8 +660,11 @@ func portCurrentMASignal(elem rawDoc, sig observation.SignalID, hasSR bool) Sign
 // portBoolField and portStringField implement contract section 3.2's
 // second paragraph: enabled/status/bank are Unsupported (not omitted) on a
 // smart-receiver position, each with a reason naming which key was
-// absent, and are ordinary values on an output element (where all three
-// are always present in every live capture).
+// absent, and are ordinary values on an output element on the live
+// fleet (FPP 9.4/master, where all three are always present). On FPP
+// 10.0, enabled and status are each Unsupported instead whenever the
+// port has no enable pin or no eFuse respectively — see
+// portAbsentReason's doc comment.
 func portBoolField(elem rawDoc, sig observation.SignalID, key string, hasSR bool) SignalValue {
 	raw, ok := elem[key]
 	if !ok {
@@ -694,11 +701,27 @@ func portStringField(elem rawDoc, sig observation.SignalID, key string, hasSR bo
 	return SignalValue{Signal: sig, Value: s}
 }
 
+// portAbsentReason names why key is missing from a non-smart-receiver port
+// element. On FPP 10.0, OutputMonitor::appendTo (src/OutputMonitor.cpp,
+// confirmed against refs/tags/10.0^{}, commit 370e62ed7) only sets
+// "enabled" when the port has an enable pin, only sets "status" when it
+// has an eFuse pin, and (per portCurrentMASignal) only sets "ma" when it
+// has a current sensor — each key is conditionally written, not always
+// present with a placeholder value. FPP 9.5.3 always wrote a hardcoded
+// "status": true regardless of hardware, so this three-way omission is new
+// in 10.0. It is normal hardware reporting, not a decode anomaly.
 func portAbsentReason(key string, hasSR bool) string {
 	if hasSR {
 		return fmt.Sprintf("smart receiver position: no %q key reported", key)
 	}
-	return fmt.Sprintf("%q absent from this port element", key)
+	switch key {
+	case "enabled":
+		return "this port has no enable pin"
+	case "status":
+		return "this port has no eFuse"
+	default:
+		return fmt.Sprintf("%q absent from this port element", key)
+	}
 }
 
 // portPixelCountField implements contract section 3.2's third absence
@@ -741,6 +764,8 @@ func SystemInfoSignals(body []byte) ([]SignalValue, error) {
 	out = append(out, stringSignalValue(doc, SignalPlatform, "Platform"))
 	out = append(out, stringSignalValue(doc, SignalVariant, "Variant"))
 	out = append(out, stringSignalValue(doc, SignalKernel, "Kernel"))
+	out = append(out, intSignalValue(doc, SignalMajorVersion, "majorVersion", ""))
+	out = append(out, intSignalValue(doc, SignalMinorVersion, "minorVersion", ""))
 
 	util, err := doc.objectField("Utilization")
 	if err != nil {

@@ -24,6 +24,15 @@
 # See docker-compose.macvlan.yml and README.md for the docker network
 # create command and why even Mode B is not the reference switch either.
 
+# No container_name here (or on probe/fpp-remote below): a fixed name is
+# not namespaced by `docker compose -p`, so two projects (e.g. the two
+# `.env` files README.md's "Running a 9.5.3 bench and a 10.0 bench side
+# by side" describes) would fight over the same container. Compose's
+# default name (`<project>-<service>-1`) already varies by project, the
+# same way the `bench` network and the named volumes below do. Anything
+# that needs to find this container programmatically resolves it
+# through the service name (`docker compose ... ps -q fpp-master`),
+# never a hardcoded string.
 services:
   fpp-master:
     build:
@@ -38,7 +47,6 @@ services:
       dockerfile: Docker/Dockerfile
       args:
         FPPBRANCH: ${FPP_GIT_REF:-9.5.3}
-    container_name: showmesh-bench-fpp-master
     hostname: fpp-master
     cap_add:
       # Matches the run command FalconChristmas/fpp's own dockerBuild.sh
@@ -81,7 +89,6 @@ services:
         VERSION: ${SHOWMESH_VERSION:-dev}
         COMMIT: ${SHOWMESH_COMMIT:-none}
         BUILD_DATE: ${SHOWMESH_BUILD_DATE:-unknown}
-    container_name: showmesh-bench-probe
     networks:
       - bench
     volumes:
@@ -115,7 +122,6 @@ services:
       dockerfile: Docker/Dockerfile
       args:
         FPPBRANCH: ${FPP_GIT_REF:-9.5.3}
-    container_name: showmesh-bench-fpp-remote
     hostname: fpp-remote
     cap_add:
       - SYS_NICE
