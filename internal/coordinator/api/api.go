@@ -1803,7 +1803,7 @@ func New(deps Dependencies, opts Options) *API {
 	// GET/PUT /api/v1/config/show.mode (ADR-033): the installation-wide
 	// operating mode singleton. The ONLY configuration kind whose
 	// current-value GET is not gated on config:write, and that is
-	// deliberate rather than an oversight — ADR-033 decision 3 requires
+	// deliberate rather than an oversight: ADR-033 decision 3 requires
 	// the mode to be persistently visible in the Operator UI, and the
 	// operator standing at the console holds observation:read and
 	// show:macro:run, not config:write. observation:read is the narrowest

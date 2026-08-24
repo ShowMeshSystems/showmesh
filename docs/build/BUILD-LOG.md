@@ -79,6 +79,55 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-08-23 (ADR-033's show mode: implemented, gated against a running coordinator, branch `claude/sm-112-show-mode`, not yet merged)
+
+**Goal:** implement ADR-033, Accepted since 2026-08-14 and implemented by nothing. Before this branch, a grep for `showmode|show\.mode|ShowMode` across Go, TypeScript and YAML returned only three forward-looking comments deferring the work.
+
+**Completed:** one installation-wide operating mode, `program` or `show`, held as the `show.mode` configuration singleton with the revision and audit semantics every other kind has, on all three ADR-039 surfaces.
+
+- The kind and its validation: `internal/coordinator/config/showmode.go`. Closed enum, `default` singleton, full-replacement PUT, unknown top-level keys refused.
+- The API: `internal/coordinator/api/showmode.go`, `internal/coordinator/api/v1/showmode.go`, routes in `internal/coordinator/api/api.go`, contract in `api/openapi.yaml` (three paths, `ConfigShowModePayload`, `ShowModeConfigResponse`, `show.mode` added to `ConfigRevisionsResponse.kind`), conformance in `internal/coordinator/api/openapi_showmode_test.go`.
+- The CLI: `cmd/showmeshctl/cmd_showmode.go`, reachable as `showmeshctl show mode [get|set|revisions]`.
+- The Operator UI: `ui/src/components/ShowModeIndicator.tsx` in `Layout.tsx`'s `app-header`, so it renders on every route and is deliberately not gated on `blockContent`, plus `ui/src/components/ShowModePanel.tsx` on the Configuration page for the write.
+- The one behaviour that reads it: the Resolume WebSocket footprint switch, which had existed since Track D seam D-2 with nothing driving it. `internal/coordinator/showmode.go` resolves the active revision on a five second cadence and drives `resolumeManager.SetWebSocketEnabled`, which reaches the current bundle and seeds any bundle built later.
+- Node delivery: `pkg/mqttproto/showmode.go` (one retained topic, `showmesh/events/show_mode`) and `internal/agent/showmode.go` (an atomic-backed holder read fresh at the point of decision).
+
+**Decisions made:** ADR-033 deliberately left five gaps; all five were settled by the orchestrator and owner before this build began, and this branch transcribes rather than chooses.
+
+1. The kind identifier is `show.mode`, object id `default`, minted in `docs/build/IDENTIFIER-REGISTER.md` along with an explicit statement that this build mints no exit code, no agent operation name, no scope, no observation signal and no audit action.
+2. Exactly two consumers ship: the Resolume WebSocket switch and delivery to nodes. FPP poll cadence, the audio device-loss policy and the asset sync timer are named in ADR-033's own Context as future consumers and are untouched. Driving `SetPollInterval` from the mode was optional and was **not** done; the poll interval stays a startup-only debug override, and a test pins that the mode does not move it.
+3. **The fresh-install default is `program`** (owner ruling): a fresh install is by definition being set up, and black in front of someone programming is worse than useless. This does not change ADR-033 decision 5. "Never been set" is `program`, a coordinator answering with a value it knows; "cannot be read" is `unknown`, which behaves as `show`. The code and tests keep them distinct in three places: the config default, the coordinator's fallback when no store read has ever succeeded (`show`, not `program`), and the node's never-received state (`unknown`).
+4. **The read gate is a deliberate departure and is stated as one** in the OpenAPI path description, in `internal/coordinator/api/showmode.go`'s header comment, and in the route registration. Every other configuration singleton gates even its GET on `config:write`; the mode's current-value GET is gated on `observation:read`, the narrowest existing scope every signed-in role already holds, because ADR-033 decision 3's persistent visibility is about the operator at the console, who holds `observation:read` and not `config:write`. The revisions list keeps `config:write`; the write is unchanged.
+5. **Nodes are told the mode on its own retained topic, not by re-dispatching `render.surface.apply`.** That path exists and bakes resolved configuration into a command; using it would tear down and rebuild frame writers on every mode flip, which is the wrong behaviour for a value whose whole purpose is to be safe during a show. `showmesh/events/show_mode` is the coordinator-published family ADR-008 already defines, retained per ADR-008's own "retained QoS 1 for state". This is the first thing in the project to publish on the events family at all.
+
+**Deliberately out of scope, recorded rather than done.**
+
+- **Mode-dependent edits.** ADR-033 decision 6 says a mode "may" make an edit louder, slower, or warned. Nothing here does: no edit gating, no warnings on writes, no confirmation prompts. ADR-033 decision 4 is honoured structurally rather than by discipline: the applier writes an atomic bool and publishes a message, it sits on no dispatch path, and no code path exists in which the mode can block a command.
+- **A mode change mid-macro.** ADR-033's own Consequences section says the interesting bugs live in a transition that happens while a macro is mid-flight, and that nothing in the record claims it is solved. Nothing macro-related reads the mode in this build, so there is no transition to define. **This is unaddressed, not solved**, and is the first thing to specify when a second consumer lands.
+- **The three other consumers** named above.
+
+**The ADR-025 gap, stated plainly.** ADR-033 decision 5 says the mode is part of ADR-025's signed agent fallback cache. **That cache does not exist**, in this repository or anywhere else. No unsigned substitute was built, because ADR-025's own logic is that a cache failing verification leaves the mode `unknown`; an unsigned one would be strictly worse than none. So decision 5's durable-across-restart half has no substrate: the node holds the mode in memory, reports it as HELD rather than current once the coordinator stops confirming it, and **a restarted agent reads `unknown`, which behaves as `show`**. The broker's retained copy makes a reconnecting agent relearn the mode promptly in practice, but that is broker retention, not a signed cache, and it does not survive a broker with persistence off.
+
+**Verification gates.** Only what was actually run against commit `e6276c6` is recorded.
+
+- `make check`: exit 0, including `ui-gen-check`, `ui-lint`, `ui-test` (781 tests, 72 files) and `ui-build`.
+- `SHOWMESH_TEST_MOSQUITTO_CONTAINER=showmesh-test-mosquitto-sm112 SHOWMESH_TEST_MQTT_PORT=11985 make test-integration`: exit 0, `ok github.com/showmeshsystems/showmesh/test/integration 183.575s`, zero failures, on this worktree's own isolated broker.
+- Narrow unit tests for the kind, its validation including unknown-key rejection and the closed enum, the API handlers and their scope postures, the CLI verb, the live configuration source including its failed-read behaviour, the Resolume driver in both directions, and the agent's held-value semantics including never-received and coordinator-lost.
+
+**Acceptance, against a running coordinator on isolated ports (HTTP 18112, broker 11986) with its own throwaway Mosquitto, not the reference deployment and never a fleet broker.**
+
+1. `GET /api/v1/config/show.mode` on a fresh store answered `200` with `mode: program`, `revision: 0`, `source: "default"`.
+2. `showmeshctl show mode` read it, `showmeshctl show mode set show` wrote it, the API reflected revision 1 with `source: "api"` and `createdByPrincipalName: "acc-admin"`, and `GET /api/v1/audit` carried one `config.write` entry targeting `show.mode` naming that principal and the mode written.
+3. **Both directions, observed, with no coordinator restart.** With a Resolume instance configured, setting `program` opened the WebSocket and setting `show` closed it, seen from both ends: the coordinator logged `resolume watcher connected` then `resolume watcher disconnected`, and the stand-in logged the matching open and close. The coordinator's pid and start time were unchanged across both flips. **The stand-in is not Resolume Arena**: no Arena is reachable from this machine, so what is proven is that the mode drives this coordinator's WebSocket client open and closed at runtime, and nothing here is evidence about Arena's own behaviour or about the crash the footprint switch exists to reduce exposure to.
+4. **A running agent received the mode and held it through coordinator loss.** On connect it logged `show mode received mode=show revision=3 previous_mode=unknown` from the retained topic, followed a change to `program` at revision 4, and after the coordinator process was stopped logged `show mode is HELD, not current: the coordinator has stopped confirming it` still carrying `mode=program revision=4`. It fell back to nothing.
+5. **The UI indicator was NOT verified in a browser.** The Chrome extension was not connected, so no browser drove the page. What was verified: the production bundle serves and contains the indicator's own markup and styles, and the exact same-origin request the indicator makes returns `200` with the mode through the served origin. Component and Layout tests pass and pin that the indicator renders on an ordinary route, before any snapshot has arrived, and while content is blocked. **None of that is browser evidence** and it must not be reported as such.
+
+**Also unverified:** nothing ran on real hardware, on a real fleet, or against a real Resolume Arena. No node subsystem reads the mode yet, so no mode-dependent node behaviour has been observed; the renderer's own fail-visible behaviour is a separate follow-up and is not in this branch.
+
+**Cleanup:** every process this session started was terminated by its own binary path, the one container it created (`showmesh-acc-sm112-mosquitto`) was removed, `./scripts/cleanup-stray-test-processes.sh --dry-run` reported no orphaned test processes, and `pgrep -fl 'gst-launch|showmesh-agent|showmesh-coordinator'` returned nothing.
+
+---
+
 ## 2026-08-22 (Track F seams F5, F6, and F7's UI half: built, reviewed, gated and merged to `main`)
 
 **Goal:** record Track F's three remaining seams as they landed on their own branches, from evidence captured by the orchestrator against each pushed commit, not from any builder's report.
