@@ -442,6 +442,11 @@ func (s *Service) reconcileInFlight(nodeID string, report *store.NodeAssetReport
 		}
 		if FetchConfirmed(rec.dispatchedAt, report, held[key.contentHash]) {
 			delete(s.inFlight, key)
+			// byCmdID must not outlive its inFlight record: HandleMessage
+			// reads inFlight[key] only while byCmdID still tracks the
+			// commandID, and would otherwise record a failure carrying no
+			// asset metadata.
+			delete(s.byCmdID, rec.commandID)
 		}
 	}
 }
