@@ -62,6 +62,14 @@ type branch struct {
 	// resumed position into the shared pipeline's running time.
 	segmentStart time.Duration
 
+	// anchorUnknown is set once a seek's own ctx deadline fires before its
+	// underlying call returns: the seek was still issued and can land
+	// later in the abandoned goroutine with no way for this package to
+	// learn if or when it did, so segmentStart can no longer be trusted
+	// to match GStreamer's real segment. It never clears — see
+	// errAnchorUnknown.
+	anchorUnknown bool
+
 	fadeActive bool
 	// fadeStartPos anchors both the GstController ramp itself and the
 	// completion bound in the branch's own raw stream position
@@ -83,6 +91,13 @@ type branch struct {
 	// bin, a blocking probe is authoritative regardless of the parent
 	// bin's own state.
 	blockProbeID uint32
+
+	// pendingStateChanges counts calls to setElementsState whose own ctx
+	// deadline fired before the underlying GStreamer call returned: that
+	// call keeps running against this branch's elements in the
+	// background. teardown must not touch a pad or an element while this
+	// is nonzero — see awaitNoElementRace.
+	pendingStateChanges atomic.Int32
 
 	released bool
 }
@@ -273,15 +288,71 @@ func (b *branch) onEOS() {
 }
 
 // setElementsState sets every branch element to state, bounded by ctx.
+// A call abandoned to ctx's deadline keeps running against this branch's
+// elements in the background — cgo has no mechanism to interrupt it —
+// so pendingStateChanges stays incremented until it actually finishes,
+// letting teardown (see awaitNoElementRace) tell whether one of these
+// may still be touching this branch's elements before it starts
+// touching them itself.
 func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
-	return boundedCall(ctx, func() error {
-		for _, el := range b.elements() {
-			if el.SetState(state) == gst.StateChangeFailure {
-				return fmt.Errorf("%w: element %q refused to reach state %v", pkgaudio.ErrEnginePipelineCrash, el.GetName(), state)
-			}
+	b.pendingStateChanges.Add(1)
+	done := make(chan error, 1)
+	go func() {
+		done <- setElementsStateNow(b, state)
+	}()
+	select {
+	case err := <-done:
+		b.pendingStateChanges.Add(-1)
+		return err
+	case <-ctx.Done():
+		go func() {
+			<-done
+			b.pendingStateChanges.Add(-1)
+		}()
+		return ctx.Err()
+	}
+}
+
+// setElementsStateNow runs the actual GStreamer state change for every
+// element b owns, with no bound of its own — setElementsState is what
+// bounds the caller's wait for it.
+func setElementsStateNow(b *branch, state gst.State) error {
+	for _, el := range b.elements() {
+		if el.SetState(state) == gst.StateChangeFailure {
+			return fmt.Errorf("%w: element %q refused to reach state %v", pkgaudio.ErrEnginePipelineCrash, el.GetName(), state)
 		}
-		return nil
-	})
+	}
+	return nil
+}
+
+// awaitNoElementRace blocks until no setElementsState call — including
+// one abandoned to its own ctx's deadline — is still running against
+// this branch's elements, or until timeout elapses first. It reports
+// whether pendingStateChanges actually drained.
+func (b *branch) awaitNoElementRace(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if b.pendingStateChanges.Load() == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return b.pendingStateChanges.Load() == 0
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// checkAnchorKnown returns errAnchorUnknown once a prior timed-out seek
+// has made this branch's segmentStart unreliable — see anchorUnknown.
+// Every method that would anchor the mixer or a fade to segmentStart
+// calls this before doing so.
+func (b *branch) checkAnchorKnown() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.anchorUnknown {
+		return errAnchorUnknown
+	}
+	return nil
 }
 
 // queryPosition returns the branch's live position, or the last frozen

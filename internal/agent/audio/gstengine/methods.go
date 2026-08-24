@@ -28,6 +28,26 @@ var errFadeBeforeStart = fmt.Errorf("gstengine: cannot fade a branch that has no
 // expired, never because the asset itself was undecodable.
 var errLoadTimedOut = fmt.Errorf("gstengine: Load did not complete before its context deadline")
 
+// errAnchorUnknown marks a branch whose real GStreamer segment may no
+// longer match segmentStart: a seek's own ctx deadline fired before its
+// abandoned goroutine's call to decodebin.Seek returned, and that call
+// is still free to land later with no way for this package to learn if
+// or when it did. Every operation that would anchor the mixer or a fade
+// to segmentStart refuses with this instead of running the branch's
+// buffers into the aggregator's past. It wraps
+// [pkgaudio.ErrEnginePipelineCrash]: from a session's perspective this
+// branch is exactly as unrecoverable as one, and only Release followed
+// by a fresh Load makes it usable again.
+var errAnchorUnknown = fmt.Errorf("%w: gstengine: a seek timed out and may still land; this branch's position anchoring no longer matches GStreamer's actual segment", pkgaudio.ErrEnginePipelineCrash)
+
+// errTeardownDeferredForRace marks a teardown that refused to touch a
+// branch's elements because an earlier operation on it abandoned its own
+// state change to ctx's deadline and may still be driving those same
+// elements — a timed-out Start left running toward PLAYING, say. It
+// wraps [pkgaudio.ErrEnginePipelineCrash]: the branch could not be torn
+// down safely and its elements leak for the life of the process.
+var errTeardownDeferredForRace = fmt.Errorf("%w: gstengine: teardown deferred because an earlier abandoned state change may still be driving this branch's elements", pkgaudio.ErrEnginePipelineCrash)
+
 // asLoadTimeout wraps a bare context deadline with errLoadTimedOut, and
 // returns any other error (a pipeline crash boundedCall produced) unchanged.
 func asLoadTimeout(err error) error {
@@ -104,7 +124,7 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 		// A boundedCall failure here can mean ctx's own deadline fired,
 		// which leaves ctx already exhausted, so teardown needs a budget
 		// of its own rather than one that has already run out.
-		bestEffortTeardown(b)
+		_ = bestEffortTeardown(b)
 		return agentaudio.EngineObservation{}, asLoadTimeout(err)
 	}
 
@@ -117,7 +137,7 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 		// ctx is already exhausted here, unlike the two cases above, so
 		// teardown needs a budget of its own rather than one that has
 		// already run out.
-		bestEffortTeardown(b)
+		_ = bestEffortTeardown(b)
 		return agentaudio.EngineObservation{}, asLoadTimeout(ctx.Err())
 	}
 
@@ -144,14 +164,21 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
+	if err := b.checkAnchorKnown(); err != nil {
+		return agentaudio.EngineObservation{}, err
+	}
 	b.unblockFlow()
 	if err := b.seekTo(ctx, position, func() { b.resyncMixerPads(position) }); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	b.unfreeze()
+	// unfreeze only after the transition to PLAYING actually succeeds: it
+	// switches Position reporting from the frozen bookmark to a live
+	// query, and a caller must never see that live query while the
+	// session's own state stays non-playing because this failed.
 	if err := b.setElementsState(ctx, gst.StatePlaying); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
+	b.unfreeze()
 	b.setState(pkgaudio.StatePlaying)
 	return b.observe(e.cfg.now()), nil
 }
@@ -189,6 +216,9 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 	if err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
+	if err := b.checkAnchorKnown(); err != nil {
+		return agentaudio.EngineObservation{}, err
+	}
 	pos := b.queryPosition()
 	if err := b.seekTo(ctx, pos, func() { b.resyncMixerPads(pos) }); err != nil {
 		return agentaudio.EngineObservation{}, err
@@ -204,6 +234,9 @@ func (e *Engine) Resume(ctx context.Context, handle agentaudio.EngineHandle) (ag
 func (e *Engine) Seek(ctx context.Context, handle agentaudio.EngineHandle, position time.Duration) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
+		return agentaudio.EngineObservation{}, err
+	}
+	if err := b.checkAnchorKnown(); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
 	if err := b.seekTo(ctx, position, func() { b.resyncMixerPads(position) }); err != nil {
@@ -264,6 +297,9 @@ func (e *Engine) Fade(ctx context.Context, handle agentaudio.EngineHandle, fade 
 	if !b.hasStarted() {
 		return agentaudio.EngineObservation{}, errFadeBeforeStart
 	}
+	if err := b.checkAnchorKnown(); err != nil {
+		return agentaudio.EngineObservation{}, err
+	}
 	if err := b.startFade(fade, b.queryPosition()); err != nil {
 		return agentaudio.EngineObservation{}, fmt.Errorf("%w: %v", pkgaudio.ErrEnginePipelineCrash, err)
 	}
@@ -299,6 +335,9 @@ func (e *Engine) Observe(ctx context.Context, handle agentaudio.EngineHandle) (a
 // segmentStart, after, and the frozen position are mutated only once
 // boundedCall has returned successfully, so a seek abandoned to ctx's
 // deadline never rewrites them later from its still-running goroutine.
+// That goroutine keeps running the seek it already issued, though, and
+// may still land it against the real GStreamer segment — see
+// errAnchorUnknown for what this does about the resulting staleness.
 func (b *branch) seekTo(ctx context.Context, position time.Duration, after func()) error {
 	err := boundedCall(ctx, func() error {
 		if !b.decodebin.Seek(1.0, gst.FormatTime, gst.SeekFlagFlush|gst.SeekFlagAccurate,
@@ -308,6 +347,16 @@ func (b *branch) seekTo(ctx context.Context, position time.Duration, after func(
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// The seek was issued and may still land from the abandoned
+			// goroutine; segmentStart cannot be moved to position from
+			// here without risking a second write racing that goroutine's
+			// own eventual (never observed) completion, so the branch is
+			// marked permanently unusable for anchoring instead.
+			b.mu.Lock()
+			b.anchorUnknown = true
+			b.mu.Unlock()
+		}
 		return err
 	}
 
@@ -327,21 +376,26 @@ func (b *branch) seekTo(ctx context.Context, position time.Duration, after func(
 // teardownTimeout bounds a best-effort teardown triggered by a failure
 // this package cannot otherwise recover from. A stuck GStreamer state
 // change must end the caller's wait, never extend it indefinitely.
-const teardownTimeout = 5 * time.Second
+var teardownTimeout = 5 * time.Second // var, not const: shrunk by tests exercising the bound itself
 
 // bestEffortTeardown tears b down under a fresh bounded context, for
 // call sites that hold no ctx of their own (a cleanup path already
 // past its caller's deadline, or one triggered by that deadline).
-func bestEffortTeardown(b *branch) {
+func bestEffortTeardown(b *branch) error {
 	ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
 	defer cancel()
-	_ = b.teardown(ctx)
+	return b.teardown(ctx)
 }
 
 // teardown halts and removes every element this branch owns and releases
 // its channel mixer request pads. Bounded by ctx. On timeout it returns
 // without touching a pad or an element, leaking them rather than
-// manipulating elements a still-running abandoned goroutine holds.
+// manipulating elements a still-running abandoned goroutine holds. The
+// same hazard applies when an earlier operation on this branch — a
+// timed-out Start left running toward PLAYING, say — abandoned its own
+// state change: teardown waits up to teardownTimeout for every such call
+// to finish before it starts its own, and refuses to touch elements at
+// all rather than race one still outstanding past that bound.
 func (b *branch) teardown(ctx context.Context) error {
 	b.mu.Lock()
 	if b.released {
@@ -355,7 +409,15 @@ func (b *branch) teardown(ctx context.Context) error {
 	// A blocked pad holds a streaming thread waiting inside the probe;
 	// the state change below must never race that wait, so the block is
 	// always released first, whether or not this branch was ever paused.
+	// This also runs ahead of the drain wait below, because an abandoned
+	// state change is exactly the thing a blocked pad can be holding up.
 	b.unblockFlow()
+
+	if !b.awaitNoElementRace(teardownTimeout) {
+		slog.Warn("gstengine: teardown deferred because an earlier abandoned state change may still be driving this branch's elements; leaving them in the pipeline rather than racing it", "branch", b.id)
+		return errTeardownDeferredForRace
+	}
+
 	if err := b.setElementsState(ctx, gst.StateNull); err != nil {
 		slog.Warn("gstengine: branch teardown did not reach NULL in time; leaving its elements in the pipeline rather than removing them concurrently with the abandoned state change", "branch", b.id, "error", err)
 		return err

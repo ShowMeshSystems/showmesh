@@ -71,6 +71,7 @@ type Engine struct {
 	brokenReason string
 
 	closeOnce sync.Once
+	closeErr  error
 	done      chan struct{}
 }
 
@@ -156,10 +157,22 @@ func (e *Engine) Available() (bool, string) {
 // closed engine holds no device and must never report itself playable.
 const closedReason = "engine was closed and released its output device"
 
+// errCloseIncomplete marks a Close whose teardown did not fully finish
+// within its bound: a branch teardown deferred to an abandoned state
+// change, or the final pipeline transition to NULL itself timed out. A
+// caller sees Available()==false and every further call refused either
+// way, but this distinguishes "torn down cleanly, the device is free"
+// from "teardown abandoned, elements or the device itself may still be
+// live" — the difference [closeReplacedEngine]'s caller needs before it
+// probes and builds a replacement engine against the same device.
+var errCloseIncomplete = fmt.Errorf("%w: gstengine: Close's teardown did not fully complete before its timeout; some elements or the output device itself may still be live", pkgaudio.ErrEnginePipelineCrash)
+
 // Close tears every branch down, stops the bus watcher, and returns the
 // output pipeline to NULL so the device it held is released. Required
 // before building a replacement Engine against the same device, since
-// the outgoing pipeline keeps the device open until it does. Idempotent.
+// the outgoing pipeline keeps the device open until it does. Idempotent:
+// a second call observes the same closeErr the first one computed,
+// rather than re-running teardown or reporting a different outcome.
 func (e *Engine) Close() error {
 	e.closeOnce.Do(func() {
 		// markBroken's first-write-wins guard is what makes this
@@ -176,12 +189,15 @@ func (e *Engine) Close() error {
 			delete(e.handles, h)
 		}
 		e.mu.Unlock()
+		var incomplete atomic.Bool
 		var wg sync.WaitGroup
 		for _, b := range branches {
 			wg.Add(1)
 			go func(b *branch) {
 				defer wg.Done()
-				bestEffortTeardown(b)
+				if err := bestEffortTeardown(b); err != nil {
+					incomplete.Store(true)
+				}
 			}(b)
 		}
 		wg.Wait()
@@ -203,6 +219,7 @@ func (e *Engine) Close() error {
 			cancel()
 			if err != nil {
 				slog.Warn("gstengine: output pipeline did not reach NULL within the shutdown timeout", "error", err)
+				incomplete.Store(true)
 			}
 		}
 		if e.ltc != nil {
@@ -215,8 +232,12 @@ func (e *Engine) Close() error {
 			}
 			e.ltc.closeEncoder()
 		}
+
+		if incomplete.Load() {
+			e.closeErr = errCloseIncomplete
+		}
 	})
-	return nil
+	return e.closeErr
 }
 
 func (e *Engine) markBroken(reason string) {
