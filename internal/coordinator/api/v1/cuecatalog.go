@@ -106,6 +106,43 @@ const (
 	CueCatalogStatusStale   = "catalog-stale"
 )
 
+// CueCatalogDeployResult is the outcome of dispatching cuecatalog.deploy
+// to one node — the coordinator's own push half of TRACK-H-H3-SPEC.md
+// section 4, complementing CueCatalogAcknowledgeResponse's pull/report
+// half. Show, Generation, and Revision are always THIS coordinator's own
+// resolution (assetsync.ResolveCueCatalog), never a caller-supplied value:
+// there is no request body field for any of them. Outcome/Reason reuse
+// pkg/mqttproto's own closed vocabulary ("confirmed", "unconfirmed",
+// "refused", "failed") verbatim, since cuecatalog.deploy's node-side
+// result already reports in exactly that vocabulary with no
+// project-specific narrowing the way audio.session.* needed.
+// AcknowledgedRevision is the revision the node reported holding, present
+// only when Outcome is "confirmed".
+type CueCatalogDeployResult struct {
+	CommandID      string `json:"commandId"`
+	IdempotencyKey string `json:"idempotencyKey"`
+	Node           string `json:"node"`
+	Replay         bool   `json:"replay"`
+
+	Show       string `json:"show"`
+	Generation int64  `json:"generation"`
+	Revision   string `json:"revision"`
+
+	Outcome              string `json:"outcome"`
+	Reason               string `json:"reason,omitempty"`
+	AcknowledgedRevision string `json:"acknowledgedRevision,omitempty"`
+
+	DispatchedAt string  `json:"dispatchedAt"`
+	ResolvedAt   *string `json:"resolvedAt,omitempty"`
+}
+
+// CueCatalogDeployResponse wraps CueCatalogDeployResult with the standard
+// serverTime envelope (contract section 6.2).
+type CueCatalogDeployResponse struct {
+	ServerTime string                 `json:"serverTime"`
+	Command    CueCatalogDeployResult `json:"command"`
+}
+
 // CueAuthorizationOutcome documents, read-only, TRACK-H-H3-SPEC.md section
 // 6's seven refusal reasons for checking a Cue authorization tuple
 // (pkg/cueauth.Outcome's own wire spellings): "cross-show",

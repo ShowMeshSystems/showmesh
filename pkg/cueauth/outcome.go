@@ -97,8 +97,12 @@ type HeldState struct {
 // the zero value, only when every check passes — never both a non-zero
 // outcome and ok == true, and never a silent success from an unset field:
 // a caller supplying a zero-value HeldState (e.g. never having resolved
-// anything yet) gets OutcomeCrossShow or OutcomeUnknownGeneration from the
-// very first checks, never an accidental "authorized".
+// anything yet) never gets an accidental "authorized". A tuple that itself
+// differs from the zero value in Show or Generation is refused by the
+// Show or Generation check, whichever runs first; a tuple that is ALSO the
+// zero value passes both of those (they compare equal) and instead falls
+// through to the nil KnownCueRevisions map, whose lookup always reports
+// !known, so it is OutcomeUnknownCue that actually refuses it.
 func Check(tuple AuthorizationTuple, held HeldState) (outcome Outcome, ok bool) {
 	if tuple.Show != held.Show {
 		return OutcomeCrossShow, false

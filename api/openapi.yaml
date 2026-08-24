@@ -6924,6 +6924,72 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /nodes/{nodeId}/cue-catalog/deploy:
+    post:
+      operationId: dispatchCueCatalogDeploy
+      summary: Deploy this node's resolved Cue catalog (Track H seam H3)
+      description: >-
+        Behind `cuecatalog:deploy` (admin only), deliberately not
+        `asset:write`: deploying a catalog grants the node authority to
+        execute Cues, which is a separate power from putting a file in the
+        asset store. Resolves
+        THIS coordinator's own current Cue catalog for `nodeId` (never a
+        request-body value - there is nothing for a caller to supply) and
+        dispatches `cuecatalog.deploy` to the node over MQTT, the same
+        command path `POST .../render/surfaces/{surfaceId}/apply` uses one
+        seam earlier.
+
+
+        `outcome` is `"confirmed"` only once the node's own result reports
+        it has independently recomputed and persisted the identical
+        revision this dispatch sent (ADR-003: a bare successful publish is
+        never conflated with the node having accepted anything). On a
+        confirmed outcome, the revision the node reports holding is also
+        recorded via the same acknowledgement path `POST
+        .../cue-catalog/acknowledge` uses, so `GET
+        /nodes/{nodeId}/cue-catalog` and its own acknowledge route can
+        report `catalog-current` from a real deployment. `400` when no
+        `show.active` is configured (there is nothing to deploy); `404`
+        when `nodeId` does not name a declared node.
+      parameters:
+        - name: nodeId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >-
+            Same ID syntax as an MQTT node ID: 1-64 characters, lowercase
+            letters/digits/hyphens, not starting or ending with a hyphen.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CueCatalogDeployRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CueCatalogDeployResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -14073,4 +14139,78 @@ components:
           type: string
         acknowledgedAt:
           type: string
+          format: date-time
+    CueCatalogDeployRequest:
+      type: object
+      description: >-
+        The body of POST /nodes/{nodeId}/cue-catalog/deploy. Carries only
+        an idempotency key - the catalog itself is always THIS
+        coordinator's own current resolution, never a request field.
+      additionalProperties: false
+      properties:
+        idempotencyKey:
+          type: string
+          description: >-
+            Optional; a fresh key is minted server-side when omitted. A
+            replayed key dispatches nothing and returns the original
+            command's own result, flagged `replay: true`.
+    CueCatalogDeployResponse:
+      type: object
+      description: The body of a successful (200) response from the deploy endpoint.
+      required: [serverTime, command]
+      additionalProperties: false
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        command:
+          $ref: "#/components/schemas/CueCatalogDeployResult"
+    CueCatalogDeployResult:
+      type: object
+      description: >-
+        What happened to one dispatched (or replayed) cuecatalog.deploy
+        command. outcome is never "successful" merely because the publish
+        to the node succeeded (ADR-003): it is decided by the node's own
+        result, which independently recomputes the catalog revision before
+        reporting it.
+      required:
+        [commandId, idempotencyKey, node, replay, show, generation,
+         revision, outcome, dispatchedAt]
+      additionalProperties: false
+      properties:
+        commandId:
+          type: string
+        idempotencyKey:
+          type: string
+        node:
+          type: string
+        replay:
+          type: boolean
+          description: >-
+            True when this response answers a REPLAYED idempotency key:
+            the command described here was NOT dispatched by this
+            request - it is the ORIGINAL command's already-recorded
+            result.
+        show:
+          type: string
+        generation:
+          type: integer
+        revision:
+          type: string
+          description: The catalog revision this coordinator resolved and dispatched.
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "refused", "failed"]
+        reason:
+          type: string
+        acknowledgedRevision:
+          type: string
+          description: >-
+            The revision the node reported holding after this deploy.
+            Present only when outcome is "confirmed".
+        dispatchedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: [string, "null"]
           format: date-time

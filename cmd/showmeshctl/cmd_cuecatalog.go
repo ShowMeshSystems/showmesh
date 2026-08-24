@@ -77,6 +77,30 @@ type cueCatalogAcknowledgeResponse struct {
 	AcknowledgedAt       time.Time `json:"acknowledgedAt"`
 }
 
+type cueCatalogDeployRequest struct {
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+}
+
+type cueCatalogDeployResult struct {
+	CommandID            string     `json:"commandId"`
+	IdempotencyKey       string     `json:"idempotencyKey"`
+	Node                 string     `json:"node"`
+	Replay               bool       `json:"replay"`
+	Show                 string     `json:"show"`
+	Generation           int64      `json:"generation"`
+	Revision             string     `json:"revision"`
+	Outcome              string     `json:"outcome"`
+	Reason               string     `json:"reason,omitempty"`
+	AcknowledgedRevision string     `json:"acknowledgedRevision,omitempty"`
+	DispatchedAt         time.Time  `json:"dispatchedAt"`
+	ResolvedAt           *time.Time `json:"resolvedAt,omitempty"`
+}
+
+type cueCatalogDeployResponse struct {
+	ServerTime time.Time              `json:"serverTime"`
+	Command    cueCatalogDeployResult `json:"command"`
+}
+
 // --- dispatch ---
 
 func cmdCueCatalog(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
@@ -93,6 +117,8 @@ func cmdCueCatalog(args []string, stdout, stderr io.Writer, clock func() time.Ti
 		return cmdCueCatalogGet(rest, stdout, stderr, clock)
 	case "acknowledge":
 		return cmdCueCatalogAcknowledge(rest, stdout, stderr, clock)
+	case "deploy":
+		return cmdCueCatalogDeploy(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl cuecatalog: unknown subcommand %q\n\n", sub)
 		printCueCatalogUsage(stderr)
@@ -108,6 +134,7 @@ Track H seam H3: a node's resolved Cue catalog and its acknowledgement.
 Subcommands:
   get <nodeId>                          GET /api/v1/nodes/<nodeId>/cue-catalog
   acknowledge <nodeId> <revision>       POST .../cue-catalog/acknowledge (write)
+  deploy <nodeId>                       POST .../cue-catalog/deploy (write)
 
 Run "showmeshctl cuecatalog <subcommand> -h" for that subcommand's own flags.
 `)
@@ -243,5 +270,67 @@ func cmdCueCatalogAcknowledge(args []string, stdout, stderr io.Writer, clock fun
 	}
 	_, _ = fmt.Fprintf(stdout, "node %s: %s (acknowledged=%s current=%s)\n",
 		resp.Node, resp.Status, resp.AcknowledgedRevision, resp.CurrentRevision)
+	return exitOK
+}
+
+// --- deploy ---
+
+func cmdCueCatalogDeploy(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl cuecatalog deploy", stderr)
+	var idempotencyKey string
+	fs.StringVar(&idempotencyKey, "idempotency-key", "", "reuse a prior request's key to replay its result instead of dispatching again")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl cuecatalog deploy <nodeId> [flags]")
+		_, _ = fmt.Fprintln(stderr, "\nResolve this coordinator's own current Cue catalog for <nodeId> and push it")
+		_, _ = fmt.Fprintln(stderr, "to the node (POST /api/v1/nodes/{nodeId}/cue-catalog/deploy). This is a")
+		_, _ = fmt.Fprintln(stderr, "write: requires the asset:write scope. On a confirmed outcome, the revision")
+		_, _ = fmt.Fprintln(stderr, "the node reports holding is also recorded as its acknowledgement.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "cuecatalog deploy", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	nodeID := rest[0]
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "cuecatalog deploy", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	req := cueCatalogDeployRequest{IdempotencyKey: idempotencyKey}
+	var resp cueCatalogDeployResponse
+	if err := c.postJSON(ctx, "/api/v1/nodes/"+url.PathEscape(nodeID)+"/cue-catalog/deploy", req, &resp); err != nil {
+		return reportError(stderr, "cuecatalog deploy", err)
+	}
+	printClockSkew(stderr, resp.ServerTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, resp); err != nil {
+			return reportError(stderr, "cuecatalog deploy", err)
+		}
+		return exitOK
+	}
+	cmd := resp.Command
+	_, _ = fmt.Fprintf(stdout, "node %s: %s show=%s generation=%d revision=%s", cmd.Node, cmd.Outcome, cmd.Show, cmd.Generation, cmd.Revision)
+	if cmd.Reason != "" {
+		_, _ = fmt.Fprintf(stdout, " reason=%q", cmd.Reason)
+	}
+	if cmd.AcknowledgedRevision != "" {
+		_, _ = fmt.Fprintf(stdout, " acknowledgedRevision=%s", cmd.AcknowledgedRevision)
+	}
+	if cmd.Replay {
+		_, _ = fmt.Fprint(stdout, " (replay)")
+	}
+	_, _ = fmt.Fprintln(stdout)
 	return exitOK
 }

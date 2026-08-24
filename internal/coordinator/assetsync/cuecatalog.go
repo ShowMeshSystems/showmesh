@@ -153,7 +153,16 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 		out.Audio = &cuecatalog.AudioOutput{
 			Asset:             payload.Outputs.Audio.Asset,
 			StartOffsetMillis: payload.Outputs.Audio.StartOffsetMillis,
-			AssetHashes:       contentHashesFor(assetsBySequence, payload.Outputs.Audio.Asset),
+			// assetsBySequence is keyed by AssetRecord.SequenceID, and
+			// payload.Outputs.Audio.Asset IS that same identity, not
+			// AssetRecord.ID: every asset, audio or render, is uploaded
+			// under a "sequence" parameter (internal/coordinator/api/
+			// assets.go's fields.sequence) that becomes SequenceID
+			// regardless of MediaType, so an audio Cue output names the
+			// same identity space a render Cue output's Sequence does —
+			// only ShowCueAudioOutput's own field is called "asset" rather
+			// than "sequence".
+			AssetHashes: contentHashesFor(assetsBySequence, payload.Outputs.Audio.Asset),
 		}
 	}
 	if payload.Outputs.LTC != nil && nodeHasAudioNode {

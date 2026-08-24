@@ -230,6 +230,7 @@ bundles of these (ADR-024).
 | `fpp:command` | shipped | the eight FPP primitives |
 | `fpp:observe` | shipped | SM-63/Track H: authenticated FPP playlist-entry observation ingestion |
 | `node:observe` | shipped | Track H seam H3: authenticated node cue-catalog acknowledgement |
+| `cuecatalog:deploy` | shipped | Track H seam H3: pushing a resolved cue catalog to a node |
 | `config:write` | shipped | every configuration write |
 | `audit:read` | shipped | audit log reads |
 | `resolume:action` | shipped | the seven Resolume actions |

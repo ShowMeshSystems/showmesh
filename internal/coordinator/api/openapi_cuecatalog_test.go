@@ -25,6 +25,7 @@ func TestOpenAPICueCatalogDocumentIsWellFormed(t *testing.T) {
 		"CueCatalogRenderOutput", "CueCatalogAudioOutput", "CueCatalogLTCOutput",
 		"CueCatalogAnnouncementOutput", "CueCatalogOutputs", "CueCatalogEntry", "CueCatalogResponse",
 		"CueCatalogAcknowledgeRequest", "CueCatalogAcknowledgeResponse",
+		"CueCatalogDeployRequest", "CueCatalogDeployResponse", "CueCatalogDeployResult",
 	} {
 		compileSchema(t, c, name)
 	}
@@ -320,5 +321,14 @@ func TestOpenAPICueCatalogResponsesMatchRealResponses(t *testing.T) {
 func TestOpenAPICueCatalogAcknowledgeRequestBodyReferencesDocumentedSchema(t *testing.T) {
 	if got := requestBodySchemaRef(t, "post", "/nodes/{nodeId}/cue-catalog/acknowledge"); got != "CueCatalogAcknowledgeRequest" {
 		t.Errorf("POST /nodes/{nodeId}/cue-catalog/acknowledge requestBody schema = %q, want CueCatalogAcknowledgeRequest", got)
+	}
+}
+
+// TestOpenAPICueCatalogDeployRequestBodyReferencesDocumentedSchema is
+// TestOpenAPICueCatalogAcknowledgeRequestBodyReferencesDocumentedSchema's
+// own sibling for the deploy route this build item adds.
+func TestOpenAPICueCatalogDeployRequestBodyReferencesDocumentedSchema(t *testing.T) {
+	if got := requestBodySchemaRef(t, "post", "/nodes/{nodeId}/cue-catalog/deploy"); got != "CueCatalogDeployRequest" {
+		t.Errorf("POST /nodes/{nodeId}/cue-catalog/deploy requestBody schema = %q, want CueCatalogDeployRequest", got)
 	}
 }

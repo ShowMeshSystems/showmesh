@@ -3,9 +3,12 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/google/uuid"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
@@ -148,6 +151,47 @@ func (h *handlers) handlePostNodeCueCatalogAcknowledge(w http.ResponseWriter, r 
 		return
 	}
 
+	// Resolved BEFORE anything is validated or stored: req.Show and
+	// req.Generation are a CALLER's claim, and storing or auditing them
+	// verbatim without checking them against this coordinator's own
+	// resolution would let a caller record (and have audited) a show and
+	// generation that were never true — a fresh-reviewer finding fixed
+	// here. The active show is also what the response's own resolution
+	// below needs, so it is only ever resolved once.
+	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
+	if err != nil {
+		h.writeInternalError(w, now, "resolve active show", err)
+		return
+	}
+	if !active.Configured || req.Show != active.ShowID || req.Generation != active.Generation {
+		detail := fmt.Sprintf("acknowledgement names show %q generation %d, which does not match this coordinator's currently resolved active show", req.Show, req.Generation)
+		if active.Configured {
+			detail = fmt.Sprintf("acknowledgement names show %q generation %d, but the active show is %q generation %d", req.Show, req.Generation, active.ShowID, active.Generation)
+		}
+		writeProblem(w, h.logger, now, invalidParameterProblem(detail))
+		return
+	}
+
+	// ADR-024 decision 11's dispatch/outcome split, matching session.go's
+	// handleDeleteSession precedent: the Dispatch entry is written and
+	// must succeed BEFORE the store write runs (a write that cannot be
+	// attributed does not proceed); the Outcome entry below is best-effort
+	// and never gates the response, since by then the store write has
+	// already happened and refusing to answer would only hide it from the
+	// caller. This used to run the store write BEFORE any audit entry at
+	// all, so an audit failure returned an error with the acknowledgement
+	// already written — a second fresh-reviewer finding fixed here.
+	commandID := uuid.NewString()
+	if !h.writeAuditOrFail(ctx, w, now, identity.AuditEntry{
+		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
+		Action: auditActionCueCatalogAcknowledge, Target: nodeID,
+		Kind: identity.AuditDispatch, CommandID: commandID,
+		Params: map[string]any{"revision": req.Revision, "show": req.Show, "generation": req.Generation},
+	}) {
+		return
+	}
+
 	if err := h.deps.AssetManifests.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
 		NodeID: nodeID, Revision: req.Revision, ShowID: req.Show, Generation: req.Generation, AcknowledgedAt: now,
 	}); err != nil {
@@ -155,35 +199,24 @@ func (h *handlers) handlePostNodeCueCatalogAcknowledge(w http.ResponseWriter, r 
 		return
 	}
 
-	entry := identity.AuditEntry{
-		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
+	outcomeNow := h.now()
+	outcome := identity.AuditEntry{
+		Timestamp: outcomeNow, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
-		Action: auditActionCueCatalogAcknowledge, Target: nodeID, Kind: identity.AuditOutcome,
+		Action: auditActionCueCatalogAcknowledge, Target: nodeID,
+		Kind: identity.AuditOutcome, CommandID: commandID,
 		Params:        map[string]any{"revision": req.Revision, "show": req.Show, "generation": req.Generation},
 		OutcomeReason: "acknowledged",
 	}
-	if !h.writeAuditOrFail(ctx, w, now, entry) {
-		return
-	}
-
-	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
-	if err != nil {
-		h.writeInternalError(w, now, "resolve active show", err)
-		return
+	if h.deps.Identity != nil {
+		if err := h.deps.Identity.WriteAudit(ctx, outcome); err != nil {
+			h.logWarn("cue catalog acknowledge outcome audit write failed", "node", nodeID, "error", err)
+		}
 	}
 
 	resp := v1.CueCatalogAcknowledgeResponse{
 		ServerTime: formatTime(now), Node: nodeID, AcknowledgedRevision: req.Revision,
 		AcknowledgedAt: formatTime(now),
-	}
-	if !active.Configured {
-		// No active show to resolve a current revision against: there is
-		// no "current" this acknowledgement could match, so it is stale by
-		// construction (H3 spec section 4: "no partial state").
-		resp.Configured = false
-		resp.Status = v1.CueCatalogStatusStale
-		jsonWrite(w, resp)
-		return
 	}
 
 	catalog, err := assetsync.ResolveCueCatalog(ctx, h.deps.AssetManifests, active, nodeID)

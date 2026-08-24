@@ -2446,6 +2446,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{nodeId}/cue-catalog/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deploy this node's resolved Cue catalog (Track H seam H3)
+         * @description Behind `cuecatalog:deploy` (admin only), deliberately not `asset:write`: deploying a catalog grants the node authority to execute Cues, which is a separate power from putting a file in the asset store. Resolves THIS coordinator's own current Cue catalog for `nodeId` (never a request-body value - there is nothing for a caller to supply) and dispatches `cuecatalog.deploy` to the node over MQTT, the same command path `POST .../render/surfaces/{surfaceId}/apply` uses one seam earlier.
+         *
+         *     `outcome` is `"confirmed"` only once the node's own result reports it has independently recomputed and persisted the identical revision this dispatch sent (ADR-003: a bare successful publish is never conflated with the node having accepted anything). On a confirmed outcome, the revision the node reports holding is also recorded via the same acknowledgement path `POST .../cue-catalog/acknowledge` uses, so `GET /nodes/{nodeId}/cue-catalog` and its own acknowledge route can report `catalog-current` from a real deployment. `400` when no `show.active` is configured (there is nothing to deploy); `404` when `nodeId` does not name a declared node.
+         */
+        post: operations["dispatchCueCatalogDeploy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5132,6 +5154,38 @@ export interface components {
             currentRevision?: string;
             /** Format: date-time */
             acknowledgedAt: string;
+        };
+        /** @description The body of POST /nodes/{nodeId}/cue-catalog/deploy. Carries only an idempotency key - the catalog itself is always THIS coordinator's own current resolution, never a request field. */
+        CueCatalogDeployRequest: {
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key dispatches nothing and returns the original command's own result, flagged `replay: true`. */
+            idempotencyKey?: string;
+        };
+        /** @description The body of a successful (200) response from the deploy endpoint. */
+        CueCatalogDeployResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            command: components["schemas"]["CueCatalogDeployResult"];
+        };
+        /** @description What happened to one dispatched (or replayed) cuecatalog.deploy command. outcome is never "successful" merely because the publish to the node succeeded (ADR-003): it is decided by the node's own result, which independently recomputes the catalog revision before reporting it. */
+        CueCatalogDeployResult: {
+            commandId: string;
+            idempotencyKey: string;
+            node: string;
+            /** @description True when this response answers a REPLAYED idempotency key: the command described here was NOT dispatched by this request - it is the ORIGINAL command's already-recorded result. */
+            replay: boolean;
+            show: string;
+            generation: number;
+            /** @description The catalog revision this coordinator resolved and dispatched. */
+            revision: string;
+            /** @enum {string} */
+            outcome: "confirmed" | "unconfirmed" | "refused" | "failed";
+            reason?: string;
+            /** @description The revision the node reported holding after this deploy. Present only when outcome is "confirmed". */
+            acknowledgedRevision?: string;
+            /** Format: date-time */
+            dispatchedAt: string;
+            /** Format: date-time */
+            resolvedAt?: string | null;
         };
     };
     responses: {
@@ -10032,6 +10086,41 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    dispatchCueCatalogDeploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Same ID syntax as an MQTT node ID: 1-64 characters, lowercase letters/digits/hyphens, not starting or ending with a hyphen. */
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CueCatalogDeployRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueCatalogDeployResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

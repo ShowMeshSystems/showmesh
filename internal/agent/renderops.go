@@ -128,26 +128,34 @@ func parseSurfaceID(action string, params map[string]any) (string, error) {
 }
 
 // parseAssignmentAuth extracts params' optional TRACK-H-H3-SPEC.md section 7
-// authorization tuple ("show", "generation", "catalogRevision") for
+// authorization tuple ("generation", "catalogRevision", plus "show") for
 // persisting on the resulting [pipeline.Assignment]. Absent means an
 // assignment applied before H3's boot-clearing rule existed, or one applied
 // by a coordinator that has not yet started sending H4's full activation
 // envelope — both are the same "no tuple" case downstream (build item 4:
 // treated as unauthorized at boot, never grandfathered), so this function
 // returns (nil, nil) rather than a zero-value tuple, and the caller
-// distinguishes the two via the pointer. All three fields must be present
-// together, or none: a caller sending a partial tuple is a bug upstream, not
-// a case to silently paper over with a mixed real/zero tuple that could
-// pass a later boot comparison by accident.
+// distinguishes the two via the pointer.
+//
+// "show" is NOT part of this presence test: it was already a
+// renderApplyKnownKeys member and a required top-level render.surface.apply
+// field before this seam existed (internal/coordinator/api/renderdispatch.go's
+// renderApplyParamsPayload.Show has no omitempty and is always populated by
+// the real coordinator), so every real apply already carries it regardless
+// of whether H3's tuple is present. Only "generation" and "catalogRevision"
+// are new with this seam, so only they gate whether the tuple is present at
+// all; a caller sending exactly one of those two (and not the other) is a
+// bug upstream, not a case to silently paper over with a mixed real/zero
+// tuple that could pass a later boot comparison by accident. "show" is read
+// for the tuple once the other two are present.
 func parseAssignmentAuth(action string, params map[string]any) (*pipeline.AssignmentAuth, error) {
-	_, hasShow := params["show"]
 	_, hasGeneration := params["generation"]
 	_, hasCatalogRevision := params["catalogRevision"]
-	if !hasShow && !hasGeneration && !hasCatalogRevision {
+	if !hasGeneration && !hasCatalogRevision {
 		return nil, nil
 	}
-	if !hasShow || !hasGeneration || !hasCatalogRevision {
-		return nil, fmt.Errorf("%s: params.show, params.generation, and params.catalogRevision must be supplied together or not at all", action)
+	if !hasGeneration || !hasCatalogRevision {
+		return nil, fmt.Errorf("%s: params.generation and params.catalogRevision must be supplied together or not at all", action)
 	}
 
 	show, ok := params["show"].(string)

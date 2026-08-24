@@ -2,11 +2,13 @@ package assetsync
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
 // putConfigRev writes payload as the given revision of (kind, id) and
@@ -463,5 +465,217 @@ func TestCueCatalogAudioOnlyCueYieldsEmptyOutputsForNodeWithNoAudioNode(t *testi
 	out := catalog.Entries[0].Outputs
 	if out.Audio != nil || out.LTC != nil || out.Announcement != nil || out.Render != nil {
 		t.Fatalf("ResolveCueCatalog entries[0].Outputs = %+v, want every output absent (render-01 has neither a surface nor an audio.node object)", out)
+	}
+}
+
+// TestCueCatalogAudioOutputResolvesHashesBySequenceIDNotAssetRowID proves
+// build item 4's own question: outputs.audio.asset names the SAME identity
+// space AssetRecord.SequenceID does (every asset, audio or render, is
+// uploaded under a "sequence" parameter regardless of MediaType — see
+// resolveCueOutputs' own comment on the Audio branch), not
+// AssetRecord.ID. A real stored audio asset is created with a SequenceID
+// equal to the Cue's outputs.audio.asset value and a content hash distinct
+// from its own store-generated row id, so a lookup that used AssetID
+// instead of SequenceID would find nothing and this test would see an
+// empty AssetHashes.
+func TestCueCatalogAudioOutputResolvesHashesBySequenceIDNotAssetRowID(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "audio-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putAudioNode(t, st, "audio-01")
+	putCue(t, st, "thriller", "halloween-2026", config.ShowCuePayload{
+		Name:    "Thriller",
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "thriller-audio"}},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "thriller"))
+	putActiveShow(t, st, "halloween-2026")
+
+	const contentHash = "deadbeef00000000000000000000000000000000000000000000000000ab"
+	rec := createAsset(t, st, "halloween-2026", "thriller-audio", store.AssetTargetKindShow, "", contentHash, "thriller-audio.wav")
+	if rec.ID == contentHash {
+		t.Fatalf("test fixture's asset row id %q must differ from its content hash %q, or this test cannot distinguish a SequenceID lookup from an AssetID lookup", rec.ID, contentHash)
+	}
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := ResolveCueCatalog(ctx, st, active, "audio-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	if len(catalog.Entries) != 1 {
+		t.Fatalf("ResolveCueCatalog entries = %+v, want exactly one", catalog.Entries)
+	}
+	out := catalog.Entries[0].Outputs
+	if out.Audio == nil {
+		t.Fatalf("ResolveCueCatalog entries[0].Outputs.Audio is nil, want set")
+	}
+	if len(out.Audio.AssetHashes) != 1 || out.Audio.AssetHashes[0] != contentHash {
+		t.Fatalf("ResolveCueCatalog entries[0].Outputs.Audio.AssetHashes = %+v, want [%q] (looked up by SequenceID %q, not AssetID %q)",
+			out.Audio.AssetHashes, contentHash, "thriller-audio", rec.ID)
+	}
+}
+
+// cueCatalogDeployWireParamsForTest mirrors internal/agent/cuecatalogops.go's
+// own catalogDeployWireParams field for field and tag for tag AND
+// internal/coordinator/api/cuecatalogdeploy.go's cueCatalogDeployWireParams
+// — this package cannot import either (internal/agent must never import
+// internal/coordinator, and this file already lives in
+// internal/coordinator/assetsync), so it is independently reproduced a
+// third time, matching this project's standing each-side-of-a-wire-
+// boundary-decodes-independently convention.
+type cueCatalogDeployWireParamsForTest struct {
+	Show       string             `json:"show"`
+	Generation int64              `json:"generation"`
+	Revision   string             `json:"revision"`
+	Entries    []cuecatalog.Entry `json:"entries"`
+}
+
+// TestCueCatalogRevisionAgreesAfterWireRoundTrip is this build item's own
+// cross-boundary regression coverage. The reviewer's finding: every prior
+// revision-agreement test (both here and internal/agent/cuecatalogops_
+// test.go's computeExpectedRevision) computes its "expected" value from
+// entries the SAME test hand-authored, which proves nothing about whether
+// a REAL resolved catalog survives the actual cuecatalog.deploy wire
+// shape unchanged. internal/agent must never import internal/coordinator
+// (pkg/cuecatalog's own doc comment), so this file cannot call the
+// agent's catalogDeployOperation.deploy directly — a real coordinator
+// resolution IS crossed here as far as this project's own layering rule
+// allows: [ResolveCueCatalog]'s real output is marshaled through the
+// EXACT wire shape cuecatalog.deploy carries (cueCatalogDeployWireParamsForTest,
+// built from the real cuecatalog.Entry values ResolveCueCatalog produced,
+// never re-authored by hand) and decoded back with encoding/json — the
+// same decode internal/agent/cuecatalogops.go's deploy operation performs
+// — before recomputing the revision via [cuecatalog.ComputeRevision], the
+// ONE function both sides call. Agreement here rules out every wire/
+// marshalling-shaped disagreement (JSON number precision, field
+// omission, nil-vs-empty-slice, sort-order-sensitive canonicalization);
+// what it cannot rule out is a defect in internal/agent's own Go code
+// path, which is why cuecatalogops_test.go's own suite (against fixed,
+// hand-authored entries) remains that package's job to cover.
+//
+// Covers all three of this build item's required shapes in one
+// resolution each: media-01 (holds both a surface and an audio.node)
+// gets a render Cue whose sequence has TWO current assets (a node-
+// targeted upload and a show-targeted upload with different bytes, so
+// AssetHashes has two DISTINCT non-empty entries) and an announcement Cue
+// with a non-nil duckGainDb; quiet-01 (holds neither) gets an audio-only
+// Cue that resolves to a catalog Entry with every output field nil.
+func TestCueCatalogRevisionAgreesAfterWireRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "media-01")
+	declareNode(t, st, "quiet-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putSurface(t, st, "wall", "halloween-2026", "media-01")
+	putAudioNode(t, st, "media-01")
+
+	putCue(t, st, "opener", "halloween-2026", config.ShowCuePayload{
+		Name:    "Opener",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "opener"}},
+	})
+	duckGain := -6.0
+	putCue(t, st, "announce", "halloween-2026", config.ShowCuePayload{
+		Name: "Announce",
+		Outputs: config.ShowCueOutputs{
+			Audio: &config.ShowCueAudioOutput{Asset: "announce-track"},
+			Announcement: &config.ShowCueAnnouncementOutput{
+				Policy: config.ShowCueAnnouncementPolicyDuck, DuckGainDb: &duckGain, FadeMillis: 250,
+			},
+		},
+	})
+	putCue(t, st, "silent-elsewhere", "halloween-2026", config.ShowCuePayload{
+		Name:    "Silent Elsewhere",
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "background-track"}},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "opener", "announce", "silent-elsewhere"))
+	putActiveShow(t, st, "halloween-2026")
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+
+	// Two DISTINCT current assets for sequence "opener": one node-
+	// targeted, one show-targeted, deliberately different content so
+	// AssetHashes ends up with two entries, not one deduplicated one.
+	const hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const hashB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	createAsset(t, st, "halloween-2026", "opener", store.AssetTargetKindNode, "media-01", hashA, "opener-node.fseq")
+	createAsset(t, st, "halloween-2026", "opener", store.AssetTargetKindShow, "", hashB, "opener-show.fseq")
+
+	mediaCatalog, err := ResolveCueCatalog(ctx, st, active, "media-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog (media-01): %v", err)
+	}
+	if len(mediaCatalog.Entries) != 3 {
+		t.Fatalf("media-01 catalog entries = %+v, want 3 (opener, announce, silent-elsewhere)", mediaCatalog.Entries)
+	}
+	assertRoundTripRevisionAgrees(t, mediaCatalog)
+
+	var openerEntry, announceEntry cuecatalog.Entry
+	for _, e := range mediaCatalog.Entries {
+		switch e.CueID {
+		case "opener":
+			openerEntry = e
+		case "announce":
+			announceEntry = e
+		}
+	}
+	if openerEntry.Outputs.Render == nil || len(openerEntry.Outputs.Render.AssetHashes) != 2 {
+		t.Fatalf("opener entry render output = %+v, want exactly 2 asset hashes", openerEntry.Outputs.Render)
+	}
+	gotHashes := map[string]bool{openerEntry.Outputs.Render.AssetHashes[0]: true, openerEntry.Outputs.Render.AssetHashes[1]: true}
+	if !gotHashes[hashA] || !gotHashes[hashB] {
+		t.Fatalf("opener entry render asset hashes = %+v, want %q and %q in some order", openerEntry.Outputs.Render.AssetHashes, hashA, hashB)
+	}
+	if announceEntry.Outputs.Announcement == nil || announceEntry.Outputs.Announcement.DuckGainDb == nil || *announceEntry.Outputs.Announcement.DuckGainDb != duckGain {
+		t.Fatalf("announce entry announcement output = %+v, want DuckGainDb = %v", announceEntry.Outputs.Announcement, duckGain)
+	}
+
+	quietCatalog, err := ResolveCueCatalog(ctx, st, active, "quiet-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog (quiet-01): %v", err)
+	}
+	if len(quietCatalog.Entries) != 3 {
+		t.Fatalf("quiet-01 catalog entries = %+v, want 3", quietCatalog.Entries)
+	}
+	assertRoundTripRevisionAgrees(t, quietCatalog)
+	for _, e := range quietCatalog.Entries {
+		if e.CueID != "silent-elsewhere" {
+			continue
+		}
+		if e.Outputs.Render != nil || e.Outputs.Audio != nil || e.Outputs.LTC != nil || e.Outputs.Announcement != nil {
+			t.Fatalf("quiet-01's silent-elsewhere entry outputs = %+v, want every field nil (quiet-01 holds neither a surface nor an audio.node object)", e.Outputs)
+		}
+	}
+}
+
+// assertRoundTripRevisionAgrees marshals catalog through the real
+// cuecatalog.deploy wire shape, decodes it back, recomputes the revision
+// via [cuecatalog.ComputeRevision] against the round-tripped entries, and
+// fails t unless it equals catalog.Revision exactly.
+func assertRoundTripRevisionAgrees(t *testing.T, catalog Catalog) {
+	t.Helper()
+	raw, err := json.Marshal(cueCatalogDeployWireParamsForTest{
+		Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision, Entries: catalog.Entries,
+	})
+	if err != nil {
+		t.Fatalf("marshal cuecatalog.deploy wire params: %v", err)
+	}
+	var wire cueCatalogDeployWireParamsForTest
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("decode cuecatalog.deploy wire params: %v", err)
+	}
+	recomputed, err := cuecatalog.ComputeRevision(cuecatalog.RevisionInput{
+		Show: wire.Show, Generation: wire.Generation, Node: catalog.Node, Entries: wire.Entries,
+	})
+	if err != nil {
+		t.Fatalf("recompute revision after wire round trip: %v", err)
+	}
+	if recomputed != catalog.Revision {
+		t.Fatalf("revision recomputed after a wire round trip = %q, want the original resolved revision %q (node %q)", recomputed, catalog.Revision, catalog.Node)
 	}
 }

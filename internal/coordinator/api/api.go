@@ -1822,6 +1822,12 @@ func New(deps Dependencies, opts Options) *API {
 	// an acknowledgement is not a configuration write.
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/cue-catalog", h.readGuard(identity.ScopeObservationRead, h.handleGetNodeCueCatalog))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/acknowledge", h.writeGuard(&scopeNodeObserve, h.handlePostNodeCueCatalogAcknowledge))
+	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
+	// resolve, dispatch cuecatalog.deploy, and record the node's own
+	// reported revision through the same PutNodeCueCatalogAck path the
+	// acknowledge route above uses. asset:write, matching this route's own
+	// doc comment on why it reuses that scope rather than minting one.
+	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/deploy", h.writeGuard(&scopeCueCatalogDeploy, h.handlePostNodeCueCatalogDeploy))
 	// GET /api/v1/resolume/recovery (Track D seam D-3a): the open read —
 	// never gated, per ADR-024's reads-stay-open posture and the build
 	// contract §1.3's own "the dashboard renders with no session"

@@ -209,10 +209,20 @@ func Run() int {
 		for _, a := range persisted {
 			if decision := decideBootResume(a, heldCatalog, hasCatalog); !decision.Authorized {
 				logger.Warn("discarding a persisted render assignment at startup: authorization tuple did not match this node's held Cue catalog", "surface_id", a.SurfaceID, "reason", decision.Reason)
-				sup.MarkResumeFailed(a.SurfaceID, decision.Reason)
+				reason := decision.Reason
 				if err := assignmentStore.Remove(a.SurfaceID); err != nil {
+					// The surface still ends up StateFailed either way (never
+					// half-cleared), but a failed disk write here means the
+					// discarded assignment is still ON DISK and would resume
+					// again next boot if the underlying disk problem clears
+					// without an operator ever having been told — a bare log
+					// Warn is easy to miss, so the state reason itself names
+					// it, matching the "state with evidence, never a silent
+					// no-op" posture every other refusal in this seam follows.
 					logger.Warn("failed to remove a discarded render assignment from disk", "surface_id", a.SurfaceID, "error", err)
+					reason = fmt.Sprintf("%s (also failed to remove the discarded assignment from disk: %v)", reason, err)
 				}
+				sup.MarkResumeFailed(a.SurfaceID, reason)
 				continue
 			}
 
