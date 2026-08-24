@@ -283,8 +283,9 @@ func cmdCueCatalogDeploy(args []string, stdout, stderr io.Writer, clock func() t
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl cuecatalog deploy <nodeId> [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nResolve this coordinator's own current Cue catalog for <nodeId> and push it")
 		_, _ = fmt.Fprintln(stderr, "to the node (POST /api/v1/nodes/{nodeId}/cue-catalog/deploy). This is a")
-		_, _ = fmt.Fprintln(stderr, "write: requires the asset:write scope. On a confirmed outcome, the revision")
-		_, _ = fmt.Fprintln(stderr, "the node reports holding is also recorded as its acknowledgement.")
+		_, _ = fmt.Fprintln(stderr, "write: requires the cuecatalog:deploy scope (admin only). On a")
+		_, _ = fmt.Fprintln(stderr, "confirmed outcome, the revision the node reports holding is also")
+		_, _ = fmt.Fprintln(stderr, "recorded as its acknowledgement.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
