@@ -108,29 +108,65 @@ physical switch closes item 5's IGMP question.
 FalconChristmas/fpp does not publish tagged images beyond `latest`, and its
 `dockerBuild.sh` takes an `FPPBRANCH` build argument, so pinned versions are
 built locally from source via a git-URL Docker build context. Confirmed
-directly against the upstream repository (`git ls-remote`, 2026-08-10):
+directly against the upstream repository
+(`git ls-remote https://github.com/FalconChristmas/fpp.git 'refs/tags/<tag>^{}'`):
 
-| RES-002 target | Branch (moves) | Tags on that branch (pin to one of these) |
-|---|---|---|
-| 9.5, current stable | `v9.5` | `9.5`, `9.5.1`, `9.5.2`, `9.5.3` |
-| 10.0 beta | `v10.0-beta` | `10.0-beta`, `10.0-beta2`, `10.0-beta3` |
+| Bench target | Branch (moves) | Tag this bench pins to | Confirmed upstream commit |
+|---|---|---|---|
+| 9.5, current stable (default) | `v9.5` | `9.5.3` | `7979a4bb0bb9068fea71f3b447e273d5c0ea01e3` |
+| 10.0, current stable | `v10.0` (release, not `-beta`) | `10.0` | `370e62ed7e8c8318da6ee5b01312b8b75082d952` |
 
 `docker-compose.yml` pins `FPP_GIT_REF` to an explicit **tag**, not the
 floating branch name, for the same reason
 `deploy/docker-compose.yml` pins Mosquitto to an exact patch version rather
 than a floating minor tag: a tag pin means a rebuild months from now
-reproduces the same FPP. Default is `9.5.3`. To build the 10.0 beta target
-instead, set in `.env`:
+reproduces the same FPP. Default is `9.5.3`. Both targets are first-class:
+the same `docker-compose.yml`, `.env.example`, and `FPP_GIT_REF` variable
+select either, side by side. There is no separate v10 compose file and no
+version-branching in this bench's own code — the source build already
+takes any upstream tag, so supporting FPP 10 here is a matter of building
+with a different `FPP_GIT_REF`, not new scaffolding.
+
+To build the 10.0 target instead of the 9.5.3 default, set in `.env`:
 
 ```
-FPP_GIT_REF=10.0-beta3
+FPP_GIT_REF=10.0
 ```
 
 then `docker compose build fpp-master`. Building from source pulls FPP's own
 prebuilt package repo for most dependencies rather than compiling
 everything locally, so a build takes on the order of a couple of minutes on
 a development machine, not the much longer full-recompile time you might
-expect — confirmed while building this bench (see below).
+expect — confirmed while building this bench (see below), and reconfirmed
+for the 10.0 tag while adding FPP 10 support.
+
+**Running a 9.5.3 bench and a 10.0 bench side by side.** `docker-compose.yml`
+gives every host port and the container/volume names a single instance's
+worth of identity (`showmesh-bench-fpp-master`, `FPP_MASTER_HTTP_PORT`), so
+two versions cannot run from the same `.env` at the same time. To have both
+up at once, run this bench twice with distinct `.env` files (or
+`COMPOSE_PROJECT_NAME`/port/volume overrides) — e.g. a `.env` with
+`FPP_GIT_REF=9.5.3` and default ports for one, and a second `.env` with
+`FPP_GIT_REF=10.0`, a different `FPP_MASTER_HTTP_PORT`, and a different
+`COMPOSE_PROJECT_NAME` for the other:
+
+```
+docker compose --env-file .env -p showmesh-fpp95 up -d --build fpp-master
+docker compose --env-file .env.v10 -p showmesh-fpp10 up -d --build fpp-master
+```
+
+Ordinarily, though, only one bench target is needed at a time: switch
+`FPP_GIT_REF` in `.env` and rebuild, the same way you would switch any other
+bench setting.
+
+**What differs between the two targets, as built here.** The 9.5.3 image's
+Debian base and web UI are the "How this bench was validated" baseline
+below. The 10.0 build was confirmed (see "FPP 10 verification" below) to
+also build clean via the same `Docker/Dockerfile`/`dockerBuild.sh` path and
+answer the same REST endpoints (`/api/system/info`,
+`/api/fppd/status`, `/api/fppd/ports`, `/api/fppd/multiSyncSystems`); this
+README has not exhaustively diffed every response shape between the two —
+that is SM-210's job, not this bench's.
 
 ## CI's prebuilt test fixture
 
@@ -184,13 +220,44 @@ identical contents. Only a `sha256` image digest is immutable.
 run the `Build FPP test image` workflow (`workflow_dispatch`) with
 `fpp_ref`, `fpp_commit`, and `image_tag` inputs; it verifies `fpp_commit`
 actually resolves from `fpp_ref` upstream before building. Take the
-resulting digest from the job's summary.
+resulting digest from the job's summary. The workflow's inputs default to
+the current 9.5.3 fixture, so a careless dispatch (accepting every default)
+republishes 9.5.3, never silently starts publishing something else as CI's
+fixture.
+
+**Publishing a 10.0 fixture** works the same way, with explicit inputs
+(defaults are never enough on their own for this — they exist so a
+no-input dispatch stays 9.5.3):
+
+```
+fpp_ref:    10.0
+fpp_commit: 370e62ed7e8c8318da6ee5b01312b8b75082d952
+image_tag:  10.0-build1
+```
+
+`image_tag` convention: `<fpp_ref>-build<N>`, `N` incrementing per
+re-publish of the same `fpp_ref` (`9.5.3-build1`, `10.0-build1`,
+`10.0-build2`, ...) — the same pattern the 9.5.3 fixture already uses.
 
 **Pointing CI at a new image** is a separate, deliberate step: publishing
 does not move CI to it. Replace the digest in `docker-compose.prebuilt.yml`'s
 `image: ${SHOWMESH_FPP_TEST_IMAGE:-...}` default with the
 `ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:...` reference the publish
-job's summary prints.
+job's summary prints. Until a v10 fixture is deliberately pointed at, CI's
+default fixture and `docker-compose.prebuilt.yml`'s default digest both stay
+9.5.3.
+
+**Using a published v10 fixture locally without touching CI's default**:
+`docker-compose.prebuilt.yml`'s `image:` already reads
+`SHOWMESH_FPP_TEST_IMAGE` before falling back to the pinned 9.5.3 digest, so
+point a local run at a published v10 digest by exporting it rather than
+editing the file:
+
+```
+export SHOWMESH_FPP_TEST_IMAGE=ghcr.io/showmeshsystems/showmesh-fpp-test@sha256:<v10 digest>
+docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull fpp-master
+docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml up -d fpp-master
+```
 
 **Fork pull requests cannot run the FPP integration workflow.** A pull
 request from a fork gets a `GITHUB_TOKEN` scoped to the fork, which cannot
@@ -403,3 +470,46 @@ diagnose and will otherwise cost the same time again:
   Desktop's virtualized bridge network, not of FPP or of this bench's
   wiring, but it was not tracked down further than that. It was not
   observed against Mode B, which was not testable on this machine.
+
+## FPP 10 verification
+
+Confirmed while adding FPP 10 as a first-class bench target: `FPP_GIT_REF=10.0`
+source-builds and runs a real `fppd` through this same `docker-compose.yml`,
+no separate compose file or code path needed.
+
+- **Build:** `docker compose -f docker-compose.yml build fpp-master` with
+  `FPP_GIT_REF=10.0` completed successfully, producing an image from
+  upstream commit `370e62ed7e8c8318da6ee5b01312b8b75082d952`.
+- **One caveat hit during the build, worth recording so it does not cost
+  the same time again:** the first attempt failed with
+  `fatal: No url found for submodule path 'external/rpi_ws281x' in
+  .gitmodules`. This is not an upstream FPP 10 defect — `external/rpi_ws281x`
+  is a real submodule on the 9.5 line but was removed from `.gitmodules` by
+  the 10.0 tag, and Docker's buildx git-source cache had a stale shared
+  mirror left over from an earlier 9.5.3 build on this machine that still
+  carried that submodule's registration. `docker buildx prune` (clearing the
+  stale `source.git.checkout` cache) resolved it; a machine that has never
+  built this repo's 9.5.3 target would not hit this at all.
+- **`fppd` comes up and answers real REST endpoints:** confirmed via
+  `curl http://localhost:<port>/api/system/info`,
+  `/api/fppd/status` (idle and with a playlist started),
+  `/api/fppd/ports`, and `/api/fppd/multiSyncSystems`. Every response
+  reports `majorVersion: 10`, `minorVersion: 0`, `version: "10.0"`, and
+  `system/info`'s `LocalGitVersion: "370e62ed7"` — a real FPP 10.0 build at
+  the pinned commit, not a mislabeled 9.5 image. Raw response bodies are
+  captured at
+  `internal/coordinator/collector/fpp/testdata/v10-bench/` (see that
+  directory's own README) for later steps of the FPP 10 migration that need
+  a v10 REST capture to work from.
+- **The 9.5.3 default still builds and starts unchanged**, confirmed the
+  same session: `docker compose -f docker-compose.yml build fpp-master`
+  with no `FPP_GIT_REF` override (the `9.5.3` default) and
+  `docker compose -f docker-compose.yml up -d fpp-master` came up and
+  answered `/api/fppd/status` exactly as before.
+- **Not verified in this pass:** running a 9.5.3 and a 10.0 bench
+  simultaneously (see "Running a 9.5.3 bench and a 10.0 bench side by side"
+  above for the mechanism — separate `.env`/project name/ports — which was
+  not itself exercised); the MultiSync packet-cadence and lifecycle
+  evidence "How this bench was validated" recorded for 9.5.3 above was not
+  independently re-run against 10.0; and Mode B (macvlan) was not tested
+  for either version, consistent with the rest of this README.

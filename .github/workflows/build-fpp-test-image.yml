@@ -9,6 +9,17 @@ name: Build FPP test image
 # edit to bench/fpp-multisync/docker-compose.prebuilt.yml's default. See
 # that file and bench/fpp-multisync/README.md for the publish-then-point
 # workflow.
+#
+# Defaults below stay pinned to 9.5.3 so a careless dispatch (accepting
+# every default) republishes the current 9.5.3 fixture, never silently
+# starts publishing FPP 10 as CI's fixture. To publish a 10.0 fixture,
+# override all three inputs explicitly:
+#   fpp_ref:    10.0
+#   fpp_commit: 370e62ed7e8c8318da6ee5b01312b8b75082d952
+#   image_tag:  10.0-build1
+# (bump the trailing build number for a re-publish of the same fpp_ref).
+# The commit-verification step below applies identically to any fpp_ref --
+# it is not special-cased to 9.5.3.
 
 on:
   workflow_dispatch:
