@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
 const validShowModeBody = `{"mode":"show"}`
@@ -305,6 +307,97 @@ func TestGetShowModeConfigRevisionsListsNewestFirst(t *testing.T) {
 	}
 	if first["active"] != true {
 		t.Errorf("revisions[0].active = %v, want true", first["active"])
+	}
+}
+
+// interleavedConfigStore is [ConfigStore] with one deliberate seam: after
+// its FIRST GetConfigRevision call returns, it runs afterFirstRevision,
+// which lands a second write directly against the same underlying store.
+// That first call is resolveShowMode's own revision read, so the write
+// lands exactly between it and anything handleGetShowModeConfig does
+// afterward, with no sleep and no goroutine race.
+type interleavedConfigStore struct {
+	*store.Store
+	afterFirstRevision func()
+	revisionCalls      int
+}
+
+func (s *interleavedConfigStore) GetConfigRevision(ctx context.Context, kind, id string, revision int64) (store.ConfigRevisionRecord, error) {
+	rec, err := s.Store.GetConfigRevision(ctx, kind, id, revision)
+	s.revisionCalls++
+	if s.revisionCalls == 1 && s.afterFirstRevision != nil {
+		s.afterFirstRevision()
+	}
+	return rec, err
+}
+
+// TestGetShowModeConfigDoesNotTearReadAcrossAConcurrentActivation guards
+// the pairing invariant of GET /api/v1/config/show.mode: the revision
+// number and metadata the response reports and the payload it reports must
+// always describe the SAME revision, even when a PUT activates a new
+// revision between the handler's store reads.
+func TestGetShowModeConfigDoesNotTearReadAcrossAConcurrentActivation(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	// Revision 1, mode "show", is the value in place when the GET starts.
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.mode", `{"mode":"show"}`,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	setupAPI := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	if resp, body := doRawRequest(t, setupAPI.Handler, putReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	racyStore := &interleavedConfigStore{Store: st}
+	deps := configTestDeps(svc, st)
+	deps.Config = racyStore
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// Simulates a concurrent PUT landing after resolveShowMode's revision
+	// read: revision 2, mode "program", activated directly against the
+	// same store - the same two writes handlePutShowModeConfig itself
+	// makes, just outside this GET's own request lifecycle.
+	racyStore.afterFirstRevision = func() {
+		ctx := context.Background()
+		rec, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+			Kind: config.ShowModeConfigKind, ObjectID: config.ShowModeConfigObjectID,
+			Revision: 2, PayloadJSON: `{"mode":"program"}`,
+			CreatedByPrincipalID: admin.ID, CreatedByPrincipalName: admin.Name,
+			Source: config.ShowModeSourceAPI,
+		})
+		if err != nil {
+			t.Fatalf("interleaved CreateConfigRevision: %v", err)
+		}
+		if _, err := st.ActivateConfigRevision(ctx, rec.Kind, rec.ObjectID, rec.Revision); err != nil {
+			t.Fatalf("interleaved ActivateConfigRevision: %v", err)
+		}
+	}
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/show.mode",
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	revision := m["revision"]
+	payload, _ := m["payload"].(map[string]any)
+	mode := payload["mode"]
+
+	// Whichever revision the response names, its payload must be THAT
+	// revision's own payload: revision 1 paired with "show", or revision 2
+	// paired with "program". Revision 2 paired with "show" is the tear.
+	switch revision {
+	case float64(1):
+		if mode != "show" {
+			t.Fatalf("revision = 1 but payload.mode = %v, want show (torn read)", mode)
+		}
+	case float64(2):
+		if mode != "program" {
+			t.Fatalf("revision = 2 but payload.mode = %v, want program (torn read)", mode)
+		}
+	default:
+		t.Fatalf("revision = %v, want 1 or 2", revision)
 	}
 }
 

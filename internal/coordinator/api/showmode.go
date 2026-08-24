@@ -53,28 +53,35 @@ const maxShowModeConfigRequestBodyBytes = 1024
 // own store returns an error, and the caller reports the failure; it does
 // not manufacture a mode. "unknown" is the NODE's word for a mode it has
 // never received (ADR-033 decision 5), and it lives in internal/agent.
-func resolveShowMode(ctx context.Context, cs ConfigStore) (payload config.ShowModePayload, configured bool, err error) {
-	obj, err := cs.GetConfigObject(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID)
+//
+// obj and rev are the exact store records the returned payload was decoded
+// from. A caller building a response MUST use these instead of re-reading
+// the store: a re-read can observe a revision a concurrent PUT activated
+// after this function's own read, pairing the NEW revision number and
+// metadata with the OLD decoded payload. obj and rev are zero when
+// configured is false.
+func resolveShowMode(ctx context.Context, cs ConfigStore) (payload config.ShowModePayload, obj store.ConfigObjectRecord, rev store.ConfigRevisionRecord, configured bool, err error) {
+	obj, err = cs.GetConfigObject(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID)
 	switch {
 	case errors.Is(err, store.ErrConfigObjectNotFound):
-		return config.ShowModeDefaultPayload, false, nil
+		return config.ShowModeDefaultPayload, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{}, false, nil
 	case err != nil:
-		return config.ShowModePayload{}, false, fmt.Errorf("api: get show.mode config object: %w", err)
+		return config.ShowModePayload{}, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{}, false, fmt.Errorf("api: get show.mode config object: %w", err)
 	case obj.CurrentRevision == 0:
-		return config.ShowModeDefaultPayload, false, nil
+		return config.ShowModeDefaultPayload, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{}, false, nil
 	}
 
-	rev, err := cs.GetConfigRevision(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID, obj.CurrentRevision)
+	rev, err = cs.GetConfigRevision(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID, obj.CurrentRevision)
 	if err != nil {
-		return config.ShowModePayload{}, false, fmt.Errorf("api: get show.mode config revision %d: %w", obj.CurrentRevision, err)
+		return config.ShowModePayload{}, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{}, false, fmt.Errorf("api: get show.mode config revision %d: %w", obj.CurrentRevision, err)
 	}
 	payload, verr := config.DecodeShowModePayload(rev.PayloadJSON)
 	if verr != nil {
 		// A stored row this package never wrote in this shape is a
 		// store-integrity error, not a validation outcome to recover from.
-		return config.ShowModePayload{}, false, fmt.Errorf("api: decode show.mode payload: %s", verr.Error())
+		return config.ShowModePayload{}, store.ConfigObjectRecord{}, store.ConfigRevisionRecord{}, false, fmt.Errorf("api: decode show.mode payload: %s", verr.Error())
 	}
-	return payload, true, nil
+	return payload, obj, rev, true, nil
 }
 
 // handleGetShowModeConfig serves GET /api/v1/config/show.mode. See this
@@ -87,7 +94,7 @@ func (h *handlers) handleGetShowModeConfig(w http.ResponseWriter, r *http.Reques
 	now := h.now()
 	ctx := r.Context()
 
-	payload, configured, err := resolveShowMode(ctx, h.deps.Config)
+	payload, obj, rev, configured, err := resolveShowMode(ctx, h.deps.Config)
 	if err != nil {
 		h.writeInternalError(w, now, "resolve show.mode", err)
 		return
@@ -102,16 +109,8 @@ func (h *handlers) handleGetShowModeConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID)
-	if err != nil {
-		h.writeInternalError(w, now, "get show.mode config object", err)
-		return
-	}
-	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID, obj.CurrentRevision)
-	if err != nil {
-		h.writeInternalError(w, now, "get active show.mode config revision", err)
-		return
-	}
+	// obj and rev are resolveShowMode's own records; see its doc comment
+	// for why this must not re-read the store.
 	jsonWrite(w, mapShowModeConfigResponse(now, rev, obj, payload))
 }
 
