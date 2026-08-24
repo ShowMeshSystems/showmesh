@@ -32,6 +32,8 @@ This procedure was originally written for the real player on the show network. T
 
 **Before anything else, check that MultiSync is actually enabled on the master.** `MultiSyncEnabled` defaults to off, and with it off `fppd` plays sequences completely normally and emits no MultiSync packets at all, with no error at default log verbosity. A capture that records nothing is far more likely to be this than a network problem.
 
+**On FPP 10 specifically, a capture that records nothing can also mean the default transport, not a fault.** A fresh FPP 10 player defaults to unicast (`MultiSyncUnicast=1`) with no multicast default at all, and its automatic unicast targeting only ever selects other FPP instances in remote mode — never this probe. See [RES-002's "Version-dependent default transport" section](../research/RES-002-fpp-multisync-compatibility.md) for the full explanation, and the probe's own zero-packet summary output, which now names this possibility explicitly. Confirm which case you are in by adding the capture host's address to `MultiSyncRemotes`/`MultiSyncExtraRemotes` on the FPP 10 player (**Settings → MultiSync**; applies live on FPP 10, no `fppd` restart) and re-running the capture — if packets then arrive, this was the expected FPP 10 default, not a fault.
+
 ## What to run
 
 From the repository root:
@@ -115,7 +117,7 @@ The summary's item 4 section reports the drift series (master position vs. this 
 ./bin/showmesh-multisync-probe -duration 3m -out captures/res-002-item5-transport.jsonl
 ```
 
-Run this once with FPP configured for its default (multicast) MultiSync mode, and, if you can reconfigure FPP's MultiSync settings, once more each for broadcast and unicast mode, each as its own capture (`-out captures/res-002-item5-broadcast.jsonl`, etc.). The summary reports which transports actually delivered a packet and the outcome of the multicast group join on every interface the probe considered. It cannot see IGMP snooping or querier behavior on your switch; if you want that evidence too, you will need switch-side capture or logs (port mirroring, switch CLI, or SNMP), which is outside this tool's scope.
+Run this once with FPP configured for its default MultiSync mode, and, if you can reconfigure FPP's MultiSync settings, once more each for the other two transports, each as its own capture (`-out captures/res-002-item5-broadcast.jsonl`, etc.). **"Default" is version-dependent, per RES-002's "Version-dependent default transport" section: multicast on FPP 9.x, unicast (to other known FPP instances only, never this probe) on a fresh FPP 10 install.** On FPP 10, a "default mode" run against a probe with no `MultiSyncRemotes`/`MultiSyncExtraRemotes` entry is expected to receive nothing at all — that is the item this section exists to establish, not a failed capture; the summary's zero-packet message explains this. The summary reports which transports actually delivered a packet and the outcome of the multicast group join on every interface the probe considered. It cannot see IGMP snooping or querier behavior on your switch; if you want that evidence too, you will need switch-side capture or logs (port mirroring, switch CLI, or SNMP), which is outside this tool's scope.
 
 To specifically check the discover-ping / MultiSync UI behavior mentioned in RES-002:
 

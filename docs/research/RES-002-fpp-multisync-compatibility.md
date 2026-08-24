@@ -49,7 +49,7 @@ Desk research 2026-08-10 (documentation and source reading; no packet captures y
 ### Protocol definition
 
 - MultiSync is officially documented in-repo: [docs/ControlProtocol.txt](https://github.com/FalconChristmas/fpp/blob/master/docs/ControlProtocol.txt); implemented in [src/MultiSync.h](https://github.com/FalconChristmas/fpp/blob/master/src/MultiSync.h) / [MultiSync.cpp](https://github.com/FalconChristmas/fpp/blob/master/src/MultiSync.cpp). [doc][src]
-- Transport: UDP port **32320** (`FPP_CTRL_PORT`); multicast group **239.70.80.80**; broadcast and unicast modes selectable by FPP settings, with **multicast as the default** when nothing is configured. A listener should join the multicast group and also accept broadcast/unicast on 32320. [src]
+- Transport: UDP port **32320** (`FPP_CTRL_PORT`); multicast group **239.70.80.80**; broadcast and unicast modes selectable by FPP settings. **The default which of these is active is version-dependent, not a single fact — see "Version-dependent default transport" below.** A listener should join the multicast group and also accept broadcast/unicast on 32320 regardless of version, since it cannot assume which one a given player is using. [src]
 - All packets share a header: `'FPPD'` + packet type byte + uint16 extraDataLen. Types: 0x01 MultiSync, 0x03 Blank, 0x04 Ping/Discover, 0x05 Plugin, 0x06 FPP Command (0x00 Command and 0x02 Event are deprecated). [doc]
 - Sync packet (0x01): action byte (0=START, 1=STOP, 2=SYNC, 3=OPEN), file type (0=FSEQ sequence, 1=media), uint32 frameNumber, float32 secondsElapsed, null-terminated filename. Sync fields are little-endian (confirmed against ESPixelStick's explicit `write32`); ping version fields are big-endian. [doc][src]
 - **Rate is not carried in packets** — the remote derives it from the step time in its local copy of the .fseq file. The protocol assumes both sides hold the same file. [src]
@@ -59,19 +59,119 @@ Desk research 2026-08-10 (documentation and source reading; no packet captures y
 
 - FPP's own device-type enum reserves IDs for non-FPP followers: xSchedule (0xC1), ESPixelStick (0xC2/0xC3), WLED, HinksPix, Falcon and Genius controllers. [src]
 - Working third-party listeners: [ESPixelStick FPPDiscovery.cpp](https://github.com/forkineye/ESPixelStick/blob/main/src/service/FPPDiscovery.cpp) (sequence sync only, ignores media sync); xSchedule master+remote (e.g., xLights 2024.20 tag, `xSchedule/SyncFPP.cpp`); Falcon controller firmware. [src]
-- ControlProtocol.txt defines etiquette for non-FPP devices (discover pings with IP 0.0.0.0). Caveat: FPP's auto-unicast mode only targets FPP instances (`supportsUnicast`); a third-party node should rely on multicast/broadcast or manual listing in `MultiSyncRemotes`, and should answer discover pings to appear in the FPP MultiSync UI. [src]
+- ControlProtocol.txt defines etiquette for non-FPP devices (discover pings with IP 0.0.0.0). Caveat: FPP's auto-unicast mode only targets FPP instances (`supportsUnicast`); a third-party node should rely on multicast/broadcast or manual listing in `MultiSyncRemotes`/`MultiSyncExtraRemotes`, and should answer discover pings to appear in the FPP MultiSync UI. **`supportsUnicast`'s exact formula — `(type < kSysTypeFalconController) && (fppMode == REMOTE_MODE)`, `src/MultiSync.cpp:191` — is read at the FPP 10.0 tag (`370e62ed7`) specifically, not confirmed against 9.5.3 source.** The consequence stated in "Version-dependent default transport, and why a fresh FPP 10 player is silent" below is what makes this caveat load-bearing rather than a footnote: ShowMesh (system type 0xC0) can never satisfy `type < kSysTypeFalconController`, so it can never be an automatic unicast target on any version where this formula holds. [src]
+
+### Version-dependent default transport, and why a fresh FPP 10 player is silent
+
+Added because the failure mode this describes has no error message on
+either side: a fresh FPP 10 player and ShowMesh's MultiSync listener can sit
+next to each other, both healthy, and never exchange a single packet. This
+blocks any FPP 10 fleet upgrade until an operator knows to look for it.
+
+- **FPP 9.x default: multicast.** With nothing explicitly configured, an
+  FPP 9.5.3 master sends MultiSync over multicast to 239.70.80.80. This is
+  the behavior the rest of this record's bench evidence (2026-08-10, "First
+  corroboration against a running daemon") was captured against, and it is
+  why ShowMesh's listener joining that multicast group has been sufficient
+  in practice up to and through FPP 9.x.
+- **FPP 10 default: unicast, to other FPP instances only.** Read directly
+  at the `10.0` tag (`370e62ed7e8c8318da6ee5b01312b8b75082d952`):
+  `www/settings.json` gives `MultiSyncUnicast` a default of `1` and
+  `MultiSyncMulticast` no default entry at all (previously present with a
+  default in the 9.x line; the 10.0 settings schema simply does not carry
+  one). The web UI additionally makes the three send-method checkboxes
+  (`MultiSyncUnicast`/`MultiSyncMulticast`/`MultiSyncBroadcast`) mutually
+  exclusive, so enabling one in the UI turns the others off rather than
+  layering. **A fresh FPP 10 install that has never had these settings
+  touched is therefore unicast-only by default, not multicast, reversing
+  the 9.x default this record previously stated as a single fact.** [src]
+- Unicast targets are computed, not configured directly: `supportsUnicast =
+  (type < kSysTypeFalconController) && (fppMode == REMOTE_MODE)`,
+  `src/MultiSync.cpp:191` at the same 10.0 tag. ShowMesh announces system
+  type `0xC0` (`kSysTypeShowMesh`, reserved alongside xSchedule/ESPixelStick
+  per the "Third-party interoperability" section above) and is never a
+  `REMOTE_MODE` FPP instance, so it **can never satisfy this formula and
+  can never become an automatic unicast target**, on any FPP version where
+  this formula holds. This is not a bug in ShowMesh or in FPP; it is
+  FPP-to-FPP remote discovery working as designed, applied to a transport
+  that happens to now be the default.
+- **The consequence**: an operator who re-images or factory-resets an FPP
+  10 player, or provisions one fresh, and turns on `MultiSyncEnabled` (the
+  one setting this record's earlier bench evidence already established
+  defaults to off and must be turned on deliberately) gets a player that is
+  sending MultiSync, correctly, per its own configuration — over unicast,
+  to a discovered-FPP-remotes list that will never contain ShowMesh. FPP
+  logs nothing wrong, because nothing is wrong from FPP's perspective.
+  ShowMesh's listener logs nothing wrong either, because a silent multicast
+  group is indistinguishable on the wire from "no show has started yet."
+  Neither side reports an error. See ADR-013's 2026-08-23 note: the unicast
+  interception hazard that decision was written to guard against is now the
+  *default* mode on a fresh FPP 10 player, which strengthens rather than
+  weakens that decision.
+- `upgrade/122` and `upgrade/132` (FPP's own version-to-version settings
+  migration scripts) explicitly preserve an existing installation's prior
+  multicast configuration across an in-place upgrade to 10.x. **This
+  protects an upgraded install, not a re-image or a factory reset**, which
+  is exactly the FPP 10 fleet-migration path most likely to be used and the
+  path this failure mode was found against.
+- The wire protocol itself is unaffected: `docs/ControlProtocol.txt` is
+  byte-identical between the 9.5.3 and 10.0 tags, so none of this changes
+  `pkg/multisync`'s packet decoding. The problem is entirely which
+  transport a fresh FPP 10 player uses to send those otherwise-unchanged
+  packets, and it is only observable by checking configuration, since FPP's
+  `MultiSyncSystem::toJSON` (backing `/api/fppd/multiSyncSystems` and
+  similar) omits `supportsUnicast` and the send-method configuration
+  entirely — there is no REST field that answers "which send methods are
+  actually active" for ShowMesh to read.
+- **The supported operator remedy, confirmed against a real FPP 10 daemon**
+  (see `bench/fpp-multisync/captures/sm209/FPP10-DEFAULT-TRANSPORT.md`):
+  adding ShowMesh's address to `MultiSyncRemotes` (auto-populated by
+  discovery, but can be seeded) or, more directly, to
+  `MultiSyncExtraRemotes` (a plain CSV `PUT /api/settings/MultiSyncExtraRemotes`)
+  under **Settings → MultiSync** puts ShowMesh on the unicast target list.
+  On FPP 10 this was observed to apply **live, with no `fppd` restart**:
+  `fppd.log` recorded `Setting MultiSyncExtraRemotes changed from  to
+  <address>` immediately on the `PUT`, and a capture taken after that
+  change (before any restart) received a clean 41-packet OPEN/START/SYNC
+  unicast stream from a subsequent sequence start. Enabling
+  `MultiSyncMulticast`/`MultiSyncBroadcast` explicitly is the alternative
+  remedy and does require the setting's own restart semantics like any
+  other MultiSync send-method change.
+- **What ShowMesh must not do about this, and why**: write to FPP's
+  MultiSync send-method settings itself, because there is no REST field
+  (per `MultiSyncSystem::toJSON` above) that lets ShowMesh confirm which
+  send methods actually took effect afterward, and this project's evidence
+  discipline (Step 8's confirm-by-evidence rule) requires being able to
+  observe the effect of a write before claiming it worked. Reading
+  `/api/settings/MultiSyncUnicast` to detect this condition is also
+  unreliable for the same reason RES-002 already documents for
+  `MultiSyncEnabled`: FPP's own `upgrade/132` header states that an absent
+  key reads as `1` inside `fppd` but as `0` via `getSetting`, so the
+  endpoint answers **wrong in exactly the failing case** — a fresh install
+  that has never written the key. A collector or probe can report the
+  *symptom* (packets not arriving) and point at this record's operator
+  remedy; it cannot safely read or write its way to a diagnosis.
+- Confirmed 2026-08-23 against a genuinely fresh `fpp-multisync` bench
+  container at the `10.0` tag: `GET /api/settings/MultiSyncUnicast` showed
+  `"default":1,"value":1` already present with no configuration step taken,
+  and `GET /api/settings/MultiSyncMulticast` carried neither key. Promotes
+  the unicast-default and no-multicast-default claims above from source
+  reading alone to source-plus-a-real-fresh-daemon, though this remains L1
+  for this record's overall status: one container capture is not the bench
+  tier's structured verification pass, per this record's existing
+  Verification-levels discipline.
 
 ### Semantics a listener must implement
 
-- Position: prefer `secondsElapsed` when > 0 — FPP's own remote recomputes frame as `round(seconds*1000/stepTimeMs)`. Media START carries secondsElapsed for mid-show joins (possibly 0 from ≤8.x masters). [src]
+- Position: prefer `secondsElapsed` when > 0 — FPP's own remote recomputes frame as `round(seconds*1000/stepTimeMs)`. **Correction (superseding the previous "possibly 0 from ≤8.x masters" phrasing): media START hardcodes `secondsElapsed = 0` in both the 9.5.3 and 10.0 tags, read directly in source at both `7979a4bb0` and `370e62ed7`. This is not a legacy (≤8.x) quirk that later versions grew out of; it is current behavior on both tags this record tracks, and a listener must treat a media START's `secondsElapsed` as unusable for position on either version, always falling back to `FrameNumber`.** [src]
 - Lifecycle: OPEN → START → SYNC… → STOP, but a robust listener must handle START without OPEN and even a bare SYNC for an unstarted sequence (FPP's remote does both). [src]
 - Stop: explicit STOP packets per sequence and media; FPP remotes deliberately wait ~5 frames before blanking so back-to-back stop/start doesn't blink ([Sequence.cpp](https://github.com/FalconChristmas/fpp/blob/master/src/Sequence.cpp) ~695). [src]
-- Loss policy: FPP's design is to **free-run through sync silence** and only slew/jump when packets resume ([channeloutputthread.cpp](https://github.com/FalconChristmas/fpp/blob/master/src/channeloutput/channeloutputthread.cpp): slew ≤4 frames, skip when moderately behind, jump when >0.5 s behind). Silence is deliberately not a teardown trigger; the only watchdog is `RemoteSyncedMediaIdleTimeout` (default 10 s) after media ends. ESPixelStick re-broadcasts pings after 30 s of no master contact and supports a local fallback file; FPP remotes support `fallback.fseq`. [src]
+- Loss policy: FPP's design is to **free-run through sync silence** and only slew/jump when packets resume ([channeloutputthread.cpp](https://github.com/FalconChristmas/fpp/blob/master/src/channeloutput/channeloutputthread.cpp): slew ≤4 frames, skip when moderately behind, jump when >0.5 s behind). Silence is deliberately not a teardown trigger; the only watchdog is `RemoteSyncedMediaIdleTimeout` (default 10 s) after media ends. **This watchdog default is read at the FPP 10.0 tag specifically and is not confirmed against 9.5.3 source** — treat it as an FPP 10 fact until someone reads it at the 9.5.3 tag too. ESPixelStick re-broadcasts pings after 30 s of no master contact and supports a local fallback file; FPP remotes support `fallback.fseq`. [src]
 
 ### Version stability
 
-- Sync packet format unchanged FPP 4→10; changes have been additive (ping v3 in 2019, FPP Command type in 2020) or semantic (FPP 5 removed "master mode" naming; masters are "player + sending multisync", mode flag 0x04). FPP 10's GStreamer/PipeWire media engine changes internal clocking only, not the wire protocol. [hist][src]
-- Current versions (Aug 2026): stable **FPP 9.5** (2026-01-08); **10.0-beta3** (2026-08-08). [doc]
+- Sync packet format unchanged FPP 4→10; changes have been additive (ping v3 in 2019, FPP Command type in 2020) or semantic (FPP 5 removed "master mode" naming; masters are "player + sending multisync", mode flag 0x04). FPP 10's GStreamer/PipeWire media engine changes internal clocking only, not the wire protocol. **This wire-format stability is exactly why "Version-dependent default transport" above is a transport problem, not a protocol problem: `docs/ControlProtocol.txt` is byte-identical between the 9.5.3 and 10.0 tags.** [hist][src]
+- Current versions (Aug 2026): stable **FPP 9.5** (2026-01-08); **10.0** GA, confirmed shipped and no longer beta at the `10.0` tag (`370e62ed7e8c8318da6ee5b01312b8b75082d952`). [doc]
 
 ### Alternative boundaries
 
@@ -174,4 +274,6 @@ the `MultiSyncEnabled` finding above actionable rather than merely known.
 
 ## Decision, fallback, and revalidation
 
-Direction (pending L2/L3 confirmation): implement a native MultiSync listener speaking the documented wire protocol, answering discover pings with a reserved/appropriate device type, following FPP's own remote semantics (free-run on silence, slew/jump on resume, STOP+~5-frame blank). Supplement with REST/MQTT for supervision. Fallback options remain a small FPP-side bridge, running FPP on the node, or pre-rendered media with a separate verified clock. Revalidate on supported FPP major releases (next: FPP 10.0 GA).
+Direction (pending L2/L3 confirmation): implement a native MultiSync listener speaking the documented wire protocol, answering discover pings with a reserved/appropriate device type, following FPP's own remote semantics (free-run on silence, slew/jump on resume, STOP+~5-frame blank). Supplement with REST/MQTT for supervision. Fallback options remain a small FPP-side bridge, running FPP on the node, or pre-rendered media with a separate verified clock. Revalidate on supported FPP major releases (**FPP 10.0 GA has now shipped and is confirmed at the pinned bench tag** — next revalidation trigger is the following major release).
+
+**Revalidated 2026-08-23 against FPP 10.0 GA: the wire protocol itself needed no changes** (see "Version stability"), but "Version-dependent default transport" above is a durable finding this decision must carry forward: a fresh FPP 10 player will not reach ShowMesh's listener over its default transport, silently, on both sides. This does not change the listener implementation (it must already accept multicast, broadcast, and unicast on the same socket, and it already does), but it does mean the direction above is incomplete without an operator-facing story for the FPP 10 default case, which this record's "supported operator remedy" now documents, and which the probe's diagnostic output (`cmd/showmesh-multisync-probe`) now reports as an expected FPP 10 configuration rather than an undifferentiated fault.

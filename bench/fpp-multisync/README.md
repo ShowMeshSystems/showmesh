@@ -52,7 +52,7 @@ bench/fpp-multisync/
   docker-compose.macvlan.yml  Mode B overlay: redefines the network as external macvlan
   probe.Dockerfile            Bench-only build for showmesh-multisync-probe
   .env.example                Copy to .env and adjust
-  captures/                   Default landing spot for JSONL captures (git-ignored)
+  captures/                   Default landing spot for captures; JSONL/log output is git-ignored
 ```
 
 ## Prerequisites
@@ -308,8 +308,26 @@ miss it.
    take effect).
 
    Leaving the transport settings (Multicast/Broadcast/Unicast) at their
-   defaults is fine: with nothing else configured, FPP defaults to
-   multicast, matching RES-002's documented default.
+   defaults is fine on the **9.5.3** target: with nothing else configured,
+   FPP 9.x defaults to multicast, matching RES-002's documented 9.x default.
+
+   **This is not true on the 10.0 target.** A fresh FPP 10 install ships
+   with `MultiSyncUnicast` defaulting to on and `MultiSyncMulticast`
+   carrying no default at all (upstream `www/settings.json` at the `10.0`
+   tag, recorded in RES-002), and FPP 10's automatic unicast targeting only
+   ever selects other FPP instances in remote mode (`supportsUnicast` in
+   `src/MultiSync.cpp`) — never this bench's `probe`. Left at its shipped
+   defaults, an FPP 10 `fpp-master` sends nothing this probe will ever
+   receive, on any transport, and neither side logs an error. **This is not
+   a bench defect**; it is the exact configuration RES-002 exists to
+   document, and it is what the
+   [FPP 10 default-transport capture](captures/sm209/FPP10-DEFAULT-TRANSPORT.md)
+   shows the probe correctly reporting as expected FPP 10 behavior rather
+   than as a fault. To make a 10.0 `fpp-master` actually reach `probe`, add
+   the probe's address to `MultiSyncRemotes` (or `MultiSyncExtraRemotes`)
+   under **Settings → MultiSync** — this applies live on FPP 10 with no
+   `fppd` restart — or enable `MultiSyncBroadcast`/`MultiSyncMulticast`
+   explicitly.
 
 3. **Get a sequence onto the master.** Under **Content Setup → Sequences**,
    upload a `.fseq` file — one of your own from xLights is the realistic
