@@ -8,6 +8,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
@@ -238,5 +239,58 @@ func TestActivateAudioRedeliveredActivationIsIdempotent(t *testing.T) {
 	snaps := mgr.Snapshot(context.Background())
 	if len(snaps) != 1 || snaps[0].State != pkgaudio.StatePlaying {
 		t.Fatalf("session snapshots after redelivery = %+v, want exactly one, playing", snaps)
+	}
+}
+
+// TestBlackAndSilenceStopRevisionIsNotRefusedAsStale is defect 2's own
+// regression test: H0.2's blackAndSilence policy must actually be able to
+// silence a Cue's audio session. It activates audio exactly as
+// internal/agent/cueactivationaudio.go's activateAudio does (Apply,
+// Prepare, Start, Seek, each through [activationRevision]), then derives a
+// stop revision the SAME way internal/coordinator/api/cueactivationloop.go's
+// dispatchBlackAndSilenceAudioStop does — through the one shared
+// [cueactivation.AudioSessionRevision] rule, at a later wall-clock time —
+// and proves [audio.Manager.Stop] accepts it rather than refusing it as
+// stale. Before the fix, the node derived its own revisions as
+// EvidenceAt.UnixNano()*4+step while the coordinator dispatched a bare
+// now.UnixNano() with no multiplier: the node's own session was already
+// past the coordinator's derived revision the instant Seek ran, so this
+// exact Stop call would have come back Refused/ReasonStaleRevision.
+func TestBlackAndSilenceStopRevisionIsNotRefusedAsStale(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 20, 0, 0, 0, time.UTC)}
+	mgr, _ := newTestAudioManager(t, dir, clock)
+
+	hash := writeAssetFixture(t, dir, "cue-song.wav", []byte("pretend this is wav audio content"))
+
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-10", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Audio: &cuecatalog.AudioOutput{Asset: "cue-song-asset", Filename: "cue-song.wav", AssetHashes: []string{hash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, audioMgr: mgr}
+	act := testActivation("act-audio-blackandsilence", "cue-10", 1, "halloween-2026", 3, "rev-a", 2000)
+
+	if result, err := op.activate(context.Background(), activationParams(t, act), clock.now); err != nil || !result.Confirmed {
+		t.Fatalf("activate = (%+v, %v), want confirmed", result, err)
+	}
+
+	// The coordinator dispatches the blackAndSilence stop some time later,
+	// its own dispatch-time clock — never act.EvidenceAt, which the
+	// coordinator does not even have at dispatch time for an arbitrary
+	// node's session (H0.2's ClearNodes path names nodes, not activations).
+	stopAt := act.EvidenceAt.Add(5 * time.Second)
+	stopRevision := pkgaudio.Revision(cueactivation.AudioSessionRevision(stopAt, cueactivation.AudioSessionStepStop))
+
+	outcome := mgr.Stop(context.Background(), cueActivationAudioSessionID, "cueact-silence-node-1", stopRevision)
+	if audioOutcomeFailed(outcome) {
+		t.Fatalf("audio.session.stop outcome = %+v, want a non-refused/failed outcome (blackAndSilence's audio half must be able to silence a running session)", outcome)
+	}
+	if outcome.Outcome == pkgaudio.OutcomeRefused && outcome.Reason == pkgaudio.ReasonStaleRevision {
+		t.Fatalf("stop refused as stale: the coordinator's derived revision did not exceed the node's own — the exact defect this test guards against")
 	}
 }

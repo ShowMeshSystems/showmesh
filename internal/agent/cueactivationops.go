@@ -72,9 +72,25 @@ func (o *cueActivationOperation) heldStateAndEntry(cueID string) (held cueauth.H
 
 // assetPresent reports whether the file named filename is present under
 // this node's asset directory and, when hashes is non-empty, that its
-// content hash matches one of hashes. An empty filename is never
-// "present": an output the resolved catalog declares with no asset name
-// at all is a coordinator-side bug, not a node-side "nothing to check."
+// content hash matches [firstAssetHash](hashes) — the SAME single hash
+// cueactivationrender.go's activateSurfaceRender pins into
+// params["fseqContentHash"] and buildAssignedSpec then checks exactly
+// against at apply time (renderops.go). This authorization check and that
+// apply-time check must be one rule, not two independently written ones:
+// this function used to accept a match against ANY of hashes, so with two
+// CURRENT asset hashes for one sequence (a legitimate mid-supersession
+// state) and the on-disk file carrying the second hash, authorization
+// passed here and the apply then failed buildAssignedSpec's exact
+// first-hash comparison — a confusing two-stage refusal (authorized, then
+// a hash-mismatch apply failure) instead of a clean, single asset-missing
+// refusal at authorization time, where a caller actually expects to see
+// it (TRACK-H-H3-SPEC.md section 6: "a present file is never a reason to
+// execute" applies here to "a present-but-WRONG-hash file" too — the node
+// must refuse it up front, not discover it mid-swap).
+//
+// An empty filename is never "present": an output the resolved catalog
+// declares with no asset name at all is a coordinator-side bug, not a
+// node-side "nothing to check."
 func (o *cueActivationOperation) assetPresent(filename string, hashes []string) bool {
 	if filename == "" {
 		return false
@@ -83,15 +99,15 @@ func (o *cueActivationOperation) assetPresent(filename string, hashes []string) 
 	if err != nil {
 		return false
 	}
-	if len(hashes) == 0 {
+	expected := firstAssetHash(hashes)
+	if expected == "" {
+		// No declared hash at all: presence alone is enough (matches the
+		// apply-time side's own "no recorded hash is a coordinator-side
+		// bug, not a node-side trust-it" posture — firstAssetHash.go's own
+		// doc comment).
 		return true
 	}
-	for _, h := range hashes {
-		if h == got {
-			return true
-		}
-	}
-	return false
+	return got == expected
 }
 
 // assetsPresent is [cueauth.CheckLazy]'s assetsPresent callback for entry:

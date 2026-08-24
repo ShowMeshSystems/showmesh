@@ -60,6 +60,15 @@ func (s *fppObservationTestSetup) deps() Dependencies {
 // re-derive the hash by hand.
 func fppObservationBody(t *testing.T, instanceUUID string, sequence int64, playlistName, section string, position int) string {
 	t.Helper()
+	return fppObservationBodyWithAction(t, instanceUUID, sequence, playlistName, section, position, "playing")
+}
+
+// fppObservationBodyWithAction is [fppObservationBody] with an explicit
+// action, for tests exercising schemaV17's entry-occurrence computation
+// (fppobservations.go's handlePostFPPPlaylistEntryObservation), which
+// branches on whether action is "start".
+func fppObservationBodyWithAction(t *testing.T, instanceUUID string, sequence int64, playlistName, section string, position int, action string) string {
+	t.Helper()
 	entryKey, err := fppidentity.DeriveEntryKey(fppidentity.EntryIdentity{
 		InstanceUUID: instanceUUID, PlaylistName: playlistName, PlaylistHash: playlistHash64, Section: section, Position: position,
 	})
@@ -74,7 +83,7 @@ func fppObservationBody(t *testing.T, instanceUUID string, sequence int64, playl
 		"section":                            section,
 		"position":                           position,
 		"entryKey":                           entryKey,
-		"action":                             "playing",
+		"action":                             action,
 		"sequence":                           sequence,
 		"observedAtMillis":                   testNow.UnixMilli(),
 		"coalescedSincePreviousAcknowledged": 0,
@@ -192,6 +201,74 @@ func TestFPPObservationAcceptedIsStoredAndStreamVisible(t *testing.T) {
 	hub.mu.Unlock()
 	if !rendered {
 		t.Errorf("stream hub did not render fppobs:instance-1 after an accepted observation")
+	}
+}
+
+// TestFPPObservationEntryOccurrenceSequenceTracksStartNotEveryTick proves
+// schemaV17's own contract: EntryOccurrenceSequence is stable across
+// ordinary "playing" ticks inside one entry occurrence, and changes on a
+// genuine re-entry signalled by action "start" — including a playlist
+// looping back to an entry whose EntryKey is otherwise identical to its
+// first visit. This is the ingestion-side half of defect 1 (a looping
+// playlist never re-activating its Cues): without it,
+// [cueactivate.activationID] would either mint a new ActivationID on every
+// ordinary tick (the raw wire `sequence`) or never mint a new one on a
+// loop (an unconditionally stable per-entry id).
+func TestFPPObservationEntryOccurrenceSequenceTracksStartNotEveryTick(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	scheduler := mustCreatePrincipal(t, setup.svc, "scheduler-bot", identity.RoleScheduler)
+	token := mustIssueToken(t, setup.svc, scheduler.ID)
+
+	// Entry starts at sequence 1: nothing stored yet, so this event starts
+	// its own occurrence.
+	start := fppObservationBodyWithAction(t, "instance-1", 1, "showmesh-test", "main", 0, "start")
+	if resp, _ := mustPostObservation(t, api, start, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("start post: status = %d, want 200", resp.StatusCode)
+	}
+	rec1, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after start: %v", err)
+	}
+	if rec1.EntryOccurrenceSequence != 1 {
+		t.Fatalf("EntryOccurrenceSequence after start = %d, want 1", rec1.EntryOccurrenceSequence)
+	}
+
+	// A "playing" tick for the SAME entry, at a higher wire sequence (a
+	// MultiSync position update, not a new entry): the occurrence must NOT
+	// advance, or every ordinary tick would dispatch a fresh activation.
+	tick := fppObservationBodyWithAction(t, "instance-1", 2, "showmesh-test", "main", 0, "playing")
+	if resp, _ := mustPostObservation(t, api, tick, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("playing tick post: status = %d, want 200", resp.StatusCode)
+	}
+	rec2, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after playing tick: %v", err)
+	}
+	if rec2.EntryOccurrenceSequence != rec1.EntryOccurrenceSequence {
+		t.Fatalf("EntryOccurrenceSequence changed across a same-entry playing tick: %d -> %d", rec1.EntryOccurrenceSequence, rec2.EntryOccurrenceSequence)
+	}
+
+	// The playlist loops back to the SAME entry: FPP reports "start" again
+	// for an entry whose EntryKey (derived from instanceUuid/playlistHash/
+	// playlistName/section/position) is identical to the first visit. The
+	// occurrence MUST advance, or a looping playlist never re-activates.
+	loopStart := fppObservationBodyWithAction(t, "instance-1", 3, "showmesh-test", "main", 0, "start")
+	if resp, _ := mustPostObservation(t, api, loopStart, token); resp.StatusCode != http.StatusOK {
+		t.Fatalf("loop start post: status = %d, want 200", resp.StatusCode)
+	}
+	rec3, err := setup.st.GetFPPPlaylistEntryObservation(context.Background(), "instance-1")
+	if err != nil {
+		t.Fatalf("get after loop start: %v", err)
+	}
+	if rec3.EntryKey != rec1.EntryKey {
+		t.Fatalf("test setup error: loop re-entry's EntryKey (%s) differs from the first visit's (%s)", rec3.EntryKey, rec1.EntryKey)
+	}
+	if rec3.EntryOccurrenceSequence == rec2.EntryOccurrenceSequence {
+		t.Fatalf("EntryOccurrenceSequence did not advance on a loop re-entry (same EntryKey, action=start): stayed at %d", rec3.EntryOccurrenceSequence)
+	}
+	if rec3.EntryOccurrenceSequence != 3 {
+		t.Fatalf("EntryOccurrenceSequence after loop start = %d, want 3 (the loop start's own wire sequence)", rec3.EntryOccurrenceSequence)
 	}
 }
 

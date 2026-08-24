@@ -136,3 +136,76 @@ func DecodeParams(params map[string]any) (Activation, error) {
 // silently not silencing at exactly the moment an operator chose that policy
 // to guarantee silence.
 const AudioSessionID = "cue-activation:show"
+
+// Ordered steps a Cue activation's audio session moves through on the node
+// (Apply, Prepare, Start, Seek — internal/agent/cueactivationaudio.go's
+// activateAudio, in that order), plus the one step the coordinator itself
+// ever drives directly against the SAME session: Stop, H0.2's
+// blackAndSilence policy (internal/coordinator/api/cueactivationloop.go's
+// dispatchBlackAndSilenceAudioStop). Numbered as one closed, ordered set —
+// not two independently chosen ranges — specifically so [AudioSessionRevision]
+// called with the identical timestamp from both sides can never collide:
+// AudioSessionStepStop sorts after every activation step, so a stop
+// dispatched in the same wall-clock nanosecond as the activation it is
+// reacting to still outranks it.
+const (
+	AudioSessionStepApply = iota
+	AudioSessionStepPrepare
+	AudioSessionStepStart
+	AudioSessionStepSeek
+	AudioSessionStepStop
+)
+
+// AudioSessionRevision derives [AudioSessionID]'s own pkg/audio.Revision-
+// shaped uint64 from t (a real wall-clock reading) and step (one of the
+// AudioSessionStep* constants above). Both sides that drive this session —
+// the node's own activateAudio steps, keyed off the Activation's own
+// EvidenceAt, and the coordinator's blackAndSilence audio.session.stop —
+// MUST derive their revision through this one function, never two
+// independently written copies of the same rule: internal/agent/
+// cueactivationaudio.go used to multiply t.UnixNano() by 4 while
+// internal/coordinator/api/cueactivationloop.go dispatched the stop as a
+// bare t.UnixNano() with no multiplier, so the node's own session was
+// already, permanently past the coordinator's derived revision the instant
+// the first Cue activated — pkg/audio's RevisionState.Apply refuses
+// anything not strictly greater than the session's current revision
+// (pkg/audio/identity.go), so the stop was refused as stale every time,
+// and blackAndSilence's audio half never touched the engine.
+//
+// Unifying the rule fixed the multiplier defect but left a second one: t
+// itself is read from two DIFFERENT clocks. The node's activateAudio steps
+// pass act.EvidenceAt, a reading taken on the FPP player; the coordinator's
+// blackAndSilence stop cannot pass its own "now" directly, because an FPP
+// player is a Raspberry Pi with no real-time clock and no guaranteed
+// internet — it can boot with a badly wrong clock, ahead of the
+// coordinator's — and this function has no way to compare two callers'
+// readings for it. A stop computed from the coordinator's now alone would
+// then be smaller than the session's own current revision and get refused
+// as stale for the life of the session, the identical symptom the
+// multiplier defect produced, arriving through clock skew instead.
+// internal/coordinator/api/cueactivationloop.go's
+// dispatchBlackAndSilenceAudioStop handles this OUTSIDE this function, by
+// never trusting its own now alone: it reads back the EvidenceAt of the
+// last cue.activate this coordinator itself dispatched to the node (the
+// commands table, not the node's clock) and passes the LATER of that
+// reading and its own now. AudioSessionStepStop still sorts after every
+// activation step, so an identical timestamp — the ordinary case, where
+// the coordinator's clock is caught up or ahead — still yields a strictly
+// greater revision the ordinary way; the skew case is what the LATER-of
+// comparison exists for.
+//
+// step is kept as a small, single-digit ADDITIVE offset rather than a
+// multiplier deliberately: POST
+// /nodes/{nodeId}/audio/sessions/{sessionId}/stop takes a plain,
+// caller-supplied revision most naturally also a raw nanosecond reading
+// (matching every other revision this codebase derives — see this
+// function's own doc comment above), and a multiplied revision inflates
+// the session's current revision to several times a real nanosecond value,
+// permanently out of reach of an unmultiplied operator-supplied one for
+// the life of the session. Staying additive keeps this derivation's
+// magnitude within a handful of nanoseconds of t itself, so a later real
+// moment — an operator's own "now" included — still produces a strictly
+// larger revision the ordinary way.
+func AudioSessionRevision(t time.Time, step int) uint64 {
+	return uint64(t.UnixNano()) + uint64(step)
+}

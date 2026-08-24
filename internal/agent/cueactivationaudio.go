@@ -48,31 +48,34 @@ func activationInvocation(act cueactivation.Activation, step string) pkgaudio.In
 }
 
 // Step indices [activationRevision] derives its four strictly-increasing
-// revisions from, one per audio.Manager call activateAudio makes.
+// revisions from, one per audio.Manager call activateAudio makes — aliases
+// of [cueactivation.AudioSessionStep*] (never independently numbered: see
+// that constant block's own doc comment for why the coordinator's own
+// blackAndSilence stop must sort after every one of these).
 const (
-	activationStepApply = iota
-	activationStepPrepare
-	activationStepStart
-	activationStepSeek
+	activationStepApply   = cueactivation.AudioSessionStepApply
+	activationStepPrepare = cueactivation.AudioSessionStepPrepare
+	activationStepStart   = cueactivation.AudioSessionStepStart
+	activationStepSeek    = cueactivation.AudioSessionStepSeek
 )
 
 // activationRevision derives one step's [pkgaudio.Revision] from act.
-// EvidenceAt: identical across a redelivery of the identical Activation
-// (EvidenceAt is part of the envelope's own full state, so a redelivery
-// carries the identical timestamp), and — because it is a real wall-clock
-// reading the runner took at the moment it observed this activation —
-// practically guaranteed to exceed every prior activation's own revisions
-// for this node's one show session.
+// EvidenceAt via [cueactivation.AudioSessionRevision] — the one shared rule
+// the coordinator's own blackAndSilence stop dispatch also derives its
+// revision through, see that function's own doc comment for why a second,
+// independently written copy of this rule is exactly what left
+// blackAndSilence unable to silence anything. EvidenceAt is identical
+// across a redelivery of the identical Activation (part of the envelope's
+// own full state), and — because it is a real wall-clock reading the
+// runner took at the moment it observed this activation — practically
+// guaranteed to exceed every prior activation's own revisions for this
+// node's one show session.
 //
 // SHOWMESH HYPOTHESIS, NOT MEASURED: no real runner clock has been
 // observed to produce two distinct activations with the identical
-// nanosecond EvidenceAt, and this multiplies by 4 (this file's four
-// possible steps) rather than a larger factor specifically to stay well
-// clear of uint64 overflow for any EvidenceAt in this project's real
-// operating window (SHOWMESH HYPOTHESIS: no such window remotely
-// approaches uint64/4 nanoseconds from the Unix epoch).
+// nanosecond EvidenceAt.
 func activationRevision(act cueactivation.Activation, step int) pkgaudio.Revision {
-	return pkgaudio.Revision(uint64(act.EvidenceAt.UnixNano())*4 + uint64(step))
+	return pkgaudio.Revision(cueactivation.AudioSessionRevision(act.EvidenceAt, step))
 }
 
 // audioOutcomeFailed reports whether outcome is one of the three

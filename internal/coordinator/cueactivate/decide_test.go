@@ -532,6 +532,72 @@ func TestActivationIDStableAcrossRepeatedDecideForTheSameEntry(t *testing.T) {
 	}
 }
 
+// TestActivationIDChangesAcrossALoopingEntryOccurrence is defect 1's own
+// regression test: a looping FPP playlist re-activates its Cues. Two ticks
+// carrying the SAME EntryOccurrenceSequence (schemaV17's entry-start
+// identity, computed at ingestion from action/entryKey — see
+// fppobservations.go and TestActivationIDStableAcrossRepeatedDecideForTheSameEntry
+// above for the "one dispatch per occurrence" half) must still dedup to one
+// ActivationID; a THIRD tick reporting a new EntryOccurrenceSequence for the
+// IDENTICAL node/show/generation/catalog/playlist/entry/cue tuple — exactly
+// what a playlist looping E1->E2->E3->E1 produces on its second lap, since
+// every other identity field is unchanged — must mint a different one, or
+// [store.InsertCommand] reports a duplicate and the loop's second lap is
+// silently never dispatched.
+func TestActivationIDChangesAcrossALoopingEntryOccurrence(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putLTCCue(t, st, "cue-1", "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+	putFreshReport(t, st, "node-1", now)
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
+
+	// First lap through entry-1: two ticks of the SAME occurrence (the
+	// stored observation's own entry-start identity), a wire sequence bump
+	// with no new occurrence in between.
+	firstLapTick1 := baseObservation("inst-1")
+	firstLapTick1.Sequence, firstLapTick1.EntryOccurrenceSequence, firstLapTick1.Position = 1, 1, 1000
+	firstLapTick2 := baseObservation("inst-1")
+	firstLapTick2.Sequence, firstLapTick2.EntryOccurrenceSequence, firstLapTick2.Position = 2, 1, 5000
+
+	dec1, err := Decide(context.Background(), st, result, firstLapTick1, "inst-1")
+	if err != nil {
+		t.Fatalf("Decide (first lap, tick 1): %v", err)
+	}
+	dec2, err := Decide(context.Background(), st, result, firstLapTick2, "inst-1")
+	if err != nil {
+		t.Fatalf("Decide (first lap, tick 2): %v", err)
+	}
+	id1, id2 := dec1.Activations["node-1"].ActivationID, dec2.Activations["node-1"].ActivationID
+	if id1 == "" || id1 != id2 {
+		t.Fatalf("ActivationID changed across two ticks of one occurrence: %q vs %q, want a single dispatch per occurrence", id1, id2)
+	}
+
+	// The playlist loops back to entry-1: a fresh EntryOccurrenceSequence
+	// for the identical node/show/generation/catalog/playlist/entry/cue
+	// identity — every field [Decide] pins is unchanged except the
+	// occurrence itself, exactly as a real loop's second lap reports it.
+	secondLapTick := baseObservation("inst-1")
+	secondLapTick.Sequence, secondLapTick.EntryOccurrenceSequence, secondLapTick.Position = 3, 3, 1000
+
+	dec3, err := Decide(context.Background(), st, result, secondLapTick, "inst-1")
+	if err != nil {
+		t.Fatalf("Decide (second lap): %v", err)
+	}
+	id3 := dec3.Activations["node-1"].ActivationID
+	if id3 == "" {
+		t.Fatal("second lap built no ActivationID")
+	}
+	if id3 == id1 {
+		t.Fatalf("ActivationID did not change on a loop re-entry (same entry, new occurrence): stayed %q — the second lap would silently never dispatch", id3)
+	}
+}
+
 // hash64 mirrors internal/coordinator/fppreconcile's own test helper:
 // produces a syntactically valid 64-lowercase-hex hash from a short label.
 func hash64(label string) string {

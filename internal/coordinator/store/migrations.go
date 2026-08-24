@@ -1301,6 +1301,36 @@ CREATE TABLE node_cue_catalog_ack (
 );
 `
 
+// schemaV17 is Track H seam H4's own migration: entry_occurrence_sequence
+// on fpp_playlist_entry_observations, the entry-START identity
+// [cueactivate.activationID] (internal/coordinator/cueactivate/decide.go)
+// hashes so a looping FPP playlist re-activates its Cues rather than
+// replaying the first lap's stored outcome forever.
+//
+// fpp_playlist_entry_observations keeps only the LATEST accepted
+// observation per instance (schemaV14's own doc comment); the raw wire
+// `sequence` column is not usable for this by itself because it is a
+// per-EVENT counter that also advances on an ordinary MultiSync position
+// tick within one ongoing entry ("playing"), not only on a fresh entry
+// start. entry_occurrence_sequence is instead computed at ingestion
+// (fppobservations.go's handlePostFPPPlaylistEntryObservation): it is set
+// to the accepted observation's own `sequence` whenever the observation's
+// action is `start` or no prior row (or a different entry_key) exists, and
+// carried forward from the prior row's value otherwise — so it is stable
+// across repeat ticks inside one occurrence and changes on every genuine
+// re-entry, including a playlist looping back to an entry it already
+// visited (whose entry_key is otherwise identical to the first visit).
+//
+// Defaulted to 0 rather than nullable, matching every other identity
+// column on this table (schemaV14's own convention): a pre-migration row
+// (none exist in practice, this table is never seeded outside a live
+// coordinator) would read as occurrence 0, which is a safe, ordinary value
+// here rather than a sentinel.
+const schemaV17 = `
+ALTER TABLE fpp_playlist_entry_observations
+    ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
+`
+
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):
 // the two agree only while no version number is ever skipped, and a gap

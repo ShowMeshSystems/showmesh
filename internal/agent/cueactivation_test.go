@@ -239,6 +239,49 @@ func TestActivateAssetMissingNeverConsultsDiskForAnEarlierRefusal(t *testing.T) 
 	}
 }
 
+// TestActivateRefusesAssetMissingWhenOnDiskFileMatchesOnlyTheSecondHash is
+// defect 5's own regression test: cueactivationops.go's assetsPresent used
+// to accept the on-disk file if its hash matched ANY of AssetHashes, while
+// cueactivationrender.go's activateSurfaceRender pins fseqContentHash to
+// AssetHashes[0] only (firstAssetHash) and buildAssignedSpec then checks
+// the on-disk hash against exactly that. With two CURRENT asset hashes for
+// one sequence (a legitimate mid-supersession state) and the on-disk file
+// carrying the SECOND hash, the old behavior authorized the activation
+// (asset "present" under the any-of rule) and then failed the apply on a
+// hash mismatch: a confusing two-stage refusal instead of a clean
+// asset-missing at authorization time, where a caller actually expects to
+// see it.
+func TestActivateRefusesAssetMissingWhenOnDiskFileMatchesOnlyTheSecondHash(t *testing.T) {
+	dir := t.TempDir()
+	// The on-disk file's REAL hash is the second of the two declared
+	// hashes, never the first (AssetHashes[0]) — activateSurfaceRender and
+	// buildAssignedSpec pin against AssetHashes[0] exclusively.
+	hash := writeAssetFixture(t, dir, "seq.fseq", []byte("pretend this is fseq content"))
+
+	store := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-1", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Render: &cuecatalog.RenderOutput{
+				Sequence: "seq-two-hashes", Filename: "seq.fseq",
+				AssetHashes: []string{"sha256:not-the-hash-on-disk", hash},
+			},
+		},
+	}
+	saveHeld(t, store, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: store}
+	act := testActivation("act-two-hashes", "cue-1", 1, "halloween-2026", 3, "rev-a", 0)
+
+	result, err := op.activate(context.Background(), activationParams(t, act), func() time.Time { return act.EvidenceAt })
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if got := outcomeOf(t, result); got != "asset-missing" {
+		t.Fatalf("outcome = %q, want asset-missing (authorization must use the SAME single-hash rule the apply path pins against, never a broader any-of-hashes rule)", got)
+	}
+}
+
 // writeAssetFixture writes contents to dir/name and returns its
 // "sha256:<hex>" content hash, for a test that needs a real, present,
 // hash-verifiable asset file on disk.

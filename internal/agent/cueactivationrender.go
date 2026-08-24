@@ -28,6 +28,16 @@ import (
 // identical reason: a bad new file must leave the old one running and
 // report a stated failure, never go dark.
 //
+// That "never go dark" guarantee covers open-and-validate failures only.
+// Once the OLD writer has actually been stopped, a startFrameWriter
+// failure for the NEW file DOES leave the surface dark — there is no third
+// file to fall back to, and store.Upsert (persisting the new assignment)
+// already ran before this point, so the persisted assignment names a file
+// nothing is currently rendering. surfaceAlreadyActivated below consults
+// [renderOperations.hasRunningFrameWriter], not only the store, precisely
+// so a later activation of the same Cue on that surface repairs this
+// rather than reporting it healthy.
+//
 // The stop-then-start swap itself is still a brief, real, VISIBLE gap on
 // the surface being switched — the old frame writer's last frame stops
 // reaching the pipeline before the new one's first frame does. This is
@@ -95,11 +105,14 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	}
 
 	// Already exactly this Cue's resolved FSEQ, applied under exactly this
-	// authorization tuple: a redelivered/duplicate activation must not
-	// disturb a surface that is already correct (H4's own "full state,
-	// idempotent" requirement) by re-opening and re-swapping a file that
-	// is already playing.
-	if surfaceAlreadyActivated(a, act, out) {
+	// authorization tuple, AND actually running: a redelivered/duplicate
+	// activation must not disturb a surface that is already correct (H4's
+	// own "full state, idempotent" requirement) by re-opening and
+	// re-swapping a file that is already playing. o.hasRunningFrameWriter
+	// is real running state, not the persisted assignment alone — see
+	// surfaceAlreadyActivated's own doc comment for why a dark surface
+	// whose store already names the right file must still be repaired.
+	if surfaceAlreadyActivated(a, act, out, o.hasRunningFrameWriter(a.SurfaceID)) {
 		return nil
 	}
 
@@ -142,22 +155,41 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	// visible gap to the frame-writer swap itself rather than a full
 	// pipeline restart.
 	o.stopFrameWriter(a.SurfaceID)
-	o.applyTimelineStepTime(a.SurfaceID, f.StepTimeMS())
 	if err := o.startFrameWriter(a.SurfaceID, f, parsedA); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("%s: surface %q: starting frame writer for the newly activated FSEQ: %w", action, a.SurfaceID, err)
 	}
+	// The SHARED timeline step time moves only after the new writer is
+	// actually running — never before, or a startFrameWriter failure above
+	// would already have left every OTHER surface on this node stepping to
+	// a file that is not running (o.timeline is one shared instance across
+	// every surface on this node, applyTimelineStepTime's own "SHARED-
+	// TIMELINE DECISION" doc comment, renderops.go).
+	o.applyTimelineStepTime(a.SurfaceID, f.StepTimeMS())
 	return nil
 }
 
 // surfaceAlreadyActivated reports whether a's persisted assignment already
 // names out's resolved sequence and content hash, under exactly act's
-// authorization tuple — the "nothing to disturb" case a redelivered
-// activation must detect before touching a running surface. A decode
-// failure or a missing/mismatched authorization tuple is conservatively
-// "not already activated" (never grandfathers a legacy or foreign
-// assignment into skipping the swap).
-func surfaceAlreadyActivated(a pipeline.Assignment, act cueactivation.Activation, out cuecatalog.RenderOutput) bool {
+// authorization tuple, AND running is true — the "nothing to disturb" case
+// a redelivered activation must detect before touching a running surface.
+// A decode failure or a missing/mismatched authorization tuple is
+// conservatively "not already activated" (never grandfathers a legacy or
+// foreign assignment into skipping the swap).
+//
+// running must come from real running state
+// ([renderOperations.hasRunningFrameWriter]), never the store alone:
+// activateSurfaceRender's store.Upsert persists the new assignment BEFORE
+// the swap is known to have worked, so a startFrameWriter failure leaves a
+// surface that is dark while its persisted assignment already names the
+// new file. Without running, THIS function would then read that surface
+// as already-activated on the very next activation of the same Cue,
+// skipping the repair forever and letting the node report Confirmed:true,
+// outcome "authorized", for a dark surface.
+func surfaceAlreadyActivated(a pipeline.Assignment, act cueactivation.Activation, out cuecatalog.RenderOutput, running bool) bool {
+	if !running {
+		return false
+	}
 	if a.Auth == nil {
 		return false
 	}

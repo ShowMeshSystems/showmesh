@@ -181,6 +181,77 @@ func TestActivateRenderSurfaceApplyValidateBeforeStopDirectly(t *testing.T) {
 	assertSurfaceStillOnOldFSEQ(t, dir, "old.fseq", oldHash)
 }
 
+// TestActivateRenderRepairsADarkSurfaceEvenWhenTheStoreAlreadyMatches is
+// defect 4's own regression test: store.Upsert (activateSurfaceRender)
+// persists the new assignment BEFORE the old writer stops and the new one
+// starts, so a startFrameWriter failure leaves a surface that is dark
+// while its persisted assignment already names the new file/hash under
+// the correct authorization tuple. Before the fix, surfaceAlreadyActivated
+// read the store alone, so a LATER activation of the identical Cue on that
+// surface would see "already correct" and skip the repair forever — the
+// node would keep reporting Confirmed:true, outcome "authorized", for a
+// surface that is actually dark.
+func TestActivateRenderRepairsADarkSurfaceEvenWhenTheStoreAlreadyMatches(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	assignmentStore := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, assignmentStore, dir, clock)
+	setupActivatedSurface(t, renderOps, dir, "old.fseq", clock)
+
+	newPath := writeSynthFSEQ(t, dir, "new.fseq", cueActivationRenderChannelCount, 10, 25)
+	newHash, err := hashFile(newPath)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+	out := cuecatalog.RenderOutput{Sequence: "seq-new", Filename: "new.fseq", AssetHashes: []string{newHash}}
+	act := testActivation("act-dark-repair", "cue-6", 1, "halloween-2026", 3, "rev-a", 0)
+
+	// Simulate exactly the state a startFrameWriter failure leaves behind:
+	// the persisted assignment already names the new file/hash under act's
+	// own authorization tuple (as activateSurfaceRender's store.Upsert
+	// would have left it), but no writer is actually running for the
+	// surface.
+	renderOps.stopFrameWriter("surface-1")
+	reloaded, err := assignmentStore.Load()
+	if err != nil {
+		t.Fatalf("reloading assignments: %v", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(reloaded[0].RawParams, &params); err != nil {
+		t.Fatalf("decoding persisted params: %v", err)
+	}
+	params["fseqFilename"] = out.Filename
+	params["fseqContentHash"] = newHash
+	params["show"] = act.Show
+	params["generation"] = float64(act.Generation)
+	params["catalogRevision"] = act.CatalogRevision
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("encoding params: %v", err)
+	}
+	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
+	if err := assignmentStore.Upsert(pipeline.Assignment{
+		SurfaceID: "surface-1", RawParams: rawParams, AppliedAt: clock.now(), Auth: auth,
+	}); err != nil {
+		t.Fatalf("upsert dark-surface assignment: %v", err)
+	}
+
+	if renderOps.hasRunningFrameWriter("surface-1") {
+		t.Fatalf("test setup error: surface-1 must be dark (no running writer) before the repair is exercised")
+	}
+
+	// Activating the IDENTICAL Cue/authorization tuple again: the store
+	// already matches out's filename/hash exactly, but the surface is
+	// dark. The fix must repair it rather than report "already activated".
+	if err := renderOps.activateRender(act, out, clock.now); err != nil {
+		t.Fatalf("activateRender did not repair the dark surface: %v", err)
+	}
+	if !renderOps.hasRunningFrameWriter("surface-1") {
+		t.Fatalf("surface-1 is still dark after activateRender: the store-already-matches shortcut skipped the repair")
+	}
+}
+
 func assertSurfaceStillOnOldFSEQ(t *testing.T, dir, oldFilename, oldHash string) {
 	t.Helper()
 	reloaded, err := pipeline.NewAssignmentStore(dir).Load()

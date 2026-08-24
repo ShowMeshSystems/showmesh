@@ -296,7 +296,9 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		existing, err := tx.GetFPPPlaylistEntryObservation(ctx, rec.InstanceUUID)
 		switch {
 		case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
-			// No prior observation for this instance: accept unconditionally.
+			// No prior observation for this instance: accept unconditionally,
+			// and this event starts its own occurrence (schemaV17).
+			rec.EntryOccurrenceSequence = rec.Sequence
 		case err != nil:
 			return err
 		default:
@@ -310,6 +312,22 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 					return nil
 				}
 				return store.ErrFPPPlaylistEntryObservationSequenceConflict
+			}
+			// schemaV17's own rule: a fresh occurrence begins whenever this
+			// observation reports action "start" (FPP entering an entry,
+			// whether for the first time or looping back into one it
+			// already visited — EntryKey alone cannot tell those apart,
+			// since a loop's second visit derives the identical key) or
+			// names a different entry than the one last accepted. Anything
+			// else — an ordinary "playing" tick, "stop", "query_next", or
+			// "unknown" for the SAME entry — carries the prior occurrence
+			// forward unchanged, so repeat ticks inside one occurrence keep
+			// deriving the same [cueactivate] ActivationID and dedup to one
+			// dispatch.
+			if action == fppidentity.ActionStart || rec.EntryKey != existing.EntryKey {
+				rec.EntryOccurrenceSequence = rec.Sequence
+			} else {
+				rec.EntryOccurrenceSequence = existing.EntryOccurrenceSequence
 			}
 		}
 		return tx.PutFPPPlaylistEntryObservation(ctx, rec)

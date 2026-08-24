@@ -276,6 +276,40 @@ func (t *Tx) GetCommandByIdempotencyKey(ctx context.Context, key string) (Comman
 	return getCommandByIdempotencyKey(ctx, t.tx, key)
 }
 
+func getLatestCommandByTargetAction(ctx context.Context, q querier, targetKind, targetID, action string) (CommandRecord, error) {
+	row := q.QueryRowContext(ctx, `SELECT`+commandColumns+`FROM commands WHERE target_kind = ? AND target_id = ? AND action = ? ORDER BY created_at DESC LIMIT 1`,
+		targetKind, targetID, action)
+	rec, err := scanCommand(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CommandRecord{}, ErrCommandNotFound
+	}
+	if err != nil {
+		return CommandRecord{}, fmt.Errorf("store: get latest command by target/action: %w", err)
+	}
+	return rec, nil
+}
+
+// GetLatestCommandByTargetAction returns the most recently CREATED command
+// row (by created_at, ties broken arbitrarily — created_at is set from the
+// coordinator's own clock at insertion, matching every other ordering this
+// package derives from it) matching (targetKind, targetID, action), or
+// [ErrCommandNotFound] when none exists. Track H seam H4's own use: the
+// blackAndSilence audio stop needs the EvidenceAt of the LAST cue.activate
+// this coordinator itself dispatched to a node, and that value lives only
+// inside that command's own ParamsJSON (the encoded
+// [cueactivation.Activation]) — this is a plain lookup by the columns
+// already indexed for InsertCommand's own idempotency-key path, not a new
+// concept.
+func (s *Store) GetLatestCommandByTargetAction(ctx context.Context, targetKind, targetID, action string) (CommandRecord, error) {
+	guardNotInTx(ctx, "Store.GetLatestCommandByTargetAction")
+	return getLatestCommandByTargetAction(ctx, s.db, targetKind, targetID, action)
+}
+
+// GetLatestCommandByTargetAction is [Store.GetLatestCommandByTargetAction]'s [Tx] form.
+func (t *Tx) GetLatestCommandByTargetAction(ctx context.Context, targetKind, targetID, action string) (CommandRecord, error) {
+	return getLatestCommandByTargetAction(ctx, t.tx, targetKind, targetID, action)
+}
+
 // CommandOutcomeUpdate is [Store.UpdateCommandOutcome]'s input: every
 // field a command's lifecycle mutates after insertion. Pointer fields left
 // nil leave that column untouched — a dispatch-only update sets

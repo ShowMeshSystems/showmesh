@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -63,6 +65,15 @@ type CueActivationLoop struct {
 	// anyway, and a second "run now" before the first has even started
 	// adds nothing.
 	nudge chan struct{}
+
+	// minNudgeInterval and nudgeMu/lastNudgeTick are defect 6's own fix:
+	// [Options.CueActivationNudgeMinInterval]'s own doc comment for why a
+	// floor between NUDGE-DRIVEN ticks exists at all (the periodic
+	// ticker's own cadence is untouched by this — it always ticks every
+	// l.interval regardless of any nudge).
+	minNudgeInterval time.Duration
+	nudgeMu          sync.Mutex
+	lastNudgeTick    time.Time
 }
 
 // NewCueActivationLoop builds a [CueActivationLoop] against deps/opts,
@@ -72,11 +83,12 @@ func NewCueActivationLoop(deps Dependencies, opts Options) *CueActivationLoop {
 	deps = deps.withDefaults()
 	opts = opts.withDefaults()
 	return &CueActivationLoop{
-		h:        &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger},
-		interval: opts.CueActivationLoopInterval,
-		logger:   opts.Logger,
-		inFlight: make(chan struct{}, 1),
-		nudge:    make(chan struct{}, 1),
+		h:                &handlers{deps: deps, clock: opts.Clock, logger: opts.Logger},
+		interval:         opts.CueActivationLoopInterval,
+		logger:           opts.Logger,
+		inFlight:         make(chan struct{}, 1),
+		nudge:            make(chan struct{}, 1),
+		minNudgeInterval: opts.CueActivationNudgeMinInterval,
 	}
 }
 
@@ -114,15 +126,49 @@ func (l *CueActivationLoop) Run(ctx context.Context) {
 		case <-ticker.C:
 			l.runTick(ctx)
 		case <-l.nudge:
-			l.runTick(ctx)
+			l.runNudgedTick(ctx)
 		}
 	}
+}
+
+// runNudgedTick is [CueActivationLoop.Run]'s nudge-driven case: it enforces
+// l.minNudgeInterval between two nudge-driven ticks (defect 6 — see
+// [Options.CueActivationNudgeMinInterval]'s own doc comment for why), and
+// runs [CueActivationLoop.runTick] once that floor is satisfied. A nudge
+// arriving before the floor is never dropped, only DEFERRED: it schedules
+// a fresh [CueActivationLoop.Nudge] for the moment the floor is satisfied,
+// so the evidence a fast-posting plugin's nudge represents is still
+// reconciled, only at the floor's own bounded rate rather than instantly
+// every time. This never delays the periodic ticker's own cadence
+// (l.interval, Run's other select case) — only nudge-driven promptness is
+// rate-limited here.
+func (l *CueActivationLoop) runNudgedTick(ctx context.Context) {
+	now := l.h.now()
+
+	l.nudgeMu.Lock()
+	elapsed := now.Sub(l.lastNudgeTick)
+	if l.lastNudgeTick.IsZero() || elapsed >= l.minNudgeInterval {
+		l.lastNudgeTick = now
+		l.nudgeMu.Unlock()
+		l.runTick(ctx)
+		return
+	}
+	wait := l.minNudgeInterval - elapsed
+	l.nudgeMu.Unlock()
+
+	// Deferred, not dropped: re-request a nudge once the floor is
+	// satisfied. A duplicate AfterFunc from several rapid nudges arriving
+	// inside the SAME wait window costs nothing extra: l.nudge's own
+	// 1-buffered coalescing (this struct's own doc comment) already
+	// collapses any number of pending re-nudges into at most one.
+	time.AfterFunc(wait, l.Nudge)
 }
 
 // runTick starts one tick as a non-blocking, skip-if-already-running
 // attempt — the exact body Run's own select cases used to inline, factored
 // out so the immediate first tick, the periodic tick, and a nudge-driven
-// tick all share it rather than three copies that could drift.
+// tick (via runNudgedTick, once its own floor is satisfied) all share it
+// rather than three copies that could drift.
 func (l *CueActivationLoop) runTick(ctx context.Context) {
 	select {
 	case l.inFlight <- struct{}{}:
@@ -191,7 +237,7 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 			}
 		}
 		if len(dec.ClearNodes) > 0 {
-			h.dispatchBlackAndSilence(ctx, now, dec.ClearNodes, issuer)
+			h.dispatchBlackAndSilence(ctx, now, dec.ClearNodes, issuer, blackAndSilenceEpisode(obs))
 		}
 	case cueactivate.StateUnbound, cueactivate.StateIdentityUnavailable:
 		// Nothing to dispatch or hold — see [cueactivate.State]'s own doc
@@ -216,6 +262,28 @@ func cueActivationSystemPrincipalID(instanceUUID string) string {
 // not exist.
 const blackAndSilenceAudioSessionID = cueactivation.AudioSessionID
 
+// blackAndSilenceEpisode is defect 3's own episode dimension for the
+// blackAndSilence clear/silence idempotency keys: obs.InstanceUUID and its
+// EntryOccurrenceSequence (schemaV17's own entry-start identity, computed
+// at ingestion — see fppobservations.go and [cueactivate.activationID]'s
+// identical use one seam over). idempotency_key is globally unique on the
+// commands table (store.InsertCommand), and both
+// [handlers.resolveRenderCommandReplay]/[resolveAudioSessionReplay] answer
+// a reused key with the FIRST command's already-resolved outcome forever,
+// never dispatching again — so a key scoped only to node/surface (the
+// render clear) or only to node (the audio stop) means the SECOND
+// mismatch episode on the same node ever, no matter how much later or how
+// unrelated its trigger, silently replays the first episode's outcome
+// instead of dispatching. Stable across repeat ticks of one CONTINUING
+// mismatch (the coordinator's own store keeps only the latest accepted
+// observation per instance, so an unchanged mismatch re-reads the
+// identical obs every tick) and changes on any genuinely new FPP
+// entry-start evidence — including the mismatch clearing and later
+// recurring, which always advances EntryOccurrenceSequence again first.
+func blackAndSilenceEpisode(obs store.FPPPlaylistEntryObservationRecord) string {
+	return obs.InstanceUUID + "-" + strconv.FormatInt(obs.EntryOccurrenceSequence, 10)
+}
+
 // dispatchBlackAndSilence dispatches render.surface.clear to every surface
 // belonging to a node in nodeIDs, and audio.session.stop against
 // [blackAndSilenceAudioSessionID] on every one of those nodes that has
@@ -223,8 +291,11 @@ const blackAndSilenceAudioSessionID = cueactivation.AudioSessionID
 // ("the renderer blacks its surfaces and ShowMesh-owned audio silences"),
 // not only its render half. A node with no audio.node object has no
 // program-audio route to silence at all (ADR-018), so it is skipped
-// rather than dispatched-and-refused every tick.
-func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, nodeIDs []string, issuer cueActivationIssuer) {
+// rather than dispatched-and-refused every tick. episode is
+// [blackAndSilenceEpisode]'s own value for the observation that produced
+// this mismatch — see that function's own doc comment for why the
+// idempotency keys below carry it.
+func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, nodeIDs []string, issuer cueActivationIssuer, episode string) {
 	if h.deps.Config == nil {
 		return
 	}
@@ -236,20 +307,29 @@ func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, n
 			for _, surfaceID := range surfaceIDs {
 				in := renderDispatchInput{
 					Action: "render.surface.clear", NodeID: nodeID, SurfaceID: surfaceID,
-					IdempotencyKey: "cueact-clear-" + nodeID + "-" + surfaceID,
+					IdempotencyKey: "cueact-clear-" + nodeID + "-" + surfaceID + "-" + episode,
 					DesiredState:   "stopped",
 					IssuerID:       issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 					Form: issuer.Form, CredentialID: issuer.CredentialID,
 				}
-				if _, problem, err := h.executeRenderDispatch(ctx, now, in); err != nil {
-					h.logWarn("cue activation loop: blackAndSilence clear dispatch failed", "nodeId", nodeID, "surfaceId", surfaceID, "error", err)
-				} else if problem != nil {
-					h.logWarn("cue activation loop: blackAndSilence clear dispatch refused", "nodeId", nodeID, "surfaceId", surfaceID, "detail", problem.Detail)
+				result, problem, err := h.executeRenderDispatch(ctx, now, in)
+				switch {
+				case err != nil:
+					h.logWarn("cue activation loop: blackAndSilence clear dispatch failed", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "error", err)
+				case problem != nil:
+					h.logWarn("cue activation loop: blackAndSilence clear dispatch refused", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "detail", problem.Detail)
+				case result.Replay:
+					// Not a failure: this episode's clear was already
+					// dispatched on an earlier tick and this is a repeat
+					// tick of the SAME episode — logged so a suppressed
+					// dispatch is visible evidence, never a silent no-op
+					// (TRACK-H-H3-SPEC.md section 6).
+					h.logDebug("cue activation loop: blackAndSilence clear suppressed as a replay of an unchanged episode", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode)
 				}
 			}
 		}
 
-		h.dispatchBlackAndSilenceAudioStop(ctx, now, nodeID, issuer)
+		h.dispatchBlackAndSilenceAudioStop(ctx, now, nodeID, issuer, episode)
 	}
 }
 
@@ -262,8 +342,9 @@ func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, n
 // authorization check): an operator who chose blackAndSilence specifically
 // to avoid the wrong content reaching an audience must be able to see that
 // the silence attempt itself failed, not just infer it from continued
-// audio on the wall.
-func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer) {
+// audio on the wall. episode is [blackAndSilenceEpisode]'s own value; see
+// that function's own doc comment for why the idempotency key carries it.
+func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, episode string) {
 	hasAudioNode, err := nodeHasAudioNodeObject(ctx, h.deps.Config, nodeID)
 	if err != nil {
 		h.logWarn("cue activation loop: resolve audio.node for blackAndSilence failed", "nodeId", nodeID, "error", err)
@@ -273,8 +354,49 @@ func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now tim
 		return
 	}
 
-	idempotencyKey := "cueact-silence-" + nodeID
-	revision := uint64(now.UnixNano())
+	idempotencyKey := "cueact-silence-" + nodeID + "-" + episode
+	// stopAt is the LATER of this coordinator's own now and the EvidenceAt
+	// of the last cue.activate this coordinator itself dispatched to
+	// nodeID — never a bare now, because now is THIS coordinator's clock
+	// while the node's own activateAudio steps derive their revisions from
+	// act.EvidenceAt, a reading taken on the FPP player (see
+	// cueactivation.AudioSessionRevision's own doc comment). A Raspberry Pi
+	// FPP player with no RTC and no internet can boot with a clock badly
+	// ahead of this coordinator's; if this stop used now alone in that
+	// case, its revision would be smaller than the session's own current
+	// revision and pkg/audio's RevisionState.Apply would refuse it as
+	// stale, leaving that node's audio session unstoppable for the rest of
+	// its life. Reading the last-dispatched activation back out of the
+	// commands table (rather than trusting anything the node itself
+	// reports) keeps this derivation entirely on evidence this coordinator
+	// already recorded.
+	stopAt := now
+	if h.deps.Commands != nil {
+		last, err := h.deps.Commands.GetLatestCommandByTargetAction(ctx, "node", nodeID, "cue.activate")
+		switch {
+		case err == nil:
+			var act cueactivation.Activation
+			if uerr := json.Unmarshal([]byte(last.ParamsJSON), &act); uerr != nil {
+				h.logWarn("cue activation loop: decode last dispatched activation for blackAndSilence stop failed", "nodeId", nodeID, "error", uerr)
+			} else if act.EvidenceAt.After(stopAt) {
+				stopAt = act.EvidenceAt
+			}
+		case errors.Is(err, store.ErrCommandNotFound):
+			// No cue.activate was ever dispatched to this node: nothing to
+			// compare against, so now is the correct (and only available)
+			// reading.
+		default:
+			h.logWarn("cue activation loop: read last dispatched activation for blackAndSilence stop failed", "nodeId", nodeID, "error", err)
+		}
+	}
+	// AudioSessionRevision, not a bare stopAt.UnixNano(): the node's own
+	// activateAudio steps derive their revisions through the identical
+	// function (internal/agent/cueactivationaudio.go's activationRevision),
+	// and AudioSessionStepStop is defined to sort after every one of them
+	// — see cueactivation.AudioSessionRevision's own doc comment for why a
+	// second, independently written revision rule left this stop refused
+	// as stale for the life of the session.
+	revision := cueactivation.AudioSessionRevision(stopAt, cueactivation.AudioSessionStepStop)
 	in := audioDispatchInput{
 		Action: "audio.session.stop", NodeID: nodeID, SessionID: blackAndSilenceAudioSessionID,
 		Params: map[string]any{
@@ -284,10 +406,16 @@ func (h *handlers) dispatchBlackAndSilenceAudioStop(ctx context.Context, now tim
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID,
 	}
-	if _, problem, err := h.executeAudioSessionDispatch(ctx, now, in); err != nil {
-		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch failed", "nodeId", nodeID, "error", err)
-	} else if problem != nil {
-		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch refused", "nodeId", nodeID, "detail", problem.Detail)
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, in)
+	switch {
+	case err != nil:
+		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch failed", "nodeId", nodeID, "episode", episode, "error", err)
+	case problem != nil:
+		h.logWarn("cue activation loop: blackAndSilence audio stop dispatch refused", "nodeId", nodeID, "episode", episode, "detail", problem.Detail)
+	case result.Replay:
+		// Not a failure: see the identical case in dispatchBlackAndSilence
+		// above — a suppressed dispatch is logged, never silent.
+		h.logDebug("cue activation loop: blackAndSilence audio stop suppressed as a replay of an unchanged episode", "nodeId", nodeID, "episode", episode)
 	}
 }
 

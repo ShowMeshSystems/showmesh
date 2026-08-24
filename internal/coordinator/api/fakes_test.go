@@ -169,6 +169,27 @@ func (f *fakeCommandStore) GetCommand(_ context.Context, id string) (store.Comma
 	return rec, nil
 }
 
+func (f *fakeCommandStore) GetLatestCommandByTargetAction(_ context.Context, targetKind, targetID, action string) (store.CommandRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var (
+		best  store.CommandRecord
+		found bool
+	)
+	for _, rec := range f.commands {
+		if rec.TargetKind != targetKind || rec.TargetID != targetID || rec.Action != action {
+			continue
+		}
+		if !found || rec.CreatedAt.After(best.CreatedAt) {
+			best, found = rec, true
+		}
+	}
+	if !found {
+		return store.CommandRecord{}, store.ErrCommandNotFound
+	}
+	return best, nil
+}
+
 func (f *fakeCommandStore) setCommand(rec store.CommandRecord) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

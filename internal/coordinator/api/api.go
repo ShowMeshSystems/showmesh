@@ -1001,6 +1001,13 @@ func (noCommandStore) GetCommand(context.Context, string) (store.CommandRecord, 
 	return store.CommandRecord{}, store.ErrCommandNotFound
 }
 
+// GetLatestCommandByTargetAction answers store.ErrCommandNotFound, matching
+// GetCommand's identical reasoning immediately above: a coordinator with no
+// CommandStore wired in has recorded no command against any target.
+func (noCommandStore) GetLatestCommandByTargetAction(context.Context, string, string, string) (store.CommandRecord, error) {
+	return store.CommandRecord{}, store.ErrCommandNotFound
+}
+
 // noDeclarationStore is [Dependencies.Discovery]'s nil-safe default. Reads
 // answer empty and successful (matching every other no-op lister in this
 // file); a write refuses with errDeclarationStoreNotConfigured rather than
@@ -1269,6 +1276,25 @@ type Options struct {
 	// not a measured value. Defaults to 1 second, matching
 	// NightLoopInterval's own reasoning one seam over.
 	CueActivationLoopInterval time.Duration
+
+	// CueActivationNudgeMinInterval is the floor
+	// [CueActivationLoop.Nudge] enforces between two NUDGE-DRIVEN ticks
+	// (cueactivationloop.go's runNudgedTick): [handlers.
+	// handlePostFPPPlaylistEntryObservation] nudges on every accepted,
+	// non-replay observation, and the loop's own in-flight skip only
+	// bounds CONCURRENT ticks, not the RATE a fast-posting plugin can
+	// drive back-to-back full reconcile passes at (each one a ListNodes
+	// times ResolveCueCatalog per node — coordinator load, not a
+	// dispatch-safety issue: [cueactivate.Decide]'s own idempotent
+	// ActivationID already bounds dispatch). A nudge that arrives before
+	// the floor is never dropped, only deferred to the floor, so this
+	// stays a rate limit on RECONCILE FREQUENCY, never on the latency a
+	// solitary nudge exists to cut. A SHOWMESH HYPOTHESIS, not a measured
+	// value: short enough to stay well under CueActivationLoopInterval's
+	// own 1 second default, so an isolated entry change is still never
+	// worse than the periodic tick's own staleness bound. Defaults to 100
+	// milliseconds.
+	CueActivationNudgeMinInterval time.Duration
 }
 
 const (
@@ -1303,6 +1329,11 @@ const (
 	// CueActivationLoopInterval]. See that field's doc comment — a
 	// SHOWMESH HYPOTHESIS.
 	defaultCueActivationLoopInterval = 1 * time.Second
+
+	// defaultCueActivationNudgeMinInterval backs [Options.
+	// CueActivationNudgeMinInterval]. See that field's doc comment — a
+	// SHOWMESH HYPOTHESIS.
+	defaultCueActivationNudgeMinInterval = 100 * time.Millisecond
 )
 
 // envStreamSubscriberBufferOverride is a TEST-SUPPORT-ONLY environment
@@ -1388,6 +1419,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.CueActivationLoopInterval <= 0 {
 		o.CueActivationLoopInterval = defaultCueActivationLoopInterval
+	}
+	if o.CueActivationNudgeMinInterval <= 0 {
+		o.CueActivationNudgeMinInterval = defaultCueActivationNudgeMinInterval
 	}
 	return o
 }

@@ -332,7 +332,7 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 		}
 		activations[n.NodeID] = cueactivation.Activation{
 			Runner: "fpp", RunnerInstance: runnerInstance,
-			ActivationID:     activationID(n.NodeID, tuple, playlistID, playlistRevision, entryID),
+			ActivationID:     activationID(n.NodeID, tuple, playlistID, playlistRevision, entryID, obs.EntryOccurrenceSequence),
 			Show:             active.ShowID,
 			Generation:       active.Generation,
 			CatalogRevision:  catalog.Revision,
@@ -424,20 +424,37 @@ func nodeAssetsReady(ctx context.Context, st *store.Store, now time.Time, invent
 }
 
 // activationID is a deterministic, stable id for one logical activation:
-// identical inputs (same node, same authorization tuple, same binding)
-// always produce the identical id, so a redelivered or repeated decision
-// for an unchanged entry is recognizably the SAME activation rather than a
-// new one — [cueactivation.Activation.ActivationID]'s own contract ("stable
-// per activation, for idempotency").
-func activationID(nodeID string, tuple cueauth.AuthorizationTuple, playlistID string, playlistRevision int64, entryID string) string {
+// identical inputs (same node, same authorization tuple, same binding, same
+// entry OCCURRENCE) always produce the identical id, so a redelivered or
+// repeated decision for an unchanged occurrence is recognizably the SAME
+// activation rather than a new one — [cueactivation.Activation.
+// ActivationID]'s own contract ("stable per activation, for idempotency").
+//
+// entrySequence is obs.EntryOccurrenceSequence, entry-START identity
+// computed at ingestion (internal/coordinator/api/fppobservations.go,
+// schemaV17's own doc comment) from the FPP-plugin-assigned action and
+// entry key — not a coordinator clock, and deliberately not the raw wire
+// `sequence` (that counter also advances on an ordinary MultiSync position
+// tick within one ongoing entry, so hashing it directly would mint a new
+// ActivationID on every tick instead of once per entry change). It is
+// stable across repeat ticks inside one occurrence, so an unchanged stored
+// row keeps deriving the identical ActivationID (a repeat tick must dedup),
+// while a genuinely new entry-start — including a playlist looping back to
+// an entry it already visited, whose entry key alone is otherwise identical
+// to the first visit — always changes it, so a re-entry dispatches again.
+// Without this, two occurrences of the same entry (same node/show/
+// generation/catalog/playlist/entry/cue identity) hashed identically, and a
+// looping playlist's second lap silently replayed the first lap's stored
+// outcome forever.
+func activationID(nodeID string, tuple cueauth.AuthorizationTuple, playlistID string, playlistRevision int64, entryID string, entrySequence int64) string {
 	h := sha256.New()
 	// hash.Hash.Write never returns an error (the interface's own
 	// contract) — checked explicitly rather than ignored outright so a
 	// lint pass can see that's a deliberate reading of the contract, not
 	// an oversight.
-	_, _ = fmt.Fprintf(h, "%s|%s|%d|%s|%s|%d|%s|%d|%s",
+	_, _ = fmt.Fprintf(h, "%s|%s|%d|%s|%s|%d|%s|%d|%s|%d",
 		nodeID, tuple.Show, tuple.Generation, tuple.CatalogRevision,
-		playlistID, playlistRevision, entryID, tuple.CueRevision, tuple.CueID)
+		playlistID, playlistRevision, entryID, tuple.CueRevision, tuple.CueID, entrySequence)
 	return "cueact-" + hex.EncodeToString(h.Sum(nil))
 }
 

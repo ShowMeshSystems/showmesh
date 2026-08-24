@@ -389,6 +389,18 @@ type CommandStore interface {
 	// did dispatch one; that is rendered as "not retained", never as a
 	// blank or an internal error.
 	GetCommand(ctx context.Context, id string) (store.CommandRecord, error)
+
+	// GetLatestCommandByTargetAction returns the most recently created
+	// command matching (targetKind, targetID, action), or wraps
+	// [store.ErrCommandNotFound] when none exists. Track H seam H4's
+	// blackAndSilence audio stop (cueactivationloop.go's
+	// dispatchBlackAndSilenceAudioStop) uses this to read the EvidenceAt of
+	// the last cue.activate THIS coordinator dispatched to a node, so its
+	// stop revision does not depend on the node's own clock running behind
+	// the coordinator's — see [cueactivation.AudioSessionRevision]'s own
+	// doc comment for why a stop revision derived only from the
+	// coordinator's "now" is unsound.
+	GetLatestCommandByTargetAction(ctx context.Context, targetKind, targetID, action string) (store.CommandRecord, error)
 }
 
 // NightSessionStore is Track F seam F2's own store dependency: the
