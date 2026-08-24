@@ -66,6 +66,12 @@ type fakeAudioPublisher struct {
 	// must prove a command was NEVER sent, or must read the params of an
 	// earlier one in a multi-step sequence, needs the whole list.
 	dispatched []dispatchedAudioCommand
+
+	// onAwaitResponse, when set, runs synchronously before AwaitResponse
+	// does anything else - a test's only way to inject an event (such as
+	// canceling the caller's own request context) at the exact moment a
+	// real broker round trip would be in flight, without a real broker.
+	onAwaitResponse func()
 }
 
 // dispatchedAudioCommand is one recorded publish: the action string and
@@ -93,11 +99,17 @@ func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool
 }
 
 func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.ResponseRequest) (broker.Message, error) {
+	if f.onAwaitResponse != nil {
+		f.onAwaitResponse()
+	}
 	if f.beforePublishErr != nil {
 		return broker.Message{}, fmt.Errorf("%w: %w", broker.ErrResponseFailedBeforePublish, f.beforePublishErr)
 	}
 	if f.publishErr != nil {
-		return broker.Message{}, f.publishErr
+		// Mirrors broker.BrokerManager.AwaitResponse: a failed Publish call
+		// means nothing reached the wire, wrapped in the same sentinel a
+		// failed subscribe already reports.
+		return broker.Message{}, fmt.Errorf("%w: %w", broker.ErrResponseFailedBeforePublish, f.publishErr)
 	}
 	if err := f.Publish(context.Background(), req.PublishTopic, 0, false, req.PublishPayload); err != nil {
 		return broker.Message{}, err

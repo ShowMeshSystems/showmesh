@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -199,8 +200,9 @@ func TestCueCatalogDeployReplayReturnsExistingOutcomeWithoutRepublishing(t *test
 
 	var result2 struct {
 		Command struct {
-			Replay  bool   `json:"replay"`
-			Outcome string `json:"outcome"`
+			Replay   bool   `json:"replay"`
+			Outcome  string `json:"outcome"`
+			Revision string `json:"revision"`
 		} `json:"command"`
 	}
 	if err := json.Unmarshal(body2, &result2); err != nil {
@@ -211,6 +213,14 @@ func TestCueCatalogDeployReplayReturnsExistingOutcomeWithoutRepublishing(t *test
 	}
 	if result2.Command.Outcome != mqttproto.OutcomeConfirmed {
 		t.Fatalf("replayed deploy outcome = %q, want confirmed", result2.Command.Outcome)
+	}
+	// A replay must report the SAME revision the original dispatch
+	// resolved and reported, not the accepted-empty "" a still-in-flight
+	// replay reports (TestCueCatalogDeployReplayOfAnInFlightCommandReportsAbsentOutcome) -
+	// a caller polling by idempotency key needs to see which catalog
+	// revision was actually deployed.
+	if result2.Command.Revision != revision {
+		t.Fatalf("replayed deploy revision = %q, want %q", result2.Command.Revision, revision)
 	}
 }
 
@@ -272,6 +282,141 @@ func TestCueCatalogDeployReplayOfAnInFlightCommandReportsAbsentOutcome(t *testin
 		t.Fatalf("replayed in-flight deploy dispatchedAt = %s, want JSON null; body: %s", raw.Command.DispatchedAt, body)
 	}
 	assertMatchesSchema(t, newOpenAPICompiler(t), "CueCatalogDeployResponse", body)
+}
+
+// TestCueCatalogDeployOutcomeSurvivesClientDisconnect proves this route's
+// post-dispatch bookkeeping (recording dispatchedAt, waiting for the node's
+// result, recording the resolved outcome, and writing the outcome audit
+// entry) is not cancellable by a client that walks away mid-request -
+// matching TestFPPCommandOutcomeSurvivesClientDisconnect's and
+// audiodispatch.go's own bgCtx cutover. The request's own context is
+// canceled from inside AwaitResponse, simulating an abandoned HTTP client
+// after the command already reached the wire; despite that, the command
+// must still resolve in the store with a real dispatchedAt and outcome
+// audit entry.
+func TestCueCatalogDeployOutcomeSurvivesClientDisconnect(t *testing.T) {
+	api, st, pub, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	revision := resolvedCueCatalogRevision(t, api, "render-01", auth)
+	observedAt := testNow
+	pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.cuecatalog.revision", Value: revision,
+			ObservedAt: &observedAt, CollectedAt: observedAt,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pub.onAwaitResponse = cancel
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy", `{}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req.WithContext(ctx))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ServeHTTP still completes even though the request's own context was canceled mid-wait); body: %s", resp.StatusCode, body)
+	}
+
+	var result struct {
+		Command struct {
+			CommandID    string `json:"commandId"`
+			Outcome      string `json:"outcome"`
+			DispatchedAt string `json:"dispatchedAt"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("decode deploy response: %v", err)
+	}
+	if result.Command.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("outcome = %q, want confirmed; body: %s", result.Command.Outcome, body)
+	}
+	if result.Command.DispatchedAt == "" {
+		t.Fatalf("dispatchedAt is empty, want a real dispatch time; body: %s", body)
+	}
+
+	rec, err := st.GetCommand(context.Background(), result.Command.CommandID)
+	if err != nil {
+		t.Fatalf("GetCommand: %v", err)
+	}
+	if rec.State != "resolved" {
+		t.Fatalf("stored command state = %q, want resolved (the request's own cancellation must not leave it stuck)", rec.State)
+	}
+	if rec.DispatchedAt == nil {
+		t.Fatalf("stored command dispatchedAt is nil, want set")
+	}
+	if rec.ResolvedAt == nil {
+		t.Fatalf("stored command resolvedAt is nil, want set")
+	}
+
+	ack, err := st.GetNodeCueCatalogAck(context.Background(), "render-01")
+	if err != nil {
+		t.Fatalf("GetNodeCueCatalogAck: %v", err)
+	}
+	if ack.Revision != revision {
+		t.Fatalf("stored ack revision = %q, want %q", ack.Revision, revision)
+	}
+}
+
+// TestCueCatalogDeployPublishFailureLeavesDispatchedAtNull proves a publish
+// that never reaches the broker (as opposed to a publish that succeeds but
+// gets no reply) must never claim a dispatch that never happened:
+// dispatchedAt stays null and outcome is "failed", the same contract
+// TestCueCatalogDeployRefusesWithNoActiveShow's sibling tests already prove
+// for a subscribe failure via beforePublishErr - this proves it for the
+// publish call itself failing (broker.BrokerManager.AwaitResponse's own
+// b.Publish call, api/openapi.yaml's dispatchedAt: null-when-unattempted
+// rule).
+func TestCueCatalogDeployPublishFailureLeavesDispatchedAtNull(t *testing.T) {
+	api, st, pub, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	pub.publishErr = errors.New("broker unavailable for a test")
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/deploy", `{}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (dispatch itself failed); body: %s", resp.StatusCode, body)
+	}
+
+	// Asserted on the raw JSON body via the store instead, since a 500
+	// response body is a Problem, not a CueCatalogDeployResponse.
+	var problem v1.Problem
+	if err := json.Unmarshal(body, &problem); err != nil {
+		t.Fatalf("decode problem body: %v", err)
+	}
+
+	commands, err := st.ListAuditEntries(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("ListAuditEntries: %v", err)
+	}
+	if len(commands) == 0 {
+		t.Fatalf("no audit entries recorded for a failed publish")
+	}
+
+	// Read the command back by scanning for the one this test just
+	// created (there is exactly one node/action pair in this fixture).
+	var found bool
+	for _, entry := range commands {
+		if entry.Action != auditActionCueCatalogDeploy {
+			continue
+		}
+		found = true
+		rec, err := st.GetCommand(context.Background(), entry.CommandID)
+		if err != nil {
+			t.Fatalf("GetCommand: %v", err)
+		}
+		if rec.State != "failed" {
+			t.Fatalf("stored command state = %q, want failed (publish never reached the wire)", rec.State)
+		}
+		if rec.DispatchedAt != nil {
+			t.Fatalf("stored command dispatchedAt = %v, want nil (publish never reached the wire)", *rec.DispatchedAt)
+		}
+	}
+	if !found {
+		t.Fatalf("no cuecatalog.deploy audit entry recorded")
+	}
 }
 
 // TestCueCatalogDeployRefusesWithNoActiveShow proves this route resolves

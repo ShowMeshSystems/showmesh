@@ -193,7 +193,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		h.writeInternalError(w, now, "encode params", err)
 		return
 	}
-	identityJSON, _ := json.Marshal(cueCatalogDeployRequestIdentity{NodeID: nodeID, Show: catalog.Show, Generation: catalog.Generation})
+	identityJSON, _ := json.Marshal(cueCatalogDeployRequestIdentity{NodeID: nodeID, Show: catalog.Show, Generation: catalog.Generation, Revision: catalog.Revision})
 
 	commandID := uuid.NewString()
 	rec := store.CommandRecord{
@@ -248,12 +248,19 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 
 	h.writeCueCatalogDeployAudit(ctx, now, identity.AuditDispatch, ac, nodeID, commandID, idempotencyKey, catalog, "")
 
+	// From here on, every write is on bgCtx: the command is already
+	// durably recorded and about to be dispatched, and a caller walking
+	// away (an abandoned HTTP client) must not be able to abort the
+	// dispatch or its post-dispatch bookkeeping — matching audiodispatch.
+	// go's identical bgCtx cutover.
+	bgCtx := context.WithoutCancel(ctx)
+
 	dispatchedAt := now
 	if h.deps.AudioPublisher == nil {
 		h.writeInternalError(w, now, "deploy cue catalog", errors.New("no command publish-and-await capability is configured on this coordinator"))
 		return
 	}
-	msg, err := h.deps.AudioPublisher.AwaitResponse(ctx, broker.ResponseRequest{
+	msg, err := h.deps.AudioPublisher.AwaitResponse(bgCtx, broker.ResponseRequest{
 		PublishTopic: cmdTopic, PublishPayload: rawEnv,
 		PublishQoS: mqttproto.CmdDeliveryPolicy.QoS, PublishRetain: mqttproto.CmdDeliveryPolicy.Retain,
 		ResponseTopic: resultTopic, ResponseQoS: mqttproto.ResultDeliveryPolicy.QoS,
@@ -268,25 +275,25 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 			// dispatch that never happened.
 			resolvedAt := h.now()
 			resultJSON, _ := json.Marshal(cueCatalogDeployResultPayload{Outcome: "failed", Reason: err.Error()})
-			_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
+			_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 				ResolvedAt: &resolvedAt, State: strPtr("failed"), ResultJSON: strPtr(string(resultJSON)),
 				OutcomeState: strPtr("collection_failed"), OutcomeReason: strPtr(err.Error()),
 			})
-			h.writeCueCatalogDeployAudit(ctx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, "failed: "+err.Error())
+			h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, "failed: "+err.Error())
 			h.writeInternalError(w, now, "dispatch cuecatalog.deploy", err)
 			return
 		}
 		// Published, but no reply arrived (deadline, or the await itself
 		// failed) — an honest "unconfirmed" outcome, not a caller error.
-		_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{DispatchedAt: &dispatchedAt})
+		_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{DispatchedAt: &dispatchedAt})
 		resolvedAt := h.now()
 		reason := err.Error()
 		resultJSON, _ := json.Marshal(cueCatalogDeployResultPayload{Outcome: mqttproto.OutcomeUnconfirmed, Reason: reason})
-		_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
+		_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 			ResolvedAt: &resolvedAt, State: strPtr("resolved"), ResultJSON: strPtr(string(resultJSON)),
 			OutcomeState: strPtr("not_collected"), OutcomeReason: strPtr(reason),
 		})
-		h.writeCueCatalogDeployAudit(ctx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, "unconfirmed: "+reason)
+		h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, "unconfirmed: "+reason)
 		jsonWrite(w, v1.CueCatalogDeployResponse{
 			ServerTime: formatTime(h.now()),
 			Command: v1.CueCatalogDeployResult{
@@ -318,11 +325,11 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 
 	resolvedAt := h.now()
 	resultJSON, _ := json.Marshal(cueCatalogDeployResultPayload{Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: acknowledgedRevision})
-	_ = h.updateCommandOutcomeBounded(ctx, commandID, store.CommandOutcomeUpdate{
+	_ = h.updateCommandOutcomeBounded(bgCtx, commandID, store.CommandOutcomeUpdate{
 		DispatchedAt: &dispatchedAt, ResolvedAt: &resolvedAt, State: strPtr("resolved"),
 		ResultJSON: strPtr(string(resultJSON)), OutcomeState: strPtr(res.Outcome), OutcomeReason: strPtr(res.Reason),
 	})
-	h.writeCueCatalogDeployAudit(ctx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, res.Outcome+": "+res.Reason)
+	h.writeCueCatalogDeployAudit(bgCtx, now, identity.AuditOutcome, ac, nodeID, commandID, idempotencyKey, catalog, res.Outcome+": "+res.Reason)
 
 	// The node reports which revision it now holds via THIS command's own
 	// result — see internal/agent/cuecatalogops.go's deploy, whose
@@ -334,7 +341,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 	// already succeeded on the node regardless of whether this coordinator
 	// manages to also record it.
 	if res.Outcome == mqttproto.OutcomeConfirmed && acknowledgedRevision != "" {
-		if err := h.deps.AssetManifests.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
+		if err := h.deps.AssetManifests.PutNodeCueCatalogAck(bgCtx, store.NodeCueCatalogAckRecord{
 			NodeID: nodeID, Revision: acknowledgedRevision, ShowID: catalog.Show, Generation: catalog.Generation, AcknowledgedAt: resolvedAt,
 		}); err != nil {
 			h.logWarn("failed to record cue catalog acknowledgement after a confirmed deploy", "node", nodeID, "error", err)
@@ -361,6 +368,7 @@ type cueCatalogDeployRequestIdentity struct {
 	NodeID     string `json:"node"`
 	Show       string `json:"show"`
 	Generation int64  `json:"generation"`
+	Revision   string `json:"revision"`
 }
 
 // cueCatalogDeployResultPayload is the JSON this file persists into
@@ -416,7 +424,7 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 	_ = json.Unmarshal([]byte(existing.RequestedRevision), &reqID)
 	return v1.CueCatalogDeployResult{
 		CommandID: existing.ID, IdempotencyKey: existing.IdempotencyKey, Node: nodeID, Replay: true,
-		Show: reqID.Show, Generation: reqID.Generation,
+		Show: reqID.Show, Generation: reqID.Generation, Revision: reqID.Revision,
 		Outcome: res.Outcome, Reason: res.Reason, AcknowledgedRevision: res.AcknowledgedRevision,
 		DispatchedAt: dispatchedAt, ResolvedAt: resolvedAt,
 	}, nil
