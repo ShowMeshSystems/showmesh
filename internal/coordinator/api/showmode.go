@@ -118,26 +118,32 @@ func (h *handlers) handleGetShowModeConfig(w http.ResponseWriter, r *http.Reques
 // GET /api/v1/config/show.mode/revisions: every revision's metadata,
 // newest first. Gated on config:write like every other kind's revision
 // history - the open read is the CURRENT value, not the history.
+//
+// This used to read the config object for the active revision number and
+// then separately list the revisions, the same torn-read shape
+// resolveShowMode's own fix (see its doc comment) closed for the
+// current-value GET: a PUT that activates a new revision between those two
+// reads paired a stale "active" pointer with a list that already included
+// the newer revision, marking the wrong one active. handlePutShowModeConfig
+// is the only writer of show.mode revisions, and it only ever activates
+// obj.CurrentRevision + 1 - never an older revision - so the highest
+// revision number returned by ListConfigRevisions is always the active
+// one. Deriving activeRevision from that single read, instead of a second
+// GetConfigObject call, removes the race instead of merely narrowing it.
 func (h *handlers) handleGetShowModeConfigRevisions(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
-
-	activeRevision := int64(0)
-	obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID)
-	switch {
-	case errors.Is(err, store.ErrConfigObjectNotFound):
-	case err != nil:
-		h.writeInternalError(w, now, "get show.mode config object", err)
-		return
-	default:
-		activeRevision = obj.CurrentRevision
-	}
 
 	revs, err := h.deps.Config.ListConfigRevisions(ctx, config.ShowModeConfigKind, config.ShowModeConfigObjectID)
 	if err != nil {
 		h.writeInternalError(w, now, "list show.mode config revisions", err)
 		return
 	}
+	activeRevision := int64(0)
+	if n := len(revs); n > 0 {
+		activeRevision = revs[n-1].Revision
+	}
+
 	out := make([]v1.ConfigRevisionMeta, 0, len(revs))
 	for i := len(revs) - 1; i >= 0; i-- {
 		out = append(out, mapConfigRevisionMeta(revs[i], activeRevision))

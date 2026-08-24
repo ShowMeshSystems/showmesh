@@ -401,6 +401,123 @@ func TestGetShowModeConfigDoesNotTearReadAcrossAConcurrentActivation(t *testing.
 	}
 }
 
+// interleavedShowModeObjectStore is [ConfigStore] with one deliberate seam:
+// after its FIRST GetConfigObject OR ListConfigRevisions call returns
+// (whichever the handler under test makes first), it runs afterFirstRead,
+// which lands a second write directly against the same underlying store.
+// handleGetShowModeConfigRevisions makes exactly one of these two calls, so
+// hooking both lets this store reproduce the tear regardless of which read
+// the handler's current implementation happens to make.
+type interleavedShowModeObjectStore struct {
+	*store.Store
+	afterFirstRead func()
+	readCalls      int
+}
+
+func (s *interleavedShowModeObjectStore) fireAfterFirstRead() {
+	s.readCalls++
+	if s.readCalls == 1 && s.afterFirstRead != nil {
+		s.afterFirstRead()
+	}
+}
+
+func (s *interleavedShowModeObjectStore) GetConfigObject(ctx context.Context, kind, id string) (store.ConfigObjectRecord, error) {
+	rec, err := s.Store.GetConfigObject(ctx, kind, id)
+	s.fireAfterFirstRead()
+	return rec, err
+}
+
+func (s *interleavedShowModeObjectStore) ListConfigRevisions(ctx context.Context, kind, id string) ([]store.ConfigRevisionRecord, error) {
+	recs, err := s.Store.ListConfigRevisions(ctx, kind, id)
+	s.fireAfterFirstRead()
+	return recs, err
+}
+
+// TestGetShowModeConfigRevisionsDoesNotTearReadAcrossAConcurrentActivation
+// guards the same pairing invariant as
+// TestGetShowModeConfigDoesNotTearReadAcrossAConcurrentActivation, applied
+// to GET /api/v1/config/show.mode/revisions: whichever revision the
+// response marks "active" must actually still be current given the
+// revisions the response itself lists, even when a PUT activates a new
+// revision between the handler's own store reads.
+func TestGetShowModeConfigRevisionsDoesNotTearReadAcrossAConcurrentActivation(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+
+	// Revision 1, mode "show", is the value in place when the GET starts.
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.mode", `{"mode":"show"}`,
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	setupAPI := New(configTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	if resp, body := doRawRequest(t, setupAPI.Handler, putReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup PUT status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	racyStore := &interleavedShowModeObjectStore{Store: st}
+	deps := configTestDeps(svc, st)
+	deps.Config = racyStore
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	// Simulates a concurrent PUT landing after the handler's own first
+	// store read: revision 2, mode "program", activated directly against
+	// the same store - the same two writes handlePutShowModeConfig itself
+	// makes, just outside this GET's own request lifecycle.
+	racyStore.afterFirstRead = func() {
+		ctx := context.Background()
+		rec, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+			Kind: config.ShowModeConfigKind, ObjectID: config.ShowModeConfigObjectID,
+			Revision: 2, PayloadJSON: `{"mode":"program"}`,
+			CreatedByPrincipalID: admin.ID, CreatedByPrincipalName: admin.Name,
+			Source: config.ShowModeSourceAPI,
+		})
+		if err != nil {
+			t.Fatalf("interleaved CreateConfigRevision: %v", err)
+		}
+		if _, err := st.ActivateConfigRevision(ctx, rec.Kind, rec.ObjectID, rec.Revision); err != nil {
+			t.Fatalf("interleaved ActivateConfigRevision: %v", err)
+		}
+	}
+
+	resp, body := doRequest(t, api.Handler, "GET", "/api/v1/config/show.mode/revisions",
+		map[string]string{"Authorization": "Bearer " + adminToken})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	revs, _ := m["revisions"].([]any)
+	if len(revs) == 0 {
+		t.Fatalf("revisions = %v, want at least one", revs)
+	}
+
+	// Whichever revision is marked active, and whatever set of revisions
+	// the response actually lists, the active one must be the highest
+	// revision number IN THAT SAME LIST. A torn read produces a list that
+	// already contains a newer revision (created by the concurrent PUT)
+	// while "active" still points at the older one read before it landed -
+	// exactly what the unmodified handler does here, marking revision 1
+	// active even though revision 2 is also present in the list.
+	var maxRevision float64
+	activeCount := 0
+	var activeRevision float64 = -1
+	for _, rv := range revs {
+		rm, _ := rv.(map[string]any)
+		revNum, _ := rm["revision"].(float64)
+		if revNum > maxRevision {
+			maxRevision = revNum
+		}
+		if rm["active"] == true {
+			activeCount++
+			activeRevision = revNum
+		}
+	}
+	if activeCount > 1 {
+		t.Fatalf("more than one revision marked active: %v", revs)
+	}
+	if activeCount == 1 && activeRevision != maxRevision {
+		t.Fatalf("revision %v marked active (torn read); want the highest listed revision, %v: %v", activeRevision, maxRevision, revs)
+	}
+}
+
 // net/http.ServeMux matches by segment, so "show.mode" is a distinct
 // literal that can never be swallowed by "GET /api/v1/config/show/{id}",
 // the same guard show.active already carries.
