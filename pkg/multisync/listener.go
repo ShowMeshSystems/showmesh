@@ -20,10 +20,20 @@ import (
 // documented and confirmed in RES-002.
 const FPPCtrlPort = 32320
 
-// MulticastGroup is the multicast group an FPP master joins by default for
-// MultiSync traffic, confirmed in RES-002. FPP settings can select
-// broadcast or unicast instead, which is why Listener also accepts those on
-// the same socket rather than only joining this group.
+// MulticastGroup is the multicast group an FPP master joins for MultiSync
+// traffic when multicast is the active transport, confirmed in RES-002.
+// Multicast is the default transport on FPP 9.x, but NOT on a fresh FPP 10
+// install: FPP 10 ships with MultiSyncUnicast defaulting to on and
+// MultiSyncMulticast carrying no default at all (RES-002, upstream
+// www/settings.json at the 10.0 tag), and its automatic unicast targeting
+// only ever selects other FPP instances in remote mode (supportsUnicast in
+// src/MultiSync.cpp), never a third-party listener like ShowMesh. A fresh
+// FPP 10 player can therefore be configured exactly as it ships and still
+// send nothing on this group, with no error on either side; Listener still
+// accepts broadcast/unicast on the same socket for exactly this reason, and
+// RES-002's operator procedure documents adding a third-party listener to
+// MultiSyncRemotes/MultiSyncExtraRemotes as the supported way onto an FPP
+// 10 player's sync path.
 const MulticastGroup = "239.70.80.80"
 
 // maxDatagramSize bounds the read buffer for a single UDP datagram. No
@@ -36,9 +46,11 @@ const maxDatagramSize = 65535
 
 // Transport names which delivery path a packet arrived on: multicast,
 // broadcast, or direct unicast. RES-002 records that FPP selects among the
-// three by settings, with multicast the default, so a listener that only
-// ever reports one transport (or none) has not actually confirmed which
-// paths a real master is using. TransportUnknown is returned whenever the
+// three by settings, and that the default differs by FPP version: multicast
+// on FPP 9.x, unicast (to other FPP instances only) on a fresh FPP 10
+// install. A listener that only ever reports one transport (or none) has
+// not actually confirmed which paths a real master is using. TransportUnknown
+// is returned whenever the
 // destination address cannot be determined or does not match anything
 // classifiable, deliberately never guessed.
 //
