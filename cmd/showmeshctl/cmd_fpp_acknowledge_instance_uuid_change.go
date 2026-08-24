@@ -69,6 +69,11 @@ func cmdFPPAcknowledgeInstanceUUIDChange(args []string, stdout, stderr io.Writer
 		}
 		return exitOK
 	}
+	if resp.Instance == nil {
+		_, _ = fmt.Fprintf(stdout, "instance uuid change acknowledged for %s (instance is no longer among the configured FPP endpoints)\n",
+			instanceID)
+		return exitOK
+	}
 	_, _ = fmt.Fprintf(stdout, "instance uuid change acknowledged for %s (current uuid: %s)\n",
 		instanceID, stringOrDash(resp.Instance.InstanceUUID))
 	return exitOK

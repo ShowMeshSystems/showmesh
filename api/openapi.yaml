@@ -7376,7 +7376,16 @@ components:
           type: string
           format: date-time
         instance:
-          $ref: "#/components/schemas/FPPInstance"
+          description: >-
+            Null exactly when the acknowledgment committed but the
+            instance is no longer among the currently configured
+            fpp.endpoints (an operator removed it between the write and
+            this response rendering it). The acknowledgment itself still
+            succeeded and is not undone; there is just no current
+            FPPInstance view left to render. Never null otherwise.
+          oneOf:
+            - $ref: "#/components/schemas/FPPInstance"
+            - type: "null"
     Event:
       type: object
       description: >-

@@ -377,7 +377,22 @@ func (t *Tx) RecordFPPInstanceUUIDObservation(ctx context.Context, endpointID, u
 	return recordFPPInstanceUUIDObservation(ctx, t.tx, endpointID, uuid, observedAt, t.s.now())
 }
 
-func acknowledgeFPPInstanceUUIDChange(ctx context.Context, q querier, endpointID, principalID, principalName string, now time.Time) (FPPInstanceUUIDRecord, error) {
+func acknowledgeFPPInstanceUUIDChange(ctx context.Context, q querier, endpointID, principalID, principalName string, now time.Time) (FPPInstanceUUIDRecord, string, error) {
+	// Read the pre-update row first (within the same transaction as the
+	// UPDATE below, via the caller's querier) so the acknowledged uuid
+	// this function returns separately is the value the UPDATE is about
+	// to clear, never the "" it leaves behind.
+	before, err := getFPPInstanceUUID(ctx, q, endpointID)
+	if errors.Is(err, ErrFPPInstanceUUIDNotFound) {
+		return FPPInstanceUUIDRecord{}, "", ErrFPPInstanceUUIDNotFound
+	}
+	if err != nil {
+		return FPPInstanceUUIDRecord{}, "", err
+	}
+	if before.PreviousUUID == "" {
+		return FPPInstanceUUIDRecord{}, "", ErrFPPInstanceUUIDNoUnacknowledgedChange
+	}
+
 	res, err := q.ExecContext(ctx, `
 		UPDATE fpp_instance_uuid_observations
 		SET previous_uuid = '', changed_at = '',
@@ -386,25 +401,30 @@ func acknowledgeFPPInstanceUUIDChange(ctx context.Context, q querier, endpointID
 		WHERE endpoint_id = ? AND previous_uuid != ''
 	`, timeToDB(now), principalID, principalName, timeToDB(now), endpointID)
 	if err != nil {
-		return FPPInstanceUUIDRecord{}, fmt.Errorf("store: acknowledge fpp instance uuid change for %q: %w", endpointID, err)
+		return FPPInstanceUUIDRecord{}, "", fmt.Errorf("store: acknowledge fpp instance uuid change for %q: %w", endpointID, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return FPPInstanceUUIDRecord{}, fmt.Errorf("store: acknowledge fpp instance uuid change for %q: %w", endpointID, err)
+		return FPPInstanceUUIDRecord{}, "", fmt.Errorf("store: acknowledge fpp instance uuid change for %q: %w", endpointID, err)
 	}
+	// The UPDATE's own RowsAffected, not the pre-update read above, is the
+	// authoritative signal that a pending change actually existed to
+	// clear: acknowledging a non-conflict is refused rather than a silent
+	// no-op, so a caller cannot mistake a stale or mistargeted request
+	// for one that actually cleared something. The pre-update read is
+	// necessary for the returned acknowledgedPreviousUUID but is not by
+	// itself safe against a second, concurrent caller racing between that
+	// read and this UPDATE (the non-Tx Store form runs both as separate
+	// statements, not one transaction).
 	if n == 0 {
-		// Either endpointID has never reported a uuid at all, or it has
-		// no PENDING change to acknowledge, [getFPPInstanceUUID]
-		// distinguishes those for the caller's error message, but both
-		// refuse identically: acknowledging a non-conflict is refused
-		// rather than a silent no-op, so a caller cannot mistake a stale
-		// or mistargeted request for one that actually cleared something.
-		if _, err := getFPPInstanceUUID(ctx, q, endpointID); errors.Is(err, ErrFPPInstanceUUIDNotFound) {
-			return FPPInstanceUUIDRecord{}, ErrFPPInstanceUUIDNotFound
-		}
-		return FPPInstanceUUIDRecord{}, ErrFPPInstanceUUIDNoUnacknowledgedChange
+		return FPPInstanceUUIDRecord{}, "", ErrFPPInstanceUUIDNoUnacknowledgedChange
 	}
-	return getFPPInstanceUUID(ctx, q, endpointID)
+
+	after, err := getFPPInstanceUUID(ctx, q, endpointID)
+	if err != nil {
+		return FPPInstanceUUIDRecord{}, "", err
+	}
+	return after, before.PreviousUUID, nil
 }
 
 // AcknowledgeFPPInstanceUUIDChange clears endpointID's pending
@@ -414,13 +434,21 @@ func acknowledgeFPPInstanceUUIDChange(ctx context.Context, q querier, endpointID
 // when endpointID has never reported a uuid at all. This never changes
 // UUID itself, the current uuid this endpoint most recently reported is
 // untouched, it only clears the conflict marker rule 1 raised.
-func (s *Store) AcknowledgeFPPInstanceUUIDChange(ctx context.Context, endpointID, principalID, principalName string) (FPPInstanceUUIDRecord, error) {
+//
+// The returned [FPPInstanceUUIDRecord] reflects the row AFTER the clear
+// (PreviousUUID "", HasUnacknowledgedChange false), the normal invariant
+// every other reader of this table relies on. The uuid that was JUST
+// acknowledged (what PreviousUUID held immediately before this call) is
+// returned separately as acknowledgedPreviousUUID, callers that need to
+// record what transition was cleared (an audit entry, most notably) read
+// that, never the returned record's PreviousUUID.
+func (s *Store) AcknowledgeFPPInstanceUUIDChange(ctx context.Context, endpointID, principalID, principalName string) (rec FPPInstanceUUIDRecord, acknowledgedPreviousUUID string, err error) {
 	guardNotInTx(ctx, "Store.AcknowledgeFPPInstanceUUIDChange")
 	return acknowledgeFPPInstanceUUIDChange(ctx, s.db, endpointID, principalID, principalName, s.now())
 }
 
 // AcknowledgeFPPInstanceUUIDChange is
 // [Store.AcknowledgeFPPInstanceUUIDChange]'s [Tx] form.
-func (t *Tx) AcknowledgeFPPInstanceUUIDChange(ctx context.Context, endpointID, principalID, principalName string) (FPPInstanceUUIDRecord, error) {
+func (t *Tx) AcknowledgeFPPInstanceUUIDChange(ctx context.Context, endpointID, principalID, principalName string) (rec FPPInstanceUUIDRecord, acknowledgedPreviousUUID string, err error) {
 	return acknowledgeFPPInstanceUUIDChange(ctx, t.tx, endpointID, principalID, principalName, t.s.now())
 }

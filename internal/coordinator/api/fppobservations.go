@@ -366,7 +366,7 @@ func (h *handlers) handleListFPPPlaylistEntryObservations(w http.ResponseWriter,
 	// observation. Built from h.deps.FPP (the identical source GET /fpp
 	// itself renders from) so this can never disagree with what that
 	// endpoint reports for the same uuid.
-	endpointByUUID, err := h.fppEndpointIDsByInstanceUUID(ctx)
+	endpointByUUID, err := fppEndpointIDsByInstanceUUID(ctx, h.deps)
 	if err != nil {
 		h.writeInternalError(w, now, "resolve fpp endpoint ids for playlist entry observations", err)
 		return
@@ -374,11 +374,7 @@ func (h *handlers) handleListFPPPlaylistEntryObservations(w http.ResponseWriter,
 
 	out := make([]v1.FPPPlaylistEntryObservation, 0, len(recs))
 	for _, rec := range recs {
-		mapped := mapFPPPlaylistEntryObservation(rec)
-		if id, ok := endpointByUUID[rec.InstanceUUID]; ok {
-			mapped.EndpointID = &id
-		}
-		out = append(out, mapped)
+		out = append(out, mapFPPPlaylistEntryObservation(rec, endpointByUUID[rec.InstanceUUID]))
 	}
 	jsonWrite(w, v1.FPPPlaylistEntryObservationsResponse{
 		Observations: out,
@@ -392,8 +388,14 @@ func (h *handlers) handleListFPPPlaylistEntryObservations(w http.ResponseWriter,
 // finding, see GET /fpp's duplicateInstanceUuidEndpointIds) is simply
 // absent from the result, so a caller correlating against it renders "no
 // single endpoint owns this uuid" rather than guessing.
-func (h *handlers) fppEndpointIDsByInstanceUUID(ctx context.Context) (map[string]string, error) {
-	views, err := h.deps.FPP.ListInstances(ctx)
+//
+// A free function, not a *handlers method, so the stream hub (stream.go's
+// [Hub], a distinct type that also holds a Dependencies but is not a
+// handlers) can call the identical resolution GET /playlist-entry-observations
+// uses, rather than reimplementing it — see mapFPPPlaylistEntryObservation's
+// doc comment for why the two surfaces must never disagree.
+func fppEndpointIDsByInstanceUUID(ctx context.Context, deps Dependencies) (map[string]string, error) {
+	views, err := deps.FPP.ListInstances(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -416,8 +418,13 @@ func (h *handlers) fppEndpointIDsByInstanceUUID(ctx context.Context) (map[string
 // mapFPPPlaylistEntryObservation renders rec for the wire, shared by the
 // GET list handler and the stream hub's fppPlaylistEntry.changed frame
 // (stream.go) so both surfaces render one instance's latest observation
-// identically.
-func mapFPPPlaylistEntryObservation(rec store.FPPPlaylistEntryObservationRecord) v1.FPPPlaylistEntryObservation {
+// identically. endpointID is the configured fpp.endpoints id that
+// currently owns rec.InstanceUUID (see [fppEndpointIDsByInstanceUUID]),
+// or "" when no single configured endpoint owns that uuid right now — in
+// which case EndpointID is left nil rather than set to an empty string,
+// matching the GET handler's pre-existing "absent means no single owner"
+// contract.
+func mapFPPPlaylistEntryObservation(rec store.FPPPlaylistEntryObservationRecord, endpointID string) v1.FPPPlaylistEntryObservation {
 	out := v1.FPPPlaylistEntryObservation{
 		InstanceUUID:                       rec.InstanceUUID,
 		SchemaVersion:                      int(rec.SchemaVersion),
@@ -437,6 +444,9 @@ func mapFPPPlaylistEntryObservation(rec store.FPPPlaylistEntryObservationRecord)
 	if rec.Unavailable == "" {
 		pos := int(rec.Position)
 		out.Position = &pos
+	}
+	if endpointID != "" {
+		out.EndpointID = &endpointID
 	}
 	return out
 }

@@ -409,8 +409,15 @@ type FPPInstanceUUIDChange struct {
 // AcknowledgeFPPInstanceUUIDChangeResponse is the body of
 // POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge.
 type AcknowledgeFPPInstanceUUIDChangeResponse struct {
-	ServerTime string      `json:"serverTime"`
-	Instance   FPPInstance `json:"instance"`
+	ServerTime string `json:"serverTime"`
+
+	// Instance is null exactly when the acknowledgment committed but the
+	// endpoint is no longer among the currently configured fpp.endpoints
+	// (an operator removed it between the write and this response
+	// rendering it) - there is no current FPPInstance view left to
+	// render, but the acknowledgment itself still succeeded and is not
+	// undone. Never null otherwise.
+	Instance *FPPInstance `json:"instance"`
 }
 
 // ResolumeInstanceComposition is one Resolume instance's "composition"

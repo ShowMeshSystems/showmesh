@@ -2524,7 +2524,8 @@ export interface components {
         AcknowledgeFPPInstanceUUIDChangeResponse: {
             /** Format: date-time */
             serverTime: string;
-            instance: components["schemas"]["FPPInstance"];
+            /** @description Null exactly when the acknowledgment committed but the instance is no longer among the currently configured fpp.endpoints (an operator removed it between the write and this response rendering it). The acknowledgment itself still succeeded and is not undone; there is just no current FPPInstance view left to render. Never null otherwise. */
+            instance: components["schemas"]["FPPInstance"] | null;
         };
         /** @description One recorded event: an element of GET /events, and the payload of an event.recorded stream event. `occurredAt` is null when the change was first learned from evidence of unknown age. */
         Event: {

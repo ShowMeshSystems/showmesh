@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -126,7 +127,7 @@ func TestAcknowledgeFPPInstanceUUIDChangeClearsConflict(t *testing.T) {
 		t.Fatalf("second RecordFPPInstanceUUIDObservation: %v", err)
 	}
 
-	rec, err := st.AcknowledgeFPPInstanceUUIDChange(ctx, "front-yard", "principal-1", "Eric")
+	rec, acknowledgedPreviousUUID, err := st.AcknowledgeFPPInstanceUUIDChange(ctx, "front-yard", "principal-1", "Eric")
 	if err != nil {
 		t.Fatalf("AcknowledgeFPPInstanceUUIDChange: %v", err)
 	}
@@ -140,11 +141,77 @@ func TestAcknowledgeFPPInstanceUUIDChangeClearsConflict(t *testing.T) {
 		t.Errorf("acknowledgment attribution = %q/%q, want principal-1/Eric",
 			rec.ChangeAcknowledgedByPrincipalID, rec.ChangeAcknowledgedByPrincipalName)
 	}
+	if acknowledgedPreviousUUID != "uuid-a" {
+		t.Errorf("acknowledgedPreviousUUID = %q, want uuid-a (the uuid actually acknowledged)", acknowledgedPreviousUUID)
+	}
 
 	// Acknowledging again with nothing pending refuses rather than
 	// silently no-oping.
-	if _, err := st.AcknowledgeFPPInstanceUUIDChange(ctx, "front-yard", "principal-1", "Eric"); !errors.Is(err, ErrFPPInstanceUUIDNoUnacknowledgedChange) {
+	if _, _, err := st.AcknowledgeFPPInstanceUUIDChange(ctx, "front-yard", "principal-1", "Eric"); !errors.Is(err, ErrFPPInstanceUUIDNoUnacknowledgedChange) {
 		t.Errorf("re-acknowledge with nothing pending: err = %v, want ErrFPPInstanceUUIDNoUnacknowledgedChange", err)
+	}
+}
+
+// racingQuerier wraps a querier and, on the first ExecContext call
+// (acknowledgeFPPInstanceUUIDChange's own clearing UPDATE), first runs
+// that identical UPDATE itself before letting the real call through,
+// standing in for a second concurrent caller's acknowledgment landing
+// between this call's pre-update read and its own write: the real call
+// then matches zero rows, exactly as it would racing a second real
+// caller on the underlying *sql.DB (store.go's SetMaxOpenConns(1)
+// serializes individual statements, not the read-then-write sequence).
+type racingQuerier struct {
+	querier
+	db        *sql.DB
+	triggered bool
+}
+
+func (r *racingQuerier) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if !r.triggered {
+		r.triggered = true
+		if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
+			panic(err)
+		}
+	}
+	return r.querier.ExecContext(ctx, query, args...)
+}
+
+// TestAcknowledgeFPPInstanceUUIDChangeRefusesWhenRaceClearsAfterRead proves
+// the refusal is decided by the UPDATE's own RowsAffected, not by the
+// pre-update read: when a second acknowledgment lands between this call's
+// read and its own UPDATE, the UPDATE matches zero rows and this call
+// still refuses with ErrFPPInstanceUUIDNoUnacknowledgedChange, even though
+// its own read observed a pending change moments before.
+func TestAcknowledgeFPPInstanceUUIDChangeRefusesWhenRaceClearsAfterRead(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+	t1 := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "front-yard", "uuid-a", t1); err != nil {
+		t.Fatalf("first RecordFPPInstanceUUIDObservation: %v", err)
+	}
+	if _, _, err := st.RecordFPPInstanceUUIDObservation(ctx, "front-yard", "uuid-b", t2); err != nil {
+		t.Fatalf("second RecordFPPInstanceUUIDObservation: %v", err)
+	}
+
+	q := &racingQuerier{querier: st.db, db: st.db}
+	_, _, err := acknowledgeFPPInstanceUUIDChange(ctx, q, "front-yard", "principal-1", "Eric", t2)
+	if !errors.Is(err, ErrFPPInstanceUUIDNoUnacknowledgedChange) {
+		t.Fatalf("err = %v, want ErrFPPInstanceUUIDNoUnacknowledgedChange", err)
+	}
+	if !q.triggered {
+		t.Fatalf("test bug: racingQuerier never triggered its simulated concurrent clear")
+	}
+
+	// The race's own UPDATE is the one that actually cleared the
+	// conflict; this call's refusal must not have undone that.
+	after, err := st.GetFPPInstanceUUID(ctx, "front-yard")
+	if err != nil {
+		t.Fatalf("GetFPPInstanceUUID: %v", err)
+	}
+	if after.HasUnacknowledgedChange() {
+		t.Errorf("HasUnacknowledgedChange() = true, want false (the racing update already cleared it)")
 	}
 }
 
@@ -156,7 +223,7 @@ func TestAcknowledgeFPPInstanceUUIDChangeUnknownEndpoint(t *testing.T) {
 	st := openTestStore(t, nil)
 	ctx := context.Background()
 
-	if _, err := st.AcknowledgeFPPInstanceUUIDChange(ctx, "nowhere", "principal-1", "Eric"); !errors.Is(err, ErrFPPInstanceUUIDNotFound) {
+	if _, _, err := st.AcknowledgeFPPInstanceUUIDChange(ctx, "nowhere", "principal-1", "Eric"); !errors.Is(err, ErrFPPInstanceUUIDNotFound) {
 		t.Errorf("err = %v, want ErrFPPInstanceUUIDNotFound", err)
 	}
 }

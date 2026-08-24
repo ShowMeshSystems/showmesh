@@ -639,14 +639,30 @@ func (h *Hub) render(ctx context.Context) {
 	// error skips this resource kind for the pass rather than publishing
 	// an empty list on a transient read failure, matching every other
 	// dependency-error branch in this method.
+	//
+	// This closes finding 1: endpointByUUID is resolved ONCE per pass,
+	// not once per record, mirroring the GET list handler's identical
+	// "one lookup for the whole list" reasoning
+	// (fppobservations.go's handleListFPPPlaylistEntryObservations) — and
+	// calls the exact same [fppEndpointIDsByInstanceUUID] helper that
+	// handler uses, so the stream can never render an endpointId GET
+	// would not also render for the same uuid. A failed lookup here skips
+	// this WHOLE resource kind for the pass, mirroring the night-session
+	// block's own singleton-error posture immediately above: an
+	// enrichment source failing is not distinguished from the primary
+	// list failing, both leave this pass with nothing safe to publish for
+	// this resource kind rather than silently downgrading every frame to
+	// endpointId: null.
 	if recs, err := h.deps.FPPObservations.ListFPPPlaylistEntryObservations(ctx); err != nil {
 		h.logger.Warn("stream hub: list fpp playlist entry observations failed", "error", err)
+	} else if endpointByUUID, err := fppEndpointIDsByInstanceUUID(ctx, h.deps); err != nil {
+		h.logger.Warn("stream hub: resolve fpp endpoint ids for playlist entry observations failed", "error", err)
 	} else {
 		present := make(map[string]struct{}, len(recs))
 		for _, rec := range recs {
 			key := "fppobs:" + rec.InstanceUUID
 			present[key] = struct{}{}
-			obs := mapFPPPlaylistEntryObservation(rec)
+			obs := mapFPPPlaylistEntryObservation(rec, endpointByUUID[rec.InstanceUUID])
 			if h.updateRendered(key, obs) {
 				o := obs
 				pending = append(pending, pendingFrame{event: "fppPlaylistEntry.changed", serverTime: formatTime(now), fppPlaylistEntry: &o})

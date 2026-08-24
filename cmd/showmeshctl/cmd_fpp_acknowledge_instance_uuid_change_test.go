@@ -65,6 +65,31 @@ func TestCmdFPPAcknowledgeInstanceUUIDChangeWithConfirmSucceeds(t *testing.T) {
 	}
 }
 
+func TestCmdFPPAcknowledgeInstanceUUIDChangeWithConfirmSucceedsInstanceRemoved(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"serverTime":"2026-08-16T21:00:00Z","instance":null}`))
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPP([]string{"acknowledge-instance-uuid-change", "--server", ts.URL, "--confirm", "front-yard"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "front-yard") {
+		t.Errorf("output missing instance id:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "acknowledged") {
+		t.Errorf("output missing acknowledgment confirmation:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "no longer") || !strings.Contains(stdout.String(), "configured") {
+		t.Errorf("output missing explanation that the instance is no longer configured:\n%s", stdout.String())
+	}
+}
+
 func TestCmdFPPAcknowledgeInstanceUUIDChangeRequiresExactlyOneArg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdFPP([]string{"acknowledge-instance-uuid-change", "--server", "http://example.invalid", "--confirm"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))

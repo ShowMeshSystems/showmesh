@@ -58,7 +58,7 @@ func (h *handlers) handleAcknowledgeFPPInstanceUUIDChange(w http.ResponseWriter,
 	}
 
 	err := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
-		out, err := tx.AcknowledgeFPPInstanceUUIDChange(ctx, instanceID, ac.result.Principal.ID, ac.result.Principal.Name)
+		out, acknowledgedPreviousUUID, err := tx.AcknowledgeFPPInstanceUUIDChange(ctx, instanceID, ac.result.Principal.ID, ac.result.Principal.Name)
 		if err != nil {
 			return identity.AuditEntry{}, err
 		}
@@ -66,7 +66,7 @@ func (h *handlers) handleAcknowledgeFPPInstanceUUIDChange(w http.ResponseWriter,
 			Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 			Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
 			Action: "fpp.instance_uuid.acknowledge", Target: instanceID,
-			Params: map[string]any{"uuid": out.UUID, "previousUuid": out.PreviousUUID},
+			Params: map[string]any{"uuid": out.UUID, "previousUuid": acknowledgedPreviousUUID},
 			Kind:   identity.AuditAdmin,
 		}, nil
 	})
@@ -90,15 +90,19 @@ func (h *handlers) handleAcknowledgeFPPInstanceUUIDChange(w http.ResponseWriter,
 	}
 	for _, fv := range views {
 		if fv.InstanceID == instanceID {
-			jsonWrite(w, v1.AcknowledgeFPPInstanceUUIDChangeResponse{ServerTime: formatTime(now), Instance: mapFPPInstance(fv, now)})
+			instance := mapFPPInstance(fv, now)
+			jsonWrite(w, v1.AcknowledgeFPPInstanceUUIDChangeResponse{ServerTime: formatTime(now), Instance: &instance})
 			return
 		}
 	}
-	// The acknowledgment itself succeeded (instanceID had a row in
-	// fpp_instance_uuid_observations), but instanceID is no longer among
-	// the currently configured fpp.endpoints, an operator removed the
-	// endpoint between the write above and this read. The acknowledgment
-	// is not undone; this only means there is no current FPPInstance view
-	// left to render.
-	writeProblem(w, h.logger, now, resourceNotFoundProblem("no FPP instance with id "+strconv.Quote(instanceID)+" is configured"))
+	// The acknowledgment itself succeeded and committed (instanceID had a
+	// row in fpp_instance_uuid_observations, the write and its audit
+	// entry are already durable), but instanceID is no longer among the
+	// currently configured fpp.endpoints, an operator removed the
+	// endpoint between the write above and this read. Reporting a 404
+	// here would contradict the commit that already happened, so this
+	// still reports 200 with Instance null: there is no current
+	// FPPInstance view left to render, but the acknowledgment is not
+	// undone.
+	jsonWrite(w, v1.AcknowledgeFPPInstanceUUIDChangeResponse{ServerTime: formatTime(now), Instance: nil})
 }

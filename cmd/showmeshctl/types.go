@@ -241,10 +241,12 @@ type fppInstanceUUIDChange struct {
 }
 
 // acknowledgeFPPInstanceUUIDChangeResponse is the body of
-// POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge.
+// POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge. Instance is nil
+// when the acknowledged endpoint is no longer among the configured
+// fpp.endpoints by the time the response is rendered.
 type acknowledgeFPPInstanceUUIDChangeResponse struct {
-	ServerTime time.Time   `json:"serverTime"`
-	Instance   fppInstance `json:"instance"`
+	ServerTime time.Time    `json:"serverTime"`
+	Instance   *fppInstance `json:"instance"`
 }
 
 // resourceRef is event.resource.
