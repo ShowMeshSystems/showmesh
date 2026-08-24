@@ -98,7 +98,15 @@ type ltcChannel struct {
 // newLTCChannel builds the appsrc -> audioconvert -> capsfilter chain for
 // one LTC output channel and adds it to bin, returning it unlinked from
 // the interleave sink pad the caller still owns requesting.
-func newLTCChannel(bin gst.Bin, sampleRate int) (*ltcChannel, error) {
+//
+// maskBit is the single GstAudioChannelPosition bit [channelPositionBits]
+// assigned this output channel, or 0 when the device's channel count has
+// no positioned fallback layout. When set, it is a negotiation label,
+// not a description of the signal: this channel carries generated LTC,
+// not a directional speaker feed, and calling it e.g. "rear left" to
+// satisfy a positioned sink's channel-mask must never be read as this
+// engine claiming to emit a surround layout.
+func newLTCChannel(bin gst.Bin, sampleRate int, maskBit uint64) (*ltcChannel, error) {
 	srcElem := gst.ElementFactoryMake("appsrc", "ltc-appsrc")
 	conv := gst.ElementFactoryMake("audioconvert", "ltc-convert")
 	caps := gst.ElementFactoryMake("capsfilter", "ltc-caps")
@@ -119,7 +127,7 @@ func newLTCChannel(bin gst.Bin, sampleRate int) (*ltcChannel, error) {
 	src.SetObjectProperty("block", true)
 	src.SetObjectProperty("max-bytes", uint64(float64(sampleRate)*2*ltcAppSrcLeadSeconds))
 
-	caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,format=%s,rate=%d,channels=1", interleaveSampleFormat, sampleRate)))
+	caps.SetObjectProperty("caps", gst.CapsFromString(channelCapsString(sampleRate, maskBit)))
 
 	for _, el := range []gst.Element{srcElem, conv, caps} {
 		if !bin.Add(el) {

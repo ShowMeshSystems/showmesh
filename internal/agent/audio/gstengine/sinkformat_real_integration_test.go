@@ -4,6 +4,7 @@ package gstengine
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -239,5 +240,193 @@ func TestEngineRefusesToWidenAMonoChannelOntoAWiderFixedSink(t *testing.T) {
 	t.Logf("observed refusal reason: %s", reason)
 	if got := sink.buffers.Load(); got != 0 {
 		t.Errorf("buffers reached the sink pad = %d, want 0: no data should have flowed once the layout was refused", got)
+	}
+}
+
+// TestEngineOpensAPositionedFourChannelSink reproduces the engine's
+// inability to open a device that demands a positioned channel layout, a
+// real, data-consuming sink shaped exactly like a MOTU M4 on a raw hw:
+// route: S32_LE, 4 channels, and a channel-mask fixed to 0x33 (front
+// left, front right, rear left, rear right) -- the caps alsasink itself
+// was measured negotiating against that device. ProgramChannels {1,2}
+// and LTCChannel 3 mirror a realistic binding; channel 4 is left silent.
+// Before this package assigned channel positions, interleave's own
+// channel-positions-from-input=false emitted an unpositioned mask no
+// positioned sink accepts, and the pipeline went not-negotiated.
+func TestEngineOpensAPositionedFourChannelSink(t *testing.T) {
+	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=4,channel-mask=(bitmask)0x33")
+	useSinkElement(t, sink.element)
+
+	cfg := Config{
+		SinkFactory:     "fakesink",
+		ProgramChannels: []int{1, 2},
+		LTCChannel:      3,
+		ChannelCount:    4,
+		SampleRate:      48000,
+		Resolve:         resolveByRuntimeFilename,
+	}
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	requireSustainedPlayback(t, e, sink.buffers)
+}
+
+// TestEngineOpensAPositionedThreeChannelSink is
+// TestEngineOpensAPositionedFourChannelSink's three-channel sibling,
+// matching this package's own other tests' typical channel count (see
+// e.g. config_ltc_test.go, engine_real_integration_test.go): a single
+// program channel plus LTC on channel 2, channel 3 left silent, against
+// a sink fixed to GStreamer's own documented 3-channel fallback mask
+// 0xb (front left, front right, LFE1) -- see [channelPositionBits].
+func TestEngineOpensAPositionedThreeChannelSink(t *testing.T) {
+	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=3,channel-mask=(bitmask)0xb")
+	useSinkElement(t, sink.element)
+
+	cfg := Config{
+		SinkFactory:     "fakesink",
+		ProgramChannels: []int{1},
+		LTCChannel:      2,
+		ChannelCount:    3,
+		SampleRate:      48000,
+		Resolve:         resolveByRuntimeFilename,
+	}
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	requireSustainedPlayback(t, e, sink.buffers)
+}
+
+// TestEngineRefusesAMismatchedPositionedLayoutInsteadOfRemixing proves
+// the sink-side mask pin in [linkInterleaveToSink]: once interleave can
+// emit a positioned layout, audioconvert will build a downmix/remix
+// matrix between two DIFFERENT positioned layouts rather than refuse the
+// way it refuses between an unpositioned and a positioned one. The sink
+// here is fixed to channel-mask 0x0f (front left, front right, front
+// center, LFE1) at 4 channels -- a real, different-but-plausible
+// positioned layout, not the 0x33 [channelPositionBits] itself would
+// assign -- so [probeSinkChannelPositions] must find neither the
+// unpositioned nor its own candidate acceptable and fall back to the
+// pre-existing unpositioned output, which this sink also refuses,
+// failing loudly at link time instead of silently blending channels.
+func TestEngineRefusesAMismatchedPositionedLayoutInsteadOfRemixing(t *testing.T) {
+	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=4,channel-mask=(bitmask)0x0f")
+	useSinkElement(t, sink.element)
+
+	cfg := Config{
+		SinkFactory:     "fakesink",
+		ProgramChannels: []int{1, 2},
+		LTCChannel:      3,
+		ChannelCount:    4,
+		SampleRate:      48000,
+		Resolve:         resolveByRuntimeFilename,
+	}
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	ok, reason := waitForAvailability(e, false, 3*time.Second)
+	if ok {
+		t.Fatalf("Available() = true, want false: a sink fixed to a layout this engine was not assigned must not silently remix onto it")
+	}
+	t.Logf("observed refusal reason: %s", reason)
+	if got := sink.buffers.Load(); got != 0 {
+		t.Errorf("buffers reached the sink pad = %d, want 0: no data should have flowed once the layout mismatch was refused", got)
+	}
+}
+
+// TestEngineStillOpensAnExplicitlyUnpositionedSink is
+// TestEngineOpensAPositionedFourChannelSink's negative-decision sibling:
+// a sink fixed to channels=4 with channel-mask explicitly 0x0 (not
+// merely absent) accepts unpositioned audio and nothing else.
+// [probeSinkChannelPositions] must recognize that and keep interleave's
+// pre-existing unpositioned output rather than assume a positioned
+// layout from the channel count alone -- the regression this test
+// guards against measured, before this test existed, as this exact
+// config going not-negotiated where it had worked before.
+func TestEngineStillOpensAnExplicitlyUnpositionedSink(t *testing.T) {
+	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=4,channel-mask=(bitmask)0x0")
+	useSinkElement(t, sink.element)
+
+	cfg := Config{
+		SinkFactory:     "fakesink",
+		ProgramChannels: []int{1, 2},
+		LTCChannel:      3,
+		ChannelCount:    4,
+		SampleRate:      48000,
+		Resolve:         resolveByRuntimeFilename,
+	}
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	requireSustainedPlayback(t, e, sink.buffers)
+}
+
+// negotiatedSinkCaps returns the current negotiated caps string on
+// sink's own wrapped inner element's sink pad, or "" if not yet
+// negotiated -- used to check WHICH of several caps a sink accepted,
+// not merely whether negotiation succeeded.
+func negotiatedSinkCaps(t *testing.T, sink capsRestrictedSink) string {
+	t.Helper()
+	inner := sink.element.(gst.Bin).GetByName("innersink")
+	caps := inner.GetStaticPad("sink").GetCurrentCaps()
+	if caps == nil {
+		return ""
+	}
+	return caps.String()
+}
+
+// TestEnginePrefersPositionedWhenASinkAcceptsEither is
+// [probeSinkChannelPositions]'s tie-break case, and the one that makes
+// the MOTU M4 regression-proof: a sink whose caps explicitly list BOTH
+// channel-mask 0x0 (unpositioned) and 0x33 ([channelPositionBits]'s own
+// 4-channel candidate) as acceptable -- exactly the shape alsasink's own
+// queried caps have on that device before it opens the hardware. Both
+// TestEngineOpensAPositionedFourChannelSink (sink fixed only to 0x33)
+// and TestEngineStillOpensAnExplicitlyUnpositionedSink (sink fixed only
+// to 0x0) each leave only one candidate able to negotiate at all, so
+// neither exercises the actual preference when both would work. This
+// does: MEASURED on a real MOTU M4, a capsfilter explicitly fixed to
+// channel-mask=0x0 links to alsasink fine but fails at streaming with
+// not-negotiated once data actually flows, while 0x33 plays to
+// completion -- a sink whose query accepts both is telling this probe
+// only what caps it can parse, not what the device driver underneath
+// will actually take, so the more specific positioned layout must win.
+// This asserts the negotiated caps' own channel-mask field, not merely
+// that the pipeline reached PLAYING (which would look identical either
+// way).
+func TestEnginePrefersPositionedWhenASinkAcceptsEither(t *testing.T) {
+	sink := newCapsRestrictedSink(t, "audio/x-raw,format=S32LE,rate=48000,channels=4,channel-mask=(bitmask){0x0,0x33}")
+	useSinkElement(t, sink.element)
+
+	cfg := Config{
+		SinkFactory:     "fakesink",
+		ProgramChannels: []int{1, 2},
+		LTCChannel:      3,
+		ChannelCount:    4,
+		SampleRate:      48000,
+		Resolve:         resolveByRuntimeFilename,
+	}
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: unexpected structural config error: %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+
+	requireSustainedPlayback(t, e, sink.buffers)
+
+	got := negotiatedSinkCaps(t, sink)
+	if !strings.Contains(got, "channel-mask=(bitmask)0x0000000000000033") {
+		t.Errorf("negotiated caps = %q, want channel-mask 0x33 (positioned): a sink that merely tolerates unpositioned caps must still get the more specific, positioned layout when it can express it", got)
 	}
 }
