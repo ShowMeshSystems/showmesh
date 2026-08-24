@@ -1,0 +1,44 @@
+{
+    "HostName": "fpp-master",
+    "HostDescription": "Docker ID: 0::/",
+    "Platform": "Debian",
+    "Variant": "Docker",
+    "SubPlatform": "Docker",
+    "backgroundColor": "",
+    "Mode": "player",
+    "Logo": "debian_logo.svg",
+    "Version": "10.0",
+    "Branch": "(HEAD detached at 10.0)",
+    "multisync": true,
+    "OSVersion": "v2026-08 (64bit)",
+    "OSRelease": "Debian GNU/Linux 13 (trixie)",
+    "channelRanges": "0-7",
+    "majorVersion": 10,
+    "minorVersion": 0,
+    "typeId": 1,
+    "channelInputsEnabled": false,
+    "channelOutputsEnabled": false,
+    "uuid": "M4-460b33e3d3834e8ead463fc22ed265da",
+    "Utilization": {
+        "CPU": 19.789696406244985,
+        "Memory": 47.51038905949914,
+        "Uptime": "4 days 23:56",
+        "Disk": {
+            "Media": {
+                "Free": 21293477888,
+                "Total": 62671097856
+            },
+            "Root": {
+                "Free": 21293477888,
+                "Total": 62671097856
+            }
+        }
+    },
+    "Kernel": "6.12.65-linuxkit",
+    "LocalGitVersion": "370e62ed7",
+    "RemoteGitVersion": "Unknown",
+    "UpgradeSource": "github.com",
+    "IPs": [
+        "172.21.0.2"
+    ]
+}

@@ -1,0 +1,29 @@
+{
+    "Message": "",
+    "Status": "OK",
+    "respCode": 200,
+    "systems": [
+        {
+            "HostDescription": "Docker ID: 0::/",
+            "address": "172.21.0.2",
+            "channelInputsEnabled": false,
+            "channelOutputsEnabled": false,
+            "channelRanges": "0-7",
+            "fppMode": 2,
+            "fppModeString": "player",
+            "hostname": "fpp-master",
+            "lastSeen": 1787544432,
+            "lastSeenStr": "2026-08-24 04:07:12",
+            "local": 1,
+            "majorVersion": 10,
+            "minorVersion": 0,
+            "model": "Unknown Hardware Platform",
+            "multiSyncCapable": 1,
+            "multisync": true,
+            "type": "FPP (Debian GNU/Linux)",
+            "typeId": 1,
+            "uuid": "M4-460b33e3d3834e8ead463fc22ed265da",
+            "version": "10.0"
+        }
+    ]
+}
