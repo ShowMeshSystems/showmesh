@@ -8,6 +8,37 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 )
 
+// TestBuildGstEngineConfigUsesTheProbedDeviceChannelCount proves a route
+// discovery already blessed does not get asked for fewer channels than
+// it actually negotiated: a four-output interface probed at 4 channels
+// but bound to only 3 program/LTC channels must still build a Config
+// carrying ChannelCount 4, or the engine's interleave stage requests
+// only 3 sink pads against a device that refuses fewer than its own
+// negotiated channel count.
+func TestBuildGstEngineConfigUsesTheProbedDeviceChannelCount(t *testing.T) {
+	withAudioDiscoverer(t, audio.Discovery{
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4, Rate: 48000}},
+		},
+	})
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+
+	node := audioNodeConfig{
+		ProgramRoute:    "hw:1,0",
+		LTCRoute:        "hw:1,0",
+		ProgramChannels: []int{1, 2},
+		LTCChannel:      3,
+		Revision:        1,
+	}
+	cfg, _, _ := buildGstEngineConfig(context.Background(), t.TempDir(), node)
+	if cfg.ChannelCount != 4 {
+		t.Errorf("ChannelCount = %d, want 4 (this route's own probed channel count, not just the bindings' highest index)", cfg.ChannelCount)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+}
+
 // closeCountingEngine is an [audio.Engine] that records how often it was
 // closed, so a rebind can be checked for releasing the engine it
 // replaced rather than leaving it holding an output device.
@@ -63,7 +94,7 @@ func TestBuildGstEngineConfigCarriesTheBindingsLTCChannel(t *testing.T) {
 		LTCChannel:      3,
 		Revision:        4,
 	}
-	cfg, _ := buildGstEngineConfig(context.Background(), t.TempDir(), node)
+	cfg, _, _ := buildGstEngineConfig(context.Background(), t.TempDir(), node)
 	if cfg.LTCChannel != 3 {
 		t.Errorf("LTCChannel = %d, want 3", cfg.LTCChannel)
 	}

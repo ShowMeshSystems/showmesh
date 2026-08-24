@@ -264,8 +264,8 @@ func (e *Engine) buildPipeline() error {
 	if !bin.Add(sink) {
 		return errors.New("could not add sink to pipeline")
 	}
-	if !interleave.Link(sink) {
-		return errors.New("could not link interleave to sink")
+	if err := linkInterleaveToSink(bin, interleave, sink, e.cfg.ChannelCount); err != nil {
+		return err
 	}
 
 	programSet := make(map[int]int, len(e.cfg.ProgramChannels)) // channel index -> position in ProgramChannels
@@ -359,6 +359,50 @@ func (e *Engine) buildPipeline() error {
 
 	if pipeline.SetState(gst.StatePlaying) == gst.StateChangeFailure {
 		return errors.New("output pipeline refused to reach PLAYING")
+	}
+	return nil
+}
+
+// linkInterleaveToSink connects interleave's output to sink through an
+// audioconvert/audioresample pair, so the sink negotiates its own format
+// and rate rather than being handed the interior pipeline's fixed
+// interleaveSampleFormat directly. A discovery probe of the same device
+// already runs its throwaway signal through exactly this
+// audioconvert!audioresample shape (probe.go's ProbeOutput) before
+// reaching alsasink; linking interleave straight to sink instead builds
+// a pipeline discovery never actually proved, and a raw hw: route that
+// only accepts an integer PCM format (S24_3LE, S32LE, ...) goes
+// not-negotiated even though discovery already confirmed it works.
+//
+// channelCount is pinned in a capsfilter placed after the resampler so
+// neither converter can silently remix the show's channel layout while
+// adapting format or rate for the sink -- a device that genuinely wants
+// a different channel count must still fail loudly, not renegotiate
+// which physical output carries which channel.
+func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCount int) error {
+	convert := gst.ElementFactoryMake("audioconvert", "sink-convert")
+	resample := gst.ElementFactoryMake("audioresample", "sink-resample")
+	caps := gst.ElementFactoryMake("capsfilter", "sink-caps")
+	if convert == nil || resample == nil || caps == nil {
+		return errors.New("could not create sink-side format adaptation chain")
+	}
+	caps.SetObjectProperty("caps", gst.CapsFromString(fmt.Sprintf("audio/x-raw,channels=%d", channelCount)))
+	for _, el := range []gst.Element{convert, resample, caps} {
+		if !bin.Add(el) {
+			return errors.New("could not add sink format adaptation element to pipeline")
+		}
+	}
+	if !interleave.Link(convert) {
+		return errors.New("could not link interleave to sink format converter")
+	}
+	if !convert.Link(resample) {
+		return errors.New("could not link sink format converter to resampler")
+	}
+	if !resample.Link(caps) {
+		return errors.New("could not link sink resampler to channel-count capsfilter")
+	}
+	if !caps.Link(sink) {
+		return errors.New("could not link interleave's format adaptation chain to sink")
 	}
 	return nil
 }

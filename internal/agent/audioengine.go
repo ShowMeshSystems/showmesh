@@ -16,24 +16,27 @@ import (
 // against the real "alsasink" (a non-hardware test sink such as
 // "fakesink" has no such property, and setting an unknown GObject
 // property is itself something to avoid rather than rely on being
-// harmless), ProgramChannels/ChannelCount from the binding, and
-// SampleRate from this node's own fresh route probe evidence.
-func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeConfig) (cfg gstengine.Config, sampleRateSource string) {
+// harmless), ProgramChannels from the binding, ChannelCount from
+// [resolveNodeChannelCount] (the binding's own floor raised to match
+// this route's probed channel count when that is wider), and SampleRate
+// from this node's own fresh route probe evidence.
+func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeConfig) (cfg gstengine.Config, sampleRateSource, channelCountSource string) {
 	sinkFactory := audioEngineSinkFactory()
 	props := map[string]any{}
 	if sinkFactory == "alsasink" {
 		props["device"] = node.ProgramRoute
 	}
 	rate, rateSource := resolveNodeSampleRate(ctx, node.ProgramRoute)
+	channelCount, chCountSource := resolveNodeChannelCount(ctx, node.ProgramRoute, audioNodeChannelCount(node))
 	return gstengine.Config{
 		SinkFactory:     sinkFactory,
 		SinkProperties:  props,
 		ProgramChannels: node.ProgramChannels,
 		LTCChannel:      node.LTCChannel,
-		ChannelCount:    audioNodeChannelCount(node),
+		ChannelCount:    channelCount,
 		SampleRate:      rate,
 		Resolve:         gstAssetResolver(assetDir),
-	}, rateSource
+	}, rateSource, chCountSource
 }
 
 // audioEngineRebuilder rebuilds this node's real playback engine every
@@ -59,7 +62,7 @@ func newAudioEngineRebuilder(assetDir string, switchable *audio.SwitchableEngine
 }
 
 func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
-	cfg, rateSource := buildGstEngineConfig(context.Background(), r.assetDir, node)
+	cfg, rateSource, channelCountSource := buildGstEngineConfig(context.Background(), r.assetDir, node)
 	if err := cfg.Validate(); err != nil {
 		if r.logger != nil {
 			r.logger.Error("audio.node.configure delivered a binding this node cannot build an engine from", "revision", node.Revision, "error", err)
@@ -78,6 +81,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		r.logger.Info("rebuilt the real audio engine from a delivered audio.node binding",
 			"revision", node.Revision, "program_route", node.ProgramRoute,
 			"sample_rate", cfg.SampleRate, "sample_rate_source", rateSource,
+			"channel_count", cfg.ChannelCount, "channel_count_source", channelCountSource,
 			"available", ok, "unavailable_reason", reason)
 	}
 	prev := r.mgr.RebindEngine(r.switchable, engine, audio.RebindReasonEngineRebind)

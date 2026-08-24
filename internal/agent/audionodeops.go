@@ -355,7 +355,8 @@ func audioEngineSinkFactory() string {
 
 // audioNodeChannelCount is the highest channel index the binding uses,
 // program or LTC — [gstengine.Config.ChannelCount]'s own required
-// invariant.
+// invariant. It is a floor, not the device's own channel count: see
+// [resolveNodeChannelCount].
 func audioNodeChannelCount(p audioNodeConfig) int {
 	count := p.LTCChannel
 	for _, ch := range p.ProgramChannels {
@@ -364,4 +365,24 @@ func audioNodeChannelCount(p audioNodeConfig) int {
 		}
 	}
 	return count
+}
+
+// resolveNodeChannelCount reports the channel count this node's output
+// pipeline must actually build against: the higher of bindingCount (the
+// program/LTC bindings' own required floor, from
+// [audioNodeChannelCount]) and this node's own fresh route probe
+// evidence for programRoute, run fresh for the same no-caching reason
+// [resolveNodeSampleRate] is. A device that negotiated more channels
+// than the bindings alone would ask for (a four-output interface bound
+// to three channels) must still get an engine built for its own wider
+// layout, or a raw hw: route discovery already proved usable refuses the
+// engine's narrower request outright.
+func resolveNodeChannelCount(ctx context.Context, programRoute string, bindingCount int) (count int, source string) {
+	d := audioDiscoverer(ctx, audioEnumerator)
+	for _, r := range d.Routes {
+		if r.Device == programRoute && r.Available && r.Channels > bindingCount {
+			return r.Channels, "advertised route probe evidence"
+		}
+	}
+	return bindingCount, "bindings: highest program or LTC channel index"
 }
