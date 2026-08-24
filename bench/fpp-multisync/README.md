@@ -141,11 +141,14 @@ expect — confirmed while building this bench (see below), and reconfirmed
 for the 10.0 tag while adding FPP 10 support.
 
 **Running a 9.5.3 bench and a 10.0 bench side by side.** `docker-compose.yml`
-gives every host port and the container/volume names a single instance's
-worth of identity (`showmesh-bench-fpp-master`, `FPP_MASTER_HTTP_PORT`), so
-two versions cannot run from the same `.env` at the same time. To have both
+gives every host port a single instance's worth of identity
+(`FPP_MASTER_HTTP_PORT`), so two versions cannot run from the same `.env`
+at the same time (they would both try to bind the same host port).
+Container and volume names are namespaced by the compose project
+automatically (`docker-compose.yml` does not pin `container_name`, for
+exactly this reason), so they never collide across projects. To have both
 up at once, run this bench twice with distinct `.env` files (or
-`COMPOSE_PROJECT_NAME`/port/volume overrides) — e.g. a `.env` with
+`COMPOSE_PROJECT_NAME`/port overrides) — e.g. a `.env` with
 `FPP_GIT_REF=9.5.3` and default ports for one, and a second `.env` with
 `FPP_GIT_REF=10.0`, a different `FPP_MASTER_HTTP_PORT`, and a different
 `COMPOSE_PROJECT_NAME` for the other:
@@ -206,10 +209,10 @@ docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml pull fpp-mas
 SHOWMESH_FPP_TEST_PREBUILT=1 make test-integration-fpp
 ```
 
-Prebuilt mode **recreates** `showmesh-bench-fpp-master` from the pinned
-image, replacing a source-built container if one is running, and then
-asserts that the running container really is that image. Do not run it on a
-machine whose bench container you want to keep.
+Prebuilt mode **recreates** the bench `fpp-master` container from the
+pinned image, replacing a source-built container if one is running, and
+then asserts that the running container really is that image. Do not run
+it on a machine whose bench container you want to keep.
 
 **Why a digest, not just the tag.** Rebuilding the same upstream git tag
 does not reproduce the same image: the build installs packages from

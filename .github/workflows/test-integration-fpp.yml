@@ -147,11 +147,17 @@ jobs:
       # misspelling that variable fails here instead of quietly restoring
       # the source build and reporting green.
       - name: Verify the bench container ran the pinned fixture
+        # docker-compose.yml no longer pins a fixed container_name for
+        # fpp-master (it collided across the side-by-side 9.5.3/10.0
+        # projects bench/fpp-multisync/README.md describes), so the
+        # container is resolved by service name through `docker compose ps
+        # -q`, the same way scripts/test-integration-fpp.sh resolves it.
         run: |
           pinned="$(docker image inspect -f '{{.Id}}' "$(docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" config --images fpp-master)")"
-          running="$(docker inspect -f '{{.Image}}' showmesh-bench-fpp-master)"
+          container_id="$(docker compose -f "$COMPOSE_BASE" -f "$COMPOSE_PREBUILT" ps -q fpp-master)"
+          running="$(docker inspect -f '{{.Image}}' "$container_id")"
           if [ "$running" != "$pinned" ]; then
-            echo "::error::showmesh-bench-fpp-master ran $running, not the pinned fixture $pinned" >&2
+            echo "::error::bench fpp-master ran $running, not the pinned fixture $pinned" >&2
             exit 1
           fi
-          echo "confirmed: showmesh-bench-fpp-master ran the pinned fixture $pinned"
+          echo "confirmed: bench fpp-master ran the pinned fixture $pinned"

@@ -55,7 +55,6 @@ cd "$ROOT_DIR"
 export SHOWMESH_REQUIRE_TEST_DEPS=broker,fpp
 
 COMPOSE_FILE="bench/fpp-multisync/docker-compose.yml"
-CONTAINER_NAME="showmesh-bench-fpp-master"
 FPP_URL="${SHOWMESH_TEST_FPP_URL:-http://localhost:8090}"
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
@@ -65,17 +64,31 @@ if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
   export SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE="$PREBUILT_OVERRIDE"
 fi
 
+# docker-compose.yml no longer pins a fixed container_name for fpp-master
+# (see its own comment: a fixed name collides across the side-by-side
+# 9.5.3/10.0 projects README.md describes), so the actual container name
+# now depends on the compose project name. This script never passes -p, so
+# it always resolves within compose's own default project for this file,
+# the same single instance the CI workflow and every previous run of this
+# script already shared. container_id resolves it by service name instead
+# of by a literal string; fpp_master_container is a fixed label for log
+# messages only, not something passed to docker.
+fpp_master_container="fpp-master"
+container_id() {
+  docker compose "${COMPOSE_ARGS[@]}" ps -a -q fpp-master
+}
+
 # In prebuilt mode the container is recreated whether or not one is already
 # running: an already-running container may have been source-built, and the
 # destructive test's own --force-recreate would then swap it for the pinned
 # image mid-suite. Recreating up front makes provenance unambiguous, and it
 # is why prebuilt mode replaces whatever bench container is running.
 if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
-  echo "test-integration-fpp: prebuilt mode; recreating $CONTAINER_NAME from the pinned image"
+  echo "test-integration-fpp: prebuilt mode; recreating $fpp_master_container from the pinned image"
   docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fpp-master
 else
-  echo "test-integration-fpp: checking for a running $CONTAINER_NAME"
-  if ! docker ps --filter "name=${CONTAINER_NAME}" --filter "status=running" --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
+  echo "test-integration-fpp: checking for a running $fpp_master_container"
+  if [ -z "$(docker compose "${COMPOSE_ARGS[@]}" ps -q fpp-master)" ]; then
     # --force-recreate, not a plain `up -d`: verified live, this image
     # crash-loops (an apache/php pid file left in the container's own
     # writable layer trips up its entrypoint on a second start of the SAME
@@ -92,18 +105,20 @@ else
   fi
 fi
 
+CONTAINER_ID="$(container_id)"
+
 # Prebuilt mode asserts what is RUNNING, not what is configured: a dropped
 # or misspelled SHOWMESH_FPP_TEST_PREBUILT would otherwise source-build and
 # still report green.
 if [ "${SHOWMESH_FPP_TEST_PREBUILT:-}" = "1" ]; then
   pinned_ref="$(docker compose "${COMPOSE_ARGS[@]}" config --images fpp-master)"
   pinned_id="$(docker image inspect -f '{{.Id}}' "$pinned_ref")"
-  running_id="$(docker inspect -f '{{.Image}}' "$CONTAINER_NAME")"
+  running_id="$(docker inspect -f '{{.Image}}' "$CONTAINER_ID")"
   if [ "$running_id" != "$pinned_id" ]; then
-    echo "test-integration-fpp: $CONTAINER_NAME is running image $running_id, not the pinned $pinned_ref ($pinned_id)" >&2
+    echo "test-integration-fpp: $fpp_master_container is running image $running_id, not the pinned $pinned_ref ($pinned_id)" >&2
     exit 1
   fi
-  echo "test-integration-fpp: $CONTAINER_NAME confirmed running the pinned image $pinned_ref"
+  echo "test-integration-fpp: $fpp_master_container confirmed running the pinned image $pinned_ref"
 fi
 
 echo "test-integration-fpp: waiting for $FPP_URL to answer /api/fppd/status"
@@ -123,7 +138,7 @@ for _ in $(seq 1 60); do
 done
 if [ "$ready" -ne 1 ]; then
   echo "test-integration-fpp: ${FPP_URL}/api/fppd/status did not answer within 60s" >&2
-  docker logs "$CONTAINER_NAME" --tail 50 >&2 || true
+  docker logs "$CONTAINER_ID" --tail 50 >&2 || true
   exit 1
 fi
 
@@ -148,12 +163,12 @@ fi
 if [ -z "${SHOWMESH_TEST_FPP_URL:-}" ]; then
   seed_playlist() {
     local name="$1" json="$2" path="/home/fpp/media/playlists/${1}.json"
-    if docker exec "$CONTAINER_NAME" test -f "$path"; then
+    if docker exec "$CONTAINER_ID" test -f "$path"; then
       return 0
     fi
-    echo "test-integration-fpp: seeding playlist ${name}.json (absent in $CONTAINER_NAME)"
-    docker exec "$CONTAINER_NAME" mkdir -p /home/fpp/media/playlists
-    docker exec -i "$CONTAINER_NAME" sh -c "cat > '$path'" <<EOF
+    echo "test-integration-fpp: seeding playlist ${name}.json (absent in $fpp_master_container)"
+    docker exec "$CONTAINER_ID" mkdir -p /home/fpp/media/playlists
+    docker exec -i "$CONTAINER_ID" sh -c "cat > '$path'" <<EOF
 $json
 EOF
   }
@@ -190,7 +205,7 @@ EOF
 }'
 fi
 
-echo "test-integration-fpp: running against $FPP_URL (container $CONTAINER_NAME)"
+echo "test-integration-fpp: running against $FPP_URL (container $fpp_master_container)"
 # Only exported when the caller actually overrode it: the Go suite's
 # destructive container-recreate test (integration_test.go) treats a SET
 # SHOWMESH_TEST_FPP_URL as "an operator pointed this at something other
