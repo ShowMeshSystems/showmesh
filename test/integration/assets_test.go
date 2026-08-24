@@ -982,15 +982,34 @@ func TestAssetSyncSurvivesContentEndpointUnreachable(t *testing.T) {
 	// asset.fetch failure surfaced NOWHERE on the coordinator: no event,
 	// and the manifest's "missing" reason read identically to a sync pass
 	// that simply had not run yet. Both must now say WHY.
-	if m.Reason == nil || !strings.Contains(*m.Reason, "last failed to fetch") {
-		t.Fatalf("manifest reason = %v, want it to state the node's own asset.fetch failure, not merely that the asset is missing", m.Reason)
-	}
+	// The wait above is satisfied as soon as the asset is EXPECTED and the
+	// node does not hold it, which is true before any fetch has been
+	// attempted, let alone failed. So poll for the reason itself rather
+	// than reading the manifest once: the failure reaches the coordinator
+	// on its own MQTT round trip, not on the sync tick that dispatched it.
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		r := nodeManifest(t, coord, token, nodeID).Reason
+		return r != nil && strings.Contains(*r, "last failed to fetch")
+	}, "manifest reason to state the node's own asset.fetch failure, not merely that the asset is missing")
 
-	out := mustCtl(t, coord, token, []string{"events", "--limit", "500", "--output", "json"})
+	// recordFetchFailure writes its in-memory record BEFORE appending the
+	// event, so the manifest reason appearing does not imply the event has
+	// landed yet. Poll for the event too.
 	var eventsResp ctlEventsResp
-	if err := json.Unmarshal([]byte(out), &eventsResp); err != nil {
-		t.Fatalf("decode events json: %v\noutput:\n%s", err, out)
-	}
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		out := mustCtl(t, coord, token, []string{"events", "--limit", "500", "--output", "json"})
+		eventsResp = ctlEventsResp{}
+		if err := json.Unmarshal([]byte(out), &eventsResp); err != nil {
+			t.Fatalf("decode events json: %v\noutput:\n%s", err, out)
+		}
+		for _, e := range eventsResp.Events {
+			if e.Category == "asset_sync" && e.Resource.Kind == "node" && e.Resource.ID == nodeID {
+				return true
+			}
+		}
+		return false
+	}, "GET /api/v1/events to carry an asset_sync event for this node; the fetch failure must leave a trace")
+
 	var found bool
 	for _, e := range eventsResp.Events {
 		if e.Category != "asset_sync" || e.Resource.Kind != "node" || e.Resource.ID != nodeID {
