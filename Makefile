@@ -405,6 +405,67 @@ verify-fpp-plugin-reproducible:
 clean-fpp-plugin-dist:
 	rm -rf $(FPP_PLUGIN_DIST)
 
+# --- Node agent install bundle (SM-43) ---
+#
+# The native agent (build-agent-native, CGO_ENABLED=1: go-gst + libltc,
+# ADR-042) has no install path of its own. This packages that binary
+# together with deploy/node's systemd unit, env template, preflight
+# script, installer, and README into one tarball a node operator fetches
+# and unpacks, mirroring release-fpp-plugin's discipline (deterministic
+# build, GNU tar, gzip -n, sha256sum) but NOT its multi-platform cross
+# compile: build-agent-native is CGO_ENABLED=1 and links host C libraries
+# (go-gst, libltc), so it cannot be cross-compiled the way the CGO-free
+# FPP plugin is. This target builds the one platform the fleet's media
+# nodes and this project's own CI/bench both run: linux/amd64, on a
+# Debian 13+ host with the packages deploy/node/README.md names.
+#
+# Artifact contract, pinned here as the FPP plugin's own comment pins
+# its contract:
+#   asset: showmesh-node-agent_<VERSION>_linux_amd64.tar.gz
+#   sums:  showmesh-node-agent_<VERSION>_SHA256SUMS
+# Nothing here publishes a GitHub Release; this only builds and
+# self-verifies the artifact locally, exactly like release-fpp-plugin.
+NODE_AGENT_DIST    := ./dist/node-agent
+NODE_AGENT_VERSION ?= $(VERSION)
+NODE_AGENT_COMMIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
+NODE_AGENT_LDFLAGS := -X $(MODULE)/internal/version.Version=$(NODE_AGENT_VERSION) \
+                       -X $(MODULE)/internal/version.Commit=$(COMMIT) \
+                       -X $(MODULE)/internal/version.BuildDate=$(NODE_AGENT_COMMIT_DATE)
+
+# package-node-agent builds the native agent with -trimpath (byte-stable
+# paths, same reasoning as the FPP plugin's build) and the deterministic
+# commit-timestamp ldflags above, stages it alongside deploy/node's
+# install files under a single top-level directory (so the tarball
+# extracts to one directory, not loose files mixed with whatever else is
+# in the target directory), and archives it with the same GNU
+# tar/gzip -n discipline fpp_plugin_build_and_package uses and for the
+# same reason: a plain `tar -czf` embeds this builder's uid/gid/owner
+# name and per-entry mtimes, and gzip's own header carries a timestamp,
+# none of which -trimpath touches because none of it is in the binary.
+.PHONY: package-node-agent
+package-node-agent:
+	mkdir -p $(NODE_AGENT_DIST)
+	rm -rf $(NODE_AGENT_DIST)/showmesh-node-agent
+	mkdir -p $(NODE_AGENT_DIST)/showmesh-node-agent
+	CGO_ENABLED=1 go build -trimpath -ldflags "$(NODE_AGENT_LDFLAGS)" -o $(NODE_AGENT_DIST)/showmesh-node-agent/showmesh-agent-native ./cmd/showmesh-agent
+	chmod 0755 $(NODE_AGENT_DIST)/showmesh-node-agent/showmesh-agent-native
+	cp deploy/node/showmesh-agent.service deploy/node/agent.env.example deploy/node/preflight.sh deploy/node/install.sh deploy/node/README.md $(NODE_AGENT_DIST)/showmesh-node-agent/
+	chmod 0755 $(NODE_AGENT_DIST)/showmesh-node-agent/preflight.sh $(NODE_AGENT_DIST)/showmesh-node-agent/install.sh
+	if [ "$(TAR_IS_GNU)" = "yes" ]; then \
+		$(TAR) --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' -C $(NODE_AGENT_DIST) -cf - showmesh-node-agent | gzip -n -9 > $(NODE_AGENT_DIST)/showmesh-node-agent_$(NODE_AGENT_VERSION)_linux_amd64.tar.gz; \
+	else \
+		echo "WARNING: GNU tar not found on PATH (checked gtar, tar); building the node agent tarball WITHOUT deterministic mtime/owner/group stripping. It is still correct, but will not reproduce byte-for-byte across two local runs. Install GNU tar (e.g. 'brew install gnu-tar' on macOS) to get that locally; CI always has GNU tar." >&2; \
+		tar -C $(NODE_AGENT_DIST) -czf $(NODE_AGENT_DIST)/showmesh-node-agent_$(NODE_AGENT_VERSION)_linux_amd64.tar.gz showmesh-node-agent; \
+	fi
+	rm -rf $(NODE_AGENT_DIST)/showmesh-node-agent
+	cd $(NODE_AGENT_DIST) && sha256sum showmesh-node-agent_$(NODE_AGENT_VERSION)_linux_amd64.tar.gz > showmesh-node-agent_$(NODE_AGENT_VERSION)_SHA256SUMS
+	cd $(NODE_AGENT_DIST) && sha256sum -c showmesh-node-agent_$(NODE_AGENT_VERSION)_SHA256SUMS
+	@echo "package-node-agent: built and self-verified $(NODE_AGENT_DIST)/showmesh-node-agent_$(NODE_AGENT_VERSION)_SHA256SUMS"
+
+.PHONY: clean-node-agent-dist
+clean-node-agent-dist:
+	rm -rf $(NODE_AGENT_DIST)
+
 # bench-audio builds and runs bench/audio-node's Track C seam C0a-1
 # measurement bench (RES-007): a real Debian 13 GStreamer image, all
 # runs against virtual/null devices and captured files, never against
