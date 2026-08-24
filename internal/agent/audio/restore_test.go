@@ -2,6 +2,7 @@ package audio
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -331,7 +332,7 @@ func TestRestoreAllWithNoEngineBoundDoesNotFailPersistedState(t *testing.T) {
 	// must reach a REAL loaded, playing handle on the newly bound
 	// engine, not merely retain its old, undisturbed in-memory state.
 	real := NewFakeEngine(c.now)
-	m2.RebindEngine(switchable, real, "audio.node binding delivered")
+	m2.RebindEngine(ctx, switchable, real, "audio.node binding delivered")
 
 	// restoreOne (invoked again by the retry) replaces m2.sessions[id]
 	// with a fresh *Session, exactly as it does on any restore — the
@@ -439,7 +440,7 @@ func TestRebindEngineRetriesDeferredRestoreExactlyOnce(t *testing.T) {
 	}
 
 	first := NewFakeEngine(c.now)
-	m2.RebindEngine(switchable, first, "first audio.node binding")
+	m2.RebindEngine(ctx, switchable, first, "first audio.node binding")
 
 	m2.mu.Lock()
 	_, pendingAfterFirstBind := m2.pendingEngineRestore[id]
@@ -464,7 +465,7 @@ func TestRebindEngineRetriesDeferredRestoreExactlyOnce(t *testing.T) {
 	// it as a route change — not restoreOne being invoked a second time
 	// against a session that was never deferred on this bind.
 	second := NewFakeEngine(c.now)
-	m2.RebindEngine(switchable, second, RebindReasonEngineRebind)
+	m2.RebindEngine(ctx, switchable, second, RebindReasonEngineRebind)
 
 	s2.mu.Lock()
 	stateAfterSecondBind, faultAfterSecondBind := s2.state, s2.fault
@@ -481,7 +482,7 @@ func TestRebindEngineRetriesDeferredRestoreExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestRestoreAllWithNoEngineBoundDeferrsAPausedSession is the Paused
+// TestRestoreAllWithNoEngineBoundDefersAPausedSession is the Paused
 // branch's own copy of
 // TestRestoreAllWithNoEngineBoundDoesNotFailPersistedState: restoreOne's
 // Paused branch has its own, separate prepareLocked call and its own
@@ -489,7 +490,7 @@ func TestRebindEngineRetriesDeferredRestoreExactlyOnce(t *testing.T) {
 // a reboot before any binding arrives exactly as a Playing one does, and
 // must actually resume (Paused, with a loaded handle) once the binding
 // lands.
-func TestRestoreAllWithNoEngineBoundDeferrsAPausedSession(t *testing.T) {
+func TestRestoreAllWithNoEngineBoundDefersAPausedSession(t *testing.T) {
 	dir := t.TempDir()
 	c := newClock(time.Now())
 	store := NewFileSessionStore(dir)
@@ -526,7 +527,7 @@ func TestRestoreAllWithNoEngineBoundDeferrsAPausedSession(t *testing.T) {
 	}
 
 	real := NewFakeEngine(c.now)
-	m2.RebindEngine(switchable, real, "audio.node binding delivered")
+	m2.RebindEngine(ctx, switchable, real, "audio.node binding delivered")
 
 	s2, ok := m2.get(id)
 	if !ok {
@@ -543,5 +544,399 @@ func TestRestoreAllWithNoEngineBoundDeferrsAPausedSession(t *testing.T) {
 	}
 	if _, err := real.Observe(ctx, handle); err != nil {
 		t.Fatalf("Observe on the resumed handle: %v (the deferred restore did not actually reload the Paused session on the newly bound engine)", err)
+	}
+}
+
+// TestRebindEngineConcurrentBindingsNeverPersistAnUnexplainedFailure
+// reproduces the concurrency defect an adversarial review found in the
+// first version of this fix: RebindEngine's invalidate/Set/retry was
+// not one atomic operation, so two audio.node.configure commands
+// delivered back to back (genuinely concurrent — MQTT dispatches each
+// inbound command on its own goroutine) could interleave. One call's
+// invalidateActiveSessions could run against a pre-swap snapshot while
+// a second call's retry started a deferred session against the WRONG
+// engine, and that session's own Start then failed against an engine
+// that never saw its handle — persisting Failed with NO fault recorded
+// (fault=none, reason=""), which is worse evidence than the original
+// defect: an operator sees a dead session with no explanation at all.
+//
+// A LEGITIMATE two-binding sequence can still end a session Failed
+// (recorded, not fixed, as a pre-existing rebind contract — see
+// TestRebindEngineRetriesDeferredRestoreExactlyOnce and this package's
+// PR description), but that path always goes through
+// invalidateActiveSessions, which always calls setFaultLocked with
+// [pkgaudio.FaultRouteChanged] and a real reason. So Failed with
+// Fault == FaultNone is never legitimate — it is exactly the race
+// signature. This test asserts that signature never appears across many
+// concurrent-binding iterations, run under go test -race to also catch
+// the underlying data race directly.
+func TestRebindEngineConcurrentBindingsNeverPersistAnUnexplainedFailure(t *testing.T) {
+	const iterations = 300
+	const concurrentBindings = 12
+
+	for iter := 0; iter < iterations; iter++ {
+		dir := t.TempDir()
+		c := newClock(time.Now())
+		store := NewFileSessionStore(dir)
+		ctx := context.Background()
+
+		ids := []pkgaudio.SessionID{"s1", "s2", "s3"}
+		m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+		for _, id := range ids {
+			ref := writeTestAsset(t, dir, string(id)+fmt.Sprintf("-%d.wav", iter), "asset-"+string(id), []byte("content-"+string(id)))
+			m1.Apply(ctx, id, pkgaudio.InvocationID(string(id)+"-apply"), 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+			if r := m1.Start(ctx, id, pkgaudio.InvocationID(string(id)+"-start"), 2); r.Outcome == pkgaudio.OutcomeRefused {
+				t.Fatalf("iter %d: start for %s unexpectedly refused: %+v", iter, id, r)
+			}
+		}
+
+		switchable := NewSwitchableEngine()
+		m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+		if err := m2.RestoreAll(ctx); err != nil {
+			t.Fatalf("iter %d: RestoreAll: %v", iter, err)
+		}
+
+		var wg sync.WaitGroup
+		for i := 0; i < concurrentBindings; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				m2.RebindEngine(ctx, switchable, NewFakeEngine(c.now), fmt.Sprintf("concurrent binding %d", i))
+			}(i)
+		}
+		wg.Wait()
+
+		for _, id := range ids {
+			rec, ok, err := store.Load(id)
+			if err != nil || !ok {
+				t.Fatalf("iter %d: persisted record missing for %s: ok=%v err=%v", iter, id, ok, err)
+			}
+			if rec.SessionState == pkgaudio.StateFailed && rec.Fault == pkgaudio.FaultNone {
+				t.Fatalf("iter %d: session %s persisted as Failed with no fault (fault=%q reason=%q) — this is the interleaved-engine race signature, never a legitimate rebind invalidation", iter, id, rec.Fault, rec.FaultReason)
+			}
+		}
+	}
+}
+
+// gatedLoadEngine wraps [FakeEngine] so a test can pause a Load call
+// mid-flight (after the wrapped engine's own Load has actually
+// succeeded) without holding any lock the test itself needs — unlike
+// gating inside a real restoreOne call, which runs entirely under the
+// session's own s.mu, so a second goroutine trying to inspect that same
+// session (as invalidateActiveSessions does) would deadlock rather than
+// race. That structural fact is itself why a full end-to-end race
+// reproduction between two concurrent RebindEngine calls is not
+// attempted here: any real interleaving window is either already
+// serialized by a lock the mutex-under-test does not need to duplicate
+// (session-level s.mu, or the pendingEngineRestore drain under m.mu),
+// or requires reproducing a window of a few pure allocations with
+// nothing to gate on. What IS directly testable, and is the actual
+// property rebindMu exists to guarantee, is that no other RebindEngine
+// call's body can make ANY progress — not even past
+// invalidateActiveSessions — while this one is still inside
+// retryDeferredRestores. That is what this test checks, via
+// sync.Mutex.TryLock on the SAME rebindMu the production code uses
+// (this file is in package audio, so rebindMu is reachable directly).
+type gatedLoadEngine struct {
+	*FakeEngine
+	loadReached chan struct{}
+	release     chan struct{}
+}
+
+func newGatedLoadEngine(now func() time.Time) *gatedLoadEngine {
+	return &gatedLoadEngine{FakeEngine: NewFakeEngine(now), loadReached: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (e *gatedLoadEngine) Load(ctx context.Context, handle EngineHandle, media pkgaudio.MediaRef, duration time.Duration) (EngineObservation, error) {
+	obs, err := e.FakeEngine.Load(ctx, handle, media, duration)
+	if err == nil {
+		close(e.loadReached)
+		<-e.release
+	}
+	return obs, err
+}
+
+// TestRebindEngineHoldsRebindMuAcrossItsWholeBody proves rebindMu is
+// still held partway through RebindEngine's retryDeferredRestores step
+// — deep inside the critical section, well after invalidateActiveSessions
+// and engine.Set have already run — not merely across the first line or
+// two. A goroutine holds RebindEngine paused (via gatedLoadEngine) at
+// exactly that point; the test then calls rebindMu.TryLock() itself: it
+// must fail, proving the mutex is genuinely still held, not merely
+// acquired-and-released early. Without rebindMu (asserted below by
+// reverting it), TryLock succeeds while RebindEngine is still paused —
+// this fails.
+func TestRebindEngineHoldsRebindMuAcrossItsWholeBody(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("mutex-proof-session")
+
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	ref := writeTestAsset(t, dir, "mutex-proof.wav", "asset-mutex-proof", []byte("content-mutex-proof"))
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r := m1.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start unexpectedly refused: %+v", r)
+	}
+
+	switchable := NewSwitchableEngine()
+	m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	gated := newGatedLoadEngine(c.now)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m2.RebindEngine(ctx, switchable, gated, "binding under test")
+	}()
+
+	<-gated.loadReached // RebindEngine is now paused inside retryDeferredRestores, deep past invalidate+Set.
+	if m2.rebindMu.TryLock() {
+		m2.rebindMu.Unlock()
+		close(gated.release)
+		<-done
+		t.Fatal("rebindMu.TryLock() succeeded while a RebindEngine call was still paused mid-retry — the mutex is not held across the whole body")
+	}
+	close(gated.release)
+	<-done
+}
+
+// TestStartDuringBootWindowRefusesRatherThanFails proves Manager.Start
+// treats "no engine bound yet" as a refusal, not a permanent failure,
+// for a session that never went through restoreOne at all — a fresh
+// session Applied and Started while this node has not yet received its
+// audio.node binding, the same boot window restoreOne's own deferral
+// exists for. Before this fix, Start's own prepareLocked/engine.Start
+// failure paths were untouched by the rest of this change: they set
+// StateFailed and dispatch always persists after exec(), so the
+// persisted record was overwritten with Failed even though
+// pendingEngineRestore still held the session — the retry that
+// eventually ran found Failed on disk, fell through restoreOne's
+// switch, and did nothing.
+func TestStartDuringBootWindowRefusesRatherThanFails(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	switchable := NewSwitchableEngine()
+	m := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("boot-window-session")
+
+	ref := writeTestAsset(t, dir, "boot.wav", "asset-boot", []byte("content-boot"))
+	m.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+
+	r := m.Start(ctx, id, "inv-start", 2)
+	if r.Outcome != pkgaudio.OutcomeRefused {
+		t.Fatalf("Start outcome with no engine bound = %s (reason=%q), want Refused", r.Outcome, r.Reason)
+	}
+
+	rec, ok, err := store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("persisted record missing: ok=%v err=%v", ok, err)
+	}
+	if rec.SessionState == pkgaudio.StateFailed {
+		t.Fatalf("persisted state after Start with no engine bound = Failed, want the pre-Start state to survive so the pending retry can still resume it")
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatalf("session %s missing", id)
+	}
+	s.mu.Lock()
+	state := s.state
+	s.mu.Unlock()
+	if state == pkgaudio.StateFailed {
+		t.Fatalf("in-memory state after Start with no engine bound = Failed, want it left unchanged")
+	}
+
+	// Now bind: a real command retried after the binding arrives must
+	// actually reach Playing with a loaded handle. The reported OUTCOME
+	// is Unconfirmable, not Started — FakeEngine.Available() always
+	// reports false (see FakeEngineUnavailableReason), so
+	// gateAvailability rewrites every successful outcome the same way
+	// every other test against FakeEngine observes; the state machine's
+	// own internal state is what proves this actually worked.
+	real := NewFakeEngine(c.now)
+	m.RebindEngine(ctx, switchable, real, "audio.node binding delivered")
+	if r := m.Start(ctx, id, "inv-start-2", 3); r.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("Start after binding = %s (reason=%q), want Unconfirmable (FakeEngine is never Available)", r.Outcome, r.Reason)
+	}
+	s.mu.Lock()
+	stateAfterBind, handleLoadedAfterBind, handle := s.state, s.handleLoaded, s.handle
+	s.mu.Unlock()
+	if stateAfterBind != pkgaudio.StatePlaying || !handleLoadedAfterBind {
+		t.Fatalf("state after Start following a binding = (state=%s handleLoaded=%v), want (Playing, true)", stateAfterBind, handleLoadedAfterBind)
+	}
+	if _, err := real.Observe(ctx, handle); err != nil {
+		t.Fatalf("Observe on the started handle: %v (Start after binding did not actually drive the new engine)", err)
+	}
+}
+
+// startAlwaysFailsEngine wraps [FakeEngine] so Load succeeds normally
+// (registering the handle) but Start for one specific handle always
+// fails with a fixed, non-sentinel error — modeling a genuine engine
+// refusal during a retry, as opposed to [ErrNoEngineBinding].
+// [FakeEngine.InjectFailure] cannot express this on its own: it is a
+// one-shot arm-on-any-call, and Load (which restoreOne calls first)
+// would consume it before Start ever ran.
+type startAlwaysFailsEngine struct {
+	*FakeEngine
+	handle EngineHandle
+	err    error
+}
+
+func (e *startAlwaysFailsEngine) Start(ctx context.Context, handle EngineHandle, position time.Duration) (EngineObservation, error) {
+	if handle == e.handle {
+		return EngineObservation{}, e.err
+	}
+	return e.FakeEngine.Start(ctx, handle, position)
+}
+
+// TestRebindEngineRetryStartFailureRequeuesInsteadOfFailing proves
+// Must-fix-1b: a Start failure during a deferred-restore retry that is
+// NOT ErrNoEngineBinding (a genuine engine refusal) re-queues the
+// session in pendingEngineRestore rather than persisting Failed —
+// deliberately conservative, since a session resuming in the very call
+// that just bound a new engine is not where this package makes a single
+// failed attempt permanent.
+func TestRebindEngineRetryStartFailureRequeuesInsteadOfFailing(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("retry-start-failure-session")
+
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	ref := writeTestAsset(t, dir, "retry-fail.wav", "asset-retry-fail", []byte("content-retry-fail"))
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r := m1.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start unexpectedly refused: %+v", r)
+	}
+
+	switchable := NewSwitchableEngine()
+	m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	failingEngine := &startAlwaysFailsEngine{
+		FakeEngine: NewFakeEngine(c.now),
+		handle:     EngineHandle(string(id) + "/media"),
+		err:        errWrap(pkgaudio.ErrEngineFreeze),
+	}
+	m2.RebindEngine(ctx, switchable, failingEngine, "binding with a broken engine")
+
+	rec, ok, err := store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("persisted record missing: ok=%v err=%v", ok, err)
+	}
+	if rec.SessionState == pkgaudio.StateFailed {
+		t.Fatalf("persisted state after a genuine retry-path Start failure = Failed, want it left as Playing and re-queued instead")
+	}
+
+	m2.mu.Lock()
+	_, pending := m2.pendingEngineRestore[id]
+	m2.mu.Unlock()
+	if !pending {
+		t.Fatalf("session %s not re-queued in pendingEngineRestore after a genuine retry-path Start failure", id)
+	}
+
+	s, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing", id)
+	}
+	s.mu.Lock()
+	fault, faultReason := s.fault, s.faultReason
+	s.mu.Unlock()
+	if fault == pkgaudio.FaultNone {
+		t.Fatalf("session fault after a genuine retry-path Start failure = none, want a real reason recorded (got reason=%q)", faultReason)
+	}
+}
+
+// TestRestoreAllPlayingStartFailureRecordsAFault proves the Playing/
+// Preparing branch's own engine.Start failure sets a fault, matching
+// the Paused branch's own long-standing practice — the asymmetry an
+// adversarial review found: before this fix, a Playing session whose
+// Start failed during restore persisted Failed with Fault == FaultNone,
+// which is worse evidence than no fix at all, since an operator sees a
+// dead session with no explanation.
+func TestRestoreAllPlayingStartFailureRecordsAFault(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("playing-start-failure-session")
+
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	ref := writeTestAsset(t, dir, "playing-fail.wav", "asset-playing-fail", []byte("content-playing-fail"))
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r := m1.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start unexpectedly refused: %+v", r)
+	}
+
+	failingEngine := &startAlwaysFailsEngine{
+		FakeEngine: NewFakeEngine(c.now),
+		handle:     EngineHandle(string(id) + "/media"),
+		err:        errWrap(pkgaudio.ErrEngineFreeze),
+	}
+	m2 := NewManager(failingEngine, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	rec, ok, err := store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("persisted record missing: ok=%v err=%v", ok, err)
+	}
+	if rec.SessionState != pkgaudio.StateFailed {
+		t.Fatalf("persisted state after a genuine Start failure = %q, want Failed", rec.SessionState)
+	}
+	if rec.Fault == pkgaudio.FaultNone {
+		t.Fatalf("persisted fault after a genuine Start failure = none, want a real fault recorded (reason=%q)", rec.FaultReason)
+	}
+}
+
+// TestDeferredRestoreSetsADeliberateFault proves a session
+// deferRestoreLocked defers reports WHY it is not actually driving
+// audio, deliberately (queueForRetryLocked's own setFaultLocked call),
+// not merely because prepareLocked's internal fault-setting happened to
+// leave one behind on its way out. In-memory only: nothing is persisted
+// on this path (see TestRestoreAllWithNoEngineBoundDoesNotFailPersistedState),
+// so the fault is read from the live session, not the store.
+func TestDeferredRestoreSetsADeliberateFault(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("deferred-fault-session")
+
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	ref := writeTestAsset(t, dir, "deferred-fault.wav", "asset-deferred-fault", []byte("content-deferred-fault"))
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r := m1.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start unexpectedly refused: %+v", r)
+	}
+
+	switchable := NewSwitchableEngine()
+	m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	s, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing after RestoreAll", id)
+	}
+	s.mu.Lock()
+	fault, faultReason := s.fault, s.faultReason
+	s.mu.Unlock()
+	if fault == pkgaudio.FaultNone {
+		t.Fatalf("in-memory fault after a deferred restore = none, want a deliberate reason recorded")
+	}
+	if faultReason == "" {
+		t.Fatalf("in-memory fault reason after a deferred restore is empty, want a deliberate explanation")
 	}
 }

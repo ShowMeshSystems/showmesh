@@ -25,7 +25,7 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 		return fmt.Errorf("audio: list persisted sessions: %w", err)
 	}
 	for _, id := range ids {
-		if err := m.restoreOne(ctx, id); err != nil {
+		if err := m.restoreOne(ctx, id, false); err != nil {
 			m.logf("audio session %s: restore failed: %v", id, err)
 		}
 	}
@@ -54,7 +54,18 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 // [pkgaudio.ResumePolicy]: Resume restarts from the last bookmark,
 // Restart always begins at 0. Either way this is a discontinuity —
 // timingKnown starts false until a fresh observation resolves it.
-func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
+//
+// retry is true only when [Manager.retryDeferredRestores] is the
+// caller — a session already deferred once, now being retried right
+// after RebindEngine set a real engine. It changes exactly one thing:
+// a Start/Pause failure that is NOT [ErrNoEngineBinding] re-queues the
+// session for the next binding (see queueForRetryLocked) instead of
+// persisting Failed. This is deliberately conservative: rebindMu
+// already rules out the confirmed engine-mismatch race, but a session
+// resuming in the same call that just bound a brand new engine is not
+// a place to make a single failed attempt permanent — the next binding
+// gets another try before this session is reported Failed.
+func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry bool) error {
 	rec, ok, err := m.store.Load(id)
 	if err != nil {
 		return err
@@ -180,13 +191,22 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 			s.persistBestEffortLocked("state change")
 			return err
 		}
-		// engine.Start is never reached here with an unbound
-		// SwitchableEngine: prepareLocked's own Load call above goes
-		// through the same m.engine and already fails first, so the
-		// only no-binding case this branch can hit is the one checked
-		// there.
+		// This can still fail for a real engine reason (ClassifyFault
+		// below covers those), but never with ErrNoEngineBinding
+		// specifically: RebindEngine's rebindMu holds this whole retry
+		// call, and every attempt outside a retry runs from RestoreAll,
+		// strictly before MQTT (and so any RebindEngine call) starts —
+		// see agent.go's construction order. Either way, by the time
+		// this line runs, prepareLocked's own Load has already
+		// succeeded against SOME bound engine, and nothing can unbind
+		// or swap it out from under this call.
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
+			if retry && !errors.Is(err, ErrNoEngineBinding) {
+				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Start failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				return nil
+			}
 			s.state = pkgaudio.StateFailed
+			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
 			return err
@@ -231,10 +251,14 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 				position = resolved
 			}
 		}
-		// Same reasoning as the Playing/Preparing branch: prepareLocked's
-		// Load above already fails first on an unbound engine, so
-		// neither Start nor Pause here can hit the no-binding case.
+		// Same reasoning as the Playing/Preparing branch's own Start
+		// call above: neither call here can hit ErrNoEngineBinding
+		// specifically, only a real engine error.
 		if _, err := m.engine.Start(ctx, s.handle, position); err != nil {
+			if retry && !errors.Is(err, ErrNoEngineBinding) {
+				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Start failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				return nil
+			}
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			m.stopLTCLocked(ctx, s)
@@ -242,6 +266,10 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 			return err
 		}
 		if _, err := m.engine.Pause(ctx, s.handle); err != nil {
+			if retry && !errors.Is(err, ErrNoEngineBinding) {
+				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Pause failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				return nil
+			}
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			m.stopLTCLocked(ctx, s)
@@ -301,29 +329,52 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID) error {
 // earliest engine call on every restore path, so it is the only place
 // this check is ever reachable. That is not a restore failure — it is a
 // not-yet, and it must never overwrite the on-disk persisted record with
-// StateFailed, because that overwrite is exactly the permanent damage
-// this defers to avoid: s.state is left as whatever restoreOne already
-// loaded from disk (Playing/Preparing/Paused), and nothing is persisted
-// here.
+// StateFailed. Caller holds s.mu.
+func (m *Manager) deferRestoreLocked(ctx context.Context, s *Session, id pkgaudio.SessionID) {
+	m.queueForRetryLocked(ctx, s, id, "no audio engine bound yet; restore deferred until an audio.node binding arrives")
+}
+
+// queueForRetryLocked is deferRestoreLocked's and restoreOne's own
+// shared retry-queueing: it must never overwrite the on-disk persisted
+// record with StateFailed, because that overwrite is exactly the
+// permanent damage this exists to prevent. s.state is left as whatever
+// restoreOne already loaded from disk (Playing/Preparing/Paused), and
+// nothing is persisted here — so a reboot before the next successful
+// retry still finds the original desired state on disk, not Failed.
 //
 // s is left with no engine handle (any partial Load this attempt
 // produced is released), so [Manager.invalidateActiveSessions] must
 // never treat this session as having a live handle to invalidate — see
 // that method's own handleLoaded check. id is recorded in
 // m.pendingEngineRestore so [Manager.retryDeferredRestores] re-runs
-// restoreOne for it the moment RebindEngine actually sets a real
-// engine — see that method's doc comment for why a session already
-// resolved here can never be retried twice. Caller holds s.mu.
-func (m *Manager) deferRestoreLocked(ctx context.Context, s *Session, id pkgaudio.SessionID) {
+// restoreOne for it the moment RebindEngine next sets an engine — see
+// that method's doc comment for why a session already resolved here
+// can never be retried twice.
+//
+// faultReason is set deliberately, not left to whatever prepareLocked's
+// own setFaultLocked call happened to leave behind on its Load failure:
+// a future change to that internal call must not silently turn a
+// deferred session into one reported with no explanation for why it is
+// not actually driving audio. This does not change what STATE
+// [Session.snapshotLocked] reports — still whatever was persisted
+// (Playing/Preparing/Paused) — only the fault attached to it; see that
+// function's own doc comment for the open question of whether State
+// itself should say something different here.
+func (m *Manager) queueForRetryLocked(ctx context.Context, s *Session, id pkgaudio.SessionID, faultReason string) {
+	// A no-binding failure never loads a handle, so these two lines are
+	// a no-op on that path; kept defensively for the Start/Pause retry
+	// failure path, where prepareLocked's own Load DID succeed and left
+	// one behind.
 	s.releaseEngineLocked(ctx)
 	s.handle = ""
+	s.setFaultLocked(pkgaudio.FaultOther, faultReason)
 	m.mu.Lock()
 	if m.pendingEngineRestore == nil {
 		m.pendingEngineRestore = make(map[pkgaudio.SessionID]struct{})
 	}
 	m.pendingEngineRestore[id] = struct{}{}
 	m.mu.Unlock()
-	m.logf("audio session %s: no audio engine bound yet, deferring restore until an audio.node binding arrives", id)
+	m.logf("audio session %s: %s", id, faultReason)
 }
 
 // sourceStillActiveOnDisk reports whether id's persisted record shows a

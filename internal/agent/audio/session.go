@@ -850,6 +850,15 @@ type SessionSnapshot struct {
 // failure is itself fault evidence (see [Manager.watchTick]'s identical
 // treatment) and leaves PositionKnown false, never a stale reading
 // presented as current.
+//
+// Open question, not yet decided: a session restore.go's
+// queueForRetryLocked deferred (no engine bound yet, or a retry-path
+// engine failure) reports State exactly as persisted — Playing,
+// Preparing, or Paused — with PositionKnown left false and Fault/
+// FaultReason naming why. That state value is part of this package's
+// public [pkgaudio.State] vocabulary, so changing what gets reported
+// for this specific case is a caller-visible contract question, not an
+// internal implementation detail; nothing here decides it unilaterally.
 func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	snap := SessionSnapshot{
 		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),

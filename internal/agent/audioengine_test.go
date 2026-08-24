@@ -113,11 +113,11 @@ func TestRebindEngineHandsBackTheEngineItReplaced(t *testing.T) {
 	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(t.TempDir()), t.TempDir(), audio.RealDecoder{}, time.Now, nil)
 
 	first := audio.NewFakeEngine(time.Now)
-	if prev := mgr.RebindEngine(switchable, first, audio.RebindReasonEngineRebind); prev != nil {
+	if prev := mgr.RebindEngine(context.Background(), switchable, first, audio.RebindReasonEngineRebind); prev != nil {
 		t.Fatalf("first rebind returned %v, want nil: nothing was bound before it", prev)
 	}
 	second := audio.NewFakeEngine(time.Now)
-	prev := mgr.RebindEngine(switchable, second, audio.RebindReasonEngineRebind)
+	prev := mgr.RebindEngine(context.Background(), switchable, second, audio.RebindReasonEngineRebind)
 	if prev != audio.Engine(first) {
 		t.Fatal("rebind did not hand back the engine it replaced, so nothing can release it")
 	}

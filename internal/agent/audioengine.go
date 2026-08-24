@@ -116,6 +116,13 @@ var newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
 // command attempted in it classifies as [pkgaudio.FaultRouteChanged]
 // rather than [pkgaudio.FaultOther].
 type audioEngineRebuilder struct {
+	// ctx bounds RebindEngine's own retry work (prepare/Load/Start for
+	// every deferred session) — the agent's shutdown-signal context, so
+	// a binding delivered while the agent is exiting does not run that
+	// work uncancellably. Never context.Background(): RestoreAll gets
+	// the same sigCtx at startup, and this is the same guarantee for
+	// every rebind after it.
+	ctx        context.Context
 	assetDir   string
 	switchable *audio.SwitchableEngine
 	mgr        *audio.Manager
@@ -126,8 +133,8 @@ type audioEngineRebuilder struct {
 	builtRevision int64
 }
 
-func newAudioEngineRebuilder(assetDir string, switchable *audio.SwitchableEngine, mgr *audio.Manager, logger *slog.Logger) *audioEngineRebuilder {
-	return &audioEngineRebuilder{assetDir: assetDir, switchable: switchable, mgr: mgr, logger: logger}
+func newAudioEngineRebuilder(ctx context.Context, assetDir string, switchable *audio.SwitchableEngine, mgr *audio.Manager, logger *slog.Logger) *audioEngineRebuilder {
+	return &audioEngineRebuilder{ctx: ctx, assetDir: assetDir, switchable: switchable, mgr: mgr, logger: logger}
 }
 
 // validationSampleRate is a placeholder used only to satisfy
@@ -162,7 +169,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		return
 	}
 
-	prev := r.mgr.RebindEngine(r.switchable, nil, audio.RebindReasonEngineRebind)
+	prev := r.mgr.RebindEngine(r.ctx, r.switchable, nil, audio.RebindReasonEngineRebind)
 	closeReplacedEngine(prev, r.logger)
 
 	cfg, rateSource, channelCountSource := buildGstEngineConfig(context.Background(), r.assetDir, node)
@@ -191,18 +198,16 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 	r.haveBuilt = true
 }
 
-// bind installs engine as this node's current engine and releases
-// whatever it replaces. [audio.SwitchableEngine.Set]'s own contract
-// requires the caller to close the engine its return value names, since
-// a gstengine keeps holding its output device until something closes
-// it; under [audioEngineRebuilder.rebuild]'s own mu, that return value
-// is always nil in the current call graph (rebuild's earlier
-// RebindEngine/closeReplacedEngine step already released whatever this
-// node held before probing and building the replacement), so this call
-// is a defensive backstop against any future caller of Set, not the
-// meaningful release path today.
+// bind installs engine as this node's current engine through
+// [audio.Manager.RebindEngine], so the swap and the retry of every
+// restore deferred while no engine was bound run under the manager's
+// rebindMu and cannot interleave with a concurrent binding. The engine
+// RebindEngine hands back is closed as a defensive backstop: under
+// [audioEngineRebuilder.rebuild]'s own mu it is always nil today, since
+// rebuild's earlier detach-and-close step already released whatever
+// this node held before probing and building the replacement.
 func (r *audioEngineRebuilder) bind(engine audio.Engine) {
-	closeReplacedEngine(r.switchable.Set(engine), r.logger)
+	closeReplacedEngine(r.mgr.RebindEngine(r.ctx, r.switchable, engine, audio.RebindReasonEngineRebind), r.logger)
 }
 
 // audioSettingsFromWire converts a decoded "audio.settings.configure"
