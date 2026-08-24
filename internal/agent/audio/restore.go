@@ -114,14 +114,12 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 	s.currentItemID = rec.CurrentItemID
 	s.bookmark = rec.Bookmark
 	s.muted = rec.Muted
-	s.preMuteGain = rec.PreMuteGain
 	if len(rec.DuckedByAll) > 0 {
 		s.duckedByAll = make(map[pkgaudio.SessionID]struct{}, len(rec.DuckedByAll))
 		for _, id := range rec.DuckedByAll {
 			s.duckedByAll[id] = struct{}{}
 		}
 	}
-	s.preDuckGain = rec.PreDuckGain
 	if len(rec.InterruptedByAll) > 0 {
 		s.interruptedByAll = make(map[pkgaudio.SessionID]struct{}, len(rec.InterruptedByAll))
 		for _, id := range rec.InterruptedByAll {

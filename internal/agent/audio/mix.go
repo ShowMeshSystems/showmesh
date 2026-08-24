@@ -9,19 +9,81 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
-// duckTargetGain is what a ducked session's gain is set to. SHOWMESH
-// HYPOTHESIS, NOT MEASURED: full silence is the simplest correct
-// starting behavior; RES-007's bench is what should decide whether a
-// partial duck is audibly preferable.
+// duckTargetGain is what a session is driven to while muted or ducked.
+// SHOWMESH HYPOTHESIS, NOT MEASURED: full silence is the simplest
+// correct starting behavior; RES-007's bench is what should decide
+// whether a partial duck is audibly preferable.
 const duckTargetGain = pkgaudio.Gain(0)
 
-// effectiveGainLocked returns s's current desired gain, or unity when
-// none has ever been set. Caller holds s.mu.
-func (s *Session) effectiveGainLocked() pkgaudio.Gain {
+// configuredGainLocked returns the gain last requested through
+// audio.gain.set or audio.gain.fade, or unity when neither has ever run.
+// Mute and duck never write this field, it is the value
+// [Session.effectiveGainLocked] composes with the active suppression
+// reasons, not the value driven to the engine. Caller holds s.mu.
+func (s *Session) configuredGainLocked() pkgaudio.Gain {
 	if s.desired.Gain != nil {
 		return *s.desired.Gain
 	}
 	return pkgaudio.Gain(1)
+}
+
+// effectiveGainLocked derives s's current output gain from the
+// configured gain and every active reason to reduce it: mute silences
+// unconditionally, otherwise an active duck silences to duckTargetGain,
+// otherwise the configured gain applies. The ceiling is reapplied on
+// every call, not only when the configured gain was last set, so a
+// ceiling lowered mid-duck or mid-mute still bounds the value the next
+// time it is computed. This is the single source of truth for what the
+// engine should read; nothing else in this package derives a gain to
+// drive. Caller holds s.mu.
+func (s *Session) effectiveGainLocked() pkgaudio.Gain {
+	g := s.configuredGainLocked()
+	if s.muted || len(s.duckedByAll) > 0 {
+		g = duckTargetGain
+	}
+	if result, err := s.clampToCeilingLocked(g); err == nil {
+		return result.Effective
+	}
+	return g
+}
+
+// applyEffectiveGainLocked drives the engine to s's current
+// [Session.effectiveGainLocked] when a handle is loaded. This is the
+// ONLY place in this package that calls engine.SetGain for a gain-only
+// change: every path that can change the configured gain (GainSet,
+// GainFade's immediate target) or the set of active suppression reasons
+// (mute, unmute, duck start, duck end) calls this afterward instead of
+// computing or dispatching a gain itself, so the engine is always driven
+// from one derivation, never from a value hand-copied into a second
+// field. Caller holds s.mu.
+func (s *Session) applyEffectiveGainLocked(ctx context.Context) pkgaudio.OutcomeResult {
+	effective := s.effectiveGainLocked()
+	if !s.handleLoaded {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
+	}
+	dispatchedAt := s.mgr.now()
+	obs, err := s.mgr.engine.SetGain(ctx, s.handle, effective)
+	if err != nil {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+	}
+	if obs.ObservedAt.Before(dispatchedAt) {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence predates this dispatch"}
+	}
+	if obs.Gain != effective {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: fmt.Sprintf("engine reports gain %v, expected %v", obs.Gain, effective)}
+	}
+	return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
+}
+
+// applyEffectiveGainBestEffortLocked is [Session.applyEffectiveGainLocked]
+// for a caller that already reports its own outcome through other means
+// (duck and mute transitions report a Ducked or gain outcome, not this
+// one): it logs a failure or a mismatch rather than returning one.
+// Caller holds s.mu.
+func (m *Manager) applyEffectiveGainBestEffortLocked(ctx context.Context, s *Session) {
+	if result := s.applyEffectiveGainLocked(ctx); result.Outcome != pkgaudio.OutcomeGain {
+		m.logf("audio session %s: gain apply %s: %s", s.id, result.Outcome, result.Reason)
+	}
 }
 
 // clampToCeilingLocked applies s's own declared ceiling if it has one;
@@ -52,9 +114,10 @@ func (s *Session) clampToCeilingLocked(requested pkgaudio.Gain) (pkgaudio.Ceilin
 	return pkgaudio.ApplyCeiling(requested, *ceiling)
 }
 
-// GainSet is audio.gain.set: it changes id's gain immediately, clamped
-// to its ceiling (ruling: the ceiling is enforced at the point gain
-// takes effect, on every path, not only at validation).
+// GainSet is audio.gain.set: it changes id's configured gain, clamped to
+// its ceiling (ruling: the ceiling is enforced at the point gain takes
+// effect, on every path, not only at validation), and applies the
+// resulting effective gain to the engine.
 func (m *Manager) GainSet(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, requested pkgaudio.Gain) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -68,44 +131,27 @@ func (m *Manager) GainSet(ctx context.Context, id pkgaudio.SessionID, invocation
 	return res.outcome
 }
 
-// setGainLocked clamps requested to s's ceiling, applies it to the
-// engine when a handle is loaded, and always records the clamped value
-// as s's desired gain even with no handle loaded — matching Apply's own
-// gain-without-playback semantics. Caller holds s.mu.
+// setGainLocked clamps requested to s's ceiling, records it as s's
+// configured gain, and applies the current effective gain to the
+// engine, which is the configured value verbatim only when s is neither
+// muted nor ducked; otherwise the active suppression's own target is
+// what actually reaches the engine, so a gain.set landing mid-duck or
+// mid-mute can never make a suppressed session audible. Caller holds
+// s.mu.
 func (s *Session) setGainLocked(ctx context.Context, requested pkgaudio.Gain) pkgaudio.OutcomeResult {
 	result, err := s.clampToCeilingLocked(requested)
 	if err != nil {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
 	}
-	effective := result.Effective
-	s.desired.Gain = &effective
-	s.rememberIntendedGainWhileDuckedLocked(effective)
+	configured := result.Effective
+	s.desired.Gain = &configured
 	s.persistBestEffortLocked("state change")
 
-	if !s.handleLoaded {
-		reason := ""
-		if result.Clamped {
-			reason = fmt.Sprintf("gain clamped to ceiling: requested %v, effective %v", result.Requested, result.Effective)
-		}
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain, Reason: reason}
+	outcome := s.applyEffectiveGainLocked(ctx)
+	if result.Clamped && outcome.Outcome == pkgaudio.OutcomeGain {
+		outcome.Reason = fmt.Sprintf("gain clamped to ceiling: requested %v, effective %v", result.Requested, result.Effective)
 	}
-
-	dispatchedAt := s.mgr.now()
-	obs, err := s.mgr.engine.SetGain(ctx, s.handle, effective)
-	if err != nil {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
-	}
-	if obs.ObservedAt.Before(dispatchedAt) {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence predates this dispatch"}
-	}
-	if obs.Gain != effective {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: fmt.Sprintf("engine reports gain %v, expected %v", obs.Gain, effective)}
-	}
-	reason := ""
-	if result.Clamped {
-		reason = fmt.Sprintf("gain clamped to ceiling: requested %v, effective %v", result.Requested, result.Effective)
-	}
-	return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain, Reason: reason}
+	return outcome
 }
 
 // GainFade is audio.gain.fade: it schedules a fade toward target,
@@ -127,12 +173,22 @@ func (m *Manager) GainFade(ctx context.Context, id pkgaudio.SessionID, invocatio
 	return res.outcome
 }
 
+// startFadeLocked clamps target to s's ceiling, records it as s's
+// configured gain immediately, the same instant GainSet would, and
+// dispatches an engine fade toward the CURRENT effective gain, not the
+// raw configured target: while s is muted or ducked, that is
+// duckTargetGain, so a fade requested mid-suppression cannot ramp a
+// silenced session back up before the suppression actually releases.
+// Releasing mute or a duck later drives the engine to the by-then
+// configured gain directly, through [Session.applyEffectiveGainLocked],
+// never by resuming this fade's own ramp. Caller holds s.mu.
 func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.InvocationID, curve pkgaudio.FadeCurve, duration time.Duration, target pkgaudio.Gain) pkgaudio.OutcomeResult {
 	result, err := s.clampToCeilingLocked(target)
 	if err != nil {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
 	}
-	fade := pkgaudio.Fade{Curve: curve, Duration: duration, TargetGain: result.Effective}
+	configured := result.Effective
+	fade := pkgaudio.Fade{Curve: curve, Duration: duration, TargetGain: configured}
 	if err := fade.Validate(); err != nil {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
 	}
@@ -142,15 +198,18 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 
 	f := fade
 	s.desired.Fade = &f
-	s.rememberIntendedGainWhileDuckedLocked(result.Effective)
+	s.desired.Gain = &configured
 	s.fadePending = true
 	s.fadeInvocation = invocation
 	s.fadeHandleNeverFaded = false
 	s.fadeState = FadeStateInProgress
 	s.persistBestEffortLocked("state change")
 
+	engineFade := fade
+	engineFade.TargetGain = s.effectiveGainLocked()
+	s.fadeDispatchedTarget = engineFade.TargetGain
 	dispatchedAt := s.mgr.now()
-	obs, err := s.mgr.engine.Fade(ctx, s.handle, fade)
+	obs, err := s.mgr.engine.Fade(ctx, s.handle, engineFade)
 	if err != nil {
 		s.fadePending = false
 		s.fadeInvocation = ""
@@ -168,16 +227,24 @@ func (s *Session) startFadeLocked(ctx context.Context, invocation pkgaudio.Invoc
 }
 
 // checkFadeCompletionLocked reads s's engine evidence and, exactly once
-// per dispatched fade, resolves s.fadePending and s.desired.Gain from a
-// FadeActive transition true-to-false — never from fade.Duration having
-// elapsed. It also writes the fade's terminal outcome back onto the
-// invocation that dispatched it: [pkgaudio.OutcomeFadeComplete] when the
-// engine's own evidence shows the target gain actually reached,
+// per dispatched fade, resolves s.fadePending from a FadeActive
+// transition true-to-false, never from fade.Duration having elapsed. It
+// also writes the fade's terminal outcome back onto the invocation that
+// dispatched it: [pkgaudio.OutcomeFadeComplete] when the engine's own
+// evidence shows s.fadeDispatchedTarget actually reached,
 // [pkgaudio.OutcomeUnconfirmable] otherwise, gated through
 // [Manager.gateAvailability] exactly as every other outcome in this
-// package is — this is the reachable half of "declared in the
-// vocabulary": the value becomes OutcomeFadeComplete the moment a real
-// Engine reports the gain reached, not before. Caller holds s.mu.
+// package is. Judged against the target actually dispatched, not
+// against the CURRENT effective gain: a mute or a duck landing mid-fade
+// cancels the ramp by driving the engine to its own target through
+// [Session.applyEffectiveGainLocked]'s own SetGain call, and a fade
+// judged against the current effective gain at that point would compare
+// the engine's evidence to a question the dispatched fade was never
+// asked, reporting a cancelled fade as complete. s's own configured
+// gain was already recorded at dispatch time in
+// [Session.startFadeLocked]; this never rewrites it from the engine's
+// observed value, which would reintroduce the desired/observed
+// conflation this package's evidence rules forbid. Caller holds s.mu.
 func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 	if !s.fadePending || !s.handleLoaded {
 		return
@@ -200,10 +267,7 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 		return
 	}
 
-	target := pkgaudio.Gain(0)
-	if s.desired.Fade != nil {
-		target = s.desired.Fade.TargetGain
-	}
+	target := s.fadeDispatchedTarget
 	var outcome pkgaudio.OutcomeResult
 	if gainsEqual(obs.Gain, target) {
 		outcome = pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFadeComplete}
@@ -217,8 +281,6 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 		s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(outcome))
 	}
 
-	gain := obs.Gain
-	s.desired.Gain = &gain
 	s.fadePending = false
 	s.fadeInvocation = ""
 	s.fadeState = FadeStateComplete
@@ -226,8 +288,9 @@ func (s *Session) checkFadeCompletionLocked(ctx context.Context) {
 }
 
 // resolveFadeInterruptedByRestartLocked answers a fade that survived a
-// restart onto a handle never driven through it. desired.Gain is left as
-// restored rather than read back from that handle. Caller holds s.mu.
+// restart onto a handle never driven through it. s's configured gain is
+// left as restored rather than read back from that handle. Caller holds
+// s.mu.
 func (s *Session) resolveFadeInterruptedByRestartLocked() {
 	if s.fadeInvocation != "" {
 		s.rememberExecutedResultLocked(s.fadeInvocation, s.mgr.gateAvailability(pkgaudio.OutcomeResult{
@@ -274,10 +337,11 @@ func gainsEqual(a, b pkgaudio.Gain) bool {
 	return math.Abs(float64(a-b)) <= gainEpsilon
 }
 
-// Mute is audio.output.mute: it saves id's current gain and drives its
-// gain to zero. Idempotent — muting an already-muted session reports the
-// existing mute rather than re-saving over it, so a repeated mute can
-// never lose the original pre-mute gain.
+// Mute is audio.output.mute: it marks id muted and applies the
+// resulting effective gain, which is duckTargetGain regardless of what
+// the configured gain or any active duck says. Idempotent: muting an
+// already-muted session reports the existing mute rather than
+// re-applying it.
 func (m *Manager) Mute(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -295,16 +359,17 @@ func (s *Session) muteLocked(ctx context.Context) pkgaudio.OutcomeResult {
 	if s.muted {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain, Reason: "already muted"}
 	}
-	prior := s.effectiveGainLocked()
-	s.preMuteGain = &prior
 	s.muted = true
-	return s.applyGainForMuteLocked(ctx, duckTargetGain)
+	s.persistBestEffortLocked("state change")
+	return s.applyEffectiveGainLocked(ctx)
 }
 
-// Unmute is audio.output.unmute: it restores id's pre-mute gain,
-// re-clamped to whatever ceiling is current now (a ceiling change while
-// muted must not be bypassed by the restore). Idempotent — unmuting an
-// unmuted session is a no-op success, never a refusal.
+// Unmute is audio.output.unmute: it clears muted and applies the
+// resulting effective gain, the configured gain re-clamped to whatever
+// ceiling is current now, when no duck is active, or the duck's own
+// target when one still is, because the announcement is still playing.
+// Idempotent: unmuting an unmuted session is a no-op success, never a
+// refusal.
 func (m *Manager) Unmute(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -322,40 +387,9 @@ func (s *Session) unmuteLocked(ctx context.Context) pkgaudio.OutcomeResult {
 	if !s.muted {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain, Reason: "not muted"}
 	}
-	restore := pkgaudio.Gain(1)
-	if s.preMuteGain != nil {
-		restore = *s.preMuteGain
-	}
 	s.muted = false
-	s.preMuteGain = nil
-	return s.applyGainForMuteLocked(ctx, restore)
-}
-
-// applyGainForMuteLocked is [Session.muteLocked] and [Session.
-// unmuteLocked]'s shared tail: clamp to ceiling, persist the mute/unmute
-// bookkeeping fields already mutated by the caller together with the new
-// gain, and drive the engine when a handle is loaded.
-func (s *Session) applyGainForMuteLocked(ctx context.Context, requested pkgaudio.Gain) pkgaudio.OutcomeResult {
-	result, err := s.clampToCeilingLocked(requested)
-	if err != nil {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
-	}
-	effective := result.Effective
-	s.desired.Gain = &effective
 	s.persistBestEffortLocked("state change")
-
-	if !s.handleLoaded {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
-	}
-	dispatchedAt := s.mgr.now()
-	obs, err := s.mgr.engine.SetGain(ctx, s.handle, effective)
-	if err != nil {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
-	}
-	if obs.ObservedAt.Before(dispatchedAt) || obs.Gain != effective {
-		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence does not corroborate the requested gain"}
-	}
-	return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
+	return s.applyEffectiveGainLocked(ctx)
 }
 
 // duckLowerPriority runs after a session with role duckerRole and mix
@@ -447,58 +481,23 @@ func (m *Manager) submitToActivePolicies(ctx context.Context, id pkgaudio.Sessio
 	}
 }
 
-// rememberIntendedGainWhileDuckedLocked keeps a ducked session's restore
-// target in step with the newest gain anyone has actually asked for.
-//
-// [Manager.removeDuckerLocked] returns a session to preDuckGain, which is
-// captured once, at the moment the first ducker arrives. Without this, a
-// gain change that lands DURING a duck moved the session's desired gain
-// and was then silently replayed away by the restore, putting the session
-// back at whatever it held before the duck. That is not merely a lost
-// setting: a bed whose configured gain never reached this node before the
-// duck sits at the default of unity, and the restore would put it back
-// there, playing louder than the configured maximum until something else
-// changed it. A failure path is exactly when that happens, because a
-// failure path is what makes a caller retry a gain step late.
-//
-// Only the restore target moves here. Whether a gain change should also
-// be allowed to drive the engine out of the duck while the duck is still
-// active is a separate question about what audio.gain.set means mid-duck,
-// deliberately not decided here. Caller holds s.mu.
-func (s *Session) rememberIntendedGainWhileDuckedLocked(effective pkgaudio.Gain) {
-	if len(s.duckedByAll) == 0 {
-		return
-	}
-	g := effective
-	s.preDuckGain = &g
-}
-
-// duckOneLocked adds duckerID to t's set of active duckers. t's gain is
-// only ever captured and driven to [duckTargetGain] on the transition
-// from zero duckers to one — a target already ducked by someone else
-// just gains a second member, so a later removal of one ducker does not
-// restore a target the other ducker is still legitimately suppressing
-// (two overlapping announcements must not let the first one
-// to stop restore background gain out from under the second). Caller
-// holds t.mu.
+// duckOneLocked adds duckerID to t's set of active duckers and applies
+// the resulting effective gain, duckTargetGain, whether this is the
+// first ducker or one more added on top of an existing set. A target
+// already ducked by someone else just gains a second member; the actual
+// gain does not move again until the set is empty, which is
+// [Manager.removeDuckerLocked]'s own job (two overlapping announcements
+// must not let the first one to stop restore background gain out from
+// under the second). Caller holds t.mu.
 func (m *Manager) duckOneLocked(ctx context.Context, t *Session, duckerID pkgaudio.SessionID) {
 	if _, already := t.duckedByAll[duckerID]; already {
 		return
-	}
-	if len(t.duckedByAll) == 0 {
-		prior := t.effectiveGainLocked()
-		t.preDuckGain = &prior
-		t.desired.Gain = ptrGain(duckTargetGain)
-		if t.handleLoaded {
-			if _, err := m.engine.SetGain(ctx, t.handle, duckTargetGain); err != nil {
-				m.logf("audio session %s: duck gain set failed: %v", t.id, err)
-			}
-		}
 	}
 	if t.duckedByAll == nil {
 		t.duckedByAll = make(map[pkgaudio.SessionID]struct{}, 1)
 	}
 	t.duckedByAll[duckerID] = struct{}{}
+	m.applyEffectiveGainBestEffortLocked(ctx, t)
 	t.persistBestEffortLocked("state change")
 }
 
@@ -519,9 +518,13 @@ func (m *Manager) restoreDucked(ctx context.Context, duckerID pkgaudio.SessionID
 // nothing when duckerID is not a member — that membership check is the
 // entire exactly-once guarantee, since it is the same check
 // [Manager.restoreOne] runs on a crash-recovered session, and there is
-// exactly one code path either caller runs. t's gain and preDuckGain are
-// only restored once the set becomes empty: any remaining ducker still
-// legitimately owns t's suppressed gain. Caller holds t.mu.
+// exactly one code path either caller runs. Once the set is empty, the
+// resulting effective gain is applied: the configured gain, re-clamped
+// to the ceiling in force right now, if t is not muted, or nothing
+// driven to the engine at all if it is, releasing a duck must never
+// make a muted session audible, and mute's own eventual unmute reads the
+// configured gain fresh rather than a value this function would
+// otherwise have to hand it. Caller holds t.mu.
 func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID pkgaudio.SessionID) {
 	if _, ok := t.duckedByAll[duckerID]; !ok {
 		return
@@ -531,22 +534,7 @@ func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID p
 		t.persistBestEffortLocked("state change")
 		return
 	}
-	restore := pkgaudio.Gain(1)
-	if t.preDuckGain != nil {
-		restore = *t.preDuckGain
-	}
-	result, err := t.clampToCeilingLocked(restore)
-	effective := restore
-	if err == nil {
-		effective = result.Effective
-	}
-	t.preDuckGain = nil
-	t.desired.Gain = &effective
-	if t.handleLoaded {
-		if _, err := m.engine.SetGain(ctx, t.handle, effective); err != nil {
-			m.logf("audio session %s: duck restore gain set failed: %v", t.id, err)
-		}
-	}
+	m.applyEffectiveGainBestEffortLocked(ctx, t)
 	t.persistBestEffortLocked("state change")
 }
 
@@ -566,5 +554,3 @@ func (m *Manager) otherSessions(exclude pkgaudio.SessionID) []*Session {
 	}
 	return out
 }
-
-func ptrGain(g pkgaudio.Gain) *pkgaudio.Gain { return &g }
