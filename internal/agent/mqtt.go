@@ -208,12 +208,16 @@ func buildWillMessage(nodeID string) (*paho.WillMessage, error) {
 // callback can never block on it either way, honoring the same "must not
 // block" contract publishAdvertisement's goroutine exists to respect.
 //
+// OnConnectionUp also subscribes showMode to the retained
+// installation-wide operating mode topic (ADR-033), for the same
+// per-reconnect reason cmdHandler is re-registered below. See showmode.go.
+//
 // OnConnectionUp also registers cmdHandler against every (re)connect's
 // live client (see registerCommandHandling): a fresh underlying
 // *paho.Client exists after every reconnect, so both the SUBSCRIBE and the
 // publish-received callback binding have to happen again each time, not
 // once at startup.
-func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, cmdHandler *CommandHandler, logger *slog.Logger) (*mqttConn, error) {
+func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, heartbeatConnected chan<- struct{}, cmdHandler *CommandHandler, showMode *ShowModeHolder, logger *slog.Logger) (*mqttConn, error) {
 	serverURL, err := url.Parse(cfg.MQTTBroker)
 	if err != nil {
 		// config.Config.Validate should already have caught this; guard
@@ -238,6 +242,15 @@ func newMQTTConn(ctx context.Context, cfg config.Config, bootID string, startedA
 			go publishAdvertisement(ctx, &mqttConn{cm: cm}, cfg, bootID, startedAt, logger)
 
 			registerCommandHandling(ctx, cm, cfg.NodeID, cmdHandler, logger)
+
+			// ADR-033's mode subscription, re-registered on every connect
+			// for registerCommandHandling's own reason. showMode may be nil
+			// in a test that does not exercise the mode; a nil holder means
+			// this node simply never learns the mode and reads unknown,
+			// which behaves as show.
+			if showMode != nil {
+				registerShowMode(ctx, cm, showMode, time.Now, logger)
+			}
 
 			select {
 			case heartbeatConnected <- struct{}{}:

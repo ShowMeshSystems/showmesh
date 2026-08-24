@@ -64,6 +64,9 @@ export type {
   ConfigRenderRestartPolicy,
   ConfigRenderSettingsPayload,
   RenderSettingsConfigResponse,
+  // ADR-033: the installation-wide operating mode.
+  ConfigShowModePayload,
+  ShowModeConfigResponse,
   // Track B seam B2b-front: the three render.* dispatch endpoints.
   ObservationEntry,
   RenderCommandResult,
@@ -232,6 +235,9 @@ export {
   getRenderSettingsConfig,
   putRenderSettingsConfig,
   getRenderSettingsConfigRevisions,
+  getShowModeConfig,
+  putShowModeConfig,
+  getShowModeConfigRevisions,
   listResolumeInstances,
   getResolumeInstance,
   listResolumeActions,

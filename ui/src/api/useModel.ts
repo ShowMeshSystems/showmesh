@@ -53,6 +53,8 @@ import type {
   PrincipalsResponse,
   RenderCommandResult,
   RenderSettingsConfigResponse,
+  ConfigShowModePayload,
+  ShowModeConfigResponse,
   ResolumeCompositionResponse,
   ResolumeCompositionUploadResponse,
   ResolumeInstancesConfigResponse,
@@ -224,6 +226,19 @@ export function putRenderSettingsConfig(
 
 export function getRenderSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getRenderSettingsConfigRevisions()
+}
+
+// ADR-033: show.mode. Same thin pass-through pattern.
+export function getShowModeConfig(): Promise<ShowModeConfigResponse> {
+  return store.getShowModeConfig()
+}
+
+export function putShowModeConfig(payload: ConfigShowModePayload): Promise<ShowModeConfigResponse> {
+  return store.putShowModeConfig(payload)
+}
+
+export function getShowModeConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getShowModeConfigRevisions()
 }
 
 // Step 7 seam C / Step 8: FPP primitive command dispatch. Same thin

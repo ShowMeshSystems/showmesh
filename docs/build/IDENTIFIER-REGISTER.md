@@ -91,6 +91,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `resolume.recovery` | singleton | shipped | Track D seam D-3a |
 | `show` | operator-chosen | shipped | Track E |
 | `show.active` | singleton | shipped | Track E |
+| `show.mode` | `default` singleton | shipped | ADR-033 |
 | `show.surface` | operator-chosen | shipped | Track E |
 | `show.action` | operator-chosen | shipped | Step 9 |
 | `show.macro` | operator-chosen | shipped | Step 9 |
@@ -163,6 +164,31 @@ binding check is derived from configuration the coordinator already holds,
 so it is a computed read on the asset-manifest precedent, not an observation
 with provenance and freshness. If a builder finds itself wanting a new kind
 here, the design has drifted and the orchestrator decides, not the builder.
+
+**ADR-033 mints exactly one kind, `show.mode`, and nothing else.** It is the
+installation-wide operating mode, `program` or `show`, held as a singleton
+because ADR-033 decision 1 says there is exactly one value for the
+installation: not per-node, not per-device, and not per-subsystem. Its two
+members are a closed enum, and a third member requires an amendment to
+ADR-033 rather than a payload that happens to parse.
+
+**`show.mode` is a different thing from `show.active`**, which names which
+Show is currently programmed. `show.active` says what is loaded;
+`show.mode` says whether the installation is being programmed or is running.
+The register lists them adjacently for that reason: an implementer reaching
+for one when they meant the other is the collision worth catching here.
+
+**ADR-033's build mints no other identifier.** No exit code: `showmeshctl
+show mode` reads and writes an ordinary configuration kind and reuses the
+existing outcome vocabulary. No agent operation name: the mode reaches nodes
+as one retained, installation-wide message on the `showmesh/events` family,
+never as a per-node command, so nothing is added to `newOperationRegistry`.
+No new authorization scope: the write reuses `config:write`, and the
+current-value read reuses `observation:read` rather than inventing the
+`config:read` ADR-024 decision 4 deliberately does not define. No new
+observation signal or resource kind: nothing publishes the mode as
+observed state in this build. No new audit action: the write is
+`config.write` targeting `show.mode`, like every other configuration write.
 
 Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path

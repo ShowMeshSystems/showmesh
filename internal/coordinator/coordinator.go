@@ -484,6 +484,13 @@ func Run() int {
 	// never manufactures an empty list and tears the bundle above down.
 	resolumeInstanceSrc := newResolumeInstanceSource(st, logger, resolumeInstances)
 
+	// ADR-033: the installation-wide operating mode, resolved live from the
+	// store on every pass rather than captured here (showmode.go). Nothing
+	// on a command path reads this; ADR-033 decision 4 forbids a mode from
+	// gating blackout, stop, or power-off, so the applier only writes an
+	// atomic and publishes a retained message.
+	showModeSrc := newShowModeSource(st, logger)
+
 	// Track G seam G-3 (ADR-039): fppMQTTManager owns the live
 	// *fppmqtt.Collector for whatever fpp.mqtt currently configures,
 	// mirroring resolumeMgr immediately above — see fppmqttmanager.go's own
@@ -963,7 +970,7 @@ func Run() int {
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(9)
+	backgroundWG.Add(10)
 	go func() {
 		defer backgroundWG.Done()
 		hub.Run(ctx)
@@ -1068,6 +1075,19 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		resolumeMgr.Run(ctx, resolumeInstanceSrc)
+	}()
+
+	// runShowMode owns ADR-033's own apply loop (showmode.go): it resolves
+	// the active show.mode revision on its own cadence and makes this
+	// build's two consumers agree with it, in BOTH directions and with no
+	// restart. resolumeMgr is the footprint consumer, chosen over the
+	// current bundle's FootprintControls directly because the bundle is
+	// rebuilt whenever resolume.instances changes and the mode has to
+	// survive that. bm is the node-delivery consumer: one retained,
+	// installation-wide message, never a per-node command re-dispatch.
+	go func() {
+		defer backgroundWG.Done()
+		runShowMode(ctx, showModeSrc, resolumeMgr, bm, time.Now, logger, showModeReconcileInterval)
 	}()
 
 	serveErrCh := make(chan error, 1)

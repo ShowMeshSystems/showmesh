@@ -1133,6 +1133,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show.mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The installation-wide operating mode (ADR-033)
+         * @description The one mode value for this installation: `program` or `show`. Not per-node, not per-device, and never a per-subsystem flag.
+         *
+         *     Requires `observation:read`, and this is a DELIBERATE DEPARTURE from every other configuration singleton, all of which gate even their `GET` on `config:write`. ADR-033 decision 3 requires the mode to be persistently visible in the Operator UI and reported by `showmeshctl`; the operator standing at the console during a show holds `observation:read` and `show:macro:run`, not `config:write`, and an indicator only an admin can see is not persistent visibility. `observation:read` is the narrowest existing scope every signed-in role already holds - no new scope is minted for this. `GET /config/show.mode/revisions` keeps the ordinary `config:write` gate, and the `PUT` is unchanged from every other kind.
+         *
+         *     Never `404`s: the payload has a well-defined default, reported with `revision` `0` and `source` `"default"` when nothing has ever been written. That default is `program`, because a fresh install is by definition being set up. It is NOT the same thing as ADR-033 decision 5's `unknown`: `unknown` means a NODE could not read the mode at all, behaves as `show`, and never appears in this payload.
+         */
+        get: operations["getShowModeConfig"];
+        /**
+         * Set the installation-wide operating mode (ADR-033)
+         * @description Requires `config:write` (admin only). A full replacement: `mode` is required and non-null on every write, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         *
+         *     The mode changes what the system DOES, never who may do it (ADR-033 decision 6), and it gates no command path anywhere: no mode may refuse, delay, or degrade blackout, stop, or power-off (ADR-033 decision 4).
+         *
+         *     Applies without a restart, in both directions (ADR-036): entering `show` closes the Resolume WebSocket wake-up channel and returning to `program` reopens it.
+         */
+        put: operations["putShowModeConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.mode/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * show.mode revision history, newest first (ADR-033)
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/render.settings/revisions`. The history is gated where the current value is not: revision metadata carries principal names and is audit-adjacent, and it is not what ADR-033 decision 3 asks to be persistently visible.
+         */
+        get: operations["getShowModeConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/audio.settings": {
         parameters: {
             query?: never;
@@ -3119,12 +3171,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, and GET /config/audio.node/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, and Track H seam H1 two more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, and GET /config/audio.node/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, and ADR-033's show.mode one more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3501,6 +3553,33 @@ export interface components {
             source: string;
             /** @description States that idleOutput takes effect on each surface's own next render.surface.apply dispatch, never on an already-applied surface - there is no config-push path to a node beyond that assignment (TRACK-B-BUILD-CONTRACT.md ruling 4). Always non-empty. */
             idleOutputEffectiveNote: string;
+        };
+        /**
+         * @description The "show.mode" configuration kind's decoded payload (ADR-033): the body PUT /config/show.mode accepts (a full replacement - `mode` required and non-null), and the "payload" member of GET /config/show.mode's response.
+         *
+         *     The vocabulary is closed and has exactly two members. `unknown` is deliberately NOT among them: it is a node-side held-value state (ADR-033 decision 5) meaning a node could not read the mode at all, it behaves as `show`, and no operator can ever write it.
+         */
+        ConfigShowModePayload: {
+            /**
+             * @description The installation-wide operating mode. The wire value and the operator-facing label are the same word, deliberately (ADR-033 decision 1).
+             * @enum {string}
+             */
+            mode: "program" | "show";
+        };
+        /** @description The body of GET and PUT /config/show.mode. Never `404`s: the payload has a well-defined default (`program`), reported with `revision` `0` and `source` `"default"` when nothing has ever been written. */
+        ShowModeConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigShowModePayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+            /** @description What the CURRENT mode does to the only behaviour that reads the mode in this build: the Resolume WebSocket footprint switch (ADR-033 decision 2), held open in `program` and closed in `show`. Names the mode as the reason, which is ADR-033 decision 3's requirement that a behaviour caused by the mode says so where the operator can see it. Always non-empty. */
+            resolumeWebSocketEffect: string;
         };
         /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGain` is a linear amplitude multiplier - 1.0 is unity gain - applied as the default ceiling on a background bed. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
         ConfigAudioSettingsPayload: {
@@ -7292,6 +7371,95 @@ export interface operations {
         };
     };
     getRenderSettingsConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShowModeConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowModeConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putShowModeConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigShowModePayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowModeConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getShowModeConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;

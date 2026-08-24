@@ -158,6 +158,17 @@ type resolumeManager struct {
 	mu     sync.Mutex
 	bundle *resolumeBundle
 	wg     sync.WaitGroup
+
+	// showModeWebSocket is the WebSocket footprint state ADR-033's
+	// installation-wide mode last asked for: open in program, closed in
+	// show. Held on the MANAGER rather than only on the current bundle's
+	// FootprintControls because a bundle is rebuilt whenever the Resolume
+	// instance configuration changes, and a coordinator that is in show
+	// mode when an operator points it at a newly configured Arena must not
+	// hand that fresh collector an open WebSocket. Seeded true, matching
+	// resolume.NewFootprintControls' own default and the fresh-install
+	// mode.
+	showModeWebSocket atomic.Bool
 }
 
 var (
@@ -173,9 +184,34 @@ var (
 // same "no request may observe a partially-wired dependency" property
 // coordinator.go's Run already holds for every other subsystem.
 func newResolumeManager(baseCfg config.Config, runner *collector.Runner, compositionStore *resolume.CompositionStore, st *store.Store, identitySvc identity.Service, logger *slog.Logger, notify func()) *resolumeManager {
-	return &resolumeManager{
+	m := &resolumeManager{
 		baseCfg: baseCfg, runner: runner, compositionStore: compositionStore,
 		st: st, identitySvc: identitySvc, logger: logger, notify: notify,
+	}
+	m.showModeWebSocket.Store(!baseCfg.ResolumeWebSocketDisabled)
+	return m
+}
+
+// SetWebSocketEnabled is ADR-033's mode driving the Resolume footprint
+// switch: held open in program, closed in show. It applies to whichever
+// bundle is current right now AND is remembered for any bundle built later,
+// so both directions are live with no coordinator restart.
+//
+// SHOWMESH_RESOLUME_WEBSOCKET_DISABLED still wins. That variable is a
+// startup-only debug kill switch, and a kill switch that a later
+// configuration write can silently undo is not one. It only ever forces the
+// footprint smaller, never larger, so honouring it here cannot make the
+// coordinator's footprint on Arena bigger than either input asked for.
+func (m *resolumeManager) SetWebSocketEnabled(enabled bool) {
+	if m.baseCfg.ResolumeWebSocketDisabled {
+		enabled = false
+	}
+	m.showModeWebSocket.Store(enabled)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.bundle != nil {
+		m.bundle.wiring.collector.Footprint().SetWebSocketEnabled(enabled)
 	}
 }
 
@@ -215,6 +251,11 @@ func (m *resolumeManager) buildBundle(ctx context.Context, inst config.ResolumeI
 	if err != nil {
 		return nil, err
 	}
+
+	// A bundle built while the installation is already in show mode starts
+	// with its WebSocket closed, rather than opening one and waiting for the
+	// next mode reconcile tick to close it again.
+	wiring.collector.Footprint().SetWebSocketEnabled(m.showModeWebSocket.Load())
 
 	recoveryDispatcher := resolume.NewActionDispatcher(wiring.collector, resolume.ActionDispatcherOptions{})
 	recovery, recoveryAdapter := newResolumeRecoveryWiring(m.st, m.identitySvc, wiring.collector, recoveryDispatcher, m.baseCfg.ResolumeRecoverySettle, m.logger, m.notify)

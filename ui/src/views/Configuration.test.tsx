@@ -73,6 +73,13 @@ const { getRenderSettingsConfig, putRenderSettingsConfig, getRenderSettingsConfi
   putRenderSettingsConfig: vi.fn(),
   getRenderSettingsConfigRevisions: vi.fn(),
 }))
+// ADR-033 added ShowModePanel to this view the identical way, and needs
+// the identical treatment for the identical reason.
+const { getShowModeConfig, putShowModeConfig, getShowModeConfigRevisions } = vi.hoisted(() => ({
+  getShowModeConfig: vi.fn(),
+  putShowModeConfig: vi.fn(),
+  getShowModeConfigRevisions: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return {
@@ -83,6 +90,9 @@ vi.mock('../api', async (importOriginal) => {
     getRenderSettingsConfig,
     putRenderSettingsConfig,
     getRenderSettingsConfigRevisions,
+    getShowModeConfig,
+    putShowModeConfig,
+    getShowModeConfigRevisions,
     getResolumeInstancesConfig,
     putResolumeInstancesConfig,
     getResolumeInstancesConfigRevisions,
@@ -110,9 +120,24 @@ const defaultRenderSettingsConfig = {
 }
 const emptyRenderSettingsRevisions = { serverTime: '2026-08-17T00:00:00Z', kind: 'render.settings', revisions: [] }
 
+const defaultShowModeConfig = {
+  serverTime: '2026-08-23T21:00:00Z',
+  kind: 'show.mode',
+  revision: 0,
+  payload: { mode: 'program' },
+  updatedAt: '2026-08-23T21:00:00Z',
+  createdByPrincipalId: null,
+  createdByPrincipalName: null,
+  source: 'default',
+  resolumeWebSocketEffect: 'program mode: the Resolume WebSocket wake-up channel is held OPEN.',
+}
+const emptyShowModeRevisions = { serverTime: '2026-08-23T21:00:00Z', kind: 'show.mode', revisions: [] }
+
 beforeEach(() => {
   getRenderSettingsConfig.mockResolvedValue(defaultRenderSettingsConfig)
   getRenderSettingsConfigRevisions.mockResolvedValue(emptyRenderSettingsRevisions)
+  getShowModeConfig.mockResolvedValue(defaultShowModeConfig)
+  getShowModeConfigRevisions.mockResolvedValue(emptyShowModeRevisions)
 })
 
 beforeEach(() => {

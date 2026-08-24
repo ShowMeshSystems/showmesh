@@ -64,7 +64,13 @@ var tuningKnobEnvVars = map[string]string{
 	"SHOWMESH_RESOLUME_POLL_INTERVAL": "advanced/debug tuning for the Resolume collector's poll cadence; " +
 		"reaching Resolume at all is resolume.instances (store-backed, Track G seam G-2), not this",
 	"SHOWMESH_RESOLUME_WEBSOCKET_DISABLED": "a debug/ops toggle to disable the WebSocket change-signal path; " +
-		"a safe default (enabled) exists",
+		"a safe default (enabled) exists. ADR-033's show.mode now drives the same switch (open in program, " +
+		"closed in show), and that is NOT the two-authorities-for-one-setting hazard ADR-039 decision 4 " +
+		"forbids: this variable is not retired by show.mode, it stays a startup-only debug kill switch, and " +
+		"it only ever forces the footprint SMALLER. When it is set, no mode reopens the WebSocket " +
+		"(resolumeManager.SetWebSocketEnabled); when it is unset, the mode alone decides. An operator's " +
+		"write can never silently lose to it, because setting the mode is not a way to ask for this " +
+		"variable's behaviour",
 	"SHOWMESH_RESOLUME_RECOVERY_SETTLE": "explicitly documented in config.go as \"a tuning knob (env var), not " +
 		"revisioned show-state config\" (Track D seam D-3a's own doc comment on defaultResolumeRecoverySettle)",
 }

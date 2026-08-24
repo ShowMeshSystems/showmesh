@@ -189,6 +189,51 @@ input {
   margin: 0;
 }
 
+/* ADR-033 decision 3: the installation-wide operating mode, rendered
+   persistently in the app header on every route. Built from the existing
+   colour tokens only, so it inherits the high-contrast theme rather than
+   introducing a colour of its own that the theme does not know about. The
+   two modes are distinguished by fill as well as by their label, because a
+   badge whose only difference is one word is a badge an operator reads as
+   the same badge. */
+.show-mode {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target-min);
+  padding: 0 var(--space-3);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.show-mode--show {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.show-mode--program {
+  background: var(--color-surface-raised);
+  border-color: var(--color-accent);
+}
+
+/* Loading and "cannot be read" share this style deliberately: neither is a
+   mode, and neither may be rendered as though it were one. */
+.show-mode--unknown {
+  background: var(--color-surface);
+  border-style: dashed;
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.show-mode__note {
+  font-weight: 400;
+  margin-left: var(--space-1);
+}
+
 .icon-button {
   min-height: var(--touch-target-min);
   min-width: var(--touch-target-min);
