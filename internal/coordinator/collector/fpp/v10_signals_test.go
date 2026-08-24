@@ -91,7 +91,7 @@ func TestStatusSignalsV10RepeatModeTypeFlip(t *testing.T) {
 
 // TestSystemInfoSignalsDecodeMajorMinorVersion verifies
 // fpp.major_version/fpp.minor_version against both supported FPP lines:
-// the 9.5.3 live fleet capture and the 10.0 bench capture. These are
+// the 9.4 live fleet capture and the 10.0 bench capture. These are
 // observe-only signals — see fpp.go's doc comment on the constants for why
 // nothing in this collector branches on the value.
 func TestSystemInfoSignalsDecodeMajorMinorVersion(t *testing.T) {

@@ -61,7 +61,7 @@
 //
 // # Field-shape hazards
 //
-// A live capture against a real FPP 9.5.3 daemon found that
+// A live capture against a real FPP 9.4 daemon found that
 // /api/fppd/status encodes some numeric-looking fields as JSON numbers
 // (mode, status, volume, uptimeSeconds) and others as JSON strings
 // (seconds_played, seconds_remaining, repeat_mode,
@@ -90,8 +90,9 @@
 // captured body, and testdata/v10-bench/README.md for the 10.0 captures.
 // Step 5 (2026-08-11) added a read-only REST probe of the operator's live
 // fleet — fpp-player, fpp-remote-a, fpp-remote-b (see
-// docs/reference-installation.md), all running 9.5.3 — captured to
-// testdata/live_*.json; those captures are what signals.go's StatusSignals,
+// docs/reference-installation.md): fpp-player and fpp-remote-b on FPP 9.4,
+// fpp-remote-a on a 9.x master build (9.x-master-822-g56515e4d) — captured
+// to testdata/live_*.json; those captures are what signals.go's StatusSignals,
 // PortSignals, and SystemInfoSignals are written and tested against.
 // Neither the bench captures nor the live fleet probe raises RES-002's L2
 // promotion (protocol semantics) at all — RES-002 covers the MultiSync wire

@@ -624,11 +624,11 @@ func portElementSignals(elem rawDoc, key string) []SignalValue {
 // live_remote04_fppd_ports.json, where every one of the 16/32
 // smartReceivers-carrying elements has no "ma" key at all. On an output
 // element it also falls back to Unsupported rather than fabricating a
-// value: never observed missing "ma" on the 9.5.3 live fleet, but expected
-// on FPP 10.0 whenever a port has no current sensor — OutputMonitor::
-// appendTo (src/OutputMonitor.cpp, confirmed against refs/tags/10.0^{},
-// commit 370e62ed7) only writes "ma" when currentMonitor is non-null, where
-// 9.5.3 had no such gate.
+// value: never observed missing "ma" on the live fleet (FPP 9.4/master),
+// but expected on FPP 10.0 whenever a port has no current sensor —
+// OutputMonitor::appendTo (src/OutputMonitor.cpp, confirmed against
+// refs/tags/10.0^{}, commit 370e62ed7) only writes "ma" when
+// currentMonitor is non-null, where 9.5.3 had no such gate.
 func portCurrentMASignal(elem rawDoc, sig observation.SignalID, hasSR bool) SignalValue {
 	raw, ok := elem["ma"]
 	if !ok {
@@ -660,10 +660,11 @@ func portCurrentMASignal(elem rawDoc, sig observation.SignalID, hasSR bool) Sign
 // portBoolField and portStringField implement contract section 3.2's
 // second paragraph: enabled/status/bank are Unsupported (not omitted) on a
 // smart-receiver position, each with a reason naming which key was
-// absent, and are ordinary values on an output element on the 9.5.3 live
-// fleet (where all three are always present). On FPP 10.0, enabled and
-// status are each Unsupported instead whenever the port has no enable pin
-// or no eFuse respectively — see portAbsentReason's doc comment.
+// absent, and are ordinary values on an output element on the live
+// fleet (FPP 9.4/master, where all three are always present). On FPP
+// 10.0, enabled and status are each Unsupported instead whenever the
+// port has no enable pin or no eFuse respectively — see
+// portAbsentReason's doc comment.
 func portBoolField(elem rawDoc, sig observation.SignalID, key string, hasSR bool) SignalValue {
 	raw, ok := elem[key]
 	if !ok {

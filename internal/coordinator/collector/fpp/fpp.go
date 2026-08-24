@@ -110,7 +110,7 @@ const (
 // Step 5 platform signals, from /api/system/info. See signals.go's
 // SystemInfoSignals and contract section 3.1's platform table.
 // SignalMajorVersion/SignalMinorVersion decode "majorVersion"/"minorVersion"
-// (present on both 9.5.3 and 10.0 — see testdata/live_main_system_info.json
+// (present on both 9.4 and 10.0 — see testdata/live_main_system_info.json
 // and testdata/v10-bench/system_info.json) purely as observed integers: per
 // CLAUDE.md/AGENTS.md this package never branches on FPP version, so
 // nothing in this collector reads these signals to select behavior.

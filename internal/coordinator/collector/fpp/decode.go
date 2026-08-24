@@ -123,7 +123,7 @@ func (d rawDoc) boolField(key string) (bool, error) {
 	return b, nil
 }
 
-// numberField extracts a numeric field from a real FPP 9.5.3 that was found
+// numberField extracts a numeric field from a real FPP 9.4 that was found
 // to arrive inconsistently: "seconds_played", "seconds_remaining", and
 // "repeat_mode" are JSON STRINGS ("0"), while "mode", "status", "volume",
 // and "uptimeSeconds" are genuine JSON numbers, all in the same document
