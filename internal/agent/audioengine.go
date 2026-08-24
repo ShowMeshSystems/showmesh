@@ -19,15 +19,22 @@ import (
 // harmless), ProgramChannels from the binding, ChannelCount from
 // [resolveNodeChannelCount] (the binding's own floor raised to match
 // this route's probed channel count when that is wider), and SampleRate
-// from this node's own fresh route probe evidence.
+// from [resolveNodeSampleRate]. Both resolvers read the SAME fresh
+// [audio.Discovery] run, taken exactly once here: audioDiscoverer shells
+// out to real device probes (up to nine subprocess runs across the
+// always-present device and every candidate route), so a caller that ran
+// it once per resolver would double every rebuild's real device-probing
+// cost and let the rate and channel count disagree if the device's state
+// changed between two separate runs.
 func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeConfig) (cfg gstengine.Config, sampleRateSource, channelCountSource string) {
 	sinkFactory := audioEngineSinkFactory()
 	props := map[string]any{}
 	if sinkFactory == "alsasink" {
 		props["device"] = node.ProgramRoute
 	}
-	rate, rateSource := resolveNodeSampleRate(ctx, node.ProgramRoute)
-	channelCount, chCountSource := resolveNodeChannelCount(ctx, node.ProgramRoute, audioNodeChannelCount(node))
+	d := audioDiscoverer(ctx, audioEnumerator)
+	rate, rateSource := resolveNodeSampleRate(d, node.ProgramRoute)
+	channelCount, chCountSource := resolveNodeChannelCount(d, node.ProgramRoute, audioNodeChannelCount(node))
 	return gstengine.Config{
 		SinkFactory:     sinkFactory,
 		SinkProperties:  props,

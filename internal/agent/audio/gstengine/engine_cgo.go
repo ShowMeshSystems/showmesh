@@ -254,12 +254,9 @@ func (e *Engine) buildPipeline() error {
 		return errors.New("could not add interleave to pipeline")
 	}
 
-	sink := gst.ElementFactoryMake(e.cfg.SinkFactory, "sink")
-	if sink == nil {
-		return fmt.Errorf("could not create sink %q", e.cfg.SinkFactory)
-	}
-	for k, v := range e.cfg.SinkProperties {
-		sink.SetObjectProperty(k, v)
+	sink, err := newSinkFactoryElement(e.cfg)
+	if err != nil {
+		return err
 	}
 	if !bin.Add(sink) {
 		return errors.New("could not add sink to pipeline")
@@ -363,6 +360,23 @@ func (e *Engine) buildPipeline() error {
 	return nil
 }
 
+// newSinkFactoryElement constructs the pipeline's terminal sink element
+// from cfg.SinkFactory/cfg.SinkProperties. A package var, matching this
+// package's own test-injection convention elsewhere in this codebase
+// (e.g. probe.go's runProbeProcess), so a test can substitute a
+// caps-restricted sink bin that no single registered element factory
+// name alone can express -- see sinkformat_real_integration_test.go.
+var newSinkFactoryElement = func(cfg Config) (gst.Element, error) {
+	sink := gst.ElementFactoryMake(cfg.SinkFactory, "sink")
+	if sink == nil {
+		return nil, fmt.Errorf("could not create sink %q", cfg.SinkFactory)
+	}
+	for k, v := range cfg.SinkProperties {
+		sink.SetObjectProperty(k, v)
+	}
+	return sink, nil
+}
+
 // linkInterleaveToSink connects interleave's output to sink through an
 // audioconvert/audioresample pair, so the sink negotiates its own format
 // and rate rather than being handed the interior pipeline's fixed
@@ -372,13 +386,24 @@ func (e *Engine) buildPipeline() error {
 // reaching alsasink; linking interleave straight to sink instead builds
 // a pipeline discovery never actually proved, and a raw hw: route that
 // only accepts an integer PCM format (S24_3LE, S32LE, ...) goes
-// not-negotiated even though discovery already confirmed it works.
+// not-negotiated even though discovery already confirmed it works. At a
+// rate the sink already shares, audioresample is a measured passthrough;
+// a genuinely different rate is measured to actually resample every
+// channel this chain carries, LTC's generated waveform included -- LTC
+// is not a special case here, it just rides the same interleave-to-sink
+// boundary every other channel does.
 //
-// channelCount is pinned in a capsfilter placed after the resampler so
-// neither converter can silently remix the show's channel layout while
-// adapting format or rate for the sink -- a device that genuinely wants
-// a different channel count must still fail loudly, not renegotiate
-// which physical output carries which channel.
+// channelCount is pinned in a capsfilter placed after the resampler.
+// This does not make every channel-count mismatch fail loudly on its
+// own -- interleave's own channel-positions-from-input=false already
+// emits an unpositioned channel-mask, and audioconvert already refuses
+// to remix one unpositioned multi-channel layout onto another, pinned
+// capsfilter or not (measured). What the pin is proven to stop is
+// narrower and still real: a single unpositioned channel has no such
+// ambiguity, so without this capsfilter audioconvert will silently
+// upmix a mono program or the LTC/silence channels onto a wider fixed
+// sink layout instead of refusing it (measured) -- exactly the kind of
+// silent channel reassignment a show's output layout must never get.
 func linkInterleaveToSink(bin gst.Bin, interleave, sink gst.Element, channelCount int) error {
 	convert := gst.ElementFactoryMake("audioconvert", "sink-convert")
 	resample := gst.ElementFactoryMake("audioresample", "sink-resample")

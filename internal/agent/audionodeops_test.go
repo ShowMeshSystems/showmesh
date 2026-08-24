@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
+)
 
 // validAudioNodeConfig and validAudioSettingsConfig are minimal, valid
 // payloads for exercising [audioBinding.applyNode]/[audioBinding.
@@ -117,5 +121,74 @@ func TestAudioBindingApplySettingsReplayIsNoOp(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("calls after exact-revision replay = %d, want still 1 (no re-apply)", calls)
+	}
+}
+
+// TestResolveNodeChannelCount exercises the resolver in isolation from
+// buildGstEngineConfig/discovery plumbing, covering the field-choice bug
+// directly: [audio.RouteEvidence.Channels] alone is an unconstrained
+// probe's own default fixation, not the device's real capability, so the
+// resolver must prefer LTCChannels -- an explicit, achieved-count probe
+// -- whenever it is the wider evidence.
+func TestResolveNodeChannelCount(t *testing.T) {
+	const route = "hw:1,0"
+
+	cases := []struct {
+		name         string
+		routes       []audio.RouteEvidence
+		bindingCount int
+		want         int
+	}{
+		{
+			name: "LTCChannels wider than the unconstrained probe wins",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 2}, LTCChannels: 4},
+			},
+			bindingCount: 3,
+			want:         4,
+		},
+		{
+			name: "no explicit probe evidence falls back to the unconstrained Channels",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 4}},
+			},
+			bindingCount: 3,
+			want:         4,
+		},
+		{
+			name: "neither probe exceeds the binding floor, floor wins",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: true, Channels: 2}, LTCChannels: 3},
+			},
+			bindingCount: 3,
+			want:         3,
+		},
+		{
+			name: "an unavailable route's evidence is never used",
+			routes: []audio.RouteEvidence{
+				{Device: route, ProbeResult: audio.ProbeResult{Available: false, Channels: 8}, LTCChannels: 8},
+			},
+			bindingCount: 3,
+			want:         3,
+		},
+		{
+			name:         "no matching route at all falls back to the binding floor",
+			routes:       nil,
+			bindingCount: 2,
+			want:         2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := audio.Discovery{Routes: tc.routes}
+			got, source := resolveNodeChannelCount(d, route, tc.bindingCount)
+			if got != tc.want {
+				t.Errorf("resolveNodeChannelCount() = %d (%s), want %d", got, source, tc.want)
+			}
+			if source == "" {
+				t.Error("source is empty, want a stated reason")
+			}
+		})
 	}
 }

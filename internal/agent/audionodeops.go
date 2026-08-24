@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
@@ -328,13 +329,13 @@ func gstAssetResolver(assetDir string) func(pkgaudio.MediaRef) (string, error) {
 }
 
 // resolveNodeSampleRate reports the sample rate this node's own probe
-// evidence recorded for programRoute — the node's own discovery, run
-// fresh (matching detectAudioCapabilities's own no-caching rule) rather
-// than trusting a value from whenever this process last probed. Falls
+// evidence recorded for programRoute, out of d — one [audio.Discovery]
+// run fresh by the caller (matching detectAudioCapabilities's own
+// no-caching rule) and shared with [resolveNodeChannelCount] rather than
+// each resolver re-running discovery's own real device probes. Falls
 // back to 48000 (reported as the source, never silently) when no matching
 // route evidence exists (a route not yet probed) or its rate is 0.
-func resolveNodeSampleRate(ctx context.Context, programRoute string) (rate int, source string) {
-	d := audioDiscoverer(ctx, audioEnumerator)
+func resolveNodeSampleRate(d audio.Discovery, programRoute string) (rate int, source string) {
 	for _, r := range d.Routes {
 		if r.Device == programRoute && r.Available && r.Rate > 0 {
 			return r.Rate, "advertised route probe evidence"
@@ -368,20 +369,37 @@ func audioNodeChannelCount(p audioNodeConfig) int {
 }
 
 // resolveNodeChannelCount reports the channel count this node's output
-// pipeline must actually build against: the higher of bindingCount (the
+// pipeline must actually build against, out of the same d
+// [resolveNodeSampleRate] reads: the higher of bindingCount (the
 // program/LTC bindings' own required floor, from
-// [audioNodeChannelCount]) and this node's own fresh route probe
-// evidence for programRoute, run fresh for the same no-caching reason
-// [resolveNodeSampleRate] is. A device that negotiated more channels
-// than the bindings alone would ask for (a four-output interface bound
-// to three channels) must still get an engine built for its own wider
-// layout, or a raw hw: route discovery already proved usable refuses the
-// engine's narrower request outright.
-func resolveNodeChannelCount(ctx context.Context, programRoute string, bindingCount int) (count int, source string) {
-	d := audioDiscoverer(ctx, audioEnumerator)
+// [audioNodeChannelCount]) and this route's own probe evidence. A device
+// that negotiated more channels than the bindings alone would ask for (a
+// four-output interface bound to three channels) must still get an
+// engine built for its own wider layout, or a raw hw: route discovery
+// already proved usable refuses the engine's narrower request outright.
+//
+// [audio.RouteEvidence.Channels] is deliberately NOT read here on its
+// own: it comes from an unconstrained probe (requestedChannels=0,
+// [audio.ProbeOutput]'s own doc), so for a device offering a channel
+// range it reports whatever the throwaway source's own default
+// negotiates — often the low end of that range, not the device's real
+// capability. [audio.RouteEvidence.LTCChannels] is the reliable evidence
+// already sitting in d: [audio.Discover] runs it as an EXPLICIT probe
+// requesting at least [audio.MinLTCChannels], and only ever records the
+// count actually achieved against that request, matching a hw: route's
+// own behavior of fixating to what it truly carries regardless of what
+// was asked. It is read here purely as evidence of the device's real
+// channel count, independent of whether this binding uses LTC at all.
+func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCount int) (count int, source string) {
 	for _, r := range d.Routes {
-		if r.Device == programRoute && r.Available && r.Channels > bindingCount {
-			return r.Channels, "advertised route probe evidence"
+		if r.Device != programRoute || !r.Available {
+			continue
+		}
+		if r.LTCChannels > bindingCount {
+			return r.LTCChannels, "advertised route probe evidence (explicit channel-count probe)"
+		}
+		if r.Channels > bindingCount {
+			return r.Channels, "advertised route probe evidence (unconstrained probe)"
 		}
 	}
 	return bindingCount, "bindings: highest program or LTC channel index"

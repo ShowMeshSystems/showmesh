@@ -10,15 +10,22 @@ import (
 
 // TestBuildGstEngineConfigUsesTheProbedDeviceChannelCount proves a route
 // discovery already blessed does not get asked for fewer channels than
-// it actually negotiated: a four-output interface probed at 4 channels
-// but bound to only 3 program/LTC channels must still build a Config
-// carrying ChannelCount 4, or the engine's interleave stage requests
-// only 3 sink pads against a device that refuses fewer than its own
-// negotiated channel count.
+// it actually negotiated: a four-output interface bound to only 3
+// program/LTC channels must still build a Config carrying ChannelCount
+// 4, or the engine's interleave stage requests only 3 sink pads against
+// a device that refuses fewer than its own negotiated channel count.
+//
+// Channels is deliberately set LOWER than the binding needs (2, not the
+// device's real 4) and LTCChannels is what actually carries the wider
+// evidence (4) -- exactly the shape [audio.Discover] produces for a
+// device offering a channel range, where the unconstrained probe
+// fixates low. A resolver that read RouteEvidence.Channels instead of
+// LTCChannels would see 2, never widen past the binding's own floor of
+// 3, and this test would fail with ChannelCount = 3.
 func TestBuildGstEngineConfigUsesTheProbedDeviceChannelCount(t *testing.T) {
 	withAudioDiscoverer(t, audio.Discovery{
 		Routes: []audio.RouteEvidence{
-			{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4, Rate: 48000}},
+			{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 48000}, LTCChannels: 4},
 		},
 	})
 	t.Setenv(envGstAudioSinkOverride, "fakesink")
@@ -30,12 +37,46 @@ func TestBuildGstEngineConfigUsesTheProbedDeviceChannelCount(t *testing.T) {
 		LTCChannel:      3,
 		Revision:        1,
 	}
-	cfg, _, _ := buildGstEngineConfig(context.Background(), t.TempDir(), node)
+	cfg, _, source := buildGstEngineConfig(context.Background(), t.TempDir(), node)
 	if cfg.ChannelCount != 4 {
-		t.Errorf("ChannelCount = %d, want 4 (this route's own probed channel count, not just the bindings' highest index)", cfg.ChannelCount)
+		t.Errorf("ChannelCount = %d, want 4 (this route's own explicit channel-count probe evidence, not just the bindings' highest index, and not the unconstrained probe's under-reported 2)", cfg.ChannelCount)
+	}
+	if source == "" {
+		t.Error("channelCountSource is empty, want a stated reason")
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
+	}
+}
+
+// TestBuildGstEngineConfigCallsDiscoveryOnlyOnce proves the sample-rate
+// and channel-count resolvers share one discovery run: audioDiscoverer
+// shells out to real device probes, so calling it twice per rebuild
+// would double every rebuild's real probing cost and let the two
+// resolvers read the device's state from two different points in time.
+func TestBuildGstEngineConfigCallsDiscoveryOnlyOnce(t *testing.T) {
+	orig := audioDiscoverer
+	calls := 0
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		calls++
+		return audio.Discovery{
+			Routes: []audio.RouteEvidence{
+				{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100}},
+			},
+		}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+
+	node := audioNodeConfig{
+		ProgramRoute:    "hw:1,0",
+		LTCRoute:        "hw:1,0",
+		ProgramChannels: []int{1, 2},
+		Revision:        1,
+	}
+	buildGstEngineConfig(context.Background(), t.TempDir(), node)
+	if calls != 1 {
+		t.Errorf("audioDiscoverer called %d times, want exactly 1", calls)
 	}
 }
 
