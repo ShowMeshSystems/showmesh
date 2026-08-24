@@ -25,8 +25,10 @@ import (
 // credential or forging status.json, the file whose entire purpose is to
 // be an honest local record. /etc/showmesh-fpp-plugin is outside FPP's
 // web root, outside the media tree entirely, outside the plugin's own git
-// checkout (and therefore outside `git clean -fd`, which FPP 9.x runs as
-// an upgrade fallback and would otherwise delete an untracked credential),
+// checkout (and therefore outside `git clean -fd`, which FPP runs as an
+// upgrade fallback on both 9.5.3 and 10.0 and would otherwise delete an
+// untracked credential — scripts/upgrade_plugin lines 44-55 still run it at
+// the 10.0 tag, confirmed against refs/tags/10.0^{}, commit 370e62ed7),
 // and outside FPP's backup download, whose redaction is an exact
 // key-name match list that a file named "credential" is not on.
 const credentialDir = "/etc/showmesh-fpp-plugin"

@@ -133,6 +133,16 @@ func (d rawDoc) boolField(key string) (bool, error) {
 // it, and the collector reports the FPP unreachable when it was not. This
 // method tries a JSON number first, then a JSON string containing a
 // number, tolerating either FPP encoding without caring which one arrived.
+//
+// Re-verified against FPP 10.0 source (Playlist.cpp, confirmed against
+// refs/tags/10.0^{}, commit 370e62ed7): this hazard is not merely
+// unfixed, it is worse. src/playlist/Playlist.cpp:2322 writes
+// result["repeat_mode"] = "0" (a JSON string) while idle, and
+// src/playlist/Playlist.cpp:2345 writes result["repeat_mode"] = m_repeat
+// (a JSON number) while playing — the same field flips JSON type by
+// playback state on a single running daemon, not just inconsistently
+// across fields. The tolerant decode this method implements is still the
+// only thing standing between that and a spurious "FPP unreachable".
 func (d rawDoc) numberField(key string) (float64, error) {
 	raw, ok := d[key]
 	if !ok {

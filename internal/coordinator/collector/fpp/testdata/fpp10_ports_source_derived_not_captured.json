@@ -1,0 +1,5 @@
+[
+  { "name": "Port 1", "enabled": true, "status": true, "ma": 0, "pixelCount": 150 },
+  { "name": "Port 2", "enabled": true, "pixelCount": 50 },
+  { "name": "Port 3", "pixelCount": 0 }
+]

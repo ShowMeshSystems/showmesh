@@ -60,8 +60,10 @@
 // /etc/showmesh-fpp-plugin sits outside FPP's web root, outside the media
 // tree entirely (so it is also outside $MEDIADIR-derived state — see
 // config.go's separate resolveConfigDir), outside the plugin's own git
-// checkout (and therefore outside `git clean -fd`, which FPP 9.x runs as
-// an upgrade fallback and would otherwise delete an untracked credential),
+// checkout (and therefore outside `git clean -fd`, which FPP runs as an
+// upgrade fallback on both 9.5.3 and 10.0 and would otherwise delete an
+// untracked credential — scripts/upgrade_plugin lines 44-55 still run it at
+// the 10.0 tag, confirmed against refs/tags/10.0^{}, commit 370e62ed7),
 // and outside every one of the exposures above. Deliberately NOT
 // configurable by flag or environment variable in production — see
 // config.go's credentialDirOverride doc comment for why a test-only Go

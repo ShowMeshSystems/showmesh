@@ -109,12 +109,19 @@ const (
 
 // Step 5 platform signals, from /api/system/info. See signals.go's
 // SystemInfoSignals and contract section 3.1's platform table.
+// SignalMajorVersion/SignalMinorVersion decode "majorVersion"/"minorVersion"
+// (present on both 9.5.3 and 10.0 — see testdata/live_main_system_info.json
+// and testdata/v10-bench/system_info.json) purely as observed integers: per
+// CLAUDE.md/AGENTS.md this package never branches on FPP version, so
+// nothing in this collector reads these signals to select behavior.
 const (
 	SignalOSVersion      observation.SignalID = "fpp.os.version"
 	SignalOSRelease      observation.SignalID = "fpp.os.release"
 	SignalPlatform       observation.SignalID = "fpp.platform"
 	SignalVariant        observation.SignalID = "fpp.variant"
 	SignalKernel         observation.SignalID = "fpp.kernel"
+	SignalMajorVersion   observation.SignalID = "fpp.major_version"
+	SignalMinorVersion   observation.SignalID = "fpp.minor_version"
 	SignalUtilizationCPU observation.SignalID = "fpp.utilization.cpu"
 	SignalUtilizationMem observation.SignalID = "fpp.utilization.memory"
 	SignalDiskMediaFree  observation.SignalID = "fpp.disk.media.free_bytes"
@@ -176,6 +183,7 @@ var portsFailureSignals = []observation.SignalID{
 // exported static vocabulary.
 var systemInfoStaticSignals = []observation.SignalID{
 	SignalOSVersion, SignalOSRelease, SignalPlatform, SignalVariant, SignalKernel,
+	SignalMajorVersion, SignalMinorVersion,
 	SignalUtilizationCPU, SignalUtilizationMem,
 	SignalDiskMediaFree, SignalDiskMediaTotal, SignalDiskRootFree, SignalDiskRootTotal,
 }

@@ -27,12 +27,25 @@ happened to have, not fleet hardware, and are left verbatim.
 
 ## What this directory is, and is not
 
-This is a raw capture, not decoder test fixtures. No existing decoder,
-struct, or test in this package was changed to consume these files — that
-is a separate piece of work (comparing these captures against the 9.5.3
-shapes in `../live_*.json` and `../*multisync*.json` and updating the
-collector accordingly). Treat these as the starting evidence for that work,
-not as already-wired-in fixtures.
+These started as a raw capture, not decoder test fixtures, taken while
+adding FPP 10 bench support so a later step would have a real v10 capture
+to start from. SM-210 (`v10_signals_test.go`, package `fpp`) is that later
+step: `system_info.json`, `fppd_status_idle.json`, `fppd_status_playing.json`,
+and `fppd_ports.json` are now driven through this package's UNCHANGED
+`StatusSignals`, `PortSignals`, and `SystemInfoSignals` decoders and
+asserted to decode with zero `collection_failed` signals — the regression
+proof that this package's "observe the version, never branch on it, support
+9.5.3 and 10.0 with the same decoders" strategy actually holds against a
+real FPP 10.0 daemon, not just against 9.5.3.
+
+`fppd_ports.json` is the one file this decode test cannot use to prove
+anything about FPP 10's port-key omission (see below): it is `[]`, since
+this bench container has no channel outputs configured. Nothing in this
+directory was hand-edited to test that behavior — see
+`../fpp10_ports_source_derived_not_captured.json` and
+`v10_signals_test.go`'s `TestPortSignalsV10SourceDerivedKeyOmission` for
+the separate, explicitly-labeled source-derived fixture that covers it
+instead. `multisync_systems.json` is not yet wired into a test.
 
 ## What these captures confirm
 
