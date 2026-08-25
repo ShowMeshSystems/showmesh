@@ -79,6 +79,13 @@ export type {
   ConfigShowCueOutputs,
   ConfigShowCue,
   ShowCueConfigResponse,
+
+  ConfigShowPlaylistFPPBinding,
+  ConfigShowPlaylistShowmeshAudio,
+  ConfigShowPlaylistEntryFPP,
+  ConfigShowPlaylistEntry,
+  ConfigShowPlaylist,
+  ShowPlaylistConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -180,6 +187,9 @@ import type {
   ConfigShowSurfaceGeometry as ConfigShowSurfaceGeometryType,
   ConfigShowSurfaceOutput as ConfigShowSurfaceOutputType,
   ConfigShowCueAnnouncementOutput as ConfigShowCueAnnouncementOutputType,
+
+  ConfigShowPlaylist as ConfigShowPlaylistType,
+  ConfigShowPlaylistShowmeshAudio as ConfigShowPlaylistShowmeshAudioType,
   Asset as AssetType,
   NodeAssetManifest as NodeAssetManifestType,
   NightSessionState as NightSessionStateType,
@@ -229,6 +239,12 @@ export type SurfacePixelFormat = ConfigShowSurfaceGeometryType['pixelFormat']
 export type SurfaceTransport = ConfigShowSurfaceOutputType['transport']
 // Track H seam H6: same derived-not-duplicated pattern as every alias above.
 export type CueAnnouncementPolicy = ConfigShowCueAnnouncementOutputType['policy']
+
+// Track H seam H6: same derived-not-duplicated pattern as every alias
+// above.
+export type PlaylistRunner = ConfigShowPlaylistType['runner']
+export type PlaylistMismatchPolicy = NonNullable<ConfigShowPlaylistType['mismatchPolicy']>
+export type PlaylistShowmeshAudioRepeat = ConfigShowPlaylistShowmeshAudioType['repeat']
 export type AssetMediaType = AssetType['mediaType']
 export type AssetTargetKind = AssetType['targetKind']
 export type NodeAssetManifestState = NodeAssetManifestType['state']
