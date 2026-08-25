@@ -13,7 +13,13 @@ export interface LayoutProps {
 
 /**
  * Navigation is grouped by the OPERATOR-UI section 8 information
- * architecture: Monitor, Control, Configure.
+ * architecture: Show night, Monitor, Diagnostics, Control, Configure.
+ *
+ * Show night exists because those three screens are what an operator
+ * actually uses while the installation is running at night: the
+ * night-session controller, the active show, and the dashboard overview.
+ * Grouping them together keeps the run-time path out of the diagnostic
+ * and archival screens an operator does not need mid-show.
  *
  * Configure now exists: Step 7 seam A ships this application's first
  * configuration write surface (RES-008 D1). Control now exists too, as
@@ -33,22 +39,32 @@ const NAV_GROUPS: Array<{
   items: Array<{ to: string; label: string; end: boolean }>
 }> = [
   {
+    heading: 'Show night',
+    items: [
+      // Track F seam F2 (UI half): the night-session lifecycle operating
+      // view — observes and commands the RUNNING controller. It is what
+      // an operator opens first while the installation is running.
+      { to: '/night', label: 'Night session', end: false },
+      { to: '/config/show.active', label: 'Active show', end: false },
+      { to: '/', label: 'Dashboard', end: true },
+    ],
+  },
+  {
     heading: 'Monitor',
     items: [
-      { to: '/', label: 'Dashboard', end: true },
       { to: '/nodes', label: 'Nodes', end: false },
       { to: '/fpp', label: 'FPP', end: false },
       // Track D seam D-4: monitor and control both live on this one route
       // (build contract §2.2/§2.3), so it belongs in Monitor rather than
       // splitting it across two nav groups.
       { to: '/resolume', label: 'Resolume', end: false },
-      // Track F seam F2 (UI half): the night-session lifecycle operating
-      // view — observes and commands the RUNNING controller, so it
-      // belongs in Monitor next to Resolume, not under Configure (that
-      // holds the AUTHORED night.session/night.session.active kinds).
-      { to: '/night', label: 'Night session', end: false },
-      { to: '/capabilities', label: 'Capabilities', end: false },
       { to: '/events', label: 'Events', end: false },
+    ],
+  },
+  {
+    heading: 'Diagnostics',
+    items: [
+      { to: '/capabilities', label: 'Capabilities', end: false },
       // Track G seam G-8: read-only surfaces — a node's own asset
       // readiness and the append-only audit log.
       { to: '/assets/manifest', label: 'Asset manifest', end: false },
@@ -83,7 +99,6 @@ const NAV_GROUPS: Array<{
       // reachable only from showmeshctl.
       { to: '/config/show', label: 'Shows', end: false },
       { to: '/config/show.surface', label: 'Surfaces', end: false },
-      { to: '/config/show.active', label: 'Active show', end: false },
       // Track F seam F1 (UI half): the night.session/night.session.active
       // authoring surfaces, previously reachable only from showmeshctl.
       { to: '/config/night.session', label: 'Night sessions', end: false },

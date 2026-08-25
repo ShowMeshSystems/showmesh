@@ -918,7 +918,7 @@ export class ApiStore {
   private async dispatchRenderCommand(
     nodeId: string,
     surfaceId: string,
-    verb: 'apply' | 'clear' | 'restart',
+    verb: 'apply' | 'clear' | 'restart' | 'transport-probe',
     sequenceId?: string,
   ): Promise<RenderCommandResult> {
     const controller = this.beginSideCall()
@@ -955,12 +955,12 @@ export class ApiStore {
   }
 
   // -- The first slice of audio dispatch: the five operations an
-  // operator reaches for when something is audibly wrong —
+  // operator reaches for when something is audibly wrong:
   // pause/resume/stop and output.mute/output.unmute. Same
   // "long request by design" posture as dispatchRenderCommand above:
   // AUDIO_COMMAND_REQUEST_TIMEOUT_MS matches audioHandlerWriteDeadline()
   // on the coordinator side (client.ts's own doc comment). Never rendered
-  // as unqualified success on a bare 200 (ADR-003) — the caller reads
+  // as unqualified success on a bare 200 (ADR-003). The caller reads
   // `.outcome`, which for this endpoint family is "unconfirmable" (not
   // "unconfirmed") whenever the dispatch was accepted but not
   // corroborated.
@@ -1009,6 +1009,11 @@ export class ApiStore {
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute`. Requires audio:command. */
   async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/unmute', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe`. Requires render:command. */
+  async probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+    return this.dispatchRenderCommand(nodeId, surfaceId, 'transport-probe')
   }
 
   // -- Track D seam D-4: Resolume observability (seam E) and the
