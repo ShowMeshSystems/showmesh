@@ -59,6 +59,7 @@
 import {
   ACTION_INVOKE_REQUEST_TIMEOUT_MS,
   ApiClient,
+  AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
   FPP_COMMAND_REQUEST_TIMEOUT_MS,
   RENDER_COMMAND_REQUEST_TIMEOUT_MS,
   RESOLUME_ACTION_REQUEST_TIMEOUT_MS,
@@ -71,6 +72,7 @@ import { SYSTEM_CLOCK, type Clock, type TimerHandle } from './clock'
 import {
   asEventSeq,
   initialModel,
+  type AudioSessionCommandResult,
   type ConnectionState,
   type CueCatalogDeployResult,
   type Evidence,
@@ -127,6 +129,9 @@ type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlay
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
 type SchemaRenderSurfaceRequest = components['schemas']['RenderSurfaceRequest']
+// First audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
+type SchemaAudioSessionCommandResponse = components['schemas']['AudioSessionCommandResponse']
+type SchemaAudioSessionCommandRequest = components['schemas']['AudioSessionCommandRequest']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -996,6 +1001,63 @@ export class ApiStore {
   /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/restart`. Requires render:command. */
   async restartRenderPipeline(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
     return this.dispatchRenderCommand(nodeId, surfaceId, 'restart')
+  }
+
+  // -- The first slice of audio dispatch: the five operations an
+  // operator reaches for when something is audibly wrong:
+  // pause/resume/stop and output.mute/output.unmute. Same
+  // "long request by design" posture as dispatchRenderCommand above:
+  // AUDIO_COMMAND_REQUEST_TIMEOUT_MS matches audioHandlerWriteDeadline()
+  // on the coordinator side (client.ts's own doc comment). Never rendered
+  // as unqualified success on a bare 200 (ADR-003). The caller reads
+  // `.outcome`, which for this endpoint family is "unconfirmable" (not
+  // "unconfirmed") whenever the dispatch was accepted but not
+  // corroborated.
+
+  private async dispatchAudioSessionCommand(
+    nodeId: string,
+    sessionId: string,
+    path: string,
+    revision: number,
+  ): Promise<AudioSessionCommandResult> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaAudioSessionCommandRequest = { revision, idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaAudioSessionCommandResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/audio/sessions/${encodeURIComponent(sessionId)}/${path}`,
+        body,
+        controller.signal,
+        AUDIO_COMMAND_REQUEST_TIMEOUT_MS,
+      )
+      return resp.command
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/pause`. Requires audio:command. */
+  async pauseAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'pause', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/resume`. Requires audio:command. */
+  async resumeAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'resume', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/stop`. Requires audio:command. */
+  async stopAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'stop', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/mute`. Requires audio:command. */
+  async muteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/mute', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute`. Requires audio:command. */
+  async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/unmute', revision)
   }
 
   /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe`. Requires render:command. */

@@ -6,6 +6,7 @@ import { EvidenceValue } from '../components/EvidenceValue'
 import { resolveCapabilityPanel } from '../components/capabilityPanelRegistry'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
+import { AudioSessionPanel } from '../components/AudioSessionPanel'
 import { CueCatalogPanel } from '../components/CueCatalogPanel'
 import { formatAbsolute } from '../app/time'
 
@@ -134,6 +135,17 @@ export function NodeDetail() {
             <section className="panel">
               <h3 className="panel__title">Render</h3>
               <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
+            </section>
+          </PanelErrorBoundary>
+
+          {/* Audio is its own full-width panel below the two-column grid,
+              not inside it: a node can hold several sessions each with
+              their own controls, which makes this panel tall in the same
+              way the render signal table is. */}
+          <PanelErrorBoundary panelLabel="Audio">
+            <section className="panel">
+              <h3 className="panel__title">Audio</h3>
+              <AudioSessionPanel nodeId={node.nodeId} entries={node.audio} />
             </section>
           </PanelErrorBoundary>
 
