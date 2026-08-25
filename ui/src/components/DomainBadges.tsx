@@ -4,6 +4,8 @@ import type {
   DiscoveryState,
   EventSeverity,
   FPPHealth,
+  FPPPlaylistEntryReconciliationOutcome,
+  FPPPlaylistReadinessFailingCondition,
   NightCueOutcome,
   NightCueState,
   NightLifecycleState,
@@ -330,6 +332,83 @@ const NIGHT_CUE_OUTCOME: Record<NightCueOutcome, { tone: StatusTone; icon: strin
 
 export function NightCueOutcomeBadge({ outcome }: { outcome: NightCueOutcome }) {
   const spec = NIGHT_CUE_OUTCOME[outcome] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized outcome (${String(outcome)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// TRACK-H-H2-SPEC.md §6: FPPPlaylistReadinessResponse.ready is a bare
+// boolean, not an enum: this badge is the one place that boolean gets a
+// tone+icon+label triple, same "never color alone" rule as every badge
+// above. The failing CONDITION (which of §6's five checks failed) gets
+// its own badge below; this one only ever says ready or not.
+export function FPPPlaylistReadinessBadge({ ready }: { ready: boolean }) {
+  return ready ? (
+    <StatusBadge tone="good" icon="●" label="ready" />
+  ) : (
+    <StatusBadge tone="bad" icon="✕" label="not ready" />
+  )
+}
+
+const FPP_PLAYLIST_READINESS_FAILING_CONDITION: Record<
+  FPPPlaylistReadinessFailingCondition,
+  { tone: StatusTone; icon: string; label: string }
+> = {
+  'definition-missing': { tone: 'bad', icon: '✕', label: 'definition missing' },
+  'entry-not-in-definition': { tone: 'bad', icon: '✕', label: 'entry not in definition' },
+  'entry-filename-mismatch': { tone: 'bad', icon: '✕', label: 'entry filename mismatch' },
+  'cue-not-ready': { tone: 'bad', icon: '✕', label: 'cue not ready' },
+  'observation-hash-mismatch': { tone: 'bad', icon: '✕', label: 'observation hash mismatch' },
+}
+
+// Only rendered once `ready` is false: every one of §6's five failing
+// conditions is its own distinguishable label, never collapsed into one
+// generic "not ready" (task instruction: "a stale import, a missing
+// asset, an unresolved reference and an unbound playlist must be
+// distinguishable from each other").
+export function FPPPlaylistReadinessFailingConditionBadge({
+  condition,
+}: {
+  condition: FPPPlaylistReadinessFailingCondition
+}) {
+  const spec = FPP_PLAYLIST_READINESS_FAILING_CONDITION[condition] ?? {
+    tone: 'unknown' as StatusTone,
+    icon: '?',
+    label: `unrecognized condition (${String(condition)})`,
+  }
+  return <StatusBadge tone={spec.tone} icon={spec.icon} label={spec.label} />
+}
+
+// TRACK-H-H2-SPEC.md §5: FPPPlaylistEntryReconciliationResponse.outcome:
+// what the coordinator currently makes of one instance's latest accepted
+// observation against the show's bindings. `resolved` is the only good
+// outcome; every other value names a DIFFERENT reason it did not resolve,
+// each with its own tone/icon/label so an operator distinguishes "we have
+// heard nothing yet" (identity-unavailable) from "this entry names a
+// Playlist that has never been bound" (unbound) from "the binding names a
+// hash this instance is no longer reporting" (stale-import) from a
+// genuine data problem (unknown-entry/evidence-mismatch/cross-show).
+const FPP_PLAYLIST_RECONCILIATION_OUTCOME: Record<
+  FPPPlaylistEntryReconciliationOutcome,
+  { tone: StatusTone; icon: string; label: string }
+> = {
+  resolved: { tone: 'good', icon: '●', label: 'resolved' },
+  'identity-unavailable': { tone: 'unknown', icon: '?', label: 'identity unavailable' },
+  unbound: { tone: 'warn', icon: '⚠', label: 'unbound' },
+  'stale-import': { tone: 'bad', icon: '✕', label: 'stale import' },
+  'unknown-entry': { tone: 'bad', icon: '✕', label: 'unknown entry' },
+  'evidence-mismatch': { tone: 'bad', icon: '✕', label: 'evidence mismatch' },
+  'cross-show': { tone: 'bad', icon: '✕', label: 'cross-show' },
+}
+
+export function FPPPlaylistReconciliationOutcomeBadge({
+  outcome,
+}: {
+  outcome: FPPPlaylistEntryReconciliationOutcome
+}) {
+  const spec = FPP_PLAYLIST_RECONCILIATION_OUTCOME[outcome] ?? {
     tone: 'unknown' as StatusTone,
     icon: '?',
     label: `unrecognized outcome (${String(outcome)})`,

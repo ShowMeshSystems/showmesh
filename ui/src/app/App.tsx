@@ -44,6 +44,10 @@ import { NightSession } from '../views/NightSession'
 import { NightSessions } from '../views/NightSessions'
 import { NightSessionDetail } from '../views/NightSessionDetail'
 import { NightSessionActive } from '../views/NightSessionActive'
+// TRACK-H-H2-SPEC.md §5/§6: the show-night Playlist readiness and FPP
+// instance reconciliation verdicts, previously reachable only from
+// `showmeshctl fpp`.
+import { PlaylistReadiness } from '../views/PlaylistReadiness'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -98,6 +102,12 @@ export default function App() {
                 non-load-bearing note as the macro/action/show routes
                 above. */}
             <Route path="night" element={<NightSession />} />
+            {/* TRACK-H-H2-SPEC.md §5/§6: the Playlist readiness and FPP
+                instance reconciliation verdicts. Lives in the Show night
+                nav group (Layout.tsx), same reasoning as /night just
+                above: this is a question an operator asks BEFORE a show
+                runs, never a configuration authoring surface. */}
+            <Route path="playlists/readiness" element={<PlaylistReadiness />} />
             <Route path="config/night.session" element={<NightSessions />} />
             <Route path="config/night.session/new" element={<NightSessionDetail isNew />} />
             <Route path="config/night.session/:id" element={<NightSessionDetail />} />

@@ -123,6 +123,11 @@ type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation surface,
 // the recovery path for a wedged sequence anchor.
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+// TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts:
+// whether a Playlist is ready, and whether an instance's latest accepted
+// observation still matches the show's bindings.
+type SchemaFPPPlaylistReadinessResponse = components['schemas']['FPPPlaylistReadinessResponse']
+type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPlaylistEntryReconciliationResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
@@ -598,6 +603,52 @@ export class ApiStore {
       await this.client.deleteJson(
         `/integrations/fpp/playlist-entry-observations/${encodeURIComponent(instanceUuid)}`,
         undefined,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/integrations/fpp/playlists/{playlistId}/readiness`
+   * (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is ready to
+   * run, and the first of §6's five conditions that fails when it is not.
+   * Open under `observation:read`, same posture as
+   * [listFPPPlaylistEntryObservations] above. Throws (400) for a
+   * non-fpp-runner playlist and (404) for a playlist with no active
+   * revision: both are real, distinguishable answers a caller inspects
+   * `ApiError.status` for, never confused with "not ready" or with a
+   * failure to ask.
+   */
+  async getFPPPlaylistReadiness(playlistId: string): Promise<SchemaFPPPlaylistReadinessResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPPlaylistReadinessResponse>(
+        `/integrations/fpp/playlists/${encodeURIComponent(playlistId)}/readiness`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/integrations/fpp/playlist-entry-observations/{instanceUuid}/reconciliation`
+   * (TRACK-H-H2-SPEC.md §5): what this coordinator currently makes of one
+   * instance's latest accepted observation against the show's
+   * `show.playlist` bindings. Open under `observation:read`, same posture
+   * as [getFPPPlaylistReadiness] above. Throws (404) when this instance
+   * has no accepted observation yet: a real, distinguishable answer, not
+   * a failure to ask.
+   */
+  async getFPPPlaylistEntryReconciliation(
+    instanceUuid: string,
+  ): Promise<SchemaFPPPlaylistEntryReconciliationResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPPlaylistEntryReconciliationResponse>(
+        `/integrations/fpp/playlist-entry-observations/${encodeURIComponent(instanceUuid)}/reconciliation`,
         controller.signal,
       )
     } finally {
@@ -1378,13 +1429,14 @@ export class ApiStore {
 
   /**
    * `GET /api/v1/config/show.action`, `GET /api/v1/config/show.macro`,
-   * `GET /api/v1/config/show`, or `GET /api/v1/config/show.surface` —
-   * object ids, labels, and current revision only, never the full
-   * payloads. `show` narrows the list to that show's objects (`?show=`)
-   * — `show` itself is a namespace and does not accept it on itself.
+   * `GET /api/v1/config/show`, `GET /api/v1/config/show.surface`, or
+   * `GET /api/v1/config/show.playlist`: object ids, labels, and current
+   * revision only, never the full payloads. `show` narrows the list to
+   * that show's objects (`?show=`); `show` itself is a namespace and
+   * does not accept it on itself.
    */
   async listConfigObjects(
-    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'night.session',
+    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.playlist' | 'night.session',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
