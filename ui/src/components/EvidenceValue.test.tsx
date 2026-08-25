@@ -82,6 +82,60 @@ describe('EvidenceValue', () => {
     expect(screen.getByText('no poll response in over 30s')).toBeInTheDocument()
   })
 
+  // Compact case (ADR-011): "current" collapses to one line, but nothing
+  // that is not "current" is ever collapsed, hidden, or quieted -- so
+  // this pins the root modifier class as the visible line between the two.
+  describe('compact "current" vs. loud non-"current" treatment', () => {
+    it('renders a current evidence value, badge, and freshness text with no attention modifier on the root', () => {
+      const { container } = render(
+        <EvidenceValue evidence={evidence({ state: 'current' })} serverTime={SERVER_TIME} />,
+      )
+      expect(screen.getByText('true')).toBeInTheDocument()
+      expect(screen.getByText('current')).toBeInTheDocument()
+      expect(screen.getByText(/observed/)).toBeInTheDocument()
+      const root = container.querySelector('.evidence')
+      expect(root?.className).not.toContain('evidence--attention')
+      expect(root?.className).not.toMatch(/evidence--tone-/)
+    })
+
+    it('still renders the value, badge, freshness text, and reason for a stale evidence, with the attention and warn-tone classes on the root', () => {
+      const { container } = render(
+        <EvidenceValue
+          evidence={evidence({ state: 'stale', reason: 'no poll response in over 30s', value: 42 })}
+          serverTime={SERVER_TIME}
+        />,
+      )
+      expect(screen.getByText('42')).toBeInTheDocument()
+      expect(screen.getByText('stale')).toBeInTheDocument()
+      expect(screen.getByText(/observed/)).toBeInTheDocument()
+      expect(screen.getByText('no poll response in over 30s')).toBeInTheDocument()
+      const root = container.querySelector('.evidence')
+      expect(root?.className).toContain('evidence--attention')
+      expect(root?.className).toContain('evidence--tone-warn')
+    })
+
+    it('carries the bad-tone class for collection_failed and still renders its reason', () => {
+      const { container } = render(
+        <EvidenceValue
+          evidence={evidence({ state: 'collection_failed', value: null, reason: 'HTTP 500 from FPP', observedAt: null })}
+          serverTime={SERVER_TIME}
+        />,
+      )
+      expect(screen.getByText('HTTP 500 from FPP')).toBeInTheDocument()
+      const root = container.querySelector('.evidence')
+      expect(root?.className).toContain('evidence--attention')
+      expect(root?.className).toContain('evidence--tone-bad')
+    })
+
+    it('still renders the as-of note for a current evidence while disconnected', () => {
+      render(
+        <EvidenceValue evidence={evidence({ state: 'current' })} serverTime={SERVER_TIME} connected={false} />,
+      )
+      const qualifier = screen.getByRole('note')
+      expect(qualifier.textContent).toMatch(/as of last contact/i)
+    })
+  })
+
   // The load-bearing case named in the spec: `unknown_age` HAS a value.
   // A client that treats it as absent is making exactly the reading error
   // that state was invented to prevent.

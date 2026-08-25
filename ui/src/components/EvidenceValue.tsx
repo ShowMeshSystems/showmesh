@@ -88,8 +88,18 @@ export function EvidenceValue({
     freshnessLine = 'no collection has ever been attempted'
   }
 
+  const isCurrent = evidence.state === 'current'
+  // ADR-011: only "current" ever collapses to one line, and even it keeps
+  // its freshness text visible. Every other state keeps the full block
+  // below and gets a louder treatment instead, via these modifier classes
+  // (root class + a tone class off the existing STATE_TONE mapping) --
+  // never a quieter or hidden one.
+  const rootClassName = isCurrent
+    ? 'evidence'
+    : `evidence evidence--attention evidence--tone-${STATE_TONE[evidence.state]}`
+
   return (
-    <div className="evidence">
+    <div className={rootClassName}>
       <div className="evidence__row">
         {label !== undefined && <span className="text-muted">{label}</span>}
         <span className={hasValue ? 'evidence__value' : 'evidence__value--absent'}>
@@ -100,8 +110,11 @@ export function EvidenceValue({
           icon={STATE_ICON[evidence.state]}
           label={STATE_LABEL[evidence.state]}
         />
+        {/* Compact case: the same freshnessLine text as the full block
+            below, just inline after the badge instead of on its own row. */}
+        {isCurrent && <span className="evidence__age evidence__age--inline">{freshnessLine}</span>}
       </div>
-      <span className="evidence__age">{freshnessLine}</span>
+      {!isCurrent && <span className="evidence__age">{freshnessLine}</span>}
       {!connected && (
         // Requirement 2 of the disconnected-evidence fix (OPERATOR-UI
         // section 7): the badge above is the coordinator's own verdict
@@ -117,7 +130,7 @@ export function EvidenceValue({
           Not live — this is the coordinator's state as of last contact, not a live verdict.
         </span>
       )}
-      {evidence.state !== 'current' &&
+      {!isCurrent &&
         (evidence.reason !== null ? (
           <span className="evidence__reason">{evidence.reason}</span>
         ) : (

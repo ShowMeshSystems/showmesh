@@ -95,6 +95,40 @@
   color: var(--color-text-muted);
 }
 
+/* Compact "current" case only (ADR-011): the freshness text moves onto
+   the badge row instead of its own line, but stays the exact same text,
+   small and muted -- never dropped or hidden. */
+.evidence__age--inline {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* Loud treatment for every non-"current" state (ADR-011: nothing that is
+   not "current" is ever collapsed, hidden, quieted, or gated behind a
+   toggle -- so a stale/failed/unsupported reading among many "current"
+   ones stands out instead of reading as just another line of prose). The
+   tone class picks the token pair off the same STATE_TONE mapping every
+   other renderer of an Evidence envelope already uses. */
+.evidence--attention {
+  border-left: 4px solid transparent;
+  padding-left: var(--space-2);
+}
+
+.evidence--tone-warn {
+  border-left-color: var(--status-warn-fg);
+  background: var(--status-warn-bg);
+}
+
+.evidence--tone-bad {
+  border-left-color: var(--status-bad-fg);
+  background: var(--status-bad-bg);
+}
+
+.evidence--tone-unknown {
+  border-left-color: var(--status-unknown-fg);
+  background: var(--status-unknown-bg);
+}
+
 /* Disconnected-evidence qualifier (EvidenceValue's `connected` prop): the
    state badge above is the coordinator's last-reported verdict, not a
    live one. Distinct styling from --status-bad-* (evidence__reason for a
