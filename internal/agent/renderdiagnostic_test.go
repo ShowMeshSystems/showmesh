@@ -79,6 +79,16 @@ func (s *recordingStarter) started() int {
 	return len(s.procs)
 }
 
+// startedArgv returns the argv of every pipeline process started, so a test
+// can assert on how many distinct pipelines exist rather than only on bytes.
+func (s *recordingStarter) startedArgv() [][]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([][]string, len(s.argv))
+	copy(out, s.argv)
+	return out
+}
+
 // frames returns every frame written to every process this starter handed
 // out, in the order the processes were started.
 func (s *recordingStarter) frames() [][]byte {
@@ -99,6 +109,22 @@ func (s *recordingStarter) frames() [][]byte {
 // empty temp dir, which is all three of those last absences at once.
 func coldNode(t *testing.T) (*renderOperations, *recordingStarter, *logCapture) {
 	t.Helper()
+	return coldNodeWithDiagnosticSurface(t, "")
+}
+
+// coldNodeWithDiagnosticSurface is coldNode for a node whose local
+// configuration names diagnosticSurfaceID, so the idle-output override is
+// in place before any writer is built, exactly as agent.go's Run orders it.
+// It returns the asset dir too, since a test that stages a persisted
+// assignment needs to write into it.
+func coldNodeWithDiagnosticSurface(t *testing.T, diagnosticSurfaceID string) (*renderOperations, *recordingStarter, *logCapture) {
+	t.Helper()
+	ops, starter, logs, _ := coldNodeIn(t, diagnosticSurfaceID)
+	return ops, starter, logs
+}
+
+func coldNodeIn(t *testing.T, diagnosticSurfaceID string) (*renderOperations, *recordingStarter, *logCapture, string) {
+	t.Helper()
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Now()}
 	starter := &recordingStarter{}
@@ -114,18 +140,18 @@ func coldNode(t *testing.T) (*renderOperations, *recordingStarter, *logCapture) 
 		t.Fatalf("a cold node must hold no persisted assignment, got %d", len(persisted))
 	}
 
-	ops := newRenderOperations(sup, store, dir, multisync.NewTimeline(clock.now, multisync.Config{}), nil, logs)
+	ops := newRenderOperations(sup, store, dir, multisync.NewTimeline(clock.now, multisync.Config{}), nil, diagnosticSurfaceID, logs)
 	t.Cleanup(func() {
 		ops.Shutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		sup.Shutdown(ctx)
 	})
-	return ops, starter, logs
+	return ops, starter, logs, dir
 }
 
 // logCapture is a [pipeline.Logger] that keeps every message, so a test can
-// assert on what a startup path told the operator — including that a path
+// assert on what a startup path told the operator, including that a path
 // which must stay silent said nothing at all.
 type logCapture struct {
 	mu       sync.Mutex
@@ -252,6 +278,115 @@ func TestDiagnosticSurfaceNeverDisplacesARunningWriter(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already has a running frame writer") {
 		t.Fatalf("error does not name the reason: %v", err)
+	}
+}
+
+// TestResumedAssignmentOnTheDiagnosticSurfaceDrawsTheDiagnosticPattern is
+// the owner's scenario end to end, and the case the first version of this
+// feature got wrong by refusing instead of overriding.
+//
+// A node holds a persisted assignment for the surface its local
+// configuration also names as the diagnostic surface. It boots with no
+// coordinator, no broker and no FPP master, so the resumed assignment's
+// timeline reads unknown, which is an idle state, and the assignment's own
+// idle output is black. Without the override the operator gets a black wall
+// and a warning in a log nobody is reading. With it, the same resumed
+// assignment draws the diagnostic pattern.
+func TestResumedAssignmentOnTheDiagnosticSurfaceDrawsTheDiagnosticPattern(t *testing.T) {
+	const surfaceID = "diagnostic-surface"
+	ops, starter, logs, dir := coldNodeIn(t, surfaceID)
+
+	// A real FSEQ on disk, a real assignment: everything a boot resume has
+	// and a genuinely cold node does not.
+	const width, height, bytesPerPixel = 64, 8, 3
+	const channelCount = width * height * bytesPerPixel
+	path := writeSynthFSEQ(t, dir, "resumed.fseq", channelCount, 10, 25)
+	hash, err := hashFile(path)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+	params := fseqApplyParams(surfaceID, "resumed.fseq", hash, 1, channelCount, width, height, "rgb", 40)
+	// The idle output the coordinator resolved when it dispatched this
+	// assignment. Black is the build contract's default and the exact value
+	// that leaves an operator with nothing to look at.
+	params["idleOutput"] = pipeline.IdleOutputBlack
+
+	if err := ops.ResumeAssignment(surfaceID, params); err != nil {
+		t.Fatalf("ResumeAssignment on a node with no coordinator: %v", err)
+	}
+	ops.StartDiagnosticSurfaceIfConfigured(diagnosticTestSurface, time.Now)
+
+	// Both halves of the operator-visible record: the override announced
+	// where the writer was actually built, and the startup path reporting
+	// that it found the surface already covered.
+	if !logs.contains("overriding the surface's assigned one") {
+		t.Fatal("the node never announced the override where the frame writer was built")
+	}
+	if !logs.contains("its idle output is the diagnostic pattern") {
+		t.Fatal("the node never reported that the assignment's idle output had been overridden")
+	}
+
+	mode, ok := ops.idleOutputOfRunningWriter(surfaceID)
+	if !ok {
+		t.Fatal("no frame writer is running for the resumed surface")
+	}
+	if mode != pipeline.IdleOutputDiagnostic {
+		t.Fatalf("the resumed writer's idle output is %q, want %q: with FPP dead the timeline reads unknown, and %q is a black wall", mode, pipeline.IdleOutputDiagnostic, mode)
+	}
+
+	// The frames themselves, not just the mode: the timeline is untouched,
+	// so it reads unknown exactly as it would with no FPP master alive.
+	frames := waitForFrames(t, starter, 4)
+
+	// One pipeline, not two: the assignment keeps the surface it owns and
+	// the diagnostic output arrives as an override, never as a second
+	// writer racing the same stdin.
+	if got := len(starter.startedArgv()); got != 1 {
+		t.Fatalf("%d pipeline processes were started, want exactly 1: the diagnostic surface must never stand up a second writer over an assignment", got)
+	}
+
+	frameBytes := channelCount
+	for i, f := range frames {
+		if len(f) != frameBytes {
+			t.Fatalf("frame %d is %d bytes, want %d", i, len(f), frameBytes)
+		}
+		if bytes.Equal(f, make([]byte, frameBytes)) {
+			t.Fatalf("frame %d is all black, which is what the assigned idle output would have drawn", i)
+		}
+		if !bytes.Contains(f, []byte{0xFF, 0xFF, 0xFF}) {
+			t.Fatalf("frame %d carries no diagnostic bar", i)
+		}
+	}
+	if bytes.Equal(frames[0], frames[len(frames)-1]) {
+		t.Fatal("the pattern never changed; the diagnostic output must be generated content, not a held frame")
+	}
+}
+
+// TestDiagnosticSurfaceOverrideLeavesOtherSurfacesAlone keeps the override
+// narrow: it applies to the one configured surface id and to nothing else.
+func TestDiagnosticSurfaceOverrideLeavesOtherSurfacesAlone(t *testing.T) {
+	ops, _, _, dir := coldNodeIn(t, "diagnostic-surface")
+
+	const other = "another-surface"
+	const width, height, bytesPerPixel = 64, 8, 3
+	const channelCount = width * height * bytesPerPixel
+	path := writeSynthFSEQ(t, dir, "other.fseq", channelCount, 10, 25)
+	hash, err := hashFile(path)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+	params := fseqApplyParams(other, "other.fseq", hash, 1, channelCount, width, height, "rgb", 40)
+	params["idleOutput"] = pipeline.IdleOutputBlack
+
+	if err := ops.ResumeAssignment(other, params); err != nil {
+		t.Fatalf("ResumeAssignment: %v", err)
+	}
+	mode, ok := ops.idleOutputOfRunningWriter(other)
+	if !ok {
+		t.Fatal("no frame writer is running for the other surface")
+	}
+	if mode != pipeline.IdleOutputBlack {
+		t.Fatalf("a surface the diagnostic configuration does not name draws %q, want its assigned %q", mode, pipeline.IdleOutputBlack)
 	}
 }
 

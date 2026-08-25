@@ -5,6 +5,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
 // TestDiagnosticFrameWriterDrawsWithNoSourceAndNoTimeline is the owner's
@@ -18,8 +20,14 @@ func TestDiagnosticFrameWriterDrawsWithNoSourceAndNoTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDiagnosticFrameWriter: %v", err)
 	}
-	if fw.source != nil || fw.timeline != nil {
-		t.Fatal("the diagnostic writer holds a source or a timeline; it must depend on neither")
+	// The sentinels, not nil: the frame loop dereferences both every tick,
+	// and a writer that depends on neither must say so with a value rather
+	// than with an absence the hot path has to branch on.
+	if _, ok := fw.source.(emptyFrameSource); !ok {
+		t.Fatalf("the diagnostic writer's source is %T, want emptyFrameSource", fw.source)
+	}
+	if _, ok := fw.timeline.(unknownTimeline); !ok {
+		t.Fatalf("the diagnostic writer's timeline is %T, want unknownTimeline", fw.timeline)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go fw.Run(ctx)
@@ -44,6 +52,28 @@ func TestDiagnosticFrameWriterDrawsWithNoSourceAndNoTimeline(t *testing.T) {
 			t.Fatalf("only %d bytes reached the pipeline's stdin within the deadline", len(got))
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestDiagnosticSentinelsAreLoudNotAbsent covers the two stand-ins the
+// diagnostic writer holds in place of a real timeline and sequence. Both
+// exist so the frame loop never branches on nil: an unknown timeline is
+// permanently idle, and an extraction from no sequence at all is an error
+// the failure path can report, not a panic and not a silent black frame.
+func TestDiagnosticSentinelsAreLoudNotAbsent(t *testing.T) {
+	if got := (unknownTimeline{}).Snapshot().State; got != multisync.StateUnknown {
+		t.Fatalf("unknownTimeline reports %q, want %q", got, multisync.StateUnknown)
+	}
+	if !idleContentStates[(unknownTimeline{}).Snapshot().State] {
+		t.Fatal("unknownTimeline's state is not an idle state, so a diagnostic writer could leave the idle path")
+	}
+
+	src := emptyFrameSource{}
+	if got := src.FrameCount(); got != 0 {
+		t.Fatalf("emptyFrameSource reports %d frames, want 0", got)
+	}
+	if err := src.ChannelRange(0, 0, 4, make([]byte, 4)); err == nil {
+		t.Fatal("emptyFrameSource extracted a channel range from a sequence it does not have")
 	}
 }
 

@@ -120,16 +120,9 @@ type Config struct {
 }
 
 // DiagnosticSurface is the node-local diagnostic idle output an operator
-// configures on the node itself, with no coordinator, broker, FPP master or
-// asset manifest involved. The owner's ruling on it: "99 out of 100 times
-// I'll use that is when FPP wouldn't be on to display output." It is
-// deliberately node-local start-time configuration rather than an operator
-// setting in the coordinator's store — a diagnostic that has to be
-// delivered over the control plane is missing whenever the control plane
-// is, which is the situation it exists for. The coordinator-delivered
-// render.settings.idleOutput (ADR-039) remains the way an ASSIGNED
-// surface's idle output is chosen; this is the way a node with no
-// assignment at all still puts something legible on the wall.
+// configures on the node itself. See TRACK-B-BUILD-CONTRACT.md ruling 3's
+// node-local amendment for why it is node-local start-time configuration
+// rather than a coordinator-delivered setting.
 type DiagnosticSurface struct {
 	// SurfaceID names the surface this node renders the diagnostic pattern
 	// on. Empty (the default) disables the whole feature: a node that was

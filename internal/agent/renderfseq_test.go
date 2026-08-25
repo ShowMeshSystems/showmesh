@@ -284,7 +284,7 @@ func TestApplySurfaceSetsSharedTimelineStepTimeFromFSEQ(t *testing.T) {
 	sup := newRenderTestSupervisor(t, clock)
 	store := pipeline.NewAssignmentStore(dir)
 	timeline := multisync.NewTimeline(clock.now, multisync.Config{})
-	renderOps := newRenderOperations(sup, store, dir, timeline, nil, discardLogger())
+	renderOps := newRenderOperations(sup, store, dir, timeline, nil, "", discardLogger())
 
 	params := fseqApplyParams("surface-1", "surface-1.fseq", hash, 1, 12, 2, 2, "rgb", 40)
 	if _, err := renderOps.applySurface(context.Background(), params, clock.now); err != nil {

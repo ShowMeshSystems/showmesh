@@ -22,18 +22,42 @@ const diagnosticPixelFormat = "rgb"
 // writer must be sized to exactly what the pipeline spec expects.
 const diagnosticBytesPerPixel = 3
 
-// StartDiagnosticSurfaceIfConfigured starts the node-local diagnostic
-// surface when this node was configured with one, and does nothing at all
-// when it was not: a node nobody asked for a diagnostic surface must not
-// invent one and start pushing frames at an output nobody configured.
+// StartDiagnosticSurfaceIfConfigured gives this node its configured
+// diagnostic idle output, by whichever of the two routes applies, and does
+// nothing at all when no diagnostic surface was configured.
 //
-// A failure to start is logged rather than returned, because this runs at
-// agent startup and a diagnostic surface that cannot come up must never
-// stop the node coming up around it.
+// Called AFTER the boot resume, so the two routes divide cleanly. If that
+// surface already has a writer, a persisted assignment resumed onto it and
+// startFrameWriter already built that writer with the diagnostic idle
+// output (renderops.go's idleOutputFor): the surface keeps its assignment,
+// still draws content whenever the timeline plays, and draws the diagnostic
+// pattern instead of black whenever it is idle. Nothing more to do here.
+// Otherwise this node holds no assignment for it and the standalone
+// diagnostic surface below is started from nothing.
+//
+// A failure is logged rather than returned, because this runs at agent
+// startup and a diagnostic surface that cannot come up must never stop the
+// node coming up around it.
 func (o *renderOperations) StartDiagnosticSurfaceIfConfigured(d config.DiagnosticSurface, now func() time.Time) {
 	if !d.Enabled() {
 		return
 	}
+
+	if mode, ok := o.idleOutputOfRunningWriter(d.SurfaceID); ok {
+		if mode == pipeline.IdleOutputDiagnostic {
+			o.logger.Info("an assignment already holds this node's diagnostic surface; its idle output is the diagnostic pattern",
+				"surface_id", d.SurfaceID)
+			return
+		}
+		// The override is applied where a writer is built, so reaching
+		// here means one was built for this surface without it: the
+		// configuration arrived after the writer, or a caller bypassed
+		// idleOutputFor. Never displace the assignment to force it.
+		o.logger.Warn("an assignment holds this node's diagnostic surface and its writer was not built with the diagnostic idle output; leaving the assignment alone",
+			"surface_id", d.SurfaceID, "idle_output", mode)
+		return
+	}
+
 	if err := o.StartDiagnosticSurface(d, now); err != nil {
 		o.logger.Warn("failed to start the node-local diagnostic surface", "surface_id", d.SurfaceID, "error", err)
 		return
@@ -42,23 +66,28 @@ func (o *renderOperations) StartDiagnosticSurfaceIfConfigured(d config.Diagnosti
 		"surface_id", d.SurfaceID, "width", d.Width, "height", d.Height, "frame_rate", d.FrameRate)
 }
 
-// StartDiagnosticSurface brings up this node's locally configured
-// diagnostic idle output: a running pipeline and a frame writer that draws
-// the diagnostic pattern on every tick, from nothing but this agent's own
-// process and configuration.
+// idleOutputOfRunningWriter reports the idle output surfaceID's current
+// frame writer draws, and whether it has one at all.
+func (o *renderOperations) idleOutputOfRunningWriter(surfaceID string) (string, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	h, ok := o.writers[surfaceID]
+	if !ok {
+		return "", false
+	}
+	return h.fw.IdleOutput(), true
+}
+
+// StartDiagnosticSurface brings up a standalone diagnostic surface: a
+// running pipeline and a frame writer that draws the diagnostic pattern on
+// every tick, from nothing but this agent's own process and configuration.
+// No assignment, no sequence, no timeline, no held catalog, nothing
+// persisted. See TRACK-B-BUILD-CONTRACT.md ruling 3's node-local amendment
+// for why it must depend on none of them.
 //
-// The owner's ruling on diagnostic idle output is what this exists for.
-// Every other path to the diagnostic pattern runs through a coordinator-delivered
-// render.surface.apply carrying idleOutput, which needs a broker, a
-// coordinator, a resolved asset manifest and an FSEQ file on disk before
-// one frame reaches the wall. The operator reaches for the diagnostic
-// pattern almost exclusively when those are the things that are down, so
-// this path takes none of them: no assignment, no sequence, no timeline, no
-// held catalog, nothing persisted to disk.
-//
-// It refuses rather than overwrites when the surface already has a running
-// frame writer, so a persisted assignment resumed at boot (build contract
-// ruling 4) keeps the surface it owns and the operator is told why.
+// It never displaces a surface that already has a running frame writer;
+// that surface is served by the idle-output override instead (see
+// [renderOperations.StartDiagnosticSurfaceIfConfigured]).
 func (o *renderOperations) StartDiagnosticSurface(d config.DiagnosticSurface, now func() time.Time) error {
 	const action = "render diagnostic surface (node-local)"
 
@@ -69,7 +98,7 @@ func (o *renderOperations) StartDiagnosticSurface(d config.DiagnosticSurface, no
 		return fmt.Errorf("%s: surface id %q is not a valid surface identifier", action, d.SurfaceID)
 	}
 	if o.hasRunningFrameWriter(d.SurfaceID) {
-		return fmt.Errorf("%s: surface %q already has a running frame writer; the diagnostic surface never displaces an assignment", action, d.SurfaceID)
+		return fmt.Errorf("%s: surface %q already has a running frame writer; the override applies there instead of a second writer", action, d.SurfaceID)
 	}
 
 	spec, err := pipeline.FSEQSourceSpec(d.SurfaceID, d.Width, d.Height, diagnosticPixelFormat, d.FrameRate, pipeline.FdsrcSupportsIsLive(nil))

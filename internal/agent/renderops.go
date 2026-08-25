@@ -238,6 +238,12 @@ type renderOperations struct {
 	// Show Mode.
 	showMode pipeline.ShowModeSource
 
+	// diagnosticSurfaceID is the surface this node was locally configured
+	// to draw the diagnostic idle pattern on, or "" for none. Fixed at
+	// construction and read without a lock: it is start-time node
+	// configuration, never something a command changes. See idleOutputFor.
+	diagnosticSurfaceID string
+
 	mu      sync.Mutex
 	writers map[string]*frameWriterHandle
 
@@ -258,16 +264,37 @@ type renderOperations struct {
 	probeStarter pipeline.ProcessStarter
 }
 
-func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, logger pipeline.Logger) *renderOperations {
+func newRenderOperations(sup *pipeline.Supervisor, store *pipeline.AssignmentStore, assetDir string, timeline *multisync.Timeline, showMode pipeline.ShowModeSource, diagnosticSurfaceID string, logger pipeline.Logger) *renderOperations {
 	return &renderOperations{
-		sup:      sup,
-		store:    store,
-		assetDir: assetDir,
-		timeline: timeline,
-		showMode: showMode,
-		logger:   logger,
-		writers:  make(map[string]*frameWriterHandle),
+		sup:                 sup,
+		store:               store,
+		assetDir:            assetDir,
+		timeline:            timeline,
+		showMode:            showMode,
+		diagnosticSurfaceID: diagnosticSurfaceID,
+		logger:              logger,
+		writers:             make(map[string]*frameWriterHandle),
 	}
+}
+
+// idleOutputFor resolves which idle output a surface's writer is built
+// with: its assignment's own value, unless this node was locally configured
+// to draw the diagnostic pattern on that exact surface, which wins.
+//
+// The node-local setting takes precedence over the assigned one on purpose
+// (TRACK-B-BUILD-CONTRACT.md ruling 3's node-local amendment). Refusing
+// instead would defeat the whole point on the nodes this was built for: a
+// node holding a persisted assignment resumes it at boot with no
+// coordinator, the dead FPP master leaves the timeline unknown, unknown is
+// an idle state, and the assigned idle output defaults to black. The
+// operator would be standing in front of a black wall with the diagnostic
+// surface configured and refused. Content still draws whenever the timeline
+// plays, so this changes a running show not at all.
+func (o *renderOperations) idleOutputFor(surfaceID, assigned string) string {
+	if o.diagnosticSurfaceID != "" && surfaceID == o.diagnosticSurfaceID {
+		return pipeline.IdleOutputDiagnostic
+	}
+	return assigned
 }
 
 // Shutdown stops every currently-running frame writer and closes its FSEQ
@@ -734,7 +761,12 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 // the writer's own lifetime (via [renderOperations.stopFrameWriter]) owns
 // closing it.
 func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fseqAssignment) error {
-	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, a.idleOutput, o.showMode, o.logger)
+	idleOutput := o.idleOutputFor(surfaceID, a.idleOutput)
+	if idleOutput != a.idleOutput {
+		o.logger.Info("this node's locally configured diagnostic idle output is overriding the surface's assigned one",
+			"surface_id", surfaceID, "assigned_idle_output", a.idleOutput, "using", idleOutput)
+	}
+	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
 	if err != nil {
 		return err
 	}

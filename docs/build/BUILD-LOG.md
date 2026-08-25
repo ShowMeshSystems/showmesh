@@ -48,6 +48,31 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-08-25 (The diagnostic idle output renders from a node with nothing else running; branch `claude/sm-34-owner-ruling-diagnostic-idle-output-must-render`, not merged)
+
+**Goal:** honour the owner's ruling that the diagnostic idle output must appear regardless of the state of FPP, the MultiSync timeline, the coordinator or the asset manifest.
+
+**Reproduced first, from the cold state the ruling names.** A node with nothing but the agent: no coordinator, no broker, no FPP master, no asset manifest, no FSEQ, no persisted assignment, no held cue catalog. Observed: zero pipeline processes started, zero surfaces in the render report, zero bytes written to any pipeline stdin. The cause is that the only route to `diagnostic` was `params.idleOutput` on a coordinator-delivered `render.surface.apply`, and `pipeline.NewFrameWriter` additionally requires an open FSEQ whose channel range it probes at construction, so with no assignment there is no writer and no frame.
+
+**Completed.** Two routes to the diagnostic pattern, chosen by whether the named surface already has a writer.
+
+- `pipeline.NewDiagnosticFrameWriter` (`internal/agent/pipeline/frame.go`) builds a writer whose timeline is `unknownTimeline` (permanently `multisync.StateUnknown`, already an idle state) and whose source is `emptyFrameSource`. Both are sentinel values, not nil: the frame loop dereferences both every tick and keeps its never-nil invariant, so a writer that depends on neither says so with a value rather than with an absence.
+- `renderOperations.StartDiagnosticSurface` (`internal/agent/renderdiagnostic.go`) stands that writer up on its own pipeline from nothing: no assignment, no sequence, no held catalog, nothing persisted.
+- `renderOperations.idleOutputFor` (`internal/agent/renderops.go`) overrides the assigned idle output with `diagnostic` for the one locally configured surface id, applied where every frame writer is built. This is the case the first version got wrong by refusing: a node holding a persisted assignment for that surface resumes it at boot with FPP dead, the timeline reads `unknown`, `unknown` is an idle state, and the assigned idle output defaults to `black`, so a refusal leaves a black wall and a log line.
+- `internal/agent/config`: `SHOWMESH_RENDER_DIAGNOSTIC_SURFACE` plus `_WIDTH`, `_HEIGHT`, `_FRAME_RATE` and `_NDI_SOURCE_NAME`, documented in `deploy/node/agent.env.example` and in the env inventory. Geometry set without a surface id is refused at load rather than ignored.
+
+**Decisions made:** [TRACK-B-BUILD-CONTRACT.md](TRACK-B-BUILD-CONTRACT.md) ruling 3 gains a node-local amendment: `diagnostic` is also configurable node-locally, and the node-local setting takes precedence over the assigned `render.settings.idleOutput` for that surface. It does not rise to an ADR and does not reopen ADR-039: that record requires operator configuration to be store-backed because the coordinator has a store; the node agent has none, and `internal/agent/config/envinventory_test.go` already records its environment surface as the total documented surface of a store-less process rather than a list of promotion candidates. The assigned idle output stays store-backed and coordinator-resolved. What is added is a second, local authority, which exists because the first cannot be relied on to arrive.
+
+**Questions raised with the owner:** none. The ruling was already settled; this session implemented it.
+
+**Deferred:** nothing about the feature. `api/openapi.yaml` and `showmeshctl` are unchanged, since this is node deployment configuration rather than an operator API capability.
+
+**Verification gates:** `make check` and `go test -race -count=1 ./internal/agent/...`, both foreground. `make test-integration` not run: the coordinator/agent wire contract is unchanged, and an integration test exercising the real agent subprocess is written but deliberately not run in this worktree. Every kept hunk was mutation-tested. **Not run and not claimed:** no real display, projector, node or NDI runtime was involved, so that the pattern is visible on an actual output remains unverified.
+
+**Flaky test seen:** `gstengine` `TestCloseTearsDownThreeConcurrentPlayingBranches` once locally under a loaded `make check`, passing alone in 0.4 s and on both later full runs; and on CI, `TestInterruptSuspendsAndResumesRealSession` hung to the 10 m timeout on Go 1.26.6 under `-race` while passing locally in 3.6 s. Neither is reachable from this diff: the audio packages use exactly one symbol from `internal/agent/pipeline`, `ResolveGstLaunch`, which this session did not touch.
+
+---
+
 ## 2026-08-25 (Twenty-four overnight pull requests folded into `main`, from `e2d6c47` to `3d7d822`)
 
 **Goal:** fold the overnight branches, pull requests #55 through #78, into `main` one at a time, gating each on a merged tree rather than on the base it was written against, and resolve the conflicts and defects that only appear once branches meet.
