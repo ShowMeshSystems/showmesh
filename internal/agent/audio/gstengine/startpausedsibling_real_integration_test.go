@@ -12,7 +12,7 @@ import (
 )
 
 // TestStartWithPositionOnPausedBranchWithActiveSiblingLandsAtPosition is
-// SM-143's real-pipeline scenario: a positioned Start (seek then play)
+// the real-pipeline scenario behind a positioned Start (seek then play)
 // issued on a branch that is currently paused (blocked, not released)
 // while a sibling branch actively feeds the same channel mixers. A
 // buffer-level reproduction against this package's real GStreamer

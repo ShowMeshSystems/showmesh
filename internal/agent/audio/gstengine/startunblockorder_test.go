@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// TestStartUnblocksFlowOnlyAfterItsOwnSeekLands is SM-143's acceptance
-// test. A positioned Start (seek then play) issued on a branch that is
-// currently paused -- flow blocked, not released -- must not unblock
+// TestStartUnblocksFlowOnlyAfterItsOwnSeekLands is the acceptance test
+// for this defect. A positioned Start (seek then play) issued on a
+// branch that is currently paused -- flow blocked, not released -- must not unblock
 // that flow before its own seek has actually landed: unblocking first
 // lets whatever sat parked at the flow block, carrying the branch's
 // pre-seek position and pre-seek mixer pad offset, reach the shared mix
