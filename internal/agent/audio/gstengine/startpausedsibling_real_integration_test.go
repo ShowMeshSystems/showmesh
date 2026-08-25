@@ -12,22 +12,16 @@ import (
 )
 
 // TestStartWithPositionOnPausedBranchWithActiveSiblingLandsAtPosition is
-// the real-pipeline scenario behind a positioned Start (seek then play)
-// issued on a branch that is currently paused (blocked, not released)
-// while a sibling branch actively feeds the same channel mixers. A
-// buffer-level reproduction against this package's real GStreamer
-// pipeline (see startunblockorder_test.go's commit message and PR for
-// the measurement) found no run in which the reported position actually
-// drifted from the named target: seekTo re-freezes the frozen bookmark
-// to the target unconditionally while the branch is still paused, and
-// this environment's flushing seeks reliably discarded whatever sat
-// parked at the flow block before it could reach the mixer. What the
-// real pipeline could not exercise reliably is guarded deterministically
-// instead, by startunblockorder_test.go: Start must not unblock this
-// branch's flow before its own seek has actually landed, exactly as
-// Resume already does, rather than depending on that race resolving the
-// same way every time. This test stays as the runtime regression guard
-// for the position contract itself.
+// a non-regression guard, not this defect's acceptance evidence: it
+// passes both before and after the ordering fix in Start, since the
+// reported position is protected by seekTo's own frozen-bookmark
+// bookkeeping regardless of unblockFlow's ordering (see
+// TestStartLeavesFlowBlockedWhenItsOwnSeekTimesOut in
+// startunblockorder_test.go for the actual runtime proof of the
+// ordering). It keeps a real-pipeline check on the position contract
+// itself -- a positioned Start (seek then play) on a branch that is
+// currently paused, while a sibling branch actively feeds the same
+// channel mixers, must land and hold at the named target.
 func TestStartWithPositionOnPausedBranchWithActiveSiblingLandsAtPosition(t *testing.T) {
 	e := newTestEngine(t)
 	dir := t.TempDir()
@@ -74,6 +68,7 @@ func TestStartWithPositionOnPausedBranchWithActiveSiblingLandsAtPosition(t *test
 	// instead is unambiguous, and well inside the 12s fixture.
 	target := pausedAt + 6*time.Second
 
+	startedAt := time.Now()
 	startObs, err := e.Start(ctx, "pb", target)
 	if err != nil {
 		t.Fatalf("Start pb with position: %v", err)
@@ -91,14 +86,22 @@ func TestStartWithPositionOnPausedBranchWithActiveSiblingLandsAtPosition(t *test
 	}
 
 	// The position must also hold up a moment later, not just in the
-	// instant the call returned.
-	time.Sleep(300 * time.Millisecond)
+	// instant the call returned: it must have kept advancing in real
+	// time from target, neither stuck nor jumped. The settle window is
+	// symmetric around target plus the real elapsed time since Start
+	// returned, not an arbitrary asymmetric range, so a branch that
+	// jumped seconds ahead (or never advanced at all) fails this just as
+	// surely as one that landed short.
+	const settle = 300 * time.Millisecond
+	time.Sleep(settle)
 	obs, err := e.Observe(ctx, "pb")
 	if err != nil {
 		t.Fatalf("Observe pb: %v", err)
 	}
-	if obs.Position < target-tolerance || obs.Position > target+2*time.Second {
-		t.Fatalf("pb position %s settled far from the Start target %s", obs.Position, target)
+	expected := target + time.Since(startedAt)
+	if obs.Position < expected-tolerance || obs.Position > expected+tolerance {
+		t.Fatalf("pb position %s is %s away from %s (target %s plus %s of real elapsed time since Start), want within %s",
+			obs.Position, obs.Position-expected, expected, target, time.Since(startedAt), tolerance)
 	}
 
 	_ = e.Release(context.Background(), "sib")

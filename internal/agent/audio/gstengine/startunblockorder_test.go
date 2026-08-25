@@ -3,81 +3,135 @@
 package gstengine
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"context"
+	"errors"
+	"path/filepath"
 	"testing"
+	"time"
+
+	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
 )
 
-// TestStartUnblocksFlowOnlyAfterItsOwnSeekLands is the acceptance test
-// for this defect. A positioned Start (seek then play) issued on a
-// branch that is currently paused -- flow blocked, not released -- must not unblock
-// that flow before its own seek has actually landed: unblocking first
-// lets whatever sat parked at the flow block, carrying the branch's
-// pre-seek position and pre-seek mixer pad offset, reach the shared mix
-// before the flushing seek meant to discard it has taken effect. Resume
-// already follows the correct order for the identical reason (see
-// resyncskew_test.go's TestResumeReanchorsViaFlushingSeek); this proves
-// Start does too, by asserting Start's own unblockFlow call comes after
-// its seekTo call in source, the same technique this package already
-// uses for the sibling ordering invariant. A real GStreamer reproduction
-// of the resulting drift is in startpausedsibling_real_integration_test.go's
-// doc comment: this environment's flushing seeks reliably discarded the
-// stale parked data before it reached the mixer in every run, so the
-// wrong-position hazard this guards against is real by construction of
-// the source, not reliably forceable at runtime here.
-func TestStartUnblocksFlowOnlyAfterItsOwnSeekLands(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "methods.go", nil, 0)
+// TestStartLeavesFlowBlockedWhenItsOwnSeekTimesOut is this defect's
+// acceptance test. It forces Start's own seek to abandon before
+// decodebin.Seek returns, using the same already-exhausted-deadline
+// technique TestTimedOutSeekRefusesFurtherAnchoring (timedoutseekfix_
+// test.go) already relies on for seekTo, then asserts the paused
+// branch's flow block is still in place and no buffers reached its
+// queue's own src pad afterward. Under the old order -- unblockFlow
+// before seekTo -- the block was already released by the time Start
+// returned its timeout error, regardless of whether the seek itself
+// ever lands; under the fixed order, a seek that never completes means
+// unblockFlow never runs at all. This is a genuine behavioral proof of
+// the ordering, not a check on source text.
+func TestStartLeavesFlowBlockedWhenItsOwnSeekTimesOut(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 6)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	const handle = "startblocked1"
+	if _, err := e.Load(ctx, handle, mediaRef(wav), 6*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := e.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForPosition(t, e, handle, 200*time.Millisecond, 5*time.Second)
+
+	if _, err := e.Pause(ctx, handle); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	count := countQueueSrcBuffers(t, e, handle)
+	// Settle past whatever queueMaxSizeTime's worth of already-buffered
+	// content still drains immediately after Pause (see pauseflow_real_
+	// integration_test.go), so the baseline below is taken once flow has
+	// genuinely stopped, not mid-drain.
+	time.Sleep(4 * queueMaxSizeTime)
+	baseline := count()
+
+	tctx, tcancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer tcancel()
+	if _, err := e.Start(tctx, handle, 2*time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Start with an exhausted deadline: err = %v, want a deadline timeout", err)
+	}
+
+	b, err := e.branchFor(agentaudio.EngineHandle(handle))
 	if err != nil {
-		t.Fatalf("parsing methods.go: %v", err)
+		t.Fatalf("branchFor: %v", err)
+	}
+	b.mu.Lock()
+	stillBlocked := b.blockProbeID != 0
+	b.mu.Unlock()
+	if !stillBlocked {
+		t.Fatalf("Start's own seek timed out before landing, but the branch's flow block was already released: unblockFlow ran ahead of the seek it depends on")
 	}
 
-	var fn *ast.FuncDecl
-	ast.Inspect(f, func(n ast.Node) bool {
-		d, ok := n.(*ast.FuncDecl)
-		if ok && d.Name.Name == "Start" {
-			fn = d
-			return false
-		}
-		return true
-	})
-	if fn == nil {
-		t.Fatal("could not find func (e *Engine) Start in methods.go")
+	const settle = 500 * time.Millisecond
+	time.Sleep(settle)
+	if got := count(); got != baseline {
+		t.Fatalf("branch produced %d buffer(s) in the %s after a timed-out Start, want 0: its flow block was released before the abandoned seek could land", got-baseline, settle)
 	}
 
-	var seekToPos, unblockFlowPos token.Pos
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		switch sel.Sel.Name {
-		case "seekTo":
-			if seekToPos == token.NoPos {
-				seekToPos = call.Pos()
-			}
-		case "unblockFlow":
-			if unblockFlowPos == token.NoPos {
-				unblockFlowPos = call.Pos()
-			}
-		}
-		return true
-	})
+	_ = e.Release(context.Background(), handle)
+}
 
-	if seekToPos == token.NoPos {
-		t.Fatal("Start no longer calls seekTo: a positioned Start must re-anchor the branch before playback resumes")
+// TestSeekOnPausedBranchNeverTouchesTheFlowBlock establishes why this
+// package's own Start, not Seek, is the only call site the ordering
+// hazard above reaches: Seek's implementation (methods.go) never calls
+// unblockFlow or blockFlow at all, so a paused branch stays paused
+// across a Seek regardless of call order. This is a direct runtime
+// check of that, not an inference from reading the source.
+func TestSeekOnPausedBranchNeverTouchesTheFlowBlock(t *testing.T) {
+	e := newTestEngine(t)
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "fixture.wav")
+	generateWAV(t, wav, 6)
+
+	ctx, cancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer cancel()
+
+	const handle = "seeknoblock1"
+	if _, err := e.Load(ctx, handle, mediaRef(wav), 6*time.Second); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	if unblockFlowPos == token.NoPos {
-		t.Fatal("Start no longer calls unblockFlow: a branch paused or stopped before Start would never flow again")
+	if _, err := e.Start(ctx, handle, 0); err != nil {
+		t.Fatalf("Start: %v", err)
 	}
-	if unblockFlowPos < seekToPos {
-		t.Fatal("Start calls unblockFlow before seekTo: this releases whatever sat parked at the flow block, carrying the " +
-			"branch's pre-seek position and pre-seek mixer pad offset, into the shared mix before the flushing seek meant " +
-			"to discard it has taken effect, landing live output at a stale position Start never named")
+	waitForPosition(t, e, handle, 200*time.Millisecond, 5*time.Second)
+
+	if _, err := e.Pause(ctx, handle); err != nil {
+		t.Fatalf("Pause: %v", err)
 	}
+
+	count := countQueueSrcBuffers(t, e, handle)
+	time.Sleep(4 * queueMaxSizeTime)
+	baseline := count()
+
+	if _, err := e.Seek(ctx, handle, 3*time.Second); err != nil {
+		t.Fatalf("Seek on a paused branch: %v", err)
+	}
+
+	b, err := e.branchFor(agentaudio.EngineHandle(handle))
+	if err != nil {
+		t.Fatalf("branchFor: %v", err)
+	}
+	b.mu.Lock()
+	stillBlocked := b.blockProbeID != 0
+	b.mu.Unlock()
+	if !stillBlocked {
+		t.Fatalf("Seek on a paused branch released its flow block: Seek must never touch blockFlow/unblockFlow")
+	}
+
+	const settle = 500 * time.Millisecond
+	time.Sleep(settle)
+	if got := count(); got != baseline {
+		t.Fatalf("branch produced %d buffer(s) in the %s after Seek on a paused branch, want 0: Seek must not resume flow", got-baseline, settle)
+	}
+
+	_ = e.Release(context.Background(), handle)
 }
