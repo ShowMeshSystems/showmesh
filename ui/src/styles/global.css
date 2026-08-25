@@ -185,7 +185,7 @@ input {
 
 .app-header__title {
   font-size: var(--font-size-lg);
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   margin: 0;
 }
 
@@ -259,8 +259,8 @@ input {
 
 .panel__title {
   margin: 0 0 var(--space-3) 0;
-  font-size: var(--font-size-md);
-  font-weight: 700;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
 }
 
 /* ResolumeCompositionUpload.tsx: a 401/403 is a successful conversation
@@ -290,7 +290,7 @@ input {
 
 .field-list dt {
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
 }
 
 .field-list dd {
@@ -375,7 +375,7 @@ input {
    fact — an operator-visible failure, not decoration. */
 .text-error {
   color: var(--status-bad-fg);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 /* A destructive write control (BUILD-PLAN Step 7 seam B's "Remove
@@ -440,7 +440,7 @@ input {
 }
 
 .show-macro-form__step legend {
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   padding: 0 var(--space-2);
 }
 
@@ -514,4 +514,24 @@ input {
 .macro-run-step__facts dd {
   margin: 0;
   word-break: break-word;
+}
+
+/* Opt-in two-column layout for a run of sibling .panel peers on a wide
+   operator display; below the breakpoint .panel-grid does nothing, so
+   phone/tablet layouts are unchanged. */
+@media (min-width: 1024px) {
+  .app-main {
+    max-width: 96rem;
+  }
+
+  .panel-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-4);
+    align-items: start;
+  }
+
+  .panel-grid > .panel {
+    margin-bottom: 0;
+  }
 }

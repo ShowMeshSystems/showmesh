@@ -65,18 +65,18 @@
 }
 
 .evidence__value {
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
   font-variant-numeric: tabular-nums;
 }
 
 .evidence__value--absent {
   color: var(--color-text-muted);
-  font-weight: 400;
+  font-weight: var(--font-weight-normal);
   font-style: italic;
 }
 
 .evidence__reason {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
@@ -87,11 +87,11 @@
    than rendering identically to (or silently instead of) one. */
 .evidence__reason--violation {
   color: var(--status-bad-fg);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 .evidence__age {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
@@ -162,7 +162,7 @@
   background: transparent;
   color: var(--connection-problem-fg);
   cursor: pointer;
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 /*
@@ -194,13 +194,13 @@
 .session-panel--urgent {
   background: var(--connection-problem-bg);
   color: var(--connection-problem-fg);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 .session-panel--signed-in {
   background: transparent;
   color: var(--color-text-muted);
-  font-weight: 400;
+  font-weight: var(--font-weight-normal);
 }
 
 .session-panel button {
@@ -211,12 +211,12 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 .session-panel__error {
   color: var(--status-bad-fg);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 /* Sign-in / bootstrap-claim forms: a plain stacked field list, phone-first
@@ -232,7 +232,7 @@
 
 .session-form label {
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 .session-form input {
@@ -252,13 +252,13 @@
   background: var(--color-accent);
   color: var(--color-surface);
   cursor: pointer;
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
   align-self: flex-start;
 }
 
 .session-form__error {
   color: var(--status-bad-fg);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 /* ScopedButton (ADR-024 decision 12): a disabled control never renders
@@ -302,7 +302,7 @@
 
 .fpp-command-control__confirmed {
   color: var(--status-good-fg);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 /* Boxed, like .fpp-command-control__warning just below, and deliberately
@@ -327,7 +327,7 @@
   border: 1px solid var(--status-bad-fg);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 /* Boxed, not just colored text: FPPNextPlaylistItemControl's own comment
@@ -341,7 +341,7 @@
   border: 1px solid var(--status-warn-fg);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
 
 /* Plain text, deliberately: see .fpp-command-control__unconfirmed's own
@@ -351,5 +351,5 @@
    round trip whose outcome was "unconfirmed". */
 .fpp-command-control__error {
   color: var(--status-bad-fg);
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
 }
