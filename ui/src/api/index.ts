@@ -186,6 +186,10 @@ export type {
   NightCommandResponse,
   NightSessionChangedEvent,
   NightCommandName,
+  // TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
+  // verdicts.
+  FPPPlaylistReadinessResponse,
+  FPPPlaylistEntryReconciliationResponse,
 } from './domain'
 export {
   useModel,
@@ -199,6 +203,8 @@ export {
   getFPPEndpointsConfigRevisions,
   listFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,
+  getFPPPlaylistReadiness,
+  getFPPPlaylistEntryReconciliation,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,

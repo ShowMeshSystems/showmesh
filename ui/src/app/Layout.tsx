@@ -46,6 +46,12 @@ const NAV_GROUPS: Array<{
       // an operator opens first while the installation is running.
       { to: '/night', label: 'Night session', end: false },
       { to: '/config/show.active', label: 'Active show', end: false },
+      // TRACK-H-H2-SPEC.md §5/§6: whether a show's Playlists are actually
+      // ready to run, and whether each FPP instance's latest observation
+      // still matches what the show declares. This is the show-night
+      // question a stale import, missing asset, or unbound Playlist
+      // would otherwise only surface from `showmeshctl fpp`.
+      { to: '/playlists/readiness', label: 'Playlist readiness', end: false },
       { to: '/', label: 'Dashboard', end: true },
     ],
   },

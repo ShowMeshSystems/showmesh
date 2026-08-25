@@ -72,6 +72,9 @@ import type { ActionBinding, ActionInvocationResult, CueCatalogDeployResult, Res
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+// TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts.
+type SchemaFPPPlaylistReadinessResponse = components['schemas']['FPPPlaylistReadinessResponse']
+type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPlaylistEntryReconciliationResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
@@ -147,6 +150,18 @@ export function listFPPPlaylistEntryObservations(): Promise<SchemaFPPPlaylistEnt
 
 export function deleteFPPPlaylistEntryObservation(instanceUuid: string): Promise<void> {
   return store.deleteFPPPlaylistEntryObservation(instanceUuid)
+}
+
+// TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts. Same
+// thin pass-through pattern as every method above.
+export function getFPPPlaylistReadiness(playlistId: string): Promise<SchemaFPPPlaylistReadinessResponse> {
+  return store.getFPPPlaylistReadiness(playlistId)
+}
+
+export function getFPPPlaylistEntryReconciliation(
+  instanceUuid: string,
+): Promise<SchemaFPPPlaylistEntryReconciliationResponse> {
+  return store.getFPPPlaylistEntryReconciliation(instanceUuid)
 }
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {
@@ -367,7 +382,7 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'night.session',
+  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.playlist' | 'night.session',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse> {
   return store.listConfigObjects(kind, show)

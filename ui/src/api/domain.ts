@@ -301,6 +301,13 @@ export type NightCommandName =
   | 'power-down-presentation'
   | 'end-session'
 
+// TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
+// verdicts, aliased for the identical reason as every type above
+// (ADR-015). Neither is part of `Model`: plain on-demand side calls,
+// same posture as CueCatalogResponse above.
+export type FPPPlaylistReadinessResponse = components['schemas']['FPPPlaylistReadinessResponse']
+export type FPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPlaylistEntryReconciliationResponse']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

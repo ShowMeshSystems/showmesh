@@ -140,6 +140,10 @@ export type {
   NightAuthorization,
   NightCommandName,
   NightCommandResult,
+  // TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
+  // verdicts.
+  FPPPlaylistReadinessResponse,
+  FPPPlaylistEntryReconciliationResponse,
 } from '../api'
 // Renamed on import, not re-declared: seam B's `Event` is identical to
 // the wire schema's Event plus a branded `EventSeq` (see api/domain.ts);
@@ -178,6 +182,8 @@ import type {
   NightBackgroundAudio as NightBackgroundAudioType,
   NightBackgroundAudioStep as NightBackgroundAudioStepType,
   NightAuthorization as NightAuthorizationType,
+  FPPPlaylistReadinessResponse as FPPPlaylistReadinessResponseType,
+  FPPPlaylistEntryReconciliationResponse as FPPPlaylistEntryReconciliationResponseType,
 } from '../api'
 
 // Derived, not duplicated: these are indexed-access views onto seam B's
@@ -242,3 +248,11 @@ export type NightBackgroundAudioStepState = NightBackgroundAudioStepType['state'
 // above.
 export type NightBackgroundAudioStepOutcome = NonNullable<NightBackgroundAudioStepType['outcome']>
 export type NightAuthorizationState = NightAuthorizationType['state']
+// TRACK-H-H2-SPEC.md §5/§6: same derived-not-duplicated pattern as every
+// alias above. `failingCondition` is present only when `ready` is false
+// (FPPPlaylistReadinessResponse's own schema description): same
+// NonNullable-over-optional-field shape as NightReadinessOutcome above.
+export type FPPPlaylistReadinessFailingCondition = NonNullable<
+  FPPPlaylistReadinessResponseType['failingCondition']
+>
+export type FPPPlaylistEntryReconciliationOutcome = FPPPlaylistEntryReconciliationResponseType['outcome']
