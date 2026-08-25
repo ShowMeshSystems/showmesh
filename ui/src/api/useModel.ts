@@ -70,6 +70,7 @@ import type { components } from './generated/schema'
 import type { ActionBinding, ActionInvocationResult, ResolumeActionResult } from './domain'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
+type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
@@ -134,6 +135,16 @@ export function putFPPEndpointsConfig(
   payload: ConfigFPPEndpointsPayload,
 ): Promise<FPPEndpointsConfigResponse> {
   return store.putFPPEndpointsConfig(payload)
+}
+
+// TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation recovery
+// surface. Same thin pass-through pattern as every method above.
+export function listFPPPlaylistEntryObservations(): Promise<SchemaFPPPlaylistEntryObservationsResponse> {
+  return store.listFPPPlaylistEntryObservations()
+}
+
+export function deleteFPPPlaylistEntryObservation(instanceUuid: string): Promise<void> {
+  return store.deleteFPPPlaylistEntryObservation(instanceUuid)
 }
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {

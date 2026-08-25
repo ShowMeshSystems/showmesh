@@ -190,6 +190,8 @@ export {
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
   getFPPEndpointsConfigRevisions,
+  listFPPPlaylistEntryObservations,
+  deleteFPPPlaylistEntryObservation,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,

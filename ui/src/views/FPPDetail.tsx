@@ -13,6 +13,7 @@ import {
   FPPResumePlaylistControl,
 } from '../components/FPPPlaylistTransportControls'
 import { FPPSetVolumeControl } from '../components/FPPSetVolumeControl'
+import { FPPResetObservationSequenceControl } from '../components/FPPResetObservationSequenceControl'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { PortGrid } from '../components/PortGrid'
 import { formatAbsolute } from '../app/time'
@@ -111,6 +112,21 @@ export function FPPDetail() {
               <FPPStartPlaylistControl instanceId={instance.instanceId} />
               <h4 className="panel__title">Volume</h4>
               <FPPSetVolumeControl instanceId={instance.instanceId} />
+            </section>
+          </PanelErrorBoundary>
+
+          {/* TRACK-H-H2-SPEC.md §5.1: the show-night recovery path for a
+              wedged sequence anchor, previously reachable only from
+              `showmeshctl fpp reset-observation-sequence --confirm`. Its
+              own panel, not folded into Commands above, because this is
+              recovery from a stuck evidence store, not a playback
+              primitive -- and it renders what it is about to discard
+              before allowing the (arm-then-confirm, not undoable) clear. */}
+          <PanelErrorBoundary panelLabel="Recovery">
+            <section className="panel">
+              <h3 className="panel__title">Recovery</h3>
+              <h4 className="panel__title">Reset observation sequence</h4>
+              <FPPResetObservationSequenceControl instanceUuid={instance.instanceUuid} />
             </section>
           </PanelErrorBoundary>
 
