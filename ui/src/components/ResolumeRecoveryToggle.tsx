@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { getResolumeRecovery, putResolumeRecoveryConfig } from '../api'
-import { describeApiError } from '../app/session'
+import {
+  getResolumeRecovery,
+  getResolumeRecoveryConfigRevisions,
+  putResolumeRecoveryConfig,
+  type ConfigRevisionMeta,
+} from '../api'
+import { describeApiError, evaluateScope } from '../app/session'
+import { useModelContext } from '../app/ModelContext'
+import { formatAbsolute } from '../app/time'
 import { ScopedButton } from './ScopedButton'
 
 // Track D seam D-3a §7.1/§2.6: the auto-restore toggle's own read and
@@ -26,7 +33,19 @@ type LoadState =
   | { kind: 'unconfigured' }
   | { kind: 'loaded'; enabled: boolean; configured: boolean }
 
+type RevisionsState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'loaded'; revisions: ConfigRevisionMeta[] }
+
 export function ResolumeRecoveryToggle() {
+  const model = useModelContext()
+  // GET /config/resolume.recovery/revisions requires config:write, unlike
+  // GET /resolume/recovery above (an open read) -- so, unlike `state`,
+  // this fetch is gated the same way Access.tsx gates its own read: a
+  // missing/stale/unavailable grant is a reason not to even attempt it.
+  const revisionsGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
+
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -35,6 +54,32 @@ export function ResolumeRecoveryToggle() {
   // first setSaving(true).
   const savingRef = useRef(false)
   const [reloadGeneration, setReloadGeneration] = useState(0)
+  const [revisionsState, setRevisionsState] = useState<RevisionsState>({ kind: 'loading' })
+
+  useEffect(() => {
+    if (!revisionsGate.allowed) return
+    let cancelled = false
+    setRevisionsState({ kind: 'loading' })
+
+    async function loadRevisions(): Promise<void> {
+      try {
+        const resp = await getResolumeRecoveryConfigRevisions()
+        if (cancelled) return
+        setRevisionsState({ kind: 'loaded', revisions: resp.revisions })
+      } catch (err) {
+        if (cancelled) return
+        setRevisionsState({ kind: 'error', message: describeApiError(err) })
+      }
+    }
+    void loadRevisions()
+    return () => {
+      cancelled = true
+    }
+    // Reloads on the same `reloadGeneration` bump a successful toggle
+    // write already causes above: writing the toggle mints a new
+    // resolume.recovery revision, so the history a fresh write leaves
+    // stale is exactly the one this effect exists to keep current.
+  }, [revisionsGate.allowed, reloadGeneration])
 
   useEffect(() => {
     let cancelled = false
@@ -110,6 +155,51 @@ export function ResolumeRecoveryToggle() {
             {saving ? 'Saving…' : state.enabled ? 'Turn automatic restore off' : 'Turn automatic restore on'}
           </ScopedButton>
         </>
+      )}
+
+      <h3 className="panel__title">Revision history</h3>
+      {!revisionsGate.allowed && (
+        <p className="text-muted">
+          Requires the <code>{CONFIG_WRITE_SCOPE}</code> scope. {revisionsGate.reason}
+        </p>
+      )}
+      {revisionsGate.allowed && revisionsState.kind === 'loading' && (
+        <p className="text-muted">Loading…</p>
+      )}
+      {revisionsGate.allowed && revisionsState.kind === 'error' && (
+        <p className="panel panel--error" role="alert">
+          {revisionsState.message}
+        </p>
+      )}
+      {revisionsGate.allowed && revisionsState.kind === 'loaded' && (
+        revisionsState.revisions.length === 0 ? (
+          <p className="text-muted">No revisions have ever been written for this configuration kind.</p>
+        ) : (
+          <div className="table-scroll">
+            <table className="config-table" aria-label="resolume.recovery revision history">
+              <thead>
+                <tr>
+                  <th scope="col">Revision</th>
+                  <th scope="col">Active</th>
+                  <th scope="col">Created at</th>
+                  <th scope="col">Created by</th>
+                  <th scope="col">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {revisionsState.revisions.map((rev) => (
+                  <tr key={rev.revision}>
+                    <td>{rev.revision}</td>
+                    <td>{rev.active ? 'active' : ''}</td>
+                    <td>{formatAbsolute(rev.createdAt)}</td>
+                    <td>{rev.createdByPrincipalName ?? '(coordinator startup migration)'}</td>
+                    <td>{rev.source}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
       )}
     </section>
   )

@@ -114,6 +114,10 @@ type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRes
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 type SchemaResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
+// The pending-instanceUuid-change acknowledgement.
+type SchemaAcknowledgeFPPInstanceUUIDChangeResponse = components['schemas']['AcknowledgeFPPInstanceUUIDChangeResponse']
+// `GET /` (getServiceDescriptor): the coordinator's own self-description.
+type SchemaServiceDescriptor = components['schemas']['ServiceDescriptor']
 // Track B seam B2c (ADR-039): the render.settings configuration singleton.
 type SchemaRenderSettingsConfigResponse = components['schemas']['RenderSettingsConfigResponse']
 type SchemaConfigRenderSettingsPayload = components['schemas']['ConfigRenderSettingsPayload']
@@ -464,6 +468,25 @@ export class ApiStore {
     this.loopAbort?.abort()
   }
 
+  /**
+   * `GET /api/v1/` (getServiceDescriptor). "Always open, with no
+   * credential and regardless of whether reads are otherwise closed"
+   * (api/openapi.yaml's own doc comment) -- the coordinator's build
+   * metadata, not one of the four resources the read-closure posture
+   * gates. A plain pass-through like the ADR-024 session methods below:
+   * not part of `Model`/the SSE stream, and never retried by this store
+   * -- a caller (ConnectionBanner) fetches it once and renders its own
+   * failure to do so as a fact, not a blank.
+   */
+  async getServiceDescriptor(): Promise<SchemaServiceDescriptor> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaServiceDescriptor>('/', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `POST /api/v1/session` (ADR-024 decisions 1, 5, 8). Throws on invalid credentials, rate limiting, etc — the caller renders the failure. */
   async login(name: string, password: string, deviceLabel: string): Promise<void> {
     const controller = this.beginSideCall()
@@ -657,6 +680,31 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaFPPPlaylistEntryReconciliationResponse>(
         `/integrations/fpp/playlist-entry-observations/${encodeURIComponent(instanceUuid)}/reconciliation`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `POST /api/v1/fpp/{instanceId}/instance-uuid/acknowledge`. Behind
+   * `config:write` (an operator-authored inventory decision, not a
+   * command sent to any device, api/openapi.yaml's own doc comment on
+   * this route). Clears the ONE marker that this endpoint's observed
+   * instanceUuid changed since it was last seen -- never the recorded
+   * instanceUuid itself. Throws 409 when the instance has no pending
+   * unacknowledged change. The response carries the post-acknowledge
+   * FPPInstance (or null, if the instance was removed between the write
+   * and this response), so a caller renders the OBSERVED result from
+   * this response body rather than the bare fact the POST returned.
+   */
+  async acknowledgeFPPInstanceUUIDChange(instanceId: string): Promise<SchemaAcknowledgeFPPInstanceUUIDChangeResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.postJson<SchemaAcknowledgeFPPInstanceUUIDChangeResponse>(
+        `/fpp/${encodeURIComponent(instanceId)}/instance-uuid/acknowledge`,
+        undefined,
         controller.signal,
       )
     } finally {
@@ -891,6 +939,23 @@ export class ApiStore {
       return await this.client.putJson<SchemaResolumeRecoveryConfigResponse>(
         '/config/resolume.recovery',
         payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/resolume.recovery/revisions` (Track D seam D-3a).
+   * Requires `config:write`, mirroring [getFPPEndpointsConfigRevisions]'s
+   * own posture: metadata only, newest first.
+   */
+  async getResolumeRecoveryConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/resolume.recovery/revisions',
         controller.signal,
       )
     } finally {

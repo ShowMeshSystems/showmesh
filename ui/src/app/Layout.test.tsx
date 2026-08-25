@@ -1,17 +1,23 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Layout } from './Layout'
 import { ModelContext } from './ModelContext'
 import type { ConnectionState, Model, SessionResponse } from './types'
 
-// ShowModeIndicator fetches on mount, so its one API call is mocked here
-// rather than left to hit the real client. See the ADR-033 tests at the
-// bottom of this file for what that indicator's presence is proving.
-const { getShowModeConfig } = vi.hoisted(() => ({ getShowModeConfig: vi.fn() }))
+// ShowModeIndicator and CoordinatorBuildNotice (the latter defined in
+// Layout.tsx itself) each fetch once on mount, so their API calls are
+// mocked here rather than left to hit the real client. See the ADR-033
+// tests at the bottom of this file for what the mode indicator's presence
+// is proving, and the "coordinator build notice" describe block below for
+// the latter.
+const { getShowModeConfig, getServiceDescriptor } = vi.hoisted(() => ({
+  getShowModeConfig: vi.fn(),
+  getServiceDescriptor: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getShowModeConfig }
+  return { ...actual, getShowModeConfig, getServiceDescriptor }
 })
 
 const SHOW_MODE_RESPONSE = {
@@ -26,9 +32,33 @@ const SHOW_MODE_RESPONSE = {
   resolumeWebSocketEffect: 'show mode: the Resolume WebSocket wake-up channel is held CLOSED.',
 }
 
+// Default coordinator descriptor every test not specifically about
+// CoordinatorBuildNotice gets, so its own fetch-on-mount never needs
+// separate attention in tests unrelated to it -- same reasoning as
+// SHOW_MODE_RESPONSE existing purely to keep ShowModeIndicator quiet in
+// those same unrelated tests.
+const SERVICE_DESCRIPTOR = {
+  serverTime: '2026-08-11T12:00:00.000Z',
+  apiVersion: 3,
+  supportedVersions: [3],
+  coordinator: { version: '1.2.3', commit: 'abcdef1234567', buildDate: '2026-08-20T00:00:00Z', goVersion: 'go1.23.0' },
+}
+
+beforeEach(() => {
+  getServiceDescriptor.mockResolvedValue(SERVICE_DESCRIPTOR)
+  // Otherwise a `waitFor` anywhere in this file gives ShowModeIndicator's
+  // own unrelated fetch-on-mount enough time to resolve to `undefined`
+  // (vi.fn()'s own default) and crash render -- this default keeps every
+  // test in this file that is not itself about the mode indicator quiet,
+  // exactly like SHOW_MODE_RESPONSE already does for the tests below that
+  // explicitly opt back into asserting on it.
+  getShowModeConfig.mockResolvedValue(SHOW_MODE_RESPONSE)
+})
+
 afterEach(() => {
   cleanup()
   getShowModeConfig.mockReset()
+  getServiceDescriptor.mockReset()
 })
 
 function model(
@@ -189,5 +219,33 @@ describe('Layout', () => {
     renderLayout(model({ kind: 'connecting' }, null))
 
     await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/Show/))
+  })
+
+  // GET / (getServiceDescriptor): "is this the thing I just deployed" has
+  // no other answer anywhere in this UI during a fleet upgrade. Rendered
+  // by CoordinatorBuildNotice, fetched once on mount, next to
+  // ConnectionBanner rather than gated on `blockContent` -- this component
+  // never touches `model.session`/`model.connection` at all, so it is
+  // trivially present in every state, unlike the SessionPanel/mode-
+  // indicator pairs above which specifically prove they are NOT gated.
+  describe('coordinator build notice', () => {
+    it('renders the coordinator version and the negotiated API version once the descriptor has been fetched', async () => {
+      renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+
+      await waitFor(() => expect(screen.getByText(/Coordinator 1\.2\.3/)).toBeInTheDocument())
+      expect(screen.getByText(/API v3/)).toBeInTheDocument()
+    })
+
+    it('states plainly that the build could not be read, rather than rendering blank, on a failed fetch', async () => {
+      getServiceDescriptor.mockReset()
+      getServiceDescriptor.mockRejectedValue(new Error('network unreachable'))
+      renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+
+      await waitFor(() =>
+        expect(screen.getByText(/Coordinator build: could not be read/)).toBeInTheDocument(),
+      )
+      expect(screen.getByText(/network unreachable/)).toBeInTheDocument()
+      expect(screen.queryByText(/^Coordinator 1\.2\.3/)).not.toBeInTheDocument()
+    })
   })
 })

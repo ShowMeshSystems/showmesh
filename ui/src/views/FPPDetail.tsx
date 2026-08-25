@@ -1,5 +1,8 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { acknowledgeFPPInstanceUUIDChange } from '../api'
 import { useModelContext } from '../app/ModelContext'
+import { describeApiError } from '../app/session'
 import { FPPHealthBadge } from '../components/DomainBadges'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
@@ -16,8 +19,10 @@ import { FPPSetVolumeControl } from '../components/FPPSetVolumeControl'
 import { FPPResetObservationSequenceControl } from '../components/FPPResetObservationSequenceControl'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { PortGrid } from '../components/PortGrid'
+import { ScopedButton } from '../components/ScopedButton'
 import { formatAbsolute } from '../app/time'
 import { findObservation, groupFppObservations } from '../app/fppSignals'
+import type { FPPInstance } from '../app/types'
 
 // FPP instance detail. Not named in spec section 6.4's view list, which
 // enumerates Dashboard/Nodes/Capabilities/Events, but OBSERVABILITY
@@ -77,6 +82,17 @@ export function FPPDetail() {
                 <dd>{instance.lastPollError ?? 'none'}</dd>
               </dl>
             </section>
+          </PanelErrorBoundary>
+
+          {/* `FPPInstance.instanceUuidChange` (api/openapi.yaml): non-null
+              exactly when this endpoint has a PENDING, unacknowledged uuid
+              change -- a rebuilt or replaced Pi, from the coordinator's
+              side. Its own panel, self-contained (renders nothing at all
+              for an instance with no pending change), so it never crowds
+              the summary panel above with a conflict most instances never
+              have. */}
+          <PanelErrorBoundary panelLabel="Pending instance uuid change">
+            <FPPInstanceUuidChangeNotice instance={instance} />
           </PanelErrorBoundary>
 
           {/* Step 7 seam C / Step 8, ADR-001/ADR-003: the full primitive
@@ -252,5 +268,105 @@ export function FPPDetail() {
         </>
       )}
     </div>
+  )
+}
+
+const REQUIRED_CONFIG_WRITE_SCOPE = 'config:write'
+
+// A human asserting a configured FPP endpoint's hardware really was
+// replaced (an SD card clone, a restored backup, a swapped controller) --
+// worded that way, never as a "dismiss" -- clears
+// `FPPInstance.instanceUuidChange`'s ONE conflict marker via
+// `POST /fpp/{instanceId}/instance-uuid/acknowledge`. Renders NOTHING for
+// an instance with no pending change and no just-completed acknowledgement,
+// so instances that have never had this conflict are not crowded with an
+// empty panel. Once acknowledged, renders the OBSERVED post-acknowledge
+// state straight from the response body (never the bare fact the POST
+// returned), the same posture FPPResetObservationSequenceControl's
+// ClearedOutcome uses for its own delete.
+function FPPInstanceUuidChangeNotice({ instance }: { instance: FPPInstance }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [ackResult, setAckResult] = useState<{ instance: FPPInstance | null } | null>(null)
+
+  if (instance.instanceUuidChange === null && ackResult === null) {
+    return null
+  }
+
+  if (ackResult !== null) {
+    return (
+      <section className="panel" aria-label="Pending instance uuid change">
+        <h3 className="panel__title">Pending instance uuid change</h3>
+        {ackResult.instance === null ? (
+          <p role="status">
+            Acknowledged. This instance is no longer configured, so there is nothing further
+            to show for it.
+          </p>
+        ) : ackResult.instance.instanceUuidChange === null ? (
+          <p role="status">
+            Acknowledged: no pending instance uuid change remains for this instance.
+          </p>
+        ) : (
+          // Should not happen against a correct coordinator (the
+          // acknowledge route always clears the marker or 409s before
+          // ever committing), but if it does, this says so rather than
+          // asserting the conflict is gone.
+          <p role="alert" className="panel panel--error">
+            The acknowledgement request succeeded, but a pending instance uuid change is
+            still present for this instance.
+          </p>
+        )}
+      </section>
+    )
+  }
+
+  // Non-null, guaranteed by the early return above.
+  const change = instance.instanceUuidChange!
+
+  async function handleAcknowledge(): Promise<void> {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const resp = await acknowledgeFPPInstanceUUIDChange(instance.instanceId)
+      setAckResult({ instance: resp.instance })
+    } catch (err) {
+      setError(describeApiError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="panel panel--warning" aria-label="Pending instance uuid change">
+      <h3 className="panel__title">Pending instance uuid change</h3>
+      <p>
+        <strong>This endpoint&rsquo;s reported hardware identity changed.</strong> This looks
+        like a rebuilt or replaced Pi: the coordinator observed a different instanceUuid than
+        the one it had on record, and is holding this as an unresolved conflict until an
+        operator confirms it.
+      </p>
+      <dl className="field-list">
+        <dt>Previous uuid</dt>
+        <dd>{change.previousUuid}</dd>
+        <dt>Current uuid</dt>
+        <dd>{instance.instanceUuid ?? 'unknown'}</dd>
+        <dt>Change first seen</dt>
+        <dd>{formatAbsolute(change.changedAt)}</dd>
+      </dl>
+      {error !== null && (
+        <p role="alert" className="session-form__error">
+          {error}
+        </p>
+      )}
+      <ScopedButton
+        requiredScope={REQUIRED_CONFIG_WRITE_SCOPE}
+        onClick={() => void handleAcknowledge()}
+        busy={busy}
+        busyReason="Acknowledging…"
+      >
+        {busy ? 'Acknowledging…' : 'Acknowledge: this hardware was replaced'}
+      </ScopedButton>
+    </section>
   )
 }
