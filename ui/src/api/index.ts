@@ -169,6 +169,8 @@ export type {
   NightPhaseEvidence,
   NightCue,
   NightCues,
+  NightBackgroundAudioStep,
+  NightBackgroundAudio,
   NightAuthorization,
   NightSessionState,
   NightSessionResponse,

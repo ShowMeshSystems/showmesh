@@ -333,6 +333,147 @@ describe('NightSession', () => {
     expect(screen.queryByText('not configured')).toBeNull()
   })
 
+  // The background-audio step log gets its own section, rendering
+  // the same evidence (state, outcome, reason, pinned revision, dispatch
+  // and resolution time) the Cues table already shows, and reusing the
+  // same badges rather than a second vocabulary.
+  it('renders background-audio steps with their sequence, kind, state and outcome', async () => {
+    getCurrentNightSession.mockResolvedValue({
+      serverTime: '2026-08-22T00:00:00Z',
+      session: makeNightSessionState({
+        state: 'resting-intershow',
+        backgroundAudio: {
+          state: 'recorded',
+          reason: '',
+          steps: [
+            {
+              sequence: 'background',
+              phase: 'restingBackgroundStart',
+              cueName: 'resting-bed-start',
+              kind: 'start',
+              actionRevision: 3,
+              state: 'resolved',
+              outcome: 'confirmed',
+              dispatchedAt: '2026-08-22T00:00:01Z',
+              resolvedAt: '2026-08-22T00:00:02Z',
+            },
+          ],
+        },
+      }),
+    })
+    renderView(makeModel())
+    await waitFor(() => expect(screen.getByText('resting-bed-start')).toBeVisible())
+    expect(screen.getByRole('heading', { name: 'Background audio' })).toBeVisible()
+    expect(screen.getByText('background')).toBeVisible()
+    expect(screen.getByText('start')).toBeVisible()
+    expect(screen.getByText('3')).toBeVisible()
+    expect(screen.getByText('confirmed')).toBeVisible()
+  })
+
+  // The two failures this section exists for: a refused restore leaves the
+  // bed stuck ducked, and an unconfirmed gain leaves it at an unknown
+  // level. Neither may blend in with a confirmed step.
+  it('renders a refused restore step and an unconfirmed gain step distinguishably from a confirmed one', async () => {
+    getCurrentNightSession.mockResolvedValue({
+      serverTime: '2026-08-22T00:00:00Z',
+      session: makeNightSessionState({
+        state: 'resting-intershow',
+        backgroundAudio: {
+          state: 'recorded',
+          reason: '',
+          steps: [
+            {
+              sequence: 'background',
+              phase: 'restingBackgroundStart',
+              cueName: 'resting-bed-start',
+              kind: 'start',
+              actionRevision: 1,
+              state: 'resolved',
+              outcome: 'confirmed',
+              dispatchedAt: '2026-08-22T00:00:01Z',
+              resolvedAt: '2026-08-22T00:00:02Z',
+            },
+            {
+              sequence: 'announcement',
+              phase: 'announcementRestore',
+              cueName: 'vo-announcement',
+              kind: 'resume',
+              actionRevision: 2,
+              state: 'resolved',
+              outcome: 'refused',
+              reason: 'node declined to raise gain past the configured ceiling',
+              dispatchedAt: '2026-08-22T00:05:01Z',
+              resolvedAt: '2026-08-22T00:05:02Z',
+            },
+            {
+              sequence: 'background',
+              phase: 'restingBackgroundGain',
+              cueName: 'resting-bed-gain',
+              kind: 'gain',
+              actionRevision: 4,
+              state: 'resolved',
+              outcome: 'unconfirmed',
+              reason: 'no expected response declared',
+              dispatchedAt: '2026-08-22T00:10:01Z',
+              resolvedAt: '2026-08-22T00:10:02Z',
+            },
+          ],
+        },
+      }),
+    })
+    renderView(makeModel())
+    await waitFor(() => expect(screen.getByText('vo-announcement')).toBeVisible())
+
+    function badgeSignature(labelText: string): { tone: string; icon: string | null } {
+      const badge = screen.getByText(labelText).closest('.status-badge')
+      if (badge === null) throw new Error(`expected "${labelText}" to render inside a .status-badge element`)
+      return { tone: badge.className, icon: badge.querySelector('.status-badge__icon')?.textContent ?? null }
+    }
+
+    const confirmed = badgeSignature('confirmed')
+    const refused = badgeSignature('refused')
+    const unconfirmed = badgeSignature('unconfirmed')
+
+    // The refused restore is a real failure — 'bad' tone — and both it and
+    // the unconfirmed gain must read differently from the confirmed step.
+    expect(refused.tone).toContain('status-badge--bad')
+    expect(refused).not.toEqual(confirmed)
+    expect(unconfirmed).not.toEqual(confirmed)
+    expect(unconfirmed).not.toEqual(refused)
+    expect(screen.getByText('node declined to raise gain past the configured ceiling')).toBeVisible()
+    expect(screen.getByText('no expected response declared')).toBeVisible()
+  })
+
+  // A session with no background audio configured (or none started this
+  // cycle) must not render an empty or broken table.
+  it('renders an explicit line, not an empty table, when no background-audio steps are recorded', async () => {
+    getCurrentNightSession.mockResolvedValue({
+      serverTime: '2026-08-22T00:00:00Z',
+      session: makeNightSessionState({
+        backgroundAudio: { state: 'recorded', reason: '', steps: [] },
+      }),
+    })
+    renderView(makeModel())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Background audio' })).toBeVisible())
+    expect(
+      screen.getByText('No background audio steps recorded for this cycle yet, or none is configured.'),
+    ).toBeVisible()
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  // A non-"recorded" backgroundAudio state (e.g. the read failed) renders
+  // the coordinator's own reason, same posture as readiness/cues above.
+  it('renders the coordinator-supplied reason when background-audio state is not "recorded"', async () => {
+    getCurrentNightSession.mockResolvedValue({
+      serverTime: '2026-08-22T00:00:00Z',
+      session: makeNightSessionState({
+        backgroundAudio: { state: 'not_available', reason: 'the outbox store could not be read', steps: [] },
+      }),
+    })
+    renderView(makeModel())
+    await waitFor(() => expect(screen.getByText('the outbox store could not be read')).toBeVisible())
+  })
+
   it('renders the lifecycle command buttons, disabled with a stated reason when night:command is not held', async () => {
     getCurrentNightSession.mockResolvedValue({
       serverTime: '2026-08-22T00:00:00Z',
