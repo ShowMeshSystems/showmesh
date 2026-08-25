@@ -32,33 +32,42 @@ export function Events() {
       {model.events.length === 0 ? (
         <p className="text-muted">No events recorded yet.</p>
       ) : (
-        <ul className="list-plain">
-          {model.events.map((event) => (
-            <PanelErrorBoundary key={event.seq} panelLabel={`Event ${event.seq}`}>
-              <li className="panel">
-                <div
-                  style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}
-                >
-                  <SeverityBadge severity={event.severity} />
-                  <span className="text-muted">
-                    {event.resource.kind}: {event.resource.id}
-                  </span>
-                </div>
-                <p style={{ margin: '0.5rem 0' }}>{event.summary}</p>
-                <dl className="field-list">
-                  <dt>Occurred</dt>
-                  <dd>{event.occurredAt !== null ? formatAbsolute(event.occurredAt) : 'occurrence time unknown'}</dd>
-                  <dt>Recorded</dt>
-                  <dd>{formatAbsolute(event.recordedAt)}</dd>
-                  <dt>Category</dt>
-                  <dd>{event.category}</dd>
-                  <dt>Source</dt>
-                  <dd>{event.source}</dd>
-                </dl>
-              </li>
-            </PanelErrorBoundary>
-          ))}
-        </ul>
+        // One row per event, so severity, message, subject and timing line
+        // up in columns instead of each event being its own scrolled panel.
+        <div className="table-scroll">
+          <table className="config-table">
+            <thead>
+              <tr>
+                <th scope="col">Severity</th>
+                <th scope="col">Message</th>
+                <th scope="col">Subject</th>
+                <th scope="col">Occurred</th>
+                <th scope="col">Recorded</th>
+                <th scope="col">Category</th>
+                <th scope="col">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {model.events.map((event) => (
+                <PanelErrorBoundary key={event.seq} panelLabel={`Event ${event.seq}`}>
+                  <tr>
+                    <th scope="row">
+                      <SeverityBadge severity={event.severity} />
+                    </th>
+                    <td>{event.summary}</td>
+                    <td>
+                      {event.resource.kind}: {event.resource.id}
+                    </td>
+                    <td>{event.occurredAt !== null ? formatAbsolute(event.occurredAt) : 'occurrence time unknown'}</td>
+                    <td>{formatAbsolute(event.recordedAt)}</td>
+                    <td>{event.category}</td>
+                    <td>{event.source}</td>
+                  </tr>
+                </PanelErrorBoundary>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

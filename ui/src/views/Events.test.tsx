@@ -5,6 +5,7 @@ import { Events } from './Events'
 import { ModelContext } from '../app/ModelContext'
 import { makeEvent, makeModel } from '../app/test-support/fixtures'
 import type { Model } from '../app/types'
+import { formatAbsolute } from '../app/time'
 
 afterEach(cleanup)
 
@@ -58,5 +59,31 @@ describe('Events', () => {
   it('states plainly when no events have been recorded', () => {
     renderEvents(makeModel({ events: [] }))
     expect(screen.getByText('No events recorded yet.')).toBeInTheDocument()
+  })
+
+  // One row per event (real table), so the operator scanning for what
+  // just changed gets aligned columns instead of stacked panels.
+  it('renders as a table with one row per event and the expected column headers', () => {
+    const events = [
+      makeEvent(2, { summary: 'first event' }),
+      makeEvent(1, { summary: 'second event' }),
+    ]
+    renderEvents(makeModel({ events }))
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
+    expect(headers).toEqual(['Severity', 'Message', 'Subject', 'Occurred', 'Recorded', 'Category', 'Source'])
+    // Header row plus one row per event.
+    expect(screen.getAllByRole('row')).toHaveLength(events.length + 1)
+  })
+
+  // occurredAt: null must still render its own row and its own "occurrence
+  // time unknown" cell, distinct from a populated recordedAt in the same row.
+  it('renders an event with an unknown occurrence time as its own table row', () => {
+    const event = makeEvent(1, { occurredAt: null, recordedAt: '2026-08-11T12:05:00.000Z', summary: 'unknown occurrence' })
+    renderEvents(makeModel({ events: [event] }))
+    const row = screen.getByText('unknown occurrence').closest('tr')
+    expect(row).not.toBeNull()
+    expect(row).toHaveTextContent('occurrence time unknown')
+    expect(row).toHaveTextContent(formatAbsolute('2026-08-11T12:05:00.000Z'))
   })
 })

@@ -43,6 +43,18 @@ describe('FPPList', () => {
     expect(screen.getByText('No FPP instances are configured on this coordinator.')).toBeInTheDocument()
   })
 
+  // One row per instance (real table), so endpoint, health and version
+  // line up in columns instead of each instance being its own panel.
+  it('renders as a table with one row per instance and the expected column headers', () => {
+    const fpp = [makeFPPInstance('fpp-front'), makeFPPInstance('fpp-back')]
+    renderFPPList(makeModel({ fpp }))
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
+    expect(headers).toEqual(['Instance', 'Endpoint', 'Health', 'Version', 'Last poll error'])
+    // Header row plus one row per instance.
+    expect(screen.getAllByRole('row')).toHaveLength(fpp.length + 1)
+  })
+
   it("shows each instance's fpp.version", () => {
     const fpp = [
       makeFPPInstance('fpp-a', { observations: [makeEvidence({ signal: 'fpp.version', value: '9.4' })] }),
