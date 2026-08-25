@@ -13,7 +13,7 @@ import {
 } from '../components/DomainBadges'
 import { NightCommandButton } from '../components/NightCommandButton'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
-import type { NightCue, NightSessionState } from '../app/types'
+import type { NightBackgroundAudioStep, NightCue, NightSessionState } from '../app/types'
 
 // Track F seam F2 (RESTING-MODE.md, ADR-038): the night-session operating
 // view. Same posture as ResolumeView.tsx (this codebase's other
@@ -22,15 +22,27 @@ import type { NightCue, NightSessionState } from '../app/types'
 // stay reachable-but-disabled-with-a-reason rather than hidden
 // (ADR-024 decision 12).
 //
-// Three fields are deliberately absent from this view and every one below
-// it: audio gain, brightness ceiling/multiplier, and interlock/site-control
-// state. None of that capability exists in this coordinator yet
-// (RESTING-MODE.md §10's siteControl/interlocks are specified but
-// unimplemented, and the schema carries no gain/brightness fields at
-// all) — omitted rather than rendered as an empty placeholder, matching
-// this codebase's "an absent capability is not a blank control" posture
-// elsewhere (Layout.tsx's own comment on why Control/Configure stayed
-// absent from the nav until their first real behaviour shipped).
+// Two fields are deliberately absent from this view and every one below
+// it: brightness ceiling/multiplier, and interlock/site-control state.
+// Neither capability exists in this coordinator yet (RESTING-MODE.md §10's
+// siteControl/interlocks are specified but unimplemented, and the schema
+// carries no brightness field at all) — omitted rather than rendered as an
+// empty placeholder, matching this codebase's "an absent capability is not
+// a blank control" posture elsewhere (Layout.tsx's own comment on why
+// Control/Configure stayed absent from the nav until their first real
+// behaviour shipped).
+//
+// A THIRD field, background audio's configured maxGainDb ceiling, is
+// absent for a different reason: it is genuinely not part of
+// NightSessionState.backgroundAudio (NightBackgroundAudio) on
+// GET /night/session — it only exists on the WRITE-side
+// ConfigNightSessionBackgroundAudio/-Write config schemas. Rendering it
+// here would mean either fetching and cross-referencing the separate
+// night.session config object (a config read next to a session-state
+// view — a different resource with its own revision, not this endpoint's
+// evidence) or inventing a field this response does not carry. Neither is
+// this seam's contract, so it stays off this screen until GET
+// /night/session actually carries it.
 
 type LoadState =
   | { kind: 'loading' }
@@ -397,6 +409,80 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                         <td>{cue.reason ?? '—'}</td>
                         <td>{cue.dispatchedAt === null ? 'not dispatched' : formatAbsolute(cue.dispatchedAt)}</td>
                         <td>{cue.resolvedAt === null ? 'not resolved' : formatAbsolute(cue.resolvedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+        </section>
+      </PanelErrorBoundary>
+
+      <h3 className="section-title">Background audio</h3>
+      {/* resting.backgroundAudio's own durable step log — the
+          resting bed's playback sequence plus every announcement's duck,
+          restore/interrupt-stop step, all in one list keyed by their own
+          `sequence` column (never a second parallel vocabulary — this
+          reuses NightCueStateBadge/NightCueOutcomeBadge exactly as the Cues
+          table above does, since NightBackgroundAudioStep's state/outcome
+          enums are the identical wire vocabulary as NightCue's). An empty
+          `steps` list with state "recorded" means either backgroundAudio
+          is not configured at all, or it has never started this cycle
+          (NightBackgroundAudio's own schema description) — the two cannot
+          be told apart from this endpoint alone, so both render the same
+          explicit line rather than a blank section, on the Cues table's
+          own precedent just above. */}
+      <PanelErrorBoundary panelLabel="Background audio evidence">
+        <section className="panel">
+          {session.backgroundAudio.state !== 'recorded' && (
+            <p className="text-muted" role="status">
+              {session.backgroundAudio.reason}
+            </p>
+          )}
+          {session.backgroundAudio.state === 'recorded' &&
+            (session.backgroundAudio.steps.length === 0 ? (
+              <p className="text-muted">
+                No background audio steps recorded for this cycle yet, or none is configured.
+              </p>
+            ) : (
+              <div className="table-scroll">
+                <table className="config-table">
+                  <thead>
+                    <tr>
+                      <th>Sequence</th>
+                      <th>Cue</th>
+                      <th>Kind</th>
+                      <th>Pinned revision</th>
+                      <th>State</th>
+                      <th>Outcome</th>
+                      <th>Reason</th>
+                      <th>Dispatched</th>
+                      <th>Resolved</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {session.backgroundAudio.steps.map((step: NightBackgroundAudioStep, i) => (
+                      <tr key={`${step.sequence}-${step.cueName}-${step.kind}-${i}`}>
+                        <td>{step.sequence}</td>
+                        <td>{step.cueName}</td>
+                        <td>{step.kind}</td>
+                        <td>{step.actionRevision}</td>
+                        <td>
+                          <NightCueStateBadge state={step.state} />
+                        </td>
+                        <td>
+                          {/* Same posture as the Cues table's own comment
+                              just above: a refused restore/resume step or
+                              an unconfirmed gain step must not blend in
+                              with a confirmed one — refused renders 'bad'
+                              tone with its own icon, unconfirmed renders
+                              its own distinct icon/label, and neither is
+                              ever collapsed into 'confirmed'. */}
+                          {step.outcome === undefined ? '—' : <NightCueOutcomeBadge outcome={step.outcome} />}
+                        </td>
+                        <td>{step.reason ?? '—'}</td>
+                        <td>{step.dispatchedAt === null ? 'not dispatched' : formatAbsolute(step.dispatchedAt)}</td>
+                        <td>{step.resolvedAt === null ? 'not resolved' : formatAbsolute(step.resolvedAt)}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -128,6 +128,8 @@ export type {
   NightPhaseEvidence,
   NightCue,
   NightCues,
+  NightBackgroundAudio,
+  NightBackgroundAudioStep,
   NightAuthorization,
   NightCommandName,
   NightCommandResult,
@@ -166,6 +168,8 @@ import type {
   NightPhaseEvidence as NightPhaseEvidenceType,
   NightCue as NightCueType,
   NightCues as NightCuesType,
+  NightBackgroundAudio as NightBackgroundAudioType,
+  NightBackgroundAudioStep as NightBackgroundAudioStepType,
   NightAuthorization as NightAuthorizationType,
 } from '../api'
 
@@ -222,4 +226,12 @@ export type NightCueState = NightCueType['state']
 export type NightCueOutcome = NonNullable<NightCueType['outcome']>
 export type NightCuePhase = NightCueType['phase']
 export type NightCuesState = NightCuesType['state']
+export type NightBackgroundAudioState = NightBackgroundAudioType['state']
+export type NightBackgroundAudioSequence = NightBackgroundAudioStepType['sequence']
+export type NightBackgroundAudioStepKind = NightBackgroundAudioStepType['kind']
+export type NightBackgroundAudioStepState = NightBackgroundAudioStepType['state']
+// `outcome` (and `reason`) are optional wire fields, same shape as
+// NightCue's own outcome — see NightReadinessOutcome's identical comment
+// above.
+export type NightBackgroundAudioStepOutcome = NonNullable<NightBackgroundAudioStepType['outcome']>
 export type NightAuthorizationState = NightAuthorizationType['state']
