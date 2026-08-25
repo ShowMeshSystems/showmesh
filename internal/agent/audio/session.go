@@ -183,8 +183,8 @@ type Session struct {
 	// fadeDispatchedTarget is the gain [Session.startFadeLocked] actually
 	// told the engine to ramp toward, which is the CURRENT effective
 	// gain at dispatch time, not necessarily the fade's own configured
-	// target: a fade dispatched while suppressed ramps toward
-	// duckTargetGain instead. [Session.checkFadeCompletionLocked] judges
+	// target: a fade dispatched while suppressed ramps toward the
+	// suppressed gain instead. [Session.checkFadeCompletionLocked] judges
 	// completion against this, not against a value recomputed later,
 	// because a mute or a duck landing mid-fade drives the engine to a
 	// NEW gain via SetGain (see [Session.applyEffectiveGainLocked]),

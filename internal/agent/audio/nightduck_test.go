@@ -72,8 +72,9 @@ func TestNightAnnouncementDucksBedAndRestoresConfiguredGain(t *testing.T) {
 
 	startPlaying(t, m, ctx, "announcement-1", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
 	ducked, duckers := nightBedGain(t, m, "night-bg")
-	if duckers != 1 || ducked != duckTargetGain {
-		t.Fatalf("during the announcement: gain = %v, duckers = %d; want %v and exactly one ducker", ducked, duckers, duckTargetGain)
+	wantDucked := m.SettingsSnapshot().DuckTargetGain
+	if duckers != 1 || ducked != wantDucked {
+		t.Fatalf("during the announcement: gain = %v, duckers = %d; want %v and exactly one ducker", ducked, duckers, wantDucked)
 	}
 
 	m.Stop(ctx, "announcement-1", "ann-stop", 3)
@@ -109,6 +110,13 @@ func TestNightTwoDuckMechanismsCompoundBelowEitherIntendedLevel(t *testing.T) {
 	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "ann-asset", []byte("y"))
 	configured := nightConfiguredGain(-6)
 	coordinatorDuck := pkgaudio.Gain(float64(configured) * 0.25)
+
+	// A node duck depth below the coordinator's own level, so the two
+	// mechanisms genuinely stack rather than the deeper one simply
+	// winning: the depth is an operator setting now.
+	s := DefaultSettings
+	s.DuckTargetGain = pkgaudio.Gain(0.05)
+	m.SetSettings(s)
 
 	startPlaying(t, m, ctx, "night-bg", bedRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
 	m.GainSet(ctx, "night-bg", "bg-gain", 3, configured)
@@ -341,8 +349,8 @@ func TestNightBedStartingUnderAPlayingAnnouncementIsDucked(t *testing.T) {
 	if duckers != 1 {
 		t.Fatalf("bed started under a playing duck-policy announcement has %d ducker(s), want 1", duckers)
 	}
-	if ducked != duckTargetGain {
-		t.Fatalf("bed gain under the announcement = %v, want %v", ducked, duckTargetGain)
+	if wantDucked := m.SettingsSnapshot().DuckTargetGain; ducked != wantDucked {
+		t.Fatalf("bed gain under the announcement = %v, want %v", ducked, wantDucked)
 	}
 
 	m.Stop(ctx, "announcement-1", "ann-stop", 3)

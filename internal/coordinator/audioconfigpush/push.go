@@ -131,6 +131,7 @@ func pushSettings(ctx context.Context, cs ConfigStore, pub Publisher, now func()
 		"defaultFadeCurve":         payload.DefaultFadeCurve,
 		"defaultFadeDurationMs":    payload.DefaultFadeDurationMs,
 		"defaultMaxBackgroundGain": payload.DefaultMaxBackgroundGain,
+		"duckTargetGain":           payload.DuckTargetGain,
 		"ltcFrameRate":             payload.LTCFrameRate,
 		"ltcDefaultStartOffset":    payload.LTCDefaultStartOffset,
 		"revision":                 revision,

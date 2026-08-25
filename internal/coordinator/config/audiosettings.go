@@ -31,7 +31,7 @@ const (
 	AudioSettingsSourceAPI = "api"
 )
 
-// Bounds on audio.settings' four fields. Sanity bounds catching a typo (a
+// Bounds on audio.settings' numeric fields. Sanity bounds catching a typo (a
 // duration entered in seconds instead of milliseconds, a gain entered as a
 // percentage instead of a linear multiplier), not tuned ceilings — the
 // drift threshold in particular has never been measured (see
@@ -47,6 +47,11 @@ const (
 	// (12 dB of amplification above unity) purely to catch a typo; it is
 	// not a tuned headroom figure.
 	maxDefaultMaxBackgroundGain = 4.0
+
+	// maxDuckTargetGain is exclusive: a duck lowers a session, so unity
+	// (or more) is not a duck at all. Zero remains expressible and means
+	// the bed goes fully silent under an announcement.
+	maxDuckTargetGain = 1.0
 )
 
 // AudioSettingsPayload is config_revisions.payload_json's decoded,
@@ -74,6 +79,15 @@ type AudioSettingsPayload struct {
 	// [audio.Gain] — 1.0 is unity gain.
 	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
 
+	// DuckTargetGain is how far a node lowers a session while a
+	// higher-priority session ducks it (an announcement over a resting
+	// background bed), in the same linear-multiplier unit as
+	// DefaultMaxBackgroundGain: 0.0 is silence, 1.0 would be no duck at
+	// all and is refused. PROVISIONAL, NOT MEASURED — the shipped value
+	// has never been heard on the installation's speakers (RES-007). A muted session is unaffected: mute silences
+	// unconditionally.
+	DuckTargetGain float64 `json:"duckTargetGain"`
+
 	// LTCFrameRate is the closed vocabulary Resolume's timecode input
 	// supports ([audio.LTCFrameRate]): 24, 25, 29.97, or 30. This ships
 	// non-drop-frame at every rate — RES-001 §9 leaves Resolume's
@@ -99,6 +113,7 @@ var AudioSettingsDefaultPayload = AudioSettingsPayload{
 	DefaultFadeCurve:         string(audio.FadeCurveLinear),
 	DefaultFadeDurationMs:    1000,
 	DefaultMaxBackgroundGain: 0.6,
+	DuckTargetGain:           0.25,
 	LTCFrameRate:             string(audio.LTCFrameRate30),
 	LTCDefaultStartOffset:    "00:00:00:00",
 }
@@ -106,7 +121,7 @@ var AudioSettingsDefaultPayload = AudioSettingsPayload{
 var audioSettingsTopLevelKeys = map[string]bool{
 	"driftIgnoreThresholdMs": true, "defaultFadeCurve": true,
 	"defaultFadeDurationMs": true, "defaultMaxBackgroundGain": true,
-	"ltcFrameRate": true, "ltcDefaultStartOffset": true,
+	"duckTargetGain": true, "ltcFrameRate": true, "ltcDefaultStartOffset": true,
 }
 
 // EncodeAudioSettingsPayload marshals p into config_revisions.payload_json's
@@ -188,6 +203,23 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		}
 	}
 
+	duckGain, verr := decodeRequiredFloat(top, "duckTargetGain", "duckTargetGain")
+	if verr != nil {
+		return AudioSettingsPayload{}, verr
+	}
+	if err := audio.Gain(duckGain).Validate(); err != nil {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "duckTargetGain",
+			Detail: err.Error(),
+		}
+	}
+	if duckGain >= maxDuckTargetGain {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "duckTargetGain",
+			Detail: fmt.Sprintf("duckTargetGain must be below %v: a gain of %v or more does not duck anything", maxDuckTargetGain, maxDuckTargetGain),
+		}
+	}
+
 	ltcFrameRate, verr := decodeRequiredString(top, "ltcFrameRate", "ltcFrameRate")
 	if verr != nil {
 		return AudioSettingsPayload{}, verr
@@ -215,6 +247,7 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		DefaultFadeCurve:         fadeCurve,
 		DefaultFadeDurationMs:    fadeDurationMs,
 		DefaultMaxBackgroundGain: maxGain,
+		DuckTargetGain:           duckGain,
 		LTCFrameRate:             ltcFrameRate,
 		LTCDefaultStartOffset:    ltcOffset,
 	}, nil

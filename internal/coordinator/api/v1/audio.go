@@ -16,6 +16,7 @@ type ConfigAudioSettingsPayload struct {
 	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
 	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
 	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
+	DuckTargetGain           float64 `json:"duckTargetGain"`
 	LTCFrameRate             string  `json:"ltcFrameRate"`
 	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
 }

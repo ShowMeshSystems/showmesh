@@ -23,7 +23,8 @@ func validAudioSettingsConfig(revision int64) audioSettingsConfig {
 	return audioSettingsConfig{
 		DriftIgnoreThresholdMs: 50, DefaultFadeCurve: "linear",
 		DefaultFadeDurationMs: 500, DefaultMaxBackgroundGain: 0.8,
-		LTCFrameRate: "30", LTCDefaultStartOffset: "00:00:00:00",
+		DuckTargetGain: 0.2,
+		LTCFrameRate:   "30", LTCDefaultStartOffset: "00:00:00:00",
 		Revision: revision,
 	}
 }
