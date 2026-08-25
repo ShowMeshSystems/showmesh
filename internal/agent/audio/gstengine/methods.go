@@ -163,10 +163,18 @@ func (e *Engine) Load(ctx context.Context, handle agentaudio.EngineHandle, media
 // the branch had drifted to. A source that refuses this seek — including
 // at position 0 — fails Start as [pkgaudio.ErrEngineDecodeFailure],
 // indistinguishable from an undecodable asset. Start also clears any flow
-// block a prior Stop left behind: its own contract promises playback, not
-// only that it requires a Resume first, and a Start that reports Playing
-// while nothing flows is exactly the kind of stale claim this package
-// must not make.
+// block a prior Pause or Stop left behind: its own contract promises
+// playback, not only that it requires a Resume first, and a Start that
+// reports Playing while nothing flows is exactly the kind of stale claim
+// this package must not make. That unblock runs only after the seek
+// above has actually landed, exactly as Resume's does: unblocking first
+// would let whatever this branch already had parked at its own flow
+// block — carrying the branch's pre-seek position and pre-seek mixer pad
+// offset — reach the shared mix before the flushing seek that is meant
+// to discard it has taken effect, landing live output at a stale
+// position this call never named. A seek that fails leaves the block in
+// place rather than clearing it, since nothing has re-anchored this
+// branch to flow from yet.
 func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, position time.Duration) (agentaudio.EngineObservation, error) {
 	b, err := e.branchFor(handle)
 	if err != nil {
@@ -175,10 +183,10 @@ func (e *Engine) Start(ctx context.Context, handle agentaudio.EngineHandle, posi
 	if err := b.checkAnchorKnown(); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
-	b.unblockFlow()
 	if err := b.seekTo(ctx, position, func() { b.resyncMixerPads(position) }); err != nil {
 		return agentaudio.EngineObservation{}, err
 	}
+	b.unblockFlow()
 	// unfreeze only after the transition to PLAYING actually succeeds: it
 	// switches Position reporting from the frozen bookmark to a live
 	// query, and a caller must never see that live query while the
