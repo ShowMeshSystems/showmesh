@@ -8,6 +8,7 @@ import "fmt"
 type Frame struct {
 	Hours, Mins, Secs, Frame int
 	DropFrame                bool
+	OffStart                 int64
 }
 
 // Decode always fails: this build has no libltc linked in.

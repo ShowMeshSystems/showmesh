@@ -40,6 +40,17 @@ const ltcLivenessTimeout = 10 * ltcSilenceChunk
 // slowest sink pad.
 const ltcAppSrcLeadSeconds = 0.2
 
+// ltcAppSrcLeadDuration is [ltcAppSrcLeadSeconds] as a [time.Duration]: the
+// steady-state amount of already-queued audio a buffer sits behind between
+// being pushed and actually reaching the wire, since block=true keeps the
+// appsrc queue near max-bytes whenever the feeder is keeping up. StartLTC
+// advances a new run's start timecode by this much so the frame that
+// eventually plays at the requested position carries the requested value,
+// and the feeder's own observation reporting subtracts it back out so a
+// reported timecode reflects what is audible rather than what was just
+// pushed ahead of the existing queue.
+const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
+
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
 // feeder goroutine to exit after unblocking it. It is a backstop, not the
 // normal path: setting the pipeline to NULL should return a blocked
@@ -229,7 +240,26 @@ func (e *Engine) StartLTC(ctx context.Context, spec agentaudio.LTCSpec) (agentau
 		return e.ltc.observe(now), err
 	}
 
-	enc, err := ltcgen.NewEncoder(spec.FrameRate, spec.StartTimecode, e.ltc.sampleRate)
+	// The appsrc this encoder feeds already has up to ltcAppSrcLeadDuration
+	// of previously-queued audio ahead of whatever gets pushed next (see
+	// ltcAppSrcLeadDuration): this run's first pushed frame will not
+	// actually reach the wire until that backlog drains. Starting the
+	// encoder that far ahead of the requested timecode, rather than at it,
+	// is what makes the frame audible at spec.StartTimecode's position
+	// carry spec.StartTimecode's value instead of reading late by the
+	// queue depth.
+	compensatedStart, err := spec.StartTimecode.Advance(ltcAppSrcLeadDuration, spec.FrameRate)
+	if err != nil {
+		obs := agentaudio.LTCObservation{State: agentaudio.LTCFailed, Reason: err.Error()}
+		e.ltc.mu.Lock()
+		e.ltc.active = false
+		e.ltc.obs = obs
+		e.ltc.mu.Unlock()
+		obs.ObservedAt = now
+		return obs, err
+	}
+
+	enc, err := ltcgen.NewEncoder(spec.FrameRate, compensatedStart, e.ltc.sampleRate)
 	if err != nil {
 		obs := agentaudio.LTCObservation{State: agentaudio.LTCFailed, Reason: err.Error()}
 		e.ltc.mu.Lock()
@@ -388,6 +418,17 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 			return
 		}
 
+		// tc is the timecode of the frame just handed to appsrc, which is
+		// not the frame currently audible: it sits behind whatever this
+		// channel already had queued (see ltcAppSrcLeadDuration). Reporting
+		// tc directly would have this observation lead the audible output
+		// by the same queue depth, the mirror image of the start-time bug
+		// StartLTC compensates for above.
+		played := tc
+		if playedTC, err := tc.Advance(-ltcAppSrcLeadDuration, rate); err == nil {
+			played = playedTC
+		}
+
 		ch.mu.Lock()
 		if pushed && ch.generation == gen && ch.active && ch.anchorKnown && ch.emittedGeneration.Load() == gen {
 			ch.lastConfirmed = e.cfg.now()
@@ -396,7 +437,7 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 				FrameRateKnown: true,
 				FrameRate:      rate,
 				TimecodeKnown:  true,
-				Timecode:       tc,
+				Timecode:       played,
 			}
 		}
 		ch.mu.Unlock()
