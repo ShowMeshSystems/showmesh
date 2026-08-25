@@ -164,18 +164,18 @@ func TestResolveNodeChannelCount(t *testing.T) {
 			want:         3,
 		},
 		{
-			name: "an unavailable route's evidence is never used",
+			name: "an unavailable route's evidence is never used, and is not evidence at all",
 			routes: []audio.RouteEvidence{
 				{Device: route, ProbeResult: audio.ProbeResult{Available: false, Channels: 8}, LTCChannels: 8},
 			},
 			bindingCount: 3,
-			want:         3,
+			want:         0,
 		},
 		{
-			name:         "no matching route at all falls back to the binding floor",
+			name:         "no matching route at all reports no evidence rather than the binding floor",
 			routes:       nil,
 			bindingCount: 2,
-			want:         2,
+			want:         0,
 		},
 	}
 

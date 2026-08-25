@@ -32,6 +32,14 @@ func New(cfg Config) (*Engine, error) {
 	return &Engine{}, nil
 }
 
+// NewUnavailable matches the cgo build's own constructor for an Engine
+// that was never built. This build has no GStreamer backend at all, so
+// reason is recorded and every call still fails with
+// [unavailableReason], the truthful fact about this binary.
+func NewUnavailable(string) *Engine {
+	return &Engine{}
+}
+
 func (e *Engine) unavailable() error {
 	return fmt.Errorf("gstengine: %s", unavailableReason)
 }

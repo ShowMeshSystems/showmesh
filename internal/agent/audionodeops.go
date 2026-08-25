@@ -360,17 +360,31 @@ func gstAssetResolver(assetDir string) func(pkgaudio.MediaRef) (string, error) {
 // evidence recorded for programRoute, out of d — one [audio.Discovery]
 // run fresh by the caller (matching detectAudioCapabilities's own
 // no-caching rule) and shared with [resolveNodeChannelCount] rather than
-// each resolver re-running discovery's own real device probes. Falls
-// back to 48000 (reported as the source, never silently) when no matching
-// route evidence exists (a route not yet probed) or its rate is 0.
+// each resolver re-running discovery's own real device probes. Reports 0
+// with [noProbeEvidenceSource] when no matching route evidence exists (a
+// route not yet probed, or probed as unavailable) or its rate is 0: a
+// rate this route never advertised is not evidence, and
+// [buildGstEngineConfig] is what decides whether a guess is tolerable
+// for the sink actually being built against.
 func resolveNodeSampleRate(d audio.Discovery, programRoute string) (rate int, source string) {
 	for _, r := range d.Routes {
 		if r.Device == programRoute && r.Available && r.Rate > 0 {
 			return r.Rate, "advertised route probe evidence"
 		}
 	}
-	return 48000, "fallback: no advertised probe evidence for this route"
+	return 0, noProbeEvidenceSource
 }
+
+// noProbeEvidenceSource is what both route resolvers report when this
+// node's own discovery run recorded no usable evidence for the bound
+// route at all.
+const noProbeEvidenceSource = "none: this route has no advertised probe evidence"
+
+// realAudioSinkFactory is the GStreamer sink this node builds against on
+// real hardware. A route bound to it reaches a physical ALSA device,
+// which is where an invented rate or channel count is a defect rather
+// than harmless scaffolding.
+const realAudioSinkFactory = "alsasink"
 
 // audioEngineSinkFactory reports the GStreamer sink factory this node
 // builds against: [envGstAudioSinkOverride] when set, "alsasink"
@@ -379,7 +393,7 @@ func audioEngineSinkFactory() string {
 	if v := os.Getenv(envGstAudioSinkOverride); v != "" {
 		return v
 	}
-	return "alsasink"
+	return realAudioSinkFactory
 }
 
 // audioNodeChannelCount is the highest channel index the binding uses,
@@ -429,6 +443,7 @@ func resolveNodeChannelCount(d audio.Discovery, programRoute string, bindingCoun
 		if r.Channels > bindingCount {
 			return r.Channels, "advertised route probe evidence (unconstrained probe)"
 		}
+		return bindingCount, "bindings: highest program or LTC channel index, within this route's probed width"
 	}
-	return bindingCount, "bindings: highest program or LTC channel index"
+	return 0, noProbeEvidenceSource
 }

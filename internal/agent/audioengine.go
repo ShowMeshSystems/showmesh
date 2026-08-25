@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -29,10 +30,26 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 	rate, rateSource := resolveNodeSampleRate(d, node.ProgramRoute)
 	channelCount, chCountSource := resolveNodeChannelCount(d, node.ProgramRoute, audioNodeChannelCount(node))
 	cfg = staticGstEngineConfig(assetDir, node)
+	if cfg.SinkFactory != realAudioSinkFactory {
+		if rate <= 0 {
+			rate, rateSource = scaffoldSampleRate, "fallback: non-hardware sink, no advertised probe evidence for this route"
+		}
+		if channelCount <= 0 {
+			channelCount, chCountSource = audioNodeChannelCount(node), "fallback: non-hardware sink, bindings' highest program or LTC channel index"
+		}
+	}
 	cfg.SampleRate = rate
 	cfg.ChannelCount = channelCount
 	return cfg, rateSource, chCountSource
 }
+
+// scaffoldSampleRate is the rate a config built against a non-hardware
+// sink ([envGstAudioSinkOverride]) uses when this node has no probe
+// evidence for the bound route. Such a sink accepts whatever it is
+// handed, so the value is scaffolding rather than a claim about a
+// device. A route bound to the real [realAudioSinkFactory] gets no such
+// substitution: see [audioEngineRebuilder.rebuild].
+const scaffoldSampleRate = 48000
 
 // staticGstEngineConfig builds the part of a [gstengine.Config] that
 // needs no route probe: SinkFactory from [audioEngineSinkFactory] (the
@@ -51,7 +68,7 @@ func buildGstEngineConfig(ctx context.Context, assetDir string, node audioNodeCo
 func staticGstEngineConfig(assetDir string, node audioNodeConfig) gstengine.Config {
 	sinkFactory := audioEngineSinkFactory()
 	props := map[string]any{}
-	if sinkFactory == "alsasink" {
+	if sinkFactory == realAudioSinkFactory {
 		props["device"] = node.ProgramRoute
 	}
 	return gstengine.Config{
@@ -76,7 +93,8 @@ func staticGstEngineConfig(assetDir string, node audioNodeConfig) gstengine.Conf
 // unreachable in production, since it only ever calls newGstEngine with
 // a cfg already proven to pass Validate() (see rebuild's earlier
 // staticCfg.Validate() call, which differs only in SampleRate, and
-// [resolveNodeSampleRate] never returns a value <= 0). It is kept as a
+// rebuild refuses outright rather than calling this when the resolved
+// rate or channel count is not positive). It is kept as a
 // defensive backstop, not as the meaningful failure path for a bad
 // device: that path is [gstengine.Engine.Available] reporting false,
 // which rebuild binds and logs like any other outcome.
@@ -108,7 +126,25 @@ var newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
 // [audio.SwitchableEngine], in that order, so a session in flight is
 // failed visibly before its handle can reach a closed engine, and no
 // in-flight call can reach the outgoing engine after this method starts
-// closing it. While the outgoing engine is closed and the replacement is
+// closing it.
+//
+// A route bound to the real [realAudioSinkFactory] is only ever built
+// from this node's own probe evidence. When discovery recorded none for
+// it, rebuild REFUSES to build rather than substituting a rate and
+// channel count the device never advertised, and binds an engine that
+// reports that refusal. Measured on a MOTU M4: the substituted pair
+// (48000Hz, the bindings' own highest channel index) is a combination
+// that device does not offer at all, while its advertised pair is
+// 44100Hz across 4 channels, so the guess turned a binding redelivered
+// at boot into an engine that could not reach PLAYING. Waiting for probe
+// evidence instead was rejected: [buildGstEngineConfig] runs discovery
+// inline on this very call, so "no evidence" means the probe just ran
+// against this route and found nothing, and waiting would only hold
+// rebuild's own lock, and every later revision behind it, retrying work
+// that belongs to discovery. A later revision, or a redelivery of this
+// one, rebuilds normally.
+//
+// While the outgoing engine is closed and the replacement is
 // not yet bound, [audio.SwitchableEngine] reports
 // [audio.SwitchableEngineRebindInProgressReason] rather than
 // [audio.SwitchableEngineNoBindingReason]: a binding WAS delivered, so a
@@ -173,6 +209,17 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 	closeReplacedEngine(prev, r.logger)
 
 	cfg, rateSource, channelCountSource := buildGstEngineConfig(context.Background(), r.assetDir, node)
+	if cfg.SampleRate <= 0 || cfg.ChannelCount <= 0 {
+		reason := fmt.Sprintf("this node has no advertised probe evidence for %q, so no output pipeline was built (sample rate: %s; channel count: %s)",
+			node.ProgramRoute, rateSource, channelCountSource)
+		if r.logger != nil {
+			r.logger.Error("refused to build the real audio engine against a route with no probe evidence", "revision", node.Revision, "program_route", node.ProgramRoute, "reason", reason)
+		}
+		r.bind(gstengine.NewUnavailable(reason))
+		r.builtRevision = node.Revision
+		r.haveBuilt = true
+		return
+	}
 	engine, err := newGstEngine(cfg)
 	if err != nil {
 		// See newGstEngine's doc comment: production never reaches this
