@@ -489,8 +489,20 @@ func clearRetainedShowMode(t *testing.T) {
 
 // awaitRenderReport reads the node's own retained render report straight
 // off the broker, which is the only evidence surface available with no
-// coordinator running.
+// coordinator running, waiting for this file's own gate surface to report
+// a failure drawing.
 func awaitRenderReport(t *testing.T, nodeID string) mqttproto.RenderPayload {
+	t.Helper()
+	return awaitRenderReportMatching(t, nodeID, func(s mqttproto.RenderSurfaceReport) bool {
+		return s.SurfaceID == gateSurfaceID && s.Drawing == mqttproto.RenderDrawingFailure
+	})
+}
+
+// awaitRenderReportMatching is awaitRenderReport for any surface condition:
+// it returns the first retained render report containing a surface match
+// accepts. Parameterized because more than one running-system gate needs
+// this same broker read for a different surface and a different condition.
+func awaitRenderReportMatching(t *testing.T, nodeID string, match func(mqttproto.RenderSurfaceReport) bool) mqttproto.RenderPayload {
 	t.Helper()
 	topic, err := mqttproto.ObservedTopic(nodeID, "render")
 	if err != nil {
@@ -538,13 +550,13 @@ func awaitRenderReport(t *testing.T, nodeID string) mqttproto.RenderPayload {
 		mu.Unlock()
 		if ok {
 			for _, s := range p.Surfaces {
-				if s.SurfaceID == gateSurfaceID && s.Drawing == mqttproto.RenderDrawingFailure {
+				if match(s) {
 					return p
 				}
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("no render report carrying %s ever arrived on %s", gateSurfaceID, topic)
+	t.Fatalf("no matching render report ever arrived on %s", topic)
 	return mqttproto.RenderPayload{}
 }

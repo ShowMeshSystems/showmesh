@@ -302,6 +302,68 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		idleOutput = IdleOutputBlack
 	}
 
+	return newFrameWriter(sup, surfaceID, source, timeline, channelStart, channelCount, width, height, stepTime, idleOutput, showMode, logger), nil
+}
+
+// unknownTimeline is the [TimelineSource] a writer with no timeline of its
+// own reads: permanently [multisync.StateUnknown], which [idleContentStates]
+// already treats as idle. A real value rather than a nil check on the frame
+// loop, so writeOneFrame keeps one invariant (timeline is never nil) instead
+// of branching on absence every tick.
+type unknownTimeline struct{}
+
+func (unknownTimeline) Snapshot() multisync.Snapshot {
+	return multisync.Snapshot{State: multisync.StateUnknown}
+}
+
+// emptyFrameSource is the [FrameSource] a writer with no sequence reads: it
+// covers no frame at all and says so. A writer holding this must be in an
+// idle state on every tick (see [NewDiagnosticFrameWriter]); if it somehow
+// is not, the extraction fails loudly into the failure output rather than
+// dereferencing nil.
+type emptyFrameSource struct{}
+
+func (emptyFrameSource) FrameCount() int  { return 0 }
+func (emptyFrameSource) StepTimeMS() byte { return 0 }
+func (emptyFrameSource) ChannelRange(frame, start, count int, dst []byte) error {
+	return fmt.Errorf("pipeline: this writer holds no sequence, so frame %d channels %d..%d cannot be extracted", frame, start+1, start+count)
+}
+
+// NewDiagnosticFrameWriter builds a frame writer that draws
+// [IdleOutputDiagnostic] and nothing else, from a node's own local
+// configuration: no sequence, no timeline, no assignment, and therefore no
+// coordinator, broker, FPP master or asset manifest anywhere in its path.
+// See TRACK-B-BUILD-CONTRACT.md ruling 3's node-local amendment for why
+// that independence is the requirement rather than a convenience.
+//
+// Its timeline is [unknownTimeline], permanently an idle state, so every
+// tick it ever runs draws the diagnostic pattern: no upstream state can
+// turn it off, because it reads no upstream state.
+//
+// width, height and bytesPerPixel are the surface's own geometry, and the
+// caller is responsible for having built a pipeline [Spec] that expects
+// exactly width*height*bytesPerPixel bytes per frame. frameRate sets the
+// tick period, since there is no FSEQ file to read a step time from.
+func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, bytesPerPixel, frameRate int, logger Logger) (*FrameWriter, error) {
+	if width < 1 || height < 1 || bytesPerPixel < 1 {
+		return nil, fmt.Errorf("pipeline: surface %q: diagnostic geometry %dx%d at %d bytes per pixel is invalid", surfaceID, width, height, bytesPerPixel)
+	}
+	if frameRate < 1 {
+		return nil, fmt.Errorf("pipeline: surface %q: diagnostic frame rate %d is invalid", surfaceID, frameRate)
+	}
+	channelCount := width * height * bytesPerPixel
+	stepTime := time.Second / time.Duration(frameRate)
+	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, 0, channelCount, width, height, stepTime, IdleOutputDiagnostic, nil, logger), nil
+}
+
+// newFrameWriter allocates the writer both constructors above share: every
+// per-frame buffer, the diagnostic bar's geometry, and the alert pattern.
+// It validates nothing, since each exported constructor owns the checks its
+// own inputs need, but source and timeline must both be non-nil: the frame
+// loop dereferences them every tick and has no absence branch (see
+// [emptyFrameSource] and [unknownTimeline] for what a writer with neither
+// of its own passes instead).
+func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, stepTime time.Duration, idleOutput string, showMode ShowModeSource, logger Logger) *FrameWriter {
 	diagW, diagH, diagBPP := resolveGeometry(width, height, channelCount)
 	alertBuf := make([]byte, channelCount)
 	fillAlert(alertBuf, diagBPP)
@@ -314,7 +376,7 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		barWidthPx = 1
 	}
 
-	fw := &FrameWriter{
+	return &FrameWriter{
 		surfaceID:         surfaceID,
 		sup:               sup,
 		logger:            logger,
@@ -338,7 +400,6 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		stop:              make(chan struct{}),
 		done:              make(chan struct{}),
 	}
-	return fw, nil
 }
 
 // fillAlert paints [FailureOutputAlert]'s pattern across dst once, at
@@ -413,6 +474,10 @@ func (fw *FrameWriter) Stop() {
 	close(fw.stop)
 	<-fw.done
 }
+
+// IdleOutput reports which idle output this writer draws. Fixed at
+// construction, so no lock: a caller changing it replaces the writer.
+func (fw *FrameWriter) IdleOutput() string { return fw.idleOutput }
 
 // Counts returns the writer's cumulative written/late/dropped counts.
 func (fw *FrameWriter) Counts() (written, late, dropped int64) {

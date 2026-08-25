@@ -113,7 +113,40 @@ type Config struct {
 	// one named network interface. Empty means join every suitable
 	// interface (pkg/multisync.NewListener's own default).
 	MultiSyncInterface string
+
+	// DiagnosticSurface is this node's own locally configured diagnostic
+	// idle surface. See [DiagnosticSurface].
+	DiagnosticSurface DiagnosticSurface
 }
+
+// DiagnosticSurface is the node-local diagnostic idle output an operator
+// configures on the node itself. See TRACK-B-BUILD-CONTRACT.md ruling 3's
+// node-local amendment for why it is node-local start-time configuration
+// rather than a coordinator-delivered setting.
+type DiagnosticSurface struct {
+	// SurfaceID names the surface this node renders the diagnostic pattern
+	// on. Empty (the default) disables the whole feature: a node that was
+	// never asked for a local diagnostic surface must not invent one and
+	// start pushing frames at an output nobody configured.
+	SurfaceID string
+
+	// Width, Height and FrameRate are the diagnostic surface's geometry
+	// and tick rate. There is no FSEQ file to read a step time from, so
+	// FrameRate is the whole of it.
+	Width     int
+	Height    int
+	FrameRate int
+
+	// NDISourceName is the NDI source this surface sends on. Empty runs the
+	// same fakesink fallback an assignment with no usable output gets: the
+	// pipeline still runs and the frames are still produced, and the
+	// degraded-output reason says so rather than reporting a healthy send.
+	NDISourceName string
+}
+
+// Enabled reports whether this node was configured with a local diagnostic
+// surface at all.
+func (d DiagnosticSurface) Enabled() bool { return d.SurfaceID != "" }
 
 const (
 	envNodeID           = "SHOWMESH_NODE_ID"
@@ -138,12 +171,27 @@ const (
 	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
 	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
 
+	envDiagnosticSurface       = "SHOWMESH_RENDER_DIAGNOSTIC_SURFACE"
+	envDiagnosticWidth         = "SHOWMESH_RENDER_DIAGNOSTIC_WIDTH"
+	envDiagnosticHeight        = "SHOWMESH_RENDER_DIAGNOSTIC_HEIGHT"
+	envDiagnosticFrameRate     = "SHOWMESH_RENDER_DIAGNOSTIC_FRAME_RATE"
+	envDiagnosticNDISourceName = "SHOWMESH_RENDER_DIAGNOSTIC_NDI_SOURCE_NAME"
+
 	defaultBroker                 = "tcp://localhost:1883"
 	defaultLogLevel               = "info"
 	defaultAssetDir               = "./assets"
 	defaultAssetInventoryInterval = 2 * time.Minute
 	defaultRenderReportInterval   = 15 * time.Second
 	defaultAudioReportInterval    = 15 * time.Second
+
+	// The diagnostic surface's defaults are an ordinary 1080p projector
+	// output at the reference profile's own frame rate (RES-004/the Track B
+	// build contract's B0 spike measured 40 fps), so an operator who sets
+	// only SHOWMESH_RENDER_DIAGNOSTIC_SURFACE gets a usable picture without
+	// having to know four more variables exist.
+	defaultDiagnosticWidth     = 1920
+	defaultDiagnosticHeight    = 1080
+	defaultDiagnosticFrameRate = 40
 )
 
 // validLogLevels enumerates the accepted values for SHOWMESH_LOG_LEVEL.
@@ -241,6 +289,11 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		audioReportInterval = d
 	}
 
+	diagnostic, err := loadDiagnosticSurface(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		NodeID:                 nodeID,
 		NodeLabel:              getEnvDefault(lookup, envNodeLabel, ""),
@@ -257,6 +310,7 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		AudioReportInterval:    audioReportInterval,
 		MultiSyncListenAddr:    getEnvDefault(lookup, envMultiSyncListenAddr, ""),
 		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
+		DiagnosticSurface:      diagnostic,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -264,6 +318,55 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 	}
 
 	return cfg, nil
+}
+
+// loadDiagnosticSurface reads the node-local diagnostic idle surface's
+// variables. Every geometry variable is refused when set on a node that did
+// not name a surface, rather than silently ignored: an operator who set the
+// geometry and mistyped (or forgot) the surface variable would otherwise
+// get a dark wall and no error, the exact failure this surface exists to end.
+func loadDiagnosticSurface(lookup func(string) (string, bool)) (DiagnosticSurface, error) {
+	d := DiagnosticSurface{
+		SurfaceID:     strings.TrimSpace(getEnvDefault(lookup, envDiagnosticSurface, "")),
+		NDISourceName: getEnvDefault(lookup, envDiagnosticNDISourceName, ""),
+	}
+
+	var err error
+	if d.Width, err = intEnv(lookup, envDiagnosticWidth, defaultDiagnosticWidth); err != nil {
+		return DiagnosticSurface{}, err
+	}
+	if d.Height, err = intEnv(lookup, envDiagnosticHeight, defaultDiagnosticHeight); err != nil {
+		return DiagnosticSurface{}, err
+	}
+	if d.FrameRate, err = intEnv(lookup, envDiagnosticFrameRate, defaultDiagnosticFrameRate); err != nil {
+		return DiagnosticSurface{}, err
+	}
+
+	if !d.Enabled() {
+		for _, name := range []string{envDiagnosticWidth, envDiagnosticHeight, envDiagnosticFrameRate, envDiagnosticNDISourceName} {
+			if v, ok := lookup(name); ok && v != "" {
+				return DiagnosticSurface{}, fmt.Errorf("%s is set but %s is empty: the diagnostic surface's geometry configures nothing until it has a surface id", name, envDiagnosticSurface)
+			}
+		}
+	}
+
+	return d, nil
+}
+
+// intEnv reads key as an integer, or returns def when it is unset or empty.
+// It does not range-check: Validate is the one place a diagnostic surface's
+// numbers are required to be positive, so an out-of-range value is refused
+// there rather than by two rules that could disagree.
+func intEnv(lookup func(string) (string, bool), key string, def int) (int, error) {
+	raw, ok := lookup(key)
+	if !ok || raw == "" {
+		return def, nil
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, fmt.Errorf("%s %q is not an integer: %w", key, raw, err)
+	}
+	return v, nil
 }
 
 // resolveNodeID returns SHOWMESH_NODE_ID when set to a non-empty value
@@ -391,6 +494,15 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%s must be positive", envAudioReportInterval)
 	}
 
+	if c.DiagnosticSurface.Enabled() {
+		if c.DiagnosticSurface.Width <= 0 || c.DiagnosticSurface.Height <= 0 {
+			return fmt.Errorf("%s and %s must be positive", envDiagnosticWidth, envDiagnosticHeight)
+		}
+		if c.DiagnosticSurface.FrameRate <= 0 {
+			return fmt.Errorf("%s must be positive", envDiagnosticFrameRate)
+		}
+	}
+
 	return nil
 }
 
@@ -437,5 +549,6 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("audio_report_interval", c.AudioReportInterval),
 		slog.String("multisync_listen_addr", c.MultiSyncListenAddr),
 		slog.String("multisync_interface", c.MultiSyncInterface),
+		slog.String("diagnostic_surface_id", c.DiagnosticSurface.SurfaceID),
 	)
 }

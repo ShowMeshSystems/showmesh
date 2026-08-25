@@ -56,6 +56,16 @@ var agentConfigEnvVars = map[string]string{
 		"Config.MultiSyncListenAddr defaults to pkg/multisync's own default",
 	"SHOWMESH_MULTISYNC_INTERFACE": "restricts the MultiSync multicast group join to one named interface; " +
 		"Config.MultiSyncInterface",
+	"SHOWMESH_RENDER_DIAGNOSTIC_SURFACE": "names the node-local diagnostic idle surface, empty (the default) " +
+		"disabling it; DiagnosticSurface's own doc comment records why the owner's ruling on diagnostic idle " +
+		"output makes this node-local start-time configuration rather than a coordinator-delivered setting",
+	"SHOWMESH_RENDER_DIAGNOSTIC_WIDTH":  "the diagnostic surface's width; DiagnosticSurface.Width",
+	"SHOWMESH_RENDER_DIAGNOSTIC_HEIGHT": "the diagnostic surface's height; DiagnosticSurface.Height",
+	"SHOWMESH_RENDER_DIAGNOSTIC_FRAME_RATE": "the diagnostic surface's tick rate, the whole of its timing " +
+		"because it has no FSEQ to read a step time from; DiagnosticSurface.FrameRate",
+	"SHOWMESH_RENDER_DIAGNOSTIC_NDI_SOURCE_NAME": "the NDI source the diagnostic surface sends on; empty runs " +
+		"the same stated-degraded fakesink fallback an assignment with no usable output gets, per " +
+		"DiagnosticSurface.NDISourceName",
 	"SHOWMESH_GST_LAUNCH": "points at a gst-launch-1.0 binary outside PATH; internal/agent/pipeline/resolve.go's " +
 		"own doc comment documents this as a value an operator can set, used as-is and not re-validated, " +
 		"distinct from a subsystem capability because an absent binary degrades to \"unsupported\" rather than " +

@@ -178,7 +178,10 @@ func Run() int {
 	// value copied at construction.
 	showMode := NewShowModeHolder(time.Now)
 
-	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, showMode, logger)
+	// The diagnostic surface id is handed in HERE, ahead of the boot resume
+	// below, because the resume builds that surface's frame writer and the
+	// idle-output override has to be in place before it does.
+	renderOps := newRenderOperations(sup, assignmentStore, cfg.AssetDir, timeline, showMode, cfg.DiagnosticSurface.SurfaceID, logger)
 
 	// catalogStore is this node's held Cue catalog (TRACK-H-H3-SPEC.md
 	// section 4) — constructed here, outside newMQTTConn, for the same
@@ -247,6 +250,11 @@ func Run() int {
 			logger.Info("resumed a persisted render assignment at startup", "surface_id", a.SurfaceID, "applied_at", a.AppliedAt)
 		}
 	}
+
+	// The node-local diagnostic idle surface, started AFTER the boot resume
+	// above so a resumed assignment keeps the surface it owns and takes the
+	// idle-output override instead of a second writer.
+	renderOps.StartDiagnosticSurfaceIfConfigured(cfg.DiagnosticSurface, time.Now)
 
 	// audioEngine is the real [gstengine] backend behind a
 	// [audio.SwitchableEngine]: Available() reports false with

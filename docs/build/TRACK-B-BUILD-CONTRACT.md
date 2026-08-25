@@ -153,6 +153,61 @@ that hazard explicitly: an operator choosing it is choosing an output that
 looks identical to a failure. It is never a default and never what
 `diagnostic` falls back to.
 
+#### Ruling 3 amended: `diagnostic` is also configurable node-locally, and the node-local setting wins
+
+**Added from the owner's ruling that the diagnostic idle output must render
+unconditionally.** The paragraphs above make `diagnostic` an
+operator-settable value in the `render.settings` configuration object,
+resolved by the coordinator and delivered to the node on a
+`render.surface.apply`. That is the only authority the original ruling
+named, and as the only authority it is wrong for the case the mode exists
+to serve.
+
+The owner's words: **"99 out of 100 times I'll use that is when FPP wouldn't
+be on to display output."** A diagnostic reached only through the control
+plane is missing exactly when the control plane is. Delivering it requires a
+broker, a reachable coordinator, a resolved asset manifest and an FSEQ file
+already on disk; the operator reaches for it when those are the things that
+are down. So:
+
+- **A node may be configured locally to draw the diagnostic idle output on
+  one named surface**, with no coordinator, broker, FPP master, assignment,
+  sequence or held catalog in the path. This is start-time node
+  configuration (`SHOWMESH_RENDER_DIAGNOSTIC_SURFACE` and its geometry
+  companions), in the same category as the broker URL and the MultiSync bind
+  address.
+- **The node-local setting takes precedence over the assigned
+  `render.settings.idleOutput` for that surface.** Precedence, not refusal
+  and not displacement: when a persisted assignment resumes onto the named
+  surface (ruling 4), that assignment's own frame writer is built with the
+  diagnostic idle output instead of its assigned one. The surface keeps its
+  assignment and still draws content whenever the timeline plays; only the
+  idle output changes.
+- **Refusing instead of overriding defeats the ruling on exactly the nodes
+  it was filed for.** A node holding an assignment for that surface, booting
+  with FPP dead, reads the timeline as `unknown`, which this ruling's own
+  table makes an idle state, and draws the assigned idle output, which
+  defaults to `black`. Refusing the diagnostic there leaves a black wall and
+  a log line, which is the reported failure, not a fix for it.
+- **When the named surface has no writer at all, the node stands up a
+  standalone diagnostic surface**: its own pipeline and a frame writer whose
+  timeline is permanently `unknown` and whose sequence is empty, so no
+  upstream state can turn the pattern off.
+
+This does not reopen ADR-039. That record requires operator configuration to
+be store-backed because the coordinator has a store for it to live in; the
+node agent has none, and every one of its settings is environment-driven
+(`internal/agent/config`, whose own `envinventory_test.go` records that this
+is the total documented surface of a store-less process rather than a list
+of promotion candidates). The assigned idle output remains store-backed and
+coordinator-resolved exactly as before. What is added is a second, local
+authority that exists precisely because the first one cannot be relied on to
+arrive.
+
+The generated-content requirement above is unchanged and applies to both
+paths: the node-local diagnostic output is the same swept bar, never a held
+frame.
+
 ### Ruling 4: the node is told its surface; it does not discover it
 
 There is no configuration-distribution path to a node today (ADR-025's cache
