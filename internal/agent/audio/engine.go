@@ -28,6 +28,29 @@ func boundedObserveContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(ctx, observeTimeout)
 }
 
+// advanceCallTimeout bounds every Load/Start call [Session.advanceLocked]
+// makes while moving a session onto its next item. RunWatcher's own
+// caller wires it with the agent's root context, which has no deadline
+// (agent.go). Without a bound of its own here, a single wedged Load or
+// Start holds s.mu for the life of the process, and [Manager.Snapshot],
+// which locks every session in turn, hangs behind it. SHOWMESH
+// HYPOTHESIS, NOT MEASURED: no bench data exists for the right bound
+// against a real backend; chosen well above observeTimeout because
+// Load/Start do real engine work Observe does not, while still bounding
+// a genuinely wedged call to one missed advance rather than an
+// indefinite stall.
+var advanceCallTimeout = 10 * time.Second // var, not const: shrunk by tests exercising the bound itself
+
+// boundedAdvanceContext derives a child of ctx bounded by
+// [advanceCallTimeout], for one engine call [Session.advanceLocked]
+// makes. Call it fresh before each such call, matching
+// [boundedObserveContext]'s own per-call convention, so an earlier call's
+// own bound is never silently shared with (and shortened by) a later
+// one.
+func boundedAdvanceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, advanceCallTimeout)
+}
+
 // EngineObservation is what an Engine reports about one handle, collected
 // at ObservedAt. Every state-changing Engine method returns one collected
 // strictly after the change took effect — never the request echoed back —

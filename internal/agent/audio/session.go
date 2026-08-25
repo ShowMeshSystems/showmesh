@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -242,6 +243,15 @@ type Session struct {
 	gap           time.Duration
 	gapReason     string
 	gapObservedAt time.Time
+
+	// lastSnapshot is the most recent [SessionSnapshot] this session
+	// itself successfully built, via [Session.snapshotLocked]. Read
+	// lock-free by [Session.snapshotWithBudget] when it could not
+	// acquire s.mu within [snapshotLockBudget]. An atomic pointer,
+	// not a plain field, precisely because that read must never take
+	// s.mu itself (that is the whole case it exists to survive). Nil
+	// until this session's first successful snapshot.
+	lastSnapshot atomic.Pointer[SessionSnapshot]
 }
 
 // sortedSessionIDsLocked returns set's members as a deterministically
@@ -729,13 +739,23 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 
 	s.releaseEngineLocked(ctx)
 	dispatchedAt := s.mgr.now()
-	if _, err := s.prepareLocked(ctx, item); err != nil {
+	// Bounded fresh per call, not shared across both: this advance runs
+	// under RunWatcher's own caller, the agent's root context, which has
+	// no deadline of its own (agent.go). Without a bound here, a wedged
+	// Load or Start would hold s.mu for the life of the process and stall
+	// [Manager.Snapshot] behind it.
+	prepareCtx, prepareCancel := boundedAdvanceContext(ctx)
+	_, err := s.prepareLocked(prepareCtx, item)
+	prepareCancel()
+	if err != nil {
 		s.state = pkgaudio.StateFailed
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
-	obs, err := s.mgr.engine.Start(ctx, s.handle, 0)
+	startCtx, startCancel := boundedAdvanceContext(ctx)
+	obs, err := s.mgr.engine.Start(startCtx, s.handle, 0)
+	startCancel()
 	if err != nil {
 		s.state = pkgaudio.StateFailed
 		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
@@ -941,6 +961,85 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		}
 	}
 
+	s.lastSnapshot.Store(&snap)
+	return snap
+}
+
+// snapshotLockBudget bounds how long [Manager.Snapshot] waits to acquire
+// one session's own mutex before falling back to that session's last
+// retained snapshot instead of blocking further. Deliberately far
+// shorter than [advanceCallTimeout]: a session currently inside a
+// bounded engine call (advanceLocked, prepareLocked,
+// checkFadeCompletionLocked, ...) can legitimately hold s.mu for up to
+// that call's own bound, and Manager.Snapshot must not let waiting on
+// ONE such session delay fresh telemetry for every other session sharing
+// the same report tick. SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data
+// exists for the right budget against a real backend; chosen well above
+// any lock hold this package's own command paths need for ordinary
+// bookkeeping, so normal, brief contention is never mistaken for a
+// wedged session.
+var snapshotLockBudget = 200 * time.Millisecond // var, not const: shrunk by tests exercising the bound itself
+
+// snapshotWithBudget is [Manager.Snapshot]'s own per-session call. It
+// spawns the actual lock-and-snapshot onto its own goroutine and waits
+// for it only up to budget, rather than blocking on s.mu directly: a
+// session wedged inside a bounded engine call otherwise holds s.mu for
+// that call's own full bound, and Manager.Snapshot iterates every
+// session serially, so one wedged session would still delay every
+// session behind it in that iteration by up to that bound. On timeout
+// this reports [Session.staleFallbackSnapshot] instead. The spawned
+// goroutine is not abandoned forever: once it does acquire s.mu (as soon
+// as whatever held it releases, bounded per advanceCallTimeout/
+// observeTimeout, never truly indefinite) it still builds and records a
+// fresh snapshot into s.lastSnapshot for the NEXT call to find, then
+// discards its own now-unwanted result via the buffered channel.
+func (s *Session) snapshotWithBudget(ctx context.Context, budget time.Duration) SessionSnapshot {
+	done := make(chan SessionSnapshot, 1)
+	go func() {
+		s.mu.Lock()
+		snap := s.snapshotLocked(ctx)
+		s.mu.Unlock()
+		done <- snap
+	}()
+
+	select {
+	case snap := <-done:
+		return snap
+	case <-time.After(budget):
+		return s.staleFallbackSnapshot(budget)
+	}
+}
+
+// staleFallbackSnapshot builds the telemetry [Session.snapshotWithBudget]
+// reports when it could not acquire s.mu within its budget: s's last
+// successfully collected snapshot, with Fault/FaultReason overwritten to
+// state plainly that THIS report tick's evidence is stale and why. Every
+// other field is retained as documented "last known" evidence, never
+// fabricated for this tick. Reads s.lastSnapshot without s.mu by design
+// (see that field's own doc comment) and reads s.id directly for the
+// same reason: both are safe unlocked because neither is ever mutated
+// after [newSession] constructs this Session. A session with no prior
+// successful snapshot (freshly created, never yet observed) reports an
+// explicit "no telemetry collected yet" fault instead of a zero-value
+// SessionSnapshot that would otherwise look exactly like a healthy,
+// merely-idle session with nothing to report.
+func (s *Session) staleFallbackSnapshot(budget time.Duration) SessionSnapshot {
+	last := s.lastSnapshot.Load()
+	if last == nil {
+		return SessionSnapshot{
+			ID:    s.id,
+			State: pkgaudio.StateUnknown,
+			Fault: pkgaudio.FaultOther,
+			FaultReason: fmt.Sprintf(
+				"audio session telemetry could not be collected within %s of this report tick, and no prior snapshot exists to fall back to; the session is likely inside an in-flight engine call",
+				budget),
+		}
+	}
+	snap := *last
+	snap.Fault = pkgaudio.FaultOther
+	snap.FaultReason = fmt.Sprintf(
+		"audio session busy inside an in-flight engine call; could not collect fresh telemetry within %s of this report tick, reporting the last known state instead",
+		budget)
 	return snap
 }
 

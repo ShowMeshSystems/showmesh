@@ -221,6 +221,16 @@ func (m *Manager) get(id pkgaudio.SessionID) (*Session, bool) {
 // machine's own internal bookkeeping, real even while every command's
 // own outward-facing outcome is being rewritten to Unconfirmable. See
 // [Session.snapshotLocked].
+//
+// Each session is snapshotted through [Session.snapshotWithBudget], not
+// a direct Lock/Unlock: a session currently inside a bounded engine call
+// (advanceLocked's own natural-completion Start, chiefly) can
+// legitimately hold its mutex for up to that call's own bound, and this
+// loop is serial across sessions, so blocking directly on s.mu would let
+// ONE such session delay fresh telemetry for every session behind it in
+// this same call. A session Snapshot could not lock in time is reported
+// stale, with a stated fault, rather than silently missing or silently
+// stale; see [Session.staleFallbackSnapshot].
 func (m *Manager) Snapshot(ctx context.Context) []SessionSnapshot {
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
@@ -232,9 +242,7 @@ func (m *Manager) Snapshot(ctx context.Context) []SessionSnapshot {
 
 	out := make([]SessionSnapshot, 0, len(sessions)+len(corrupt))
 	for _, s := range sessions {
-		s.mu.Lock()
-		out = append(out, s.snapshotLocked(ctx))
-		s.mu.Unlock()
+		out = append(out, s.snapshotWithBudget(ctx, snapshotLockBudget))
 	}
 	for _, c := range corrupt {
 		out = append(out, corruptSessionSnapshot(c))
