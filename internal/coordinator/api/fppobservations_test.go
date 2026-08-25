@@ -64,7 +64,7 @@ func fppObservationBody(t *testing.T, instanceUUID string, sequence int64, playl
 }
 
 // fppObservationBodyWithAction is [fppObservationBody] with an explicit
-// action, for tests exercising schemaV17's entry-occurrence computation
+// action, for tests exercising schemaV18's entry-occurrence computation
 // (fppobservations.go's handlePostFPPPlaylistEntryObservation), which
 // branches on whether action is "start".
 func fppObservationBodyWithAction(t *testing.T, instanceUUID string, sequence int64, playlistName, section string, position int, action string) string {
@@ -205,7 +205,7 @@ func TestFPPObservationAcceptedIsStoredAndStreamVisible(t *testing.T) {
 }
 
 // TestFPPObservationEntryOccurrenceSequenceTracksStartNotEveryTick proves
-// schemaV17's own contract: EntryOccurrenceSequence is stable across
+// schemaV18's own contract: EntryOccurrenceSequence is stable across
 // ordinary "playing" ticks inside one entry occurrence, and changes on a
 // genuine re-entry signalled by action "start" — including a playlist
 // looping back to an entry whose EntryKey is otherwise identical to its

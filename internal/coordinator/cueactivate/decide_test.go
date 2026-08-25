@@ -534,7 +534,7 @@ func TestActivationIDStableAcrossRepeatedDecideForTheSameEntry(t *testing.T) {
 
 // TestActivationIDChangesAcrossALoopingEntryOccurrence is defect 1's own
 // regression test: a looping FPP playlist re-activates its Cues. Two ticks
-// carrying the SAME EntryOccurrenceSequence (schemaV17's entry-start
+// carrying the SAME EntryOccurrenceSequence (schemaV18's entry-start
 // identity, computed at ingestion from action/entryKey — see
 // fppobservations.go and TestActivationIDStableAcrossRepeatedDecideForTheSameEntry
 // above for the "one dispatch per occurrence" half) must still dedup to one

@@ -264,7 +264,7 @@ const blackAndSilenceAudioSessionID = cueactivation.AudioSessionID
 
 // blackAndSilenceEpisode is defect 3's own episode dimension for the
 // blackAndSilence clear/silence idempotency keys: obs.InstanceUUID and its
-// EntryOccurrenceSequence (schemaV17's own entry-start identity, computed
+// EntryOccurrenceSequence (schemaV18's own entry-start identity, computed
 // at ingestion — see fppobservations.go and [cueactivate.activationID]'s
 // identical use one seam over). idempotency_key is globally unique on the
 // commands table (store.InsertCommand), and both

@@ -432,7 +432,7 @@ func nodeAssetsReady(ctx context.Context, st *store.Store, now time.Time, invent
 //
 // entrySequence is obs.EntryOccurrenceSequence, entry-START identity
 // computed at ingestion (internal/coordinator/api/fppobservations.go,
-// schemaV17's own doc comment) from the FPP-plugin-assigned action and
+// schemaV18's own doc comment) from the FPP-plugin-assigned action and
 // entry key — not a coordinator clock, and deliberately not the raw wire
 // `sequence` (that counter also advances on an ordinary MultiSync position
 // tick within one ongoing entry, so hashing it directly would mint a new

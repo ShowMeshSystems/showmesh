@@ -39,7 +39,7 @@ type FPPPlaylistEntryObservationRecord struct {
 	CoalescedSincePreviousAcknowledged int64
 	ReceivedAt                         time.Time
 
-	// EntryOccurrenceSequence is entry-START identity (schemaV17's own doc
+	// EntryOccurrenceSequence is entry-START identity (schemaV18's own doc
 	// comment): stable across repeat ticks inside one entry occurrence,
 	// and strictly newer on every genuine re-entry, including a playlist
 	// looping back to an entry whose EntryKey is otherwise identical to

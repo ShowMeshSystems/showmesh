@@ -297,7 +297,7 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		switch {
 		case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
 			// No prior observation for this instance: accept unconditionally,
-			// and this event starts its own occurrence (schemaV17).
+			// and this event starts its own occurrence (schemaV18).
 			rec.EntryOccurrenceSequence = rec.Sequence
 		case err != nil:
 			return err
@@ -313,7 +313,7 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 				}
 				return store.ErrFPPPlaylistEntryObservationSequenceConflict
 			}
-			// schemaV17's own rule: a fresh occurrence begins whenever this
+			// schemaV18's own rule: a fresh occurrence begins whenever this
 			// observation reports action "start" (FPP entering an entry,
 			// whether for the first time or looping back into one it
 			// already visited — EntryKey alone cannot tell those apart,
