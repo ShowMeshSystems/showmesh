@@ -138,10 +138,13 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	if policy == pkgaudio.ResumePolicyResume && handleStillValid {
 		obs, err := m.engine.Resume(ctx, t.handle)
 		if err != nil {
-			// Same treatment [Manager.Resume] gives this error: t stays
-			// Paused rather than Failed, so an operator Resume (or the
-			// next interrupter release) can still recover it instead of
-			// dead-ending here.
+			// Unlike [Manager.Resume]'s own failure handling (which
+			// drops the handle and fails the session), this internal
+			// reconciliation call leaves t Paused with its
+			// handle untouched: the handle here was never released, so
+			// there is no stale-handle retry to guard against, and an
+			// operator Resume (or the next interrupter release) can
+			// still recover it instead of dead-ending here.
 			t.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			t.persistBestEffortLocked("state change")
 			return

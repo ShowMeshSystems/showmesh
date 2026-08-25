@@ -414,6 +414,10 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		if err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			// Drop the handle so the ordinary operator retry re-prepares
+			// instead of calling into this same stale handle and failing
+			// identically.
+			s.releaseEngineLocked(ctx)
 			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
@@ -509,6 +513,14 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 		obs, err := s.mgr.engine.Resume(ctx, s.handle)
 		if err != nil {
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			// A failed Resume leaves the same stale handle a plain Resume
+			// retry would call into again and fail identically. Fail the
+			// session and drop the handle, matching Start's own failure
+			// treatment, so the ordinary next Start re-prepares instead
+			// of Resume's paused guard refusing forever against a handle
+			// that no longer exists.
+			s.state = pkgaudio.StateFailed
+			s.releaseEngineLocked(ctx)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePlaying
