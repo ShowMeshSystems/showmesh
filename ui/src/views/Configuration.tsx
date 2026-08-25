@@ -333,11 +333,16 @@ function FPPEndpointsSection() {
             </ScopedButton>
           </div>
 
+          {/* Revision history: a long, rarely-consulted list, kept apart
+              from the status line above and the editor above that,
+              a reasonable thing to start collapsed (nothing in it is
+              stale/failed evidence rendered through EvidenceValue; it is
+              a plain fetched list). */}
           {state.kind === 'loaded' && state.revisions.length > 0 && (
-            <>
-              <h4 className="panel__title">Revision history</h4>
+            <details className="details-section">
+              <summary className="details-section__summary">Revision history</summary>
               <RevisionsTable revisions={state.revisions} />
-            </>
+            </details>
           )}
         </>
       )}
@@ -494,11 +499,13 @@ function ResolumeInstancesSection() {
             </ScopedButton>
           </div>
 
+          {/* Revision history: same rationale as FPPEndpointsSection's own
+              identical comment above. */}
           {state.kind === 'loaded' && state.revisions.length > 0 && (
-            <>
-              <h4 className="panel__title">Revision history</h4>
+            <details className="details-section">
+              <summary className="details-section__summary">Revision history</summary>
               <RevisionsTable revisions={state.revisions} />
-            </>
+            </details>
           )}
         </>
       )}
@@ -783,11 +790,13 @@ function FPPMQTTSection() {
             </ScopedButton>
           </div>
 
+          {/* Revision history: same rationale as FPPEndpointsSection's own
+              identical comment above. */}
           {state.kind === 'loaded' && state.revisions.length > 0 && (
-            <>
-              <h4 className="panel__title">Revision history</h4>
+            <details className="details-section">
+              <summary className="details-section__summary">Revision history</summary>
               <RevisionsTable revisions={state.revisions} />
-            </>
+            </details>
           )}
         </>
       )}
@@ -983,11 +992,13 @@ function AssetsSettingsSection() {
             </ScopedButton>
           </div>
 
+          {/* Revision history: same rationale as FPPEndpointsSection's own
+              identical comment above. */}
           {state.kind === 'loaded' && state.revisions.length > 0 && (
-            <>
-              <h4 className="panel__title">Revision history</h4>
+            <details className="details-section">
+              <summary className="details-section__summary">Revision history</summary>
               <RevisionsTable revisions={state.revisions} />
-            </>
+            </details>
           )}
         </>
       )}

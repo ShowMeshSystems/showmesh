@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ShowActionDetail } from './ShowActionDetail'
 import { ModelContext } from '../app/ModelContext'
@@ -15,19 +15,25 @@ import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import { ForbiddenError } from '../api/errors'
 import type { Model } from '../app/types'
 
-const { putShowAction, getResolumeComposition } = vi.hoisted(() => ({
+const { putShowAction, getResolumeComposition, getShowAction, getShowActionRevisions, getActionBinding } = vi.hoisted(() => ({
   putShowAction: vi.fn(),
   getResolumeComposition: vi.fn(),
+  getShowAction: vi.fn(),
+  getShowActionRevisions: vi.fn(),
+  getActionBinding: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, putShowAction, getResolumeComposition }
+  return { ...actual, putShowAction, getResolumeComposition, getShowAction, getShowActionRevisions, getActionBinding }
 })
 
 afterEach(() => {
   cleanup()
   putShowAction.mockReset()
   getResolumeComposition.mockReset()
+  getShowAction.mockReset()
+  getShowActionRevisions.mockReset()
+  getActionBinding.mockReset()
 })
 
 function renderNewAction(model: Model) {
@@ -35,6 +41,18 @@ function renderNewAction(model: Model) {
     <ModelContext.Provider value={model}>
       <MemoryRouter initialEntries={['/actions/new']}>
         <ShowActionDetail isNew />
+      </MemoryRouter>
+    </ModelContext.Provider>,
+  )
+}
+
+function renderExistingAction(model: Model, id: string) {
+  return render(
+    <ModelContext.Provider value={model}>
+      <MemoryRouter initialEntries={[`/actions/${id}`]}>
+        <Routes>
+          <Route path="/actions/:id" element={<ShowActionDetail />} />
+        </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
   )
@@ -331,5 +349,53 @@ describe('ShowActionDetail (Resolume authoring)', () => {
       .map((o) => o.textContent ?? '')
       .filter((t) => t !== 'Choose one')
     expect(clipTexts).toEqual(['Second Deck Clip'])
+  })
+})
+
+// Readability seam: coordinator-reported status (the
+// active-revision line and revision history) is split from the authoring
+// fieldset above it. The status line stays visible; the long, rarely-
+// consulted revision history starts collapsed behind a <details>.
+describe('ShowActionDetail (status split from authoring)', () => {
+  it('shows the active-revision status without opening anything, and starts revision history collapsed', async () => {
+    getActionBinding.mockRejectedValue(new Error('not mocked for this test'))
+    getShowAction.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'show.action',
+      id: 'projectors-on',
+      revision: 4,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Projectors on',
+        description: '',
+        safetyClass: 'powerOff',
+        target: { integration: 'mqtt', broker: 'home-automation', publish: { topic: 't', payload: '', qos: 1, retain: false }, expect: { kind: 'none' } },
+      },
+      updatedAt: '2026-08-25T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    getShowActionRevisions.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'show.action',
+      revisions: [
+        { revision: 4, createdAt: '2026-08-25T00:00:00Z', createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1', source: 'api', note: '', active: true },
+        { revision: 3, createdAt: '2026-08-20T00:00:00Z', createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1', source: 'api', note: '', active: false },
+      ],
+    })
+    const user = userEvent.setup()
+    renderExistingAction(makeModel({ session: adminSession }), 'projectors-on')
+
+    const status = await screen.findByText(/Active revision 4/)
+    expect(status).toBeVisible()
+
+    const summary = screen.getByText('Revision history')
+    expect(summary.closest('details')).not.toHaveAttribute('open')
+    const revisionCell = screen.getAllByText('admin-1', { selector: 'td' })[0]!
+    expect(revisionCell).not.toBeVisible()
+
+    await user.click(summary)
+    expect(revisionCell).toBeVisible()
   })
 })
