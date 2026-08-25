@@ -204,7 +204,7 @@ function buildPayload(
   if (form.safetyClass === '') {
     return {
       error:
-        'Safety class is required and is never defaulted — pick the one that matches what this action actually does.',
+        'Safety class is required and is never defaulted; pick the one that matches what this action actually does.',
     }
   }
 
@@ -321,10 +321,10 @@ function buildPayload(
 
   // mqtt
   if (form.broker.trim() === '') {
-    return { error: 'Broker is required for an MQTT action and has no default — say which one this publishes on.' }
+    return { error: 'Broker is required for an MQTT action and has no default; say which one this publishes on.' }
   }
   if (form.publishTopic.trim() === '') return { error: 'Publish topic is required.' }
-  if (form.publishQos === '') return { error: 'QoS is required and has no default — pick 0, 1, or 2.' }
+  if (form.publishQos === '') return { error: 'QoS is required and has no default; pick 0, 1, or 2.' }
   if (form.expectKind !== 'none') {
     if (form.expectTopic.trim() === '') return { error: 'Expected response topic is required unless the response kind is "none".' }
     if (form.expectDeadlineSeconds.trim() === '') {
@@ -600,7 +600,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
 
       {!editable && (
         <p className="text-muted" role="status">
-          Viewing only — editing requires the <code>config:write</code> scope.
+          Viewing only: editing requires the <code>config:write</code> scope.
         </p>
       )}
 
@@ -635,7 +635,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
             onChange={(e) => setForm({ ...form, safetyClass: e.target.value as SafetyClass })}
           >
             <option value="" disabled>
-              Choose one — never defaulted
+              Choose one, never defaulted
             </option>
             {SAFETY_CLASSES.map((cls) => (
               <option key={cls} value={cls}>
@@ -681,7 +681,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
               </select>
             </label>
             <label className="form-field">
-              Params (JSON object, optional — shape depends on the primitive chosen above)
+              Params (JSON object, optional; shape depends on the primitive chosen above)
               <textarea
                 rows={4}
                 value={form.paramsJson}
@@ -692,7 +692,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
         ) : form.integration === 'mqtt' ? (
           <>
             <label className="form-field">
-              Broker (required — this deployment&rsquo;s declared broker identifier, never defaulted)
+              Broker (required; this deployment&rsquo;s declared broker identifier, never defaulted)
               <input type="text" value={form.broker} onChange={(e) => setForm({ ...form, broker: e.target.value })} />
             </label>
             <label className="form-field">
@@ -712,7 +712,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
               />
             </label>
             <label className="form-field">
-              QoS (required — no default)
+              QoS (required, no default)
               <select
                 value={form.publishQos}
                 onChange={(e) => setForm({ ...form, publishQos: e.target.value as FormState['publishQos'] })}
@@ -750,7 +750,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
             {form.expectKind === 'none' ? (
               <p className="text-muted">
                 No response is expected. This step will report as unconfirmable, on every run, by
-                design — that is honest, not a defect.
+                design: that is honest, not a defect.
               </p>
             ) : (
               <>
@@ -788,7 +788,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
         ) : (
           <>
             <p className="text-muted">
-              Every Resolume action is coordinator-required — Resolume holds no local fallback for
+              Every Resolume action is coordinator-required: Resolume holds no local fallback for
               a coordinator-hosted adapter. This macro step must use the
               &ldquo;coordinator-required&rdquo; local fallback class; see the macro editor.
             </p>
@@ -903,7 +903,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
                 </label>
                 {resolumeClips.some((c) => c.ambiguous) && (
                   <p className="text-muted" role="status">
-                    One or more clips in this list are ambiguous in Resolume itself — see the
+                    One or more clips in this list are ambiguous in Resolume itself; see the
                     ambiguous clips list on the Resolume view for what to rename.
                   </p>
                 )}

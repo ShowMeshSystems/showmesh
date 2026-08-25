@@ -87,14 +87,14 @@ export function ResolumeRecoveryToggle() {
       )}
       {state.kind === 'unconfigured' && (
         <p className="text-muted" role="status">
-          Resolume is not configured on this coordinator — crash recovery is not available.
+          Resolume is not configured on this coordinator: crash recovery is not available.
         </p>
       )}
       {state.kind === 'loaded' && (
         <>
           <p role="status">
             Automatic restore is <strong>{state.enabled ? 'ON' : 'OFF'}</strong>
-            {state.configured ? '' : ' (default — no revision has ever been written)'}.
+            {state.configured ? '' : ' (default; no revision has ever been written)'}.
           </p>
           {saveError !== null && (
             <p role="alert" className="session-form__error">

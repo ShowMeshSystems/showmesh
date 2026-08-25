@@ -119,7 +119,7 @@ export function Macros() {
         Narrow by show
         <input
           type="text"
-          placeholder="show id — leave blank for every show"
+          placeholder="show id, or leave blank for every show"
           value={showFilter}
           onChange={(e) => {
             const value = e.target.value
@@ -154,7 +154,7 @@ export function Macros() {
                   className="entity-link"
                   to={`/macros/${encodeURIComponent(run.macroObjectId)}/runs/${encodeURIComponent(run.id)}`}
                 >
-                  {run.macroObjectId} — started {formatAbsolute(run.createdAt)} by {run.issuerPrincipalName} (
+                  {run.macroObjectId}: started {formatAbsolute(run.createdAt)} by {run.issuerPrincipalName} (
                   {run.trigger})
                 </Link>
               </li>

@@ -23,7 +23,7 @@ export function ConnectionBanner({ connection }: ConnectionBannerProps) {
     case 'live':
       return (
         <div className="connection-banner connection-banner--live" role="status">
-          <span>● Live — connected to the coordinator</span>
+          <span>● Live: connected to the coordinator</span>
         </div>
       )
     case 'reconnecting':
@@ -31,7 +31,7 @@ export function ConnectionBanner({ connection }: ConnectionBannerProps) {
         <div className="connection-banner" role="alert">
           <span>
             ⚠ Cannot reach the ShowMesh coordinator right now. This is a browser/network
-            problem, not a report about the show — the show continues regardless.
+            problem, not a report about the show; the show continues regardless.
             Reconnecting (attempt {connection.attempt})…
           </span>
           <span className="connection-banner__detail">{connection.lastError}</span>
@@ -65,7 +65,7 @@ export function ConnectionBanner({ connection }: ConnectionBannerProps) {
         <div className="connection-banner" role="alert">
           <span>
             ⚠ This UI requires control API version {connection.requiredVersion}, but{' '}
-            {versionsClause}. Reconnecting will not help — update the coordinator or this UI so
+            {versionsClause}. Reconnecting will not help; update the coordinator or this UI so
             their versions match.
           </span>
           <span className="connection-banner__detail">{connection.detail}</span>

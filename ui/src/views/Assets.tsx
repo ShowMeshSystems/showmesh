@@ -68,7 +68,7 @@ export function Assets() {
       <h2 className="panel__title">Assets</h2>
       {/* Metadata in SQLite, bytes never in it (ADR-028 decision 4). */}
       <p className="text-muted">
-        Every stored asset&rsquo;s metadata — bytes never live in this list. Identity is show +
+        Every stored asset&rsquo;s metadata: bytes never live in this list. Identity is show +
         sequence + target + content hash, never a filename: three different targets&rsquo;
         artifacts for one xLights sequence may legitimately share one filename.
       </p>
@@ -143,7 +143,7 @@ export function Assets() {
                           <td>{a.current ? 'current' : 'superseded'}</td>
                           <td>
                             {formatAbsolute(a.createdAt)}
-                            {a.createdByPrincipalName !== null && ` — ${a.createdByPrincipalName}`}
+                            {a.createdByPrincipalName !== null && `: ${a.createdByPrincipalName}`}
                           </td>
                           <td>
                             <a href={assetContentUrl(a.id)} download={a.runtimeFilename}>

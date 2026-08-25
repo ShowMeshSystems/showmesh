@@ -119,7 +119,7 @@ function CompositionSummaryView({
               {composition.decks.map((deck) => (
                 <li key={deck.id}>
                   {deck.name}
-                  {deck.closed ? ' (closed)' : ''} — {deck.clipCount} clip{deck.clipCount === 1 ? '' : 's'}
+                  {deck.closed ? ' (closed)' : ''}: {deck.clipCount} clip{deck.clipCount === 1 ? '' : 's'}
                 </li>
               ))}
             </ul>
@@ -221,7 +221,7 @@ export function ResolumeCompositionUpload() {
       <h3 className="panel__title">Resolume composition</h3>
       <p className="text-muted">
         The composition file this coordinator reads clip, layer and deck ids from. Resolume itself is never asked
-        to list them — only an uploaded copy of the composition file is. Uploading a new file replaces the stored
+        to list them; only an uploaded copy of the composition file is. Uploading a new file replaces the stored
         map entirely.
       </p>
 

@@ -247,7 +247,7 @@ export function buildPayload(form: FormState): { payload: ConfigNightSessionWrit
       if ('error' in parsed) return parsed
       crossfadeMs = parsed.value
     } else if (form.backgroundAudioCrossfadeMs.trim() !== '') {
-      return { error: 'Crossfade duration only applies when item transition is "crossfade" — clear it or pick that transition.' }
+      return { error: 'Crossfade duration only applies when item transition is "crossfade". Clear it or pick that transition.' }
     }
     backgroundAudio = {
       items,
@@ -441,7 +441,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
       <h2 className="panel__title">{isNew ? 'New night session' : form.label || existingId}</h2>
       <p className="text-muted">
         The authored definition a night session pins. FPP alone authorizes and
-        schedules a night session — this form never accepts a calendar field or a rest-duration
+        schedules a night session; this form never accepts a calendar field or a rest-duration
         field, and the server rejects one outright if it ever appears. <code>siteControl</code>{' '}
         and <code>interlocks</code> are specified but not implemented in this seam, so this form
         never offers them either.
@@ -449,7 +449,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
 
       {!editable && (
         <p className="text-muted" role="status">
-          Viewing only — editing requires the <code>config:write</code> scope.
+          Viewing only: editing requires the <code>config:write</code> scope.
         </p>
       )}
 
@@ -748,7 +748,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
               )}
               {revisionView.kind === 'loaded' && (
                 <div className="panel">
-                  <h4 className="panel__title">Revision {revisionView.revision} (immutable — may not be the active one)</h4>
+                  <h4 className="panel__title">Revision {revisionView.revision} (immutable, may not be the active one)</h4>
                   <pre className="table-scroll">{JSON.stringify(revisionView.config.payload, null, 2)}</pre>
                 </div>
               )}

@@ -127,7 +127,7 @@ export function EvidenceValue({
         // banner would otherwise carry no local signal that its own
         // badge is not live.
         <span className="evidence__as-of" role="note">
-          Not live — this is the coordinator's state as of last contact, not a live verdict.
+          Not live: this is the coordinator's state as of last contact, not a live verdict.
         </span>
       )}
       {!isCurrent &&

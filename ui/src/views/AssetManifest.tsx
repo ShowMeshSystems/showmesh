@@ -50,7 +50,7 @@ function NodeManifestRow({ manifest }: { manifest: NodeAssetManifest }) {
           <ul className="list-plain">
             {manifest.missing.map((m) => (
               <li key={m.assetId}>
-                {m.sequence} — {m.filename} ({m.sizeBytes.toLocaleString()} B)
+                {m.sequence}: {m.filename} ({m.sizeBytes.toLocaleString()} B)
               </li>
             ))}
           </ul>
@@ -72,7 +72,7 @@ function NodeManifestRow({ manifest }: { manifest: NodeAssetManifest }) {
 
       {manifest.extra.length > 0 && (
         <>
-          <h4>Extra — held but not expected, never a basis for deletion ({manifest.extra.length})</h4>
+          <h4>Extra: held but not expected, never a basis for deletion ({manifest.extra.length})</h4>
           <ul className="list-plain">
             {manifest.extra.map((e) => (
               <li key={e.contentHash}>
@@ -116,7 +116,7 @@ export function AssetManifest() {
       <p className="text-muted">
         What the <Link to="/config/show.active">active show</Link> expects every declared node to
         hold, compared against what each node actually reports. &ldquo;Unknown&rdquo; is never
-        rendered as &ldquo;not ready&rdquo; — there is no evidence an unknown verdict rests on, so
+        rendered as &ldquo;not ready&rdquo;: there is no evidence an unknown verdict rests on, so
         it is stated as unknown rather than guessed either way.
       </p>
 

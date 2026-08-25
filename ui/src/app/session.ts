@@ -207,7 +207,7 @@ export function describeApiError(err: unknown): string {
     // ADR-024 decision 8: never a lockout, always transient — the
     // message must say so explicitly rather than reading like a ban.
     const wait = err.retryAfterSeconds === null ? 'a few seconds' : `${err.retryAfterSeconds}s`
-    return `Too many attempts from this network right now. Wait ${wait} and try again — this is a rate limit, not a lockout.`
+    return `Too many attempts from this network right now. Wait ${wait} and try again; this is a rate limit, not a lockout.`
   }
   if (err instanceof ForbiddenError) {
     return err.message

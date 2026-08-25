@@ -320,7 +320,7 @@ export function ResolumeView() {
                               ? 'persistent'
                               : (composition.decks.find((d) => d.id === clip.deckId)?.name ?? 'unknown deck')}
                           </td>
-                          <td>{clip.ambiguous ? 'yes — see below' : 'no'}</td>
+                          <td>{clip.ambiguous ? 'yes, see below' : 'no'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -363,14 +363,14 @@ export function ResolumeView() {
               {compositionState.kind === 'loaded' &&
                 (ambiguous.length === 0 ? (
                   <p className="text-muted">
-                    No ambiguous clips in the stored composition — every clip's (deck-or-persistent,
+                    No ambiguous clips in the stored composition: every clip's (deck-or-persistent,
                     layer, label) triple is unique and can be resolved by name.
                   </p>
                 ) : (
                   <>
                     <p className="text-muted" role="status">
-                      These clips share the same layer and label as another clip, so no reference —
-                      including one naming their layer — can ever resolve them. Rename one of each
+                      These clips share the same layer and label as another clip, so no reference,
+                      including one naming their layer, can ever resolve them. Rename one of each
                       colliding pair in Resolume and re-upload the composition file.
                     </p>
                     <table className="config-table">

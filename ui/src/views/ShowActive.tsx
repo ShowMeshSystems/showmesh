@@ -202,7 +202,7 @@ export function ShowActive() {
                           {showsState.shows.map((s) => (
                             <option key={s.id} value={s.id}>
                               {s.label} ({s.id})
-                              {s.id === currentShow ? ' — currently active' : ''}
+                              {s.id === currentShow ? ' (currently active)' : ''}
                             </option>
                           ))}
                         </select>
@@ -233,7 +233,7 @@ export function ShowActive() {
               <p>
                 This replaces the active show
                 {currentShow !== null ? ` (currently "${currentShow}")` : ''}. Every declared node&rsquo;s
-                expected asset set changes to what &ldquo;{armedTarget}&rdquo; now requires — the{' '}
+                expected asset set changes to what &ldquo;{armedTarget}&rdquo; now requires; the{' '}
                 <Link to="/assets/manifest">asset manifest</Link> will show which nodes are ready and
                 which are not once this takes effect. This is revisioned and audited like every other
                 configuration write.

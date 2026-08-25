@@ -102,7 +102,7 @@ function buildPayload(form: FormState): { payload: ConfigShowSurface } | { error
   }
   const channelCount = Number(form.channelCount)
   if (!Number.isInteger(channelCount) || channelCount < 1) {
-    return { error: 'Channel count must be a whole number of at least 1 — an empty range is refused server-side.' }
+    return { error: 'Channel count must be a whole number of at least 1; an empty range is refused server-side.' }
   }
   const width = Number(form.width)
   if (!Number.isInteger(width) || width < 1) return { error: 'Width must be a whole number of at least 1.' }
@@ -246,7 +246,7 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
 
       {!editable && (
         <p className="text-muted" role="status">
-          Viewing only — editing requires the <code>config:write</code> scope.
+          Viewing only: editing requires the <code>config:write</code> scope.
         </p>
       )}
 
@@ -271,7 +271,7 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
           <input type="text" value={form.node} onChange={(e) => setForm({ ...form, node: e.target.value })} />
         </label>
 
-        <h3 className="panel__title">Channel range (manual — a permanent path, not a fallback)</h3>
+        <h3 className="panel__title">Channel range (manual, a permanent path, not a fallback)</h3>
         {/* Manual channel ranges are a permanent first-class path (ADR-027 decision 4), not an
             escape hatch — named xLights-model selection has no path here until FPP Connect
             compatibility lands. */}
@@ -302,7 +302,7 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
         <h3 className="panel__title">Geometry</h3>
         <p className="text-muted">
           width × height × channels-per-pixel(pixel format) must equal the channel count above
-          exactly — enforced server-side.
+          exactly; enforced server-side.
         </p>
         <label className="form-field">
           Width (pixels)
@@ -319,7 +319,7 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
             onChange={(e) => setForm({ ...form, pixelFormat: e.target.value as SurfacePixelFormat })}
           >
             <option value="" disabled>
-              Choose one — never defaulted
+              Choose one, never defaulted
             </option>
             {PIXEL_FORMATS.map((f) => (
               <option key={f} value={f}>
@@ -341,14 +341,14 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
         {/* The day-0 profile of 40 fps over NDI on OptiPlex 7040-class hardware (ADR-026) is L0
             design intent — a target to validate, not a supported profile. */}
         <p className="text-muted">
-          The day-0 target of 40 fps over NDI is a value to validate, not a guaranteed profile —
+          The day-0 target of 40 fps over NDI is a value to validate, not a guaranteed profile;
           treat any number here as a starting point, not a promise.
         </p>
 
         <h3 className="panel__title">Output</h3>
         <p className="text-muted">
           Exactly one transport. Support for NDI is never evidence HDMI also works on this node,
-          and vice versa — nothing here defaults or infers one from the other.
+          and vice versa; nothing here defaults or infers one from the other.
         </p>
         <label className="form-field">
           Transport
@@ -357,7 +357,7 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
             onChange={(e) => setForm({ ...form, transport: e.target.value as SurfaceTransport })}
           >
             <option value="" disabled>
-              Choose one — never defaulted
+              Choose one, never defaulted
             </option>
             {TRANSPORTS.map((t) => (
               <option key={t} value={t}>

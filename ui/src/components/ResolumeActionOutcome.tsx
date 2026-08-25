@@ -19,7 +19,7 @@ export function ResolumeActionOutcome({ result, composition }: ResolumeActionOut
     <div role="status" className="resolume-action-outcome">
       {result.replay && (
         <p className="text-muted">
-          This was already requested (idempotency key already used) — nothing new was
+          This was already requested (idempotency key already used); nothing new was
           dispatched; showing the original result.
         </p>
       )}
@@ -33,12 +33,12 @@ export function ResolumeActionOutcome({ result, composition }: ResolumeActionOut
       )}
       {result.outcome === 'unconfirmable' && (
         <p className="resolume-action-outcome__unconfirmable">
-          Unconfirmable — neither success nor failure: {outcomeReason}
+          Unconfirmable, neither success nor failure: {outcomeReason}
         </p>
       )}
       {result.outcome === 'refused' && (
         <p role="alert" className="resolume-action-outcome__refused">
-          Refused — nothing was dispatched to Resolume: {outcomeReason}
+          Refused, nothing was dispatched to Resolume: {outcomeReason}
         </p>
       )}
       {result.outcome === 'failed' && (

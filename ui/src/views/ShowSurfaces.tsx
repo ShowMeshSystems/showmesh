@@ -68,7 +68,7 @@ export function ShowSurfaces() {
           fallback (ADR-027 decision 4). */}
       <p className="text-muted">
         A surface owns one node&rsquo;s canvas, its virtual-matrix channel extraction, and its
-        output. A manual channel range is a permanent, first-class way to configure one — not a
+        output. A manual channel range is a permanent, first-class way to configure one, not a
         fallback.
       </p>
 
@@ -76,7 +76,7 @@ export function ShowSurfaces() {
         Narrow by show
         <input
           type="text"
-          placeholder="show id — leave blank for every show"
+          placeholder="show id, or leave blank for every show"
           value={showFilter}
           onChange={(e) => {
             const value = e.target.value

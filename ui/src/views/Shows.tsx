@@ -63,7 +63,7 @@ export function Shows() {
       {/* A show is a namespace, not a container (ADR-027 decision 2): surfaces, actions, and macros
           each carry a reference to one, so programming one show cannot accidentally revise another. */}
       <p className="text-muted">
-        A show is a namespace — surfaces, actions, and macros each carry a reference to one, so
+        A show is a namespace: surfaces, actions, and macros each carry a reference to one, so
         programming one show cannot accidentally revise another. See{' '}
         <Link to="/config/show.active">the active show</Link> to change what is currently running.
       </p>

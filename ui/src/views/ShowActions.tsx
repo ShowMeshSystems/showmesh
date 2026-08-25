@@ -96,7 +96,7 @@ export function ShowActions() {
         )}
       </div>
       <p className="text-muted">
-        A show action is one logical step a macro can invoke — an FPP primitive or an external
+        A show action is one logical step a macro can invoke: an FPP primitive or an external
         MQTT command. Macros compose actions; actions never appear on their own in a running
         show.
       </p>
@@ -105,7 +105,7 @@ export function ShowActions() {
         Narrow by show
         <input
           type="text"
-          placeholder="show id — leave blank for every show"
+          placeholder="show id, or leave blank for every show"
           value={showFilter}
           onChange={(e) => {
             const value = e.target.value

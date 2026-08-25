@@ -96,7 +96,7 @@ export function NightCommandButton({
       )}
       {state.kind === 'audit_unavailable' && (
         <p role="alert" className="fpp-command-control__error">
-          Refused — the audit store is unavailable, so nothing was dispatched or recorded:{' '}
+          Refused, the audit store is unavailable, so nothing was dispatched or recorded:{' '}
           {messageOr(state.message)}
         </p>
       )}
