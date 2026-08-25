@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -462,5 +464,63 @@ func TestCueCatalogDeployRefusesUnknownField(t *testing.T) {
 	}
 	if pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 (nothing should have been dispatched)", pub.count())
+	}
+}
+
+// TestCueCatalogDeployRefusesOnClaimConflict proves TRACK-H-cues-and-
+// playlists.md section H5 build item 2's own ruling: deployment refuses
+// outright, with a named 409 naming both Cue ids and the exact claim
+// string, when the resolved catalog carries an H0.5 exclusive-claim
+// conflict — never dispatching a catalog it already knows two Cues cannot
+// both safely execute. assetsync.ResolveCueCatalog itself no longer
+// errors on a conflict (Decide/Authorize/participatingNodesForShow must
+// keep working for the rest of the fleet); this route is what actually
+// refuses.
+func TestCueCatalogDeployRefusesOnClaimConflict(t *testing.T) {
+	api, st, pub, token := newCueCatalogDeployFixture(t)
+	auth := map[string]string{"Authorization": "Bearer " + token}
+
+	putAudioNodeForTest(t, st, "audio-01")
+	mustDeclareNode(t, st, "audio-01")
+
+	mustPutCue(t, api, token, "cue-a", `{
+		"show": "halloween-2026", "name": "A",
+		"outputs": {"audio": {"asset": "a-audio", "startOffsetMillis": 0}}
+	}`)
+	mustPutCue(t, api, token, "cue-b", `{
+		"show": "halloween-2026", "name": "B",
+		"outputs": {"audio": {"asset": "b-audio", "startOffsetMillis": 0}}
+	}`)
+	// playlist-a (fpp) and playlist-b (showmesh-audio) — the ONE
+	// concurrent-Playlist case H0.5 blesses — each with a Cue claiming the
+	// SAME node's program-audio-route: a genuine, reachable claim
+	// conflict, not merely a hypothetical two-showmesh-audio-playlists
+	// case build item 8 already refuses at authoring.
+	putPlaylistForTest(t, st, "playlist-a", config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "playlist-a", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "11111111-1111-1111-1111-111111111111", PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries:        []config.ShowPlaylistEntry{{ID: "cue-a-entry", Cue: "cue-a", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}}},
+	})
+	putPlaylistForTest(t, st, "playlist-b", config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "playlist-b", Runner: config.ShowPlaylistRunnerShowmeshAudio,
+		ShowmeshAudio: &config.ShowPlaylistShowmeshAudio{Repeat: config.ShowPlaylistShowmeshAudioRepeatNone},
+		Entries:       []config.ShowPlaylistEntry{{ID: "cue-b-entry", Cue: "cue-b"}},
+	})
+	mustPutShowActive(t, api, token, "halloween-2026")
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/audio-01/cue-catalog/deploy", `{}`, auth)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("deploy with a claim conflict: status = %d, want 409; body: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "cue-a") || !strings.Contains(string(body), "cue-b") {
+		t.Fatalf("refusal body %q does not name both cue ids", body)
+	}
+	if !strings.Contains(string(body), "program-audio-route") {
+		t.Fatalf("refusal body %q does not name the exact claim kind", body)
+	}
+	if pub.count() != 0 {
+		t.Fatalf("publish count = %d, want 0 (a conflicting catalog must never be dispatched)", pub.count())
 	}
 }

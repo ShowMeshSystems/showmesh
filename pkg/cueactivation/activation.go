@@ -137,6 +137,29 @@ func DecodeParams(params map[string]any) (Activation, error) {
 // to guarantee silence.
 const AudioSessionID = "cue-activation:show"
 
+// BackgroundSessionID is the one audio session the showmesh-audio
+// runner's background Playlist runs in (TRACK-H-cues-and-playlists.md
+// section H5, ruling 3): [pkgaudio.SourceRoleBackground].
+// Declared here, beside [AudioSessionID], for the identical reason that
+// constant lives here rather than being independently declared on each
+// side of the wire — the coordinator resolves and Applies a
+// show.playlist's pkgaudio.PlaylistRef against this id, and the node's
+// own Manager.RunWatcher advances whatever session is Playing under it,
+// so a second, independently declared copy of this string would compile,
+// drift, and leave the coordinator applying to a session the node's own
+// watcher never observes as the one it just started.
+const BackgroundSessionID = "cue-activation:background"
+
+// AnnouncementSessionID is the one audio session a directly-activated
+// announcement Cue runs in (TRACK-H-cues-and-playlists.md section H5 ruling 3):
+// [pkgaudio.SourceRoleAnnouncement]. An announcement Cue's EntryID is
+// empty (H3 spec section 5's "absent for a directly activated
+// announcement" rule, projected onto [Activation.EntryID] above) — this
+// id is what a coordinator dispatch and a node's own activateAudio agree
+// names the one announcement session, independent of which Cue most
+// recently activated into it.
+const AnnouncementSessionID = "cue-activation:announcement"
+
 // Ordered steps a Cue activation's audio session moves through on the node
 // (Apply, Prepare, Start, Seek — internal/agent/cueactivationaudio.go's
 // activateAudio, in that order), plus the one step the coordinator itself

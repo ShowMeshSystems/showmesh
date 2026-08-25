@@ -117,10 +117,42 @@ func resolveLTCStartOffsetTimecode(mgr *audio.Manager, startOffsetMillis int) (p
 	return tc, true
 }
 
+// announcementMixPolicy maps [cuecatalog.AnnouncementOutput.Policy]
+// (already validated at authoring time — config/showcue.go's
+// showCueAnnouncementPolicies is exactly [pkgaudio.MixPolicy]'s own
+// "duck"/"mix"/"interrupt" members, spelled identically) onto
+// [pkgaudio.MixPolicy], refusing anything that is not one of those three
+// closed-vocabulary strings rather than passing an unvalidated value
+// through to [pkgaudio.ApplyRequest.MixPolicy].
+func announcementMixPolicy(policy string) (pkgaudio.MixPolicy, error) {
+	mp := pkgaudio.MixPolicy(policy)
+	if err := mp.Validate(); err != nil {
+		return "", fmt.Errorf("cue.activate: outputs.announcement.policy %q is not a recognized mix policy: %w", policy, err)
+	}
+	if mp == pkgaudio.MixPolicyUnsupported {
+		return "", fmt.Errorf("cue.activate: outputs.announcement.policy %q is not directly authorable", policy)
+	}
+	return mp, nil
+}
+
 // activateAudio is TRACK-H-cues-and-playlists.md section H4's audio (and,
 // transitively, LTC) requirement: select the Cue's resolved audio asset,
-// apply it to this node's one show session (Apply, Prepare, Start), and
-// align playback to act.PositionMS via Seek.
+// apply it to the ONE session act's Cue actually belongs to, and align
+// playback to act.PositionMS via Seek.
+//
+// A Cue that declares the `announcement` output (H0.4) runs in
+// [cueactivation.AnnouncementSessionID] as [pkgaudio.SourceRoleAnnouncement]
+// with its declared duck/mix/interrupt [pkgaudio.MixPolicy] set on Apply —
+// TRACK-H-cues-and-playlists.md section H5 build item 2's own fix: this used to hardcode
+// [pkgaudio.SourceRoleShow] and never set MixPolicy at all, which is what
+// silently made every announcement play as an ordinary show Cue with no mix
+// relationship to whatever background session was already running. Every
+// other Cue (declaring `audio` without `announcement`) is unchanged: it
+// runs in [cueActivationAudioSessionID] as [pkgaudio.SourceRoleShow], which
+// is also the only role [audio.Manager.startLTCLocked] ever starts LTC for
+// (internal/agent/audio/ltclifecycle.go's isShowSessionLocked) — so an
+// announcement Cue that also declares `ltc` still emits none, by
+// construction, never a special case here.
 //
 // When ltc is non-nil, the session's own LTCStartOffset override is set on
 // Apply (before Start), so [audio.Manager.startLTCLocked] — the ONE
@@ -131,7 +163,7 @@ func resolveLTCStartOffsetTimecode(mgr *audio.Manager, startOffsetMillis int) (p
 // ltcgen, LTCGenerator.StartLTC, or multisync.Timeline directly; the
 // position crosses into the audio clock domain as data (PositionMS, a
 // plain time.Duration argument to Seek), never as a second clock.
-func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput) error {
+func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act cueactivation.Activation, out cuecatalog.AudioOutput, ltc *cuecatalog.LTCOutput, announcement *cuecatalog.AnnouncementOutput) error {
 	if out.Filename == "" {
 		return fmt.Errorf("cue.activate: audio output for Cue %q resolves asset %q to no runtime filename (no matching asset uploaded); refusing to open anything by asset id (ADR-043 decision 6)", act.CueID, out.Asset)
 	}
@@ -142,8 +174,21 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 		sizeBytes = info.Size()
 	}
 
+	id := cueActivationAudioSessionID
+	sourceRole := pkgaudio.SourceRoleShow
+	var mixPolicy *pkgaudio.MixPolicy
+	if announcement != nil {
+		id = pkgaudio.SessionID(cueactivation.AnnouncementSessionID)
+		sourceRole = pkgaudio.SourceRoleAnnouncement
+		mp, err := announcementMixPolicy(announcement.Policy)
+		if err != nil {
+			return err
+		}
+		mixPolicy = &mp
+	}
+
 	req := pkgaudio.ApplyRequest{
-		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleShow),
+		SourceRole: pkgaudio.SetField(sourceRole),
 		Media: pkgaudio.SetField(pkgaudio.MediaRef{
 			AssetID:     out.Asset,
 			ContentHash: contentHash,
@@ -156,13 +201,14 @@ func activateAudio(ctx context.Context, mgr *audio.Manager, assetDir string, act
 			RuntimeFilename: out.Filename,
 		}),
 	}
+	if mixPolicy != nil {
+		req.MixPolicy = pkgaudio.SetField(*mixPolicy)
+	}
 	if ltc != nil {
 		if tc, ok := resolveLTCStartOffsetTimecode(mgr, ltc.StartOffsetMillis); ok {
 			req.LTCStartOffset = pkgaudio.SetField(tc)
 		}
 	}
-
-	id := cueActivationAudioSessionID
 
 	applyOutcome := mgr.Apply(ctx, id, activationInvocation(act, "apply"), activationRevision(act, activationStepApply), req)
 	if audioOutcomeFailed(applyOutcome) {

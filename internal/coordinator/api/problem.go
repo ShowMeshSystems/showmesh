@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 )
 
@@ -536,6 +538,50 @@ func principalLockoutProblem(detail string) v1.Problem {
 		Title:  "Refused: this would lock out every administrator",
 		Status: http.StatusConflict,
 		Detail: detail,
+	}
+}
+
+// cueCatalogClaimConflictProblem is [handlers.handlePostCueCatalogDeploy]'s
+// own 409 (TRACK-H-cues-and-playlists.md section H5 build item 2's ruling):
+// the resolved catalog for nodeID carries at least one H0.5 exclusive-claim
+// conflict ([assetsync.Catalog.Conflicts]). Every conflict is named, not
+// only the first, so an operator sees the whole readiness problem in one
+// response rather than fixing one collision at a time by repeated deploy
+// attempts.
+func cueCatalogClaimConflictProblem(nodeID string, conflicts []assetsync.CatalogConflict) v1.Problem {
+	details := make([]string, 0, len(conflicts))
+	for _, c := range conflicts {
+		details = append(details, c.Detail())
+	}
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Cue catalog deploy refused: conflicting exclusive claims",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"the Cue catalog resolved for node %q cannot be deployed: %s. Fix the authoring conflict (change one "+
+				"Cue's outputs, or the Playlists that reference it) and retry.",
+			nodeID, strings.Join(details, "; ")),
+	}
+}
+
+// showmeshAudioPlaylistConflictProblem is [handlers.handlePutShowPlaylist]'s
+// own 409 (TRACK-H-cues-and-playlists.md section H5 build item 8): a Show
+// may hold at most one showmesh-audio playlist, because there is exactly
+// one background-audio session per node ([cueactivation.BackgroundSessionID])
+// for one to run in. The old behavior silently applied whichever playlist
+// sorted first by object id and logged a warning — an operator-invisible
+// alphabetical choice for what plays out of a speaker. Naming both ids
+// lets the operator pick which one to keep.
+func showmeshAudioPlaylistConflictProblem(existingID, newID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Refused: this Show already has a showmesh-audio playlist",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"show.playlist %q is already this Show's showmesh-audio playlist; there is exactly one background-audio "+
+				"session per node, so a second one (%q) is refused rather than silently choosing between them. Edit "+
+				"%q instead, or change its runner, then retry.",
+			existingID, newID, existingID),
 	}
 }
 

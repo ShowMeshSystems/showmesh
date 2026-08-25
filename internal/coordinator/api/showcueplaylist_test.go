@@ -429,14 +429,21 @@ func TestPutShowCueRoundTripPreservesEveryField(t *testing.T) {
 	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
 
+	// render+audio+ltc, deliberately WITHOUT announcement: TRACK-H-cues-
+	// and-playlists.md section H5 build item 5's own authoring-time
+	// refusal (config/showcue.go's decodeShowCueOutputs) rejects a Cue
+	// that declares both ltc and announcement, since a node has one LTC
+	// generator tied to the program-audio clock domain and the
+	// announcement session is not that domain. Announcement's own field
+	// round trip is covered separately by
+	// TestPutShowCueRoundTripPreservesAnnouncementFields below.
 	body := `{
 		"show": "halloween-2026",
 		"name": "Full Cue",
 		"outputs": {
 			"render": {"sequence": "thriller"},
 			"audio": {"asset": "thriller-audience", "startOffsetMillis": 1500},
-			"ltc": {"startOffsetMillis": 2500},
-			"announcement": {"policy": "duck", "duckGainDb": -18, "fadeMillis": 300}
+			"ltc": {"startOffsetMillis": 2500}
 		}
 	}`
 	want := v1.ConfigShowCue{
@@ -445,9 +452,6 @@ func TestPutShowCueRoundTripPreservesEveryField(t *testing.T) {
 			Render: &v1.ConfigShowCueRenderOutput{Sequence: "thriller"},
 			Audio:  &v1.ConfigShowCueAudioOutput{Asset: "thriller-audience", StartOffsetMillis: 1500},
 			LTC:    &v1.ConfigShowCueLTCOutput{StartOffsetMillis: 2500},
-			Announcement: &v1.ConfigShowCueAnnouncementOutput{
-				Policy: "duck", DuckGainDb: float64Ptr(-18), FadeMillis: 300,
-			},
 		},
 	}
 
@@ -466,6 +470,61 @@ func TestPutShowCueRoundTripPreservesEveryField(t *testing.T) {
 	}
 
 	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.cue/full", map[string]string{"Authorization": "Bearer " + token})
+	var getResp v1.ShowCueConfigResponse
+	if err := json.Unmarshal(getBody, &getResp); err != nil {
+		t.Fatalf("decode GET response: %v; body: %s", err, getBody)
+	}
+	if !reflect.DeepEqual(getResp.Payload, want) {
+		t.Errorf("GET response payload = %+v, want %+v", getResp.Payload, want)
+	}
+}
+
+// TestPutShowCueRoundTripPreservesAnnouncementFields is
+// TestPutShowCueRoundTripPreservesEveryField's own announcement-output
+// sibling, split out because a Cue must not declare both ltc and
+// announcement (TRACK-H-cues-and-playlists.md section H5 build item 5).
+func TestPutShowCueRoundTripPreservesAnnouncementFields(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	api := New(showObjectsTestDeps(svc, st), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	body := `{
+		"show": "halloween-2026",
+		"name": "Announcement Cue",
+		"outputs": {
+			"render": {"sequence": "thriller"},
+			"audio": {"asset": "thriller-audience", "startOffsetMillis": 1500},
+			"announcement": {"policy": "duck", "duckGainDb": -18, "fadeMillis": 300}
+		}
+	}`
+	want := v1.ConfigShowCue{
+		Show: "halloween-2026", Name: "Announcement Cue",
+		Outputs: v1.ConfigShowCueOutputs{
+			Render: &v1.ConfigShowCueRenderOutput{Sequence: "thriller"},
+			Audio:  &v1.ConfigShowCueAudioOutput{Asset: "thriller-audience", StartOffsetMillis: 1500},
+			Announcement: &v1.ConfigShowCueAnnouncementOutput{
+				Policy: "duck", DuckGainDb: float64Ptr(-18), FadeMillis: 300,
+			},
+		},
+	}
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.cue/announcement-full", body,
+		map[string]string{"Authorization": "Bearer " + token})
+	resp, putBody := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: status = %d, want 200; body: %s", resp.StatusCode, putBody)
+	}
+	var putResp v1.ShowCueConfigResponse
+	if err := json.Unmarshal(putBody, &putResp); err != nil {
+		t.Fatalf("decode PUT response: %v; body: %s", err, putBody)
+	}
+	if !reflect.DeepEqual(putResp.Payload, want) {
+		t.Errorf("PUT response payload = %+v, want %+v", putResp.Payload, want)
+	}
+
+	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/show.cue/announcement-full", map[string]string{"Authorization": "Bearer " + token})
 	var getResp v1.ShowCueConfigResponse
 	if err := json.Unmarshal(getBody, &getResp); err != nil {
 		t.Fatalf("decode GET response: %v; body: %s", err, getBody)

@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+// validCueJSON declares render, audio, and announcement — deliberately
+// NOT ltc alongside announcement: TRACK-H-cues-and-playlists.md section H5
+// build item 5's own authoring-time refusal (decodeShowCueOutputs) rejects
+// that combination, since a node has one LTC generator tied to the
+// program-audio clock domain and the announcement session is not that
+// domain. validLTCCueJSON below covers ltc instead.
 func validCueJSON() string {
 	return `{
 		"show": "halloween-2026",
@@ -12,8 +18,22 @@ func validCueJSON() string {
 		"outputs": {
 			"render": {"sequence": "thriller"},
 			"audio": {"asset": "thriller-audience", "startOffsetMillis": 0},
-			"ltc": {"startOffsetMillis": 0},
 			"announcement": {"policy": "duck", "duckGainDb": -18, "fadeMillis": 300}
+		}
+	}`
+}
+
+// validLTCCueJSON is validCueJSON's own render+audio+ltc sibling (no
+// announcement — see that function's own doc comment for why the two are
+// never declared together).
+func validLTCCueJSON() string {
+	return `{
+		"show": "halloween-2026",
+		"name": "Thriller (LTC)",
+		"outputs": {
+			"render": {"sequence": "thriller"},
+			"audio": {"asset": "thriller-audience", "startOffsetMillis": 0},
+			"ltc": {"startOffsetMillis": 0}
 		}
 	}`
 }
@@ -32,13 +52,42 @@ func TestDecodeShowCuePayloadValid(t *testing.T) {
 	if p.Outputs.Audio == nil || p.Outputs.Audio.Asset != "thriller-audience" || p.Outputs.Audio.StartOffsetMillis != 0 {
 		t.Fatalf("unexpected audio output: %+v", p.Outputs.Audio)
 	}
-	if p.Outputs.LTC == nil || p.Outputs.LTC.StartOffsetMillis != 0 {
-		t.Fatalf("unexpected ltc output: %+v", p.Outputs.LTC)
-	}
 	if p.Outputs.Announcement == nil || p.Outputs.Announcement.Policy != "duck" ||
 		p.Outputs.Announcement.DuckGainDb == nil || *p.Outputs.Announcement.DuckGainDb != -18 ||
 		p.Outputs.Announcement.FadeMillis != 300 {
 		t.Fatalf("unexpected announcement output: %+v", p.Outputs.Announcement)
+	}
+}
+
+func TestDecodeShowCuePayloadValidLTC(t *testing.T) {
+	p, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if p.Outputs.LTC == nil || p.Outputs.LTC.StartOffsetMillis != 0 {
+		t.Fatalf("unexpected ltc output: %+v", p.Outputs.LTC)
+	}
+	if p.Outputs.Announcement != nil {
+		t.Fatalf("unexpected announcement output: %+v", p.Outputs.Announcement)
+	}
+}
+
+// TestDecodeShowCuePayloadRefusesLTCWithAnnouncement is TRACK-H-cues-and-
+// playlists.md section H5 build item 5's own authoring-time test: a Cue
+// declaring BOTH ltc and announcement is refused, not silently accepted
+// and later silently dropped on the node.
+func TestDecodeShowCuePayloadRefusesLTCWithAnnouncement(t *testing.T) {
+	j := `{
+		"show": "halloween-2026", "name": "x",
+		"outputs": {
+			"audio": {"asset": "a", "startOffsetMillis": 0},
+			"ltc": {"startOffsetMillis": 0},
+			"announcement": {"policy": "mix", "fadeMillis": 0}
+		}
+	}`
+	_, verr := DecodeShowCuePayload(j, alwaysTrueShowExists)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "outputs.ltc" {
+		t.Fatalf("expected field-invalid on outputs.ltc for ltc+announcement, got %+v", verr)
 	}
 }
 
@@ -305,20 +354,21 @@ func TestDecodeShowCuePayloadAudioOffsetOutOfBounds(t *testing.T) {
 
 // --- H0.5 claim derivation ---
 
-// TestDeriveShowCueClaimsAllFourOutputs uses a Cue declaring render,
-// audio, ltc, AND announcement (validCueJSON). Per H0.5, declaring
-// announcement alongside audio routes that audio through the announcement
-// session rather than the exclusive program route, so program-audio-route
-// is NOT among the claims — only announcement-session, ltc-output, and
-// the two render-surface claims are.
-func TestDeriveShowCueClaimsAllFourOutputs(t *testing.T) {
+// TestDeriveShowCueClaimsAllOutputsAnnouncement uses a Cue declaring
+// render, audio, AND announcement (validCueJSON — ltc is exercised
+// separately by TestDeriveShowCueClaimsRenderAudioLTC, since a Cue must
+// not declare both ltc and announcement). Per H0.5, declaring announcement
+// alongside audio routes that audio through the announcement session
+// rather than the exclusive program route, so program-audio-route is NOT
+// among the claims — only announcement-session and the two render-surface
+// claims are.
+func TestDeriveShowCueClaimsAllOutputsAnnouncement(t *testing.T) {
 	p, verr := DecodeShowCuePayload(validCueJSON(), alwaysTrueShowExists)
 	if verr != nil {
 		t.Fatalf("unexpected error: %+v", verr)
 	}
 	claims, err := DeriveShowCueClaims(p, ShowCueClaimContext{
 		ProgramAudioNode: "audio-01", ProgramAudioRoute: "line-out-1",
-		LTCNode: "audio-01", LTCRoute: "line-out-2",
 		AnnouncementNode: "audio-01",
 		RenderSurfaceIDs: []string{"surface-b", "surface-a"},
 	})
@@ -327,7 +377,40 @@ func TestDeriveShowCueClaimsAllFourOutputs(t *testing.T) {
 	}
 	want := []ShowCueClaim{
 		{Kind: ShowCueClaimKindAnnouncementSession, Node: "audio-01"},
+		{Kind: ShowCueClaimKindRenderSurface, Resource: "surface-a"},
+		{Kind: ShowCueClaimKindRenderSurface, Resource: "surface-b"},
+	}
+	if len(claims) != len(want) {
+		t.Fatalf("claims = %v, want %v", claims, want)
+	}
+	for i := range want {
+		if claims[i] != want[i] {
+			t.Fatalf("claims = %v, want %v", claims, want)
+		}
+	}
+}
+
+// TestDeriveShowCueClaimsRenderAudioLTC is the ltc-declaring sibling of
+// TestDeriveShowCueClaimsAllOutputsAnnouncement: render, audio, and ltc
+// together claim program-audio-route (no announcement declared, so audio
+// claims the route directly), ltc-output, and the two render-surface
+// claims.
+func TestDeriveShowCueClaimsRenderAudioLTC(t *testing.T) {
+	p, verr := DecodeShowCuePayload(validLTCCueJSON(), alwaysTrueShowExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	claims, err := DeriveShowCueClaims(p, ShowCueClaimContext{
+		ProgramAudioNode: "audio-01", ProgramAudioRoute: "line-out-1",
+		LTCNode: "audio-01", LTCRoute: "line-out-2",
+		RenderSurfaceIDs: []string{"surface-b", "surface-a"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []ShowCueClaim{
 		{Kind: ShowCueClaimKindLTCOutput, Node: "audio-01", Resource: "line-out-2"},
+		{Kind: ShowCueClaimKindProgramAudioRoute, Node: "audio-01", Resource: "line-out-1"},
 		{Kind: ShowCueClaimKindRenderSurface, Resource: "surface-a"},
 		{Kind: ShowCueClaimKindRenderSurface, Resource: "surface-b"},
 	}
@@ -412,13 +495,11 @@ func TestDeriveShowCueClaimsRepeatedCallsAgree(t *testing.T) {
 	}
 	ctx := ShowCueClaimContext{
 		ProgramAudioNode: "n", ProgramAudioRoute: "r",
-		LTCNode: "n", LTCRoute: "r2",
 		AnnouncementNode: "n",
 		RenderSurfaceIDs: []string{"s1"},
 	}
 	want := []ShowCueClaim{
 		{Kind: ShowCueClaimKindAnnouncementSession, Node: "n"},
-		{Kind: ShowCueClaimKindLTCOutput, Node: "n", Resource: "r2"},
 		{Kind: ShowCueClaimKindRenderSurface, Resource: "s1"},
 	}
 	for i := 0; i < 2; i++ {
