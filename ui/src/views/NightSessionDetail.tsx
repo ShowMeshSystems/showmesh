@@ -705,15 +705,23 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         </div>
       )}
 
+      {/* Status: what the coordinator currently reports about this night
+          session's stored configuration, kept apart from the authoring
+          fieldset above. The active-revision line stays outside any
+          <details>: it is short and always relevant, never a candidate
+          for hiding. Revision history is a long, rarely-consulted list,
+          a reasonable thing to start collapsed (per this seam's own
+          rule, nothing here can be stale/failed evidence; it is a plain
+          fetched list, not an EvidenceValue). */}
       {!isNew && state.kind === 'loaded' && (
-        <>
+        <section aria-label="Status">
           <p className="panel" role="status">
             Active revision {state.config.revision}
             {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}.
           </p>
           {state.revisions.length > 0 && (
-            <>
-              <h3 className="panel__title">Revision history</h3>
+            <details className="details-section">
+              <summary className="details-section__summary">Revision history</summary>
               <table className="config-table">
                 <thead>
                   <tr>
@@ -752,9 +760,9 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
                   <pre className="table-scroll">{JSON.stringify(revisionView.config.payload, null, 2)}</pre>
                 </div>
               )}
-            </>
+            </details>
           )}
-        </>
+        </section>
       )}
 
       <p className="text-muted">

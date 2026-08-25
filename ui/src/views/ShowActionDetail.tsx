@@ -996,15 +996,24 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
         </div>
       )}
 
+      {/* Status: what the coordinator currently reports about this
+          action's stored configuration, kept apart from the authoring
+          fieldset above (ActionBindingCheck/ActionInvokeButton at the top
+          of this page are the OTHER live-status widgets, already outside
+          the fieldset and untouched here). The active-revision line stays
+          outside any <details>: it is short and always relevant. Revision
+          history is a long, rarely-consulted list, a reasonable thing to
+          start collapsed (nothing in it is stale/failed evidence rendered
+          through EvidenceValue; it is a plain fetched list). */}
       {!isNew && state.kind === 'loaded' && (
-        <>
+        <section aria-label="Status">
           <p className="panel" role="status">
             Active revision {state.config.revision}
             {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}.
           </p>
           {state.revisions.length > 0 && (
-            <>
-              <h3 className="panel__title">Revision history</h3>
+            <details className="details-section">
+              <summary className="details-section__summary">Revision history</summary>
               <table className="config-table">
                 <thead>
                   <tr>
@@ -1025,9 +1034,9 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
                   ))}
                 </tbody>
               </table>
-            </>
+            </details>
           )}
-        </>
+        </section>
       )}
     </div>
   )

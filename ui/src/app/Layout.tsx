@@ -111,6 +111,10 @@ const NAV_GROUPS: Array<{
       // Track H seam H6: the show.cue authoring surface, previously
       // reachable only from showmeshctl.
       { to: '/config/show.cue', label: 'Cues', end: false },
+
+      // Track H seam H6: show.playlist authoring, previously reachable
+      // only from showmeshctl.
+      { to: '/config/show.playlist', label: 'Playlists', end: false },
       // Track F seam F1 (UI half): the night.session/night.session.active
       // authoring surfaces, previously reachable only from showmeshctl.
       { to: '/config/night.session', label: 'Night sessions', end: false },

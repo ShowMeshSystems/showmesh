@@ -291,6 +291,35 @@ describe('Configuration', () => {
     expect(screen.getByRole('button', { name: /save configuration/i })).toBeEnabled()
   })
 
+  // Readability seam: coordinator-reported status (the
+  // "already in effect" restart-required line) is split from the long,
+  // rarely-consulted revision history, which starts collapsed behind a
+  // <details> rather than hidden or removed.
+  it('shows the status line already visible while the revision history starts collapsed, and opens on click', async () => {
+    getFPPEndpointsConfig.mockResolvedValue(activeConfig)
+    getFPPEndpointsConfigRevisions.mockResolvedValue({
+      serverTime: '2026-08-12T00:00:00Z',
+      kind: 'fpp.endpoints',
+      revisions: [
+        { revision: 1, createdAt: '2026-08-12T00:00:00Z', createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1', source: 'api', note: '', active: true },
+      ],
+    })
+    const user = userEvent.setup()
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    const status = await screen.findByText(/already in effect/i)
+    expect(status).toBeVisible()
+
+    const fppSection = status.closest('section')!
+    const summary = within(fppSection).getByText('Revision history')
+    expect(summary.closest('details')).not.toHaveAttribute('open')
+    const revisionCell = within(fppSection).getByText('admin-1', { selector: 'td' })
+    expect(revisionCell).not.toBeVisible()
+
+    await user.click(summary)
+    expect(revisionCell).toBeVisible()
+  })
+
   it('renders the coordinator\'s own 404 reason with an empty editor, not as an error', async () => {
     getFPPEndpointsConfig.mockRejectedValue(
       new ApiError(

@@ -38,6 +38,8 @@ import type {
   ConfigShowMacro,
   ConfigShowSurface,
   ConfigShowCue,
+
+  ConfigShowPlaylist,
   ConfigShowWrite,
   CreatePrincipalRequest,
   FPPCommandResult,
@@ -85,6 +87,8 @@ type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigRespo
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
 // Track H seam H6: show.cue authoring.
 type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
+
+type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -469,6 +473,10 @@ export function getShowSurface(id: string): Promise<SchemaShowSurfaceConfigRespo
   return store.getShowSurface(id)
 }
 
+export function getShowPlaylist(id: string): Promise<SchemaShowPlaylistConfigResponse> {
+  return store.getShowPlaylist(id)
+}
+
 export function getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
   return store.getShowAction(id)
 }
@@ -662,6 +670,14 @@ export function putShowCue(id: string, payload: ConfigShowCue): Promise<SchemaSh
 
 export function getShowCueRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowCueRevisions(id)
+}
+
+export function putShowPlaylist(id: string, payload: ConfigShowPlaylist): Promise<SchemaShowPlaylistConfigResponse> {
+  return store.putShowPlaylist(id, payload)
+}
+
+export function getShowPlaylistRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowPlaylistRevisions(id)
 }
 
 export function getShowActive(): Promise<SchemaShowActiveConfigResponse> {

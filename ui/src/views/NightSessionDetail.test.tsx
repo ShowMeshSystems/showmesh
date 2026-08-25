@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   NightSessionDetail,
@@ -16,15 +16,21 @@ import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
-const { putNightSessionConfig } = vi.hoisted(() => ({ putNightSessionConfig: vi.fn() }))
+const { putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions } = vi.hoisted(() => ({
+  putNightSessionConfig: vi.fn(),
+  getNightSessionConfig: vi.fn(),
+  getNightSessionConfigRevisions: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, putNightSessionConfig }
+  return { ...actual, putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions }
 })
 
 afterEach(() => {
   cleanup()
   putNightSessionConfig.mockReset()
+  getNightSessionConfig.mockReset()
+  getNightSessionConfigRevisions.mockReset()
 })
 
 const writerSession = makeAuthenticatedSession({ scopes: ['config:write'] })
@@ -34,6 +40,18 @@ function renderNew(model: Model = makeModel({ session: writerSession })) {
     <ModelContext.Provider value={model}>
       <MemoryRouter>
         <NightSessionDetail isNew />
+      </MemoryRouter>
+    </ModelContext.Provider>,
+  )
+}
+
+function renderExisting(model: Model, id: string) {
+  return render(
+    <ModelContext.Provider value={model}>
+      <MemoryRouter initialEntries={[`/config/night.session/${id}`]}>
+        <Routes>
+          <Route path="/config/night.session/:id" element={<NightSessionDetail />} />
+        </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
   )
@@ -396,5 +414,65 @@ describe('buildPayload (pure)', () => {
     const result = buildPayload(form)
     if ('error' in result) throw new Error(result.error)
     expect(result.payload.resting.backgroundAudio?.maxGainDb).toBe(0)
+  })
+})
+
+// Readability seam: this screen mixes what the
+// coordinator reports (active revision, revision history) with what the
+// operator edits (the authoring fieldset). This asserts the split exists
+// and that the status line an operator scans first is visible without
+// opening anything, while the long, rarely-consulted revision history
+// starts collapsed behind a <details>.
+describe('NightSessionDetail (status split from authoring)', () => {
+  const nightSessionPayload = {
+    show: 'halloween-2026',
+    label: 'Halloween Night',
+    showPlaylist: { fppInstanceId: 'fpp-main', playlist: 'show-playlist' },
+    resting: {
+      fppInstanceId: 'fpp-main',
+      playlist: 'resting-playlist',
+      endOfNightPlaylist: 'resting-playlist',
+      endOfNightRepeat: false,
+      timelineAsset: { show: 'halloween-2026', sequence: 'resting-seq', target: 'node-1' },
+    },
+    enterShow: { cues: [], blackoutHoldMs: 0 },
+    enterResting: { cues: [], blackoutAfterShowMs: 0 },
+  }
+
+  it('shows the active-revision status without opening anything, and starts revision history collapsed', async () => {
+    getNightSessionConfig.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'night.session',
+      id: 'halloween-night',
+      revision: 3,
+      payload: nightSessionPayload,
+      updatedAt: '2026-08-25T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    getNightSessionConfigRevisions.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'night.session',
+      revisions: [
+        { revision: 3, createdAt: '2026-08-25T00:00:00Z', createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1', source: 'api', note: '', active: true },
+        { revision: 2, createdAt: '2026-08-20T00:00:00Z', createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1', source: 'api', note: '', active: false },
+      ],
+    })
+    renderExisting(makeModel({ session: writerSession }), 'halloween-night')
+
+    const status = await screen.findByText(/Active revision 3/)
+    expect(status).toBeVisible()
+
+    const summary = screen.getByText('Revision history')
+    expect(summary.closest('details')).not.toHaveAttribute('open')
+    // The revision row is present in the DOM (a closed <details> does not
+    // remove its content), but is not visible until opened.
+    expect(screen.getByRole('heading', { name: 'Halloween Night' })).toBeVisible() // sanity: the page itself did render
+    const revisionRow = screen.getAllByText('admin-1', { selector: 'td' })[0]!
+    expect(revisionRow).not.toBeVisible()
+
+    await userEvent.setup().click(summary)
+    expect(revisionRow).toBeVisible()
   })
 })

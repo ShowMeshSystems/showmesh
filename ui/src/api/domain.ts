@@ -175,6 +175,16 @@ export type ConfigShowCueOutputs = components['schemas']['ConfigShowCueOutputs']
 export type ConfigShowCue = components['schemas']['ConfigShowCue']
 export type ShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
 
+// Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
+// authoring. Aliased for the identical reason as every type above
+// (ADR-015).
+export type ConfigShowPlaylistFPPBinding = components['schemas']['ConfigShowPlaylistFPPBinding']
+export type ConfigShowPlaylistShowmeshAudio = components['schemas']['ConfigShowPlaylistShowmeshAudio']
+export type ConfigShowPlaylistEntryFPP = components['schemas']['ConfigShowPlaylistEntryFPP']
+export type ConfigShowPlaylistEntry = components['schemas']['ConfigShowPlaylistEntry']
+export type ConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
+export type ShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
+
 export type MacroRunSummary = components['schemas']['MacroRunSummary']
 export type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
 export type MacroRunStep = components['schemas']['MacroRunStep']
