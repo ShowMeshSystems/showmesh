@@ -98,6 +98,40 @@ describe('FPPDetail', () => {
     expect(screen.getByText('surprise')).toBeInTheDocument()
   })
 
+  // Task readability fix: a signal group (here "Other") renders as a real
+  // table, not a stack of unaligned EvidenceValue blocks, matching the
+  // config-table/table-scroll pattern this app already uses elsewhere
+  // (e.g. views/FPPList.tsx).
+  it('renders the Other observation group as a table with Signal/Value column headers and one row per signal', () => {
+    const instance = makeFPPInstance('fpp-mystery', {
+      observations: [
+        makeEvidence({ signal: 'fpp.something_a_future_step_invents', value: 'surprise', state: 'current' }),
+        makeEvidence({ signal: 'fpp.another_unrecognized_signal', value: 'also surprising', state: 'current' }),
+      ],
+    })
+    renderFPPDetail('fpp-mystery', makeModel({ fpp: [instance] }))
+
+    const otherHeading = screen.getByRole('heading', { name: 'Other' })
+    const otherPanel = otherHeading.closest('section')!
+    const table = within(otherPanel).getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Signal' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Value' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'fpp.something_a_future_step_invents' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'fpp.another_unrecognized_signal' })).toBeInTheDocument()
+    // One row per signal, both real signals present, none dropped.
+    expect(within(table).getAllByRole('row')).toHaveLength(3) // header row + 2 signal rows
+  })
+
+  it('renders the Warnings group as a table with Signal/Value column headers', () => {
+    renderFPPDetail('fpp-main', makeModel({ fpp: [makeMainInstance()], serverTime: FLEET_NOW }))
+    const warningsPanel = screen.getByRole('heading', { name: 'Warnings' }).closest('section')!
+    const table = within(warningsPanel).getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Signal' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Value' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'fpp.warnings.summary' })).toBeInTheDocument()
+    expect(within(table).getByText('A Log Level is set to Debug')).toBeInTheDocument()
+  })
+
   it('groups observations under labelled headings instead of one flat list, for a realistic instance', () => {
     renderFPPDetail('fpp-remote-04', makeModel({ fpp: [makeRemote04Instance()], serverTime: FLEET_NOW }))
     expect(screen.getByRole('heading', { name: 'Playback' })).toBeInTheDocument()

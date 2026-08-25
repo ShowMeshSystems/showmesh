@@ -333,6 +333,31 @@ input {
   box-sizing: border-box;
 }
 
+/* FPPDetail.tsx's "Commands" panel: the transport commands (Stop, Stop
+   gracefully, Pause/resume, item navigation, Start playlist, Volume) as a
+   compact, wrapping group per heading instead of one full-width button
+   stacked under each heading down the page. `.command-group` only sizes
+   itself to its own content (align-items: flex-start), so a button reads
+   at its natural width and an operator scanning for Pause is not made to
+   scroll past Stop first. */
+.command-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5) var(--space-6);
+}
+
+.command-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 18rem;
+}
+
+.command-group > .panel__title {
+  margin-bottom: var(--space-2);
+}
+
 .list-plain {
   list-style: none;
   margin: 0;
