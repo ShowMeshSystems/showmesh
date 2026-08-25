@@ -34,6 +34,10 @@ import { Shows } from '../views/Shows'
 import { ShowDetail } from '../views/ShowDetail'
 import { ShowSurfaces } from '../views/ShowSurfaces'
 import { ShowSurfaceDetail } from '../views/ShowSurfaceDetail'
+// Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): the show.cue
+// authoring surface, previously reachable only from showmeshctl.
+import { ShowCues } from '../views/ShowCues'
+import { ShowCueDetail } from '../views/ShowCueDetail'
 import { ShowActive } from '../views/ShowActive'
 import { Assets } from '../views/Assets'
 import { AssetManifest } from '../views/AssetManifest'
@@ -93,6 +97,9 @@ export default function App() {
             <Route path="config/show.surface" element={<ShowSurfaces />} />
             <Route path="config/show.surface/new" element={<ShowSurfaceDetail isNew />} />
             <Route path="config/show.surface/:id" element={<ShowSurfaceDetail />} />
+            <Route path="config/show.cue" element={<ShowCues />} />
+            <Route path="config/show.cue/new" element={<ShowCueDetail isNew />} />
+            <Route path="config/show.cue/:id" element={<ShowCueDetail />} />
             <Route path="config/show.active" element={<ShowActive />} />
             {/* Track F seam F2 (UI half): the night-session lifecycle
                 operating view lives under Monitor/Control (Layout.tsx),

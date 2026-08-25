@@ -71,6 +71,14 @@ export type {
   // configured-but-not-yet-applied surface the way showmeshctl already can.
   ConfigShowSurface,
   ShowSurfaceConfigResponse,
+  // Track H seam H6: show.cue authoring.
+  ConfigShowCueRenderOutput,
+  ConfigShowCueAudioOutput,
+  ConfigShowCueLTCOutput,
+  ConfigShowCueAnnouncementOutput,
+  ConfigShowCueOutputs,
+  ConfigShowCue,
+  ShowCueConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -171,6 +179,7 @@ import type {
   ResolumeRecoveryRestoreLayer as ResolumeRecoveryRestoreLayerType,
   ConfigShowSurfaceGeometry as ConfigShowSurfaceGeometryType,
   ConfigShowSurfaceOutput as ConfigShowSurfaceOutputType,
+  ConfigShowCueAnnouncementOutput as ConfigShowCueAnnouncementOutputType,
   Asset as AssetType,
   NodeAssetManifest as NodeAssetManifestType,
   NightSessionState as NightSessionStateType,
@@ -218,6 +227,8 @@ export type ResolumeRecoveryRestoreResult = ResolumeRecoveryRestoreLayerType['re
 // above.
 export type SurfacePixelFormat = ConfigShowSurfaceGeometryType['pixelFormat']
 export type SurfaceTransport = ConfigShowSurfaceOutputType['transport']
+// Track H seam H6: same derived-not-duplicated pattern as every alias above.
+export type CueAnnouncementPolicy = ConfigShowCueAnnouncementOutputType['policy']
 export type AssetMediaType = AssetType['mediaType']
 export type AssetTargetKind = AssetType['targetKind']
 export type NodeAssetManifestState = NodeAssetManifestType['state']

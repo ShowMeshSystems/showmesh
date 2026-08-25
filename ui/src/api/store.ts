@@ -149,6 +149,9 @@ type SchemaConfigShowMacro = components['schemas']['ConfigShowMacro']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 // Finding 16: show.surface's own read response, same aliasing pattern.
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+// Track H seam H6: show.cue authoring, same aliasing pattern.
+type SchemaConfigShowCue = components['schemas']['ConfigShowCue']
+type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -1498,7 +1501,7 @@ export class ApiStore {
    * does not accept it on itself.
    */
   async listConfigObjects(
-    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.playlist' | 'night.session',
+    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'night.session',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
@@ -1784,6 +1787,51 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         `/config/show.surface/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.cue/{id}` (Track H seam H1/H6). Throws (404) when no such cue exists. */
+  async getShowCue(id: string): Promise<SchemaShowCueConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowCueConfigResponse>(
+        `/config/show.cue/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.cue/{id}` (Track H seam H1/H6, ADR-043).
+   * `config:write` only. Full replacement: `outputs` must declare at
+   * least one of render/audio/ltc/announcement. Validated and normalized
+   * server-side; a rejected payload throws and appends no revision.
+   */
+  async putShowCue(id: string, payload: SchemaConfigShowCue): Promise<SchemaShowCueConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowCueConfigResponse>(
+        `/config/show.cue/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.cue/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowCueRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show.cue/${encodeURIComponent(id)}/revisions`,
         controller.signal,
       )
     } finally {
