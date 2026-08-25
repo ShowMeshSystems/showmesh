@@ -49,6 +49,13 @@ const ltcAppSrcLeadSeconds = 0.2
 // and the feeder's own observation reporting subtracts it back out so a
 // reported timecode reflects what is audible rather than what was just
 // pushed ahead of the existing queue.
+//
+// This is chosen over flushing the appsrc on a generation change: a flush
+// on one of interleave's sink pads propagates into interleave itself,
+// which has no way to keep pacing the other, unrelated channels while one
+// of its inputs resets: flush and lead-advance are alternatives, not
+// additions, and turning an LTC-only defect into a program-audio glitch
+// is a worse failure than the queue lag this constant corrects for.
 const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
 
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
@@ -240,14 +247,9 @@ func (e *Engine) StartLTC(ctx context.Context, spec agentaudio.LTCSpec) (agentau
 		return e.ltc.observe(now), err
 	}
 
-	// The appsrc this encoder feeds already has up to ltcAppSrcLeadDuration
-	// of previously-queued audio ahead of whatever gets pushed next (see
-	// ltcAppSrcLeadDuration): this run's first pushed frame will not
-	// actually reach the wire until that backlog drains. Starting the
-	// encoder that far ahead of the requested timecode, rather than at it,
-	// is what makes the frame audible at spec.StartTimecode's position
-	// carry spec.StartTimecode's value instead of reading late by the
-	// queue depth.
+	// See ltcAppSrcLeadDuration: starting the encoder that far ahead of the
+	// requested timecode is what makes the frame audible at
+	// spec.StartTimecode's position carry spec.StartTimecode's value.
 	compensatedStart, err := spec.StartTimecode.Advance(ltcAppSrcLeadDuration, spec.FrameRate)
 	if err != nil {
 		obs := agentaudio.LTCObservation{State: agentaudio.LTCFailed, Reason: err.Error()}
@@ -418,15 +420,20 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 			return
 		}
 
-		// tc is the timecode of the frame just handed to appsrc, which is
-		// not the frame currently audible: it sits behind whatever this
-		// channel already had queued (see ltcAppSrcLeadDuration). Reporting
-		// tc directly would have this observation lead the audible output
-		// by the same queue depth, the mirror image of the start-time bug
-		// StartLTC compensates for above.
-		played := tc
-		if playedTC, err := tc.Advance(-ltcAppSrcLeadDuration, rate); err == nil {
-			played = playedTC
+		// See ltcAppSrcLeadDuration: tc is the frame just handed to appsrc,
+		// not the frame currently audible, so report it shifted back by the
+		// same lead rather than as pushed. An error here is unreachable in
+		// practice (rate and tc both already validated), so it is reported
+		// as failed evidence rather than silently falling back to the
+		// mirror-image bug this is fixing.
+		played, err := tc.Advance(-ltcAppSrcLeadDuration, rate)
+		if err != nil {
+			ch.mu.Lock()
+			if ch.generation == gen {
+				ch.obs = agentaudio.LTCObservation{State: agentaudio.LTCFailed, Reason: "could not compute the played timecode: " + err.Error()}
+			}
+			ch.mu.Unlock()
+			continue
 		}
 
 		ch.mu.Lock()

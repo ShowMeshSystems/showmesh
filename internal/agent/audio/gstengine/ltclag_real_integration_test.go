@@ -24,12 +24,20 @@ import (
 // This suite proves the LTC queue-lag fix directly against real decoded
 // audio rather than fakesink or ShowMesh's own reported evidence: an
 // appsink captures the actual interleaved output samples, channel 1
-// (program) is scanned
-// for the real onset of an audible tone, and channel 2 (LTC) is decoded
-// by libltc through ltcdecodetest -- the same decoder used to prove
-// ltcgen's own round trip. Comparing the two locates the lag entirely in
-// the sample domain, so it holds regardless of how fast or slow this
-// process actually runs the pipeline.
+// (program) is scanned for the real onset of an audible tone, and channel
+// 2 (LTC) is decoded by libltc through ltcdecodetest -- the same decoder
+// used to prove ltcgen's own round trip. Comparing the two locates the
+// lag entirely in the sample domain, so it holds regardless of how fast
+// or slow this process actually runs the pipeline.
+//
+// TestLTCAudioAlignedToProgramOnset covers a fresh start,
+// TestLTCSeekRealignsAudioToNewPosition covers a seek, and
+// TestLTCResumeRealignsAudioToNewPosition covers a pause/resume: the
+// three realignment paths StartLTC's own doc comment names. All three
+// share [measureLTCAlignmentAtEdge], because all three reduce to the
+// same question once a realignment lands -- does the audible LTC value
+// at a known file position match that position -- regardless of which
+// gstengine call produced it.
 
 const ltcLagSampleRate = 44100
 
@@ -139,7 +147,7 @@ func newLTCLagSink(t *testing.T) gstapp.AppSink {
 
 // newLTCLagEngine builds a 2-channel engine (1: program, 2: LTC) whose
 // sink is a real appsink substituted via [useSinkElement], and starts
-// capturing its output immediately. The caller must call cap.Stop()
+// capturing its output immediately. The caller must call capture.Stop()
 // before the engine itself tears down.
 func newLTCLagEngine(t *testing.T) (*Engine, *ltcLagCapture) {
 	t.Helper()
@@ -162,14 +170,18 @@ func newLTCLagEngine(t *testing.T) (*Engine, *ltcLagCapture) {
 		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
 	}
 
-	cap := newLTCLagCapture(sink)
-	go cap.run()
+	capture := newLTCLagCapture(sink)
+	go capture.run()
 	t.Cleanup(func() {
-		cap.Stop()
+		capture.Stop()
 		_ = e.Close()
 	})
-	return e, cap
+	return e, capture
 }
+
+// silenceThreshold is the magnitude [toneOnsetFrame] treats as audible
+// rather than digital silence.
+const silenceThreshold = int16(2000)
 
 // toneOnsetFrame scans ch1 for the first sample whose magnitude clears
 // silenceThreshold. Program channel content is otherwise exact digital
@@ -178,8 +190,6 @@ func newLTCLagEngine(t *testing.T) (*Engine, *ltcLagCapture) {
 // so the very first sample above threshold is a clean edge -- a 440Hz
 // sine's own half-cycle (~50 samples at 44.1kHz) is too short for a
 // sustained-run requirement to be reliable here.
-const silenceThreshold = int16(2000)
-
 func toneOnsetFrame(t *testing.T, ch1 []int16) int {
 	t.Helper()
 	for i, v := range ch1 {
@@ -310,11 +320,62 @@ func generateSilenceThenToneWAV(t *testing.T, path string, silence, tone time.Du
 	writeMonoWAV(t, path, samples, sampleRate)
 }
 
+// ltcLagToleranceFrames bounds every measured-lag assertion in this
+// suite: 2 frames, 80ms at 25fps. The budget behind that number is a
+// roughly one-frame systematic residual from [nearestFrame]'s own
+// extrapolation rounding, plus the real (unmocked) gap between the
+// StartLTC and program-realignment calls each test issues back to back
+// rather than atomically, plus whatever latency the program branch's own
+// decode/seek path adds before its first post-realignment sample reaches
+// the sink. A future flake within a frame or two of this budget is
+// scheduling variance, not a regression; a flake far outside it is not.
+const ltcLagToleranceFrames = 2
+
+// measureLTCAlignmentAtEdge waits for capture's fixture-defined
+// silence-to-tone edge to become audible, then reports how many LTC
+// frames the audible signal at that edge is behind (positive) or ahead
+// of (negative) the position-independent ground truth every realignment
+// path -- start, seek, or resume -- must agree on: the tone edge always
+// sits exactly silenceDuration of real audio time past file position 0,
+// regardless of how playback actually got there, so
+// zeroTC.Advance(silenceDuration, rate) is what the audible LTC value at
+// that edge should equal no matter which gstengine call produced it.
+// wait is how long the caller has already determined the edge needs, in
+// real time, from when this is called.
+func measureLTCAlignmentAtEdge(t *testing.T, capture *ltcLagCapture, rate pkgaudio.LTCFrameRate, silenceDuration, wait time.Duration) (lagFrames int64, lagSeconds float64) {
+	t.Helper()
+	time.Sleep(wait)
+
+	ch1, ch2 := capture.snapshot()
+	onset := toneOnsetFrame(t, ch1)
+	frames := decodeLTCChannel(t, ch2, rate)
+	nearest := nearestFrame(frames, int64(onset))
+
+	audibleFrames, err := ltcValueAtOffset(nearest, rate, int64(onset))
+	if err != nil {
+		t.Fatalf("ltcValueAtOffset: %v", err)
+	}
+	expectedTC, err := pkgaudio.LTCTimecode("00:00:00:00").Advance(silenceDuration, rate)
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	expectedFrames, err := expectedTC.FrameCount(rate)
+	if err != nil {
+		t.Fatalf("FrameCount(%q): %v", expectedTC, err)
+	}
+
+	lagFrames = expectedFrames - audibleFrames
+	lagSeconds = float64(lagFrames) / rate.Rate()
+	t.Logf("edge onset at sample %d; nearest decoded LTC frame %02d:%02d:%02d:%02d at sample %d; audible value implies frame %d, want %d; lag = %d frames (%.4fs)",
+		onset, nearest.Hours, nearest.Mins, nearest.Secs, nearest.Frame, nearest.OffStart, audibleFrames, expectedFrames, lagFrames, lagSeconds)
+	return lagFrames, lagSeconds
+}
+
 // TestLTCAudioAlignedToProgramOnset is the LTC queue-lag fix's core
-// reproduction and regression guard: it measures, from real decoded
-// audio, how far LTC's own on-wire value is from what it should read at
-// the sample where the program's audible content actually reaches a
-// known position.
+// reproduction and regression guard, covering a fresh start: it measures,
+// from real decoded audio, how far LTC's own on-wire value is from what
+// it should read at the sample where the program's audible content
+// actually reaches a known position.
 //
 // The fixture is silence followed by a tone rather than a bare tone: a
 // branch loaded well ahead of Start keeps decoding into the shared,
@@ -324,17 +385,15 @@ func generateSilenceThenToneWAV(t *testing.T, path string, silence, tone time.Du
 // is ever called. Start's own seek is what actually re-anchors the
 // branch to position 0, so the fixture's silence prefix is what turns
 // "silenceDuration after this test's Start call" into a real, physically
-// located edge in the captured stream: the sample where that edge
-// appears is, by construction, exactly silenceDuration of true program
-// time after the position StartLTC's spec.StartTimecode was asked to
-// describe. Before the fix this measured lag is approximately
-// ltcAppSrcLeadSeconds (the LTC feeder's queue depth, ~5-6 frames at
-// typical rates); after it, close to zero.
+// located edge in the captured stream. Before the fix this measured lag
+// is approximately ltcAppSrcLeadSeconds (the LTC feeder's queue depth,
+// ~5-6 frames at typical rates); after it, close to zero.
 func TestLTCAudioAlignedToProgramOnset(t *testing.T) {
-	e, cap := newLTCLagEngine(t)
+	e, capture := newLTCLagEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
 	defer cancel()
 
+	const rate = pkgaudio.LTCFrameRate25
 	const silenceDuration = 3 * time.Second
 	const toneDuration = 2 * time.Second
 	dir := t.TempDir()
@@ -351,9 +410,7 @@ func TestLTCAudioAlignedToProgramOnset(t *testing.T) {
 	// fixture's own silence prefix, so it does not race the edge below.
 	time.Sleep(500 * time.Millisecond)
 
-	const rate = pkgaudio.LTCFrameRate25
-	const startTC = pkgaudio.LTCTimecode("01:00:00:00")
-	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: rate, StartTimecode: startTC}); err != nil {
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: rate, StartTimecode: "00:00:00:00"}); err != nil {
 		t.Fatalf("StartLTC: %v", err)
 	}
 	// Start's own seek re-anchors the branch to position 0 regardless of
@@ -363,36 +420,123 @@ func TestLTCAudioAlignedToProgramOnset(t *testing.T) {
 	}
 	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
 
-	time.Sleep(silenceDuration + 1*time.Second) // past the fixture's own silence-to-tone edge, with margin
-
-	ch1, ch2 := cap.snapshot()
-	onset := toneOnsetFrame(t, ch1)
-	frames := decodeLTCChannel(t, ch2, rate)
-	nearest := nearestFrame(frames, int64(onset))
-
-	startFrames, err := startTC.FrameCount(rate)
-	if err != nil {
-		t.Fatalf("FrameCount(%q): %v", startTC, err)
+	lagFrames, lagSeconds := measureLTCAlignmentAtEdge(t, capture, rate, silenceDuration, silenceDuration+time.Second)
+	if lagFrames > ltcLagToleranceFrames || lagFrames < -ltcLagToleranceFrames {
+		t.Fatalf("LTC on the wire is %d frames (%.4fs) behind the program's real position after a start, want within %d frames", lagFrames, lagSeconds, ltcLagToleranceFrames)
 	}
-	// audibleFrames is what LTC's own decoded audio claims is playing at
-	// the exact sample the program tone actually starts.
-	audibleFrames, err := ltcValueAtOffset(nearest, rate, int64(onset))
-	if err != nil {
-		t.Fatalf("ltcValueAtOffset: %v", err)
+}
+
+// TestLTCSeekRealignsAudioToNewPosition covers a seek: StartLTC's own doc
+// comment calls this "the realignment a seek uses," and a seek swaps a
+// generation that was already carrying real, decodable LTC content --
+// not merely queued silence, as a fresh start's own appsrc backlog is --
+// so this is the more representative reproduction of the queue-lag bug
+// for that path. The program branch seeks to seekTarget, well inside the
+// fixture's silence prefix, and StartLTC is realigned to the same
+// position; the tone edge that follows is exactly silenceDuration past
+// file position 0 regardless of where playback resumed from, which is
+// what lets [measureLTCAlignmentAtEdge] serve every realignment path.
+func TestLTCSeekRealignsAudioToNewPosition(t *testing.T) {
+	e, capture := newLTCLagEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
+	defer cancel()
+
+	const rate = pkgaudio.LTCFrameRate25
+	const silenceDuration = 6 * time.Second
+	const toneDuration = 2 * time.Second
+	const seekTarget = 4 * time.Second
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "silence-then-tone-seek.wav")
+	generateSilenceThenToneWAV(t, wav, silenceDuration, toneDuration)
+	if _, err := e.Load(ctx, "prog", mediaRef(wav), silenceDuration+toneDuration); err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	// expectedFrames is what it should claim: exactly silenceDuration of
-	// program time past spec.StartTimecode, by construction of the fixture
-	// and Start's own seek to position 0.
-	expectedFrames := startFrames + int64(math.Round(silenceDuration.Seconds()*rate.Rate()))
 
-	lagFrames := expectedFrames - audibleFrames
-	lagSeconds := float64(lagFrames) / rate.Rate()
-	t.Logf("program tone onset at sample %d; nearest decoded LTC frame %02d:%02d:%02d:%02d at sample %d; audible value implies frame %d, want %d; lag = %d frames (%.4fs)",
-		onset, nearest.Hours, nearest.Mins, nearest.Secs, nearest.Frame, nearest.OffStart, audibleFrames, expectedFrames, lagFrames, lagSeconds)
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: rate, StartTimecode: "00:00:00:00"}); err != nil {
+		t.Fatalf("StartLTC (initial): %v", err)
+	}
+	if _, err := e.Start(ctx, "prog", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+	// Let the initial run emit real, decoded LTC content -- not just
+	// silence -- for a while before the seek swaps its generation out.
+	time.Sleep(1 * time.Second)
 
-	const toleranceFrames = 2
-	if lagFrames > toleranceFrames || lagFrames < -toleranceFrames {
-		t.Fatalf("LTC on the wire is %d frames (%.4fs) behind the program's real position, want within %d frames", lagFrames, lagSeconds, toleranceFrames)
+	seekTC, err := pkgaudio.LTCTimecode("00:00:00:00").Advance(seekTarget, rate)
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if _, err := e.Seek(ctx, "prog", seekTarget); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: rate, StartTimecode: seekTC}); err != nil {
+		t.Fatalf("StartLTC (seek realignment): %v", err)
+	}
+	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+
+	lagFrames, lagSeconds := measureLTCAlignmentAtEdge(t, capture, rate, silenceDuration, silenceDuration-seekTarget+time.Second)
+	if lagFrames > ltcLagToleranceFrames || lagFrames < -ltcLagToleranceFrames {
+		t.Fatalf("LTC on the wire is %d frames (%.4fs) behind the program's real position after a seek, want within %d frames", lagFrames, lagSeconds, ltcLagToleranceFrames)
+	}
+}
+
+// TestLTCResumeRealignsAudioToNewPosition covers a pause/resume: it
+// queries the branch's own frozen position (the same value a real
+// Manager would read to build StartLTC's spec) rather than assuming a
+// round number, then realigns LTC to it exactly as production code does.
+func TestLTCResumeRealignsAudioToNewPosition(t *testing.T) {
+	e, capture := newLTCLagEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
+	defer cancel()
+
+	const rate = pkgaudio.LTCFrameRate25
+	const silenceDuration = 6 * time.Second
+	const toneDuration = 2 * time.Second
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "silence-then-tone-resume.wav")
+	generateSilenceThenToneWAV(t, wav, silenceDuration, toneDuration)
+	if _, err := e.Load(ctx, "prog", mediaRef(wav), silenceDuration+toneDuration); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: rate, StartTimecode: "00:00:00:00"}); err != nil {
+		t.Fatalf("StartLTC (initial): %v", err)
+	}
+	if _, err := e.Start(ctx, "prog", 0); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+	time.Sleep(1 * time.Second)
+
+	if _, err := e.Pause(ctx, "prog"); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	pausedObs, err := e.Observe(ctx, "prog")
+	if err != nil {
+		t.Fatalf("Observe (paused): %v", err)
+	}
+	time.Sleep(300 * time.Millisecond) // a real pause duration; StartLTC's own realignment is what this test measures, not the pause length
+
+	resumeTC, err := pkgaudio.LTCTimecode("00:00:00:00").Advance(pausedObs.Position, rate)
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if _, err := e.Resume(ctx, "prog"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: rate, StartTimecode: resumeTC}); err != nil {
+		t.Fatalf("StartLTC (resume realignment): %v", err)
+	}
+	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+
+	remaining := silenceDuration - pausedObs.Position
+	if remaining < 0 {
+		remaining = 0
+	}
+	lagFrames, lagSeconds := measureLTCAlignmentAtEdge(t, capture, rate, silenceDuration, remaining+time.Second)
+	if lagFrames > ltcLagToleranceFrames || lagFrames < -ltcLagToleranceFrames {
+		t.Fatalf("LTC on the wire is %d frames (%.4fs) behind the program's real position after a pause/resume, want within %d frames", lagFrames, lagSeconds, ltcLagToleranceFrames)
 	}
 }
 
@@ -400,11 +544,11 @@ func TestLTCAudioAlignedToProgramOnset(t *testing.T) {
 // reporting-side reproduction and regression guard: it compares
 // ObserveLTC's reported Timecode, at the instant it is called, against
 // what libltc actually decodes as audible at that same sample-domain
-// position. Before the
-// fix, the reported value is the frame just pushed -- ahead of the
-// audible frame by the queue depth; after it, the two agree.
+// position. Before the fix, the reported value is the frame just
+// pushed -- ahead of the audible frame by the queue depth; after it, the
+// two agree.
 func TestLTCObservedTimecodeMatchesAudibleFrame(t *testing.T) {
-	e, cap := newLTCLagEngine(t)
+	e, capture := newLTCLagEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
 	defer cancel()
 
@@ -417,7 +561,7 @@ func TestLTCObservedTimecodeMatchesAudibleFrame(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	obs := e.ObserveLTC(ctx)
-	sampleAtObserve := cap.framesCaptured()
+	sampleAtObserve := capture.framesCaptured()
 	if obs.State != agentaudio.LTCRunning || !obs.TimecodeKnown {
 		t.Fatalf("ObserveLTC at sampling instant = %+v, want running with a known timecode", obs)
 	}
@@ -431,7 +575,7 @@ func TestLTCObservedTimecodeMatchesAudibleFrame(t *testing.T) {
 	// back from, without needing the observation instant itself to fall
 	// exactly on a frame boundary.
 	time.Sleep(300 * time.Millisecond)
-	_, ch2 := cap.snapshot()
+	_, ch2 := capture.snapshot()
 	frames := decodeLTCChannel(t, ch2, rate)
 
 	var anchor *ltcdecodetest.Frame
@@ -454,8 +598,7 @@ func TestLTCObservedTimecodeMatchesAudibleFrame(t *testing.T) {
 	t.Logf("ObserveLTC reported %q (frame %d); audible frame %d at the same sample position; lead = %d frames (%.4fs)",
 		obs.Timecode, reportedFrames, audibleFrames, lagFrames, lagSeconds)
 
-	const toleranceFrames = 2
-	if lagFrames > toleranceFrames || lagFrames < -toleranceFrames {
-		t.Fatalf("ObserveLTC's reported timecode leads the audible frame by %d frames (%.4fs), want within %d frames", lagFrames, lagSeconds, toleranceFrames)
+	if lagFrames > ltcLagToleranceFrames || lagFrames < -ltcLagToleranceFrames {
+		t.Fatalf("ObserveLTC's reported timecode leads the audible frame by %d frames (%.4fs), want within %d frames", lagFrames, lagSeconds, ltcLagToleranceFrames)
 	}
 }
