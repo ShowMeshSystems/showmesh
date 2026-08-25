@@ -1064,16 +1064,28 @@ export class ApiStore {
   // `.outcome`, which for this endpoint family is "unconfirmable" (not
   // "unconfirmed") whenever the dispatch was accepted but not
   // corroborated.
+  //
+  // -- Second slice: prepare/start/advance/clear (no params) plus
+  // seek/gain/gain.fade (each carrying operation-specific params the
+  // node itself validates -- AudioSessionCommandRequest.params is opaque
+  // to this coordinator by design). apply is deliberately not exposed
+  // here: its own params are a full session definition (sourceRole,
+  // media, playlist, outputs, mixPolicy) with no per-field schema in
+  // openapi.yaml for a form to render responsibly.
 
   private async dispatchAudioSessionCommand(
     nodeId: string,
     sessionId: string,
     path: string,
     revision: number,
+    params?: Record<string, unknown>,
   ): Promise<AudioSessionCommandResult> {
     const controller = this.beginSideCall()
     try {
       const body: SchemaAudioSessionCommandRequest = { revision, idempotencyKey: randomUUIDv4() }
+      if (params !== undefined) {
+        body.params = params as Record<string, never>
+      }
       const resp = await this.client.postJson<SchemaAudioSessionCommandResponse>(
         `/nodes/${encodeURIComponent(nodeId)}/audio/sessions/${encodeURIComponent(sessionId)}/${path}`,
         body,
@@ -1109,6 +1121,61 @@ export class ApiStore {
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute`. Requires audio:command. */
   async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/unmute', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare`. Requires audio:command. */
+  async prepareAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'prepare', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command. */
+  async startAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/advance`. Requires audio:command. */
+  async advanceAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'advance', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/clear`. Requires audio:command. Releases the session entirely on the node; destructive, matching stop's own "never refused for want of node evidence" posture. */
+  async clearAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'clear', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/seek`. Requires audio:command. params.positionMs is the target position, in milliseconds. */
+  async seekAudioSession(
+    nodeId: string,
+    sessionId: string,
+    revision: number,
+    positionMs: number,
+  ): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'seek', revision, { positionMs })
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain`. Requires audio:command. params.gain is linear, not dB (openapi.yaml), clamped server-side to the session's own ceiling. */
+  async setAudioSessionGain(
+    nodeId: string,
+    sessionId: string,
+    revision: number,
+    gain: number,
+  ): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gain })
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade`. Requires audio:command. params.targetGain is linear, not dB; params.durationMs is the fade duration in milliseconds; params.curve is fixed to "linear", the only curve the node ships. */
+  async fadeAudioSessionGain(
+    nodeId: string,
+    sessionId: string,
+    revision: number,
+    targetGain: number,
+    durationMs: number,
+  ): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain/fade', revision, {
+      targetGain,
+      durationMs,
+      curve: 'linear',
+    })
   }
 
   /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe`. Requires render:command. */
