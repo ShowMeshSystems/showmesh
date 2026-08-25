@@ -326,9 +326,10 @@ func TestInterruptRestoreExactlyOnce_CrashWhileInterrupterStillPlaying(t *testin
 // TestInterruptedSessionResumeFailureStaysRecoverable verifies that when
 // the engine.Resume call [Manager.removeInterrupterLocked] makes on an
 // interrupting announcement's stop fails, the interrupted session stays
-// Paused, not Failed — the same treatment [Manager.Resume] itself gives
-// this error — so an operator Resume can still recover it instead of the
-// session being stuck for the rest of the night.
+// Paused, not Failed, with its handle untouched — this internal
+// reconciliation call never released it, so there is no stale handle to
+// guard against — so an operator Resume can still recover it instead of
+// the session being stuck for the rest of the night.
 func TestInterruptedSessionResumeFailureStaysRecoverable(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)

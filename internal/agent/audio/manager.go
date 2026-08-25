@@ -414,6 +414,10 @@ func (m *Manager) Start(ctx context.Context, id pkgaudio.SessionID, invocation p
 		if err != nil {
 			s.state = pkgaudio.StateFailed
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			// Drop the handle so the ordinary operator retry re-prepares
+			// instead of calling into this same stale handle and failing
+			// identically.
+			s.releaseEngineLocked(ctx)
 			m.stopLTCLocked(ctx, s)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
@@ -498,17 +502,64 @@ func (m *Manager) Resume(ctx context.Context, id pkgaudio.SessionID, invocation 
 	defer s.mu.Unlock()
 
 	res := s.dispatch(invocation, revision, func() pkgaudio.OutcomeResult {
-		if !s.handleLoaded || s.state != pkgaudio.StatePaused {
+		if s.state != pkgaudio.StatePaused {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is not paused"}
 		}
 		if len(s.interruptedByAll) > 0 {
 			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session is suspended by an interrupting announcement; it resumes on its own once that ends"}
+		}
+		item, ok := s.currentItemLocked()
+		if !ok {
+			return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "session has no media or playlist to resume"}
+		}
+		// A failed Resume below drops the handle but keeps the session
+		// Paused with its bookmark intact, so a plain retry (an operator's
+		// or the night loop's own per-tick one) lands here with no handle
+		// loaded. Mirrors Manager.Start's stale-handle re-prepare branch,
+		// but finishes with Engine.Start at the bookmark's position rather
+		// than Engine.Resume: a freshly loaded handle was never paused,
+		// so there is nothing for Engine.Resume to continue.
+		if !s.handleLoaded || s.loadedIdentity != itemIdentity(item) {
+			s.releaseEngineLocked(ctx)
+			if _, err := s.prepareLocked(ctx, item); err != nil {
+				if errors.Is(err, ErrNoEngineBinding) {
+					return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "no audio engine bound yet; refused, not failed — retry once an audio.node binding has arrived"}
+				}
+				s.state = pkgaudio.StateFailed
+				m.stopLTCLocked(ctx, s)
+				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			}
+			position, err := s.resolveBookmarkPositionLocked(item)
+			if err != nil {
+				s.bookmark = nil
+				return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: "bookmark could not be resolved and was cleared: " + err.Error()}
+			}
+			dispatchedAt := m.now()
+			obs, err := s.mgr.engine.Start(ctx, s.handle, position)
+			if err != nil {
+				s.state = pkgaudio.StateFailed
+				s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+				s.releaseEngineLocked(ctx)
+				m.stopLTCLocked(ctx, s)
+				return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
+			}
+			s.state = pkgaudio.StatePlaying
+			s.timingKnown = true
+			s.bookmark = nil
+			s.lastObservedAt = obs.ObservedAt
+			m.startLTCLocked(ctx, s, position)
+			return m.gateAvailability(confirmLocked(pkgaudio.StatePlaying, pkgaudio.OutcomeStarted, obs, dispatchedAt))
 		}
 		s.timingKnown = false
 		dispatchedAt := m.now()
 		obs, err := s.mgr.engine.Resume(ctx, s.handle)
 		if err != nil {
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			// Drop the handle but keep the session Paused with its
+			// bookmark intact: the next Resume re-prepares through the
+			// branch above instead of refusing forever against a handle
+			// that no longer exists.
+			s.releaseEngineLocked(ctx)
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()})
 		}
 		s.state = pkgaudio.StatePlaying
