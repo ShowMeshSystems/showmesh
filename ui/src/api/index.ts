@@ -208,6 +208,7 @@ export {
   applyRenderSurface,
   clearRenderSurface,
   restartRenderPipeline,
+  probeRenderTransport,
   runDiscovery,
   declareNode,
   deleteNodeDeclaration,

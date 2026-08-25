@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import { applyRenderSurface, clearRenderSurface, listShowSurfacesForNode, restartRenderPipeline } from '../api'
+import {
+  applyRenderSurface,
+  clearRenderSurface,
+  listShowSurfacesForNode,
+  probeRenderTransport,
+  restartRenderPipeline,
+} from '../api'
 import type { ObservationEntry, RenderCommandResult } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope } from '../app/session'
@@ -157,11 +163,13 @@ export function RenderSurfacePanel({ nodeId, entries }: RenderSurfacePanelProps)
   )
 }
 
+type Verb = 'apply' | 'clear' | 'restart' | 'probe'
+
 type CallState =
   | { kind: 'idle' }
-  | { kind: 'submitting'; verb: 'apply' | 'clear' | 'restart' }
-  | { kind: 'result'; verb: 'apply' | 'clear' | 'restart'; result: RenderCommandResult }
-  | { kind: 'error'; verb: 'apply' | 'clear' | 'restart'; message: string }
+  | { kind: 'submitting'; verb: Verb }
+  | { kind: 'result'; verb: Verb; result: RenderCommandResult }
+  | { kind: 'error'; verb: Verb; message: string }
 
 // RenderSurfaceControls holds the apply/clear/restart buttons for one
 // surface. "apply" needs a sequenceId the operator supplies (this build
@@ -172,7 +180,7 @@ function RenderSurfaceControls({ nodeId, surfaceId }: { nodeId: string; surfaceI
   const [sequenceId, setSequenceId] = useState('')
   const [state, setState] = useState<CallState>({ kind: 'idle' })
 
-  async function run(verb: 'apply' | 'clear' | 'restart'): Promise<void> {
+  async function run(verb: Verb): Promise<void> {
     if (state.kind === 'submitting') return
     setState({ kind: 'submitting', verb })
     try {
@@ -181,7 +189,9 @@ function RenderSurfaceControls({ nodeId, surfaceId }: { nodeId: string; surfaceI
           ? await applyRenderSurface(nodeId, surfaceId, sequenceId)
           : verb === 'clear'
             ? await clearRenderSurface(nodeId, surfaceId)
-            : await restartRenderPipeline(nodeId, surfaceId)
+            : verb === 'restart'
+              ? await restartRenderPipeline(nodeId, surfaceId)
+              : await probeRenderTransport(nodeId, surfaceId)
       setState({ kind: 'result', verb, result })
     } catch (err) {
       setState({ kind: 'error', verb, message: describeApiError(err) })
@@ -225,6 +235,14 @@ function RenderSurfaceControls({ nodeId, surfaceId }: { nodeId: string; surfaceI
           busyReason="Restarting…"
         >
           Restart
+        </ScopedButton>
+        <ScopedButton
+          requiredScope="render:command"
+          onClick={() => void run('probe')}
+          busy={submitting && state.verb === 'probe'}
+          busyReason="Probing…"
+        >
+          Probe transport
         </ScopedButton>
       </div>
       {state.kind === 'result' && <RenderCommandOutcome result={state.result} />}
