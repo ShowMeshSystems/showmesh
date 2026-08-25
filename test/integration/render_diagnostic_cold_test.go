@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/pkg/fseq/fseqtest"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -144,4 +146,89 @@ func awaitColdDiagnosticCapture(t *testing.T, captureDir string) [][]byte {
 	}
 	t.Fatal("the cold agent never wrote a diagnostic frame to its pipeline")
 	return nil
+}
+
+// TestDiagnosticSurfaceOverridesAnAssignedIdleOutputOnARealAgent is the
+// other half of the ruling, against the real binaries: a node whose local
+// configuration names the same surface a real coordinator then assigns.
+//
+// The assignment's own idle output is the build contract's default, black.
+// The node-local setting must win, because the node that matters here is
+// the one holding an assignment when FPP dies: its timeline reads unknown,
+// unknown is an idle state, and black is a dark wall with the diagnostic
+// surface configured and doing nothing. No MultiSync sender runs in this
+// test, so the surface is idle exactly as it would be with FPP off.
+func TestDiagnosticSurfaceOverridesAnAssignedIdleOutputOnARealAgent(t *testing.T) {
+	requireBroker(t)
+	dataDir := t.TempDir()
+	coord, token, _ := startAssetCoordinator(t, dataDir, true)
+
+	showID := "show-" + uniqueSuffix()
+	nodeID := "node-" + uniqueSuffix()
+	surfaceID := "surface-" + uniqueSuffix()
+
+	// The agent is told to draw the diagnostic pattern on the very surface
+	// the coordinator is about to assign to it. Started before the surface
+	// exists, exactly as a real node is: the node-local setting is boot
+	// configuration, not something it learns from the control plane.
+	mustCtl(t, coord, token, []string{"declare", "--label", "override node"}, nodeID)
+	agentDir := filepath.Join(t.TempDir(), "assets")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agent asset dir: %v", err)
+	}
+	startAgent(t, agentConfig{
+		nodeID:   nodeID,
+		assetDir: agentDir,
+		extraEnv: []string{
+			"SHOWMESH_RENDER_DIAGNOSTIC_SURFACE=" + surfaceID,
+			"SHOWMESH_RENDER_DIAGNOSTIC_WIDTH=2",
+			"SHOWMESH_RENDER_DIAGNOSTIC_HEIGHT=2",
+			"SHOWMESH_RENDER_DIAGNOSTIC_FRAME_RATE=40",
+			gateRenderInterval,
+		},
+	})
+
+	mustCtl(t, coord, token, []string{"show", "set", "--name", "Override E2E"}, showID)
+	mustCtl(t, coord, token, []string{"show", "activate"}, showID)
+	mustCtl(t, coord, token, []string{
+		// hdmi for TestRenderApplyClearRestartAgainstRealAgent's own
+		// reason: this proves idle-output precedence, not NDI reachability.
+		"surface", "set", "--show", showID, "--name", "Wall", "--node", nodeID,
+		"--start-channel", "1", "--channel-count", "12", "--width", "2", "--height", "2",
+		"--pixel-format", "rgb", "--frame-rate", "40", "--transport", "hdmi", "--hdmi-display", "HDMI-1",
+	}, surfaceID)
+
+	filePath := writeTempFile(t, "opener.fseq", fseqtest.Build(24, 40, 25))
+	uploadNodeAsset(t, coord, token, showID, "opener", "fseq", nodeID, filePath)
+	waitFor(t, 20*time.Second, 200*time.Millisecond, func() bool {
+		return apiNodeManifestState(t, coord, nodeID) == "ready"
+	}, "node asset manifest to become ready so the FSEQ is on the node before apply")
+
+	applyOut := mustCtl(t, coord, token, []string{"render", "apply"}, nodeID, surfaceID, "opener")
+	if !strings.Contains(applyOut, "confirmed:") {
+		t.Fatalf("render apply did not confirm: %s", applyOut)
+	}
+
+	// Wait for a settled idle report for this surface, then assert which
+	// idle output actually won. Matching on a non-empty IdleMode rather
+	// than on "diagnostic" means a regression produces a clear assertion
+	// failure naming what it drew instead, not an opaque timeout.
+	report := awaitRenderReportMatching(t, nodeID, func(s mqttproto.RenderSurfaceReport) bool {
+		return s.SurfaceID == surfaceID && s.Drawing == mqttproto.RenderDrawingIdle && s.IdleMode != ""
+	})
+	var found *mqttproto.RenderSurfaceReport
+	for i := range report.Surfaces {
+		if report.Surfaces[i].SurfaceID == surfaceID {
+			found = &report.Surfaces[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("the assigned surface never appeared in the node's render report; surfaces=%+v", report.Surfaces)
+	}
+	if found.IdleMode != "diagnostic" {
+		t.Fatalf("the assigned surface reports idleMode=%q, want %q: the node-local diagnostic setting must take precedence over the assignment's own idle output, or a node holding an assignment with FPP dead shows a black wall", found.IdleMode, "diagnostic")
+	}
+	t.Logf("override evidence from the real agent: surface=%s drawing=%q idleMode=%q timelineState=%q",
+		found.SurfaceID, found.Drawing, found.IdleMode, found.TimelineState)
 }
