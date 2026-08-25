@@ -24,9 +24,13 @@ import (
 )
 
 // Frame is one LTC frame libltc's decoder recovered from an audio signal.
+// OffStart is the sample offset, within the buffer passed to [Decode], of
+// this frame's first transition -- what a caller needs to place the frame
+// on a timeline rather than just knowing its decoded value.
 type Frame struct {
 	Hours, Mins, Secs, Frame int
 	DropFrame                bool
+	OffStart                 int64
 }
 
 // Decode feeds samples (S16LE mono) to a fresh libltc decoder and returns
@@ -56,6 +60,7 @@ func Decode(samples []int16, framesPerVideoFrame int) ([]Frame, error) {
 			Secs:      int(stime.secs),
 			Frame:     int(stime.frame),
 			DropFrame: C.showmesh_ltc_dfbit(&ext.ltc) != 0,
+			OffStart:  int64(ext.off_start),
 		})
 	}
 	return frames, nil
