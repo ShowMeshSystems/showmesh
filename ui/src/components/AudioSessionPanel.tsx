@@ -1,8 +1,15 @@
 import { useState } from 'react'
 import {
+  advanceAudioSession,
+  clearAudioSession,
+  fadeAudioSessionGain,
   muteAudioSessionOutput,
   pauseAudioSession,
+  prepareAudioSession,
   resumeAudioSession,
+  seekAudioSession,
+  setAudioSessionGain,
+  startAudioSession,
   stopAudioSession,
   unmuteAudioSessionOutput,
 } from '../api'
@@ -16,6 +23,14 @@ import { ScopedButton } from './ScopedButton'
 // the controls an operator reaches for when something is audibly wrong
 // mid-show -- pause, resume, stop, and output mute/unmute. Apply,
 // prepare, start, clear, seek, advance, and gain are a later slice.
+//
+// This second slice adds prepare/start/advance/clear (no operator
+// parameters) and seek/gain/gain.fade (each carrying the parameters
+// openapi.yaml's own operation descriptions name -- positionMs, gain,
+// targetGain/durationMs). apply is left out: its own params are a full
+// session definition (sourceRole/media/playlist/outputs/mixPolicy) with
+// no per-field schema in openapi.yaml, so this panel does not offer a
+// JSON textarea as a stand-in for a form nobody has actually designed.
 const AUDIO_COMMAND_SCOPE = 'audio:command'
 
 // Node.audio (api/openapi.yaml) is a flat ObservationEntry[] spanning
@@ -98,7 +113,7 @@ export function AudioSessionPanel({ nodeId, entries }: AudioSessionPanelProps) {
   )
 }
 
-type Verb = 'pause' | 'resume' | 'mute' | 'unmute'
+type Verb = 'pause' | 'resume' | 'mute' | 'unmute' | 'prepare' | 'start' | 'advance'
 
 type CallState =
   | { kind: 'idle' }
@@ -106,14 +121,19 @@ type CallState =
   | { kind: 'result'; verb: Verb; result: AudioSessionCommandResult }
   | { kind: 'error'; verb: Verb; message: string }
 
-// AudioSessionControls holds pause/resume/mute/unmute plus the stop
-// arm-then-confirm pair for one session. Stop is kept as its own
-// separate state, not folded into CallState above, matching
-// ShowActive.tsx/NightSessionActive.tsx's own "the sharp control is a
-// distinct piece of state from the ordinary ones" shape: a second,
-// distinct click actually submits it, and the confirmation panel itself
-// carries any refusal so the operator is not made to re-arm just to see
-// why stop failed.
+// AudioSessionControls holds pause/resume/mute/unmute/prepare/start/
+// advance plus the stop and clear arm-then-confirm pairs for one
+// session. Stop and clear are each kept as their own separate state, not
+// folded into CallState above, matching ShowActive.tsx/
+// NightSessionActive.tsx's own "the sharp control is a distinct piece of
+// state from the ordinary ones" shape: a second, distinct click actually
+// submits it, and the confirmation panel itself carries any refusal so
+// the operator is not made to re-arm just to see why the command failed.
+// clear gets the same treatment as stop because it is equally
+// irreversible from the operator's seat -- clear releases the session
+// and its loaded content on the node and removes its persisted record
+// entirely (openapi.yaml), where stop only halts playback of an
+// otherwise still-loaded session.
 function AudioSessionControls({
   nodeId,
   sessionId,
@@ -130,6 +150,11 @@ function AudioSessionControls({
   const [stopError, setStopError] = useState<string | null>(null)
   const [stopResult, setStopResult] = useState<AudioSessionCommandResult | null>(null)
 
+  const [clearArmed, setClearArmed] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [clearError, setClearError] = useState<string | null>(null)
+  const [clearResult, setClearResult] = useState<AudioSessionCommandResult | null>(null)
+
   async function run(verb: Verb): Promise<void> {
     if (state.kind === 'submitting') return
     setState({ kind: 'submitting', verb })
@@ -142,7 +167,13 @@ function AudioSessionControls({
             ? await resumeAudioSession(nodeId, sessionId, revision)
             : verb === 'mute'
               ? await muteAudioSessionOutput(nodeId, sessionId, revision)
-              : await unmuteAudioSessionOutput(nodeId, sessionId, revision)
+              : verb === 'unmute'
+                ? await unmuteAudioSessionOutput(nodeId, sessionId, revision)
+                : verb === 'prepare'
+                  ? await prepareAudioSession(nodeId, sessionId, revision)
+                  : verb === 'start'
+                    ? await startAudioSession(nodeId, sessionId, revision)
+                    : await advanceAudioSession(nodeId, sessionId, revision)
       setState({ kind: 'result', verb, result })
     } catch (err) {
       setState({ kind: 'error', verb, message: describeApiError(err) })
@@ -178,11 +209,53 @@ function AudioSessionControls({
     }
   }
 
+  function armClear(): void {
+    setClearError(null)
+    setClearArmed(true)
+  }
+
+  function cancelClear(): void {
+    setClearArmed(false)
+    setClearError(null)
+  }
+
+  async function confirmClear(): Promise<void> {
+    if (clearing) return
+    setClearing(true)
+    setClearError(null)
+    try {
+      const revision = nextRevision(entries)
+      const result = await clearAudioSession(nodeId, sessionId, revision)
+      setClearResult(result)
+      setClearArmed(false)
+    } catch (err) {
+      setClearError(describeApiError(err))
+    } finally {
+      setClearing(false)
+    }
+  }
+
   const submitting = state.kind === 'submitting'
 
   return (
     <div className="audio-session__controls">
       <div className="audio-session__buttons">
+        <ScopedButton
+          requiredScope={AUDIO_COMMAND_SCOPE}
+          onClick={() => void run('prepare')}
+          busy={submitting && state.kind === 'submitting' && state.verb === 'prepare'}
+          busyReason="Preparing…"
+        >
+          Prepare
+        </ScopedButton>
+        <ScopedButton
+          requiredScope={AUDIO_COMMAND_SCOPE}
+          onClick={() => void run('start')}
+          busy={submitting && state.kind === 'submitting' && state.verb === 'start'}
+          busyReason="Starting…"
+        >
+          Start
+        </ScopedButton>
         <ScopedButton
           requiredScope={AUDIO_COMMAND_SCOPE}
           onClick={() => void run('pause')}
@@ -198,6 +271,14 @@ function AudioSessionControls({
           busyReason="Resuming…"
         >
           Resume
+        </ScopedButton>
+        <ScopedButton
+          requiredScope={AUDIO_COMMAND_SCOPE}
+          onClick={() => void run('advance')}
+          busy={submitting && state.kind === 'submitting' && state.verb === 'advance'}
+          busyReason="Advancing…"
+        >
+          Advance
         </ScopedButton>
         <ScopedButton
           requiredScope={AUDIO_COMMAND_SCOPE}
@@ -218,6 +299,11 @@ function AudioSessionControls({
         {!stopArmed && (
           <button type="button" onClick={armStop} disabled={stopping}>
             Stop…
+          </button>
+        )}
+        {!clearArmed && (
+          <button type="button" onClick={armClear} disabled={clearing}>
+            Clear…
           </button>
         )}
       </div>
@@ -262,6 +348,354 @@ function AudioSessionControls({
         </div>
       )}
       {stopResult !== null && <AudioCommandOutcome result={stopResult} />}
+
+      {/* Clear is more destructive than stop: it releases the session and
+          its loaded content on the node and removes its persisted record
+          entirely, not merely halting playback. Same arm-then-confirm
+          shape as stop, for the same reason. */}
+      {clearArmed && (
+        <div className="panel panel--warning" role="alertdialog" aria-label="Confirm audio session clear">
+          <p>
+            <strong>About to clear session &ldquo;{sessionId}&rdquo;.</strong>
+          </p>
+          <p>
+            This releases the session and its loaded content on the node and removes its
+            persisted record entirely. This is not undoable.
+          </p>
+          {clearError !== null && (
+            <p role="alert" className="audio-session__error">
+              {clearError}
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <ScopedButton
+              requiredScope={AUDIO_COMMAND_SCOPE}
+              onClick={() => void confirmClear()}
+              busy={clearing}
+              busyReason="Clearing…"
+            >
+              {clearing ? 'Clearing…' : `Confirm: clear "${sessionId}"`}
+            </ScopedButton>
+            <button type="button" onClick={cancelClear} disabled={clearing}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {clearResult !== null && <AudioCommandOutcome result={clearResult} />}
+
+      {/* Parameterised commands each get their own content-sized group in
+          a wrapping row (.command-groups/.command-group, global.css),
+          matching FPPDetail.tsx's "an operator hunting for one control is
+          not made to scroll past the others" convention, rather than
+          stacking full-width inputs down the page. */}
+      <div className="command-groups">
+        <div className="command-group">
+          <h4 className="panel__title">Seek</h4>
+          <SeekControl nodeId={nodeId} sessionId={sessionId} entries={entries} />
+        </div>
+        <div className="command-group">
+          <h4 className="panel__title">Gain</h4>
+          <GainControl nodeId={nodeId} sessionId={sessionId} entries={entries} />
+        </div>
+        <div className="command-group">
+          <h4 className="panel__title">Gain fade</h4>
+          <GainFadeControl nodeId={nodeId} sessionId={sessionId} entries={entries} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type ParamCallState =
+  | { kind: 'idle' }
+  | { kind: 'submitting' }
+  | { kind: 'result'; result: AudioSessionCommandResult }
+  | { kind: 'error'; message: string }
+
+// SeekControl re-anchors the session's current item's position.
+// openapi.yaml: "params.positionMs names the target position in
+// milliseconds" -- a non-negative whole number, validated client-side
+// before anything leaves the browser (FPPSetVolumeControl.tsx's own
+// "refuse, don't clamp or coerce" posture), never sent as a bare string.
+function SeekControl({
+  nodeId,
+  sessionId,
+  entries,
+}: {
+  nodeId: string
+  sessionId: string
+  entries: ObservationEntry[]
+}) {
+  const [raw, setRaw] = useState('')
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const [state, setState] = useState<ParamCallState>({ kind: 'idle' })
+  const submitting = state.kind === 'submitting'
+
+  function parsePositionMs(): number | null {
+    const trimmed = raw.trim()
+    if (trimmed === '') {
+      setValidationError('Enter a target position in milliseconds.')
+      return null
+    }
+    const n = Number(trimmed)
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+      setValidationError(`"${raw}" is not valid. Position must be a whole number of milliseconds, 0 or greater.`)
+      return null
+    }
+    setValidationError(null)
+    return n
+  }
+
+  async function handleClick(): Promise<void> {
+    if (submitting) return
+    const positionMs = parsePositionMs()
+    if (positionMs === null) return
+    setState({ kind: 'submitting' })
+    try {
+      const result = await seekAudioSession(nodeId, sessionId, nextRevision(entries), positionMs)
+      setState({ kind: 'result', result })
+    } catch (err) {
+      setState({ kind: 'error', message: describeApiError(err) })
+    }
+  }
+
+  return (
+    <div>
+      <label>
+        Position (ms){' '}
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={raw}
+          disabled={submitting}
+          onChange={(e) => setRaw(e.target.value)}
+        />
+      </label>
+      {validationError !== null && (
+        <p role="alert" className="audio-session__error">
+          {validationError}
+        </p>
+      )}
+      <div>
+        <ScopedButton
+          requiredScope={AUDIO_COMMAND_SCOPE}
+          onClick={() => void handleClick()}
+          busy={submitting}
+          busyReason="Seeking…"
+        >
+          Seek
+        </ScopedButton>
+      </div>
+      {state.kind === 'result' && <AudioCommandOutcome result={state.result} />}
+      {state.kind === 'error' && (
+        <p role="alert" className="audio-session__error">
+          {state.message}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// GainControl sets the session's configured gain. openapi.yaml states
+// this plainly: "params.gain is linear, not dB - see AUDIO-ENGINE.md".
+// No numeric range is given in the schema -- the node clamps to the
+// session's own ceiling and reports the clamp as evidence rather than
+// silently applying it -- so this control only refuses a non-numeric or
+// negative entry, leaving the actual ceiling to the node.
+function GainControl({
+  nodeId,
+  sessionId,
+  entries,
+}: {
+  nodeId: string
+  sessionId: string
+  entries: ObservationEntry[]
+}) {
+  const [raw, setRaw] = useState('')
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const [state, setState] = useState<ParamCallState>({ kind: 'idle' })
+  const submitting = state.kind === 'submitting'
+
+  function parseGain(): number | null {
+    const trimmed = raw.trim()
+    if (trimmed === '') {
+      setValidationError('Enter a gain value (linear, not dB).')
+      return null
+    }
+    const n = Number(trimmed)
+    if (!Number.isFinite(n) || n < 0) {
+      setValidationError(`"${raw}" is not valid. Gain must be a non-negative number (linear, not dB).`)
+      return null
+    }
+    setValidationError(null)
+    return n
+  }
+
+  async function handleClick(): Promise<void> {
+    if (submitting) return
+    const gain = parseGain()
+    if (gain === null) return
+    setState({ kind: 'submitting' })
+    try {
+      const result = await setAudioSessionGain(nodeId, sessionId, nextRevision(entries), gain)
+      setState({ kind: 'result', result })
+    } catch (err) {
+      setState({ kind: 'error', message: describeApiError(err) })
+    }
+  }
+
+  return (
+    <div>
+      <label>
+        Gain (linear, not dB){' '}
+        <input
+          type="number"
+          min={0}
+          step="any"
+          value={raw}
+          disabled={submitting}
+          onChange={(e) => setRaw(e.target.value)}
+        />
+      </label>
+      {validationError !== null && (
+        <p role="alert" className="audio-session__error">
+          {validationError}
+        </p>
+      )}
+      <div>
+        <ScopedButton
+          requiredScope={AUDIO_COMMAND_SCOPE}
+          onClick={() => void handleClick()}
+          busy={submitting}
+          busyReason="Setting gain…"
+        >
+          Set gain
+        </ScopedButton>
+      </div>
+      {state.kind === 'result' && <AudioCommandOutcome result={state.result} />}
+      {state.kind === 'error' && (
+        <p role="alert" className="audio-session__error">
+          {state.message}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// GainFadeControl sets the configured gain to params.targetGain
+// (linear, not dB, same as GainControl above) immediately, then ramps
+// toward it over params.durationMs. params.curve is sent as "linear" --
+// the only curve the node ships (openapi.yaml) -- rather than offered as
+// a one-option control with nothing to actually choose.
+function GainFadeControl({
+  nodeId,
+  sessionId,
+  entries,
+}: {
+  nodeId: string
+  sessionId: string
+  entries: ObservationEntry[]
+}) {
+  const [rawGain, setRawGain] = useState('')
+  const [rawDuration, setRawDuration] = useState('')
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const [state, setState] = useState<ParamCallState>({ kind: 'idle' })
+  const submitting = state.kind === 'submitting'
+
+  function parseInputs(): { targetGain: number; durationMs: number } | null {
+    const trimmedGain = rawGain.trim()
+    if (trimmedGain === '') {
+      setValidationError('Enter a target gain value (linear, not dB).')
+      return null
+    }
+    const targetGain = Number(trimmedGain)
+    if (!Number.isFinite(targetGain) || targetGain < 0) {
+      setValidationError(`"${rawGain}" is not valid. Target gain must be a non-negative number (linear, not dB).`)
+      return null
+    }
+    const trimmedDuration = rawDuration.trim()
+    if (trimmedDuration === '') {
+      setValidationError('Enter a fade duration in milliseconds.')
+      return null
+    }
+    const durationMs = Number(trimmedDuration)
+    if (!Number.isFinite(durationMs) || !Number.isInteger(durationMs) || durationMs < 0) {
+      setValidationError(
+        `"${rawDuration}" is not valid. Duration must be a whole number of milliseconds, 0 or greater.`,
+      )
+      return null
+    }
+    setValidationError(null)
+    return { targetGain, durationMs }
+  }
+
+  async function handleClick(): Promise<void> {
+    if (submitting) return
+    const parsed = parseInputs()
+    if (parsed === null) return
+    setState({ kind: 'submitting' })
+    try {
+      const result = await fadeAudioSessionGain(
+        nodeId,
+        sessionId,
+        nextRevision(entries),
+        parsed.targetGain,
+        parsed.durationMs,
+      )
+      setState({ kind: 'result', result })
+    } catch (err) {
+      setState({ kind: 'error', message: describeApiError(err) })
+    }
+  }
+
+  return (
+    <div>
+      <label>
+        Target gain (linear, not dB){' '}
+        <input
+          type="number"
+          min={0}
+          step="any"
+          value={rawGain}
+          disabled={submitting}
+          onChange={(e) => setRawGain(e.target.value)}
+        />
+      </label>
+      <br />
+      <label>
+        Duration (ms){' '}
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={rawDuration}
+          disabled={submitting}
+          onChange={(e) => setRawDuration(e.target.value)}
+        />
+      </label>
+      {validationError !== null && (
+        <p role="alert" className="audio-session__error">
+          {validationError}
+        </p>
+      )}
+      <div>
+        <ScopedButton
+          requiredScope={AUDIO_COMMAND_SCOPE}
+          onClick={() => void handleClick()}
+          busy={submitting}
+          busyReason="Fading…"
+        >
+          Fade
+        </ScopedButton>
+      </div>
+      {state.kind === 'result' && <AudioCommandOutcome result={state.result} />}
+      {state.kind === 'error' && (
+        <p role="alert" className="audio-session__error">
+          {state.message}
+        </p>
+      )}
     </div>
   )
 }

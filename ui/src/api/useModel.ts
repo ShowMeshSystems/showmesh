@@ -36,6 +36,8 @@ import type {
   ConfigShowActive,
   ConfigShowMacro,
   ConfigShowSurface,
+  ConfigShowCue,
+
   ConfigShowPlaylist,
   ConfigShowWrite,
   CreatePrincipalRequest,
@@ -81,6 +83,9 @@ type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListR
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+// Track H seam H6: show.cue authoring.
+type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
+
 type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
@@ -360,6 +365,52 @@ export function unmuteAudioSessionOutput(
   return store.unmuteAudioSessionOutput(nodeId, sessionId, revision)
 }
 
+// Second audio-dispatch slice. Same thin pass-through pattern.
+
+export function prepareAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  return store.prepareAudioSession(nodeId, sessionId, revision)
+}
+
+export function startAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  return store.startAudioSession(nodeId, sessionId, revision)
+}
+
+export function advanceAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  return store.advanceAudioSession(nodeId, sessionId, revision)
+}
+
+export function clearAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  return store.clearAudioSession(nodeId, sessionId, revision)
+}
+
+export function seekAudioSession(
+  nodeId: string,
+  sessionId: string,
+  revision: number,
+  positionMs: number,
+): Promise<AudioSessionCommandResult> {
+  return store.seekAudioSession(nodeId, sessionId, revision, positionMs)
+}
+
+export function setAudioSessionGain(
+  nodeId: string,
+  sessionId: string,
+  revision: number,
+  gain: number,
+): Promise<AudioSessionCommandResult> {
+  return store.setAudioSessionGain(nodeId, sessionId, revision, gain)
+}
+
+export function fadeAudioSessionGain(
+  nodeId: string,
+  sessionId: string,
+  revision: number,
+  targetGain: number,
+  durationMs: number,
+): Promise<AudioSessionCommandResult> {
+  return store.fadeAudioSessionGain(nodeId, sessionId, revision, targetGain, durationMs)
+}
+
 export function probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
   return store.probeRenderTransport(nodeId, surfaceId)
 }
@@ -584,6 +635,21 @@ export function putShowSurface(id: string, payload: ConfigShowSurface): Promise<
 
 export function getShowSurfaceRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowSurfaceRevisions(id)
+}
+
+// Track H seam H6: show.cue authoring. Same thin pass-through pattern as
+// every method above.
+
+export function getShowCue(id: string): Promise<SchemaShowCueConfigResponse> {
+  return store.getShowCue(id)
+}
+
+export function putShowCue(id: string, payload: ConfigShowCue): Promise<SchemaShowCueConfigResponse> {
+  return store.putShowCue(id, payload)
+}
+
+export function getShowCueRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowCueRevisions(id)
 }
 
 export function putShowPlaylist(id: string, payload: ConfigShowPlaylist): Promise<SchemaShowPlaylistConfigResponse> {

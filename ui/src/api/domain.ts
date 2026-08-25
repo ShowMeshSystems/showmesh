@@ -157,6 +157,17 @@ export type ConfigRevisionsResponseKind = ConfigRevisionsResponse['kind']
 // type above.
 export type ConfigShowSurface = components['schemas']['ConfigShowSurface']
 export type ShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+// Track H seam H6: show.cue authoring. Aliased for the identical reason as
+// every type above (ADR-015). Not part of `Model`: same reasoning as
+// ConfigShowSurface just above.
+export type ConfigShowCueRenderOutput = components['schemas']['ConfigShowCueRenderOutput']
+export type ConfigShowCueAudioOutput = components['schemas']['ConfigShowCueAudioOutput']
+export type ConfigShowCueLTCOutput = components['schemas']['ConfigShowCueLTCOutput']
+export type ConfigShowCueAnnouncementOutput = components['schemas']['ConfigShowCueAnnouncementOutput']
+export type ConfigShowCueOutputs = components['schemas']['ConfigShowCueOutputs']
+export type ConfigShowCue = components['schemas']['ConfigShowCue']
+export type ShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
+
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring. Aliased for the identical reason as every type above
 // (ADR-015).

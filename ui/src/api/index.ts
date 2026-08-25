@@ -104,6 +104,15 @@ export type {
   // configured-but-not-yet-applied surface the way showmeshctl already can.
   ConfigShowSurface,
   ShowSurfaceConfigResponse,
+  // Track H seam H6: show.cue authoring.
+  ConfigShowCueRenderOutput,
+  ConfigShowCueAudioOutput,
+  ConfigShowCueLTCOutput,
+  ConfigShowCueAnnouncementOutput,
+  ConfigShowCueOutputs,
+  ConfigShowCue,
+  ShowCueConfigResponse,
+
   // Track H seam H6: show.playlist authoring.
   ConfigShowPlaylistFPPBinding,
   ConfigShowPlaylistShowmeshAudio,
@@ -237,6 +246,13 @@ export {
   stopAudioSession,
   muteAudioSessionOutput,
   unmuteAudioSessionOutput,
+  prepareAudioSession,
+  startAudioSession,
+  advanceAudioSession,
+  clearAudioSession,
+  seekAudioSession,
+  setAudioSessionGain,
+  fadeAudioSessionGain,
   probeRenderTransport,
   runDiscovery,
   declareNode,
@@ -296,6 +312,10 @@ export {
   getShowRevisions,
   putShowSurface,
   getShowSurfaceRevisions,
+  // Track H seam H6: show.cue authoring.
+  getShowCue,
+  putShowCue,
+  getShowCueRevisions,
   getShowActive,
   putShowActive,
   getShowActiveRevisions,

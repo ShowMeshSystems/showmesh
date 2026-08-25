@@ -11,14 +11,33 @@ import type { AudioSessionCommandResult, Model, ObservationEntry, SessionRespons
 // wiring to "audio:command", grouping by audio_session resource, the
 // stop arm-then-confirm pair, and rendering the audio outcome vocabulary
 // honestly per ADR-003) from store.ts's own network behavior.
-const { pauseAudioSession, resumeAudioSession, stopAudioSession, muteAudioSessionOutput, unmuteAudioSessionOutput } =
-  vi.hoisted(() => ({
-    pauseAudioSession: vi.fn(),
-    resumeAudioSession: vi.fn(),
-    stopAudioSession: vi.fn(),
-    muteAudioSessionOutput: vi.fn(),
-    unmuteAudioSessionOutput: vi.fn(),
-  }))
+const {
+  pauseAudioSession,
+  resumeAudioSession,
+  stopAudioSession,
+  muteAudioSessionOutput,
+  unmuteAudioSessionOutput,
+  prepareAudioSession,
+  startAudioSession,
+  advanceAudioSession,
+  clearAudioSession,
+  seekAudioSession,
+  setAudioSessionGain,
+  fadeAudioSessionGain,
+} = vi.hoisted(() => ({
+  pauseAudioSession: vi.fn(),
+  resumeAudioSession: vi.fn(),
+  stopAudioSession: vi.fn(),
+  muteAudioSessionOutput: vi.fn(),
+  unmuteAudioSessionOutput: vi.fn(),
+  prepareAudioSession: vi.fn(),
+  startAudioSession: vi.fn(),
+  advanceAudioSession: vi.fn(),
+  clearAudioSession: vi.fn(),
+  seekAudioSession: vi.fn(),
+  setAudioSessionGain: vi.fn(),
+  fadeAudioSessionGain: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return {
@@ -28,6 +47,13 @@ vi.mock('../api', async (importOriginal) => {
     stopAudioSession,
     muteAudioSessionOutput,
     unmuteAudioSessionOutput,
+    prepareAudioSession,
+    startAudioSession,
+    advanceAudioSession,
+    clearAudioSession,
+    seekAudioSession,
+    setAudioSessionGain,
+    fadeAudioSessionGain,
   }
 })
 
@@ -38,6 +64,13 @@ afterEach(() => {
   stopAudioSession.mockReset()
   muteAudioSessionOutput.mockReset()
   unmuteAudioSessionOutput.mockReset()
+  prepareAudioSession.mockReset()
+  startAudioSession.mockReset()
+  advanceAudioSession.mockReset()
+  clearAudioSession.mockReset()
+  seekAudioSession.mockReset()
+  setAudioSessionGain.mockReset()
+  fadeAudioSessionGain.mockReset()
 })
 
 const NOW = '2026-08-25T00:00:00.000Z'
@@ -106,18 +139,26 @@ describe('AudioSessionPanel', () => {
     expect(screen.queryByText('node.audio.engine.state')).not.toBeInTheDocument()
   })
 
-  it('renders pause/resume/mute/unmute/stop disabled, never enabled, without audio:command', async () => {
+  it('renders every control disabled, never enabled, without audio:command', async () => {
     const model = makeModel({ session: signedIn({ scopes: ['node:read'] }) })
     renderPanel(model, [entry()])
+    expect(screen.getByRole('button', { name: 'Prepare' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Advance' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Mute' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Unmute' })).toBeDisabled()
-    // Stop's arm button is a plain button (the ScopedButton only guards
-    // the confirm step), so it stays clickable; arming it must still
-    // reach a disabled confirm control.
+    expect(screen.getByRole('button', { name: 'Seek' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Set gain' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Fade' })).toBeDisabled()
+    // Stop's and clear's arm buttons are plain buttons (the ScopedButton
+    // only guards the confirm step), so they stay clickable; arming
+    // either must still reach a disabled confirm control.
     await userEvent.click(screen.getByRole('button', { name: 'Stop…' }))
     expect(screen.getByRole('button', { name: /Confirm: stop/ })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Clear…' }))
+    expect(screen.getByRole('button', { name: /Confirm: clear/ })).toBeDisabled()
   })
 
   it('dispatches pause and renders a confirmed outcome honestly', async () => {
@@ -195,5 +236,109 @@ describe('AudioSessionPanel', () => {
 
     expect(stopAudioSession).not.toHaveBeenCalled()
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('dispatches prepare/start/advance with the computed next revision', async () => {
+    prepareAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.prepare', outcome: 'unconfirmable', reason: 'no pipeline backend' }))
+    startAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.start', outcome: 'started' }))
+    advanceAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.advance', outcome: 'position' }))
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 2 })])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Prepare' }))
+    expect(prepareAudioSession).toHaveBeenCalledWith('media-01', 'session-1', 3)
+    expect(await screen.findByText('Unconfirmed: no pipeline backend')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start' }))
+    expect(startAudioSession).toHaveBeenCalledWith('media-01', 'session-1', 3)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Advance' }))
+    expect(advanceAudioSession).toHaveBeenCalledWith('media-01', 'session-1', 3)
+  })
+
+  it('requires a second, distinct click to actually clear a session', async () => {
+    clearAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.clear', outcome: 'stopped' }))
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    // The arm click alone must not dispatch anything.
+    await userEvent.click(screen.getByRole('button', { name: 'Clear…' }))
+    expect(clearAudioSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('alertdialog', { name: 'Confirm audio session clear' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /Confirm: clear/ }))
+    expect(clearAudioSession).toHaveBeenCalledWith('media-01', 'session-1', 1)
+    expect(await screen.findByText('Confirmed: stopped')).toBeInTheDocument()
+  })
+
+  it('cancelling the armed clear dispatches nothing', async () => {
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear…' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(clearAudioSession).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('seek refuses an empty position before dispatching, then sends the entered value', async () => {
+    seekAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.seek', outcome: 'position' }))
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 7 })])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Seek' }))
+    expect(seekAudioSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a target position in milliseconds.')
+
+    await userEvent.type(screen.getByLabelText('Position (ms)'), '1500')
+    await userEvent.click(screen.getByRole('button', { name: 'Seek' }))
+
+    expect(seekAudioSession).toHaveBeenCalledWith('media-01', 'session-1', 8, 1500)
+    expect(await screen.findByText('Confirmed: position')).toBeInTheDocument()
+  })
+
+  it('seek refuses a negative or non-numeric position without dispatching', async () => {
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.type(screen.getByLabelText('Position (ms)'), '-5')
+    await userEvent.click(screen.getByRole('button', { name: 'Seek' }))
+
+    expect(seekAudioSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Position must be a whole number of milliseconds, 0 or greater.')
+  })
+
+  it('gain refuses an empty value before dispatching, then sends the entered linear value', async () => {
+    setAudioSessionGain.mockResolvedValue(commandResult({ action: 'audio.gain.set', outcome: 'position' }))
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 1 })])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Set gain' }))
+    expect(setAudioSessionGain).not.toHaveBeenCalled()
+    expect(screen.getByText('Enter a gain value (linear, not dB).')).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText('Gain (linear, not dB)'), '0.75')
+    await userEvent.click(screen.getByRole('button', { name: 'Set gain' }))
+
+    expect(setAudioSessionGain).toHaveBeenCalledWith('media-01', 'session-1', 2, 0.75)
+    expect(await screen.findByText('Confirmed: position')).toBeInTheDocument()
+  })
+
+  it('gain fade refuses a missing duration without dispatching, then sends both entered values', async () => {
+    fadeAudioSessionGain.mockResolvedValue(commandResult({ action: 'audio.gain.fade', outcome: 'unconfirmable', reason: 'no pipeline backend' }))
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 9 })])
+
+    await userEvent.type(screen.getByLabelText('Target gain (linear, not dB)'), '0.5')
+    await userEvent.click(screen.getByRole('button', { name: 'Fade' }))
+    expect(fadeAudioSessionGain).not.toHaveBeenCalled()
+    expect(screen.getByText('Enter a fade duration in milliseconds.')).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText('Duration (ms)'), '2000')
+    await userEvent.click(screen.getByRole('button', { name: 'Fade' }))
+
+    expect(fadeAudioSessionGain).toHaveBeenCalledWith('media-01', 'session-1', 10, 0.5, 2000)
+    expect(await screen.findByText('Unconfirmed: no pipeline backend')).toBeInTheDocument()
   })
 })

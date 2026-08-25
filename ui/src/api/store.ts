@@ -149,6 +149,10 @@ type SchemaConfigShowMacro = components['schemas']['ConfigShowMacro']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 // Finding 16: show.surface's own read response, same aliasing pattern.
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+// Track H seam H6: show.cue authoring, same aliasing pattern.
+type SchemaConfigShowCue = components['schemas']['ConfigShowCue']
+type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
+
 // Track H seam H6: show.playlist's own read/write response, same
 // aliasing pattern.
 type SchemaConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
@@ -1068,16 +1072,28 @@ export class ApiStore {
   // `.outcome`, which for this endpoint family is "unconfirmable" (not
   // "unconfirmed") whenever the dispatch was accepted but not
   // corroborated.
+  //
+  // -- Second slice: prepare/start/advance/clear (no params) plus
+  // seek/gain/gain.fade (each carrying operation-specific params the
+  // node itself validates -- AudioSessionCommandRequest.params is opaque
+  // to this coordinator by design). apply is deliberately not exposed
+  // here: its own params are a full session definition (sourceRole,
+  // media, playlist, outputs, mixPolicy) with no per-field schema in
+  // openapi.yaml for a form to render responsibly.
 
   private async dispatchAudioSessionCommand(
     nodeId: string,
     sessionId: string,
     path: string,
     revision: number,
+    params?: Record<string, unknown>,
   ): Promise<AudioSessionCommandResult> {
     const controller = this.beginSideCall()
     try {
       const body: SchemaAudioSessionCommandRequest = { revision, idempotencyKey: randomUUIDv4() }
+      if (params !== undefined) {
+        body.params = params as Record<string, never>
+      }
       const resp = await this.client.postJson<SchemaAudioSessionCommandResponse>(
         `/nodes/${encodeURIComponent(nodeId)}/audio/sessions/${encodeURIComponent(sessionId)}/${path}`,
         body,
@@ -1113,6 +1129,61 @@ export class ApiStore {
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute`. Requires audio:command. */
   async unmuteAudioSessionOutput(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'output/unmute', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare`. Requires audio:command. */
+  async prepareAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'prepare', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/start`. Requires audio:command. */
+  async startAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'start', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/advance`. Requires audio:command. */
+  async advanceAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'advance', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/clear`. Requires audio:command. Releases the session entirely on the node; destructive, matching stop's own "never refused for want of node evidence" posture. */
+  async clearAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'clear', revision)
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/seek`. Requires audio:command. params.positionMs is the target position, in milliseconds. */
+  async seekAudioSession(
+    nodeId: string,
+    sessionId: string,
+    revision: number,
+    positionMs: number,
+  ): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'seek', revision, { positionMs })
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain`. Requires audio:command. params.gain is linear, not dB (openapi.yaml), clamped server-side to the session's own ceiling. */
+  async setAudioSessionGain(
+    nodeId: string,
+    sessionId: string,
+    revision: number,
+    gain: number,
+  ): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gain })
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade`. Requires audio:command. params.targetGain is linear, not dB; params.durationMs is the fade duration in milliseconds; params.curve is fixed to "linear", the only curve the node ships. */
+  async fadeAudioSessionGain(
+    nodeId: string,
+    sessionId: string,
+    revision: number,
+    targetGain: number,
+    durationMs: number,
+  ): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain/fade', revision, {
+      targetGain,
+      durationMs,
+      curve: 'linear',
+    })
   }
 
   /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe`. Requires render:command. */
@@ -1804,6 +1875,51 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         `/config/show.surface/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.cue/{id}` (Track H seam H1/H6). Throws (404) when no such cue exists. */
+  async getShowCue(id: string): Promise<SchemaShowCueConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowCueConfigResponse>(
+        `/config/show.cue/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.cue/{id}` (Track H seam H1/H6, ADR-043).
+   * `config:write` only. Full replacement: `outputs` must declare at
+   * least one of render/audio/ltc/announcement. Validated and normalized
+   * server-side; a rejected payload throws and appends no revision.
+   */
+  async putShowCue(id: string, payload: SchemaConfigShowCue): Promise<SchemaShowCueConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowCueConfigResponse>(
+        `/config/show.cue/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.cue/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowCueRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show.cue/${encodeURIComponent(id)}/revisions`,
         controller.signal,
       )
     } finally {

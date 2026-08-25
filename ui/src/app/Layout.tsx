@@ -105,6 +105,10 @@ const NAV_GROUPS: Array<{
       // reachable only from showmeshctl.
       { to: '/config/show', label: 'Shows', end: false },
       { to: '/config/show.surface', label: 'Surfaces', end: false },
+      // Track H seam H6: the show.cue authoring surface, previously
+      // reachable only from showmeshctl.
+      { to: '/config/show.cue', label: 'Cues', end: false },
+
       // Track H seam H6: show.playlist authoring, previously reachable
       // only from showmeshctl.
       { to: '/config/show.playlist', label: 'Playlists', end: false },

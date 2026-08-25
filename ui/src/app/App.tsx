@@ -34,6 +34,11 @@ import { Shows } from '../views/Shows'
 import { ShowDetail } from '../views/ShowDetail'
 import { ShowSurfaces } from '../views/ShowSurfaces'
 import { ShowSurfaceDetail } from '../views/ShowSurfaceDetail'
+// Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): the show.cue
+// authoring surface, previously reachable only from showmeshctl.
+import { ShowCues } from '../views/ShowCues'
+import { ShowCueDetail } from '../views/ShowCueDetail'
+
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring, one level down from the show it belongs to, same posture as
 // the Shows/Surfaces routes just above.
@@ -98,6 +103,10 @@ export default function App() {
             <Route path="config/show.surface" element={<ShowSurfaces />} />
             <Route path="config/show.surface/new" element={<ShowSurfaceDetail isNew />} />
             <Route path="config/show.surface/:id" element={<ShowSurfaceDetail />} />
+            <Route path="config/show.cue" element={<ShowCues />} />
+            <Route path="config/show.cue/new" element={<ShowCueDetail isNew />} />
+            <Route path="config/show.cue/:id" element={<ShowCueDetail />} />
+
             <Route path="config/show.playlist" element={<ShowPlaylists />} />
             <Route path="config/show.playlist/new" element={<ShowPlaylistDetail isNew />} />
             <Route path="config/show.playlist/:id" element={<ShowPlaylistDetail />} />
