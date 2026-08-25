@@ -210,324 +210,330 @@ export function Dashboard() {
         </section>
       </PanelErrorBoundary>
 
-      <PanelErrorBoundary panelLabel="Inventory summary">
-        <section className="panel">
-          <h2 className="panel__title">Inventory</h2>
-          <dl className="field-list">
-            <dt>Nodes with control-plane connected</dt>
-            <dd>{onlineNodes}</dd>
-            <dt>Nodes with control-plane connection lost</dt>
-            <dd>{offlineNodes}</dd>
-            <dt>Nodes with control-plane state unknown</dt>
-            <dd>{unknownNodes}</dd>
-            <dt>FPP instances configured</dt>
-            <dd>{model.fpp.length}</dd>
-            <dt>FPP instances with health unknown</dt>
-            <dd>{fppUnknownHealth}</dd>
-            <dt>FPP instances suppressed</dt>
-            <dd>{fppSuppressed}</dd>
-            <dt>FPP warnings across fleet</dt>
-            <dd>
-              {warningsTotal.instancesReporting === 0 ? (
-                <span className="text-muted">not collected</span>
-              ) : (
-                <>
-                  {warningsTotal.total}
-                  {/* Step 5 review finding 6: a total built partly from
-                      stale/unknown_age evidence must say so -- it is still
-                      a legitimate value (EvidenceValue.tsx's contract), not
-                      folded into instancesUnknown, but it must not read as
-                      equally fresh as a total built entirely from current
-                      evidence. */}
-                  {warningsTotal.instancesStaleOrUnknownAge > 0 && (
-                    <span className="text-muted">
-                      {' '}
-                      ({warningsTotal.instancesStaleOrUnknownAge} instance
-                      {warningsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} stale or age unknown)
-                    </span>
-                  )}
-                  {warningsTotal.instancesUnknown > 0 && (
-                    <span className="text-muted">
-                      {' '}
-                      ({warningsTotal.instancesUnknown} instance
-                      {warningsTotal.instancesUnknown === 1 ? '' : 's'} not reporting)
-                    </span>
-                  )}
-                </>
-              )}
-            </dd>
-            <dt>Collectors</dt>
-            <dd>
-              {/* D1: a collector's state and reason previously never reached
-                  the operator at all -- this rendered as the bare count
-                  `model.collectors.length`, so a collector reporting a
-                  failure state and a reason explaining it looked identical
-                  to a healthy one. Each collector's own run state (not the
-                  health of what it collects -- see CollectorStatus's Go doc
-                  comment) is rendered with its reason alongside it. */}
-              {model.collectors.length === 0 ? (
-                'none configured'
-              ) : (
-                <ul className="list-plain">
-                  {model.collectors.map((collector) => (
-                    <li key={collector.id}>
-                      <CollectorStatusBadge state={collector.state} />{' '}
-                      <span className="text-muted">{collector.id}</span>
-                      {collector.reason !== null && (
-                        <div className="evidence__reason">{collector.reason}</div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </dd>
-          </dl>
-        </section>
-      </PanelErrorBoundary>
-
-      {/* Track D seam D-4 (build contract §2.1): reachability with
-          provenance/freshness through the shared EvidenceValue, the loaded
-          composition's name or a stated "no composition uploaded," and an
-          "unconfigured" render rather than an error or an empty box when
-          GET /resolume/instances answers with an empty array by design. */}
-      <PanelErrorBoundary panelLabel="Resolume">
-        <section className="panel">
-          <h2 className="panel__title">Resolume</h2>
-          {resolumeInstance === undefined ? (
-            <p className="text-muted">Resolume is not configured on this coordinator.</p>
-          ) : (
-            <>
-              <Link className="entity-link" to="/resolume">
-                <strong>{resolumeInstance.instanceId}</strong>
-              </Link>
-              <EvidenceValue
-                label="reachable"
-                evidence={
-                  findObservation(resolumeInstance.observations, 'resolume.reachable') ?? {
-                    signal: 'resolume.reachable',
-                    value: null,
-                    unit: null,
-                    state: 'not_collected',
-                    reason: 'never collected',
-                    observedAt: null,
-                    collectedAt: null,
-                    source: 'resolume',
-                    quality: 'direct',
-                    validForSeconds: null,
-                  }
-                }
-                serverTime={model.serverTime}
-                serverTimeReceivedAt={model.serverTimeReceivedAt}
-                connected={model.connection.kind === 'live'}
-              />
-              <p className="text-muted">
-                {resolumeInstance.composition === null
-                  ? 'No composition uploaded.'
-                  : `Loaded composition: ${resolumeInstance.composition.name}`}
-              </p>
-            </>
-          )}
-        </section>
-      </PanelErrorBoundary>
-
-      {/* Track D seam D-3a §7.1/§2.6: the auto-restore toggle's own read
-          and write control — the one exception to "everything else of
-          Track D's UI is D-4's own work" (see ResolumeRecoveryToggle.tsx's
-          own top comment for why this ships here rather than waiting). */}
-      <PanelErrorBoundary panelLabel="Resolume crash recovery">
-        <ResolumeRecoveryToggle />
-      </PanelErrorBoundary>
-
-      {/* Step 5: four newly modeled signal groups each get a panel (spec
-          section 6 "Dashboard"). Every panel renders unconditionally when
-          FPP instances are configured -- ShowMesh models all four
-          subsystems now, so there is never a "this subsystem is not
-          modeled" reason to omit one -- and each instance row states an
-          absence via FleetSignalBadge rather than going blank when a
-          particular signal was never collected. None of these panels
-          colours or recomputes instance.health; they are the same
-          Evidence envelopes FPPDetail shows, just fleet-wide and compact. */}
-      <PanelErrorBoundary panelLabel="Playback state">
-        <section className="panel">
-          <h2 className="panel__title">Playback state</h2>
-          {model.fpp.length === 0 ? (
-            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-          ) : (
-            <ul className="list-plain">
-              {model.fpp.map((instance) => (
-                <li key={instance.instanceId}>
-                  <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                    <strong>{instance.instanceId}</strong>{' '}
-                    <FleetSignalBadge evidence={findObservation(instance.observations, 'fpp.status')} />
-                    <div className="text-muted">
-                      <FleetSignalBadge
-                        label="playlist"
-                        evidence={findObservation(instance.observations, 'fpp.playlist.name')}
-                      />
-                    </div>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </PanelErrorBoundary>
-
-      <PanelErrorBoundary panelLabel="Controller health">
-        <section className="panel">
-          <h2 className="panel__title">Controller health</h2>
-          {model.fpp.length === 0 ? (
-            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-          ) : (
-            <ul className="list-plain">
-              {model.fpp.map((instance) => (
-                <li key={instance.instanceId}>
-                  <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                    <strong>{instance.instanceId}</strong>{' '}
-                    <FleetSignalBadge
-                      label="fppd"
-                      evidence={findObservation(instance.observations, 'fpp.fppd.state')}
-                    />{' '}
-                    <FleetSignalBadge
-                      label="power bad"
-                      evidence={findObservation(instance.observations, 'fpp.power.bad')}
-                    />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </PanelErrorBoundary>
-
-      <PanelErrorBoundary panelLabel="Pixel current">
-        <section className="panel">
-          <h2 className="panel__title">Pixel current</h2>
-          {model.fpp.length === 0 ? (
-            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-          ) : (
-            <>
-              <p className="text-muted">
-                {portsTotal.instancesReporting === 0
-                  ? 'Port inventory not collected for any instance yet.'
-                  : `${portsTotal.totalPorts} port element(s) across ${portsTotal.instancesReporting} reporting instance(s), ${portsTotal.totalBlind} of which are smart-receiver blind spots.`}
-                {/* Step 5 review finding 6/7: both counts below are stated
-                    explicitly rather than silently folded into the numbers
-                    above -- a stale/unknown_age contribution is still a
-                    real value, and an unanswered blind_count means
-                    totalBlind is a partial sum, not a confirmed total. */}
-                {portsTotal.instancesStaleOrUnknownAge > 0 && (
+      {/* Attention stays full width above: it is the page's banner-like
+          surfacing of critical/warning conditions, not a peer data panel.
+          Everything below is a genuine peer, so it can share the wide-display
+          two-column grid (.panel-grid, global.css). */}
+      <div className="panel-grid">
+        <PanelErrorBoundary panelLabel="Inventory summary">
+          <section className="panel">
+            <h2 className="panel__title">Inventory</h2>
+            <dl className="field-list">
+              <dt>Nodes with control-plane connected</dt>
+              <dd>{onlineNodes}</dd>
+              <dt>Nodes with control-plane connection lost</dt>
+              <dd>{offlineNodes}</dd>
+              <dt>Nodes with control-plane state unknown</dt>
+              <dd>{unknownNodes}</dd>
+              <dt>FPP instances configured</dt>
+              <dd>{model.fpp.length}</dd>
+              <dt>FPP instances with health unknown</dt>
+              <dd>{fppUnknownHealth}</dd>
+              <dt>FPP instances suppressed</dt>
+              <dd>{fppSuppressed}</dd>
+              <dt>FPP warnings across fleet</dt>
+              <dd>
+                {warningsTotal.instancesReporting === 0 ? (
+                  <span className="text-muted">not collected</span>
+                ) : (
                   <>
-                    {' '}
-                    {portsTotal.instancesStaleOrUnknownAge} instance{portsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} contributing
-                    port counts that are stale or of unknown age.
+                    {warningsTotal.total}
+                    {/* Step 5 review finding 6: a total built partly from
+                        stale/unknown_age evidence must say so -- it is still
+                        a legitimate value (EvidenceValue.tsx's contract), not
+                        folded into instancesUnknown, but it must not read as
+                        equally fresh as a total built entirely from current
+                        evidence. */}
+                    {warningsTotal.instancesStaleOrUnknownAge > 0 && (
+                      <span className="text-muted">
+                        {' '}
+                        ({warningsTotal.instancesStaleOrUnknownAge} instance
+                        {warningsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} stale or age unknown)
+                      </span>
+                    )}
+                    {warningsTotal.instancesUnknown > 0 && (
+                      <span className="text-muted">
+                        {' '}
+                        ({warningsTotal.instancesUnknown} instance
+                        {warningsTotal.instancesUnknown === 1 ? '' : 's'} not reporting)
+                      </span>
+                    )}
                   </>
                 )}
-                {portsTotal.instancesBlindCountUnknown > 0 && (
-                  <>
-                    {' '}
-                    Blind-spot count not reported by {portsTotal.instancesBlindCountUnknown} instance
-                    {portsTotal.instancesBlindCountUnknown === 1 ? '' : 's'}, so the blind-spot total above may be
-                    incomplete.
-                  </>
-                )}
-                {portsTotal.instancesUnknown > 0 && (
-                  <>
-                    {' '}
-                    {portsTotal.instancesUnknown} instance{portsTotal.instancesUnknown === 1 ? '' : 's'} not
-                    reporting port inventory.
-                  </>
-                )}
-              </p>
-              <ul className="list-plain">
-                {model.fpp.map((instance) => {
-                  const count = findObservation(instance.observations, 'fpp.ports.count')
-                  return (
-                    <li key={instance.instanceId}>
-                      <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                        <strong>{instance.instanceId}</strong>{' '}
-                        {typeof count?.value === 'number' && count.value === 0 ? (
-                          // Step 5 review finding 6: this used to be a bare
-                          // <span> with no state marker, so a zero-port
-                          // reading of unknown age (the fpp-ghost ghost shape,
-                          // one modelling decision away from this exact
-                          // signal) rendered as confidently as a fresh one.
-                          // A StatusBadge carries count.state's icon/tone
-                          // alongside the same wording, matching
-                          // FleetSignalBadge/PortGrid's established pattern
-                          // for the same distinction.
-                          <StatusBadge
-                            tone={STATE_TONE[count.state]}
-                            icon={STATE_ICON[count.state]}
-                            label="reports no pixel output ports"
-                          />
-                        ) : (
-                          <FleetSignalBadge label="ports" evidence={count} />
+              </dd>
+              <dt>Collectors</dt>
+              <dd>
+                {/* D1: a collector's state and reason previously never reached
+                    the operator at all -- this rendered as the bare count
+                    `model.collectors.length`, so a collector reporting a
+                    failure state and a reason explaining it looked identical
+                    to a healthy one. Each collector's own run state (not the
+                    health of what it collects -- see CollectorStatus's Go doc
+                    comment) is rendered with its reason alongside it. */}
+                {model.collectors.length === 0 ? (
+                  'none configured'
+                ) : (
+                  <ul className="list-plain">
+                    {model.collectors.map((collector) => (
+                      <li key={collector.id}>
+                        <CollectorStatusBadge state={collector.state} />{' '}
+                        <span className="text-muted">{collector.id}</span>
+                        {collector.reason !== null && (
+                          <div className="evidence__reason">{collector.reason}</div>
                         )}
-                      </Link>
-                    </li>
-                  )
-                })}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </dd>
+            </dl>
+          </section>
+        </PanelErrorBoundary>
+
+        {/* Track D seam D-4 (build contract §2.1): reachability with
+            provenance/freshness through the shared EvidenceValue, the loaded
+            composition's name or a stated "no composition uploaded," and an
+            "unconfigured" render rather than an error or an empty box when
+            GET /resolume/instances answers with an empty array by design. */}
+        <PanelErrorBoundary panelLabel="Resolume">
+          <section className="panel">
+            <h2 className="panel__title">Resolume</h2>
+            {resolumeInstance === undefined ? (
+              <p className="text-muted">Resolume is not configured on this coordinator.</p>
+            ) : (
+              <>
+                <Link className="entity-link" to="/resolume">
+                  <strong>{resolumeInstance.instanceId}</strong>
+                </Link>
+                <EvidenceValue
+                  label="reachable"
+                  evidence={
+                    findObservation(resolumeInstance.observations, 'resolume.reachable') ?? {
+                      signal: 'resolume.reachable',
+                      value: null,
+                      unit: null,
+                      state: 'not_collected',
+                      reason: 'never collected',
+                      observedAt: null,
+                      collectedAt: null,
+                      source: 'resolume',
+                      quality: 'direct',
+                      validForSeconds: null,
+                    }
+                  }
+                  serverTime={model.serverTime}
+                  serverTimeReceivedAt={model.serverTimeReceivedAt}
+                  connected={model.connection.kind === 'live'}
+                />
+                <p className="text-muted">
+                  {resolumeInstance.composition === null
+                    ? 'No composition uploaded.'
+                    : `Loaded composition: ${resolumeInstance.composition.name}`}
+                </p>
+              </>
+            )}
+          </section>
+        </PanelErrorBoundary>
+
+        {/* Track D seam D-3a §7.1/§2.6: the auto-restore toggle's own read
+            and write control — the one exception to "everything else of
+            Track D's UI is D-4's own work" (see ResolumeRecoveryToggle.tsx's
+            own top comment for why this ships here rather than waiting). */}
+        <PanelErrorBoundary panelLabel="Resolume crash recovery">
+          <ResolumeRecoveryToggle />
+        </PanelErrorBoundary>
+
+        {/* Step 5: four newly modeled signal groups each get a panel (spec
+            section 6 "Dashboard"). Every panel renders unconditionally when
+            FPP instances are configured -- ShowMesh models all four
+            subsystems now, so there is never a "this subsystem is not
+            modeled" reason to omit one -- and each instance row states an
+            absence via FleetSignalBadge rather than going blank when a
+            particular signal was never collected. None of these panels
+            colours or recomputes instance.health; they are the same
+            Evidence envelopes FPPDetail shows, just fleet-wide and compact. */}
+        <PanelErrorBoundary panelLabel="Playback state">
+          <section className="panel">
+            <h2 className="panel__title">Playback state</h2>
+            {model.fpp.length === 0 ? (
+              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+            ) : (
+              <ul className="list-plain">
+                {model.fpp.map((instance) => (
+                  <li key={instance.instanceId}>
+                    <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                      <strong>{instance.instanceId}</strong>{' '}
+                      <FleetSignalBadge evidence={findObservation(instance.observations, 'fpp.status')} />
+                      <div className="text-muted">
+                        <FleetSignalBadge
+                          label="playlist"
+                          evidence={findObservation(instance.observations, 'fpp.playlist.name')}
+                        />
+                      </div>
+                    </Link>
+                  </li>
+                ))}
               </ul>
-            </>
-          )}
-        </section>
-      </PanelErrorBoundary>
+            )}
+          </section>
+        </PanelErrorBoundary>
 
-      <PanelErrorBoundary panelLabel="Network and MQTT state">
-        <section className="panel">
-          <h2 className="panel__title">Network / MQTT state</h2>
-          {model.fpp.length === 0 ? (
-            <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-          ) : (
-            <ul className="list-plain">
-              {model.fpp.map((instance) => (
-                <li key={instance.instanceId}>
-                  <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                    <strong>{instance.instanceId}</strong>{' '}
-                    <FleetSignalBadge
-                      label="MQTT configured"
-                      evidence={findObservation(instance.observations, 'fpp.mqtt.configured')}
-                    />{' '}
-                    <FleetSignalBadge
-                      label="MQTT connected"
-                      evidence={findObservation(instance.observations, 'fpp.mqtt.connected')}
-                    />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </PanelErrorBoundary>
+        <PanelErrorBoundary panelLabel="Controller health">
+          <section className="panel">
+            <h2 className="panel__title">Controller health</h2>
+            {model.fpp.length === 0 ? (
+              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+            ) : (
+              <ul className="list-plain">
+                {model.fpp.map((instance) => (
+                  <li key={instance.instanceId}>
+                    <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                      <strong>{instance.instanceId}</strong>{' '}
+                      <FleetSignalBadge
+                        label="fppd"
+                        evidence={findObservation(instance.observations, 'fpp.fppd.state')}
+                      />{' '}
+                      <FleetSignalBadge
+                        label="power bad"
+                        evidence={findObservation(instance.observations, 'fpp.power.bad')}
+                      />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </PanelErrorBoundary>
 
-      <PanelErrorBoundary panelLabel="Recent events">
-        <section className="panel">
-          <h2 className="panel__title">Recent events</h2>
-          {model.eventsGap && (
-            <p className="evidence__reason" role="status">
-              Some event history has been permanently lost to retention; this list does
-              not reach back to the beginning.
+        <PanelErrorBoundary panelLabel="Pixel current">
+          <section className="panel">
+            <h2 className="panel__title">Pixel current</h2>
+            {model.fpp.length === 0 ? (
+              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+            ) : (
+              <>
+                <p className="text-muted">
+                  {portsTotal.instancesReporting === 0
+                    ? 'Port inventory not collected for any instance yet.'
+                    : `${portsTotal.totalPorts} port element(s) across ${portsTotal.instancesReporting} reporting instance(s), ${portsTotal.totalBlind} of which are smart-receiver blind spots.`}
+                  {/* Step 5 review finding 6/7: both counts below are stated
+                      explicitly rather than silently folded into the numbers
+                      above -- a stale/unknown_age contribution is still a
+                      real value, and an unanswered blind_count means
+                      totalBlind is a partial sum, not a confirmed total. */}
+                  {portsTotal.instancesStaleOrUnknownAge > 0 && (
+                    <>
+                      {' '}
+                      {portsTotal.instancesStaleOrUnknownAge} instance{portsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} contributing
+                      port counts that are stale or of unknown age.
+                    </>
+                  )}
+                  {portsTotal.instancesBlindCountUnknown > 0 && (
+                    <>
+                      {' '}
+                      Blind-spot count not reported by {portsTotal.instancesBlindCountUnknown} instance
+                      {portsTotal.instancesBlindCountUnknown === 1 ? '' : 's'}, so the blind-spot total above may be
+                      incomplete.
+                    </>
+                  )}
+                  {portsTotal.instancesUnknown > 0 && (
+                    <>
+                      {' '}
+                      {portsTotal.instancesUnknown} instance{portsTotal.instancesUnknown === 1 ? '' : 's'} not
+                      reporting port inventory.
+                    </>
+                  )}
+                </p>
+                <ul className="list-plain">
+                  {model.fpp.map((instance) => {
+                    const count = findObservation(instance.observations, 'fpp.ports.count')
+                    return (
+                      <li key={instance.instanceId}>
+                        <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                          <strong>{instance.instanceId}</strong>{' '}
+                          {typeof count?.value === 'number' && count.value === 0 ? (
+                            // Step 5 review finding 6: this used to be a bare
+                            // <span> with no state marker, so a zero-port
+                            // reading of unknown age (the fpp-ghost ghost shape,
+                            // one modelling decision away from this exact
+                            // signal) rendered as confidently as a fresh one.
+                            // A StatusBadge carries count.state's icon/tone
+                            // alongside the same wording, matching
+                            // FleetSignalBadge/PortGrid's established pattern
+                            // for the same distinction.
+                            <StatusBadge
+                              tone={STATE_TONE[count.state]}
+                              icon={STATE_ICON[count.state]}
+                              label="reports no pixel output ports"
+                            />
+                          ) : (
+                            <FleetSignalBadge label="ports" evidence={count} />
+                          )}
+                        </Link>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </>
+            )}
+          </section>
+        </PanelErrorBoundary>
+
+        <PanelErrorBoundary panelLabel="Network and MQTT state">
+          <section className="panel">
+            <h2 className="panel__title">Network / MQTT state</h2>
+            {model.fpp.length === 0 ? (
+              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
+            ) : (
+              <ul className="list-plain">
+                {model.fpp.map((instance) => (
+                  <li key={instance.instanceId}>
+                    <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                      <strong>{instance.instanceId}</strong>{' '}
+                      <FleetSignalBadge
+                        label="MQTT configured"
+                        evidence={findObservation(instance.observations, 'fpp.mqtt.configured')}
+                      />{' '}
+                      <FleetSignalBadge
+                        label="MQTT connected"
+                        evidence={findObservation(instance.observations, 'fpp.mqtt.connected')}
+                      />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </PanelErrorBoundary>
+
+        <PanelErrorBoundary panelLabel="Recent events">
+          <section className="panel">
+            <h2 className="panel__title">Recent events</h2>
+            {model.eventsGap && (
+              <p className="evidence__reason" role="status">
+                Some event history has been permanently lost to retention; this list does
+                not reach back to the beginning.
+              </p>
+            )}
+            {recentEvents.length === 0 ? (
+              <p className="text-muted">No events recorded yet.</p>
+            ) : (
+              <ul className="list-plain">
+                {recentEvents.map((event) => (
+                  <li key={event.seq}>
+                    <Link className="entity-link" to="/events">
+                      <SeverityBadge severity={event.severity} /> {event.summary}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p>
+              <Link to="/events">View all events</Link>
             </p>
-          )}
-          {recentEvents.length === 0 ? (
-            <p className="text-muted">No events recorded yet.</p>
-          ) : (
-            <ul className="list-plain">
-              {recentEvents.map((event) => (
-                <li key={event.seq}>
-                  <Link className="entity-link" to="/events">
-                    <SeverityBadge severity={event.severity} /> {event.summary}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p>
-            <Link to="/events">View all events</Link>
-          </p>
-        </section>
-      </PanelErrorBoundary>
+          </section>
+        </PanelErrorBoundary>
+      </div>
     </div>
   )
 }
