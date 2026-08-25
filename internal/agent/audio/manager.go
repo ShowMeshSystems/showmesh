@@ -217,10 +217,10 @@ func (m *Manager) get(id pkgaudio.SessionID) (*Session, bool) {
 // Snapshot returns fresh, read-only telemetry for every session this
 // Manager currently holds — the retained observation surface. It never
 // mutates any command-facing session state and never consults
-// [Manager.gateAvailability]: what it reports is the session state
-// machine's own internal bookkeeping, real even while every command's
-// own outward-facing outcome is being rewritten to Unconfirmable. See
-// [Session.snapshotLocked].
+// [Manager.gateAvailability]. Each session goes through [Session.
+// snapshotWithBudget], not a direct Lock/Unlock, so one session wedged
+// inside a bounded engine call cannot delay every other session's
+// telemetry in the same call — see that method's own doc comment.
 func (m *Manager) Snapshot(ctx context.Context) []SessionSnapshot {
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
@@ -232,9 +232,7 @@ func (m *Manager) Snapshot(ctx context.Context) []SessionSnapshot {
 
 	out := make([]SessionSnapshot, 0, len(sessions)+len(corrupt))
 	for _, s := range sessions {
-		s.mu.Lock()
-		out = append(out, s.snapshotLocked(ctx))
-		s.mu.Unlock()
+		out = append(out, s.snapshotWithBudget(ctx, snapshotLockBudget))
 	}
 	for _, c := range corrupt {
 		out = append(out, corruptSessionSnapshot(c))

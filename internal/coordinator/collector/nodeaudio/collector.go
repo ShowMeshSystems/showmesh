@@ -210,24 +210,37 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	source := SourceForSession(nodeID, sess.SessionID)
 	observedAt := rep.payload.ObservedAt // this report tick's own live evidence time; see AudioPayload.ObservedAt.
 
+	// sessionAt is THIS session's own evidence time (mqttproto.
+	// AudioSessionReport.CollectedAt), falling back to the report tick's
+	// blanket time only when a node has not upgraded to send it yet. A
+	// stale fallback (sess.Stale) carries its ORIGINAL CollectedAt
+	// forward unchanged, so using it here — rather than the tick's own
+	// observedAt — is what lets SignalSessionState/Fault/... genuinely
+	// age when the node reports them stale, instead of every session
+	// signal looking equally fresh regardless of Stale.
+	sessionAt := observedAt
+	if sess.CollectedAt != nil {
+		sessionAt = sess.CollectedAt
+	}
+
 	obs := []observation.Observation{}
 
 	if sess.HasSourceRole {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionSourceRole, sess.SourceRole, observedAt, rep))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionSourceRole, sess.SourceRole, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionSourceRole, source, "session has no source role set", rep.receivedAt))
 	}
 
 	if sess.HasPlaylist {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionPlaylistRevision, int64(sess.PlaylistRevision), observedAt, rep))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionPlaylistRevision, int64(sess.PlaylistRevision), sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionPlaylistRevision, source, "session has no pinned playlist", rep.receivedAt))
 	}
 
 	if sess.HasItem {
 		obs = append(obs,
-			buildSessionValue(res, source, SignalSessionItemID, sess.ItemID, observedAt, rep),
-			buildSessionValue(res, source, SignalSessionItemIndex, sess.ItemIndex, observedAt, rep),
+			buildSessionValue(res, source, SignalSessionItemID, sess.ItemID, sessionAt, rep),
+			buildSessionValue(res, source, SignalSessionItemIndex, sess.ItemIndex, sessionAt, rep),
 		)
 	} else {
 		obs = append(obs,
@@ -237,7 +250,7 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	}
 
 	if sess.PositionKnown {
-		posAt := observedAt
+		posAt := sessionAt
 		if sess.ObservedAt != nil {
 			posAt = sess.ObservedAt
 		}
@@ -251,17 +264,17 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		notCollected(res, SignalSessionDriftMs, source, "drift is measured at track boundaries only (ADR-017); that measurement is not implemented", rep.receivedAt),
 	)
 
-	obs = append(obs, buildSessionValue(res, source, SignalSessionState, sess.State, observedAt, rep))
-	obs = append(obs, buildSessionValue(res, source, SignalSessionStateReason, sessionStateReason(sess.State), observedAt, rep))
-	obs = append(obs, buildSessionValue(res, source, SignalSessionDesiredRevision, int64(sess.DesiredRevision), observedAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionState, sess.State, sessionAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionStateReason, sessionStateReason(sess.State), sessionAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionDesiredRevision, int64(sess.DesiredRevision), sessionAt, rep))
 
 	if sess.HasGain {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionGain, sess.Gain, observedAt, rep))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGain, sess.Gain, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionGain, source, "session has no gain set", rep.receivedAt))
 	}
 	if sess.HasCeiling {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, sess.Ceiling, observedAt, rep))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, sess.Ceiling, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionGainCeiling, source, "session has no gain ceiling set", rep.receivedAt))
 	}
@@ -270,18 +283,18 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	if fadeState == "" {
 		fadeState = "none"
 	}
-	obs = append(obs, buildSessionValue(res, source, SignalSessionFadeState, fadeState, observedAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionFadeState, fadeState, sessionAt, rep))
 
 	if sess.Ducked {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionMixDuckedBy, sess.DuckedBy, observedAt, rep))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionMixDuckedBy, sess.DuckedBy, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionMixDuckedBy, source, "session is not currently ducked", rep.receivedAt))
 	}
 
 	if sess.HasAssetProbe {
 		obs = append(obs,
-			buildSessionValue(res, source, SignalSessionAssetProbeState, sess.AssetProbeState, observedAt, rep),
-			buildSessionValue(res, source, SignalSessionAssetProbeReason, sess.AssetProbeReason, observedAt, rep),
+			buildSessionValue(res, source, SignalSessionAssetProbeState, sess.AssetProbeState, sessionAt, rep),
+			buildSessionValue(res, source, SignalSessionAssetProbeReason, sess.AssetProbeReason, sessionAt, rep),
 		)
 	} else {
 		obs = append(obs,
@@ -294,9 +307,9 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	if fault == "" {
 		fault = "none"
 	}
-	obs = append(obs, buildSessionValue(res, source, SignalSessionFaultKind, fault, observedAt, rep))
+	obs = append(obs, buildSessionValue(res, source, SignalSessionFaultKind, fault, sessionAt, rep))
 	if fault != "none" {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionFaultReason, sess.FaultReason, observedAt, rep))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionFaultReason, sess.FaultReason, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
 	}
@@ -316,6 +329,12 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 			notCollected(res, SignalSessionItemGapReason, source, gapReason, rep.receivedAt),
 		)
 	}
+
+	// Stale is its own signal, always collected, always stamped with THIS
+	// tick's own observedAt: whether the node could gather fresh evidence
+	// this tick is itself fresh information, even when what it describes
+	// (the signals above) is not.
+	obs = append(obs, buildSessionValue(res, source, SignalSessionStale, sess.Stale, observedAt, rep))
 
 	return obs
 }

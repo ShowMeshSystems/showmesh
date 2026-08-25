@@ -28,6 +28,19 @@ func boundedObserveContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(ctx, observeTimeout)
 }
 
+// engineCallTimeout bounds one state-changing Engine call issued from a
+// path with no deadline of its own (RunWatcher's root context, agent.go).
+// SHOWMESH HYPOTHESIS, NOT MEASURED: chosen above observeTimeout since
+// these calls do real engine work Observe does not.
+var engineCallTimeout = 10 * time.Second // var, not const: shrunk by tests exercising the bound itself
+
+// boundedEngineCallContext derives a child of ctx bounded by
+// [engineCallTimeout]. Call it fresh before each engine call, matching
+// [boundedObserveContext]'s own per-call convention.
+func boundedEngineCallContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, engineCallTimeout)
+}
+
 // EngineObservation is what an Engine reports about one handle, collected
 // at ObservedAt. Every state-changing Engine method returns one collected
 // strictly after the change took effect — never the request echoed back —
@@ -62,6 +75,13 @@ type EngineObservation struct {
 // itself is an open owner decision; [FakeEngine] is the only
 // implementation in this repository and exists to prove the session layer
 // against, never to play audio — see that type's doc comment.
+//
+// Every method here must give up when ctx's deadline expires, not merely
+// accept ctx as a parameter: callers bound these calls (see
+// [boundedEngineCallContext]/[boundedObserveContext]) precisely so one
+// wedged call cannot hold a session's mutex forever, and that guarantee
+// holds only as long as every implementation actually honours the
+// deadline it is given.
 type Engine interface {
 	// Load prepares handle to play media, without starting it, so
 	// readiness gating (a missing, changed, or undecodable asset) happens

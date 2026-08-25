@@ -541,6 +541,7 @@ All are on the `audio_session` resource kind, resource id the session id:
 | `audio_session.fault.reason` | shipped | C6/C7 |
 | `audio_session.item_gap_ms` | shipped | the measured gap between consecutive playlist items (Track C) |
 | `audio_session.item_gap.reason` | shipped | why no gap could be measured (Track C) |
+| `audio_session.stale` | shipped | true when a session's other signals are last-known evidence, not fresh this tick (a wedged engine call review fix) |
 
 **`audio_session.item_gap_ms` is a measurement, never a restatement of the
 requested transition.** It is reported only from the node's own evidence of

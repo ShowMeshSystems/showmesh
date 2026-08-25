@@ -62,7 +62,9 @@ func (s *Session) applyEffectiveGainLocked(ctx context.Context) pkgaudio.Outcome
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
 	}
 	dispatchedAt := s.mgr.now()
-	obs, err := s.mgr.engine.SetGain(ctx, s.handle, effective)
+	gainCtx, cancel := boundedEngineCallContext(ctx)
+	obs, err := s.mgr.engine.SetGain(gainCtx, s.handle, effective)
+	cancel()
 	if err != nil {
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
