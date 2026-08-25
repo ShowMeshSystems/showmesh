@@ -45,7 +45,9 @@ func (m *Manager) interruptOneLocked(ctx context.Context, t *Session, interrupte
 		if !t.handleLoaded {
 			return
 		}
-		obs, err := m.engine.Pause(ctx, t.handle)
+		pauseCtx, cancel := boundedEngineCallContext(ctx)
+		obs, err := m.engine.Pause(pauseCtx, t.handle)
+		cancel()
 		if err != nil {
 			t.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 			return
@@ -136,7 +138,9 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	// has no reason for this call site to seek it a second time when
 	// Resume already re-anchors it.
 	if policy == pkgaudio.ResumePolicyResume && handleStillValid {
-		obs, err := m.engine.Resume(ctx, t.handle)
+		resumeCtx, cancel := boundedEngineCallContext(ctx)
+		obs, err := m.engine.Resume(resumeCtx, t.handle)
+		cancel()
 		if err != nil {
 			// Same treatment [Manager.Resume] gives this error: t stays
 			// Paused rather than Failed, so an operator Resume (or the
@@ -182,7 +186,9 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 		return
 	}
 
-	obs, err := m.engine.Start(ctx, t.handle, position)
+	startCtx, startCancel := boundedEngineCallContext(ctx)
+	obs, err := m.engine.Start(startCtx, t.handle, position)
+	startCancel()
 	if err != nil {
 		t.state = pkgaudio.StateFailed
 		t.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())

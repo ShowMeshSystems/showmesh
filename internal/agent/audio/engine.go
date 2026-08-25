@@ -28,27 +28,17 @@ func boundedObserveContext(ctx context.Context) (context.Context, context.Cancel
 	return context.WithTimeout(ctx, observeTimeout)
 }
 
-// advanceCallTimeout bounds every Load/Start call [Session.advanceLocked]
-// makes while moving a session onto its next item. RunWatcher's own
-// caller wires it with the agent's root context, which has no deadline
-// (agent.go). Without a bound of its own here, a single wedged Load or
-// Start holds s.mu for the life of the process, and [Manager.Snapshot],
-// which locks every session in turn, hangs behind it. SHOWMESH
-// HYPOTHESIS, NOT MEASURED: no bench data exists for the right bound
-// against a real backend; chosen well above observeTimeout because
-// Load/Start do real engine work Observe does not, while still bounding
-// a genuinely wedged call to one missed advance rather than an
-// indefinite stall.
-var advanceCallTimeout = 10 * time.Second // var, not const: shrunk by tests exercising the bound itself
+// engineCallTimeout bounds one state-changing Engine call issued from a
+// path with no deadline of its own (RunWatcher's root context, agent.go).
+// SHOWMESH HYPOTHESIS, NOT MEASURED: chosen above observeTimeout since
+// these calls do real engine work Observe does not.
+var engineCallTimeout = 10 * time.Second // var, not const: shrunk by tests exercising the bound itself
 
-// boundedAdvanceContext derives a child of ctx bounded by
-// [advanceCallTimeout], for one engine call [Session.advanceLocked]
-// makes. Call it fresh before each such call, matching
-// [boundedObserveContext]'s own per-call convention, so an earlier call's
-// own bound is never silently shared with (and shortened by) a later
-// one.
-func boundedAdvanceContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, advanceCallTimeout)
+// boundedEngineCallContext derives a child of ctx bounded by
+// [engineCallTimeout]. Call it fresh before each engine call, matching
+// [boundedObserveContext]'s own per-call convention.
+func boundedEngineCallContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, engineCallTimeout)
 }
 
 // EngineObservation is what an Engine reports about one handle, collected
@@ -85,6 +75,13 @@ type EngineObservation struct {
 // itself is an open owner decision; [FakeEngine] is the only
 // implementation in this repository and exists to prove the session layer
 // against, never to play audio — see that type's doc comment.
+//
+// Every method here must give up when ctx's deadline expires, not merely
+// accept ctx as a parameter: callers bound these calls (see
+// [boundedEngineCallContext]/[boundedObserveContext]) precisely so one
+// wedged call cannot hold a session's mutex forever, and that guarantee
+// holds only as long as every implementation actually honours the
+// deadline it is given.
 type Engine interface {
 	// Load prepares handle to play media, without starting it, so
 	// readiness gating (a missing, changed, or undecodable asset) happens

@@ -984,6 +984,22 @@ type AudioSessionReport struct {
 	// when PositionKnown is false. Never the coordinator's or this
 	// node's own receipt time (ADR-011).
 	ObservedAt *time.Time `json:"observedAt"`
+
+	// Stale is true when this session's fields above were NOT collected
+	// during this report tick: the node could not acquire this session's
+	// own lock in time (it was busy inside an in-flight engine call) and
+	// is reporting its last known evidence instead. CollectedAt is when
+	// that evidence actually WAS collected. Fault/FaultReason are never
+	// repurposed to carry this: they keep answering "what is wrong with
+	// the session"; Stale/CollectedAt answer "how old is this evidence".
+	Stale bool `json:"stale"`
+
+	// CollectedAt is when this session's own fields (State, Fault,
+	// ItemID, Gain, ...) were captured on the node's clock — distinct
+	// from ObservedAt, which is specifically PositionMs's own evidence
+	// time and is nil whenever PositionKnown is false. Nil only for a
+	// session that has never produced one successful snapshot.
+	CollectedAt *time.Time `json:"collectedAt"`
 }
 
 // AudioPayload is the payload of the showmesh.node.audio/v1 schema,

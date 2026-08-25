@@ -108,7 +108,10 @@ func (m *Manager) startLTCLocked(ctx context.Context, s *Session, position time.
 		m.logLTC(s.id, "audio: LTC not started", "this node's one LTC run is held by session "+string(holder))
 		return
 	}
-	if _, err := gen.StartLTC(ctx, LTCSpec{FrameRate: rate, StartTimecode: tc}); err != nil {
+	startCtx, cancel := boundedEngineCallContext(ctx)
+	_, err = gen.StartLTC(startCtx, LTCSpec{FrameRate: rate, StartTimecode: tc})
+	cancel()
+	if err != nil {
 		m.ltc.release(s.id)
 		m.logLTC(s.id, "audio: StartLTC failed", err.Error())
 	}
@@ -126,7 +129,10 @@ func (m *Manager) stopLTCLocked(ctx context.Context, s *Session) {
 	if !ok {
 		return
 	}
-	if _, err := gen.StopLTC(ctx); err != nil {
+	stopCtx, cancel := boundedEngineCallContext(ctx)
+	_, err := gen.StopLTC(stopCtx)
+	cancel()
+	if err != nil {
 		m.logLTC(s.id, "audio: StopLTC failed", err.Error())
 	}
 }

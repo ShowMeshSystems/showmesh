@@ -102,6 +102,19 @@ type PersistedSession struct {
 	Gap           time.Duration
 	GapReason     string
 	GapObservedAt time.Time
+
+	// CollectedAt is when this snapshot's own fields were captured --
+	// distinct from ObservedAt, which is specifically Position's engine
+	// evidence time and is zero whenever PositionKnown is false. Always
+	// set, so a reader can always tell this evidence's age.
+	CollectedAt time.Time
+
+	// Stale is true when this is [Session.staleFallbackSnapshot]'s
+	// last-known fallback, not fresh evidence from this report tick.
+	// Fault/FaultReason are never rewritten to carry this: they answer
+	// "what is wrong with the session"; Stale/CollectedAt answer "how
+	// old is this evidence" -- two different axes, never collapsed.
+	Stale bool
 }
 
 // SessionStore is the session layer's durability boundary — enough of
@@ -535,6 +548,12 @@ func (s *Session) dispatch(invocation pkgaudio.InvocationID, revision pkgaudio.R
 // device or a re-probed asset therefore stays faulted until an actual
 // successful prepare, never resumes silently.
 func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem) (EngineObservation, error) {
+	// ProbeAsset runs under ctx unbounded by boundedEngineCallContext: it
+	// includes hashFile, a full-file sha256 read with no context
+	// parameter of its own and so no way to cancel it early. Bounding it
+	// to an engine-call-sized budget would abort a probe that was always
+	// going to succeed on a large show asset, turning a slow-but-healthy
+	// advance into a failed one.
 	probe := ProbeAsset(ctx, s.mgr.assetDir, item.Media, s.mgr.decoder)
 	s.lastProbe = probe
 	if probe.State != MediaReady {
@@ -543,7 +562,9 @@ func (s *Session) prepareLocked(ctx context.Context, item pkgaudio.PlaylistItem)
 		return EngineObservation{}, err
 	}
 	handle := s.engineHandleFor(item.ItemID)
-	obs, err := s.mgr.engine.Load(ctx, handle, item.Media, probe.Duration)
+	loadCtx, loadCancel := boundedEngineCallContext(ctx)
+	obs, err := s.mgr.engine.Load(loadCtx, handle, item.Media, probe.Duration)
+	loadCancel()
 	if err != nil {
 		s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
 		return EngineObservation{}, err
@@ -739,21 +760,19 @@ func (s *Session) advanceLocked(ctx context.Context, forced bool, completedAt ti
 
 	s.releaseEngineLocked(ctx)
 	dispatchedAt := s.mgr.now()
-	// Bounded fresh per call, not shared across both: this advance runs
-	// under RunWatcher's own caller, the agent's root context, which has
-	// no deadline of its own (agent.go). Without a bound here, a wedged
-	// Load or Start would hold s.mu for the life of the process and stall
-	// [Manager.Snapshot] behind it.
-	prepareCtx, prepareCancel := boundedAdvanceContext(ctx)
-	_, err := s.prepareLocked(prepareCtx, item)
-	prepareCancel()
+	// prepareLocked bounds its own Load call internally (probing is not
+	// bounded the same way; see that function's doc comment). This
+	// advance runs under RunWatcher's own caller, the agent's root
+	// context, which has no deadline of its own (agent.go), so the
+	// engine.Start call below needs its own bound too.
+	_, err := s.prepareLocked(ctx, item)
 	if err != nil {
 		s.state = pkgaudio.StateFailed
 		s.mgr.stopLTCLocked(ctx, s)
 		s.persistBestEffortLocked("state change")
 		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
 	}
-	startCtx, startCancel := boundedAdvanceContext(ctx)
+	startCtx, startCancel := boundedEngineCallContext(ctx)
 	obs, err := s.mgr.engine.Start(startCtx, s.handle, 0)
 	startCancel()
 	if err != nil {
@@ -882,6 +901,19 @@ type SessionSnapshot struct {
 	Gap           time.Duration
 	GapReason     string
 	GapObservedAt time.Time
+
+	// CollectedAt is when this snapshot's own fields were captured --
+	// distinct from ObservedAt, which is specifically Position's engine
+	// evidence time and is zero whenever PositionKnown is false. Always
+	// set, so a reader can always tell this evidence's age.
+	CollectedAt time.Time
+
+	// Stale is true when this is [Session.staleFallbackSnapshot]'s
+	// last-known fallback, not fresh evidence from this report tick.
+	// Fault/FaultReason are never rewritten to carry this: they answer
+	// "what is wrong with the session"; Stale/CollectedAt answer "how
+	// old is this evidence" -- two different axes, never collapsed.
+	Stale bool
 }
 
 // snapshotLocked builds s's [SessionSnapshot]. Caller holds s.mu. When a
@@ -906,6 +938,7 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
 		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
+		CollectedAt: s.mgr.now(),
 	}
 
 	if s.desired.SourceRole != nil {
@@ -947,9 +980,16 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		if err != nil {
 			// Mirrors watchTick's identical Observe-failure handling
 			// (restore.go): a session this snapshot cannot even observe
-			// must not still be reported as Playing.
-			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
-			s.state = pkgaudio.StateFailed
+			// must not still be reported as Playing. Skipped once ctx is
+			// already done: this branch can run from an abandoned
+			// snapshotWithBudget goroutine waking up during shutdown,
+			// long after anyone reads the result, and marking every such
+			// session Failed on the way out is not evidence anything
+			// went wrong.
+			if ctx.Err() == nil {
+				s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+				s.state = pkgaudio.StateFailed
+			}
 			snap.State = s.state
 			snap.Fault = s.fault
 			snap.FaultReason = s.faultReason
@@ -961,38 +1001,31 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		}
 	}
 
+	// Safe unguarded: snap is built entirely under s.mu (this method's own
+	// caller holds it), so two Store calls can only ever happen in
+	// lock-acquisition order -- a Store here can never be overwritten by
+	// one built from an earlier lock hold finishing late.
 	s.lastSnapshot.Store(&snap)
 	return snap
 }
 
 // snapshotLockBudget bounds how long [Manager.Snapshot] waits to acquire
-// one session's own mutex before falling back to that session's last
-// retained snapshot instead of blocking further. Deliberately far
-// shorter than [advanceCallTimeout]: a session currently inside a
-// bounded engine call (advanceLocked, prepareLocked,
-// checkFadeCompletionLocked, ...) can legitimately hold s.mu for up to
-// that call's own bound, and Manager.Snapshot must not let waiting on
-// ONE such session delay fresh telemetry for every other session sharing
-// the same report tick. SHOWMESH HYPOTHESIS, NOT MEASURED: no bench data
-// exists for the right budget against a real backend; chosen well above
-// any lock hold this package's own command paths need for ordinary
-// bookkeeping, so normal, brief contention is never mistaken for a
-// wedged session.
+// one session's own mutex before falling back to [Session.
+// staleFallbackSnapshot] instead. Deliberately far shorter than
+// [engineCallTimeout], so one session mid-engine-call cannot delay every
+// other session sharing this report tick. SHOWMESH HYPOTHESIS, NOT
+// MEASURED.
 var snapshotLockBudget = 200 * time.Millisecond // var, not const: shrunk by tests exercising the bound itself
 
-// snapshotWithBudget is [Manager.Snapshot]'s own per-session call. It
-// spawns the actual lock-and-snapshot onto its own goroutine and waits
-// for it only up to budget, rather than blocking on s.mu directly: a
-// session wedged inside a bounded engine call otherwise holds s.mu for
-// that call's own full bound, and Manager.Snapshot iterates every
-// session serially, so one wedged session would still delay every
-// session behind it in that iteration by up to that bound. On timeout
-// this reports [Session.staleFallbackSnapshot] instead. The spawned
-// goroutine is not abandoned forever: once it does acquire s.mu (as soon
-// as whatever held it releases, bounded per advanceCallTimeout/
-// observeTimeout, never truly indefinite) it still builds and records a
-// fresh snapshot into s.lastSnapshot for the NEXT call to find, then
-// discards its own now-unwanted result via the buffered channel.
+// snapshotWithBudget is [Manager.Snapshot]'s per-session call: it waits
+// for a spawned lock-and-snapshot goroutine only up to budget, then falls
+// back to [Session.staleFallbackSnapshot] rather than blocking on s.mu
+// directly. The spawned goroutine is not abandoned forever -- gstengine's
+// Load can still hold s.mu outside any bounded call (b.build,
+// branchFor's lock), so "eventually" is not a guaranteed bound, but once
+// it DOES acquire s.mu it still records a fresh snapshot into
+// s.lastSnapshot for the next call to find, then discards its own
+// now-unwanted result via the buffered channel.
 func (s *Session) snapshotWithBudget(ctx context.Context, budget time.Duration) SessionSnapshot {
 	done := make(chan SessionSnapshot, 1)
 	go func() {
@@ -1010,19 +1043,15 @@ func (s *Session) snapshotWithBudget(ctx context.Context, budget time.Duration) 
 	}
 }
 
-// staleFallbackSnapshot builds the telemetry [Session.snapshotWithBudget]
-// reports when it could not acquire s.mu within its budget: s's last
-// successfully collected snapshot, with Fault/FaultReason overwritten to
-// state plainly that THIS report tick's evidence is stale and why. Every
-// other field is retained as documented "last known" evidence, never
-// fabricated for this tick. Reads s.lastSnapshot without s.mu by design
-// (see that field's own doc comment) and reads s.id directly for the
-// same reason: both are safe unlocked because neither is ever mutated
-// after [newSession] constructs this Session. A session with no prior
-// successful snapshot (freshly created, never yet observed) reports an
-// explicit "no telemetry collected yet" fault instead of a zero-value
-// SessionSnapshot that would otherwise look exactly like a healthy,
-// merely-idle session with nothing to report.
+// staleFallbackSnapshot is s's last successfully collected snapshot with
+// Stale set and CollectedAt left at its original collection time --
+// Fault/FaultReason are carried forward UNCHANGED, never overwritten,
+// because a real prior fault (a pipeline crash, say) must stay visible
+// through exactly the window in which it is the likely cause of the
+// wedge. Reads s.lastSnapshot and s.id without s.mu by design (see
+// lastSnapshot's own doc comment); a session with no prior snapshot yet
+// reports StateUnknown/FaultOther instead of a zero-value SessionSnapshot
+// that would otherwise look like a healthy, merely-idle session.
 func (s *Session) staleFallbackSnapshot(budget time.Duration) SessionSnapshot {
 	last := s.lastSnapshot.Load()
 	if last == nil {
@@ -1033,13 +1062,11 @@ func (s *Session) staleFallbackSnapshot(budget time.Duration) SessionSnapshot {
 			FaultReason: fmt.Sprintf(
 				"audio session telemetry could not be collected within %s of this report tick, and no prior snapshot exists to fall back to; the session is likely inside an in-flight engine call",
 				budget),
+			Stale: true,
 		}
 	}
 	snap := *last
-	snap.Fault = pkgaudio.FaultOther
-	snap.FaultReason = fmt.Sprintf(
-		"audio session busy inside an in-flight engine call; could not collect fresh telemetry within %s of this report tick, reporting the last known state instead",
-		budget)
+	snap.Stale = true
 	return snap
 }
 

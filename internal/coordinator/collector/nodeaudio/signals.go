@@ -120,6 +120,15 @@ const (
 	// predecessor did not complete naturally).
 	SignalSessionItemGapMs     observation.SignalID = "audio_session.item_gap_ms"
 	SignalSessionItemGapReason observation.SignalID = "audio_session.item_gap.reason"
+
+	// SignalSessionStale is true when the node could not collect this
+	// session's OTHER signals fresh this report tick (it was busy inside
+	// an in-flight engine call) and every other signal below is instead
+	// its last known evidence, not current. Always collected -- never
+	// [observation.StateNotCollected] -- and always fresh itself: this
+	// tick's own poll is genuine evidence about staleness even when the
+	// underlying session data it describes is not.
+	SignalSessionStale observation.SignalID = "audio_session.stale"
 )
 
 // SessionSignalIDs is every audio_session.* signal this package ever
@@ -145,6 +154,7 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionFaultReason,
 	SignalSessionItemGapMs,
 	SignalSessionItemGapReason,
+	SignalSessionStale,
 }
 
 // StateUsable and StateUnavailable are the two values SignalEngineState,
