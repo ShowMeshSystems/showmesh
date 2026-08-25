@@ -36,9 +36,10 @@ export function NodeDetail() {
         <>
           <h2 className="panel__title">{node.label ?? node.nodeId}</h2>
 
-          {/* Node summary, control-plane evidence, and render are genuine
-              sibling panels for this node, so they share the wide-display
-              two-column grid (.panel-grid, global.css). */}
+          {/* Node summary and control-plane evidence are short peers, so they
+              share the wide-display two-column grid (.panel-grid, global.css).
+              Render is deliberately outside it: its signal table is the tallest
+              thing on the page and half a column wraps every reason line. */}
           <div className="panel-grid">
             <PanelErrorBoundary panelLabel="Node summary">
               <section className="panel">
@@ -119,14 +120,14 @@ export function NodeDetail() {
                 </div>
               </section>
             </PanelErrorBoundary>
-
-            <PanelErrorBoundary panelLabel="Render">
-              <section className="panel">
-                <h3 className="panel__title">Render</h3>
-                <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
-              </section>
-            </PanelErrorBoundary>
           </div>
+
+          <PanelErrorBoundary panelLabel="Render">
+            <section className="panel">
+              <h3 className="panel__title">Render</h3>
+              <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
+            </section>
+          </PanelErrorBoundary>
 
           <h3 className="section-title">Capabilities</h3>
           {node.capabilities.length === 0 ? (
