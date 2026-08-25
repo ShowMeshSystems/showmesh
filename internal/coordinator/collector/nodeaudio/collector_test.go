@@ -152,6 +152,23 @@ func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	if generator.ObservedAt.Equal(discoveredAt) {
 		t.Error("ltc.generator.state ObservedAt equals the startup probe time; it must never share DiscoveredAt's evidence")
 	}
+
+	// The node.audio.engine.* glitch signals must not be stamped with the
+	// stale one-shot discovery time either -- see the LTC generator
+	// signals just above for the identical defect this would otherwise
+	// repeat.
+	payload.EngineGlitchCountsKnown = true
+	since := observedAt
+	payload.EngineGlitchCountsSince = &since
+	st.Put("audio-01", payload, time.Now())
+	obs, _ = c.Poll(context.Background())
+	glitch := findObs(t, obs, SignalEngineWarningsStream)
+	if glitch.ObservedAt == nil || !glitch.ObservedAt.Equal(observedAt) {
+		t.Errorf("engine.warnings.stream ObservedAt = %v, want the live tick time %v", glitch.ObservedAt, observedAt)
+	}
+	if glitch.ObservedAt.Equal(discoveredAt) {
+		t.Error("engine.warnings.stream ObservedAt equals the startup probe time; it must never share DiscoveredAt's evidence")
+	}
 }
 
 // TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
