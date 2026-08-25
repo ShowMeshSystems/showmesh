@@ -55,11 +55,28 @@ func channelPositionBits(channelCount int) []uint64 {
 // it has opened the device, which happens on the NULL->READY state
 // transition -- sinkEl is brought to READY here so this query reflects
 // what the bound route genuinely accepts rather than an unconstrained
-// template. (The caller's own later pipeline-wide SetState(PLAYING)
-// still governs the element's final state; READY here is only to make
-// the query meaningful, and a real device that later fails to reach
-// PLAYING is reported the same way it always was, through the bus and
-// Available().)
+// template. It is returned to NULL before this function returns: READY
+// on a raw hw: route is an open ALSA device (it reads as state OPEN in
+// /proc/asound), and a build that fails after this point would otherwise
+// leave that device held by a process reporting itself unavailable. The
+// caller's own later pipeline-wide SetState(PLAYING) reopens it.
+//
+// The candidate goes to the pad as a CAPS query filter, not as an
+// ACCEPT_CAPS question. ACCEPT_CAPS is a yes/no on caps the caller must
+// already have fixed: a GstBaseSink -- which alsasink is -- answers it
+// with gst_caps_is_subset against its own allowed caps, so a candidate
+// that leaves format or layout unspecified, as one assembled from rate,
+// channel count and mask alone must, is refused outright however well
+// the layout itself matches. MEASURED: a base sink fixed to the MOTU
+// M4's own S32LE/interleaved/44100/4ch/0x33 caps refuses that question
+// and this function reported "no positioned layout" for a device that
+// demands exactly one, which is what left the engine emitting an
+// unpositioned layout the M4 then refused once data flowed. A
+// capsfilter-fronted test sink hides it entirely, because
+// GstBaseTransform answers ACCEPT_CAPS by intersection and says yes.
+// A filtered CAPS query asks what this function actually wants to know
+// -- what the pad can still do under this constraint -- and every pad
+// answers it the same way.
 //
 // The decision prefers positioned over unpositioned, falling back to
 // unpositioned only when the sink's accepted caps are not compatible
@@ -75,8 +92,8 @@ func channelPositionBits(channelCount int) []uint64 {
 // opened -- the more specific, positioned layout is the safer choice
 // whenever the sink can express it, and unpositioned is the fallback
 // reserved for a sink whose caps genuinely rule positioned out. A sink
-// fixed to some other, mismatched positioned mask (e.g. 0x0f) accepts
-// neither candidate, so this still returns nil for that case; on a real
+// fixed to some other, mismatched positioned mask (e.g. 0x0f) leaves the
+// query empty, so this still returns nil for that case; on a real
 // device that mismatch was also measured to fail only once data starts
 // streaming, not at link time, so [linkInterleaveToSink]'s own mask pin
 // is a runtime refusal there, not the link-time one a fixed-caps test
@@ -93,6 +110,7 @@ func probeSinkChannelPositions(sinkEl gst.Element, channelCount, sampleRate int)
 	if sinkEl.SetState(gst.StateReady) == gst.StateChangeFailure {
 		return nil
 	}
+	defer sinkEl.SetState(gst.StateNull)
 
 	var fallbackMask uint64
 	for _, bit := range fallback {
@@ -106,8 +124,9 @@ func probeSinkChannelPositions(sinkEl gst.Element, channelCount, sampleRate int)
 	}
 
 	positioned := gst.CapsFromString(fmt.Sprintf("audio/x-raw,rate=%d,channels=%d,channel-mask=(bitmask)0x%x", sampleRate, channelCount, fallbackMask))
-	if pad.QueryAcceptCaps(positioned) {
-		return fallback
+	remaining := pad.QueryCaps(positioned)
+	if remaining == nil || remaining.IsEmpty() {
+		return nil
 	}
-	return nil
+	return fallback
 }

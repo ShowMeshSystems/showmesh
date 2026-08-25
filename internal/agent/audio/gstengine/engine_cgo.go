@@ -112,17 +112,66 @@ func New(cfg Config) (*Engine, error) {
 	}
 
 	if err := e.buildPipeline(); err != nil {
+		e.releaseAfterFailedBuild()
+		e.availReason = fmt.Sprintf("could not build output pipeline: %v", err)
+		return e, nil
+	}
+	// Started before the settle window below, not after it: LTC is the
+	// only channel whose source is fed from Go, so its own pad does not
+	// negotiate until the feeder pushes, and a layout the device refuses
+	// on that pad would otherwise surface just after the build had
+	// already reported success.
+	if e.ltc != nil {
+		e.ltc.feedStarted.Store(true)
+		go e.runLTCFeeder(e.ltc)
+	}
+	if err := e.awaitSustainedPlaying(); err != nil {
+		e.releaseAfterFailedBuild()
 		e.availReason = fmt.Sprintf("could not build output pipeline: %v", err)
 		return e, nil
 	}
 
 	e.availOK = true
 	go e.watchBus()
-	if e.ltc != nil {
-		e.ltc.feedStarted.Store(true)
-		go e.runLTCFeeder(e.ltc)
-	}
 	return e, nil
+}
+
+// releaseAfterFailedBuild returns a partially built pipeline to NULL so
+// a build that could not reach sustained playback does not keep holding
+// the output device. An engine reporting itself unavailable while its
+// ALSA route reads as state OPEN in /proc/asound is unrecoverable short
+// of restarting the agent, since nothing else can claim that device and
+// no operator action reclaims it. It delegates to [Engine.Close], which
+// already stops the LTC feeder before flushing the pipeline to NULL in
+// the one order that does not deadlock a feeder blocked under
+// backpressure; a later Close by the caller observes the same idempotent
+// outcome. Available() keeps reporting the build's own reason rather
+// than Close's, since availOK was never set.
+func (e *Engine) releaseAfterFailedBuild() {
+	if e.pipeline == nil {
+		return
+	}
+	if err := e.Close(); err != nil {
+		slog.Warn("gstengine: a failed output pipeline build did not fully release its device", "error", err)
+	}
+}
+
+// NewUnavailable returns an Engine that was never built and reports
+// false with reason from [Engine.Available], refusing every call the way
+// any other unavailable Engine does. It exists so a caller that must
+// refuse to build at all -- a node whose bound route has no probe
+// evidence, where inventing a sample rate or channel count would open a
+// real device with a layout it never advertised -- can still bind
+// something that states why, rather than leaving nothing bound and
+// having the node report a rebuild that is not actually in progress.
+// It holds no device and needs no Close, though Close is safe.
+func NewUnavailable(reason string) *Engine {
+	return &Engine{
+		availReason:  reason,
+		handles:      make(map[agentaudio.EngineHandle]*branch),
+		elementIndex: make(map[string]*branch),
+		done:         make(chan struct{}),
+	}
 }
 
 // checkPrerequisites reports the reason Available() would give right now
@@ -427,6 +476,41 @@ func (e *Engine) buildPipeline() error {
 		return errors.New("output pipeline refused to reach PLAYING")
 	}
 	return nil
+}
+
+// buildSettleWindow is how long [New] watches the freshly started
+// pipeline's own bus before reporting a successful build. A device that refuses the
+// negotiated layout accepts the state change and then fails from its
+// streaming thread instead, so SetState(PLAYING) succeeding is not
+// evidence the route opened -- MEASURED against a sink demanding a
+// channel layout the pipeline cannot produce, the error lands roughly
+// 30ms after the transition returns. Without this window an engine
+// reports available=true and goes unavailable within the same second,
+// which reads as a working rebuild that later broke rather than as the
+// failed rebuild it is.
+const buildSettleWindow = 300 * time.Millisecond
+
+// awaitSustainedPlaying reports the first error a freshly started
+// pipeline puts on its own bus within [buildSettleWindow], or nil if it
+// is still running at the end of it. Messages consumed here never reach
+// [Engine.watchBus], which only starts once this returns nil.
+func (e *Engine) awaitSustainedPlaying() error {
+	bus := e.pipeline.GetBus()
+	deadline := time.Now().Add(buildSettleWindow)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil
+		}
+		msg := bus.TimedPop(gst.ClockTime(remaining))
+		if msg == nil {
+			return nil
+		}
+		if msg.Type() == gst.MessageError {
+			text, _ := msg.ParseError()
+			return fmt.Errorf("output pipeline failed to sustain PLAYING: %s", text)
+		}
+	}
 }
 
 // newSinkFactoryElement constructs the pipeline's terminal sink element
