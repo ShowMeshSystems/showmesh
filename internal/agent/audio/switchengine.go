@@ -243,3 +243,15 @@ func (e *SwitchableEngine) ObserveLTC(ctx context.Context) LTCObservation {
 	}
 	return ObserveEngineLTC(ctx, cur, time.Now())
 }
+
+// GlitchCounts forwards to whatever engine is currently bound, so a
+// rebind never resets or fabricates the count. A never-bound engine, or
+// a bound one that does not implement [GlitchObserver], reports (zero,
+// false) — not collected, never a fabricated healthy zero.
+func (e *SwitchableEngine) GlitchCounts() (GlitchCounts, bool) {
+	cur, ok := e.get()
+	if !ok {
+		return GlitchCounts{}, false
+	}
+	return ObserveEngineGlitches(cur)
+}

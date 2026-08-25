@@ -1120,6 +1120,29 @@ type AudioPayload struct {
 	// confirmed running.
 	LTCTimecodeKnown bool   `json:"ltcTimecodeKnown"`
 	LTCTimecode      string `json:"ltcTimecode"`
+
+	// EngineGlitchCountsKnown is true only when the bound engine backend
+	// actually counts glitch-class bus conditions (ALSA xrun/underrun and
+	// clock-drift warnings, and QoS-class dropped buffers). False means
+	// "not collected" and must never be read as "counted, and zero" —
+	// EngineWarningCount/EngineQosDropCount carry no meaning while this
+	// is false.
+	EngineGlitchCountsKnown bool `json:"engineGlitchCountsKnown"`
+
+	// EngineWarningCount is the cumulative count of GStreamer WARNING-
+	// class bus messages this engine has observed since it started. ALSA
+	// xruns/underruns and clock-drift sample drop/insert surface this
+	// way — the evidence that was previously discarded outright, leaving
+	// audible glitching with no observation anywhere. Meaningful only
+	// when EngineGlitchCountsKnown is true.
+	EngineWarningCount uint64 `json:"engineWarningCount"`
+
+	// EngineQosDropCount is the cumulative count of QOS-class bus
+	// messages this engine has observed since it started: a downstream
+	// element (typically the sink) reporting it dropped or skipped a
+	// buffer to keep pace with the clock. Meaningful only when
+	// EngineGlitchCountsKnown is true.
+	EngineQosDropCount uint64 `json:"engineQosDropCount"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device

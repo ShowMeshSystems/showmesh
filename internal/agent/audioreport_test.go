@@ -642,3 +642,112 @@ func TestRunAudioReportEngineAvailableReflectsLiveEngineNotStartupDiscovery(t *t
 		t.Errorf("EngineReason = %q, want the live engine's own reason", got.EngineReason)
 	}
 }
+
+// stubEngineGlitchCounts is a [stubEngineAvailability] that also
+// implements the [engineGlitchCounts] optional interface with a fixed,
+// distinguishable count.
+type stubEngineGlitchCounts struct {
+	stubEngineAvailability
+	counts audio.GlitchCounts
+	known  bool
+}
+
+func (s *stubEngineGlitchCounts) GlitchCounts() (audio.GlitchCounts, bool) {
+	return s.counts, s.known
+}
+
+// TestRunAudioReportPublishesGlitchCountsWhenEngineCollectsThem proves an
+// engine that implements [engineGlitchCounts] has its counts land on the
+// published report: the operator-visible evidence a bus warning/QoS/xrun
+// message was previously discarded into.
+func TestRunAudioReportPublishesGlitchCountsWhenEngineCollectsThem(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true, Routes: []audio.RouteEvidence{
+			{Device: "hw:CARD=X,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100, Format: "S16LE"}},
+		}}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	engine := &stubEngineGlitchCounts{
+		stubEngineAvailability: stubEngineAvailability{results: []struct {
+			ok     bool
+			reason string
+		}{{ok: true, reason: ""}}},
+		counts: audio.GlitchCounts{Warnings: 4, QosEvents: 9},
+		known:  true,
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+	}()
+
+	ticks <- time.Now()
+	<-pub.notify
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(calls))
+	}
+	got := decodeAudioReport(t, calls[0].payload)
+	if !got.EngineGlitchCountsKnown {
+		t.Fatal("EngineGlitchCountsKnown = false, want true: the wired engine implements engineGlitchCounts and reported known=true")
+	}
+	if got.EngineWarningCount != 4 || got.EngineQosDropCount != 9 {
+		t.Errorf("EngineWarningCount/EngineQosDropCount = %d/%d, want 4/9", got.EngineWarningCount, got.EngineQosDropCount)
+	}
+}
+
+// TestRunAudioReportLeavesGlitchCountsUnknownWhenEngineCannotCollectThem
+// proves an engine that only implements [engineAvailability] (not
+// [engineGlitchCounts]) -- e.g. gstengine's non-cgo stub, or any bound
+// engine that never observed a bus -- leaves EngineGlitchCountsKnown
+// false and both counts at zero, never a fabricated healthy zero: the
+// exact distinction between "counted, and zero" and "not collected".
+func TestRunAudioReportLeavesGlitchCountsUnknownWhenEngineCannotCollectThem(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true, Routes: []audio.RouteEvidence{
+			{Device: "hw:CARD=X,DEV=0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100, Format: "S16LE"}},
+		}}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	engine := &stubEngineAvailability{results: []struct {
+		ok     bool
+		reason string
+	}{{ok: true, reason: ""}}}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+	}()
+
+	ticks <- time.Now()
+	<-pub.notify
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("publish calls = %d, want 1", len(calls))
+	}
+	got := decodeAudioReport(t, calls[0].payload)
+	if got.EngineGlitchCountsKnown {
+		t.Fatal("EngineGlitchCountsKnown = true for an engine that does not implement engineGlitchCounts, want false")
+	}
+	if got.EngineWarningCount != 0 || got.EngineQosDropCount != 0 {
+		t.Errorf("EngineWarningCount/EngineQosDropCount = %d/%d, want 0/0 when not collected", got.EngineWarningCount, got.EngineQosDropCount)
+	}
+}
