@@ -168,8 +168,11 @@ func TestNightAnnouncementApplyThenStartIsWhatActuallyDucks(t *testing.T) {
 	if !bed.Ducked || bed.DuckedBy != "announcement-1" {
 		t.Fatalf("bed after the announcement started: ducked = %v, duckedBy = %q; want ducked by announcement-1", bed.Ducked, bed.DuckedBy)
 	}
-	if bed.Gain != 0 {
-		t.Fatalf("bed gain under the announcement = %v, want 0", bed.Gain)
+	// The duck depth is an operator setting; this node has never
+	// been configured, so it ducks to audio.DefaultSettings' own
+	// provisional depth.
+	if wantDucked := audio.DefaultSettings.DuckTargetGain; bed.Gain != wantDucked {
+		t.Fatalf("bed gain under the announcement = %v, want the duck depth %v", bed.Gain, wantDucked)
 	}
 
 	// And it releases on stop, back to the configured gain.

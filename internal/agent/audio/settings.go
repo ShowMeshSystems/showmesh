@@ -9,14 +9,21 @@ import (
 // Settings is the subset of the coordinator's audio.settings
 // configuration (ADR-039) this package's session logic consults: the
 // default fade a gain fade uses when a caller names none, the default
-// ceiling applied to a background session that declares none, and the
-// LTC frame rate and default start offset a show session's LTC run uses
-// absent its own override. The drift threshold has no consumer in this
+// ceiling applied to a background session that declares none, how far a
+// ducked session is lowered, and the LTC frame rate and default start
+// offset a show session's LTC run uses absent its own override. The drift threshold has no consumer in this
 // package yet.
 type Settings struct {
 	DefaultFadeCurve         pkgaudio.FadeCurve
 	DefaultFadeDurationMs    int
 	DefaultMaxBackgroundGain pkgaudio.Ceiling
+
+	// DuckTargetGain is how far a session is lowered while a
+	// higher-priority session ducks it, in the same linear-multiplier
+	// unit as [pkgaudio.Gain]. PROVISIONAL VALUE, NOT MEASURED: nobody
+	// has heard it on the real speakers yet (RES-007). Mute is
+	// unaffected, it silences unconditionally.
+	DuckTargetGain pkgaudio.Gain
 
 	LTCFrameRate          pkgaudio.LTCFrameRate
 	LTCDefaultStartOffset pkgaudio.LTCTimecode
@@ -24,7 +31,11 @@ type Settings struct {
 	// Configured reports whether these values came from a real
 	// audio.settings.configure push (true) or are still [DefaultSettings]
 	// (false). clampToCeilingLocked only applies DefaultMaxBackgroundGain
-	// once Configured is true: an operator who has never written
+	// once Configured is true. DuckTargetGain is NOT gated on it: the
+	// owner declined to bless the full-silence duck this package used to
+	// hardcode, so an unconfigured node ducks to DefaultSettings' own
+	// provisional depth rather than to silence. Reason for the ceiling
+	// gate: an operator who has never written
 	// audio.settings gets today's existing behavior (no ceiling implied
 	// for a background session that declares none) rather than a
 	// silently-applied guess. The fade curve/duration fallback is not
@@ -44,8 +55,22 @@ var DefaultSettings = Settings{
 	DefaultFadeCurve:         pkgaudio.FadeCurveLinear,
 	DefaultFadeDurationMs:    1000,
 	DefaultMaxBackgroundGain: pkgaudio.Ceiling(0.6),
+	DuckTargetGain:           pkgaudio.Gain(0.25),
 	LTCFrameRate:             pkgaudio.LTCFrameRate30,
 	LTCDefaultStartOffset:    pkgaudio.LTCTimecode("00:00:00:00"),
+}
+
+// validDuckTargetGain reports why g is not a usable duck depth: a valid
+// gain strictly below unity, since a duck lowers a session and a gain of
+// 1 or more would not duck anything.
+func validDuckTargetGain(g pkgaudio.Gain) error {
+	if err := g.Validate(); err != nil {
+		return err
+	}
+	if g >= pkgaudio.Gain(1) {
+		return fmt.Errorf("audio: duck target gain must be below 1: got %v", float64(g))
+	}
+	return nil
 }
 
 // invalidSettingsFields validates s field by field against every wire
@@ -63,6 +88,9 @@ func invalidSettingsFields(s Settings) []string {
 	}
 	if err := s.DefaultMaxBackgroundGain.Validate(); err != nil {
 		issues = append(issues, "DefaultMaxBackgroundGain: "+err.Error())
+	}
+	if err := validDuckTargetGain(s.DuckTargetGain); err != nil {
+		issues = append(issues, "DuckTargetGain: "+err.Error())
 	}
 	if err := s.LTCFrameRate.Validate(); err != nil {
 		issues = append(issues, "LTCFrameRate: "+err.Error())
@@ -95,6 +123,9 @@ func (m *Manager) SetSettings(s Settings) {
 		}
 		if s.DefaultMaxBackgroundGain.Validate() != nil {
 			s.DefaultMaxBackgroundGain = DefaultSettings.DefaultMaxBackgroundGain
+		}
+		if validDuckTargetGain(s.DuckTargetGain) != nil {
+			s.DuckTargetGain = DefaultSettings.DuckTargetGain
 		}
 		if s.LTCFrameRate.Validate() != nil {
 			s.LTCFrameRate = DefaultSettings.LTCFrameRate

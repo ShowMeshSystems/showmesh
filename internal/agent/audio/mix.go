@@ -9,11 +9,10 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
-// duckTargetGain is what a session is driven to while muted or ducked.
-// SHOWMESH HYPOTHESIS, NOT MEASURED: full silence is the simplest
-// correct starting behavior; RES-007's bench is what should decide
-// whether a partial duck is audibly preferable.
-const duckTargetGain = pkgaudio.Gain(0)
+// mutedGain is what a session is driven to while muted. Mute means
+// silence and is not configurable; how far a DUCK lowers a session is
+// [Settings.DuckTargetGain], a separate operator-set value.
+const mutedGain = pkgaudio.Gain(0)
 
 // configuredGainLocked returns the gain last requested through
 // audio.gain.set or audio.gain.fade, or unity when neither has ever run.
@@ -29,8 +28,10 @@ func (s *Session) configuredGainLocked() pkgaudio.Gain {
 
 // effectiveGainLocked derives s's current output gain from the
 // configured gain and every active reason to reduce it: mute silences
-// unconditionally, otherwise an active duck silences to duckTargetGain,
-// otherwise the configured gain applies. The ceiling is reapplied on
+// unconditionally, otherwise an active duck lowers to the operator's
+// configured duck depth, otherwise the configured gain applies. A duck
+// never raises a session: a bed already quieter than the duck depth
+// keeps its own configured gain. The ceiling is reapplied on
 // every call, not only when the configured gain was last set, so a
 // ceiling lowered mid-duck or mid-mute still bounds the value the next
 // time it is computed. This is the single source of truth for what the
@@ -38,8 +39,13 @@ func (s *Session) configuredGainLocked() pkgaudio.Gain {
 // drive. Caller holds s.mu.
 func (s *Session) effectiveGainLocked() pkgaudio.Gain {
 	g := s.configuredGainLocked()
-	if s.muted || len(s.duckedByAll) > 0 {
-		g = duckTargetGain
+	switch {
+	case s.muted:
+		g = mutedGain
+	case len(s.duckedByAll) > 0:
+		if duck := s.mgr.SettingsSnapshot().DuckTargetGain; duck < g {
+			g = duck
+		}
 	}
 	if result, err := s.clampToCeilingLocked(g); err == nil {
 		return result.Effective
@@ -178,9 +184,9 @@ func (m *Manager) GainFade(ctx context.Context, id pkgaudio.SessionID, invocatio
 // startFadeLocked clamps target to s's ceiling, records it as s's
 // configured gain immediately, the same instant GainSet would, and
 // dispatches an engine fade toward the CURRENT effective gain, not the
-// raw configured target: while s is muted or ducked, that is
-// duckTargetGain, so a fade requested mid-suppression cannot ramp a
-// silenced session back up before the suppression actually releases.
+// raw configured target: while s is muted or ducked, that is the
+// suppressed gain, so a fade requested mid-suppression cannot ramp a
+// suppressed session back up before the suppression actually releases.
 // Releasing mute or a duck later drives the engine to the by-then
 // configured gain directly, through [Session.applyEffectiveGainLocked],
 // never by resuming this fade's own ramp. Caller holds s.mu.
@@ -340,8 +346,8 @@ func gainsEqual(a, b pkgaudio.Gain) bool {
 }
 
 // Mute is audio.output.mute: it marks id muted and applies the
-// resulting effective gain, which is duckTargetGain regardless of what
-// the configured gain or any active duck says. Idempotent: muting an
+// resulting effective gain, which is mutedGain regardless of what the
+// configured gain or any active duck says. Idempotent: muting an
 // already-muted session reports the existing mute rather than
 // re-applying it.
 func (m *Manager) Mute(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
@@ -484,8 +490,8 @@ func (m *Manager) submitToActivePolicies(ctx context.Context, id pkgaudio.Sessio
 }
 
 // duckOneLocked adds duckerID to t's set of active duckers and applies
-// the resulting effective gain, duckTargetGain, whether this is the
-// first ducker or one more added on top of an existing set. A target
+// the resulting effective gain, the configured duck depth, whether this
+// is the first ducker or one more added on top of an existing set. A target
 // already ducked by someone else just gains a second member; the actual
 // gain does not move again until the set is empty, which is
 // [Manager.removeDuckerLocked]'s own job (two overlapping announcements

@@ -152,6 +152,9 @@ func TestToNodePushesDefaultAudioSettings(t *testing.T) {
 	if params["defaultFadeCurve"] != config.AudioSettingsDefaultPayload.DefaultFadeCurve {
 		t.Errorf("defaultFadeCurve = %v, want %v", params["defaultFadeCurve"], config.AudioSettingsDefaultPayload.DefaultFadeCurve)
 	}
+	if params["duckTargetGain"] != config.AudioSettingsDefaultPayload.DuckTargetGain {
+		t.Errorf("duckTargetGain = %v, want %v", params["duckTargetGain"], config.AudioSettingsDefaultPayload.DuckTargetGain)
+	}
 	if rev, _ := params["revision"].(float64); rev != 0 {
 		t.Errorf("revision = %v, want 0 (never written)", params["revision"])
 	}

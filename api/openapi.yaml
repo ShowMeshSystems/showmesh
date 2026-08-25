@@ -10461,6 +10461,14 @@ components:
         closed fade-curve vocabulary (only "linear" ships today).
         `defaultMaxBackgroundGain` is a linear amplitude multiplier - 1.0
         is unity gain - applied as the default ceiling on a background bed.
+        `duckTargetGain` is how far a node lowers a session while a
+        higher-priority session ducks it (an announcement over a resting
+        background bed), in that same linear unit: `0` is full silence,
+        and a value of `1` or more is refused because it would not duck
+        anything. THE SHIPPED VALUE IS PROVISIONAL: it has never been
+        heard on the installation's speakers, and the owner picks the
+        real one by ear (RES-007). A muted session is unaffected;
+        mute silences unconditionally.
         `ltcFrameRate` is the closed vocabulary Resolume's timecode input
         supports; this ships non-drop-frame at every rate because
         Resolume's drop-frame expectation at 29.97 is unresearched
@@ -10469,7 +10477,8 @@ components:
         point when its own audio.session.apply carries no override.
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
-         defaultMaxBackgroundGain, ltcFrameRate, ltcDefaultStartOffset]
+         defaultMaxBackgroundGain, duckTargetGain, ltcFrameRate,
+         ltcDefaultStartOffset]
       properties:
         driftIgnoreThresholdMs:
           type: integer
@@ -10480,6 +10489,13 @@ components:
           type: integer
         defaultMaxBackgroundGain:
           type: number
+        duckTargetGain:
+          type: number
+          minimum: 0
+          exclusiveMaximum: 1
+          description: >-
+            Linear multiplier a ducked session is driven to. Provisional
+            value, not measured.
         ltcFrameRate:
           type: string
           enum: ["24", "25", "29.97", "30"]

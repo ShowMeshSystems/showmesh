@@ -34,7 +34,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.settings","revision":0,
-			"payload":{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6},
+			"payload":{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"duckTargetGain":0.25},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":null,"createdByPrincipalName":null,"source":"default"}`)
 	}))
 	defer ts.Close()
@@ -45,7 +45,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"revision 0", "source default", "built-in default", "driftIgnoreThresholdMs:   20", "defaultFadeCurve:         linear"} {
+	for _, want := range []string{"revision 0", "source default", "built-in default", "driftIgnoreThresholdMs:   20", "defaultFadeCurve:         linear", "duckTargetGain:           0.25"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}

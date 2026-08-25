@@ -44,6 +44,7 @@ type audioSettingsConfig struct {
 	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
 	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
 	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
+	DuckTargetGain           float64 `json:"duckTargetGain"`
 	LTCFrameRate             string  `json:"ltcFrameRate"`
 	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
 	Revision                 int64   `json:"revision"`
@@ -226,7 +227,8 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 
 var audioSettingsConfigureKnownKeys = map[string]bool{
 	"driftIgnoreThresholdMs": true, "defaultFadeCurve": true, "defaultFadeDurationMs": true,
-	"defaultMaxBackgroundGain": true, "ltcFrameRate": true, "ltcDefaultStartOffset": true, "revision": true,
+	"defaultMaxBackgroundGain": true, "duckTargetGain": true,
+	"ltcFrameRate": true, "ltcDefaultStartOffset": true, "revision": true,
 }
 
 // decodeAudioSettingsConfig mirrors [decodeAudioNodeConfig], validating
@@ -240,7 +242,7 @@ func decodeAudioSettingsConfig(params map[string]any) (audioSettingsConfig, erro
 	}
 	for _, field := range []string{
 		"driftIgnoreThresholdMs", "defaultFadeCurve", "defaultFadeDurationMs",
-		"defaultMaxBackgroundGain", "ltcFrameRate", "ltcDefaultStartOffset", "revision",
+		"defaultMaxBackgroundGain", "duckTargetGain", "ltcFrameRate", "ltcDefaultStartOffset", "revision",
 	} {
 		if _, ok := params[field]; !ok {
 			return audioSettingsConfig{}, fmt.Errorf("%s: params.%s is required", action, field)
@@ -262,6 +264,12 @@ func decodeAudioSettingsConfig(params map[string]any) (audioSettingsConfig, erro
 	}
 	if err := pkgaudio.Ceiling(p.DefaultMaxBackgroundGain).Validate(); err != nil {
 		return audioSettingsConfig{}, fmt.Errorf("%s: params.defaultMaxBackgroundGain: %w", action, err)
+	}
+	if err := pkgaudio.Gain(p.DuckTargetGain).Validate(); err != nil {
+		return audioSettingsConfig{}, fmt.Errorf("%s: params.duckTargetGain: %w", action, err)
+	}
+	if p.DuckTargetGain >= 1 {
+		return audioSettingsConfig{}, fmt.Errorf("%s: params.duckTargetGain must be below 1: a gain of 1 or more does not duck anything", action)
 	}
 	if err := pkgaudio.LTCFrameRate(p.LTCFrameRate).Validate(); err != nil {
 		return audioSettingsConfig{}, fmt.Errorf("%s: params.ltcFrameRate: %w", action, err)
