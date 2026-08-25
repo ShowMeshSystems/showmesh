@@ -36,6 +36,7 @@ import type {
   ConfigShowActive,
   ConfigShowMacro,
   ConfigShowSurface,
+  ConfigShowCue,
   ConfigShowWrite,
   CreatePrincipalRequest,
   FPPCommandResult,
@@ -80,6 +81,8 @@ type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListR
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+// Track H seam H6: show.cue authoring.
+type SchemaShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -428,7 +431,7 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.playlist' | 'night.session',
+  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'night.session',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse> {
   return store.listConfigObjects(kind, show)
@@ -624,6 +627,21 @@ export function putShowSurface(id: string, payload: ConfigShowSurface): Promise<
 
 export function getShowSurfaceRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowSurfaceRevisions(id)
+}
+
+// Track H seam H6: show.cue authoring. Same thin pass-through pattern as
+// every method above.
+
+export function getShowCue(id: string): Promise<SchemaShowCueConfigResponse> {
+  return store.getShowCue(id)
+}
+
+export function putShowCue(id: string, payload: ConfigShowCue): Promise<SchemaShowCueConfigResponse> {
+  return store.putShowCue(id, payload)
+}
+
+export function getShowCueRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowCueRevisions(id)
 }
 
 export function getShowActive(): Promise<SchemaShowActiveConfigResponse> {
