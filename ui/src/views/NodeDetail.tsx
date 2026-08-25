@@ -6,6 +6,7 @@ import { EvidenceValue } from '../components/EvidenceValue'
 import { resolveCapabilityPanel } from '../components/capabilityPanelRegistry'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
+import { CueCatalogPanel } from '../components/CueCatalogPanel'
 import { formatAbsolute } from '../app/time'
 
 // Node detail (spec section 6.4 / OPERATOR-UI section 8.1): control-plane
@@ -118,6 +119,13 @@ export function NodeDetail() {
                     </tbody>
                   </table>
                 </div>
+              </section>
+            </PanelErrorBoundary>
+
+            <PanelErrorBoundary panelLabel="Cue catalog">
+              <section className="panel">
+                <h3 className="panel__title">Cue catalog</h3>
+                <CueCatalogPanel nodeId={node.nodeId} />
               </section>
             </PanelErrorBoundary>
           </div>

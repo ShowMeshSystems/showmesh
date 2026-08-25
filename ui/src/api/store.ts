@@ -72,6 +72,7 @@ import {
   asEventSeq,
   initialModel,
   type ConnectionState,
+  type CueCatalogDeployResult,
   type Evidence,
   type Event as ModelEvent,
   type EventSeq,
@@ -182,6 +183,9 @@ type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
 type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
 type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
 type SchemaAuditResponse = components['schemas']['AuditResponse']
+type SchemaCueCatalogResponse = components['schemas']['CueCatalogResponse']
+type SchemaCueCatalogDeployRequest = components['schemas']['CueCatalogDeployRequest']
+type SchemaCueCatalogDeployResponse = components['schemas']['CueCatalogDeployResponse']
 // Track F seam F2/F1: the night-session lifecycle controller and the
 // night.session/night.session.active configuration kinds.
 type SchemaNightSessionResponse = components['schemas']['NightSessionResponse']
@@ -997,6 +1001,45 @@ export class ApiStore {
   /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe`. Requires render:command. */
   async probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
     return this.dispatchRenderCommand(nodeId, surfaceId, 'transport-probe')
+  }
+
+  // -- Track H seam H6: the resolved Cue catalog a node holds, and the
+  // operator's own deploy control. GET is a plain open read (observation:read
+  // under closed reads, ADR-024) — no scope gate, matching
+  // listResolumeInstances' identical posture. Deploy shares
+  // dispatchRenderCommand's shape one seam earlier: same idempotency key
+  // generation, same "outcome decides success, never a bare 200" rule
+  // (ADR-003), and the same request budget, since cuecatalogdeploy.go's own
+  // confirm deadline mirrors renderdispatch.go's.
+
+  /** `GET /nodes/{nodeId}/cue-catalog`. Open read; the coordinator's current resolution for this node, not a persisted acknowledgement. */
+  async getNodeCueCatalog(nodeId: string): Promise<SchemaCueCatalogResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaCueCatalogResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/cue-catalog`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /nodes/{nodeId}/cue-catalog/deploy`. Requires cuecatalog:deploy (admin only). */
+  async deployNodeCueCatalog(nodeId: string): Promise<CueCatalogDeployResult> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaCueCatalogDeployRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaCueCatalogDeployResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/cue-catalog/deploy`,
+        body,
+        controller.signal,
+        RENDER_COMMAND_REQUEST_TIMEOUT_MS,
+      )
+      return resp.command
+    } finally {
+      this.endSideCall(controller)
+    }
   }
 
   // -- Track D seam D-4: Resolume observability (seam E) and the

@@ -67,7 +67,7 @@ import type {
 } from './domain'
 import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
-import type { ActionBinding, ActionInvocationResult, ResolumeActionResult } from './domain'
+import type { ActionBinding, ActionInvocationResult, CueCatalogDeployResult, ResolumeActionResult } from './domain'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
@@ -90,6 +90,7 @@ type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
 type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
 type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
 type SchemaAuditResponse = components['schemas']['AuditResponse']
+type SchemaCueCatalogResponse = components['schemas']['CueCatalogResponse']
 
 const store = new ApiStore({ baseUrl: '/api/v1' })
 store.connect()
@@ -575,6 +576,17 @@ export function getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetMan
 
 export function listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
   return store.listAudit(filter)
+}
+
+// Track H seam H6: the resolved Cue catalog a node holds, and the
+// operator's own deploy control. Same thin pass-through pattern.
+
+export function getNodeCueCatalog(nodeId: string): Promise<SchemaCueCatalogResponse> {
+  return store.getNodeCueCatalog(nodeId)
+}
+
+export function deployNodeCueCatalog(nodeId: string): Promise<CueCatalogDeployResult> {
+  return store.deployNodeCueCatalog(nodeId)
 }
 
 // Track F seam F2/F1: the night-session lifecycle controller and the
