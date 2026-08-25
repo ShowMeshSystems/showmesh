@@ -51,6 +51,7 @@ import type {
   NightSessionResponse,
   PrincipalResponse,
   PrincipalsResponse,
+  AudioSessionCommandResult,
   RenderCommandResult,
   RenderSettingsConfigResponse,
   ConfigShowModePayload,
@@ -298,6 +299,36 @@ export function clearRenderSurface(nodeId: string, surfaceId: string): Promise<R
 
 export function restartRenderPipeline(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
   return store.restartRenderPipeline(nodeId, surfaceId)
+}
+
+// The first audio-dispatch slice. Same thin pass-through pattern.
+
+export function pauseAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  return store.pauseAudioSession(nodeId, sessionId, revision)
+}
+
+export function resumeAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  return store.resumeAudioSession(nodeId, sessionId, revision)
+}
+
+export function stopAudioSession(nodeId: string, sessionId: string, revision: number): Promise<AudioSessionCommandResult> {
+  return store.stopAudioSession(nodeId, sessionId, revision)
+}
+
+export function muteAudioSessionOutput(
+  nodeId: string,
+  sessionId: string,
+  revision: number,
+): Promise<AudioSessionCommandResult> {
+  return store.muteAudioSessionOutput(nodeId, sessionId, revision)
+}
+
+export function unmuteAudioSessionOutput(
+  nodeId: string,
+  sessionId: string,
+  revision: number,
+): Promise<AudioSessionCommandResult> {
+  return store.unmuteAudioSessionOutput(nodeId, sessionId, revision)
 }
 
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same

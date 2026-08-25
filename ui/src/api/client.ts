@@ -171,6 +171,28 @@ export const MIN_RENDER_COMMAND_CLIENT_TIMEOUT_MS =
   SERVER_RENDER_COMMAND_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
 
 /**
+ * The first-slice audio dispatch request budget for the five
+ * `POST /nodes/{nodeId}/audio/sessions/{sessionId}/pause|resume|stop|
+ * output/mute|output/unmute` endpoints — the audio sibling of
+ * [RENDER_COMMAND_REQUEST_TIMEOUT_MS], for the identical reason: the
+ * coordinator holds the response open for its own write deadline
+ * (`audioHandlerWriteDeadline()`, internal/coordinator/api/audiodispatch.go
+ * — 25s, composed from a 15s confirm deadline plus a 10s margin) before
+ * answering, the same 25s figure the render write deadline uses. Reuses
+ * [RENDER_COMMAND_CLIENT_MARGIN_MS] rather than a fourth independently
+ * chosen margin, since the two server deadlines are already identical.
+ */
+const SERVER_AUDIO_COMMAND_WRITE_DEADLINE_MS = 25_000 // internal/coordinator/api/audiodispatch.go audioHandlerWriteDeadline()
+export const AUDIO_COMMAND_REQUEST_TIMEOUT_MS =
+  SERVER_AUDIO_COMMAND_WRITE_DEADLINE_MS + RENDER_COMMAND_CLIENT_MARGIN_MS
+/**
+ * Reconciliation target for [AUDIO_COMMAND_REQUEST_TIMEOUT_MS] — see
+ * [MIN_FPP_COMMAND_CLIENT_TIMEOUT_MS]'s identical role.
+ */
+export const MIN_AUDIO_COMMAND_CLIENT_TIMEOUT_MS =
+  SERVER_AUDIO_COMMAND_WRITE_DEADLINE_MS + CLIENT_TIMEOUT_MARGIN_MS
+
+/**
  * The request budget for `POST /actions/{id}/invocations` — the
  * coordinator's own write deadline
  * (`actionInvokeHTTPWriteDeadline`, internal/coordinator/api/actioninvoke.go

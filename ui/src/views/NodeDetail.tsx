@@ -6,6 +6,7 @@ import { EvidenceValue } from '../components/EvidenceValue'
 import { resolveCapabilityPanel } from '../components/capabilityPanelRegistry'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
+import { AudioSessionPanel } from '../components/AudioSessionPanel'
 import { formatAbsolute } from '../app/time'
 
 // Node detail (spec section 6.4 / OPERATOR-UI section 8.1): control-plane
@@ -101,6 +102,18 @@ export function NodeDetail() {
               </section>
             </PanelErrorBoundary>
           </div>
+
+          {/* Audio is rendered as its own full-width panel below the
+              two-column grid, not inside it: a node can hold several
+              sessions each with their own controls, which makes this
+              panel tall in a way the grid's three fixed-height siblings
+              are not. */}
+          <PanelErrorBoundary panelLabel="Audio">
+            <section className="panel">
+              <h3 className="panel__title">Audio</h3>
+              <AudioSessionPanel nodeId={node.nodeId} entries={node.audio} />
+            </section>
+          </PanelErrorBoundary>
 
           <h3 className="section-title">Capabilities</h3>
           {node.capabilities.length === 0 ? (

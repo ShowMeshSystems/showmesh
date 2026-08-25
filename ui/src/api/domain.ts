@@ -118,6 +118,10 @@ export type RenderCommandResult = components['schemas']['RenderCommandResult']
 // separately so NodeDetail.tsx and the dashboard attention list can
 // import it directly rather than indexing through Node.
 export type ObservationEntry = components['schemas']['ObservationEntry']
+// The first audio-dispatch slice: pause/resume/stop/output.mute/
+// output.unmute's own response shape, aliased for the identical reason
+// as RenderCommandResult above.
+export type AudioSessionCommandResult = components['schemas']['AudioSessionCommandResult']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
 // declaration. NodeDeclaration is also reachable as Node['declaration'],
 // aliased here separately for call sites (DomainBadges.tsx,
