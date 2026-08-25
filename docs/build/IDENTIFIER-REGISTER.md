@@ -105,6 +105,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `audio.node` | operator-chosen (the node id) | shipped | Track C seam C1b |
 | `night.session` | operator-chosen | reserved | Track F seam F1 |
 | `night.session.active` | `default` singleton | reserved | Track F seam F1 |
+| `fppconnect.settings` | `default` singleton | reserved | Track E phase 2 seam FC1a |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -115,6 +116,20 @@ Operator UI in a parallel worktree, and an additive payload field plus a new
 UI over the same object is the collision this register exists to prevent.
 A per-surface override of the renderer default is future work, sequenced
 after G-8 folds.
+
+**`fppconnect.settings` holds the two byte caps and the enable flag for the
+node's xLights ingestion listener** (`enabled`, `maxFileBytes` default 2 GiB,
+`maxAssetDirBytes` default 20 GiB), store-backed per
+[ADR-039](../decisions/ADR-039-operator-configuration-is-store-backed.md)
+decision 1 and ruled by
+[ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 5. It
+takes **no schema version**: the ingested file registers through the existing
+asset tables. **Track E phase 2 adds exactly one environment variable,
+`SHOWMESH_FPPCONNECT_LISTEN_ADDR`**, which is a start-time setting under
+ADR-039 decision 9's allow-list because a bind address must be known before
+the process starts. This file does not otherwise track environment variables;
+the allow-list test is where that boundary is enforced. Every other operator
+value this feature needs is in the kind above.
 
 **Track C's two kinds split engine-wide defaults from per-node physical
 binding.** `audio.settings` holds what is engine-wide and operator-settable
@@ -340,6 +355,7 @@ after shipping a breaking change to stored history.
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
+| `fppconnect.configure` | reserved | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
@@ -838,6 +854,14 @@ register and is conformance-tested against real handler responses in both
 directions. Two tracks adding paths to it collide in a merge conflict,
 which is visible, rather than silently, which is what this file exists to
 prevent everywhere else.
+
+**The node's FPP-compatible HTTP paths are not ShowMesh API paths.** The
+agent's inbound listener answers another project's paths, shaped by another
+project's client, and no operator, `showmeshctl` verb or UI screen is meant
+to call them. They are excluded from `api/openapi.yaml` by intent per
+[ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 2,
+specified in [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md), and tested
+there. They reserve nothing here and collide with nothing here.
 
 **The one thing that does not conflict visibly is a shared `enum`.** Track D
 and Track E both added a kind to `ConfigRevisionsResponse` and the union

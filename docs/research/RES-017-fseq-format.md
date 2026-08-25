@@ -296,7 +296,9 @@ The local tree read in full is FPP **8.4.2**. The deployed fleet runs FPP **9.4*
 
 ## 12. Open items
 
-- **OI-1.** Settle the base of FPP's `channelRanges` string before any code compares a file's sparse ranges to a target's expected ranges (§6.1). Read-only inspection of a deployed host's `/api/system/info` alongside its `co-universes.json` answers it.
+- **OI-1. Closed at L1 on 2026-08-25**, by source reading rather than by the deployed-host inspection this item proposed. The `channelRanges` string is `start-end` with an **inclusive, 0-based** end on the path that matters here: xLights parses the second number as an end and computes `end - start + 1`, pushes the pair straight into the file's 0-based sparse table, and converts down from its own 1-based start channel when it synthesises the string itself. Evidence, permalinks and the consequence for `show.surface`'s 1-based range are in [RES-003](RES-003-xlights-fpp-connect-compatibility.md) §10.1, pinned to xLights `ae379c0408ab39f3de265aea13c326bf48ab84b7`.
+
+  **What stays open, and it is narrower than this item was.** §13.3's warning that no *FPP-reported* string was ever compared against the file it produced is untouched: FPP builds its own ranges from `co-universes.json`, whose `startChannel` is 1-based, and formats it unchanged. So a range **ShowMesh advertises** is now settled and a formatter can be written against it, while an equality check against a range **an FPP host reports** must still be built as containment with the offset stated. Nothing here rose above L1 and nothing ran against a live xLights or a deployed FPP.
 - **OI-2.** Establish the zlib block framing if ShowMesh is ever to accept a zlib FSEQ; until then, reject compression type 2 with a clear message rather than a misparse.
 - **OI-3.** Decide whether the parser exposes "channel absent from this file" as a distinct state through to the API surface. §6 argues it must.
 - **OI-4.** RES-004 owns the decode-cost measurement. Nothing in this record licenses a frame-rate claim.
