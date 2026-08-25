@@ -95,23 +95,42 @@ export function FPPDetail() {
           <PanelErrorBoundary panelLabel="Commands">
             <section className="panel">
               <h3 className="panel__title">Commands</h3>
-              <h4 className="panel__title">Stop</h4>
-              <FPPStopPlaylistControl instanceId={instance.instanceId} />
-              <h4 className="panel__title">Stop gracefully</h4>
-              <FPPStopPlaylistGracefullyControl instanceId={instance.instanceId} />
-              <h4 className="panel__title">Pause / resume</h4>
-              <FPPPausePlaylistControl instanceId={instance.instanceId} />
-              <FPPResumePlaylistControl instanceId={instance.instanceId} />
-              <h4 className="panel__title">Item navigation</h4>
-              <FPPPrevPlaylistItemControl instanceId={instance.instanceId} />
-              <FPPNextPlaylistItemControl
-                instanceId={instance.instanceId}
-                observations={instance.observations}
-              />
-              <h4 className="panel__title">Start playlist</h4>
-              <FPPStartPlaylistControl instanceId={instance.instanceId} />
-              <h4 className="panel__title">Volume</h4>
-              <FPPSetVolumeControl instanceId={instance.instanceId} />
+              {/* Each command's heading and control are grouped together and
+                  laid out as a compact, wrapping row (.command-groups,
+                  global.css) rather than one full-width button per command
+                  stacked in a column: an operator hunting for Pause no
+                  longer scrolls past Stop to find it. */}
+              <div className="command-groups">
+                <div className="command-group">
+                  <h4 className="panel__title">Stop</h4>
+                  <FPPStopPlaylistControl instanceId={instance.instanceId} />
+                </div>
+                <div className="command-group">
+                  <h4 className="panel__title">Stop gracefully</h4>
+                  <FPPStopPlaylistGracefullyControl instanceId={instance.instanceId} />
+                </div>
+                <div className="command-group">
+                  <h4 className="panel__title">Pause / resume</h4>
+                  <FPPPausePlaylistControl instanceId={instance.instanceId} />
+                  <FPPResumePlaylistControl instanceId={instance.instanceId} />
+                </div>
+                <div className="command-group">
+                  <h4 className="panel__title">Item navigation</h4>
+                  <FPPPrevPlaylistItemControl instanceId={instance.instanceId} />
+                  <FPPNextPlaylistItemControl
+                    instanceId={instance.instanceId}
+                    observations={instance.observations}
+                  />
+                </div>
+                <div className="command-group">
+                  <h4 className="panel__title">Start playlist</h4>
+                  <FPPStartPlaylistControl instanceId={instance.instanceId} />
+                </div>
+                <div className="command-group">
+                  <h4 className="panel__title">Volume</h4>
+                  <FPPSetVolumeControl instanceId={instance.instanceId} />
+                </div>
+              </div>
             </section>
           </PanelErrorBoundary>
 
@@ -142,22 +161,42 @@ export function FPPDetail() {
                   not understand FPP's own text well enough to rank them). */}
               <section className="panel">
                 <h3 className="panel__title">Warnings</h3>
-                <EvidenceValue
-                  label="fpp.warnings.summary"
-                  evidence={warningsSummary}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
-                {warningsCount !== undefined && (
-                  <EvidenceValue
-                    label="fpp.warnings.count"
-                    evidence={warningsCount}
-                    serverTime={model.serverTime}
-                    serverTimeReceivedAt={model.serverTimeReceivedAt}
-                    connected={connected}
-                  />
-                )}
+                <div className="table-scroll">
+                  <table className="config-table" aria-label="Warnings">
+                    <thead>
+                      <tr>
+                        <th scope="col">Signal</th>
+                        <th scope="col">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th scope="row">fpp.warnings.summary</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={warningsSummary}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                      {warningsCount !== undefined && (
+                        <tr>
+                          <th scope="row">fpp.warnings.count</th>
+                          <td>
+                            <EvidenceValue
+                              evidence={warningsCount}
+                              serverTime={model.serverTime}
+                              serverTimeReceivedAt={model.serverTimeReceivedAt}
+                              connected={connected}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </section>
             </PanelErrorBoundary>
           )}
@@ -181,16 +220,31 @@ export function FPPDetail() {
               <PanelErrorBoundary key={group.id} panelLabel={group.label}>
                 <section className="panel">
                   <h4 className="panel__title">{group.label}</h4>
-                  {group.observations.map((observation) => (
-                    <EvidenceValue
-                      key={observation.signal}
-                      label={observation.signal}
-                      evidence={observation}
-                      serverTime={model.serverTime}
-                      serverTimeReceivedAt={model.serverTimeReceivedAt}
-                      connected={connected}
-                    />
-                  ))}
+                  <div className="table-scroll">
+                    <table className="config-table" aria-label={group.label}>
+                      <thead>
+                        <tr>
+                          <th scope="col">Signal</th>
+                          <th scope="col">Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.observations.map((observation) => (
+                          <tr key={observation.signal}>
+                            <th scope="row">{observation.signal}</th>
+                            <td>
+                              <EvidenceValue
+                                evidence={observation}
+                                serverTime={model.serverTime}
+                                serverTimeReceivedAt={model.serverTimeReceivedAt}
+                                connected={connected}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </section>
               </PanelErrorBoundary>
             ))
