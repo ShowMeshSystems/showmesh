@@ -148,45 +148,55 @@ export function NodesList() {
       {model.nodes.length === 0 ? (
         <p className="text-muted">No nodes have advertised themselves yet.</p>
       ) : (
-        <ul className="list-plain">
-          {model.nodes.map((node) => (
-            <li key={node.nodeId}>
-              <Link className="entity-link" to={`/nodes/${node.nodeId}`}>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: '0.75rem',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <strong>{node.label ?? node.nodeId}</strong>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <ControlPlaneBadge state={node.controlPlane.state} />
-                    <DeclarationBadge declared={node.declaration.declared} discoveryState={node.declaration.discoveryState} />
-                  </div>
-                </div>
-                <div className="text-muted">
-                  {node.platform ?? 'platform unknown'} · {node.capabilities.length}{' '}
-                  capabilit{node.capabilities.length === 1 ? 'y' : 'ies'} advertised
-                </div>
-              </Link>
-              {node.declaration.declared && (
-                <div style={{ marginTop: '0.25rem' }}>
-                  <ScopedButton
-                    requiredScope="config:write"
-                    className="button-danger"
-                    onClick={() => void handleUndeclare(node.nodeId)}
-                    busy={busyId === node.nodeId}
-                    busyReason="Already removing this declaration."
-                  >
-                    {busyId === node.nodeId ? 'Removing…' : 'Remove declaration'}
-                  </ScopedButton>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
+        // A table so twenty nodes' platforms, capability counts and status
+        // badges line up in columns instead of each being its own panel.
+        <div className="table-scroll">
+          <table className="config-table">
+            <thead>
+              <tr>
+                <th scope="col">Node</th>
+                <th scope="col">Platform</th>
+                <th scope="col">Capabilities</th>
+                <th scope="col">Status</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {model.nodes.map((node) => (
+                <tr key={node.nodeId}>
+                  <th scope="row">
+                    <Link className="entity-link" to={`/nodes/${node.nodeId}`}>
+                      {node.label ?? node.nodeId}
+                    </Link>
+                  </th>
+                  <td>{node.platform ?? 'platform unknown'}</td>
+                  <td>
+                    {node.capabilities.length} capabilit{node.capabilities.length === 1 ? 'y' : 'ies'} advertised
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <ControlPlaneBadge state={node.controlPlane.state} />
+                      <DeclarationBadge declared={node.declaration.declared} discoveryState={node.declaration.discoveryState} />
+                    </div>
+                  </td>
+                  <td>
+                    {node.declaration.declared && (
+                      <ScopedButton
+                        requiredScope="config:write"
+                        className="button-danger"
+                        onClick={() => void handleUndeclare(node.nodeId)}
+                        busy={busyId === node.nodeId}
+                        busyReason="Already removing this declaration."
+                      >
+                        {busyId === node.nodeId ? 'Removing…' : 'Remove declaration'}
+                      </ScopedButton>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

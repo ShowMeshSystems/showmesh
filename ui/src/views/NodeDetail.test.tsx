@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { NodeDetail } from './NodeDetail'
@@ -116,5 +116,20 @@ describe('NodeDetail', () => {
     const model = makeModel({ nodes: [node], connection: { kind: 'live', connectedAt: 0 } })
     renderNodeDetail('node-d', model)
     expect(screen.queryByText(/as of last contact/i)).not.toBeInTheDocument()
+  })
+
+  // Layout fix: control-plane evidence used to be three stacked
+  // EvidenceValue blocks; it is now one table, with one row per signal,
+  // so the signal name and its value line up in columns.
+  it('renders control-plane evidence as a table with one row per signal', () => {
+    const node = makeNode('node-e')
+    renderNodeDetail('node-e', makeModel({ nodes: [node] }))
+
+    const table = screen.getByRole('table', { name: /control-plane evidence/i })
+    expect(within(table).getByRole('columnheader', { name: 'Signal' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Value' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'hello (advertisement)' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'last will' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'heartbeat' })).toBeInTheDocument()
   })
 })

@@ -114,6 +114,12 @@ export type FPPCommandResult = components['schemas']['FPPCommandResult']
 // Track B seam B2b-front: the three render.* dispatch endpoints' own
 // response shape, aliased for the identical reason.
 export type RenderCommandResult = components['schemas']['RenderCommandResult']
+// Track H seam H6: GET /nodes/{nodeId}/cue-catalog and POST
+// .../cue-catalog/deploy's own response shapes, aliased for the identical
+// reason as every type above.
+export type CueCatalogResponse = components['schemas']['CueCatalogResponse']
+export type CueCatalogEntry = components['schemas']['CueCatalogEntry']
+export type CueCatalogDeployResult = components['schemas']['CueCatalogDeployResult']
 // ObservationEntry is Node['render']'s element type, aliased here
 // separately so NodeDetail.tsx and the dashboard attention list can
 // import it directly rather than indexing through Node.

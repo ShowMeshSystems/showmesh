@@ -1,5 +1,6 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { FPPDetail } from './FPPDetail'
 import { ModelContext } from '../app/ModelContext'
@@ -10,9 +11,32 @@ import {
   makeRemote04Instance,
   FLEET_NOW,
 } from '../app/test-support/fppFleetFixtures'
-import type { Model } from '../app/types'
+import type { Model, SessionResponse } from '../app/types'
+import type { components } from '../api/generated/schema'
 
-afterEach(cleanup)
+type SchemaObservation = components['schemas']['FPPPlaylistEntryObservation']
+
+// The reset-observation-sequence recovery control (FPPResetObservationSequenceControl,
+// rendered inside FPPDetail's "Recovery" panel) fetches and deletes through
+// '../api', mocked here the same way FPPStopPlaylistControl.test.tsx mocks
+// its own write, not faking network behavior (store.test.ts's own job),
+// isolating what this view is responsible for: rendering what is about to
+// be discarded, gating the destructive path on fpp:command, and rendering
+// the OBSERVED post-delete state rather than the bare fact a request went out.
+const { listFPPPlaylistEntryObservations, deleteFPPPlaylistEntryObservation } = vi.hoisted(() => ({
+  listFPPPlaylistEntryObservations: vi.fn(),
+  deleteFPPPlaylistEntryObservation: vi.fn(),
+}))
+vi.mock('../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api')>()
+  return { ...actual, listFPPPlaylistEntryObservations, deleteFPPPlaylistEntryObservation }
+})
+
+afterEach(() => {
+  cleanup()
+  listFPPPlaylistEntryObservations.mockReset()
+  deleteFPPPlaylistEntryObservation.mockReset()
+})
 
 function renderFPPDetail(instanceId: string, model: Model) {
   return render(
@@ -137,5 +161,152 @@ describe('FPPDetail', () => {
     const ageUnknownBadges = screen.getAllByText('age unknown')
     expect(ageUnknownBadges.length).toBeGreaterThan(0)
     expect(screen.queryByText('current')).not.toBeInTheDocument()
+  })
+})
+
+const RECOVERY_NOW = '2026-08-12T00:00:00.000Z'
+
+function signedIn(overrides: Partial<SessionResponse> = {}): SessionResponse {
+  return {
+    serverTime: RECOVERY_NOW,
+    authenticated: true,
+    principal: { id: 'p1', name: 'alice', kind: 'human', role: 'operator' },
+    session: { id: 's1', deviceLabel: 'porch tablet', createdAt: RECOVERY_NOW },
+    credentialForm: 'session',
+    scopes: ['fpp:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+    ...overrides,
+  }
+}
+
+function makeStoredObservation(overrides: Partial<SchemaObservation> = {}): SchemaObservation {
+  return {
+    instanceUuid: 'uuid-fpp-1',
+    endpointId: 'fpp-1',
+    schemaVersion: 1,
+    sequence: 42,
+    playlistName: 'Main Show',
+    section: 'mainPlaylist',
+    position: 3,
+    entryKey: 'mainPlaylist:3',
+    action: 'playing',
+    coalescedSincePreviousAcknowledged: 0,
+    observedAt: RECOVERY_NOW,
+    receivedAt: RECOVERY_NOW,
+    ...overrides,
+  }
+}
+
+function recoveryPanel() {
+  return screen.getByRole('heading', { name: 'Reset observation sequence' }).closest('section')!
+}
+
+// FPPResetObservationSequenceControl (components/FPPResetObservationSequenceControl.tsx),
+// rendered inside FPPDetail's own "Recovery" panel: the show-night path
+// to clear a wedged sequence anchor (TRACK-H-H2-SPEC.md §5.1), previously
+// reachable only from `showmeshctl fpp reset-observation-sequence --confirm`.
+describe("FPPDetail's reset-observation-sequence recovery control", () => {
+  it('renders the stored observation about to be discarded', async () => {
+    listFPPPlaylistEntryObservations.mockResolvedValue({
+      observations: [makeStoredObservation()],
+      serverTime: RECOVERY_NOW,
+    })
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn() }))
+
+    await waitFor(() => expect(within(recoveryPanel()).getByText('mainPlaylist:3')).toBeInTheDocument())
+    expect(within(recoveryPanel()).getByText('42')).toBeInTheDocument()
+    expect(within(recoveryPanel()).getByText('playing')).toBeInTheDocument()
+  })
+
+  it('requires a second, distinct click before dispatching the delete', async () => {
+    const user = userEvent.setup()
+    listFPPPlaylistEntryObservations.mockResolvedValue({
+      observations: [makeStoredObservation()],
+      serverTime: RECOVERY_NOW,
+    })
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn() }))
+
+    const armButton = await within(recoveryPanel()).findByRole('button', { name: 'Clear stored observation…' })
+    await user.click(armButton)
+
+    expect(screen.getByRole('alertdialog', { name: 'Confirm clearing stored observation' })).toBeInTheDocument()
+    expect(deleteFPPPlaylistEntryObservation).not.toHaveBeenCalled()
+  })
+
+  it('dispatches the confirmed delete to the right instance and renders the observed post-delete state', async () => {
+    const user = userEvent.setup()
+    listFPPPlaylistEntryObservations
+      .mockResolvedValueOnce({ observations: [makeStoredObservation()], serverTime: RECOVERY_NOW })
+      .mockResolvedValueOnce({ observations: [], serverTime: RECOVERY_NOW })
+    deleteFPPPlaylistEntryObservation.mockResolvedValue(undefined)
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn() }))
+
+    await user.click(await within(recoveryPanel()).findByRole('button', { name: 'Clear stored observation…' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm: clear stored observation' }))
+
+    expect(deleteFPPPlaylistEntryObservation).toHaveBeenCalledWith('uuid-fpp-1')
+    await waitFor(() =>
+      expect(
+        within(recoveryPanel()).getByText('Cleared: no stored observation remains for this instance.'),
+      ).toBeInTheDocument(),
+    )
+  })
+
+  it('renders the refusal reason on a failed delete, and never claims the observation is gone', async () => {
+    const user = userEvent.setup()
+    listFPPPlaylistEntryObservations.mockResolvedValue({
+      observations: [makeStoredObservation()],
+      serverTime: RECOVERY_NOW,
+    })
+    deleteFPPPlaylistEntryObservation.mockRejectedValue(new Error('coordinator refused'))
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn() }))
+
+    await user.click(await within(recoveryPanel()).findByRole('button', { name: 'Clear stored observation…' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm: clear stored observation' }))
+
+    const alert = await within(recoveryPanel()).findByRole('alert')
+    expect(alert.textContent).toContain('coordinator refused')
+    expect(within(recoveryPanel()).queryByText(/^Cleared:/)).not.toBeInTheDocument()
+    // Delete was refused: the last known observed state still stands.
+    expect(within(recoveryPanel()).getByText('mainPlaylist:3')).toBeInTheDocument()
+  })
+
+  it('renders the control unavailable, with no way to arm it, when the principal lacks fpp:command', async () => {
+    listFPPPlaylistEntryObservations.mockResolvedValue({
+      observations: [makeStoredObservation()],
+      serverTime: RECOVERY_NOW,
+    })
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn({ scopes: ['node:read'] }) }))
+
+    await waitFor(() => expect(within(recoveryPanel()).getByText('mainPlaylist:3')).toBeInTheDocument())
+    expect(within(recoveryPanel()).queryByRole('button', { name: 'Clear stored observation…' })).not.toBeInTheDocument()
+    expect(within(recoveryPanel()).getByText(/Requires the/)).toBeInTheDocument()
+  })
+
+  it('renders sensibly, with no armable destructive control, for an instance with no stored observation', async () => {
+    listFPPPlaylistEntryObservations.mockResolvedValue({ observations: [], serverTime: RECOVERY_NOW })
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn() }))
+
+    await waitFor(() =>
+      expect(
+        within(recoveryPanel()).getByText('No stored observation is currently held for this instance.'),
+      ).toBeInTheDocument(),
+    )
+    expect(within(recoveryPanel()).getByRole('button', { name: 'Clear stored observation…' })).toBeDisabled()
+  })
+
+  it('renders a plain statement, not a broken panel, when the instance has never reported an instance UUID', () => {
+    const instance = makeFPPInstance('fpp-1')
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn() }))
+
+    expect(within(recoveryPanel()).getByText(/has not yet reported an instance UUID/)).toBeInTheDocument()
+    expect(listFPPPlaylistEntryObservations).not.toHaveBeenCalled()
   })
 })

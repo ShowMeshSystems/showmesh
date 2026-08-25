@@ -146,6 +146,11 @@ export type {
   AssetManifestResponse,
   AuditEntry,
   AuditResponse,
+  // Track H seam H6: the resolved Cue catalog a node holds, and the
+  // deploy dispatch's own result shape.
+  CueCatalogResponse,
+  CueCatalogEntry,
+  CueCatalogDeployResult,
   // Track F seam F2/F1: the night-session lifecycle controller and the
   // night.session/night.session.active configuration kinds.
   ConfigNightSessionFPPPlaylist,
@@ -192,6 +197,8 @@ export {
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
   getFPPEndpointsConfigRevisions,
+  listFPPPlaylistEntryObservations,
+  deleteFPPPlaylistEntryObservation,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
@@ -282,6 +289,10 @@ export {
   getAssetManifest,
   getNodeAssetManifest,
   listAudit,
+  // Track H seam H6: the resolved Cue catalog a node holds and the
+  // operator's own deploy control.
+  getNodeCueCatalog,
+  deployNodeCueCatalog,
   // Track F seam F2/F1: the night-session lifecycle controller and the
   // night.session/night.session.active configuration kinds.
   getCurrentNightSession,

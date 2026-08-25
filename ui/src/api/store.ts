@@ -74,6 +74,7 @@ import {
   initialModel,
   type AudioSessionCommandResult,
   type ConnectionState,
+  type CueCatalogDeployResult,
   type Evidence,
   type Event as ModelEvent,
   type EventSeq,
@@ -121,6 +122,9 @@ type SchemaShowModeConfigResponse = components['schemas']['ShowModeConfigRespons
 type SchemaConfigShowModePayload = components['schemas']['ConfigShowModePayload']
 type SchemaFPPCommandResponse = components['schemas']['FPPCommandResponse']
 type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
+// TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation surface,
+// the recovery path for a wedged sequence anchor.
+type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
@@ -184,6 +188,9 @@ type SchemaAssetsListResponse = components['schemas']['AssetsListResponse']
 type SchemaAssetManifestResponse = components['schemas']['AssetManifestResponse']
 type SchemaNodeAssetManifestResponse = components['schemas']['NodeAssetManifestResponse']
 type SchemaAuditResponse = components['schemas']['AuditResponse']
+type SchemaCueCatalogResponse = components['schemas']['CueCatalogResponse']
+type SchemaCueCatalogDeployRequest = components['schemas']['CueCatalogDeployRequest']
+type SchemaCueCatalogDeployResponse = components['schemas']['CueCatalogDeployResponse']
 // Track F seam F2/F1: the night-session lifecycle controller and the
 // night.session/night.session.active configuration kinds.
 type SchemaNightSessionResponse = components['schemas']['NightSessionResponse']
@@ -554,6 +561,48 @@ export class ApiStore {
       return await this.client.putJson<SchemaFPPEndpointsConfigResponse>(
         '/config/fpp.endpoints',
         payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/integrations/fpp/playlist-entry-observations`
+   * (TRACK-H-H2-SPEC.md §5): the latest accepted observation for every
+   * known instance. Open under `observation:read`; never throws on
+   * 401/403 when reads are open. Not part of the SSE snapshot/delta
+   * stream, so a caller re-fetches this explicitly, same posture as
+   * `listResolumeInstances` above.
+   */
+  async listFPPPlaylistEntryObservations(): Promise<SchemaFPPPlaylistEntryObservationsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPPlaylistEntryObservationsResponse>(
+        '/integrations/fpp/playlist-entry-observations',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `DELETE /api/v1/integrations/fpp/playlist-entry-observations/{instanceUuid}`
+   * (TRACK-H-H2-SPEC.md §5.1): clears one instance's stored
+   * playlist-entry observation and its sequence anchor, so the next
+   * plugin report re-establishes it. Behind `fpp:command`, deliberately
+   * not `fpp:observe` (see the route's own doc comment in
+   * api/openapi.yaml). Idempotent server-side: always succeeds, whether
+   * or not a row existed.
+   */
+  async deleteFPPPlaylistEntryObservation(instanceUuid: string): Promise<void> {
+    const controller = this.beginSideCall()
+    try {
+      await this.client.deleteJson(
+        `/integrations/fpp/playlist-entry-observations/${encodeURIComponent(instanceUuid)}`,
+        undefined,
         controller.signal,
       )
     } finally {
@@ -1014,6 +1063,45 @@ export class ApiStore {
   /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe`. Requires render:command. */
   async probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
     return this.dispatchRenderCommand(nodeId, surfaceId, 'transport-probe')
+  }
+
+  // -- Track H seam H6: the resolved Cue catalog a node holds, and the
+  // operator's own deploy control. GET is a plain open read (observation:read
+  // under closed reads, ADR-024) — no scope gate, matching
+  // listResolumeInstances' identical posture. Deploy shares
+  // dispatchRenderCommand's shape one seam earlier: same idempotency key
+  // generation, same "outcome decides success, never a bare 200" rule
+  // (ADR-003), and the same request budget, since cuecatalogdeploy.go's own
+  // confirm deadline mirrors renderdispatch.go's.
+
+  /** `GET /nodes/{nodeId}/cue-catalog`. Open read; the coordinator's current resolution for this node, not a persisted acknowledgement. */
+  async getNodeCueCatalog(nodeId: string): Promise<SchemaCueCatalogResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaCueCatalogResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/cue-catalog`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `POST /nodes/{nodeId}/cue-catalog/deploy`. Requires cuecatalog:deploy (admin only). */
+  async deployNodeCueCatalog(nodeId: string): Promise<CueCatalogDeployResult> {
+    const controller = this.beginSideCall()
+    try {
+      const body: SchemaCueCatalogDeployRequest = { idempotencyKey: randomUUIDv4() }
+      const resp = await this.client.postJson<SchemaCueCatalogDeployResponse>(
+        `/nodes/${encodeURIComponent(nodeId)}/cue-catalog/deploy`,
+        body,
+        controller.signal,
+        RENDER_COMMAND_REQUEST_TIMEOUT_MS,
+      )
+      return resp.command
+    } finally {
+      this.endSideCall(controller)
+    }
   }
 
   // -- Track D seam D-4: Resolume observability (seam E) and the

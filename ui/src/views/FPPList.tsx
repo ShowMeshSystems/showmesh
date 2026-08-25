@@ -33,43 +33,51 @@ export function FPPList() {
               . This states what each instance reported, not a fault.
             </p>
           )}
-          <ul className="list-plain">
-            {model.fpp.map((instance) => {
-              const version = findObservation(instance.observations, 'fpp.version')
-              return (
-                <li key={instance.instanceId}>
-                  <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        gap: '0.75rem',
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <strong>{instance.instanceId}</strong>
-                      <FPPHealthBadge health={instance.health} />
-                    </div>
-                    <div className="text-muted">{instance.endpoint}</div>
-                    {/* Step 5 review finding 6: this used to print
-                        version.value bare, ignoring its Evidence.state --
-                        so a version pulled from a retained/unknown-age
-                        source (the fpp-ghost ghost's exact shape) rendered as
-                        a confident version string. FleetSignalBadge is the
-                        same state-carrying renderer FleetSignalBadge/
-                        PortGrid already use elsewhere for this exact
-                        reason (its own header comment). */}
-                    <div className="text-muted">
-                      <FleetSignalBadge label="version" evidence={version} />
-                    </div>
-                    {instance.lastPollError !== null && (
-                      <div className="evidence__reason">{instance.lastPollError}</div>
-                    )}
-                  </Link>
-                </li>
-              )
-            })}
-          </ul>
+          {/* One row per instance, so endpoint, health and version line up
+              in columns instead of each instance being its own panel. */}
+          <div className="table-scroll">
+            <table className="config-table">
+              <thead>
+                <tr>
+                  <th scope="col">Instance</th>
+                  <th scope="col">Endpoint</th>
+                  <th scope="col">Health</th>
+                  <th scope="col">Version</th>
+                  <th scope="col">Last poll error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {model.fpp.map((instance) => {
+                  const version = findObservation(instance.observations, 'fpp.version')
+                  return (
+                    <tr key={instance.instanceId}>
+                      <th scope="row">
+                        <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
+                          {instance.instanceId}
+                        </Link>
+                      </th>
+                      <td>{instance.endpoint}</td>
+                      <td>
+                        <FPPHealthBadge health={instance.health} />
+                      </td>
+                      <td>
+                        {/* Step 5 review finding 6: this used to print
+                            version.value bare, ignoring its Evidence.state --
+                            so a version pulled from a retained/unknown-age
+                            source (the fpp-ghost ghost's exact shape) rendered as
+                            a confident version string. FleetSignalBadge is the
+                            same state-carrying renderer FleetSignalBadge/
+                            PortGrid already use elsewhere for this exact
+                            reason (its own header comment). */}
+                        <FleetSignalBadge label="version" evidence={version} />
+                      </td>
+                      <td>{instance.lastPollError !== null && <span className="evidence__reason">{instance.lastPollError}</span>}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </div>

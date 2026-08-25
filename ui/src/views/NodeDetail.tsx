@@ -7,6 +7,7 @@ import { resolveCapabilityPanel } from '../components/capabilityPanelRegistry'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
 import { AudioSessionPanel } from '../components/AudioSessionPanel'
+import { CueCatalogPanel } from '../components/CueCatalogPanel'
 import { formatAbsolute } from '../app/time'
 
 // Node detail (spec section 6.4 / OPERATOR-UI section 8.1): control-plane
@@ -37,9 +38,10 @@ export function NodeDetail() {
         <>
           <h2 className="panel__title">{node.label ?? node.nodeId}</h2>
 
-          {/* Node summary, control-plane evidence, and render are genuine
-              sibling panels for this node, so they share the wide-display
-              two-column grid (.panel-grid, global.css). */}
+          {/* Node summary and control-plane evidence are short peers, so they
+              share the wide-display two-column grid (.panel-grid, global.css).
+              Render is deliberately outside it: its signal table is the tallest
+              thing on the page and half a column wraps every reason line. */}
           <div className="panel-grid">
             <PanelErrorBoundary panelLabel="Node summary">
               <section className="panel">
@@ -71,43 +73,75 @@ export function NodeDetail() {
             <PanelErrorBoundary panelLabel="Control-plane evidence">
               <section className="panel">
                 <h3 className="panel__title">Control-plane evidence</h3>
-                <EvidenceValue
-                  label="hello (advertisement)"
-                  evidence={node.evidence.hello}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
-                <EvidenceValue
-                  label="last will"
-                  evidence={node.evidence.lastWill}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
-                <EvidenceValue
-                  label="heartbeat"
-                  evidence={node.evidence.heartbeat}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
+                {/* One row per signal, so twenty signals scan as a column
+                    instead of a wall of stacked evidence blocks. */}
+                <div className="table-scroll">
+                  <table className="config-table" aria-label="Control-plane evidence">
+                    <thead>
+                      <tr>
+                        <th scope="col">Signal</th>
+                        <th scope="col">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th scope="row">hello (advertisement)</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={node.evidence.hello}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                      <tr>
+                        <th scope="row">last will</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={node.evidence.lastWill}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                      <tr>
+                        <th scope="row">heartbeat</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={node.evidence.heartbeat}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </section>
             </PanelErrorBoundary>
 
-            <PanelErrorBoundary panelLabel="Render">
+            <PanelErrorBoundary panelLabel="Cue catalog">
               <section className="panel">
-                <h3 className="panel__title">Render</h3>
-                <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
+                <h3 className="panel__title">Cue catalog</h3>
+                <CueCatalogPanel nodeId={node.nodeId} />
               </section>
             </PanelErrorBoundary>
           </div>
 
-          {/* Audio is rendered as its own full-width panel below the
-              two-column grid, not inside it: a node can hold several
-              sessions each with their own controls, which makes this
-              panel tall in a way the grid's three fixed-height siblings
-              are not. */}
+          <PanelErrorBoundary panelLabel="Render">
+            <section className="panel">
+              <h3 className="panel__title">Render</h3>
+              <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
+            </section>
+          </PanelErrorBoundary>
+
+          {/* Audio is its own full-width panel below the two-column grid,
+              not inside it: a node can hold several sessions each with
+              their own controls, which makes this panel tall in the same
+              way the render signal table is. */}
           <PanelErrorBoundary panelLabel="Audio">
             <section className="panel">
               <h3 className="panel__title">Audio</h3>
