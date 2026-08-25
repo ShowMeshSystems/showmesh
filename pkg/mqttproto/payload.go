@@ -1136,6 +1136,39 @@ type AudioPayload struct {
 	// confirmed running.
 	LTCTimecodeKnown bool   `json:"ltcTimecodeKnown"`
 	LTCTimecode      string `json:"ltcTimecode"`
+
+	// EngineGlitchCountsKnown is true only when the bound engine backend
+	// actually counts glitch-class bus conditions. False means "not
+	// collected": every field below must read zero and
+	// EngineGlitchCountsSince must be nil, never a fabricated healthy
+	// zero (enforced by Validate).
+	EngineGlitchCountsKnown bool `json:"engineGlitchCountsKnown"`
+
+	// EngineGlitchCountsSince is when the currently bound engine instance
+	// started counting. A rebind (audio.node.configure) swaps in a fresh
+	// engine whose counts and Since both restart at zero/now; comparing
+	// Since across ticks is how a consumer tells that reset apart from a
+	// genuinely quiet period. nil exactly when EngineGlitchCountsKnown is
+	// false.
+	EngineGlitchCountsSince *time.Time `json:"engineGlitchCountsSince"`
+
+	// EngineStreamWarningCount, EngineResourceWarningCount, and
+	// EngineOtherWarningCount are cumulative GStreamer WARNING-class bus
+	// messages since EngineGlitchCountsSince, bucketed by GError domain
+	// (gstengine's own classifyWarningDomain). Not confirmed to identify
+	// an ALSA xrun/underrun specifically -- see gstengine's watchBus doc
+	// comment for what evidence this is and is not. Meaningful only when
+	// EngineGlitchCountsKnown is true.
+	EngineStreamWarningCount   uint64 `json:"engineStreamWarningCount"`
+	EngineResourceWarningCount uint64 `json:"engineResourceWarningCount"`
+	EngineOtherWarningCount    uint64 `json:"engineOtherWarningCount"`
+
+	// EngineQosDropCount is the cumulative count of QOS-class bus
+	// messages since EngineGlitchCountsSince: a downstream element
+	// (typically the sink, which the engine sets "qos" true on)
+	// reporting it dropped or skipped a buffer to keep pace with the
+	// clock. Meaningful only when EngineGlitchCountsKnown is true.
+	EngineQosDropCount uint64 `json:"engineQosDropCount"`
 }
 
 // Validate enforces: at most maxAudioRoutes entries, every route's Device
@@ -1201,6 +1234,14 @@ func (p AudioPayload) Validate() error {
 	if p.LTCTimecodeKnown && p.LTCTimecode == "" {
 		return fmt.Errorf("%w: ltcTimecode (required whenever ltcTimecodeKnown is true)", ErrPayloadMissingField)
 	}
+	if p.EngineGlitchCountsKnown {
+		if p.EngineGlitchCountsSince == nil {
+			return fmt.Errorf("%w: engineGlitchCountsSince (required whenever engineGlitchCountsKnown is true)", ErrPayloadMissingField)
+		}
+	} else if p.EngineGlitchCountsSince != nil || p.EngineStreamWarningCount != 0 || p.EngineResourceWarningCount != 0 ||
+		p.EngineOtherWarningCount != 0 || p.EngineQosDropCount != 0 {
+		return fmt.Errorf("%w: engine glitch counts/since must be zero/nil when engineGlitchCountsKnown is false", ErrPayloadInconsistentField)
+	}
 	return nil
 }
 
@@ -1209,6 +1250,13 @@ func (p AudioPayload) Validate() error {
 // closed vocabulary, matching [ErrPayloadInvalidOutcome]'s identical
 // closed-vocabulary role for [ResultPayload].
 var ErrPayloadInvalidDrawing = errors.New("mqttproto: drawing is not a recognized value")
+
+// ErrPayloadInconsistentField is wrapped by [AudioPayload.Validate] when a
+// field that means "not collected" (e.g. engineGlitchCountsKnown false)
+// is paired with a nonzero/non-nil value the collected-evidence fields
+// only mean anything under -- the reverse direction of
+// [ErrPayloadMissingField], which catches a required field left empty.
+var ErrPayloadInconsistentField = errors.New("mqttproto: payload field is inconsistent with its own known/collected flag")
 
 // ErrPayloadEmpty is wrapped by [DecodeHelloPayload], [DecodeHealthPayload],
 // and [DecodeLWTPayload] when env.Payload is empty (including an absent

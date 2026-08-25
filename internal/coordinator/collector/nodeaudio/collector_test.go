@@ -152,6 +152,23 @@ func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	if generator.ObservedAt.Equal(discoveredAt) {
 		t.Error("ltc.generator.state ObservedAt equals the startup probe time; it must never share DiscoveredAt's evidence")
 	}
+
+	// The node.audio.engine.* glitch signals must not be stamped with the
+	// stale one-shot discovery time either -- see the LTC generator
+	// signals just above for the identical defect this would otherwise
+	// repeat.
+	payload.EngineGlitchCountsKnown = true
+	since := observedAt
+	payload.EngineGlitchCountsSince = &since
+	st.Put("audio-01", payload, time.Now())
+	obs, _ = c.Poll(context.Background())
+	glitch := findObs(t, obs, SignalEngineWarningsStream)
+	if glitch.ObservedAt == nil || !glitch.ObservedAt.Equal(observedAt) {
+		t.Errorf("engine.warnings.stream ObservedAt = %v, want the live tick time %v", glitch.ObservedAt, observedAt)
+	}
+	if glitch.ObservedAt.Equal(discoveredAt) {
+		t.Error("engine.warnings.stream ObservedAt equals the startup probe time; it must never share DiscoveredAt's evidence")
+	}
 }
 
 // TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
@@ -428,6 +445,67 @@ func TestPollOutputsCountReported(t *testing.T) {
 	}
 }
 
+// TestPollEngineGlitchCountsKnownReportsValues proves the five
+// node.audio.engine.* glitch signals carry the payload's own values
+// when EngineGlitchCountsKnown is true -- the outcome this seam exists
+// for: a bus warning/QoS count actually reaching an observation.
+func TestPollEngineGlitchCountsKnownReportsValues(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload()
+	since := time.Unix(1500, 0).UTC()
+	payload.EngineGlitchCountsKnown = true
+	payload.EngineGlitchCountsSince = &since
+	payload.EngineStreamWarningCount = 4
+	payload.EngineResourceWarningCount = 2
+	payload.EngineOtherWarningCount = 1
+	payload.EngineQosDropCount = 9
+	st.Put("audio-01", payload, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	started := findObs(t, obs, SignalEngineStartedAt)
+	if started.Value != since.Format(time.RFC3339Nano) {
+		t.Errorf("engine started_at = %v, want %v", started.Value, since.Format(time.RFC3339Nano))
+	}
+	cases := []struct {
+		sig  observation.SignalID
+		want int64
+	}{
+		{SignalEngineWarningsStream, 4},
+		{SignalEngineWarningsResource, 2},
+		{SignalEngineWarningsOther, 1},
+		{SignalEngineQosDrops, 9},
+	}
+	for _, tc := range cases {
+		o := findObs(t, obs, tc.sig)
+		if v, ok := o.Value.(int64); !ok || v != tc.want {
+			t.Errorf("%s = %v, want int64(%d)", tc.sig, o.Value, tc.want)
+		}
+	}
+}
+
+// TestPollEngineGlitchCountsUnknownReportsNotCollected proves a payload
+// reporting EngineGlitchCountsKnown false renders every one of the
+// five signals as not_collected, never a fabricated healthy zero.
+func TestPollEngineGlitchCountsUnknownReportsNotCollected(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayload(), time.Now()) // EngineGlitchCountsKnown defaults false
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalEngineStartedAt, SignalEngineWarningsStream, SignalEngineWarningsResource,
+		SignalEngineWarningsOther, SignalEngineQosDrops,
+	} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s absence = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+	}
+}
+
 func TestPollUnknownNodeProducesNoObservations(t *testing.T) {
 	st := NewStore()
 	c := New(st)
@@ -488,8 +566,8 @@ func TestAllSignalIDsAreValid(t *testing.T) {
 			t.Errorf("ValidateSignalID(%q) = %v, want nil", sig, err)
 		}
 	}
-	if len(AllSignalIDs) != 16 {
-		t.Errorf("AllSignalIDs has %d entries, want 16", len(AllSignalIDs))
+	if len(AllSignalIDs) != 21 {
+		t.Errorf("AllSignalIDs has %d entries, want 21", len(AllSignalIDs))
 	}
 }
 

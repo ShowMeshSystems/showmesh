@@ -187,7 +187,39 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 		obs = append(obs, notCollected(res, SignalLTCTimecode, source, "generator is not confirmed running; no fresh timecode evidence", rep.receivedAt))
 	}
 
+	obs = append(obs, engineGlitchObservations(nodeID, p, observedAt, rep)...)
+
 	return obs
+}
+
+// engineGlitchObservations renders the five node.audio.engine.* glitch
+// signals (see signals.go for their tentative spellings). known=false
+// reports [observation.StateNotCollected] on every one, never a
+// fabricated healthy zero.
+func engineGlitchObservations(nodeID string, p mqttproto.AudioPayload, observedAt *time.Time, rep report) []observation.Observation {
+	res := observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID}
+	source := SourceFor(nodeID)
+	if !p.EngineGlitchCountsKnown {
+		reason := "this node's audio engine backend does not collect bus-level glitch evidence"
+		return []observation.Observation{
+			notCollected(res, SignalEngineStartedAt, source, reason, rep.receivedAt),
+			notCollected(res, SignalEngineWarningsStream, source, reason, rep.receivedAt),
+			notCollected(res, SignalEngineWarningsResource, source, reason, rep.receivedAt),
+			notCollected(res, SignalEngineWarningsOther, source, reason, rep.receivedAt),
+			notCollected(res, SignalEngineQosDrops, source, reason, rep.receivedAt),
+		}
+	}
+	startedAt := ""
+	if p.EngineGlitchCountsSince != nil {
+		startedAt = p.EngineGlitchCountsSince.UTC().Format(time.RFC3339Nano)
+	}
+	return []observation.Observation{
+		buildValue(nodeID, SignalEngineStartedAt, startedAt, observedAt, rep),
+		buildValue(nodeID, SignalEngineWarningsStream, int64(p.EngineStreamWarningCount), observedAt, rep),
+		buildValue(nodeID, SignalEngineWarningsResource, int64(p.EngineResourceWarningCount), observedAt, rep),
+		buildValue(nodeID, SignalEngineWarningsOther, int64(p.EngineOtherWarningCount), observedAt, rep),
+		buildValue(nodeID, SignalEngineQosDrops, int64(p.EngineQosDropCount), observedAt, rep),
+	}
 }
 
 // sessionObservations renders every session in rep.payload.Sessions into

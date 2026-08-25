@@ -235,6 +235,46 @@ func TestAudioPayloadValidateRequiresTimecodeWhenKnown(t *testing.T) {
 	}
 }
 
+func TestAudioPayloadValidateRequiresGlitchCountsSinceWhenKnown(t *testing.T) {
+	p := validAudioPayload()
+	p.EngineGlitchCountsKnown = true
+	p.EngineGlitchCountsSince = nil
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(glitchCountsKnown, no since) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateRejectsNonzeroGlitchCountsWhenNotKnown(t *testing.T) {
+	p := validAudioPayload()
+	p.EngineGlitchCountsKnown = false
+	p.EngineStreamWarningCount = 1
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInconsistentField) {
+		t.Errorf("Validate(not known, nonzero stream count) = %v, want ErrPayloadInconsistentField", err)
+	}
+}
+
+func TestAudioPayloadValidateRejectsSinceSetWhenNotKnown(t *testing.T) {
+	p := validAudioPayload()
+	now := time.Now()
+	p.EngineGlitchCountsKnown = false
+	p.EngineGlitchCountsSince = &now
+	if err := p.Validate(); !errors.Is(err, ErrPayloadInconsistentField) {
+		t.Errorf("Validate(not known, since set) = %v, want ErrPayloadInconsistentField", err)
+	}
+}
+
+func TestAudioPayloadValidateAcceptsKnownGlitchCountsWithSince(t *testing.T) {
+	p := validAudioPayload()
+	now := time.Now()
+	p.EngineGlitchCountsKnown = true
+	p.EngineGlitchCountsSince = &now
+	p.EngineStreamWarningCount = 3
+	p.EngineQosDropCount = 5
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(known, since set, nonzero counts) = %v, want nil", err)
+	}
+}
+
 func TestNewAudioEnvelopeRejectsInvalidPayload(t *testing.T) {
 	bad := validAudioPayload()
 	bad.Routes = nil

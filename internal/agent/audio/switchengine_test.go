@@ -143,3 +143,46 @@ func TestSwitchableEngineDetachedAfterBindingReportsRebindInProgress(t *testing.
 		t.Errorf("ClassifyFault(err) = %s, want %s: err=%v", fault, pkgaudio.FaultRouteChanged, err)
 	}
 }
+
+// glitchCountingFakeEngine is a [FakeEngine] that also implements
+// [GlitchObserver] with a fixed, distinguishable count, so a test can
+// tell "SwitchableEngine.GlitchCounts actually forwarded to the bound
+// engine's own count" apart from "it always returns some zero value".
+type glitchCountingFakeEngine struct {
+	*FakeEngine
+	counts GlitchCounts
+}
+
+func (g *glitchCountingFakeEngine) GlitchCounts() (GlitchCounts, bool) {
+	return g.counts, true
+}
+
+// TestSwitchableEngineGlitchCountsForwardsOrReportsUnknown proves
+// SwitchableEngine.GlitchCounts (a) reports unknown, never a fabricated
+// zero, while unbound; (b) reports unknown for a bound engine that does
+// not implement [GlitchObserver] ([FakeEngine] does not); and (c)
+// forwards the bound engine's own distinguishable counts verbatim once
+// one that does implement it is set — proving this is a real delegation,
+// not a constant.
+func TestSwitchableEngineGlitchCountsForwardsOrReportsUnknown(t *testing.T) {
+	e := NewSwitchableEngine()
+
+	if counts, known := e.GlitchCounts(); known {
+		t.Errorf("GlitchCounts() on an unbound SwitchableEngine: known = true, counts = %+v, want known = false", counts)
+	}
+
+	e.Set(NewFakeEngine(time.Now))
+	if counts, known := e.GlitchCounts(); known {
+		t.Errorf("GlitchCounts() with a FakeEngine bound (does not implement GlitchObserver): known = true, counts = %+v, want known = false", counts)
+	}
+
+	want := GlitchCounts{Since: time.Unix(1000, 0), StreamWarnings: 3, ResourceWarnings: 2, OtherWarnings: 1, QosEvents: 7}
+	e.Set(&glitchCountingFakeEngine{FakeEngine: NewFakeEngine(time.Now), counts: want})
+	got, known := e.GlitchCounts()
+	if !known {
+		t.Fatalf("GlitchCounts() with a GlitchObserver-implementing engine bound: known = false, want true")
+	}
+	if got != want {
+		t.Errorf("GlitchCounts() = %+v, want %+v (the bound engine's own counts, forwarded verbatim)", got, want)
+	}
+}

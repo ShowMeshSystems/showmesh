@@ -45,6 +45,16 @@ type engineAvailability interface {
 	Available() (bool, string)
 }
 
+// engineGlitchCounts is the optional glitch-evidence side of
+// [engineAvailability] this report loop checks for on every tick via a
+// type assertion — matching [audio.GlitchObserver]'s own optional-
+// interface shape, so a wired engine that does not implement it (the
+// gstengine stub, a test fake) reports EngineGlitchCountsKnown false
+// rather than a fabricated zero.
+type engineGlitchCounts interface {
+	GlitchCounts() (audio.GlitchCounts, bool)
+}
+
 // noLTCObserverReason is what a nil ltcObserver reports: no LTC source is
 // wired into this report loop at all, which is a different fact from an
 // engine that cannot generate LTC.
@@ -100,6 +110,7 @@ func runAudioReport(ctx context.Context, pub Publisher, nodeID string, mgr audio
 			payload.Sessions, payload.SessionsTruncated = buildAudioSessionReports(ctx, mgr)
 			applyLTCObservation(ctx, &payload, ltc)
 			applyEngineAvailability(&payload, engine)
+			applyEngineGlitchCounts(&payload, engine)
 			publishAudioPayload(ctx, pub, topic, nodeID, payload, now, logger)
 		}
 	}
@@ -124,6 +135,39 @@ func applyEngineAvailability(payload *mqttproto.AudioPayload, engine engineAvail
 	if !ok && payload.EngineReason == "" {
 		payload.EngineReason = "audio engine probe did not reach PLAYING"
 	}
+}
+
+// applyEngineGlitchCounts writes engine's cumulative bus-level glitch
+// counts onto payload, fresh on every call — same "live, never cached"
+// rule as [applyEngineAvailability]. A nil engine, or one that does not
+// implement [engineGlitchCounts], leaves EngineGlitchCountsKnown false:
+// never a fabricated healthy zero for evidence nothing actually
+// collected.
+func applyEngineGlitchCounts(payload *mqttproto.AudioPayload, engine engineAvailability) {
+	payload.EngineGlitchCountsKnown = false
+	payload.EngineGlitchCountsSince = nil
+	payload.EngineStreamWarningCount = 0
+	payload.EngineResourceWarningCount = 0
+	payload.EngineOtherWarningCount = 0
+	payload.EngineQosDropCount = 0
+	if engine == nil {
+		return
+	}
+	g, ok := engine.(engineGlitchCounts)
+	if !ok {
+		return
+	}
+	counts, known := g.GlitchCounts()
+	if !known {
+		return
+	}
+	payload.EngineGlitchCountsKnown = true
+	since := counts.Since
+	payload.EngineGlitchCountsSince = &since
+	payload.EngineStreamWarningCount = counts.StreamWarnings
+	payload.EngineResourceWarningCount = counts.ResourceWarnings
+	payload.EngineOtherWarningCount = counts.OtherWarnings
+	payload.EngineQosDropCount = counts.QosEvents
 }
 
 // applyLTCObservation writes ltc's current evidence onto payload's four

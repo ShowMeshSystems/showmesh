@@ -86,6 +86,7 @@ func (e *Engine) Available() (bool, string) {
 
 var _ agentaudio.Engine = (*Engine)(nil)
 var _ agentaudio.LTCGenerator = (*Engine)(nil)
+var _ agentaudio.GlitchObserver = (*Engine)(nil)
 
 // StartLTC always fails: this build has no GStreamer backend.
 func (e *Engine) StartLTC(context.Context, agentaudio.LTCSpec) (agentaudio.LTCObservation, error) {
@@ -103,4 +104,10 @@ func (e *Engine) StopLTC(context.Context) (agentaudio.LTCObservation, error) {
 // backend.
 func (e *Engine) ObserveLTC(context.Context) agentaudio.LTCObservation {
 	return agentaudio.LTCObservation{State: agentaudio.LTCUnsupported, Reason: unavailableReason, ObservedAt: time.Now()}
+}
+
+// GlitchCounts always reports "not collected": this build has no
+// GStreamer bus to observe warning or QoS messages from.
+func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
+	return agentaudio.GlitchCounts{}, false
 }

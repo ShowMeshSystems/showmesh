@@ -597,6 +597,34 @@ whole value of the signal is that a green alignment light means measured
 rather than configured, and only the hardware work can make it say
 anything else.
 
+**Five more node-level `node.audio.engine.*` signals, proposed but NOT
+owner-confirmed, added on the real-node audio acceptance bench review
+fold.** They carry gstengine's bus-level glitch evidence (ALSA
+xrun/underrun-class and clock-drift WARNING messages, bucketed by GError
+domain, and QOS-class dropped-buffer counts) into an observation for the
+first time; before this they were counted in the agent process and
+discarded before reaching the coordinator. The spellings below are the
+builder's own naming, not the owner's: flagged for confirmation rather
+than reserved, per this section's no-additions-without-the-owner rule for
+the sibling LTC block above.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.audio.engine.started_at` | proposed, unconfirmed | flagged for Eric |
+| `node.audio.engine.warnings.stream` | proposed, unconfirmed | flagged for Eric |
+| `node.audio.engine.warnings.resource` | proposed, unconfirmed | flagged for Eric |
+| `node.audio.engine.warnings.other` | proposed, unconfirmed | flagged for Eric |
+| `node.audio.engine.qos_drops` | proposed, unconfirmed | flagged for Eric |
+
+**None of the five is confirmed to identify an ALSA xrun/underrun
+specifically.** alsasink logs a recovered xrun via `GST_WARNING_OBJECT`,
+a debug-log call, never a bus message, so no WARNING of any domain is
+known to correlate with one on this pipeline; `warnings.stream` is the
+closest-available bucket, not verified evidence. `qos_drops` is live
+evidence once the sink's `qos` property is enabled (done as part of this
+change), independent of the xrun question. See gstengine's own
+`classifyWarningDomain` doc comment.
+
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
 signal exists so the threshold can be set from measurement, and a future
