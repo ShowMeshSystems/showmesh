@@ -826,6 +826,18 @@ func Run() int {
 	}, macro.Options{})
 	apiDeps.Macros = macroExecutor
 
+	// cueActivationLoop is constructed here, BEFORE apiInst, so
+	// apiDeps.CueActivationNudger can be set to it before api.New copies
+	// apiDeps for its own HTTP-serving *handlers — the same "construct the
+	// nudge target first, then wire it into the Dependencies literal every
+	// consumer shares" ordering assetSync/apiDeps.AssetSyncNudger already
+	// use above. This is what lets fppobservations.go's POST handler
+	// (running inside apiInst) wake THIS loop, rather than a second,
+	// unreachable copy. The goroutine that actually runs it is started
+	// further down, alongside every other background reconcile loop.
+	cueActivationLoop := api.NewCueActivationLoop(apiDeps, apiOpts)
+	apiDeps.CueActivationNudger = cueActivationLoop
+
 	apiInst := api.New(apiDeps, apiOpts)
 	hub = apiInst.Hub
 
@@ -1038,6 +1050,21 @@ func Run() int {
 	go func() {
 		defer backgroundWG.Done()
 		nightLoop.Run(ctx)
+	}()
+
+	// cueActivationLoop.Run owns Track H seam H4's own activation trigger
+	// (cueactivationloop.go): it resolves and dispatches a cue.activate (or
+	// an H0.2 mismatch effect) for every FPP instance this coordinator has
+	// an accepted observation from, started unconditionally like every
+	// other reconcile loop above. cueActivationLoop itself is constructed
+	// further up (before apiInst, so apiDeps.CueActivationNudger could be
+	// wired to it) — this only starts the goroutine that runs it.
+	// fppobservations.go's POST handler nudging it does not give ingestion
+	// execution authority: see [api.CueActivationNudger]'s own doc
+	// comment.
+	go func() {
+		defer backgroundWG.Done()
+		cueActivationLoop.Run(ctx)
 	}()
 
 	// fppMQTTMgr.Run owns Track G seam G-3's own reconcile loop, mirroring

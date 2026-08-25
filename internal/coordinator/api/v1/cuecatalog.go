@@ -9,15 +9,20 @@ package v1
 // file's "wire shape only" posture.
 
 // CueCatalogRenderOutput is one Cue's resolved render output for the
-// requested node.
+// requested node. Filename is the runtime filename a node must open (and
+// verify against AssetHashes) to render it; Sequence is a logical
+// identity only, mirroring [cuecatalog.RenderOutput]'s own doc comment.
 type CueCatalogRenderOutput struct {
 	Sequence    string   `json:"sequence"`
+	Filename    string   `json:"filename"`
 	AssetHashes []string `json:"assetHashes"`
 }
 
-// CueCatalogAudioOutput is one Cue's resolved audio output.
+// CueCatalogAudioOutput is one Cue's resolved audio output. Filename
+// mirrors CueCatalogRenderOutput.Filename one output over.
 type CueCatalogAudioOutput struct {
 	Asset             string   `json:"asset"`
+	Filename          string   `json:"filename"`
 	StartOffsetMillis int      `json:"startOffsetMillis"`
 	AssetHashes       []string `json:"assetHashes"`
 }

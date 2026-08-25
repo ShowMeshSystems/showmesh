@@ -38,6 +38,18 @@ type FPPPlaylistEntryObservationRecord struct {
 	ObservedAt                         time.Time
 	CoalescedSincePreviousAcknowledged int64
 	ReceivedAt                         time.Time
+
+	// EntryOccurrenceSequence is entry-START identity (schemaV18's own doc
+	// comment): stable across repeat ticks inside one entry occurrence,
+	// and strictly newer on every genuine re-entry, including a playlist
+	// looping back to an entry whose EntryKey is otherwise identical to
+	// its first visit. Computed at ingestion
+	// (fppobservations.go's handlePostFPPPlaylistEntryObservation), never
+	// read off the wire — the plugin never sends it.
+	// [cueactivate.activationID] hashes it precisely so two ticks inside
+	// one occurrence dedup to one dispatch while a loop's second lap
+	// dispatches again.
+	EntryOccurrenceSequence int64
 }
 
 // ErrFPPPlaylistEntryObservationNotFound is returned when no row matches.
@@ -61,7 +73,8 @@ const fppPlaylistEntryObservationColumns = `
 	instance_uuid, schema_version, sequence, body_hash, observation_json,
 	playlist_name, playlist_hash, section, position, entry_key,
 	sequence_filename, media_filename, action, unavailable,
-	observed_at_millis, coalesced_since_previous_acknowledged, received_at
+	observed_at_millis, coalesced_since_previous_acknowledged, received_at,
+	entry_occurrence_sequence
 `
 
 func scanFPPPlaylistEntryObservation(row interface{ Scan(dest ...any) error }) (FPPPlaylistEntryObservationRecord, error) {
@@ -75,6 +88,7 @@ func scanFPPPlaylistEntryObservation(row interface{ Scan(dest ...any) error }) (
 		&rec.PlaylistName, &rec.PlaylistHash, &rec.Section, &rec.Position, &rec.EntryKey,
 		&rec.SequenceFilename, &rec.MediaFilename, &rec.Action, &rec.Unavailable,
 		&observedAtMillis, &rec.CoalescedSincePreviousAcknowledged, &receivedAt,
+		&rec.EntryOccurrenceSequence,
 	); err != nil {
 		return FPPPlaylistEntryObservationRecord{}, err
 	}
@@ -165,7 +179,7 @@ func putFPPPlaylistEntryObservation(ctx context.Context, q querier, rec FPPPlayl
 
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO fpp_playlist_entry_observations (`+fppPlaylistEntryObservationColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(instance_uuid) DO UPDATE SET
 			schema_version    = excluded.schema_version,
 			sequence          = excluded.sequence,
@@ -182,12 +196,14 @@ func putFPPPlaylistEntryObservation(ctx context.Context, q querier, rec FPPPlayl
 			unavailable       = excluded.unavailable,
 			observed_at_millis = excluded.observed_at_millis,
 			coalesced_since_previous_acknowledged = excluded.coalesced_since_previous_acknowledged,
-			received_at       = excluded.received_at
+			received_at       = excluded.received_at,
+			entry_occurrence_sequence = excluded.entry_occurrence_sequence
 	`,
 		rec.InstanceUUID, rec.SchemaVersion, rec.Sequence, rec.BodyHash, rec.ObservationJSON,
 		rec.PlaylistName, rec.PlaylistHash, rec.Section, rec.Position, rec.EntryKey,
 		rec.SequenceFilename, rec.MediaFilename, rec.Action, rec.Unavailable,
 		rec.ObservedAt.UnixMilli(), rec.CoalescedSincePreviousAcknowledged, timeToDB(rec.ReceivedAt),
+		rec.EntryOccurrenceSequence,
 	)
 	if err != nil {
 		return fmt.Errorf("store: put fpp playlist entry observation %q: %w", rec.InstanceUUID, err)

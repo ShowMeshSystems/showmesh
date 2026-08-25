@@ -1,0 +1,244 @@
+package api
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+)
+
+// This file proves this seam's own fix: dispatchOneCueActivation must
+// confirm from the NODE'S OWN result, never from a bare successful
+// publish (ADR-003), reusing audiodispatch_test.go's real-store-plus-
+// fakeAudioPublisher pattern (newAudioDispatchTestSetup) since
+// dispatchOneCueActivation now awaits a result the identical way
+// executeAudioSessionDispatch does.
+
+// declareNodeForTest gives nodeID a row in the "nodes" table itself —
+// mirrors internal/coordinator/cueactivate's own declareNode test helper
+// (decide_test.go), independently reproduced here per this codebase's
+// standing convention for test fixtures that live in different packages.
+func declareNodeForTest(t *testing.T, st *store.Store, nodeID string) {
+	t.Helper()
+	if err := st.UpsertHello(context.Background(), nodeID, store.HelloRecord{Label: nodeID}); err != nil {
+		t.Fatalf("declare node %q: %v", nodeID, err)
+	}
+}
+
+// putFreshReportForTest marks nodeID's asset inventory report complete
+// and dated now, with nothing expected and nothing held — mirrors
+// cueactivate's own putFreshReport, the simplest path to a
+// [assetsync.ManifestReady] node for a Cue that names no real asset.
+func putFreshReportForTest(t *testing.T, st *store.Store, nodeID string, now time.Time) {
+	t.Helper()
+	if err := st.ReplaceNodeAssetInventory(context.Background(), nodeID, nil, store.NodeAssetReportRecord{
+		NodeID: nodeID, ReportedAt: now, Complete: true,
+	}); err != nil {
+		t.Fatalf("replace node asset inventory for %q: %v", nodeID, err)
+	}
+}
+
+// putAudioOnlyCueForTest writes a show.cue declaring only an audio output,
+// naming an asset nothing ever uploads — so a test node can be resolved
+// "asset ready" (assetsync.ManifestReady) without uploading anything,
+// mirroring cueactivate's own putLTCCue one field narrower (no LTC).
+func putAudioOnlyCueForTest(t *testing.T, st *store.Store, id, showID string) {
+	t.Helper()
+	payload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: showID, Name: id,
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "asset-" + id}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfigForTest(t, st, config.ShowCueConfigKind, id, payload)
+}
+
+func putPlaylistForTest(t *testing.T, st *store.Store, id string, p config.ShowPlaylistPayload) {
+	t.Helper()
+	payload, err := config.EncodeShowPlaylistPayload(p)
+	if err != nil {
+		t.Fatalf("encode show.playlist payload: %v", err)
+	}
+	putConfigForTest(t, st, config.ShowPlaylistConfigKind, id, payload)
+}
+
+// hash64ForTest mirrors cueactivate's own hash64: a syntactically valid
+// 64-lowercase-hex hash from a short label.
+func hash64ForTest(label string) string {
+	h := strings.Repeat("0", 64-len(label)) + label
+	return h[len(h)-64:]
+}
+
+// cueActivationDispatchTestFixture builds a fully authorized cue.activate
+// scenario: an active show, one audio-only Cue (asset-ready with nothing
+// uploaded), one fpp-runner Playlist entry naming it, and a declared,
+// asset-ready node — exactly what [cueactivate.Authorize] requires to
+// pass, so dispatchOneCueActivation reaches its own publish-and-await
+// path rather than refusing before ever getting there.
+func cueActivationDispatchTestFixture(t *testing.T, setup *audioDispatchTestSetup, now time.Time) (nodeID string, act cueactivation.Activation) {
+	t.Helper()
+	const showID, cueID, playlistID, instanceUUID = "halloween-2026", "cue-1", "playlist-1", "inst-1"
+	nodeID = "audio-01"
+
+	putShowForTest(t, setup.st, showID, "Halloween 2026")
+	putAudioNodeForTest(t, setup.st, nodeID)
+	declareNodeForTest(t, setup.st, nodeID)
+	putFreshReportForTest(t, setup.st, nodeID, now)
+	putAudioOnlyCueForTest(t, setup.st, cueID, showID)
+	putPlaylistForTest(t, setup.st, playlistID, config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: instanceUUID, PlaylistName: "Main", PlaylistHash: hash64ForTest("a1")},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: cueID,
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	})
+	putActiveShowForTest(t, setup.st, showID)
+
+	act = cueactivation.Activation{
+		Runner: "fpp", RunnerInstance: instanceUUID, ActivationID: "cueact-test-1",
+		Show: showID, Generation: 1, CatalogRevision: "", // filled in below
+		Playlist: playlistID, PlaylistRevision: 1, EntryID: "entry-1",
+		CueID: cueID, CueRevision: 1, PositionMS: 0,
+		EvidenceAt: now,
+	}
+	return nodeID, act
+}
+
+// cueActivationNodeResultPayload builds the exact evidence shape
+// internal/agent/cueactivationops.go's activate produces, for a fake
+// node's own result.
+func cueActivationNodeResultPayload(confirmed bool, nodeOutcome string) mqttproto.ResultPayload {
+	outcome := mqttproto.OutcomeUnconfirmed
+	reason := "not authorized"
+	if confirmed {
+		outcome = mqttproto.OutcomeConfirmed
+		reason = ""
+	}
+	return mqttproto.ResultPayload{
+		Outcome: outcome, Reason: reason,
+		Evidence: &mqttproto.ResultEvidence{
+			Signal: "node.cue_activation.outcome",
+			Value:  map[string]any{"activationId": "cueact-test-1", "cueId": "cue-1", "cueRevision": int64(1), "outcome": nodeOutcome},
+		},
+	}
+}
+
+// TestDispatchOneCueActivationConfirmedFromNodeResult proves confirmation
+// comes from the node's own result: a bare successful publish is not, by
+// itself, enough — the fake publisher's canned result must actually say
+// "authorized" for Confirmed to become true.
+func TestDispatchOneCueActivationConfirmedFromNodeResult(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+
+	// CatalogRevision must be the coordinator's OWN resolution to pass
+	// Authorize's stale-catalog check — resolve it the same way
+	// cueactivate.Decide would, via a real Authorize dry run is overkill
+	// here; instead read it back off the resolved catalog directly.
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	if outcome.Err != nil {
+		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
+	}
+	if outcome.AuthorizeOutcome != "" {
+		t.Fatalf("AuthorizeOutcome = %q, want empty (this fixture is authorized)", outcome.AuthorizeOutcome)
+	}
+	if !outcome.Dispatched {
+		t.Fatalf("Dispatched = false, want true")
+	}
+	if !outcome.Confirmed {
+		t.Fatalf("Confirmed = false, want true (the node's own result reported authorized)")
+	}
+	if outcome.NodeOutcome != cueActivationNodeOutcomeAuthorized {
+		t.Fatalf("NodeOutcome = %q, want %q", outcome.NodeOutcome, cueActivationNodeOutcomeAuthorized)
+	}
+}
+
+// TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess
+// proves this seam's own defect fix directly: a node that refuses (e.g.
+// cross-show, or a stale catalog it independently detected) must NOT be
+// recorded as a successful dispatch — Confirmed stays false and
+// NodeOutcome carries the node's own refusal reason, evidence a bare
+// "the publish succeeded" outcome could never distinguish from a real
+// acceptance.
+func TestDispatchOneCueActivationRecordsNodeRefusalNotDispatchedSuccess(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	// The fake publisher replies with the PUBLISH succeeding (Publish
+	// itself never errors) but the node's own result reporting a refusal
+	// — exactly the case a bare "publish succeeded" dispatch would have
+	// mis-recorded as accepted before this fix.
+	setup.pub.result = cueActivationNodeResultPayload(false, "stale-catalog")
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	if outcome.Err != nil {
+		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
+	}
+	if !outcome.Dispatched {
+		t.Fatalf("Dispatched = false, want true (the publish itself succeeded)")
+	}
+	if outcome.Confirmed {
+		t.Fatalf("Confirmed = true, want false: the node's own result refused this activation (stale-catalog)")
+	}
+	if outcome.NodeOutcome != "stale-catalog" {
+		t.Fatalf("NodeOutcome = %q, want %q (the node's own reported refusal, not silently dropped)", outcome.NodeOutcome, "stale-catalog")
+	}
+
+	// The refusal must also be durably recorded on the command row, not
+	// only returned in memory — an operator reading the command history
+	// later must see the same refusal.
+	cmd, err := setup.st.GetCommandByIdempotencyKey(context.Background(), act.ActivationID)
+	if err != nil {
+		t.Fatalf("get command by idempotency key: %v", err)
+	}
+	if cmd.OutcomeState == mqttproto.OutcomeConfirmed {
+		t.Fatalf("persisted command OutcomeState = %q, must not read as confirmed", cmd.OutcomeState)
+	}
+}
+
+// resolvedCatalogRevisionForTest resolves showID's Cue catalog for nodeID
+// exactly the way [cueactivate.Authorize] does (it calls the identical two
+// functions), so a test can build an Activation whose CatalogRevision
+// passes the stale-catalog check without duplicating that logic.
+func resolvedCatalogRevisionForTest(t *testing.T, st *store.Store, showID, nodeID string) string {
+	t.Helper()
+	ctx := context.Background()
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("resolve active show: %v", err)
+	}
+	if !active.Configured || active.ShowID != showID {
+		t.Fatalf("resolve active show: Configured=%v ShowID=%q, want Configured=true ShowID=%q", active.Configured, active.ShowID, showID)
+	}
+	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
+	if err != nil {
+		t.Fatalf("resolve cue catalog: %v", err)
+	}
+	return catalog.Revision
+}

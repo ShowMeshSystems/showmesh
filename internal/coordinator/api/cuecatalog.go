@@ -250,12 +250,12 @@ func mapCueCatalogOutputs(o cuecatalog.Outputs) v1.CueCatalogOutputs {
 	var out v1.CueCatalogOutputs
 	if o.Render != nil {
 		out.Render = &v1.CueCatalogRenderOutput{
-			Sequence: o.Render.Sequence, AssetHashes: emptyIfNil(o.Render.AssetHashes),
+			Sequence: o.Render.Sequence, Filename: o.Render.Filename, AssetHashes: emptyIfNil(o.Render.AssetHashes),
 		}
 	}
 	if o.Audio != nil {
 		out.Audio = &v1.CueCatalogAudioOutput{
-			Asset: o.Audio.Asset, StartOffsetMillis: o.Audio.StartOffsetMillis,
+			Asset: o.Audio.Asset, Filename: o.Audio.Filename, StartOffsetMillis: o.Audio.StartOffsetMillis,
 			AssetHashes: emptyIfNil(o.Audio.AssetHashes),
 		}
 	}

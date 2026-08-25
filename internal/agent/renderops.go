@@ -307,6 +307,23 @@ func (o *renderOperations) stopFrameWriter(surfaceID string) {
 	_ = h.fseq.Close()
 }
 
+// hasRunningFrameWriter reports whether surfaceID currently has a live
+// entry in o.writers — the actual running state a swap either left in
+// place or, on a startFrameWriter failure, never installed. This is the
+// ground truth cueactivationrender.go's surfaceAlreadyActivated must
+// consult rather than only the persisted assignment: store.Upsert runs
+// BEFORE the old writer stops and the new one starts (activateSurfaceRender
+// finding 15's own ordering), so a startFrameWriter failure leaves a dark
+// surface whose persisted assignment already names the new file — a store-
+// only check would then read that surface as "already activated" and skip
+// repairing it forever.
+func (o *renderOperations) hasRunningFrameWriter(surfaceID string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	_, ok := o.writers[surfaceID]
+	return ok
+}
+
 // applyTimelineStepTime is finding 6's fix: [multisync.Timeline.
 // SetStepTime] was never called in production, so the timeline ran
 // permanently at [multisync.DefaultStepTime] regardless of what any real

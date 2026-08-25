@@ -296,7 +296,9 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 		existing, err := tx.GetFPPPlaylistEntryObservation(ctx, rec.InstanceUUID)
 		switch {
 		case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
-			// No prior observation for this instance: accept unconditionally.
+			// No prior observation for this instance: accept unconditionally,
+			// and this event starts its own occurrence (schemaV18).
+			rec.EntryOccurrenceSequence = rec.Sequence
 		case err != nil:
 			return err
 		default:
@@ -310,6 +312,22 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 					return nil
 				}
 				return store.ErrFPPPlaylistEntryObservationSequenceConflict
+			}
+			// schemaV18's own rule: a fresh occurrence begins whenever this
+			// observation reports action "start" (FPP entering an entry,
+			// whether for the first time or looping back into one it
+			// already visited — EntryKey alone cannot tell those apart,
+			// since a loop's second visit derives the identical key) or
+			// names a different entry than the one last accepted. Anything
+			// else — an ordinary "playing" tick, "stop", "query_next", or
+			// "unknown" for the SAME entry — carries the prior occurrence
+			// forward unchanged, so repeat ticks inside one occurrence keep
+			// deriving the same [cueactivate] ActivationID and dedup to one
+			// dispatch.
+			if action == fppidentity.ActionStart || rec.EntryKey != existing.EntryKey {
+				rec.EntryOccurrenceSequence = rec.Sequence
+			} else {
+				rec.EntryOccurrenceSequence = existing.EntryOccurrenceSequence
 			}
 		}
 		return tx.PutFPPPlaylistEntryObservation(ctx, rec)
@@ -337,6 +355,17 @@ func (h *handlers) handlePostFPPPlaylistEntryObservation(w http.ResponseWriter, 
 	// an idempotent replay, it stored nothing and changed nothing. The
 	// stream hub's own next render pass picks up a real change from the
 	// store; nothing here publishes synchronously.
+	//
+	// A genuinely new (non-replay) observation DOES nudge Track H seam
+	// H4's own activation loop to reconcile promptly (see
+	// [CueActivationNudger]'s own doc comment for why this is not "this
+	// handler grants execution authority"): the loop itself still
+	// independently decides and authorizes; this only asks it not to wait
+	// out its own periodic tick to notice fresh evidence exists.
+	if !replay {
+		h.deps.CueActivationNudger.Nudge()
+	}
+
 	jsonWrite(w, v1.FPPPlaylistEntryObservationResponse{
 		SchemaVersion: req.SchemaVersion,
 		InstanceUUID:  rec.InstanceUUID,

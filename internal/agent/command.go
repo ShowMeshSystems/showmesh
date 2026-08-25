@@ -172,8 +172,11 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // "agent.echo", "asset.fetch", "audio.device.probe" (Track C seam C1a),
 // "audio.media.probe" (Track C seam C2), Track B's four render.*
 // operations (seam B2a's apply/clear/restart, seam B4's transport.probe),
-// and "cuecatalog.deploy" (Track H seam H3: the coordinator pushing a
-// resolved Cue catalog onto this node — see cuecatalogops.go). Per
+// "cuecatalog.deploy" (Track H seam H3: the coordinator pushing a resolved
+// Cue catalog onto this node — see cuecatalogops.go), and "cue.activate"
+// (Track H seam H4: a runner-neutral Cue activation, authorized against
+// the held catalog and applied to rendering, audio, and LTC — see
+// cueactivationops.go). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
 // this map itself IS the enforcement mechanism — [CommandHandler.
 // HandleMessage] refuses any Action that is not a key here, never executes
@@ -202,6 +205,15 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 	if catalogStore != nil {
 		catalogDeploy := &catalogDeployOperation{nodeID: nodeID, store: catalogStore}
 		ops["cuecatalog.deploy"] = catalogDeploy.deploy
+
+		// "cue.activate" (Track H seam H4): needs the held catalog store
+		// regardless of whether render or audio is wired on this node — an
+		// activation for an output this node does not run is still
+		// authorized-or-refused against the held catalog, and only the
+		// apply step for a configured output actually executes (see
+		// cueActivationOperation.activate).
+		cueActivate := &cueActivationOperation{assetDir: assetDir, catalogStore: catalogStore, render: render, audioMgr: audioMgr}
+		ops["cue.activate"] = cueActivate.activate
 	}
 	for action, op := range audioSessionOperations(audioMgr) {
 		ops[action] = op

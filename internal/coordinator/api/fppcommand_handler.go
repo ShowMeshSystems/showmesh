@@ -568,3 +568,14 @@ func (h *handlers) logWarn(msg string, args ...any) {
 		h.logger.Warn("api: "+msg, args...)
 	}
 }
+
+// logDebug is [handlers.logWarn]'s identical nil-safe wrapper at Debug
+// level, for a condition that is evidence a caller should be able to find,
+// never a silent no-op, but is not itself a failure or a refusal (a
+// suppressed replay of an unchanged blackAndSilence episode,
+// cueactivationloop.go).
+func (h *handlers) logDebug(msg string, args ...any) {
+	if h.logger != nil {
+		h.logger.Debug("api: "+msg, args...)
+	}
+}

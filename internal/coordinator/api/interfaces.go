@@ -389,6 +389,18 @@ type CommandStore interface {
 	// did dispatch one; that is rendered as "not retained", never as a
 	// blank or an internal error.
 	GetCommand(ctx context.Context, id string) (store.CommandRecord, error)
+
+	// GetLatestCommandByTargetAction returns the most recently created
+	// command matching (targetKind, targetID, action), or wraps
+	// [store.ErrCommandNotFound] when none exists. Track H seam H4's
+	// blackAndSilence audio stop (cueactivationloop.go's
+	// dispatchBlackAndSilenceAudioStop) uses this to read the EvidenceAt of
+	// the last cue.activate THIS coordinator dispatched to a node, so its
+	// stop revision does not depend on the node's own clock running behind
+	// the coordinator's — see [cueactivation.AudioSessionRevision]'s own
+	// doc comment for why a stop revision derived only from the
+	// coordinator's "now" is unsound.
+	GetLatestCommandByTargetAction(ctx context.Context, targetKind, targetID, action string) (store.CommandRecord, error)
 }
 
 // NightSessionStore is Track F seam F2's own store dependency: the
@@ -553,6 +565,27 @@ type FPPPollNudger interface {
 // nothing until the service's own next scheduled tick, up to
 // SHOWMESH_ASSET_SYNC_INTERVAL (5 minutes) later.
 type AssetSyncNudger interface {
+	Nudge()
+}
+
+// CueActivationNudger requests that [CueActivationLoop]'s current (or
+// next) tick run promptly instead of waiting out its own periodic
+// interval — [AssetSyncNudger]'s identical pattern, one seam over, for
+// Track H seam H4's own activation loop (cueactivationloop.go). Declared
+// here, at the consumer (fppobservations.go), for the identical reason
+// [AssetSyncNudger] is: the real implementation is *CueActivationLoop
+// itself, which already satisfies this one-method interface with no
+// adapter needed.
+//
+// Calling Nudge from the FPP playlist-entry observation POST handler does
+// NOT give ingestion execution authority (fppobservations.go's own
+// standing rule): Nudge only asks the loop to re-evaluate promptly: the
+// loop itself still independently reconciles, decides, and authorizes
+// every activation exactly as it would on its own next tick. Without
+// this, a fresh observation was invisible to a wall for up to
+// [Options.CueActivationLoopInterval] (1 second) — long enough to be
+// operator-visible on a real show.
+type CueActivationNudger interface {
 	Nudge()
 }
 

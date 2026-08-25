@@ -346,6 +346,14 @@ type Dependencies struct {
 	// "no known failure", never a fabricated one, matching this struct's
 	// standing "an unwired dependency is not this API failing" posture.
 	AssetFetchFailures AssetFetchFailureSource
+	// CueActivationNudger is Track H seam H4's out-of-band activation-loop
+	// trigger — see [CueActivationNudger]'s own doc comment. In practice
+	// the real value is *CueActivationLoop, wired by coordinator.go. A nil
+	// field is replaced by [noCueActivationNudger], under which Nudge is a
+	// no-op: a fresh FPP playlist-entry observation degrades to waiting
+	// out the loop's own periodic tick, matching this struct's standing
+	// "an unwired dependency is not this API failing" posture.
+	CueActivationNudger CueActivationNudger
 
 	// AssetSettingsEnvVarsSet is [FPPEndpointsEnvVarSet]'s mirror for Track
 	// G seam G-4 (ADR-039 decision 4): whether ANY of the four
@@ -593,6 +601,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.AssetFetchFailures == nil {
 		d.AssetFetchFailures = noAssetFetchFailureSource{}
 	}
+	if d.CueActivationNudger == nil {
+		d.CueActivationNudger = noCueActivationNudger{}
+	}
 	if d.Resolume == nil {
 		d.Resolume = noResolumeLister{}
 	}
@@ -777,6 +788,14 @@ type noAssetFetchFailureSource struct{}
 func (noAssetFetchFailureSource) LastFetchFailure(string, string) (string, time.Time, bool) {
 	return "", time.Time{}, false
 }
+
+// noCueActivationNudger is [Dependencies.CueActivationNudger]'s nil-safe
+// default: Nudge does nothing, which is exactly the pre-nudge behavior
+// (wait out [CueActivationLoop]'s own interval) — matching
+// [noAssetSyncNudger]'s identical shape one field over.
+type noCueActivationNudger struct{}
+
+func (noCueActivationNudger) Nudge() {}
 
 // defaultAssetManifestInventoryInterval mirrors
 // internal/coordinator/config's own defaultAssetInventoryInterval (2
@@ -979,6 +998,13 @@ func (noCommandStore) GetCommandByIdempotencyKey(context.Context, string) (store
 // coordinator with no CommandStore wired in has recorded no command under
 // any id.
 func (noCommandStore) GetCommand(context.Context, string) (store.CommandRecord, error) {
+	return store.CommandRecord{}, store.ErrCommandNotFound
+}
+
+// GetLatestCommandByTargetAction answers store.ErrCommandNotFound, matching
+// GetCommand's identical reasoning immediately above: a coordinator with no
+// CommandStore wired in has recorded no command against any target.
+func (noCommandStore) GetLatestCommandByTargetAction(context.Context, string, string, string) (store.CommandRecord, error) {
 	return store.CommandRecord{}, store.ErrCommandNotFound
 }
 
@@ -1237,6 +1263,38 @@ type Options struct {
 	// without polling FPP or the store needlessly often. Defaults to 1
 	// second.
 	NightLoopInterval time.Duration
+
+	// CueActivationLoopInterval is [CueActivationLoop]'s own tick period
+	// (cueactivationloop.go, Track H seam H4) — how often it checks every
+	// known FPP instance's latest accepted observation for an entry it has
+	// not yet dispatched an activation for. [cueactivate.Decide]'s own
+	// stable ActivationID makes a repeat tick over an unchanged entry a
+	// cheap idempotent replay (store.DuplicateCommandError), never a
+	// reissue, so this is a responsiveness knob, never a rate limit and
+	// never the frame-rate timing path (H4's own explicit "the coordinator
+	// is not in the frame-rate timing path" rule). A SHOWMESH HYPOTHESIS,
+	// not a measured value. Defaults to 1 second, matching
+	// NightLoopInterval's own reasoning one seam over.
+	CueActivationLoopInterval time.Duration
+
+	// CueActivationNudgeMinInterval is the floor
+	// [CueActivationLoop.Nudge] enforces between two NUDGE-DRIVEN ticks
+	// (cueactivationloop.go's runNudgedTick): [handlers.
+	// handlePostFPPPlaylistEntryObservation] nudges on every accepted,
+	// non-replay observation, and the loop's own in-flight skip only
+	// bounds CONCURRENT ticks, not the RATE a fast-posting plugin can
+	// drive back-to-back full reconcile passes at (each one a ListNodes
+	// times ResolveCueCatalog per node — coordinator load, not a
+	// dispatch-safety issue: [cueactivate.Decide]'s own idempotent
+	// ActivationID already bounds dispatch). A nudge that arrives before
+	// the floor is never dropped, only deferred to the floor, so this
+	// stays a rate limit on RECONCILE FREQUENCY, never on the latency a
+	// solitary nudge exists to cut. A SHOWMESH HYPOTHESIS, not a measured
+	// value: short enough to stay well under CueActivationLoopInterval's
+	// own 1 second default, so an isolated entry change is still never
+	// worse than the periodic tick's own staleness bound. Defaults to 100
+	// milliseconds.
+	CueActivationNudgeMinInterval time.Duration
 }
 
 const (
@@ -1266,6 +1324,16 @@ const (
 	// defaultNightLoopInterval backs [Options.NightLoopInterval]. See that
 	// field's doc comment — a SHOWMESH HYPOTHESIS.
 	defaultNightLoopInterval = 1 * time.Second
+
+	// defaultCueActivationLoopInterval backs [Options.
+	// CueActivationLoopInterval]. See that field's doc comment — a
+	// SHOWMESH HYPOTHESIS.
+	defaultCueActivationLoopInterval = 1 * time.Second
+
+	// defaultCueActivationNudgeMinInterval backs [Options.
+	// CueActivationNudgeMinInterval]. See that field's doc comment — a
+	// SHOWMESH HYPOTHESIS.
+	defaultCueActivationNudgeMinInterval = 100 * time.Millisecond
 )
 
 // envStreamSubscriberBufferOverride is a TEST-SUPPORT-ONLY environment
@@ -1348,6 +1416,12 @@ func (o Options) withDefaults() Options {
 	}
 	if o.NightLoopInterval <= 0 {
 		o.NightLoopInterval = defaultNightLoopInterval
+	}
+	if o.CueActivationLoopInterval <= 0 {
+		o.CueActivationLoopInterval = defaultCueActivationLoopInterval
+	}
+	if o.CueActivationNudgeMinInterval <= 0 {
+		o.CueActivationNudgeMinInterval = defaultCueActivationNudgeMinInterval
 	}
 	return o
 }
