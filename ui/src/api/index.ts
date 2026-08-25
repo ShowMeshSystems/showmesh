@@ -104,6 +104,13 @@ export type {
   // configured-but-not-yet-applied surface the way showmeshctl already can.
   ConfigShowSurface,
   ShowSurfaceConfigResponse,
+  // Track H seam H6: show.playlist authoring.
+  ConfigShowPlaylistFPPBinding,
+  ConfigShowPlaylistShowmeshAudio,
+  ConfigShowPlaylistEntryFPP,
+  ConfigShowPlaylistEntry,
+  ConfigShowPlaylist,
+  ShowPlaylistConfigResponse,
   ConfigShowActionMQTTPublish,
   ConfigShowActionMQTTExpect,
   ConfigShowActionTarget,
@@ -237,6 +244,9 @@ export {
   listConfigObjects,
   listShowSurfacesForNode,
   getShowSurface,
+  getShowPlaylist,
+  putShowPlaylist,
+  getShowPlaylistRevisions,
   getShowAction,
   putShowAction,
   getShowActionRevisions,

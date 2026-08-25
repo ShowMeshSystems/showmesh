@@ -149,6 +149,10 @@ type SchemaConfigShowMacro = components['schemas']['ConfigShowMacro']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 // Finding 16: show.surface's own read response, same aliasing pattern.
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+// Track H seam H6: show.playlist's own read/write response, same
+// aliasing pattern.
+type SchemaConfigShowPlaylist = components['schemas']['ConfigShowPlaylist']
+type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -1498,7 +1502,7 @@ export class ApiStore {
    * does not accept it on itself.
    */
   async listConfigObjects(
-    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.playlist' | 'night.session',
+    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'night.session',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
@@ -1545,6 +1549,22 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaShowSurfaceConfigResponse>(
         `/config/show.surface/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/config/show.playlist/{id}`. Throws (404) when no such
+   * playlist exists.
+   */
+  async getShowPlaylist(id: string): Promise<SchemaShowPlaylistConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaShowPlaylistConfigResponse>(
+        `/config/show.playlist/${encodeURIComponent(id)}`,
         controller.signal,
       )
     } finally {
@@ -1784,6 +1804,39 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>(
         `/config/show.surface/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/show.playlist/{id}` (Track H seam H1, ADR-043).
+   * `config:write` only. Full replacement — `entries` is sent exactly as
+   * built, never merged with what the server already holds. Validated
+   * and normalized server-side; a rejected payload throws and appends no
+   * revision.
+   */
+  async putShowPlaylist(id: string, payload: SchemaConfigShowPlaylist): Promise<SchemaShowPlaylistConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaShowPlaylistConfigResponse>(
+        `/config/show.playlist/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/show.playlist/{id}/revisions`: revision history, newest first, metadata only. */
+  async getShowPlaylistRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/show.playlist/${encodeURIComponent(id)}/revisions`,
         controller.signal,
       )
     } finally {

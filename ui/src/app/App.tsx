@@ -34,6 +34,11 @@ import { Shows } from '../views/Shows'
 import { ShowDetail } from '../views/ShowDetail'
 import { ShowSurfaces } from '../views/ShowSurfaces'
 import { ShowSurfaceDetail } from '../views/ShowSurfaceDetail'
+// Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
+// authoring, one level down from the show it belongs to, same posture as
+// the Shows/Surfaces routes just above.
+import { ShowPlaylists } from '../views/ShowPlaylists'
+import { ShowPlaylistDetail } from '../views/ShowPlaylistDetail'
 import { ShowActive } from '../views/ShowActive'
 import { Assets } from '../views/Assets'
 import { AssetManifest } from '../views/AssetManifest'
@@ -93,6 +98,9 @@ export default function App() {
             <Route path="config/show.surface" element={<ShowSurfaces />} />
             <Route path="config/show.surface/new" element={<ShowSurfaceDetail isNew />} />
             <Route path="config/show.surface/:id" element={<ShowSurfaceDetail />} />
+            <Route path="config/show.playlist" element={<ShowPlaylists />} />
+            <Route path="config/show.playlist/new" element={<ShowPlaylistDetail isNew />} />
+            <Route path="config/show.playlist/:id" element={<ShowPlaylistDetail />} />
             <Route path="config/show.active" element={<ShowActive />} />
             {/* Track F seam F2 (UI half): the night-session lifecycle
                 operating view lives under Monitor/Control (Layout.tsx),

@@ -105,6 +105,9 @@ const NAV_GROUPS: Array<{
       // reachable only from showmeshctl.
       { to: '/config/show', label: 'Shows', end: false },
       { to: '/config/show.surface', label: 'Surfaces', end: false },
+      // Track H seam H6: show.playlist authoring, previously reachable
+      // only from showmeshctl.
+      { to: '/config/show.playlist', label: 'Playlists', end: false },
       // Track F seam F1 (UI half): the night.session/night.session.active
       // authoring surfaces, previously reachable only from showmeshctl.
       { to: '/config/night.session', label: 'Night sessions', end: false },

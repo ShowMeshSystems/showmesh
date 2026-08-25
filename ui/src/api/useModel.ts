@@ -36,6 +36,7 @@ import type {
   ConfigShowActive,
   ConfigShowMacro,
   ConfigShowSurface,
+  ConfigShowPlaylist,
   ConfigShowWrite,
   CreatePrincipalRequest,
   FPPCommandResult,
@@ -80,6 +81,7 @@ type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListR
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
 type SchemaShowMacroConfigResponse = components['schemas']['ShowMacroConfigResponse']
 type SchemaShowSurfaceConfigResponse = components['schemas']['ShowSurfaceConfigResponse']
+type SchemaShowPlaylistConfigResponse = components['schemas']['ShowPlaylistConfigResponse']
 type SchemaMacroRunResponse = components['schemas']['MacroRunResponse']
 type SchemaMacroRunSubmitResponse = components['schemas']['MacroRunSubmitResponse']
 type SchemaMacroRunsListResponse = components['schemas']['MacroRunsListResponse']
@@ -382,7 +384,7 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.playlist' | 'night.session',
+  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'night.session',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse> {
   return store.listConfigObjects(kind, show)
@@ -398,6 +400,10 @@ export function listShowSurfacesForNode(nodeId: string): Promise<SchemaConfigObj
 
 export function getShowSurface(id: string): Promise<SchemaShowSurfaceConfigResponse> {
   return store.getShowSurface(id)
+}
+
+export function getShowPlaylist(id: string): Promise<SchemaShowPlaylistConfigResponse> {
+  return store.getShowPlaylist(id)
 }
 
 export function getShowAction(id: string): Promise<SchemaShowActionConfigResponse> {
@@ -578,6 +584,14 @@ export function putShowSurface(id: string, payload: ConfigShowSurface): Promise<
 
 export function getShowSurfaceRevisions(id: string): Promise<ConfigRevisionsResponse> {
   return store.getShowSurfaceRevisions(id)
+}
+
+export function putShowPlaylist(id: string, payload: ConfigShowPlaylist): Promise<SchemaShowPlaylistConfigResponse> {
+  return store.putShowPlaylist(id, payload)
+}
+
+export function getShowPlaylistRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getShowPlaylistRevisions(id)
 }
 
 export function getShowActive(): Promise<SchemaShowActiveConfigResponse> {
