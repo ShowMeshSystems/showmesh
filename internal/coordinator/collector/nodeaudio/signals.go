@@ -51,6 +51,26 @@ const (
 	SignalLTCGeneratorReason observation.SignalID = "node.audio.ltc.generator.reason"
 )
 
+// SignalEngineStartedAt, SignalEngineWarningsStream,
+// SignalEngineWarningsResource, SignalEngineWarningsOther, and
+// SignalEngineQosDrops report gstengine's bus-level glitch evidence
+// (mqttproto.AudioPayload.EngineGlitchCounts*). TENTATIVE SPELLINGS: not
+// owner-confirmed -- flagged for Eric in PR #87 rather than invented
+// freely, per this file's own no-additions-without-the-owner rule.
+// StartedAt is the reporting engine instance's counting epoch (a rebind
+// resets it); the Warnings signals are WARNING-class bus messages
+// bucketed by GError domain, not confirmed to identify an ALSA
+// xrun/underrun (see gstengine's watchBus); QosDrops counts QOS-class
+// bus messages. All five report [observation.StateNotCollected] when
+// the bound engine backend does not collect this evidence.
+const (
+	SignalEngineStartedAt        observation.SignalID = "node.audio.engine.started_at"
+	SignalEngineWarningsStream   observation.SignalID = "node.audio.engine.warnings.stream"
+	SignalEngineWarningsResource observation.SignalID = "node.audio.engine.warnings.resource"
+	SignalEngineWarningsOther    observation.SignalID = "node.audio.engine.warnings.other"
+	SignalEngineQosDrops         observation.SignalID = "node.audio.engine.qos_drops"
+)
+
 // AllSignalIDs is every signal this package ever emits, in the order
 // [Collector.Poll] builds them for one node.
 var AllSignalIDs = []observation.SignalID{
@@ -70,6 +90,11 @@ var AllSignalIDs = []observation.SignalID{
 	SignalLTCTimecode,
 	SignalLTCGeneratorState,
 	SignalLTCGeneratorReason,
+	SignalEngineStartedAt,
+	SignalEngineWarningsStream,
+	SignalEngineWarningsResource,
+	SignalEngineWarningsOther,
+	SignalEngineQosDrops,
 }
 
 // Signal vocabulary under the "audio_session" resource kind, one

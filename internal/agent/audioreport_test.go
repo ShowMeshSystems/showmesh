@@ -674,7 +674,7 @@ func TestRunAudioReportPublishesGlitchCountsWhenEngineCollectsThem(t *testing.T)
 			ok     bool
 			reason string
 		}{{ok: true, reason: ""}}},
-		counts: audio.GlitchCounts{Warnings: 4, QosEvents: 9},
+		counts: audio.GlitchCounts{Since: time.Unix(500, 0), StreamWarnings: 4, ResourceWarnings: 2, OtherWarnings: 1, QosEvents: 9},
 		known:  true,
 	}
 
@@ -700,8 +700,12 @@ func TestRunAudioReportPublishesGlitchCountsWhenEngineCollectsThem(t *testing.T)
 	if !got.EngineGlitchCountsKnown {
 		t.Fatal("EngineGlitchCountsKnown = false, want true: the wired engine implements engineGlitchCounts and reported known=true")
 	}
-	if got.EngineWarningCount != 4 || got.EngineQosDropCount != 9 {
-		t.Errorf("EngineWarningCount/EngineQosDropCount = %d/%d, want 4/9", got.EngineWarningCount, got.EngineQosDropCount)
+	if got.EngineStreamWarningCount != 4 || got.EngineResourceWarningCount != 2 || got.EngineOtherWarningCount != 1 || got.EngineQosDropCount != 9 {
+		t.Errorf("stream/resource/other/qos counts = %d/%d/%d/%d, want 4/2/1/9",
+			got.EngineStreamWarningCount, got.EngineResourceWarningCount, got.EngineOtherWarningCount, got.EngineQosDropCount)
+	}
+	if got.EngineGlitchCountsSince == nil || !got.EngineGlitchCountsSince.Equal(time.Unix(500, 0)) {
+		t.Errorf("EngineGlitchCountsSince = %v, want %v", got.EngineGlitchCountsSince, time.Unix(500, 0))
 	}
 }
 
@@ -747,7 +751,11 @@ func TestRunAudioReportLeavesGlitchCountsUnknownWhenEngineCannotCollectThem(t *t
 	if got.EngineGlitchCountsKnown {
 		t.Fatal("EngineGlitchCountsKnown = true for an engine that does not implement engineGlitchCounts, want false")
 	}
-	if got.EngineWarningCount != 0 || got.EngineQosDropCount != 0 {
-		t.Errorf("EngineWarningCount/EngineQosDropCount = %d/%d, want 0/0 when not collected", got.EngineWarningCount, got.EngineQosDropCount)
+	if got.EngineStreamWarningCount != 0 || got.EngineResourceWarningCount != 0 || got.EngineOtherWarningCount != 0 || got.EngineQosDropCount != 0 {
+		t.Errorf("stream/resource/other/qos counts = %d/%d/%d/%d, want 0/0/0/0 when not collected",
+			got.EngineStreamWarningCount, got.EngineResourceWarningCount, got.EngineOtherWarningCount, got.EngineQosDropCount)
+	}
+	if got.EngineGlitchCountsSince != nil {
+		t.Errorf("EngineGlitchCountsSince = %v, want nil when not collected", got.EngineGlitchCountsSince)
 	}
 }

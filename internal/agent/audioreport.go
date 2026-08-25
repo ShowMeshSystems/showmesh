@@ -137,16 +137,18 @@ func applyEngineAvailability(payload *mqttproto.AudioPayload, engine engineAvail
 	}
 }
 
-// applyEngineGlitchCounts writes engine's cumulative glitch-class bus
-// evidence (ALSA xrun/underrun and clock-drift WARNING messages, QOS-
-// class dropped buffers) onto payload, fresh on every call — same "live,
-// never cached" rule as [applyEngineAvailability]. A nil engine, or one
-// that does not implement [engineGlitchCounts], leaves
-// EngineGlitchCountsKnown false: never a fabricated healthy zero for
-// evidence nothing actually collected.
+// applyEngineGlitchCounts writes engine's cumulative bus-level glitch
+// counts onto payload, fresh on every call — same "live, never cached"
+// rule as [applyEngineAvailability]. A nil engine, or one that does not
+// implement [engineGlitchCounts], leaves EngineGlitchCountsKnown false:
+// never a fabricated healthy zero for evidence nothing actually
+// collected.
 func applyEngineGlitchCounts(payload *mqttproto.AudioPayload, engine engineAvailability) {
 	payload.EngineGlitchCountsKnown = false
-	payload.EngineWarningCount = 0
+	payload.EngineGlitchCountsSince = nil
+	payload.EngineStreamWarningCount = 0
+	payload.EngineResourceWarningCount = 0
+	payload.EngineOtherWarningCount = 0
 	payload.EngineQosDropCount = 0
 	if engine == nil {
 		return
@@ -160,7 +162,11 @@ func applyEngineGlitchCounts(payload *mqttproto.AudioPayload, engine engineAvail
 		return
 	}
 	payload.EngineGlitchCountsKnown = true
-	payload.EngineWarningCount = counts.Warnings
+	since := counts.Since
+	payload.EngineGlitchCountsSince = &since
+	payload.EngineStreamWarningCount = counts.StreamWarnings
+	payload.EngineResourceWarningCount = counts.ResourceWarnings
+	payload.EngineOtherWarningCount = counts.OtherWarnings
 	payload.EngineQosDropCount = counts.QosEvents
 }
 

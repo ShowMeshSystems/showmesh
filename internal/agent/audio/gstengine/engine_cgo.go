@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	glib "github.com/go-gst/go-glib/pkg/glib/v2"
 	"github.com/go-gst/go-gst/pkg/gst"
 
 	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
@@ -70,16 +71,25 @@ type Engine struct {
 	brokenMu     sync.Mutex
 	brokenReason string
 
-	// warningCount and qosCount are cumulative counts of bus messages
-	// watchBus has observed since this Engine started: WARNING-class
-	// (ALSA xrun/underrun and clock-drift sample drop/insert are
-	// reported this way) and QOS-class (a downstream element dropping or
-	// skipping buffers to keep pace with the clock) respectively. Plain
-	// atomics, not mutex-guarded, matching nextID: watchBus runs on its
-	// own goroutine and these are read from GlitchCounts by a report
-	// loop with no other reason to take e.mu.
-	warningCount atomic.Uint64
-	qosCount     atomic.Uint64
+	// startedAt is this Engine instance's counting epoch for
+	// GlitchCounts.Since -- a fresh Engine on every rebind, so a
+	// consumer reading a falling count can tell it apart from a reset.
+	startedAt time.Time
+
+	// streamWarningCount/resourceWarningCount/otherWarningCount and
+	// qosCount are cumulative bus-message counts watchBus has observed
+	// since startedAt, classified by GError domain (see
+	// classifyWarningDomain). Plain atomics, not mutex-guarded, matching
+	// nextID: watchBus runs on its own goroutine and these are read from
+	// GlitchCounts by a report loop with no other reason to take e.mu.
+	streamWarningCount   atomic.Uint64
+	resourceWarningCount atomic.Uint64
+	otherWarningCount    atomic.Uint64
+	qosCount             atomic.Uint64
+
+	// lastWarningLogNano bounds warning log volume (see watchBus); owned
+	// solely by the watchBus goroutine, so a plain field, not an atomic.
+	lastWarningLogNano int64
 
 	// anyTeardownIncomplete latches true the moment any branch teardown
 	// ever defers (see errTeardownDeferredForRace) or the final pipeline
@@ -116,6 +126,7 @@ func New(cfg Config) (*Engine, error) {
 		handles:      make(map[agentaudio.EngineHandle]*branch),
 		elementIndex: make(map[string]*branch),
 		done:         make(chan struct{}),
+		startedAt:    time.Now(),
 	}
 
 	if reason := e.checkPrerequisites(); reason != "" {
@@ -319,6 +330,16 @@ func (e *Engine) buildPipeline() error {
 	sink, err := newSinkFactoryElement(e.cfg)
 	if err != nil {
 		return err
+	}
+	// qos on: a GstBaseSink-derived sink otherwise never posts a QOS bus
+	// message for a buffer it drops or skips to keep pace with the
+	// clock, so GlitchCounts.QosEvents would read zero forever
+	// regardless of what the pipeline actually does. Only a bin (a
+	// test-only sink shape -- see sinkformat_real_integration_test.go)
+	// lacks this GstBaseSink property directly; every real named sink
+	// factory has it.
+	if _, isBin := sink.(gst.Bin); !isBin {
+		sink.SetObjectProperty("qos", true)
 	}
 	// positionBits is one GstAudioChannelPosition bitmask per output
 	// channel (see [channelPositionBits]), or nil when the sink itself
@@ -595,26 +616,68 @@ func (e *Engine) watchBus() {
 			}
 			e.markBroken(fmt.Sprintf("output pipeline error: %s", text))
 		case gst.MessageWarning:
-			// Counted, not just logged: a WARNING is how ALSA xrun/
-			// underrun and clock-drift sample drop/insert reach the bus
-			// (gstaudiobasesink/gstalsasink never raise these to
-			// MessageError), so this is the one place that evidence
-			// exists at all. See [Engine.GlitchCounts].
+			// Counts unconditionally; classifyWarningDomain and
+			// maybeLogWarning explain the split and the log's rate limit.
 			text, gerr := msg.ParseWarning()
-			e.warningCount.Add(1)
-			source := ""
-			if src := msg.Source(); src != nil {
-				source = src.GetName()
+			switch classifyWarningDomain(gerr) {
+			case warningDomainStream:
+				e.streamWarningCount.Add(1)
+			case warningDomainResource:
+				e.resourceWarningCount.Add(1)
+			default:
+				e.otherWarningCount.Add(1)
 			}
-			slog.Warn("gstengine: output pipeline warning", "source", source, "error", warningText(text, gerr))
+			e.maybeLogWarning(msg, text, gerr)
 		case gst.MessageQos:
-			// Counted: a QOS message is a downstream element (typically
-			// the sink) reporting it dropped or skipped a buffer to keep
-			// pace with the clock — audible glitching with no other
-			// evidence otherwise. See [Engine.GlitchCounts].
+			// A downstream element dropped/skipped a buffer for the clock.
 			e.qosCount.Add(1)
 		}
 	}
+}
+
+// warningDomainStream, warningDomainResource, and warningDomainOther are
+// classifyWarningDomain's result vocabulary.
+const (
+	warningDomainStream   = "stream"
+	warningDomainResource = "resource"
+	warningDomainOther    = "other"
+)
+
+// classifyWarningDomain buckets a WARNING's GError by domain. Not
+// confirmed to identify an ALSA xrun/underrun: alsasink logs a
+// recovered xrun via GST_WARNING_OBJECT, a debug call, never a bus
+// message, so no domain here is known to correlate with one.
+func classifyWarningDomain(gerr error) string {
+	ge, ok := gerr.(*glib.GError)
+	if !ok {
+		return warningDomainOther
+	}
+	switch ge.Quark() {
+	case uint32(gst.StreamErrorQuark()):
+		return warningDomainStream
+	case uint32(gst.ResourceErrorQuark()):
+		return warningDomainResource
+	default:
+		return warningDomainOther
+	}
+}
+
+// warningLogInterval bounds watchBus's WARNING log rate; the count is
+// never gated by this, only the synchronous log write is.
+const warningLogInterval = time.Second
+
+// maybeLogWarning logs msg at most once per warningLogInterval.
+func (e *Engine) maybeLogWarning(msg *gst.Message, text string, gerr error) {
+	now := time.Now().UnixNano()
+	if now-e.lastWarningLogNano < int64(warningLogInterval) {
+		return
+	}
+	e.lastWarningLogNano = now
+	source := ""
+	if src := msg.Source(); src != nil {
+		source = src.GetName()
+	}
+	slog.Warn("gstengine: output pipeline warning", "source", source, "error", warningText(text, gerr))
 }
 
 // warningText prefers gerr's own message when GStreamer supplied one,
@@ -627,18 +690,18 @@ func warningText(text string, gerr error) string {
 	return text
 }
 
-// GlitchCounts reports this Engine's cumulative counts of bus-level
-// glitch evidence since it started: WARNING-class messages (ALSA xrun/
-// underrun, clock-drift sample drop/insert) and QOS-class messages
-// (dropped/skipped buffers). Always known=true: a real Engine always
-// counts, even when the count is genuinely zero, which is exactly the
-// distinction [agentaudio.GlitchObserver] exists to preserve against a
-// backend (e.g. gstengine's own cgo-less stub) that never collects this
-// evidence at all.
+// GlitchCounts reports this Engine's cumulative bus-level glitch counts
+// since e.startedAt. Always known=true: a real Engine always counts,
+// even when the count is genuinely zero -- the distinction
+// [agentaudio.GlitchObserver] exists to preserve against a backend (e.g.
+// gstengine's own cgo-less stub) that never collects this evidence.
 func (e *Engine) GlitchCounts() (agentaudio.GlitchCounts, bool) {
 	return agentaudio.GlitchCounts{
-		Warnings:  e.warningCount.Load(),
-		QosEvents: e.qosCount.Load(),
+		Since:            e.startedAt,
+		StreamWarnings:   e.streamWarningCount.Load(),
+		ResourceWarnings: e.resourceWarningCount.Load(),
+		OtherWarnings:    e.otherWarningCount.Load(),
+		QosEvents:        e.qosCount.Load(),
 	}, true
 }
 

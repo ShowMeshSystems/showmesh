@@ -16,7 +16,7 @@ require (
 	modernc.org/sqlite v1.56.0
 )
 
-require github.com/go-gst/go-glib v0.0.2 // indirect
+require github.com/go-gst/go-glib v0.0.2
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

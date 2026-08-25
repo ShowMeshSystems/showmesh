@@ -244,9 +244,13 @@ func (e *SwitchableEngine) ObserveLTC(ctx context.Context) LTCObservation {
 	return ObserveEngineLTC(ctx, cur, time.Now())
 }
 
-// GlitchCounts forwards to whatever engine is currently bound, so a
-// rebind never resets or fabricates the count. A never-bound engine, or
-// a bound one that does not implement [GlitchObserver], reports (zero,
+// GlitchCounts forwards to whatever engine is currently bound. A rebind
+// DOES reset the count: audio.node.configure builds a brand new Engine
+// (audioEngineRebuilder.rebuild), and this simply reports that fresh
+// engine's own count from zero. GlitchCounts.Since is how a caller tells
+// that reset apart from a genuinely quiet period, rather than reading a
+// falling count as though nothing happened. A never-bound engine, or a
+// bound one that does not implement [GlitchObserver], reports (zero,
 // false) — not collected, never a fabricated healthy zero.
 func (e *SwitchableEngine) GlitchCounts() (GlitchCounts, bool) {
 	cur, ok := e.get()

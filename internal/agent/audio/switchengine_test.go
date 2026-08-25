@@ -176,7 +176,7 @@ func TestSwitchableEngineGlitchCountsForwardsOrReportsUnknown(t *testing.T) {
 		t.Errorf("GlitchCounts() with a FakeEngine bound (does not implement GlitchObserver): known = true, counts = %+v, want known = false", counts)
 	}
 
-	want := GlitchCounts{Warnings: 3, QosEvents: 7}
+	want := GlitchCounts{Since: time.Unix(1000, 0), StreamWarnings: 3, ResourceWarnings: 2, OtherWarnings: 1, QosEvents: 7}
 	e.Set(&glitchCountingFakeEngine{FakeEngine: NewFakeEngine(time.Now), counts: want})
 	got, known := e.GlitchCounts()
 	if !known {
