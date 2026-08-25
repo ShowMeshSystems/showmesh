@@ -333,6 +333,37 @@ input {
   box-sizing: border-box;
 }
 
+/* NightSessionDetail.tsx/Configuration.tsx/ShowActionDetail.tsx: the
+   collapsible half of this seam's status/authoring split (a plain
+   <details>/<summary>, per this pass's own rule: no custom accordion, no
+   extra dependency, keyboard-usable for free). Kept visually close to
+   .panel so a collapsed section still reads as part of this page's
+   surface rather than as a bare, unstyled browser widget. */
+.details-section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.details-section > :last-child {
+  margin-bottom: 0;
+}
+
+.details-section__summary {
+  cursor: pointer;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  min-height: var(--touch-target-min);
+  display: flex;
+  align-items: center;
+}
+
+.details-section[open] > .details-section__summary {
+  margin-bottom: var(--space-3);
+}
+
 /* FPPDetail.tsx's "Commands" panel: the transport commands (Stop, Stop
    gracefully, Pause/resume, item navigation, Start playlist, Volume) as a
    compact, wrapping group per heading instead of one full-width button
