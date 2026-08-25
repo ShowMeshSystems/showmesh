@@ -302,6 +302,47 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		idleOutput = IdleOutputBlack
 	}
 
+	return newFrameWriter(sup, surfaceID, source, timeline, channelStart, channelCount, width, height, stepTime, idleOutput, showMode, logger), nil
+}
+
+// NewDiagnosticFrameWriter builds a frame writer that draws
+// [IdleOutputDiagnostic] and nothing else, from a node's own local
+// configuration: no sequence, no timeline, no assignment, and therefore no
+// coordinator, broker, FPP master or asset manifest anywhere in its path.
+//
+// The owner's ruling on diagnostic idle output is the whole reason this
+// constructor exists separately from [NewFrameWriter]: the moment an
+// operator reaches for the diagnostic pattern is almost always the moment
+// nothing upstream is
+// running, so a diagnostic output that can only arrive on a coordinator-
+// delivered render.surface.apply is missing at exactly the moment it exists
+// for. This writer's timeline is nil by construction, which writeOneFrame
+// reads as [multisync.StateUnknown] — already an idle state (see
+// [idleContentStates]) — so every tick it ever runs draws the diagnostic
+// pattern. Nothing it does can be turned off by an upstream state, because
+// it reads no upstream state at all.
+//
+// width, height and bytesPerPixel are the surface's own geometry, and the
+// caller is responsible for having built a pipeline [Spec] that expects
+// exactly width*height*bytesPerPixel bytes per frame. frameRate sets the
+// tick period, since there is no FSEQ file to read a step time from.
+func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, bytesPerPixel, frameRate int, logger Logger) (*FrameWriter, error) {
+	if width < 1 || height < 1 || bytesPerPixel < 1 {
+		return nil, fmt.Errorf("pipeline: surface %q: diagnostic geometry %dx%d at %d bytes per pixel is invalid", surfaceID, width, height, bytesPerPixel)
+	}
+	if frameRate < 1 {
+		return nil, fmt.Errorf("pipeline: surface %q: diagnostic frame rate %d is invalid", surfaceID, frameRate)
+	}
+	channelCount := width * height * bytesPerPixel
+	stepTime := time.Second / time.Duration(frameRate)
+	return newFrameWriter(sup, surfaceID, nil, nil, 0, channelCount, width, height, stepTime, IdleOutputDiagnostic, nil, logger), nil
+}
+
+// newFrameWriter allocates the writer both constructors above share: every
+// per-frame buffer, the diagnostic bar's geometry, and the alert pattern.
+// It validates nothing — each exported constructor owns the checks its own
+// inputs need.
+func newFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timeline TimelineSource, channelStart, channelCount, width, height int, stepTime time.Duration, idleOutput string, showMode ShowModeSource, logger Logger) *FrameWriter {
 	diagW, diagH, diagBPP := resolveGeometry(width, height, channelCount)
 	alertBuf := make([]byte, channelCount)
 	fillAlert(alertBuf, diagBPP)
@@ -314,7 +355,7 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		barWidthPx = 1
 	}
 
-	fw := &FrameWriter{
+	return &FrameWriter{
 		surfaceID:         surfaceID,
 		sup:               sup,
 		logger:            logger,
@@ -338,7 +379,6 @@ func NewFrameWriter(sup *Supervisor, surfaceID string, source FrameSource, timel
 		stop:              make(chan struct{}),
 		done:              make(chan struct{}),
 	}
-	return fw, nil
 }
 
 // fillAlert paints [FailureOutputAlert]'s pattern across dst once, at
@@ -428,7 +468,7 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 
 	fw.countTickerDrops(tickTime)
 
-	snap := fw.timeline.Snapshot()
+	snap := fw.timelineSnapshot()
 
 	var outBuf []byte
 	var positionMS *int64
@@ -519,6 +559,19 @@ func (fw *FrameWriter) writeOneFrame(tickTime time.Time) {
 	fw.written.Add(1)
 
 	fw.recordTick(start, tickTime, true)
+}
+
+// timelineSnapshot is this tick's timeline reading, or the unknown-state
+// snapshot for a writer built with no timeline at all
+// ([NewDiagnosticFrameWriter]). Unknown is already an idle state
+// ([idleContentStates]), so a timeline-less writer idles on every tick
+// forever, which is exactly the owner's ruling: the diagnostic pattern must
+// not depend on anything upstream being alive.
+func (fw *FrameWriter) timelineSnapshot() multisync.Snapshot {
+	if fw.timeline == nil {
+		return multisync.Snapshot{State: multisync.StateUnknown}
+	}
+	return fw.timeline.Snapshot()
 }
 
 // failureOutputFor names the fallback a failing frame draws for one answer

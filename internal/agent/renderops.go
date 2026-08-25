@@ -304,7 +304,11 @@ func (o *renderOperations) stopFrameWriter(surfaceID string) {
 	}
 	h.cancel()
 	h.fw.Stop()
-	_ = h.fseq.Close()
+	// nil for the node-local diagnostic surface, which owns no FSEQ file
+	// (see renderdiagnostic.go).
+	if h.fseq != nil {
+		_ = h.fseq.Close()
+	}
 }
 
 // hasRunningFrameWriter reports whether surfaceID currently has a live

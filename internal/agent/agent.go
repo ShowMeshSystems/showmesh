@@ -248,6 +248,14 @@ func Run() int {
 		}
 	}
 
+	// The node-local diagnostic idle surface, started AFTER the
+	// boot resume above so a real assignment always keeps the surface it
+	// owns. It needs nothing else on this node or the network to be up: a
+	// diagnostic that only appears once a coordinator, a broker, an FSEQ
+	// and an FPP master are all healthy is missing at exactly the moment an
+	// operator reaches for it.
+	renderOps.StartDiagnosticSurfaceIfConfigured(cfg.DiagnosticSurface, time.Now)
+
 	// audioEngine is the real [gstengine] backend behind a
 	// [audio.SwitchableEngine]: Available() reports false with
 	// audio.SwitchableEngineNoBindingReason until an audio.node.configure
