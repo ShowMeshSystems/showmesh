@@ -70,27 +70,53 @@ export function NodeDetail() {
             <PanelErrorBoundary panelLabel="Control-plane evidence">
               <section className="panel">
                 <h3 className="panel__title">Control-plane evidence</h3>
-                <EvidenceValue
-                  label="hello (advertisement)"
-                  evidence={node.evidence.hello}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
-                <EvidenceValue
-                  label="last will"
-                  evidence={node.evidence.lastWill}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
-                <EvidenceValue
-                  label="heartbeat"
-                  evidence={node.evidence.heartbeat}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
+                {/* One row per signal, so twenty signals scan as a column
+                    instead of a wall of stacked evidence blocks. */}
+                <div className="table-scroll">
+                  <table className="config-table" aria-label="Control-plane evidence">
+                    <thead>
+                      <tr>
+                        <th scope="col">Signal</th>
+                        <th scope="col">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th scope="row">hello (advertisement)</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={node.evidence.hello}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                      <tr>
+                        <th scope="row">last will</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={node.evidence.lastWill}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                      <tr>
+                        <th scope="row">heartbeat</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={node.evidence.heartbeat}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </section>
             </PanelErrorBoundary>
 

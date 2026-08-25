@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RenderSurfacePanel } from './RenderSurfacePanel'
@@ -126,6 +126,22 @@ describe('RenderSurfacePanel', () => {
     ])
     expect(screen.getByText('Surface: wall-1')).toBeInTheDocument()
     expect(screen.getByText('Surface: wall-2')).toBeInTheDocument()
+  })
+
+  // Layout fix: a surface's signals used to be stacked EvidenceValue
+  // blocks; each surface now gets its own table with one row per signal.
+  it('renders a surface\'s signals as a table with one row per signal', () => {
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [
+      entry({ resource: { kind: 'surface', id: 'wall-1' }, signal: 'surface.pipeline.state', value: 'running' }),
+      entry({ resource: { kind: 'surface', id: 'wall-1' }, signal: 'surface.pipeline.fps', value: 30 }),
+    ])
+
+    const table = screen.getByRole('table', { name: 'Signals for surface wall-1' })
+    expect(within(table).getByRole('columnheader', { name: 'Signal' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Value' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'surface.pipeline.state' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'surface.pipeline.fps' })).toBeInTheDocument()
   })
 
   it('renders apply/clear/restart disabled, never enabled, when the operator lacks render:command', () => {

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
@@ -81,6 +81,28 @@ describe('NodesList', () => {
     expect(screen.getByText('control-plane connected')).toBeInTheDocument()
     expect(screen.getByText('control-plane connection lost')).toBeInTheDocument()
     expect(screen.getByText(/1 capability advertised/)).toBeInTheDocument()
+  })
+
+  // Layout fix: the node list used to be one panel per node; it is now a
+  // table, with one row per node, so platform/capabilities/status line up
+  // in columns across every node instead of scattering through prose.
+  it('renders nodes as a table with one row per node', () => {
+    const nodes = [
+      makeNode('node-a', { label: 'Front Yard', controlPlane: { state: 'online', reason: null } }),
+      makeNode('node-b', { label: null, controlPlane: { state: 'offline', reason: 'lost' } }),
+    ]
+    renderNodesList(makeModel({ nodes }))
+
+    const table = screen.getByRole('table')
+    expect(within(table).getByRole('columnheader', { name: 'Node' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Platform' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Capabilities' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Status' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Actions' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'Front Yard' })).toBeInTheDocument()
+    expect(within(table).getByRole('rowheader', { name: 'node-b' })).toBeInTheDocument()
+    // header row + 2 node rows
+    expect(within(table).getAllByRole('row')).toHaveLength(3)
   })
 
   it('states plainly when no node has advertised itself yet', () => {

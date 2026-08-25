@@ -138,16 +138,34 @@ export function RenderSurfacePanel({ nodeId, entries }: RenderSurfacePanelProps)
                 Configured for this node — never applied, so there is no render report yet.
               </p>
             ) : (
-              surfaceEntries.map((entry) => (
-                <EvidenceValue
-                  key={entry.signal}
-                  label={entry.signal}
-                  evidence={entry}
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={connected}
-                />
-              ))
+              // One row per signal (spec section 6.6 legibility fix): a
+              // surface with many signals used to be a wall of stacked
+              // evidence blocks with nothing aligned.
+              <div className="table-scroll">
+                <table className="config-table" aria-label={`Signals for surface ${surfaceId}`}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Signal</th>
+                      <th scope="col">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {surfaceEntries.map((entry) => (
+                      <tr key={entry.signal}>
+                        <th scope="row">{entry.signal}</th>
+                        <td>
+                          <EvidenceValue
+                            evidence={entry}
+                            serverTime={model.serverTime}
+                            serverTimeReceivedAt={model.serverTimeReceivedAt}
+                            connected={connected}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
             <RenderSurfaceControls nodeId={nodeId} surfaceId={surfaceId} />
           </div>
