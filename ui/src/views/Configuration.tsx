@@ -111,7 +111,7 @@ export function Configuration() {
     <div>
       <h2 className="panel__title">Configuration</h2>
       <p className="text-muted">
-        Requires the <code>config:write</code> scope — admin only; there is no read-only scope for
+        Requires the <code>config:write</code> scope (admin only); there is no read-only scope for
         this page.
       </p>
 
@@ -602,14 +602,14 @@ function FPPMQTTSection() {
         if (id === '' && hostName === '') continue
         if (id === '' || hostName === '') {
           setSaveError(
-            `Host ${index + 1} needs both an instance id and a HostName — fill in the ${
+            `Host ${index + 1} needs both an instance id and a HostName: fill in the ${
               id === '' ? 'instance id' : 'HostName'
             } or remove the row.`,
           )
           return
         }
         if (Object.hasOwn(hosts, id)) {
-          setSaveError(`Host ${index + 1} repeats instance id "${id}" — instance ids must be unique.`)
+          setSaveError(`Host ${index + 1} repeats instance id "${id}". Instance ids must be unique.`)
           return
         }
         hosts[id] = hostName
@@ -647,7 +647,7 @@ function FPPMQTTSection() {
       <p className="text-muted">
         The Step 5 FPP MQTT collector&rsquo;s broker, credentials, topic prefix, and host map, moved
         out of <code>SHOWMESH_FPP_MQTT_*</code> into this coordinator&rsquo;s own store. The broker
-        password is never shown once set &mdash; leave the password field blank to keep it unchanged.
+        password is never shown once set: leave the password field blank to keep it unchanged.
       </p>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
@@ -888,7 +888,7 @@ function AssetsSettingsSection() {
         The asset store&rsquo;s operator-facing settings, moved out of{' '}
         <code>SHOWMESH_ASSET_CONTENT_BASE_URL</code>/<code>SHOWMESH_ASSET_MAX_UPLOAD_BYTES</code>/
         <code>SHOWMESH_ASSET_SYNC_INTERVAL</code>/<code>SHOWMESH_ASSET_INVENTORY_INTERVAL</code> into
-        this coordinator&rsquo;s own store. <code>SHOWMESH_ASSET_DIR</code> is unaffected — it stays
+        this coordinator&rsquo;s own store. <code>SHOWMESH_ASSET_DIR</code> is unaffected; it stays
         environment-only.
       </p>
       <p className="text-muted">

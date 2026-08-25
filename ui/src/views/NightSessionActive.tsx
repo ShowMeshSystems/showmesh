@@ -249,7 +249,7 @@ export function NightSessionActive() {
                           {sessionsState.sessions.map((s) => (
                             <option key={s.id} value={s.id}>
                               {s.label} ({s.id})
-                              {s.id === currentSession ? ' — currently active' : ''}
+                              {s.id === currentSession ? ' (currently active)' : ''}
                             </option>
                           ))}
                         </select>

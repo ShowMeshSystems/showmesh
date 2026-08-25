@@ -42,7 +42,7 @@ export function randomUUIDv4(): string {
   }
   throw new Error(
     'no source of cryptographically random bytes is available in this browser ' +
-      '(both crypto.randomUUID and crypto.getRandomValues are missing) — refusing ' +
+      '(both crypto.randomUUID and crypto.getRandomValues are missing); refusing ' +
       'to mint a weak or predictable idempotency key rather than risk a silent replay',
   )
 }

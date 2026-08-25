@@ -167,7 +167,7 @@ export function NightSession() {
     <div>
       <h2 className="panel__title">Night session</h2>
       <p className="text-muted">
-        The RESTING-MODE lifecycle controller&rsquo;s own state — a dedicated closed state
+        The RESTING-MODE lifecycle controller&rsquo;s own state: a dedicated closed state
         machine, never observed evidence. See <code>night.session</code> configuration for the
         authored definition this session pins.
       </p>
@@ -198,9 +198,9 @@ export function NightSession() {
         <section className="panel">
           <p className="text-muted">
             Each control is shown disabled with a stated reason when this device may not use it,
-            never hidden. A refusal names one of three distinct causes —
+            never hidden. A refusal names one of three distinct causes:
             not yet ready, rejected by the session&rsquo;s current state, or the session is
-            degraded and ambiguous — or, for the first four commands only, that the audit store
+            degraded and ambiguous, or, for the first four commands only, that the audit store
             is unavailable.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxWidth: '28rem' }}>
@@ -235,7 +235,7 @@ export function NightSession() {
                 </p>
                 <p>
                   This abandons the current night session outright. It is the operator-recovery
-                  path out of a degraded, ambiguous session, and is provisional — not yet part of
+                  path out of a degraded, ambiguous session, and is provisional, not yet part of
                   the closed lifecycle-command vocabulary.
                 </p>
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
@@ -556,7 +556,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
           <p>
             <strong>{session.attributionDegraded ? 'Attribution degraded' : 'Attribution intact'}</strong>
             {session.attributionDegraded &&
-              ' — this session applied at least one command despite its audit entry failing to write, or ran an autonomous dispatch with no authorizing principal recorded. This never clears once true.'}
+              ': this session applied at least one command despite its audit entry failing to write, or ran an autonomous dispatch with no authorizing principal recorded. This never clears once true.'}
           </p>
         </section>
       </PanelErrorBoundary>

@@ -162,7 +162,7 @@ function HeldCatalog({ response, deploy }: { response: CueCatalogResponse; deplo
   return (
     <p className={current ? 'render-surface__confirmed' : 'render-surface__unconfirmed'} role={current ? 'status' : 'alert'}>
       Held revision <code>{held.acknowledgedRevision}</code> (generation {held.generation}), acknowledged{' '}
-      {formatAbsolute(held.resolvedAt ?? null)} —{' '}
+      {formatAbsolute(held.resolvedAt ?? null)}:{' '}
       {current
         ? 'current: matches what the active show requires now.'
         : `stale: the active show now requires revision ${response.revision ?? 'unknown'} (generation ${response.generation ?? 'unknown'}).`}
@@ -180,7 +180,7 @@ function CueCatalogDeployOutcome({ result }: { result: CueCatalogDeployResult })
     <div role="status">
       {result.replay && (
         <p className="text-muted">
-          This was already requested (idempotency key already used) — nothing new was
+          This was already requested (idempotency key already used); nothing new was
           dispatched; showing the original result.
         </p>
       )}

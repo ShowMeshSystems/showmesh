@@ -132,7 +132,7 @@ describe('Macros', () => {
 
     await waitFor(() => expect(screen.getByText('Begin set')).toBeVisible())
     // The "Running now" panel, keyed by run id.
-    expect(screen.getByText(/begin-set — started/)).toBeVisible()
+    expect(screen.getByText(/begin-set: started/)).toBeVisible()
     // The per-row Status cell, keyed by macro id, links to the same run.
     const runningBadge = screen.getByText('Running')
     expect(runningBadge.closest('a')).toHaveAttribute(

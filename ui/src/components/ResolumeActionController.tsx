@@ -244,7 +244,7 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
           <Picker label="Clip" options={clips} value={clip} onChange={setClip} optionValue="key" />
           {clips.some((c) => c.ambiguous) && (
             <p className="text-muted" role="status">
-              One or more clips in this list are ambiguous — Resolume has more than one clip
+              One or more clips in this list are ambiguous: Resolume has more than one clip
               with the same name on the same layer, so a pick here may still be refused. See
               the ambiguous clips list below.
             </p>
@@ -287,7 +287,7 @@ export function ResolumeActionController({ actions, composition }: ResolumeActio
 
       {submitting && (
         <p className="text-muted" role="status">
-          Waiting for the coordinator to confirm this action actually happened — this can take
+          Waiting for the coordinator to confirm this action actually happened; this can take
           up to a minute.
         </p>
       )}

@@ -22,7 +22,7 @@ export function ActionInvocationOutcome({ result }: ActionInvocationOutcomeProps
     <div role="status" className="action-invocation-outcome">
       {result.replay && (
         <p className="text-muted">
-          This was already requested (idempotency key already used) — nothing new was
+          This was already requested (idempotency key already used); nothing new was
           dispatched; showing the original result.
         </p>
       )}
@@ -36,12 +36,12 @@ export function ActionInvocationOutcome({ result }: ActionInvocationOutcomeProps
       )}
       {result.outcome === 'unconfirmable' && (
         <p className="action-invocation-outcome__unconfirmable">
-          Unconfirmable — neither success nor failure: {result.outcomeReason}
+          Unconfirmable, neither success nor failure: {result.outcomeReason}
         </p>
       )}
       {result.outcome === 'refused' && (
         <p role="alert" className="action-invocation-outcome__refused">
-          Refused — nothing was dispatched: {result.outcomeReason}
+          Refused, nothing was dispatched: {result.outcomeReason}
         </p>
       )}
       {result.outcome === 'failed' && (

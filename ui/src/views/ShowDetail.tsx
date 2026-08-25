@@ -141,7 +141,7 @@ export function ShowDetail({ isNew = false }: ShowDetailProps) {
 
       {!editable && (
         <p className="text-muted" role="status">
-          Viewing only — editing requires the <code>config:write</code> scope.
+          Viewing only: editing requires the <code>config:write</code> scope.
         </p>
       )}
 

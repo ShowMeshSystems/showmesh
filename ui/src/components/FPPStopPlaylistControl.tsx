@@ -74,7 +74,7 @@ function FPPCommandOutcome({ result }: { result: FPPCommandResult }) {
     <div role="status">
       {result.replay && (
         <p className="text-muted">
-          This was already requested (idempotency key already used) — nothing new was
+          This was already requested (idempotency key already used); nothing new was
           dispatched; showing the original result.
         </p>
       )}

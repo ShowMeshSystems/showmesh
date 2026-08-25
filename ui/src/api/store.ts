@@ -2680,7 +2680,7 @@ export class ApiStore {
       timer = this.clock.setTimeout(() => {
         reject(
           new Error(
-            `stream received no bytes (not even a keepalive comment) for over ${this.streamIdleTimeoutMs}ms — treating the connection as dead`,
+            `stream received no bytes (not even a keepalive comment) for over ${this.streamIdleTimeoutMs}ms; treating the connection as dead`,
           ),
         )
       }, this.streamIdleTimeoutMs)

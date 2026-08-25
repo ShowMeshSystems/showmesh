@@ -109,7 +109,7 @@ export function RenderSettingsPanel() {
       <p className="text-muted">
         What a render surface draws while its MultiSync timeline is stopped, opened, or unknown
         (<code>idleOutput</code>), and the render pipeline supervisor&rsquo;s bounded restart backoff
-        (<code>restartPolicy</code>). Requires the <code>config:write</code> scope — admin only; there is no
+        (<code>restartPolicy</code>). Requires the <code>config:write</code> scope (admin only); there is no
         read-only scope for this page.
       </p>
 
@@ -133,7 +133,7 @@ export function RenderSettingsPanel() {
               <p className="panel" role="status">
                 {state.config.revision === 0 ? (
                   <>
-                    Never configured — showing the built-in default (source <code>{state.config.source}</code>).
+                    Never configured, showing the built-in default (source <code>{state.config.source}</code>).
                   </>
                 ) : (
                   <>

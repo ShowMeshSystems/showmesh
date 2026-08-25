@@ -351,7 +351,7 @@ describe('buildPayload (pure)', () => {
       backgroundAudioMaxGainDb: '-6',
     })
     expect(buildPayload(form)).toEqual({
-      error: 'Crossfade duration only applies when item transition is "crossfade" — clear it or pick that transition.',
+      error: 'Crossfade duration only applies when item transition is "crossfade". Clear it or pick that transition.',
     })
   })
 

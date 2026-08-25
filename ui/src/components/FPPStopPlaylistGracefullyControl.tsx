@@ -50,7 +50,7 @@ export function FPPStopPlaylistGracefullyControl({ instanceId }: FPPStopPlaylist
       </ScopedButton>
       {submitting && (
         <p className="text-muted" role="status">
-          Waiting for the coordinator to confirm FPP accepted the graceful stop — a
+          Waiting for the coordinator to confirm FPP accepted the graceful stop; a
           "confirmed" result below can still mean the show is winding down, not stopped;
           read its own reason.
         </p>

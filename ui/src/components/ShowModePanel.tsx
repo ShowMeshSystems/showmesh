@@ -136,7 +136,7 @@ export function ShowModePanel() {
               <p className="panel" role="status">
                 {state.config.revision === 0 ? (
                   <>
-                    Never set &mdash; showing the built-in default{' '}
+                    Never set, showing the built-in default{' '}
                     <code>{state.config.payload.mode}</code> (source{' '}
                     <code>{state.config.source}</code>). A fresh install is by definition being set
                     up.

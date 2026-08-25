@@ -120,7 +120,7 @@ export function RenderSurfacePanel({ nodeId, entries }: RenderSurfacePanelProps)
     // level up (DataFreshnessNotice already renders the loading case).
     return (
       <p className="text-muted" role="status">
-        This node has never published a render report — no surface is configured on it, or
+        This node has never published a render report: no surface is configured on it, or
         its agent has not reported in yet.
       </p>
     )
@@ -141,7 +141,7 @@ export function RenderSurfacePanel({ nodeId, entries }: RenderSurfacePanelProps)
             <h4 className="panel__subtitle">Surface: {surfaceId}</h4>
             {surfaceEntries.length === 0 ? (
               <p className="text-muted" role="status">
-                Configured for this node — never applied, so there is no render report yet.
+                Configured for this node, never applied, so there is no render report yet.
               </p>
             ) : (
               // One row per signal (spec section 6.6 legibility fix): a
@@ -281,7 +281,7 @@ function RenderCommandOutcome({ result }: { result: RenderCommandResult }) {
     <div role="status">
       {result.replay && (
         <p className="text-muted">
-          This was already requested (idempotency key already used) — nothing new was
+          This was already requested (idempotency key already used); nothing new was
           dispatched; showing the original result.
         </p>
       )}

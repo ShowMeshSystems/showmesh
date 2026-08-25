@@ -106,7 +106,7 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
     if (mediaType === '') return setFieldError('Media type is required and has no default.')
     if (targetKind === '') return setFieldError('Target kind is required and has no default.')
     if (targetKind === 'node' && target.trim() === '') {
-      return setFieldError('Target node is required for a node-targeted asset — this is part of the asset’s own identity.')
+      return setFieldError('Target node is required for a node-targeted asset: this is part of the asset’s own identity.')
     }
 
     uploadingRef.current = true
@@ -158,7 +158,7 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
           Media type
           <select value={mediaType} onChange={(e) => setMediaType(e.target.value as AssetMediaType)}>
             <option value="" disabled>
-              Choose one — never defaulted
+              Choose one, never defaulted
             </option>
             {MEDIA_TYPES.map((m) => (
               <option key={m} value={m}>
@@ -171,7 +171,7 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
           Target
           <select value={targetKind} onChange={(e) => setTargetKind(e.target.value as AssetTargetKind)}>
             <option value="" disabled>
-              Choose one — never defaulted
+              Choose one, never defaulted
             </option>
             <option value="node">One specific node</option>
             <option value="show">Show-wide (every node that needs this sequence)</option>
@@ -180,7 +180,7 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
         {targetKind === 'node' && (
           <label className="form-field">
             {/* The target is part of this asset's own identity (ADR-028 decision 1) — never defaulted. */}
-            Target node (required — part of this asset&rsquo;s own identity)
+            Target node (required, part of this asset&rsquo;s own identity)
             {declaredNodes.length > 0 ? (
               <select value={target} onChange={(e) => setTarget(e.target.value)}>
                 <option value="" disabled>

@@ -454,7 +454,7 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
       )}
       {issuedValue !== null && (
         <p className="panel" role="status">
-          This token is displayed exactly once and cannot be retrieved again — store it now:{' '}
+          This token is displayed exactly once and cannot be retrieved again; store it now:{' '}
           <code>{issuedValue}</code>
         </p>
       )}
@@ -506,7 +506,7 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
             <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} />
           </label>
           <label>
-            Expires (RFC3339, optional — default never)
+            Expires (RFC3339, optional, default never)
             <input type="text" placeholder="2027-01-15T00:00:00Z" value={expires} onChange={(e) => setExpires(e.target.value)} />
           </label>
           <ScopedButton

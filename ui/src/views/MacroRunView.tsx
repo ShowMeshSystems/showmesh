@@ -144,7 +144,7 @@ export function MacroRunView() {
 
       <p className="text-muted">
         Started {formatAbsolute(run.createdAt)} by {run.issuerPrincipalName} ({run.trigger})
-        {run.finishedAt !== null && <> — finished {formatAbsolute(run.finishedAt)}</>}
+        {run.finishedAt !== null && <>, finished {formatAbsolute(run.finishedAt)}</>}
       </p>
 
       <MacroRunOutcome run={run} />

@@ -109,7 +109,7 @@ function buildPayload(form: MacroFormState): { payload: ConfigShowMacro } | { er
   for (const [index, step] of form.steps.entries()) {
     const id = step.id.trim()
     if (id === '') return { error: `Step ${index + 1} needs an id.` }
-    if (seenIds.has(id)) return { error: `Step id "${id}" is used more than once — every step id must be unique.` }
+    if (seenIds.has(id)) return { error: `Step id "${id}" is used more than once. Every step id must be unique.` }
     seenIds.add(id)
     if (step.action.trim() === '') return { error: `Step "${id}" needs an action.` }
     if (step.localFallbackReason.trim() === '') {
@@ -347,7 +347,7 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
 
       {!editable && (
         <p className="text-muted" role="status">
-          Viewing only — editing requires the <code>config:write</code> scope.
+          Viewing only: editing requires the <code>config:write</code> scope.
         </p>
       )}
 
@@ -380,7 +380,7 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
       <h3 className="panel__title">Steps</h3>
       <p className="text-muted">
         Each step invokes a show action, in order. A failed step stops the remaining steps unless
-        it says otherwise; a step whose effect could not be confirmed does not, by default — see
+        it says otherwise; a step whose effect could not be confirmed does not, by default: see
         each step&rsquo;s own reason once this macro has run.
       </p>
 
@@ -464,8 +464,8 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
               {actionIntegrations[step.action.trim()] === 'resolume' && (
                 <p className="text-muted" role="status">
                   This step invokes a Resolume action. Every Resolume action is
-                  coordinator-required — Resolume holds no local fallback for a
-                  coordinator-hosted adapter — so the coordinator refuses anything
+                  coordinator-required: Resolume holds no local fallback for a
+                  coordinator-hosted adapter, so the coordinator refuses anything
                   other than &ldquo;coordinator-required&rdquo; here.
                 </p>
               )}
@@ -479,7 +479,7 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
                 take effect.
               </p>
               <label className="form-field">
-                Reason (required, in your own words — this is what an operator reads while the
+                Reason (required, in your own words; this is what an operator reads while the
                 coordinator is unreachable)
                 <input
                   type="text"
@@ -566,7 +566,7 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
                 <li key={run.id}>
                   <Link className="entity-link" to={`/macros/${encodeURIComponent(run.macroObjectId)}/runs/${encodeURIComponent(run.id)}`}>
                     <div className="text-muted">
-                      {formatAbsolute(run.createdAt)} — {run.trigger} — {run.issuerPrincipalName}
+                      {formatAbsolute(run.createdAt)}: {run.trigger}, {run.issuerPrincipalName}
                     </div>
                     <MacroRunOutcome run={run} />
                   </Link>

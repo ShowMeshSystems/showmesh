@@ -83,7 +83,7 @@ export function Audit() {
           {state.entries.length === limit && (
             <p className="panel panel--error" role="status">
               This window is full: it holds the <strong>oldest</strong> {limit} retained entries the
-              API exposes, and newer entries beyond this window may exist and are not shown —
+              API exposes, and newer entries beyond this window may exist and are not shown,
               including the most recent activity.
               {limit < MAX_LIMIT
                 ? ' Use "Show more" to widen the window.'
