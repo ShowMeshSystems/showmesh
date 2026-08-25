@@ -23,6 +23,7 @@ const {
   applyRenderSurface,
   clearRenderSurface,
   restartRenderPipeline,
+  probeRenderTransport,
   listConfigObjects,
   getShowSurface,
   listShowSurfacesForNode,
@@ -30,6 +31,7 @@ const {
   applyRenderSurface: vi.fn(),
   clearRenderSurface: vi.fn(),
   restartRenderPipeline: vi.fn(),
+  probeRenderTransport: vi.fn(),
   listConfigObjects: vi.fn(),
   getShowSurface: vi.fn(),
   listShowSurfacesForNode: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock('../api', async (importOriginal) => {
     applyRenderSurface,
     clearRenderSurface,
     restartRenderPipeline,
+    probeRenderTransport,
     listConfigObjects,
     getShowSurface,
     listShowSurfacesForNode,
@@ -52,6 +55,7 @@ afterEach(() => {
   applyRenderSurface.mockReset()
   clearRenderSurface.mockReset()
   restartRenderPipeline.mockReset()
+  probeRenderTransport.mockReset()
   listConfigObjects.mockReset()
   getShowSurface.mockReset()
   listShowSurfacesForNode.mockReset()
@@ -144,12 +148,13 @@ describe('RenderSurfacePanel', () => {
     expect(within(table).getByRole('rowheader', { name: 'surface.pipeline.fps' })).toBeInTheDocument()
   })
 
-  it('renders apply/clear/restart disabled, never enabled, when the operator lacks render:command', () => {
+  it('renders apply/clear/restart/probe disabled, never enabled, when the operator lacks render:command', () => {
     const model = makeModel({ session: signedIn({ scopes: ['node:read'] }) })
     renderPanel(model, [entry()])
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Restart' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Probe transport' })).toBeDisabled()
   })
 
   it('dispatches clear and renders a confirmed outcome honestly', async () => {
@@ -171,6 +176,40 @@ describe('RenderSurfacePanel', () => {
     renderPanel(model, [entry()])
 
     await userEvent.click(screen.getByRole('button', { name: 'Restart' }))
+
+    const unconfirmed = await screen.findByRole('alert')
+    expect(unconfirmed).toHaveTextContent('Unconfirmed: no evidence arrived before the deadline')
+  })
+
+  it('dispatches a transport probe and renders a confirmed outcome honestly', async () => {
+    probeRenderTransport.mockResolvedValue(
+      commandResult({
+        action: 'render.transport.probe',
+        outcome: 'confirmed',
+        outcomeReason: 'surface.transport.available = "true"',
+      }),
+    )
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Probe transport' }))
+
+    await waitFor(() => expect(probeRenderTransport).toHaveBeenCalledWith('media-01', 'wall-1'))
+    expect(await screen.findByText(/Confirmed:/)).toBeInTheDocument()
+  })
+
+  it('renders an accepted-but-unconfirmed transport probe as unconfirmed with its reason', async () => {
+    probeRenderTransport.mockResolvedValue(
+      commandResult({
+        action: 'render.transport.probe',
+        outcome: 'unconfirmed',
+        outcomeReason: 'no evidence arrived before the deadline',
+      }),
+    )
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Probe transport' }))
 
     const unconfirmed = await screen.findByRole('alert')
     expect(unconfirmed).toHaveTextContent('Unconfirmed: no evidence arrived before the deadline')

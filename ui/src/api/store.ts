@@ -913,7 +913,7 @@ export class ApiStore {
   private async dispatchRenderCommand(
     nodeId: string,
     surfaceId: string,
-    verb: 'apply' | 'clear' | 'restart',
+    verb: 'apply' | 'clear' | 'restart' | 'transport-probe',
     sequenceId?: string,
   ): Promise<RenderCommandResult> {
     const controller = this.beginSideCall()
@@ -947,6 +947,11 @@ export class ApiStore {
   /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/restart`. Requires render:command. */
   async restartRenderPipeline(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
     return this.dispatchRenderCommand(nodeId, surfaceId, 'restart')
+  }
+
+  /** `POST /nodes/{nodeId}/render/surfaces/{surfaceId}/transport-probe`. Requires render:command. */
+  async probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+    return this.dispatchRenderCommand(nodeId, surfaceId, 'transport-probe')
   }
 
   // -- Track D seam D-4: Resolume observability (seam E) and the
