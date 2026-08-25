@@ -68,7 +68,7 @@ const scaffoldSampleRate = 48000
 func staticGstEngineConfig(assetDir string, node audioNodeConfig) gstengine.Config {
 	sinkFactory := audioEngineSinkFactory()
 	props := map[string]any{}
-	if sinkFactory == "alsasink" {
+	if sinkFactory == realAudioSinkFactory {
 		props["device"] = node.ProgramRoute
 	}
 	return gstengine.Config{
@@ -93,7 +93,8 @@ func staticGstEngineConfig(assetDir string, node audioNodeConfig) gstengine.Conf
 // unreachable in production, since it only ever calls newGstEngine with
 // a cfg already proven to pass Validate() (see rebuild's earlier
 // staticCfg.Validate() call, which differs only in SampleRate, and
-// [resolveNodeSampleRate] never returns a value <= 0). It is kept as a
+// rebuild refuses outright rather than calling this when the resolved
+// rate or channel count is not positive). It is kept as a
 // defensive backstop, not as the meaningful failure path for a bad
 // device: that path is [gstengine.Engine.Available] reporting false,
 // which rebuild binds and logs like any other outcome.
