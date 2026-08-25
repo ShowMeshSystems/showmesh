@@ -301,6 +301,10 @@ export function restartRenderPipeline(nodeId: string, surfaceId: string): Promis
   return store.restartRenderPipeline(nodeId, surfaceId)
 }
 
+export function probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {
+  return store.probeRenderTransport(nodeId, surfaceId)
+}
+
 // Step 7 seam B (RES-008 D2/D6): node discovery and declaration. Same
 // thin pass-through pattern as the others above.
 
