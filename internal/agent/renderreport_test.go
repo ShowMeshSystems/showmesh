@@ -113,12 +113,12 @@ func TestFPPConnectRegisterCollidingSlugsBoundsOwnerNameInReason(t *testing.T) {
 	secondData := []byte("second-file-is-longer")
 	uploadAndBind(t, held, "sequences", colliding, secondData)
 
-	failed := waitForRegistrationState(t, held, "sequences", colliding, fppConnectRegistrationFailed)
-	if len(failed.RegistrationReason) > fppConnectMaxEventStringBytes+256 {
-		t.Fatalf("RegistrationReason length = %d, want the embedded competitor name bounded to roughly %d, not the full %d-byte name", len(failed.RegistrationReason), fppConnectMaxEventStringBytes, len(longName))
+	pending := waitForRegistrationState(t, held, "sequences", colliding, fppConnectRegistrationPending)
+	if len(pending.RegistrationReason) > 3*fppConnectMaxEventStringBytes {
+		t.Fatalf("RegistrationReason length = %d, want the embedded competitor name bounded to roughly %d (however many times it appears), not the full %d-byte name", len(pending.RegistrationReason), fppConnectMaxEventStringBytes, len(longName))
 	}
-	if !strings.Contains(failed.RegistrationReason, fppConnectEventStringTruncatedSuffix) {
-		t.Fatalf("RegistrationReason = %q, want it to show the competitor's name was truncated", failed.RegistrationReason)
+	if !strings.Contains(pending.RegistrationReason, fppConnectEventStringTruncatedSuffix) {
+		t.Fatalf("RegistrationReason = %q, want it to show the competitor's name was truncated", pending.RegistrationReason)
 	}
 
 	if got := len(requests()); got != 0 {

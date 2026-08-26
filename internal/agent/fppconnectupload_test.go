@@ -502,6 +502,101 @@ func TestFPPConnectUploadDiskFull(t *testing.T) {
 	}
 }
 
+// closeFailsFile wraps a real *os.File, forwarding every call except
+// Close, which returns closeErr instead: the real file still actually
+// closes (no fd leak), but the caller observes a failure exactly as it
+// would from a real Close-time error (delayed-allocation ENOSPC, a
+// network mount's write-back failure surfacing only at Close).
+type closeFailsFile struct {
+	*os.File
+	closeErr error
+}
+
+func (f *closeFailsFile) Close() error {
+	_ = f.File.Close()
+	return f.closeErr
+}
+
+// TestOSFPPConnectChunkWriterReturnsCloseError is review round 7 finding
+// 2's own regression test: osFPPConnectChunkWriter.WriteChunk used to
+// discard f.Close()'s own error entirely, so a write failure surfacing
+// only at Close (delayed allocation ENOSPC, a network mount) was reported
+// as a successful chunk, and a held record ended up with a content hash
+// for bytes that were never actually committed to disk. This calls the
+// real osFPPConnectChunkWriter directly, injecting a Close failure via
+// fppConnectOpenChunkFile, and proves the error comes back from WriteChunk
+// itself, classifiable by fppConnectIsDiskFull exactly like a write-time
+// ENOSPC already is.
+func TestOSFPPConnectChunkWriterReturnsCloseError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chunk.bin")
+
+	orig := fppConnectOpenChunkFile
+	t.Cleanup(func() { fppConnectOpenChunkFile = orig })
+	fppConnectOpenChunkFile = func(path string, flags int, perm os.FileMode) (fppConnectChunkFile, error) {
+		f, err := os.OpenFile(path, flags, perm)
+		if err != nil {
+			return nil, err
+		}
+		return &closeFailsFile{File: f, closeErr: &os.PathError{Op: "close", Path: path, Err: syscall.ENOSPC}}, nil
+	}
+
+	written, err := osFPPConnectChunkWriter{}.WriteChunk(path, 0, strings.NewReader("abc"), 3, true)
+	if err == nil {
+		t.Fatal("WriteChunk returned a nil error despite Close failing, want the Close error surfaced")
+	}
+	if !fppConnectIsDiskFull(err) {
+		t.Fatalf("WriteChunk error = %v, want it classified as disk-full (fppConnectIsDiskFull), the same way a write-time ENOSPC already is", err)
+	}
+	if written != 3 {
+		t.Fatalf("written = %d, want 3 (io.Copy's own count, independent of the later Close failure)", written)
+	}
+
+	// The real file descriptor was actually closed by closeFailsFile
+	// despite the injected error, so a real filesystem never leaks an fd
+	// here; the fix is about the RETURNED error, not about skipping the
+	// real close.
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("the file was not actually created/closed: %v", statErr)
+	}
+}
+
+// TestFPPConnectUploadCloseFailureIsTreatedAsWriteFailure is review round
+// 7 finding 2's own end-to-end regression test: a chunk whose write
+// succeeds but whose Close fails must never complete as a held record
+// with a hash for bytes that were never actually committed. Uses the real
+// osFPPConnectChunkWriter (via fppConnectOpenChunkFile injection), not a
+// fake fppConnectChunkWriter, so this exercises the real fix's own code
+// path end to end through the HTTP upload route.
+func TestFPPConnectUploadCloseFailureIsTreatedAsWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+
+	orig := fppConnectOpenChunkFile
+	t.Cleanup(func() { fppConnectOpenChunkFile = orig })
+	fppConnectOpenChunkFile = func(path string, flags int, perm os.FileMode) (fppConnectChunkFile, error) {
+		f, err := os.OpenFile(path, flags, perm)
+		if err != nil {
+			return nil, err
+		}
+		return &closeFailsFile{File: f, closeErr: &os.PathError{Op: "close", Path: path, Err: syscall.ENOSPC}}, nil
+	}
+
+	held := newFPPConnectHeldStoreWithWriter(dir, osFPPConnectChunkWriter{}, discardLogger())
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	resp, body := patchChunk(t, srv, "sequences", "CloseFails.fseq", 0, 3, []byte("abc"))
+	if resp.StatusCode != http.StatusInsufficientStorage {
+		t.Fatalf("status = %d, want 507; body=%s", resp.StatusCode, body)
+	}
+	if _, ok := findHeldRecord(t, held, "sequences", "CloseFails.fseq"); ok {
+		t.Fatal("a held record exists after a chunk whose Close failed: its hash would cover bytes never actually committed to disk")
+	}
+	if !hasEventKind(held, "disk-full", "CloseFails.fseq") {
+		t.Fatalf("no disk-full event recorded; events = %+v", held.Events())
+	}
+}
+
 // TestFPPConnectPlaylistPostBindsIdempotently proves POST
 // /api/playlist/{show} twice with the same body binds once, and GET then
 // lists the bound entries.

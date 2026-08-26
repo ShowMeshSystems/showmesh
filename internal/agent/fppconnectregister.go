@@ -535,6 +535,70 @@ func (r *fppConnectRegistrar) claimIdentity(key, identityKey string, receivedAt 
 	return false, otherKey
 }
 
+// isInFlight reports whether a registerLoop goroutine currently owns
+// key's (dir/name) in-flight slot.
+func (r *fppConnectRegistrar) isInFlight(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inFlight[key]
+}
+
+// strongestCompetitor reduces colliding (every record CollidingRecords
+// found for one identity) to the single record claimIdentity should treat
+// as "the" competitor (review round 7 finding 1): with three or more
+// files sharing one identity, deciding against whichever record a single
+// prior CollidingRecord happened to return first risked missing the
+// identity's actual registered or in-flight owner entirely, letting
+// claimIdentity's own stale-owner check wrongly discard a still-valid
+// cached owner and hand a later file a claim it should never have won.
+// Every candidate that failed non-retryably (review round 5 finding 2) or
+// that is only awaiting a show id already independently confirmed
+// resolvable (review round 6 finding 3) is dropped first, exactly as
+// attemptRegister already did for a single candidate; among what remains,
+// a registered record always wins outright, since a registered owner must
+// never be displaced by anything, else one currently in flight wins
+// outright, else the earliest ReceivedAt wins. known is false only when
+// colliding has no surviving candidate at all.
+func (r *fppConnectRegistrar) strongestCompetitor(colliding []fppConnectHeldRecord) (strongest fppConnectHeldRecord, known, awaitingShowID bool) {
+	strongerThan := func(a, b fppConnectHeldRecord) bool {
+		aReg := a.RegistrationState == fppConnectRegistrationRegistered
+		bReg := b.RegistrationState == fppConnectRegistrationRegistered
+		if aReg != bReg {
+			return aReg
+		}
+		aFlight := r.isInFlight(a.Dir + "/" + a.Name)
+		bFlight := r.isInFlight(b.Dir + "/" + b.Name)
+		if aFlight != bFlight {
+			return aFlight
+		}
+		return a.ReceivedAt.Before(b.ReceivedAt)
+	}
+
+	for _, cand := range colliding {
+		if cand.RegistrationState == fppConnectRegistrationFailed {
+			// A competitor that failed non-retryably will never attempt
+			// again (ADR-030 decision 5): it no longer contests this
+			// identity, the same way a competitor CollidingRecords never
+			// returned in the first place would not.
+			continue
+		}
+		candAwaiting := !cand.Bound
+		if candAwaiting {
+			if _, ok := r.state.ShowID(cand.Show); ok {
+				// Its own show id is already confirmed resolvable but it
+				// still has not bound: whatever is stopping
+				// RebindPendingShowIDs from converging it is not this
+				// attempt's problem to wait on.
+				continue
+			}
+		}
+		if !known || strongerThan(cand, strongest) {
+			strongest, known, awaitingShowID = cand, true, candAwaiting
+		}
+	}
+	return strongest, known, awaitingShowID
+}
+
 // fppConnectRegisterFields is the exact, required order the assets API's
 // POST /assets multipart body must arrive in: every field part before the
 // file part (api/openapi.yaml's uploadAsset operation description). show
@@ -628,35 +692,16 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 	// ReceivedAt (binding, not upload time, is what starts a registration
 	// attempt, and the two are not the same event); only a genuine
 	// simultaneous first attempt by both falls back to ReceivedAt.
+	// strongestCompetitor reduces every OTHER record CollidingRecords
+	// returns to the single one claimIdentity needs to see (review round 7
+	// finding 1): with three or more colliding files, deciding against
+	// whichever one happens to come back is not enough, since that one
+	// might be neither the registered owner nor in flight, even though a
+	// real registered owner exists among the others.
 	identityKey := fppConnectIdentityKey(rec.Dir, rec.ShowID, rec.LogicalSequence)
 	myKey := rec.Dir + "/" + rec.Name
-	other, otherKnown := r.held.CollidingRecord(rec.Dir, rec.Name, rec.ShowID, rec.Show, rec.LogicalSequence)
-	if otherKnown && other.RegistrationState == fppConnectRegistrationFailed {
-		// A competitor that failed non-retryably will never attempt again
-		// (ADR-030 decision 5): it no longer contests this identity
-		// (review round 5 finding 2), the same way a competitor CollidingRecord
-		// never found in the first place would not.
-		otherKnown = false
-	}
-	// A competitor still awaiting its own show id (review round 5 finding
-	// 4's own case) is not a settled loss (review round 6 finding 3): if
-	// it never binds at all, nobody would ever register this sequence.
-	// Once its show id is independently confirmed resolvable right now
-	// but it still has not bound, treat it the same as a competitor
-	// CollidingRecord never found: whatever is stopping RebindPendingShowIDs
-	// from converging it is this attempt's problem to stop waiting on,
-	// not a reason to fail forever. While its id genuinely is not
-	// resolvable yet, it still counts as a competitor, so this attempt can
-	// still lose to it (fairly, by ReceivedAt, exactly as any other
-	// collision does) rather than race ahead of a competitor that is
-	// legitimately about to bind.
-	otherAwaitingShowID := otherKnown && !other.Bound
-	if otherAwaitingShowID {
-		if _, ok := r.state.ShowID(other.Show); ok {
-			otherKnown = false
-			otherAwaitingShowID = false
-		}
-	}
+	colliding := r.held.CollidingRecords(rec.Dir, rec.Name, rec.ShowID, rec.Show, rec.LogicalSequence)
+	other, otherKnown, otherAwaitingShowID := r.strongestCompetitor(colliding)
 	otherKey, otherReceivedAt, otherRegistered := "", time.Time{}, false
 	if otherKnown {
 		otherKey = other.Dir + "/" + other.Name
@@ -685,11 +730,19 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 					rec.LogicalSequence, rec.ShowID, ownerName),
 			}
 		}
+		// Pending, not failed (review round 7 finding 3): a collision loss
+		// is never permanent on its own the way an empty slug or a
+		// coordinator 4xx is. If ownerName is ever discarded, rebound to a
+		// different identity, or itself fails, this file's next retry
+		// (wake or backoff) re-evaluates the collision fresh and can win
+		// it; marking this terminal left the only path back a fresh
+		// re-upload, since nothing else ever starts a new attempt for an
+		// already-terminal record.
 		return fppConnectRegisterOutcome{
-			kind: fppConnectRegistrationFailed,
+			kind: fppConnectRegistrationPending,
 			reason: fmt.Sprintf(
-				"sequence id %q under show %q collides with already-held file %q, which slugifies to the same id; rename one of the two files so their sequence ids differ",
-				rec.LogicalSequence, rec.ShowID, ownerName),
+				"sequence id %q under show %q collides with already-held file %q, which slugifies to the same id; will re-check if %q is ever discarded, rebound, or fails; rename one of the two files to resolve this permanently",
+				rec.LogicalSequence, rec.ShowID, ownerName, ownerName),
 		}
 	}
 

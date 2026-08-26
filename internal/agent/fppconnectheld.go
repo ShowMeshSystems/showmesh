@@ -303,6 +303,25 @@ type fppConnectChunkWriter interface {
 	WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (written int64, err error)
 }
 
+// fppConnectChunkFile is the *os.File subset osFPPConnectChunkWriter needs:
+// positioned writes, and a Close whose own error must never be discarded
+// (review round 7 finding 2).
+type fppConnectChunkFile interface {
+	io.WriterAt
+	io.Closer
+}
+
+// fppConnectOpenChunkFile opens path for osFPPConnectChunkWriter.WriteChunk,
+// a package-level var matching fppConnectRegisterHTTPClient's identical
+// swap-for-tests convention: a test substitutes a fppConnectChunkFile whose
+// Close deliberately fails, standing in for a real filesystem condition
+// (ENOSPC under delayed allocation, a network mount) a sandboxed test
+// cannot reliably reproduce, while still exercising osFPPConnectChunkWriter's
+// own real Close-handling logic unchanged.
+var fppConnectOpenChunkFile = func(path string, flags int, perm os.FileMode) (fppConnectChunkFile, error) {
+	return os.OpenFile(path, flags, perm)
+}
+
 // osFPPConnectChunkWriter is fppConnectChunkWriter's real implementation:
 // open (creating or truncating as directed), then a single positioned
 // streaming copy. Offset is always exactly the file's current size by the
@@ -315,12 +334,27 @@ func (osFPPConnectChunkWriter) WriteChunk(path string, offset int64, r io.Reader
 	if truncate {
 		flags |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(path, flags, 0o644)
+	f, err := fppConnectOpenChunkFile(path, flags, 0o644)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = f.Close() }()
-	return io.Copy(io.NewOffsetWriter(f, offset), io.LimitReader(r, n))
+	written, copyErr := io.Copy(io.NewOffsetWriter(f, offset), io.LimitReader(r, n))
+	closeErr := f.Close()
+	if copyErr != nil {
+		return written, copyErr
+	}
+	// A write failure can surface only at Close, not at the write itself
+	// (review round 7 finding 2): delayed allocation means ENOSPC, or any
+	// other write error, on some filesystems (and on a network mount) is
+	// reported only once the kernel actually flushes buffered pages,
+	// which Close is what forces. Discarding this error previously
+	// reported io.Copy's own byte count as a successful chunk regardless,
+	// so finishChunkLocked recorded a content hash for bytes that were
+	// never actually committed to disk. fppConnectIsDiskFull classifies
+	// this the identical way it already classifies a write-time ENOSPC,
+	// since finishChunkLocked branches on writeErr alone, never on which
+	// step produced it.
+	return written, closeErr
 }
 
 // fppConnectIsDiskFull reports whether err is the ENOSPC outcome ADR-044
@@ -529,15 +563,19 @@ func (s *fppConnectHeldStore) RecordFor(dir, name string) (fppConnectHeldRecord,
 	return rec, ok
 }
 
-// CollidingRecord returns another record in dir that shares (dir, name)'s
-// intended identity but has a different Name, if one exists (review round
-// 2 finding C): two distinct file name stems can slugify to the identical
-// sequence id ("My Show.fseq" and "my_show.fseq" both slug to "my-show"),
-// and the assets API's identity is (show, sequence, targetKind, target),
-// never the filename, so registering both under the same show would
-// silently supersede one with the other. A competitor is either another
-// currently bound record sharing showID and logicalSequence, or another
-// record still awaiting its show's config object id
+// CollidingRecords returns every OTHER record in dir that shares (dir,
+// name)'s intended identity (review round 7 finding 1: with three or more
+// files sharing one identity, returning only the first match, as a single
+// prior record did, could surface any one of the OTHER competitors, not
+// necessarily the strongest one, letting a caller wrongly conclude that
+// identity has no registered or in-flight owner when it actually does): two
+// distinct file name stems can slugify to the identical sequence id ("My
+// Show.fseq" and "my_show.fseq" both slug to "my-show"), and the assets
+// API's identity is (show, sequence, targetKind, target), never the
+// filename, so registering both under the same show would silently
+// supersede one with the other. A competitor is either another currently
+// bound record sharing showID and logicalSequence, or another record still
+// awaiting its show's config object id
 // (fppConnectUnboundReasonShowIDNotPushed, BindPendingShowID) whose
 // intended show name (showName) and logicalSequence both match (review
 // round 5 finding 4): BindPendingShowID temporarily unbinds a record
@@ -549,23 +587,25 @@ func (s *fppConnectHeldStore) RecordFor(dir, name string) (fppConnectHeldRecord,
 // timing rather than claimIdentity's own ReceivedAt fairness rule.
 // Scoped to dir so a music/videos file, which this lane never registers
 // at all, is never flagged against a sequences file it could never
-// actually collide with at the API. ok is false when no such collision
+// actually collide with at the API. Returns nil when no such collision
 // exists.
-func (s *fppConnectHeldStore) CollidingRecord(dir, name, showID, showName, logicalSequence string) (fppConnectHeldRecord, bool) {
+func (s *fppConnectHeldStore) CollidingRecords(dir, name, showID, showName, logicalSequence string) []fppConnectHeldRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var out []fppConnectHeldRecord
 	for _, rec := range s.records {
 		if rec.Dir != dir || rec.Name == name || rec.LogicalSequence != logicalSequence {
 			continue
 		}
 		if rec.Bound && rec.ShowID == showID {
-			return rec, true
+			out = append(out, rec)
+			continue
 		}
 		if !rec.Bound && rec.UnboundReason == fppConnectUnboundReasonShowIDNotPushed && rec.Show == showName {
-			return rec, true
+			out = append(out, rec)
 		}
 	}
-	return fppConnectHeldRecord{}, false
+	return out
 }
 
 // setRegistrationLocked applies one registration-state transition to

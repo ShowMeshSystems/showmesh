@@ -1101,13 +1101,18 @@ func TestFPPConnectRegisterRebindDuringInFlightAttemptRegistersUnderNewIdentity(
 	}
 }
 
-// TestFPPConnectRegisterCollidingSlugsFailTheLaterOne is review round 2
-// finding C's own regression test: two distinct file name stems that
-// slugify to the identical sequence id under the same show ("My Show.fseq"
-// and "my_show.fseq" both slug to "my-show") must never both register:
-// the earlier-received one registers normally, and the later one fails
-// with a reason naming the earlier file, without ever sending a request.
-func TestFPPConnectRegisterCollidingSlugsFailTheLaterOne(t *testing.T) {
+// TestFPPConnectRegisterCollidingSlugsStayPendingBehindTheEarlierOne is
+// review round 2 finding C's own regression test: two distinct file name
+// stems that slugify to the identical sequence id under the same show
+// ("My Show.fseq" and "my_show.fseq" both slug to "my-show") must never
+// both register: the earlier-received one registers normally, and the
+// later one stays pending, naming the earlier file, without ever sending
+// a request. Pending, not failed (review round 7 finding 3): a collision
+// loss is never permanent on its own, only the coordinator's own terminal
+// refusals, a content-hash mismatch, and an empty slug are, so a losing
+// file can still recover automatically if its winner is ever discarded,
+// rebound, or itself fails, without requiring a fresh re-upload.
+func TestFPPConnectRegisterCollidingSlugsStayPendingBehindTheEarlierOne(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 
 	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
@@ -1127,21 +1132,79 @@ func TestFPPConnectRegisterCollidingSlugsFailTheLaterOne(t *testing.T) {
 	uploadAndBind(t, held, "sequences", "my_show.fseq", secondData)
 
 	registered := waitForRegistrationState(t, held, "sequences", "My Show.fseq", fppConnectRegistrationRegistered)
-	failed := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationFailed)
+	pending := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationPending)
 
-	if registered.LogicalSequence != "my-show" || failed.LogicalSequence != "my-show" {
-		t.Fatalf("LogicalSequence = %q / %q, want both my-show", registered.LogicalSequence, failed.LogicalSequence)
+	if registered.LogicalSequence != "my-show" || pending.LogicalSequence != "my-show" {
+		t.Fatalf("LogicalSequence = %q / %q, want both my-show", registered.LogicalSequence, pending.LogicalSequence)
 	}
-	if !strings.Contains(failed.RegistrationReason, "My Show.fseq") {
-		t.Fatalf("RegistrationReason = %q, want it to name the colliding file My Show.fseq", failed.RegistrationReason)
+	if !strings.Contains(pending.RegistrationReason, "My Show.fseq") {
+		t.Fatalf("RegistrationReason = %q, want it to name the colliding file My Show.fseq", pending.RegistrationReason)
 	}
-	if failed.RegistrationProblemType != "" {
-		t.Fatalf("RegistrationProblemType = %q, want empty for a locally-detected collision", failed.RegistrationProblemType)
+	if pending.RegistrationProblemType != "" {
+		t.Fatalf("RegistrationProblemType = %q, want empty for a locally-detected collision", pending.RegistrationProblemType)
 	}
 
 	reqs := requests()
 	if len(reqs) != 1 {
 		t.Fatalf("registration requests = %d, want exactly 1 (the colliding file must never even attempt)", len(reqs))
+	}
+}
+
+// TestFPPConnectRegisterThreeCollidingSlugsNeverDisplaceTheRegisteredOwner
+// is review round 7 finding 1's own regression test: with three or more
+// files sharing one identity, CollidingRecord used to return only the
+// first match a map iteration happened to produce, which could be a
+// competitor that was neither the registered owner nor in flight. Seeing
+// that as "the" competitor, claimIdentity's own stale-owner check (round 5
+// finding 2) would find it did not match the cached owner, delete the
+// cached owner, and re-decide by ReceivedAt among the wrong two records,
+// letting a later file win a real registration attempt and potentially
+// supersede the actual owner's asset even though that owner's own held
+// record still said "registered." Both losers here must always name the
+// true registered owner, never each other, and the owner must never be
+// displaced.
+func TestFPPConnectRegisterThreeCollidingSlugsNeverDisplaceTheRegisteredOwner(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		return http.StatusOK, assetResponseBody(t, "asset-owner", hash, false)
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	uploadAndBind(t, held, "sequences", "My Show.fseq", []byte("owner-file"))
+	registered := waitForRegistrationState(t, held, "sequences", "My Show.fseq", fppConnectRegistrationRegistered)
+	if registered.RegistrationAssetID != "asset-owner" {
+		t.Fatalf("owner = %+v, want registered as asset-owner", registered)
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	uploadAndBind(t, held, "sequences", "my_show.fseq", []byte("second-loser"))
+	time.Sleep(5 * time.Millisecond)
+	uploadAndBind(t, held, "sequences", "My-Show.fseq", []byte("third-loser-longer"))
+
+	loser2 := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationPending)
+	loser3 := waitForRegistrationState(t, held, "sequences", "My-Show.fseq", fppConnectRegistrationPending)
+
+	if !strings.Contains(loser2.RegistrationReason, "My Show.fseq") {
+		t.Fatalf("loser2 RegistrationReason = %q, want it to name the registered owner My Show.fseq", loser2.RegistrationReason)
+	}
+	if !strings.Contains(loser3.RegistrationReason, "My Show.fseq") {
+		t.Fatalf("loser3 RegistrationReason = %q, want it to name the registered owner My Show.fseq", loser3.RegistrationReason)
+	}
+
+	// The owner must remain registered, unchanged: neither loser may ever
+	// have superseded it, however many times a colliding attempt runs.
+	final, ok := findHeldRecord(t, held, "sequences", "My Show.fseq")
+	if !ok || final.RegistrationState != fppConnectRegistrationRegistered || final.RegistrationAssetID != "asset-owner" {
+		t.Fatalf("owner after two colliding uploads = %+v (ok=%v), want unchanged, still registered as asset-owner", final, ok)
+	}
+
+	reqs := requests()
+	if len(reqs) != 1 {
+		t.Fatalf("registration requests = %d, want exactly 1 (only the owner ever attempts)", len(reqs))
 	}
 }
 
@@ -1201,9 +1264,9 @@ func TestFPPConnectRegisterLateBindingNeverSupersedesAlreadyRegistered(t *testin
 		t.Fatalf("POST playlist: status = %d, body=%s", resp.StatusCode, body)
 	}
 
-	failedA := waitForRegistrationState(t, held, "sequences", "Same_Show.fseq", fppConnectRegistrationFailed)
-	if !strings.Contains(failedA.RegistrationReason, "Same-Show.fseq") {
-		t.Fatalf("A's RegistrationReason = %q, want it to name the already-registered file Same-Show.fseq", failedA.RegistrationReason)
+	pendingA := waitForRegistrationState(t, held, "sequences", "Same_Show.fseq", fppConnectRegistrationPending)
+	if !strings.Contains(pendingA.RegistrationReason, "Same-Show.fseq") {
+		t.Fatalf("A's RegistrationReason = %q, want it to name the already-registered file Same-Show.fseq", pendingA.RegistrationReason)
 	}
 
 	// B must remain registered, unchanged: A's later attempt must never
@@ -1342,6 +1405,82 @@ func TestFPPConnectRegisterReadyFileStaysPendingBehindAwaitingCompetitor(t *test
 
 	if got := len(requests()); got != 1 {
 		t.Fatalf("registration requests = %d, want exactly 1", got)
+	}
+}
+
+// TestFPPConnectRegisterLoserRegistersOnNextWakeAfterWinnerFailsTerminally
+// is review round 7 finding 3's own regression test: a record that lost a
+// slug collision used to be marked terminally failed, so once its winner
+// later failed terminally (or was discarded), the loser could never
+// recover except by a fresh re-upload, since nothing else ever starts a
+// new attempt for an already-terminal record. A collision loss is now
+// pending instead, retried on the registrar's normal wake/backoff cycle
+// like any other pending state: this proves the loser registers on its
+// very next wake after the winner fails with a 400, with no re-upload
+// involved at all.
+func TestFPPConnectRegisterLoserRegistersOnNextWakeAfterWinnerFailsTerminally(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	aData := []byte("first-file")
+	aHash := sha256Hex(aData)
+	var aAttempts int32
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		if hash == aHash {
+			if atomic.AddInt32(&aAttempts, 1) == 1 {
+				// A's first attempt: a retryable failure, so A is a
+				// genuine, still-live competitor (in flight) when B first
+				// attempts below, not yet terminally failed.
+				return http.StatusInternalServerError, ""
+			}
+			// A's second attempt: a non-retryable refusal unrelated to
+			// the collision.
+			return http.StatusBadRequest, problemBody(t, "invalid-parameter", "synthetic failure")
+		}
+		// B's request, once it ever sends one.
+		return http.StatusOK, assetResponseBody(t, "asset-b", hash, false)
+	})
+	defer fakeSrv.Close()
+
+	// The registrar's real production backoff (10s) is deliberately kept
+	// here, not the fast test one: A must stay parked in its own backoff
+	// wait, genuinely in flight, until this test explicitly wakes it, so
+	// B's own first attempt below is guaranteed to see A as merely
+	// pending rather than racing A's own natural retry timer.
+	reg, _, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	uploadAndBind(t, held, "sequences", "My Show.fseq", aData)
+	waitForRegistrationState(t, held, "sequences", "My Show.fseq", fppConnectRegistrationPending)
+
+	// B binds while A is still in flight (backed off, not yet terminal):
+	// B loses the collision and stays pending, naming A, rather than
+	// failing outright.
+	time.Sleep(5 * time.Millisecond)
+	uploadAndBind(t, held, "sequences", "my_show.fseq", []byte("second-file-is-longer"))
+	pendingB := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationPending)
+	if !strings.Contains(pendingB.RegistrationReason, "My Show.fseq") {
+		t.Fatalf("B's RegistrationReason = %q, want it to name the colliding file My Show.fseq", pendingB.RegistrationReason)
+	}
+
+	// Wakes A's own retry loop into its second, terminal attempt.
+	reg.Wake()
+	waitForRegistrationState(t, held, "sequences", "My Show.fseq", fppConnectRegistrationFailed)
+
+	// A second Wake, after A is confirmed terminally failed, reaches B's
+	// own retry loop (which may not have been back in its own wait at the
+	// moment of the first Wake): B's next attempt re-evaluates the
+	// collision fresh, finds A no longer contests it, and registers for
+	// real, with no re-upload of B ever required.
+	reg.Wake()
+	registeredB := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationRegistered)
+	if registeredB.RegistrationAssetID != "asset-b" {
+		t.Fatalf("B's record = %+v, want it registered as asset-b once A's terminal failure released the identity", registeredB)
+	}
+
+	reqs := requests()
+	if len(reqs) != 3 {
+		t.Fatalf("registration requests = %d, want exactly 3 (A's two attempts, then B's one)", len(reqs))
 	}
 }
 
