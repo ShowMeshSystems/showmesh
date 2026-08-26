@@ -92,6 +92,18 @@ type fppConnectRegistrar struct {
 	now    func() time.Time
 	logger *slog.Logger
 
+	// initialBackoff and maxBackoff are registerLoop's capped exponential
+	// backoff bounds, set to fppConnectRegisterInitialBackoff/
+	// fppConnectRegisterMaxBackoff by newFPPConnectRegistrar and otherwise
+	// fixed for the registrar's whole life (review round 5 finding 5):
+	// fields rather than the package constants directly so a test can
+	// substitute a millisecond-scale schedule and actually observe (or
+	// prove the absence of) a retry within a short deadline, something
+	// impossible against the real 10s initial backoff without either an
+	// explicit Wake() or a multi-second sleep.
+	initialBackoff time.Duration
+	maxBackoff     time.Duration
+
 	// triggerInventory signals the asset inventory to republish out of
 	// cadence after a successful registration, so the coordinator's own
 	// evidence of this node's held bytes post-dates the registration that
@@ -110,7 +122,13 @@ type fppConnectRegistrar struct {
 	// and which one wins must not depend on upload arrival order alone,
 	// since binding (the event that actually starts a registration
 	// attempt) can happen long after upload completion. Populated and
-	// read only through claimIdentity, one locked decision at a time.
+	// read only through claimIdentity, one locked decision at a time. A
+	// cached entry is not permanent (review round 5 finding 2): claimIdentity
+	// clears it, and decides fresh, the moment it no longer matches either
+	// side of the collision the held store currently reports, so a dead
+	// owner (superseded, rebound elsewhere, or terminally failed) can
+	// never lock an identity a fresh upload of the losing file has every
+	// right to win.
 	identityOwner map[string]string
 
 	// wg counts every registerLoop goroutine this registrar has ever
@@ -120,6 +138,24 @@ type fppConnectRegistrar struct {
 	// attempt in flight when the agent began shutting down was simply
 	// abandoned mid-request with nothing downstream ever waiting on it.
 	wg sync.WaitGroup
+
+	// closed is set true, under mu, by Wait, before Wait ever calls
+	// wg.Wait (review round 5 finding 3): startLoop checks closed in the
+	// SAME locked critical section as its in-flight claim and its own
+	// wg.Add call, so the two orderings are mutually exclusive rather
+	// than racing. Either startLoop's whole critical section (claim,
+	// Add) completes before Wait's does (in which case Wait's own
+	// wg.Wait, called only after that critical section releases mu, is
+	// guaranteed to see the Add), or Wait's critical section (setting
+	// closed) completes first, in which case startLoop observes closed
+	// and never calls wg.Add at all. Before this field existed, r.ctx.Err()
+	// and wg.Add were two separate, unguarded steps: a late OnHeld (the
+	// "fppconnect.configure" push path, not gated by HTTP listener
+	// shutdown, see startLoop's own doc comment) could pass the ctx
+	// check and then call wg.Add after Wait had already observed the
+	// counter reach zero and returned, a documented sync.WaitGroup
+	// misuse.
+	closed bool
 }
 
 // newFPPConnectRegistrar constructs a registrar. ctx bounds every retry
@@ -131,9 +167,11 @@ func newFPPConnectRegistrar(ctx context.Context, held *fppConnectHeldStore, stat
 	return &fppConnectRegistrar{
 		ctx: ctx, held: held, state: state, nodeID: nodeID, token: token,
 		triggerInventory: triggerInventory, now: now, logger: logger,
-		wake:          make(chan struct{}),
-		inFlight:      map[string]bool{},
-		identityOwner: map[string]string{},
+		initialBackoff: fppConnectRegisterInitialBackoff,
+		maxBackoff:     fppConnectRegisterMaxBackoff,
+		wake:           make(chan struct{}),
+		inFlight:       map[string]bool{},
+		identityOwner:  map[string]string{},
 	}
 }
 
@@ -149,7 +187,15 @@ func newFPPConnectRegistrar(ctx context.Context, held *fppConnectHeldStore, stat
 // a goroutine that calls Wait before every registration has even started
 // can observe the WaitGroup's counter at zero and return immediately,
 // joining nothing (review round 2 finding A).
+//
+// closed is set true, under r.mu, BEFORE wg.Wait is ever called (review
+// round 5 finding 3): see closed's own doc comment on the struct for why
+// that ordering, shared with startLoop's identical lock, is what makes a
+// late startLoop call and this call mutually exclusive instead of racing.
 func (r *fppConnectRegistrar) Wait() {
+	r.mu.Lock()
+	r.closed = true
+	r.mu.Unlock()
 	r.wg.Wait()
 }
 
@@ -234,15 +280,18 @@ func (r *fppConnectRegistrar) BootWalk() {
 // resulting double dispatch (two concurrent requests, two inventory
 // triggers).
 //
-// r.ctx.Err() is checked before wg.Add (review round 3 finding 4): a late
-// caller (see agent.go's own doc comment on the shutdown sequence, in
-// particular the "fppconnect.configure" push path, which is not gated by
-// the HTTP listener's own shutdown) can still reach OnHeld/startLoop after
-// Wait has already returned or is currently blocked returning, and Add
-// after Wait observes a zero counter is a documented WaitGroup misuse.
-// Refusing to start once ctx is done closes that race: registerLoop's own
-// per-iteration ctx check would have refused the attempt anyway, so
-// nothing is lost by never starting the goroutine at all.
+// r.ctx.Err() is checked before ever taking r.mu (review round 3 finding
+// 4): a late caller (see agent.go's own doc comment on the shutdown
+// sequence, in particular the "fppconnect.configure" push path, which is
+// not gated by the HTTP listener's own shutdown) can still reach
+// OnHeld/startLoop after Wait has already returned or is currently
+// blocked returning. This alone is only a fast path, not the actual
+// guarantee: ctx being canceled and Wait having started are two different
+// events (agent.go cancels sigCtx, then separately calls Wait), so a
+// caller could still observe r.ctx.Err() == nil right up to the moment it
+// takes r.mu. r.closed, checked in the SAME critical section as the
+// in-flight claim and wg.Add below, is what actually closes the race
+// (review round 5 finding 3): see closed's own doc comment on the struct.
 func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
 	if r.ctx.Err() != nil {
 		return
@@ -250,14 +299,14 @@ func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
 
 	key := rec.Dir + "/" + rec.Name
 	r.mu.Lock()
-	if r.inFlight[key] {
+	if r.closed || r.inFlight[key] {
 		r.mu.Unlock()
 		return
 	}
 	r.inFlight[key] = true
+	r.wg.Add(1)
 	r.mu.Unlock()
 
-	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		defer func() {
@@ -293,7 +342,7 @@ func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
 // ever registers it. Continuing lets the next iteration's RecordFor read
 // the new record and register it instead.
 func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
-	backoff := fppConnectRegisterInitialBackoff
+	backoff := r.initialBackoff
 	for {
 		if r.ctx.Err() != nil {
 			return
@@ -337,27 +386,27 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 		switch outcome.kind {
 		case fppConnectRegistrationSkipped:
 			if !r.held.SetRegistrationSkipped(rec.Dir, rec.Name, rec.ContentHash, outcome.reason) {
-				backoff = fppConnectRegisterInitialBackoff
+				backoff = r.initialBackoff
 				continue
 			}
 			return
 		case fppConnectRegistrationRegistered:
 			if !r.held.SetRegistrationRegistered(rec.Dir, rec.Name, rec.ContentHash, outcome.assetID, outcome.rolledBack) {
-				backoff = fppConnectRegisterInitialBackoff
+				backoff = r.initialBackoff
 				continue
 			}
 			r.triggerInventory()
 			return
 		case fppConnectRegistrationFailed:
 			if !r.held.SetRegistrationFailed(rec.Dir, rec.Name, rec.ContentHash, outcome.problemType, outcome.reason) {
-				backoff = fppConnectRegisterInitialBackoff
+				backoff = r.initialBackoff
 				continue
 			}
 			return
 		default: // fppConnectRegistrationPending: retryable
 			nextRetryAt := r.now().Add(backoff)
 			if !r.held.SetRegistrationPending(rec.Dir, rec.Name, rec.ContentHash, outcome.reason, nextRetryAt) {
-				backoff = fppConnectRegisterInitialBackoff
+				backoff = r.initialBackoff
 				continue
 			}
 			select {
@@ -367,8 +416,8 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 			case <-wake:
 			}
 			backoff *= 2
-			if backoff > fppConnectRegisterMaxBackoff {
-				backoff = fppConnectRegisterMaxBackoff
+			if backoff > r.maxBackoff {
+				backoff = r.maxBackoff
 			}
 		}
 	}
@@ -398,16 +447,34 @@ func fppConnectIdentityKey(dir, showID, logicalSequence string) string {
 // claim for key in this same locked step, so a concurrent competitor's
 // own call for the identical identityKey sees it already taken rather
 // than reaching its own, possibly different, conclusion moments apart.
-// Once any key claims an identityKey it stays the owner until this
-// process restarts (identityOwner is never cleared): a further collision
-// against the same identityKey always resolves against the recorded
-// owner, never re-litigated by ReceivedAt.
+//
+// A cached owner is trusted only while it still matches key or otherKey
+// (review round 5 finding 2): otherKnown/otherKey/otherRegistered are
+// derived fresh from the held store on every call (attemptRegister's own
+// CollidingRecord lookup, immediately before this call), so a cached
+// owner that matches neither is proof its own record has since moved on
+// from this identity, whether by being superseded with different bytes,
+// rebound to a different show or sequence (BindShow), or (via
+// attemptRegister's own terminal-other check just above this call)
+// failed non-retryably and so will never attempt again. Before this fix
+// identityOwner was permanent for the life of the process: a dead owner
+// locked its identity forever, and the losing file it beat could never
+// win it even after a fresh upload gave it a real second chance. A stale
+// entry is cleared and the identity is decided fresh, exactly as if
+// nothing had ever claimed it.
 func (r *fppConnectRegistrar) claimIdentity(key, identityKey string, receivedAt time.Time, otherKnown bool, otherKey string, otherReceivedAt time.Time, otherRegistered bool) (won bool, ownerKey string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if owner, ok := r.identityOwner[identityKey]; ok {
-		return owner == key, owner
+		switch {
+		case owner == key:
+			return true, key
+		case otherKnown && owner == otherKey:
+			return false, owner
+		default:
+			delete(r.identityOwner, identityKey)
+		}
 	}
 	if !otherKnown {
 		r.identityOwner[identityKey] = key
@@ -502,7 +569,14 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 	// simultaneous first attempt by both falls back to ReceivedAt.
 	identityKey := fppConnectIdentityKey(rec.Dir, rec.ShowID, rec.LogicalSequence)
 	myKey := rec.Dir + "/" + rec.Name
-	other, otherKnown := r.held.CollidingRecord(rec.Dir, rec.Name, rec.ShowID, rec.LogicalSequence)
+	other, otherKnown := r.held.CollidingRecord(rec.Dir, rec.Name, rec.ShowID, rec.Show, rec.LogicalSequence)
+	if otherKnown && other.RegistrationState == fppConnectRegistrationFailed {
+		// A competitor that failed non-retryably will never attempt again
+		// (ADR-030 decision 5): it no longer contests this identity
+		// (review round 5 finding 2), the same way a competitor CollidingRecord
+		// never found in the first place would not.
+		otherKnown = false
+	}
 	otherKey, otherReceivedAt, otherRegistered := "", time.Time{}, false
 	if otherKnown {
 		otherKey = other.Dir + "/" + other.Name

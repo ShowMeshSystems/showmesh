@@ -125,7 +125,12 @@ type fppConnectHeldRecord struct {
 	// RegistrationReason is human-readable evidence for the current
 	// RegistrationState: why registration is skipped, the retry reason
 	// while pending, or the failure detail. Empty when RegistrationState
-	// is "" or "registered".
+	// is "" or "registered", except immediately after BindShow resets an
+	// already-registered record to "" for a rebind to a new show or
+	// sequence identity (review round 5 finding 1,
+	// resetRegistrationForRebindLocked): RegistrationReason then carries
+	// the superseded asset id as evidence, until the next registration
+	// attempt under the new identity overwrites it.
 	RegistrationReason string `json:"registrationReason,omitempty"`
 
 	// RegistrationProblemType is the coordinator's RFC 9457 problem `type`
@@ -524,25 +529,39 @@ func (s *fppConnectHeldStore) RecordFor(dir, name string) (fppConnectHeldRecord,
 	return rec, ok
 }
 
-// CollidingRecord returns another currently bound record in dir that
-// shares showID and logicalSequence with (dir, name) but has a different
-// Name, if one exists (review round 2 finding C): two distinct file name
-// stems can slugify to the identical sequence id ("My Show.fseq" and
-// "my_show.fseq" both slug to "my-show"), and the assets API's identity is
-// (show, sequence, targetKind, target), never the filename, so registering
-// both under the same show would silently supersede one with the other.
+// CollidingRecord returns another record in dir that shares (dir, name)'s
+// intended identity but has a different Name, if one exists (review round
+// 2 finding C): two distinct file name stems can slugify to the identical
+// sequence id ("My Show.fseq" and "my_show.fseq" both slug to "my-show"),
+// and the assets API's identity is (show, sequence, targetKind, target),
+// never the filename, so registering both under the same show would
+// silently supersede one with the other. A competitor is either another
+// currently bound record sharing showID and logicalSequence, or another
+// record still awaiting its show's config object id
+// (fppConnectUnboundReasonShowIDNotPushed, BindPendingShowID) whose
+// intended show name (showName) and logicalSequence both match (review
+// round 5 finding 4): BindPendingShowID temporarily unbinds a record
+// exactly like this while it waits for a later push to carry the id it
+// needs, and skipping every unbound record here used to make it invisible
+// to a competitor's collision check for as long as that wait lasted,
+// letting whichever of two colliding files happened to attempt while the
+// other was mid-wait claim the identity uncontested, decided by push
+// timing rather than claimIdentity's own ReceivedAt fairness rule.
 // Scoped to dir so a music/videos file, which this lane never registers
 // at all, is never flagged against a sequences file it could never
 // actually collide with at the API. ok is false when no such collision
 // exists.
-func (s *fppConnectHeldStore) CollidingRecord(dir, name, showID, logicalSequence string) (fppConnectHeldRecord, bool) {
+func (s *fppConnectHeldStore) CollidingRecord(dir, name, showID, showName, logicalSequence string) (fppConnectHeldRecord, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, rec := range s.records {
-		if rec.Dir != dir || rec.Name == name || !rec.Bound {
+		if rec.Dir != dir || rec.Name == name || rec.LogicalSequence != logicalSequence {
 			continue
 		}
-		if rec.ShowID == showID && rec.LogicalSequence == logicalSequence {
+		if rec.Bound && rec.ShowID == showID {
+			return rec, true
+		}
+		if !rec.Bound && rec.UnboundReason == fppConnectUnboundReasonShowIDNotPushed && rec.Show == showName {
 			return rec, true
 		}
 	}
@@ -1188,6 +1207,7 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 		}
 		if fppConnectContainsShow(showNames(), showName) {
 			rec.Show = showName
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 			return
 		}
@@ -1202,6 +1222,7 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 			// guessed, with a reason RebindPendingShowIDs specifically
 			// looks for once a later push carries shows.
 			rec.Show = binding.ShowName
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 		} else {
 			rec.Bound = true
@@ -1249,7 +1270,14 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 // completion (ADR-044 decision 8). Idempotent: binding an already-bound
 // record to the same show sets the same fields again, and re-posting the
 // same fileNames a second time produces the same records, not new ones
-// (RES-003 section 10.6's "up to twice per target" requirement).
+// (RES-003 section 10.6's "up to twice per target" requirement). A record
+// that already carries registration progress under a DIFFERENT resolved
+// identity (ShowID or LogicalSequence) has that progress reset to
+// unregistered first (review round 5 finding 1): without this, a file
+// registered under one show that a later playlist POST renames into
+// another show kept reporting "registered" for the new show while no
+// asset existed there at all, since nothing ever told the registrar to
+// try again under the new identity.
 func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1263,10 +1291,14 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 			if rec.Name != fname {
 				continue
 			}
+			newSeq := fppConnectLogicalSequenceSlug(fname)
+			if rec.RegistrationState != "" && (rec.ShowID != showID || rec.LogicalSequence != newSeq) {
+				rec = resetRegistrationForRebindLocked(rec)
+			}
 			rec.Bound = true
 			rec.Show = showName
 			rec.ShowID = showID
-			rec.LogicalSequence = fppConnectLogicalSequenceSlug(fname)
+			rec.LogicalSequence = newSeq
 			rec.UnboundReason = ""
 			s.records[key] = rec
 			matched = true
@@ -1286,6 +1318,32 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 	}
 }
 
+// resetRegistrationForRebindLocked clears rec's registration progress
+// ahead of a rebind to a new (ShowID, LogicalSequence) identity (review
+// round 5 finding 1's own helper, called from BindShow): the registrar's
+// OnHeld sees the resulting empty RegistrationState as a fresh, not yet
+// attempted candidate and starts a new attempt under the new identity.
+// When rec was actually registered, the superseded asset id, show id, and
+// sequence survive in RegistrationReason as evidence that a real
+// registration existed under the old identity, even though it is
+// otherwise empty for state "" (see RegistrationReason's own doc
+// comment for that one documented exception).
+func resetRegistrationForRebindLocked(rec fppConnectHeldRecord) fppConnectHeldRecord {
+	reason := ""
+	if rec.RegistrationState == fppConnectRegistrationRegistered {
+		reason = fmt.Sprintf(
+			"previously registered as asset %q under show %q, sequence %q, before being rebound to a different show",
+			rec.RegistrationAssetID, rec.ShowID, rec.LogicalSequence)
+	}
+	rec.RegistrationState = ""
+	rec.RegistrationAssetID = ""
+	rec.RegistrationRolledBack = false
+	rec.RegistrationReason = reason
+	rec.RegistrationProblemType = ""
+	rec.RegistrationNextRetryAt = time.Time{}
+	return rec
+}
+
 // BindPendingShowID applies one POST /api/playlist/{name} whose name
 // resolved to exactly one show by display name, but whose config object
 // id has not been pushed yet (review round 2 finding D,
@@ -1302,7 +1360,13 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 // id (or a stale playlist POST arriving after a record has already bound
 // and registered) would knock an already-registered record back to
 // unbound, undoing real progress for no benefit, since the record is
-// already bound to a resolvable show id and needs no rescue.
+// already bound to a resolvable show id and needs no rescue. Unlike
+// ShowID, LogicalSequence is kept, not cleared (review round 5 finding
+// 4): CollidingRecord matches a record awaiting its show id against
+// showName and logicalSequence precisely so a second, colliding file
+// attempting to register while this one waits still finds it as a
+// competitor, rather than treating this temporary sub-state as if the
+// file did not exist at all.
 func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1323,7 +1387,7 @@ func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []str
 			rec.Bound = false
 			rec.Show = showName
 			rec.ShowID = ""
-			rec.LogicalSequence = ""
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(fname)
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 			s.records[key] = rec
 			if s.onHeld != nil {

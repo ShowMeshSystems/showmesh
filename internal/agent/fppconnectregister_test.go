@@ -130,13 +130,33 @@ func problemBody(t *testing.T, problemType, detail string) string {
 	return string(body)
 }
 
+// fppConnectTestBackoff and fppConnectTestMaxBackoff are a millisecond-scale
+// stand-in for the real 10s initial / 5m max backoff (review round 5
+// finding 5): registerLoop's backoff is a field on the registrar
+// specifically so a test can substitute this schedule on the one registrar
+// that needs it (via reg.initialBackoff/reg.maxBackoff, after construction)
+// rather than every registrar newTestFPPConnectRegistrar builds, which
+// would otherwise make every OTHER test's own background retry loop far
+// more active than its own timing assumptions expect. fppConnectWaitPastBackoff
+// sleeps comfortably past several of these fast intervals (10+20+40+80ms,
+// capped at fppConnectTestMaxBackoff, well past "at least two").
+const (
+	fppConnectTestBackoff    = 10 * time.Millisecond
+	fppConnectTestMaxBackoff = 100 * time.Millisecond
+)
+
+func fppConnectWaitPastBackoff() { time.Sleep(250 * time.Millisecond) }
+
 // newTestFPPConnectRegistrar wires a registrar over held whose retry loops
 // share ctx (canceled automatically at test cleanup) and whose inventory
 // trigger signals the returned channel, matching agent.go's own wiring of
 // assetFetchTrigger. The push callback mirrors agent.go's own composition
 // exactly (RebindPendingShowIDs before Wake), so a test simulating a push
 // via state.Apply/state.notifyPush exercises the identical rebind path a
-// real "fppconnect.configure" push does (review round 3 finding 2).
+// real "fppconnect.configure" push does (review round 3 finding 2). The
+// returned registrar keeps the real production backoff schedule; a test
+// that needs the fast one sets reg.initialBackoff/reg.maxBackoff itself
+// (fppConnectTestBackoff/fppConnectTestMaxBackoff) right after this call.
 func newTestFPPConnectRegistrar(t *testing.T, held *fppConnectHeldStore, coordinatorBaseURL, token string) (*fppConnectRegistrar, *fppConnectState, chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -429,7 +449,12 @@ func TestFPPConnectRegisterEmptyBaseURLPendingUntilConfigured(t *testing.T) {
 }
 
 // TestFPPConnectRegister400And403AreTerminal proves a 400 or 403 is
-// recorded as a failure, verbatim, and never retried.
+// recorded as a failure, verbatim, and never retried. Uses
+// fppConnectTestBackoff/fppConnectTestMaxBackoff on this test's own
+// registrar (review round 5 finding 5): the real 10s initial backoff made
+// the "never retried" assertion below pass regardless of whether the code
+// under test actually classified the status as terminal, since no retry
+// could fire within any sleep this test could afford either way.
 func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -453,7 +478,9 @@ func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
 			})
 			defer fakeSrv.Close()
 
-			newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+			reg, _, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+			reg.initialBackoff = fppConnectTestBackoff
+			reg.maxBackoff = fppConnectTestMaxBackoff
 
 			uploadAndBind(t, held, "sequences", "Bad.fseq", []byte("payload"))
 
@@ -463,7 +490,7 @@ func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
 					failed.RegistrationProblemType, failed.RegistrationReason, tc.problemType, tc.detail)
 			}
 
-			time.Sleep(150 * time.Millisecond)
+			fppConnectWaitPastBackoff()
 			if got := atomic.LoadInt32(&requestCount); got != 1 {
 				t.Fatalf("registration requests = %d, want exactly 1 (a %d must never be retried)", got, tc.status)
 			}
@@ -606,7 +633,7 @@ func TestFPPConnectRegisterDoublePlaylistPostRegistersOnce(t *testing.T) {
 	waitForRegistrationState(t, held, "sequences", "Twice.fseq", fppConnectRegistrationRegistered)
 	// Give any wrongly-started second goroutine a chance to also fire its
 	// own request before asserting the count.
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	reqs := requests()
 	if len(reqs) != 1 {
@@ -743,14 +770,37 @@ func TestFPPConnectRegisterMusicFileIsSkipped(t *testing.T) {
 // on a fresh store, the WaitGroup's counter was already zero, so that
 // early Wait returned immediately and its done channel closed during
 // startup, before any upload ever completed, meaning shutdown never
-// actually joined a single real registration. This test reproduces that
-// exact sequence: call Wait once while nothing is registered (proving it
-// returns immediately, the harmless case that hid the bug), THEN bind a
-// file (starting a real registerLoop against an unreachable coordinator),
-// and call Wait a second time, the way agent.go's shutdown path now does
-// it inline, proving THAT call actually blocks on the running loop and
-// unblocks only once its context is canceled.
+// actually joined a single real registration. This uses two separate
+// registrars, one per half of that sequence (review round 5 finding 3
+// changed Wait into a one-shot operation: it permanently marks its own
+// registrar closed to every future startLoop call, so the ORIGINAL
+// single-registrar "Wait early, then bind, then Wait again" sequence this
+// test used to drive is no longer a scenario any real registrar's own
+// caller could hit twice; agent.go's own contract already said as much,
+// "must be called directly in the shutdown sequence," and now the
+// registrar enforces it). The first registrar proves a Wait call with
+// nothing ever registered returns immediately, the harmless case that hid
+// the bug; the second proves agent.go's own shutdown-path call, made
+// after a real registerLoop against an unreachable coordinator has
+// already started, blocks on that loop and unblocks only once its
+// context is canceled.
 func TestFPPConnectRegistrarWaitJoinsRegisterLoops(t *testing.T) {
+	emptyHeld, _ := newTestHeldStore(t)
+	earlyCtx, earlyCancel := context.WithCancel(context.Background())
+	t.Cleanup(earlyCancel)
+	earlyReg := newFPPConnectRegistrar(earlyCtx, emptyHeld, newFPPConnectState(), "node-1", "", func() {}, time.Now, discardLogger())
+
+	earlyDone := make(chan struct{})
+	go func() {
+		earlyReg.Wait()
+		close(earlyDone)
+	}()
+	select {
+	case <-earlyDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a Wait with nothing registered did not return promptly")
+	}
+
 	held, _ := newTestHeldStore(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -768,22 +818,6 @@ func TestFPPConnectRegistrarWaitJoinsRegisterLoops(t *testing.T) {
 	reg := newFPPConnectRegistrar(ctx, held, state, "node-1", "", func() {}, time.Now, discardLogger())
 	held.SetOnHeld(reg.OnHeld)
 
-	// Nothing has ever been bound yet: an early Wait (the bug's own call
-	// site) returns immediately, exactly the behavior that made the bug
-	// invisible.
-	earlyDone := make(chan struct{})
-	go func() {
-		reg.Wait()
-		close(earlyDone)
-	}()
-	select {
-	case <-earlyDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("an early Wait with nothing registered did not return promptly")
-	}
-
-	// Now a real upload binds and starts a real registerLoop, the event
-	// the early Wait above could never have joined.
 	uploadAndBind(t, held, "sequences", "NeverUp.fseq", []byte("data"))
 	waitForRegistrationState(t, held, "sequences", "NeverUp.fseq", fppConnectRegistrationPending)
 
@@ -808,6 +842,62 @@ func TestFPPConnectRegistrarWaitJoinsRegisterLoops(t *testing.T) {
 	case <-waitDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Wait did not return within 2s of the context being canceled")
+	}
+}
+
+// TestFPPConnectRegistrarStartLoopRefusesAfterWaitStarted is review round 5
+// finding 3's own regression test: startLoop's r.ctx.Err() check and its
+// wg.Add(1) used to be two separate, unguarded steps, so a late OnHeld (the
+// "fppconnect.configure" push path, never gated by the HTTP listener's own
+// shutdown, see startLoop's own doc comment) could pass the ctx check and
+// then call wg.Add after Wait had already observed the WaitGroup's counter
+// reach zero and returned, a documented sync.WaitGroup misuse. Wait's own
+// doc comment states its closed flag is set, under the same lock startLoop
+// now shares, before Wait ever calls wg.Wait: this test drives that exact
+// state directly (there is nothing in flight yet for a real Wait call to
+// usefully block on) and proves a late OnHeld arriving after it neither
+// starts a registerLoop nor calls wg.Add at all.
+func TestFPPConnectRegistrarStartLoopRefusesAfterWaitStarted(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	var requestCount int32
+	fakeSrv, _ := newFPPConnectRegisterFake(t, func(fppConnectRegisterRequest) (int, string) {
+		atomic.AddInt32(&requestCount, 1)
+		return http.StatusOK, "{}"
+	})
+	defer fakeSrv.Close()
+
+	reg, _, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	reg.mu.Lock()
+	reg.closed = true
+	reg.mu.Unlock()
+
+	// held.SetOnHeld(reg.OnHeld) is already wired by newTestFPPConnectRegistrar:
+	// this upload's own completeLocked call fires OnHeld the same way a
+	// late "fppconnect.configure" push's own call path would, after Wait
+	// has already started.
+	uploadAndBind(t, held, "sequences", "TooLate.fseq", []byte("late"))
+
+	fppConnectWaitPastBackoff()
+	if got := atomic.LoadInt32(&requestCount); got != 0 {
+		t.Fatalf("registration requests = %d, want 0: a late OnHeld after Wait started must never register anything", got)
+	}
+	reg.mu.Lock()
+	inFlight := len(reg.inFlight)
+	reg.mu.Unlock()
+	if inFlight != 0 {
+		t.Fatalf("inFlight entries = %d after a late OnHeld post-Wait, want 0", inFlight)
+	}
+
+	// wg.Wait must return immediately: nothing was ever Add'ed for the
+	// late record, so there is nothing left to join.
+	done := make(chan struct{})
+	go func() { reg.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wg.Wait() did not return promptly; a late OnHeld must never call wg.Add")
 	}
 }
 
@@ -1032,6 +1122,57 @@ func TestFPPConnectRegisterLateBindingNeverSupersedesAlreadyRegistered(t *testin
 	}
 }
 
+// TestFPPConnectRegisterLoserRetriesAfterWinnerFailsTerminally is review
+// round 5 finding 2's own regression test: claimIdentity's identityOwner
+// cache used to be permanent for the registrar's whole life, so once A won
+// a slug collision against B, A's own key stayed the recorded owner even
+// after A itself later failed terminally for a reason that has nothing to
+// do with the collision (its own non-retryable coordinator refusal) and so
+// will never attempt registration again. B, the loser, stayed "failed"
+// forever: even a fresh re-upload giving B a real second chance still lost
+// to a dead owner that could never actually win the identity for real. The
+// fix clears a cached owner the moment it no longer matches what the held
+// store currently reports for that identity, so B's fresh attempt here
+// correctly wins once A is confirmed terminally failed.
+func TestFPPConnectRegisterLoserRetriesAfterWinnerFailsTerminally(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	var attempt int32
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		if atomic.AddInt32(&attempt, 1) == 1 {
+			// A's own first (and only) attempt: a non-retryable refusal
+			// unrelated to the collision.
+			return http.StatusBadRequest, problemBody(t, "invalid-parameter", "synthetic failure")
+		}
+		hash := sha256Hex(req.fileBytes)
+		return http.StatusOK, assetResponseBody(t, "asset-b", hash, false)
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	uploadAndBind(t, held, "sequences", "My Show.fseq", []byte("first-file"))
+	failedA := waitForRegistrationState(t, held, "sequences", "My Show.fseq", fppConnectRegistrationFailed)
+	if failedA.RegistrationProblemType != "invalid-parameter" {
+		t.Fatalf("A's failure = %+v, want the synthetic 400 refusal, not a collision failure", failedA)
+	}
+
+	// Only now, with A confirmed terminally failed, does B (the colliding
+	// slug) upload and bind.
+	time.Sleep(5 * time.Millisecond)
+	uploadAndBind(t, held, "sequences", "my_show.fseq", []byte("second-file-is-longer"))
+
+	registeredB := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationRegistered)
+	if registeredB.RegistrationAssetID != "asset-b" {
+		t.Fatalf("B's record = %+v, want it to register once A's terminal failure released the identity", registeredB)
+	}
+
+	reqs := requests()
+	if len(reqs) != 2 {
+		t.Fatalf("registration requests = %d, want exactly 2 (A's own failed attempt, then B's)", len(reqs))
+	}
+}
+
 // TestFPPConnectRegisterActiveShowKnownButIDNotPushedRebindsOnLaterPush is
 // review round 3 finding 2's own regression test: an active show whose
 // display name is already known (ShowNames) but whose config object id
@@ -1098,4 +1239,123 @@ func TestFPPConnectRegisterActiveShowKnownButIDNotPushedRebindsOnLaterPush(t *te
 	if reqs[0].fields["show"] != "halloween-2026" {
 		t.Fatalf("request show field = %q, want halloween-2026", reqs[0].fields["show"])
 	}
+}
+
+// TestFPPConnectRegisterCollidingAwaitingShowIDCompetesFairly is review
+// round 5 finding 4's own regression test: BindPendingShowID temporarily
+// unbinds a record awaiting its show's config object id
+// (fppConnectUnboundReasonShowIDNotPushed), and CollidingRecord used to
+// skip every unbound record outright, making that record invisible to a
+// colliding file's own collision check for as long as the wait lasted.
+// Which of two colliding files won the identity then depended on push
+// timing (whichever one happened to attempt while the other was mid-wait
+// won uncontested) rather than claimIdentity's own ReceivedAt fairness
+// rule. The fix keeps LogicalSequence on a record awaiting its show id and
+// has CollidingRecord match it by intended show name, so a competitor
+// attempting while the other waits still finds it and the identity is
+// still decided by ReceivedAt, exactly as if neither side were waiting on
+// anything. This drives the interleaving both ways: the awaiting file can
+// have EITHER the earlier or the later ReceivedAt, and either way the
+// correct file (by ReceivedAt) is the one that ends up registered.
+func TestFPPConnectRegisterCollidingAwaitingShowIDCompetesFairly(t *testing.T) {
+	// run uploads earlierFile then laterFile (in that order, so
+	// earlierFile always has the earlier ReceivedAt), binds awaitingFile's
+	// playlist POST first, while the show's id has not been pushed yet
+	// (BindPendingShowID leaves it held, unbound, awaiting that id), THEN
+	// makes the id resolvable and binds the OTHER file's playlist,
+	// triggering ITS registration attempt against a competitor that is
+	// still sitting in the awaiting-id state.
+	run := func(t *testing.T, earlierFile, laterFile, awaitingFile string) {
+		t.Helper()
+		held, _ := newTestHeldStore(t)
+
+		fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+			hash := sha256Hex(req.fileBytes)
+			return http.StatusOK, assetResponseBody(t, "asset-"+req.fields["sequence"], hash, false)
+		})
+		defer fakeSrv.Close()
+
+		_, state, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+		srv := startFPPConnectTestServer(t, newFPPConnectStateView(state), "node-1", held)
+		defer srv.Close()
+
+		// The show's name is known, but not yet its config object id: a
+		// playlist POST naming either file resolves to "known, id not
+		// pushed" (fppConnectUnboundReasonShowIDNotPushed), never
+		// "unknown" or "ambiguous".
+		state.SetShowNames([]string{"Halloween"})
+
+		if resp, body := patchChunk(t, srv, "sequences", earlierFile, 0, 5, []byte("early")); resp.StatusCode != http.StatusOK {
+			t.Fatalf("upload %s: status = %d, body=%s", earlierFile, resp.StatusCode, body)
+		}
+		time.Sleep(5 * time.Millisecond)
+		if resp, body := patchChunk(t, srv, "sequences", laterFile, 0, 4, []byte("late")); resp.StatusCode != http.StatusOK {
+			t.Fatalf("upload %s: status = %d, body=%s", laterFile, resp.StatusCode, body)
+		}
+
+		attemptingFile := laterFile
+		if awaitingFile == laterFile {
+			attemptingFile = earlierFile
+		}
+
+		postAwaiting := []byte(`{"mainPlaylist":[{"sequenceName":"` + awaitingFile + `"}]}`)
+		if resp, body := postPlaylist(t, srv, "Halloween", postAwaiting); resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST playlist (awaiting): status = %d, body=%s", resp.StatusCode, body)
+		}
+		awaiting, ok := findHeldRecord(t, held, "sequences", awaitingFile)
+		if !ok || awaiting.Bound || awaiting.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
+			t.Fatalf("%s = %+v (ok=%v), want held, unbound, awaiting the show id", awaitingFile, awaiting, ok)
+		}
+		if awaiting.Show != "Halloween" || awaiting.LogicalSequence != "my-show" {
+			t.Fatalf("%s = %+v, want Show=Halloween and LogicalSequence=my-show preserved while awaiting the show id", awaitingFile, awaiting)
+		}
+
+		// The show's id becomes resolvable for a FRESH lookup (the
+		// coordinator has pushed it via SetShows, properly synchronized
+		// through state's own mutex), but nothing has walked awaitingFile's
+		// own already-awaiting record to rebind it yet: notifyPush, the
+		// only thing that would trigger RebindPendingShowIDs, is
+		// deliberately never called in this test. This is the exact
+		// interleaving window review round 5 finding 4 covers: a real
+		// push's Apply and its RebindPendingShowIDs sweep are two
+		// separate steps too, so a brand new file's own bind can
+		// legitimately observe the updated id before the sweep ever
+		// reaches an existing awaiting record.
+		state.SetShows([]fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}})
+
+		postAttempting := []byte(`{"mainPlaylist":[{"sequenceName":"` + attemptingFile + `"}]}`)
+		if resp, body := postPlaylist(t, srv, "Halloween", postAttempting); resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST playlist (attempting): status = %d, body=%s", resp.StatusCode, body)
+		}
+
+		wantWinner := attemptingFile
+		if earlierFile == awaitingFile {
+			wantWinner = awaitingFile
+		}
+
+		wantRequests := 1
+		if wantWinner != attemptingFile {
+			wantRequests = 0
+			failed := waitForRegistrationState(t, held, "sequences", attemptingFile, fppConnectRegistrationFailed)
+			if !strings.Contains(failed.RegistrationReason, awaitingFile) {
+				t.Fatalf("%s's RegistrationReason = %q, want it to name the earlier-received, still-awaiting file %s", attemptingFile, failed.RegistrationReason, awaitingFile)
+			}
+		} else {
+			registered := waitForRegistrationState(t, held, "sequences", attemptingFile, fppConnectRegistrationRegistered)
+			if registered.LogicalSequence != "my-show" {
+				t.Fatalf("%s registered = %+v, want LogicalSequence my-show", attemptingFile, registered)
+			}
+		}
+
+		if got := len(requests()); got != wantRequests {
+			t.Fatalf("registration requests = %d, want %d", got, wantRequests)
+		}
+	}
+
+	t.Run("awaiting file received earlier wins the identity", func(t *testing.T) {
+		run(t, "My Show.fseq", "my_show.fseq", "My Show.fseq")
+	})
+	t.Run("awaiting file received later loses the identity", func(t *testing.T) {
+		run(t, "My Show.fseq", "my_show.fseq", "my_show.fseq")
+	})
 }

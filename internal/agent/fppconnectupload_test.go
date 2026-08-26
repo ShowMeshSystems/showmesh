@@ -926,6 +926,71 @@ func TestFPPConnectBindPendingShowIDSkipsAlreadyBoundRecord(t *testing.T) {
 	}
 }
 
+// TestFPPConnectBindShowToNewIdentityResetsRegistration is review round 5
+// finding 1's own regression test: BindShow rebinding an already-registered
+// record to a different show used to leave RegistrationState,
+// RegistrationAssetID, and RegistrationReason exactly as they were, so a
+// file registered under one show that a later playlist POST names into a
+// different show kept reporting "registered" for the new show even though
+// no asset exists there at all, and OnHeld's own terminal-state check
+// (fppConnectRegistrationTerminal) would then treat the record as done and
+// never even try to register it for real. BindShow must reset registration
+// to unregistered ("") whenever the resolved ShowID changes on a record
+// that already carries registration progress, keeping the superseded asset
+// id in RegistrationReason as evidence.
+func TestFPPConnectBindShowToNewIdentityResetsRegistration(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	srv := startFPPConnectTestServer(t, fakeFPPConnectView{enabled: true}, "node-1", held)
+	if resp, body := patchChunk(t, srv, "sequences", "Rebound.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+		srv.Close()
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+	srv.Close()
+
+	held.BindShow("Halloween", "halloween-2026", []string{"Rebound.fseq"}, time.Now())
+	bound, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
+	if !ok || !bound.Bound || bound.ShowID != "halloween-2026" {
+		t.Fatalf("record after initial BindShow = %+v (found=%v), want bound to halloween-2026", bound, ok)
+	}
+	if !held.SetRegistrationRegistered("sequences", "Rebound.fseq", bound.ContentHash, "asset-halloween", false) {
+		t.Fatal("SetRegistrationRegistered was a no-op, want it to apply")
+	}
+
+	// A later playlist POST rebinds the SAME file to a DIFFERENT show
+	// (xLights' own playlist naming changed, or an operator error): the
+	// resolved ShowID changes even though the file itself did not.
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, time.Now())
+
+	after, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
+	if !ok {
+		t.Fatal("no held record after rebinding to a different show")
+	}
+	if after.ShowID != "christmas-2026" || after.Show != "Christmas" {
+		t.Fatalf("record = %+v, want bound to Christmas/christmas-2026", after)
+	}
+	if after.RegistrationState != "" {
+		t.Fatalf("RegistrationState = %q after a rebind to a new show, want empty so registration re-runs under the new identity", after.RegistrationState)
+	}
+	if after.RegistrationAssetID != "" {
+		t.Fatalf("RegistrationAssetID = %q after a rebind to a new show, want cleared", after.RegistrationAssetID)
+	}
+	if after.RegistrationRolledBack {
+		t.Fatal("RegistrationRolledBack = true after a rebind to a new show, want cleared")
+	}
+	if !strings.Contains(after.RegistrationReason, "asset-halloween") {
+		t.Fatalf("RegistrationReason = %q, want it to keep the superseded asset id asset-halloween as evidence", after.RegistrationReason)
+	}
+
+	// Rebinding to the SAME show a second time must not disturb the reset
+	// state further (BindShow's own idempotence, unaffected by this fix).
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, time.Now())
+	still, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
+	if !ok || still.RegistrationState != "" || still.RegistrationReason != after.RegistrationReason {
+		t.Fatalf("record after a same-show rebind = %+v (found=%v), want unchanged from %+v", still, ok, after)
+	}
+}
+
 // TestFPPConnectUploadBootSweepKeepsHeld proves the boot sweep removes
 // stale partials and keeps held files.
 func TestFPPConnectUploadBootSweepKeepsHeld(t *testing.T) {
