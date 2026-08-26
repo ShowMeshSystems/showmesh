@@ -59,6 +59,10 @@ type cueCatalogResponse struct {
 	Generation *int64                  `json:"generation,omitempty"`
 	Revision   string                  `json:"revision,omitempty"`
 	Entries    []cueCatalogEntryRecord `json:"entries"`
+
+	AcknowledgedStatus   string     `json:"acknowledgedStatus"`
+	AcknowledgedRevision string     `json:"acknowledgedRevision,omitempty"`
+	AcknowledgedAt       *time.Time `json:"acknowledgedAt,omitempty"`
 }
 
 type cueCatalogAcknowledgeRequest struct {
@@ -196,6 +200,8 @@ func printCueCatalogResponse(w io.Writer, resp cueCatalogResponse) {
 	}
 	_, _ = fmt.Fprintf(w, "node %s: show=%s generation=%d revision=%s entries=%d\n",
 		resp.Node, resp.Show, generation, resp.Revision, len(resp.Entries))
+	_, _ = fmt.Fprintf(w, "  acknowledged: status=%s revision=%s at=%s\n",
+		resp.AcknowledgedStatus, emptyOrDash(resp.AcknowledgedRevision), timeOrDash(resp.AcknowledgedAt))
 	for _, e := range resp.Entries {
 		_, _ = fmt.Fprintf(w, "  cue %s (revision %d)\n", e.CueID, e.CueRevision)
 		if e.Outputs.Render != nil {
