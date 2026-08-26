@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Audit } from './Audit'
 import { ModelContext } from '../app/ModelContext'
@@ -7,10 +7,9 @@ import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { AuditEntry, Model } from '../app/types'
 
 // Track G seam G-8: the audit view. GET /audit pages from the OLDEST
-// entry, so a full window is the oldest window the API exposes, not the
-// tail — the load-bearing case here is that a full window states that out
-// loud (ADR-020: absent evidence is stated, never omitted) instead of
-// presenting week-old history as the audit log.
+// entry, so this view walks the cursor forward to the end of retained
+// history (in MAX_LIMIT-sized pages) before rendering, so the log opens on
+// the most recent activity rather than the oldest retained window.
 const { listAudit } = vi.hoisted(() => ({ listAudit: vi.fn() }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -57,32 +56,68 @@ afterEach(() => {
   listAudit.mockReset()
 })
 
-describe('Audit: full-window notice', () => {
-  it('states that the window is the oldest the API exposes when the fetch fills the requested limit', async () => {
-    // The default page size is 100 — return exactly that many, the
-    // indistinguishable-from-truncated case.
-    listAudit.mockResolvedValue({
+describe('Audit: newest-first load', () => {
+  it('renders entries newest first', async () => {
+    listAudit.mockResolvedValueOnce({
       serverTime: '2026-08-17T00:00:00Z',
-      entries: Array.from({ length: 100 }, (_, i) =>
-        makeAuditEntry({ target: `config/kind-${i}` }),
-      ),
+      entries: [
+        makeAuditEntry({ target: 'config/first', timestamp: '2026-08-17T00:00:00Z' }),
+        makeAuditEntry({ target: 'config/second', timestamp: '2026-08-17T00:01:00Z' }),
+      ],
     })
     renderAudit(makeModel({ session: auditSession }))
 
-    const notice = await screen.findByText(/this window is full/i)
-    expect(notice).toHaveTextContent(/oldest/i)
-    expect(notice).toHaveTextContent(/newer entries beyond this window may exist/i)
-    expect(listAudit).toHaveBeenCalledWith({ since: 0, limit: 100 })
+    await screen.findByText('config/second')
+    const rows = screen.getAllByRole('row').slice(1) // drop the header row
+    expect(rows[0]).toHaveTextContent('config/second')
+    expect(rows[1]).toHaveTextContent('config/first')
   })
 
-  it('renders no full-window notice when the fetch comes back under the requested limit', async () => {
+  it('follows the cursor across multiple pages and stops on a short response', async () => {
+    listAudit
+      .mockResolvedValueOnce({
+        serverTime: '2026-08-17T00:00:00Z',
+        entries: Array.from({ length: 500 }, (_, i) => makeAuditEntry({ target: `config/page1-${i}` })),
+      })
+      .mockResolvedValueOnce({
+        serverTime: '2026-08-17T00:00:00Z',
+        entries: [makeAuditEntry({ target: 'config/page2-only' })],
+      })
+    renderAudit(makeModel({ session: auditSession }))
+
+    await screen.findByText('config/page2-only')
+    expect(listAudit).toHaveBeenCalledTimes(2)
+    expect(listAudit).toHaveBeenNthCalledWith(1, { since: 0, limit: 500 })
+    expect(listAudit).toHaveBeenNthCalledWith(2, { since: 500, limit: 500 })
+    expect(screen.queryByText(/stopped after/i)).not.toBeInTheDocument()
+  })
+
+  it('honours the request cap and says so when it is reached before the end', async () => {
     listAudit.mockResolvedValue({
       serverTime: '2026-08-17T00:00:00Z',
-      entries: [makeAuditEntry()],
+      entries: Array.from({ length: 500 }, (_, i) => makeAuditEntry({ target: `config/full-${i}` })),
     })
     renderAudit(makeModel({ session: auditSession }))
 
-    expect(await screen.findByText('config/fpp.endpoints')).toBeInTheDocument()
-    expect(screen.queryByText(/this window is full/i)).not.toBeInTheDocument()
+    await waitFor(() => expect(listAudit).toHaveBeenCalledTimes(20))
+    const notice = await screen.findByText(/stopped after 20 requests/i)
+    expect(notice).toHaveTextContent(/10000/)
+    expect(notice).toHaveTextContent(/not the most recent activity/i)
+  })
+
+  it('renders a fetch failure as a failure, not an empty log', async () => {
+    listAudit.mockRejectedValue(new Error('coordinator unreachable'))
+    renderAudit(makeModel({ session: auditSession }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/coordinator unreachable/i)
+    expect(screen.queryByText(/no audit entries retained/i)).not.toBeInTheDocument()
+  })
+
+  it('renders an empty log as empty', async () => {
+    listAudit.mockResolvedValue({ serverTime: '2026-08-17T00:00:00Z', entries: [] })
+    renderAudit(makeModel({ session: auditSession }))
+
+    expect(await screen.findByText(/no audit entries retained/i)).toBeInTheDocument()
   })
 })
