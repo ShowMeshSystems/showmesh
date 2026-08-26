@@ -300,12 +300,15 @@ type CurrentEntryState =
   | { kind: 'error'; message: string }
 
 // Same fetch, generation-guard, and reconnect-refetch discipline as
-// PlaylistReadiness.tsx's own useReconciliation -- this view has no live
-// model field to key off yet, so refresh here is reconnect-triggered
-// only, not an added polling interval.
+// PlaylistReadiness.tsx's own useReconciliation, plus that hook's third
+// trigger: a fresh observation for THIS instance also retriggers the
+// fetch. Keyed on `sequence`, a monotonically increasing integer and
+// therefore a stable effect dependency, not on the observation object
+// itself, which is a new identity every snapshot.
 function useCurrentEntryReconciliation(
   instanceUuid: string | null,
   snapshotReceivedAt: number | null,
+  latestObservationSequence: number | null,
 ): CurrentEntryState {
   const [state, setState] = useState<CurrentEntryState>({ kind: 'loading' })
 
@@ -328,7 +331,10 @@ function useCurrentEntryReconciliation(
     return () => {
       cancelled = true
     }
-  }, [instanceUuid, snapshotReceivedAt])
+    // latestObservationSequence is not read inside the effect body; it
+    // exists purely to retrigger the fetch when FPP itself reports a new
+    // entry for this instance.
+  }, [instanceUuid, snapshotReceivedAt, latestObservationSequence])
 
   return state
 }
@@ -346,7 +352,16 @@ function FPPCurrentEntryPanel({
   instanceUuid: string | null
   snapshotReceivedAt: number | null
 }) {
-  const reconciliation = useCurrentEntryReconciliation(instanceUuid, snapshotReceivedAt)
+  const model = useModelContext()
+  // Keyed by instanceUuid, matching PlaylistReadiness.tsx's own
+  // ReconciliationRow -- this instance's own latest accepted
+  // playlist-entry observation, not the whole list.
+  const latestObservation = model.fppPlaylistEntryObservations.find((o) => o.instanceUuid === instanceUuid)
+  const reconciliation = useCurrentEntryReconciliation(
+    instanceUuid,
+    snapshotReceivedAt,
+    latestObservation?.sequence ?? null,
+  )
 
   if (instanceUuid === null) {
     return (
@@ -380,6 +395,13 @@ function FPPCurrentEntryPanel({
           <dd>
             <FPPPlaylistReconciliationOutcomeBadge outcome={reconciliation.response.outcome} />
           </dd>
+          {/* ADR-011, same "As of" freshness rule PlaylistReadiness.tsx's
+              own rows already use: `serverTime` is the coordinator's own
+              clock at the moment it computed THIS verdict, required on
+              every 200 response, so an operator can tell a verdict read
+              hours ago from one read a moment ago. */}
+          <dt>As of</dt>
+          <dd>{formatAbsolute(reconciliation.response.serverTime)}</dd>
           <dt>Reason</dt>
           {/* Verbatim, never reworded: this task's own instruction, matching
               PlaylistReadiness.tsx's own ReconciliationRow. */}
