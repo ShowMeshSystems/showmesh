@@ -119,15 +119,18 @@ func TestPollUsesNodeReportedObservedAt(t *testing.T) {
 }
 
 // TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes proves finding 4:
-// a discovery-backed signal (engine.state) stamps its ObservedAt from
+// a discovery-backed signal (device.state, which the agent truly never
+// re-checks after boot) stamps its ObservedAt from
 // AudioPayload.DiscoveredAt, the one-shot startup probe time, while a
-// live-tick-backed signal (the LTC generator state, and a session signal
-// one file over) stamps from AudioPayload.ObservedAt, refreshed every
-// tick. Before DiscoveredAt existed both signals shared one field, so a
-// session or generator signal could never report fresher than whatever
+// live-tick-backed signal (engine.state, the LTC generator state, and a
+// session signal one file over) stamps from AudioPayload.ObservedAt,
+// refreshed every tick. Before DiscoveredAt existed both groups shared
+// one field, so a live signal could never report fresher than whatever
 // the agent's discovery probe read at startup — every tick after the
 // first 45 seconds of the process's life reported stale regardless of
-// how current the underlying data actually was.
+// how current the underlying data actually was. This defect had crept
+// back in for engine.state/engine.reason specifically: see
+// TestPollEngineStateStaysFreshWhileNodeKeepsReporting.
 func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	st := NewStore()
 	discoveredAt := time.Unix(1000, 0).UTC() // the one-shot startup probe
@@ -141,9 +144,16 @@ func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
 
+	device := findObs(t, obs, SignalDeviceState)
+	if device.ObservedAt == nil || !device.ObservedAt.Equal(discoveredAt) {
+		t.Errorf("device.state ObservedAt = %v, want the discovery probe time %v", device.ObservedAt, discoveredAt)
+	}
 	engine := findObs(t, obs, SignalEngineState)
-	if engine.ObservedAt == nil || !engine.ObservedAt.Equal(discoveredAt) {
-		t.Errorf("engine.state ObservedAt = %v, want the discovery probe time %v", engine.ObservedAt, discoveredAt)
+	if engine.ObservedAt == nil || !engine.ObservedAt.Equal(observedAt) {
+		t.Errorf("engine.state ObservedAt = %v, want the live tick time %v", engine.ObservedAt, observedAt)
+	}
+	if engine.ObservedAt.Equal(discoveredAt) {
+		t.Error("engine.state ObservedAt equals the startup probe time; the agent re-checks it fresh every tick, so it must never share DiscoveredAt's evidence")
 	}
 	generator := findObs(t, obs, SignalLTCGeneratorState)
 	if generator.ObservedAt == nil || !generator.ObservedAt.Equal(observedAt) {
@@ -174,8 +184,11 @@ func TestPollDiscoveryAndLiveSignalsUseDistinctEvidenceTimes(t *testing.T) {
 // TestPollNodeReportsNoObservedAtIsUnknownAge proves the genuinely-unknown
 // half of ADR-011: a payload with a zero DiscoveredAt (never sent by a
 // well-formed report, but not something this collector should crash on)
-// stays nil for the discovery-backed engine signal, never defaulted to
-// the receipt time.
+// stays nil for a discovery-backed signal (device.state), never
+// defaulted to the receipt time. engine.state is no longer discovery-
+// backed any more: it stamps from ObservedAt, which mqttproto.
+// AudioPayload.Validate requires non-nil, so it has no equivalent
+// unknown-age case in a well-formed payload.
 func TestPollNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 	st := NewStore()
 	receivedAt := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
@@ -185,12 +198,39 @@ func TestPollNodeReportsNoObservedAtIsUnknownAge(t *testing.T) {
 
 	c := New(st)
 	obs, _ := c.Poll(context.Background())
-	state := findObs(t, obs, SignalEngineState)
+	state := findObs(t, obs, SignalDeviceState)
 	if state.ObservedAt != nil {
 		t.Errorf("ObservedAt = %v, want nil (unknown age)", state.ObservedAt)
 	}
 	if state.StateAt(receivedAt) != observation.StateUnknownAge {
 		t.Errorf("StateAt = %s, want unknown_age", state.StateAt(receivedAt))
+	}
+}
+
+// TestPollEngineStateGoesStaleWhenTheNodeGenuinelyStopsReporting proves
+// the negative of the engine.state fix above: this is not "engine.state can never go
+// stale." A node that stops publishing altogether (ObservedAt stops
+// advancing, unlike TestPollEngineStateStaysFreshWhileNodeKeepsReporting,
+// where a live tick keeps refreshing it) still ages past DefaultValidFor
+// and reads stale, exactly like every other observation in this project.
+func TestPollEngineStateGoesStaleWhenTheNodeGenuinelyStopsReporting(t *testing.T) {
+	st := NewStore()
+	lastTick := time.Now().Add(-1 * time.Hour)
+	payload := samplePayload()
+	payload.ObservedAt = &lastTick
+	st.Put("audio-01", payload, lastTick)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+	state := findObs(t, obs, SignalEngineState)
+	reason := findObs(t, obs, SignalEngineReason)
+
+	now := time.Now()
+	if got := state.StateAt(now); got != observation.StateStale {
+		t.Errorf("engine.state StateAt(now) = %v, want stale: a node that stopped reporting an hour ago must not read current", got)
+	}
+	if got := reason.StateAt(now); got != observation.StateStale {
+		t.Errorf("engine.reason StateAt(now) = %v, want stale: a node that stopped reporting an hour ago must not read current", got)
 	}
 }
 
@@ -219,6 +259,58 @@ func TestPollEngineUnavailableReportsReason(t *testing.T) {
 	reason := findObs(t, obs, SignalEngineReason)
 	if reason.Value != "gst-launch-1.0 not found on PATH" {
 		t.Errorf("engine reason = %v, want the stated reason", reason.Value)
+	}
+}
+
+// TestPollEngineStateStaysFreshWhileNodeKeepsReporting proves the
+// agent re-checks engine.Available() fresh on every report tick (see
+// applyEngineAvailability in audioreport.go), so EngineReason genuinely
+// changes across reports long after the one-shot startup discovery
+// probe. This collector must stamp that live evidence with the report
+// tick's own time, not the pinned discovery time -- otherwise an online
+// node that keeps publishing fresh engine evidence reads its whole audio
+// surface as permanently stale past DefaultValidFor, indistinguishable
+// from a node that stopped reporting altogether.
+func TestPollEngineStateStaysFreshWhileNodeKeepsReporting(t *testing.T) {
+	st := NewStore()
+	discoveredAt := time.Now().Add(-1 * time.Hour) // ancient startup probe
+	firstReason := "no audio.node configuration has been delivered to this node yet"
+	tick1 := time.Now().Add(-time.Minute)
+	payload := samplePayload()
+	payload.EngineAvailable = false
+	payload.EngineReason = firstReason
+	payload.DiscoveredAt = &discoveredAt
+	payload.ObservedAt = &tick1
+	st.Put("audio-01", payload, tick1)
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+	reason := findObs(t, obs, SignalEngineReason)
+	if reason.Value != firstReason {
+		t.Fatalf("engine reason = %v, want the first observed reason %v", reason.Value, firstReason)
+	}
+
+	// A later tick observes a DIFFERENT reason (a real audio.node
+	// revision changed the pipeline error), while DiscoveredAt stays
+	// pinned at the original startup probe -- exactly the field
+	// [buildAudioPayload] never updates after boot.
+	secondReason := "not-negotiated: keep-alive channel program-out-2 could not be negotiated"
+	tick2 := time.Now()
+	payload.EngineReason = secondReason
+	payload.ObservedAt = &tick2
+	st.Put("audio-01", payload, tick2)
+
+	obs, _ = c.Poll(context.Background())
+	state := findObs(t, obs, SignalEngineState)
+	reason = findObs(t, obs, SignalEngineReason)
+	if reason.Value != secondReason {
+		t.Fatalf("engine reason = %v, want the newly observed reason %v", reason.Value, secondReason)
+	}
+	if state.ObservedAt == nil || !state.ObservedAt.Equal(tick2) {
+		t.Errorf("engine.state ObservedAt = %v, want the live report-tick time %v, not the frozen startup probe time %v", state.ObservedAt, tick2, discoveredAt)
+	}
+	if got := state.StateAt(tick2); got != observation.StateCurrent {
+		t.Errorf("engine.state StateAt(now) = %v, want current: an online node reporting fresh engine evidence every tick must not read stale", got)
 	}
 }
 

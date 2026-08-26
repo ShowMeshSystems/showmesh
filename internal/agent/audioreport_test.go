@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -757,5 +758,123 @@ func TestRunAudioReportLeavesGlitchCountsUnknownWhenEngineCannotCollectThem(t *t
 	}
 	if got.EngineGlitchCountsSince != nil {
 		t.Errorf("EngineGlitchCountsSince = %v, want nil when not collected", got.EngineGlitchCountsSince)
+	}
+}
+
+// hangingEngineAvailability is an [engineAvailability] whose Available()
+// blocks until release is closed, simulating a future backend whose
+// Available() call is not the fast, lock-only read the real
+// [gstengine.Engine.Available] and [audio.SwitchableEngine.Available]
+// are today (see those types' own doc comments: SwitchableEngine never
+// holds its mutex across a delegated call, and gstengine.Engine.Available
+// reads only availOK/brokenReason, never the pipeline itself, so neither
+// can be held hostage by a wedged Start/Load). This type exists only to
+// prove what runAudioReport does IF that invariant were ever broken:
+// applyEngineAvailability calling Available() synchronously in the tick
+// loop must freeze the WHOLE tick, never publish a fresh-looking
+// timestamp for a value it could not actually re-derive.
+type hangingEngineAvailability struct {
+	mu      sync.Mutex
+	hang    bool
+	release chan struct{}
+}
+
+func newHangingEngineAvailability() *hangingEngineAvailability {
+	return &hangingEngineAvailability{release: make(chan struct{})}
+}
+
+func (h *hangingEngineAvailability) armHang() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.hang = true
+}
+
+func (h *hangingEngineAvailability) releaseHang() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	select {
+	case <-h.release:
+	default:
+		close(h.release)
+	}
+}
+
+func (h *hangingEngineAvailability) Available() (bool, string) {
+	h.mu.Lock()
+	hang := h.hang
+	release := h.release
+	h.mu.Unlock()
+	if hang {
+		<-release
+	}
+	return true, ""
+}
+
+// TestRunAudioReportWedgedEngineAvailableFreezesTheTickInsteadOfPublishingFalseFreshness
+// is a wedged-engine interaction test: stamping engine.state/engine.reason
+// with the report tick's own live time (this fix) must never let a
+// genuinely wedged engine check publish a fresh-looking timestamp for
+// evidence it did not actually re-derive. applyEngineAvailability calls
+// Available() synchronously inside runAudioReport's tick loop, so a
+// wedged Available() call blocks the ENTIRE tick, including the publish
+// that would otherwise carry a new ObservedAt: no report reaches the
+// coordinator for that tick at all. The coordinator then ages the last
+// genuinely published report past DefaultValidFor and reports it stale
+// (see nodeaudio.TestPollEngineStateGoesStaleWhenTheNodeGenuinelyStopsReporting),
+// exactly the PR #83 last-known-evidence-plus-stale behavior, never a
+// fabricated current reading.
+func TestRunAudioReportWedgedEngineAvailableFreezesTheTickInsteadOfPublishingFalseFreshness(t *testing.T) {
+	orig := audioDiscoverer
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{EngineUsable: true, HardwareEnumerated: true, HasHardwareCards: true}
+	}
+	t.Cleanup(func() { audioDiscoverer = orig })
+
+	engine := newHangingEngineAvailability()
+	t.Cleanup(engine.releaseHang)
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAudioReport(ctx, pub, "audio-01", nil, nil, engine, time.Now, ticks, discardLogger())
+	}()
+
+	// First tick: engine responsive, publishes normally.
+	ticks <- time.Now()
+	<-pub.notify
+	if got := len(pub.snapshot()); got != 1 {
+		t.Fatalf("publish calls after tick 1 = %d, want 1", got)
+	}
+
+	// Second tick: Available() wedges. The tick must not complete, so no
+	// second publish -- and in particular no publish carrying a fresh
+	// ObservedAt for evidence Available() never actually returned.
+	engine.armHang()
+	ticks <- time.Now()
+
+	select {
+	case <-pub.notify:
+		t.Fatal("a wedged engine.Available() call still let the tick publish; it must freeze the whole tick instead of reporting false freshness")
+	case <-time.After(200 * time.Millisecond):
+		// Expected: the tick is genuinely stuck, exactly like a wedged
+		// GStreamer call must be.
+	}
+	if got := len(pub.snapshot()); got != 1 {
+		t.Fatalf("publish calls while wedged = %d, want still 1 (no new publish)", got)
+	}
+
+	// Release the wedge: the stuck tick completes and the loop can shut
+	// down cleanly, proving this is a genuine freeze, not a deadlock this
+	// test would otherwise hang forever on.
+	engine.releaseHang()
+	<-pub.notify
+	cancel()
+	<-done
+
+	if got := len(pub.snapshot()); got != 2 {
+		t.Fatalf("publish calls after releasing the wedge = %d, want 2", got)
 	}
 }
