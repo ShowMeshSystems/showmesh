@@ -84,13 +84,28 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 		surfaces = append(surfaces, toRenderSurfaceReport(s))
 	}
 
+	// heldRecords is the true total; held is what actually rides the wire,
+	// truncated separately (review round 3 finding 2: an unbounded list
+	// here could otherwise carry every render report past the envelope
+	// limit once enough files accumulate). Truncating BEFORE calling
+	// NewRenderEnvelope, not after, matters: that constructor calls
+	// RenderPayload.Validate itself and refuses to build an over-cap
+	// payload at all, so an untruncated list would not degrade the field,
+	// it would silently cancel the whole publish.
 	heldRecords := fcHeld.Held()
+	heldTotal := len(heldRecords)
+	heldRecords = truncateHeldFilesForWire(heldRecords, renderWireHeldFilesCap)
 	held := make([]mqttproto.RenderFPPConnectHeldFile, 0, len(heldRecords))
 	for _, rec := range heldRecords {
 		held = append(held, toRenderFPPConnectHeldFile(rec))
 	}
 
 	heldEvents := fcHeld.Events()
+	if len(heldEvents) > renderWireHeldEventsCap {
+		// Keep the most recent entries: the oldest-first log's newest
+		// tail is the evidence most likely to still be actionable.
+		heldEvents = heldEvents[len(heldEvents)-renderWireHeldEventsCap:]
+	}
 	events := make([]mqttproto.RenderFPPConnectHeldEvent, 0, len(heldEvents))
 	for _, ev := range heldEvents {
 		events = append(events, toRenderFPPConnectHeldEvent(ev))
@@ -106,7 +121,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 		FPPConnectListening:  fcListening,
 		FPPConnectReason:     fcReason,
 		FPPConnectObservedAt: fcObservedAt,
-		FPPConnectHeldCount:  len(held),
+		FPPConnectHeldCount:  heldTotal,
 		FPPConnectHeld:       held,
 		FPPConnectHeldEvents: events,
 	})
@@ -179,17 +194,55 @@ func toRenderFPPConnectHeldFile(rec fppConnectHeldRecord) mqttproto.RenderFPPCon
 }
 
 // toRenderFPPConnectHeldEvent converts one fppConnectEvent
-// (fppconnectheld.go) to its wire type, field for field.
+// (fppconnectheld.go) to its wire type, field for field. Entries is
+// already capped at fppConnectMaxEventEntries by the store itself
+// (RecordUnknownPlaylist/RecordAmbiguousPlaylist), so no further
+// truncation happens here.
 func toRenderFPPConnectHeldEvent(ev fppConnectEvent) mqttproto.RenderFPPConnectHeldEvent {
 	return mqttproto.RenderFPPConnectHeldEvent{
-		Kind:       ev.Kind,
-		Name:       ev.Name,
-		Dir:        ev.Dir,
-		Reason:     ev.Reason,
-		Entries:    ev.Entries,
-		MatchCount: ev.MatchCount,
-		At:         ev.At,
+		Kind:             ev.Kind,
+		Name:             ev.Name,
+		Dir:              ev.Dir,
+		Reason:           ev.Reason,
+		Entries:          ev.Entries,
+		EntriesTruncated: ev.EntriesTruncated,
+		MatchCount:       ev.MatchCount,
+		At:               ev.At,
 	}
+}
+
+// renderWireHeldFilesCap and renderWireHeldEventsCap mirror mqttproto's
+// own maxRenderHeldFiles/maxRenderHeldEvents (private constants in that
+// package): this defensive truncation exists so a change to either cap
+// can never, by itself, make a publish fail RenderPayload.Validate,
+// matching renderWireStderrCap's identical role one field over (review
+// round 3 finding 2).
+const (
+	renderWireHeldFilesCap  = 256
+	renderWireHeldEventsCap = 64
+)
+
+// truncateHeldFilesForWire cuts records down to at most cap entries when
+// it must, keeping unbound records first: those are the operator-
+// actionable evidence ADR-044 decision 8 exists to surface, so if the
+// list has to be cut down at all, the files still awaiting a claim are
+// worth more than the ones already resolved. records is already sorted
+// by dir then name (fppConnectHeldStore.Held); ordering within each of
+// the two groups is preserved.
+func truncateHeldFilesForWire(records []fppConnectHeldRecord, maxEntries int) []fppConnectHeldRecord {
+	if len(records) <= maxEntries {
+		return records
+	}
+	var unbound, bound []fppConnectHeldRecord
+	for _, r := range records {
+		if r.Bound {
+			bound = append(bound, r)
+		} else {
+			unbound = append(unbound, r)
+		}
+	}
+	combined := append(unbound, bound...)
+	return combined[:maxEntries]
 }
 
 // renderWireStderrCap mirrors mqttproto's own maxRenderStderrBytes (an

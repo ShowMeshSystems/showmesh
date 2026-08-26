@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -244,8 +246,95 @@ func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
 	}
 }
 
+// TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost is
+// review round 3 finding 2's regression test: one unauthenticated
+// POST /api/playlist/{name} can name tens of thousands of distinct
+// sequenceName/mediaName values in a single 1 MiB body. Before this fix,
+// every one of them rode the resulting event onto every subsequent render
+// report, with no cap anywhere between the store and RenderPayload.
+// Validate, and mqttproto.NewRenderEnvelope calls Validate itself before
+// marshalling, so an unbounded field would not merely bloat one publish,
+// it would make every future publish fail outright (a report skipped
+// forever, not degraded once). This proves the publish still succeeds and
+// the resulting bytes still decode under the wire envelope limit.
+func TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	// Build a playlist body naming as many distinct sequenceName entries
+	// as fit under fppConnectMaxPlaylistBodyBytes (1 MiB), against an
+	// unknown show name so every one lands in a single "unknown" event.
+	var sb strings.Builder
+	sb.WriteString(`{"mainPlaylist":[`)
+	for i := 0; sb.Len() < fppConnectMaxPlaylistBodyBytes-256; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"sequenceName":"S%08d.fseq"}`, i)
+	}
+	sb.WriteString(`]}`)
+
+	resp, body := postPlaylist(t, srv, "DoesNotExist", []byte(sb.String()))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	events := held.Events()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if len(events[0].Entries) > fppConnectMaxEventEntries {
+		t.Fatalf("event carries %d entries, want at most %d", len(events[0].Entries), fppConnectMaxEventEntries)
+	}
+	if events[0].EntriesTruncated == 0 {
+		t.Fatal("EntriesTruncated = 0, want a positive count given how oversized the posted body was")
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish (an unbounded field would make NewRenderEnvelope's own Validate call refuse to build the envelope at all)")
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+	if len(report.FPPConnectHeldEvents) == 0 {
+		t.Fatal("no events in the published report")
+	}
+}
+
 // TestRunRenderReportPublishesOnTrigger proves a signal on triggered
-// produces an immediate publish, out of cadence — the render-state
+// produces an immediate publish, out of cadence: the render-state
 // counterpart to runAssetInventory's identical trigger behaviour.
 func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	clock := newTestClock()

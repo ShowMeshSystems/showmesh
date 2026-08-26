@@ -104,13 +104,24 @@ type fppConnectEvent struct {
 	Name string    `json:"name"`
 	At   time.Time `json:"at"`
 
-	// Dir and Reason are set for a refused-upload event; Entries and
-	// MatchCount are set for an "unknown"/"ambiguous" playlist event. The
-	// two families never populate each other's fields.
-	Dir        string   `json:"dir,omitempty"`
-	Reason     string   `json:"reason,omitempty"`
-	Entries    []string `json:"entries,omitempty"`
-	MatchCount int      `json:"matchCount,omitempty"`
+	// Dir and Reason are set for a refused-upload event; Entries,
+	// EntriesTruncated and MatchCount are set for an "unknown"/"ambiguous"
+	// playlist event. The two families never populate each other's
+	// fields.
+	Dir    string `json:"dir,omitempty"`
+	Reason string `json:"reason,omitempty"`
+
+	// Entries is capped at fppConnectMaxEventEntries, independently of
+	// fppConnectMaxEvents' bound on the whole log (review round 3 finding
+	// 2): a single POST /api/playlist/{name} body, up to 1 MiB
+	// (fppConnectMaxPlaylistBodyBytes) with no per-entry count limit,
+	// could otherwise name tens of thousands of distinct values and carry
+	// every one of them in this one event, onto every render report,
+	// forever. EntriesTruncated states how many were cut so the
+	// capping itself is never silent.
+	Entries          []string `json:"entries,omitempty"`
+	EntriesTruncated int      `json:"entriesTruncated,omitempty"`
+	MatchCount       int      `json:"matchCount,omitempty"`
 }
 
 // fppConnectMaxEvents bounds fppConnectHeldStore.events: the oldest event
@@ -118,6 +129,20 @@ type fppConnectEvent struct {
 // client posting many unknown playlist names, or triggering many refused
 // uploads, cannot grow this file without bound.
 const fppConnectMaxEvents = 50
+
+// fppConnectMaxEventEntries bounds fppConnectEvent.Entries; see that
+// field's own doc comment.
+const fppConnectMaxEventEntries = 32
+
+// capEventEntries truncates entries to fppConnectMaxEventEntries,
+// reporting how many were cut. Pure and side-effect-free so it can be
+// exercised directly in a test independent of the store.
+func capEventEntries(entries []string) (capped []string, truncated int) {
+	if len(entries) <= fppConnectMaxEventEntries {
+		return entries, 0
+	}
+	return entries[:fppConnectMaxEventEntries], len(entries) - fppConnectMaxEventEntries
+}
 
 // fppConnectMaxPending bounds fppConnectHeldStore.pending the same way
 // fppConnectMaxEvents bounds events: oldest entries are evicted first once
@@ -234,6 +259,21 @@ type fppConnectInFlight struct {
 	hash          hash.Hash
 	bytesReceived int64
 	uploadLength  int64
+
+	// writing is true while a goroutine is actively copying a chunk for
+	// this key with the store's mutex released (review round 3 finding
+	// 3, see WriteChunk's own doc comment): a second request for the same
+	// key must never be allowed to discard or continue this entry out
+	// from under the goroutine that owns it, so every locked section that
+	// would otherwise mutate or delete this entry checks writing first
+	// and refuses instead.
+	writing bool
+
+	// lastChunkAt is stamped on creation and on every successfully
+	// reconciled chunk, never while writing is true. sweepIdleInFlightLocked
+	// uses it to find, and discard, an abandoned upload's reservation
+	// (review round 3 finding 4).
+	lastChunkAt time.Time
 }
 
 // fppConnectHeldStore is the whole of FC2's server-side state: in-flight
@@ -420,6 +460,53 @@ func (s *fppConnectHeldStore) indexPath() string {
 	return filepath.Join(s.assetDir, fppConnectUploadStateSubdir, fppConnectIndexFileName)
 }
 
+// fppConnectInFlightTTL bounds how long an in-flight upload's asset-
+// directory-cap reservation (fppConnectInFlight.uploadLength -
+// bytesReceived) survives with no chunk arriving (review round 3 finding
+// 4): an abandoned upload (xLights crashed, the network dropped) would
+// otherwise reserve that headroom against fppconnect.settings.
+// maxAssetDirBytes for the rest of this process's life, since nothing
+// else ever revisits an in-flight entry once its client stops sending
+// chunks. A few multiples of fppConnectFileReadDeadline
+// (fppconnecthttp.go), so it never fires on an upload that is merely
+// slow, only one that has genuinely stopped.
+const fppConnectInFlightTTL = 3 * fppConnectFileReadDeadline
+
+// sweepIdleInFlightLocked discards every in-flight entry whose last chunk
+// arrived more than fppConnectInFlightTTL before now, removing its
+// staging file the same way discardFragment does. Called at the top of
+// WriteChunk, s.mu already held. An entry currently being written
+// (writing true) is never swept, regardless of how old lastChunkAt is:
+// its owning goroutine has the store unlocked and is actively extending
+// it (review round 3 finding 3), so it is not idle by definition.
+func (s *fppConnectHeldStore) sweepIdleInFlightLocked(now time.Time) {
+	for key, inf := range s.inFlight {
+		if inf.writing {
+			continue
+		}
+		if now.Sub(inf.lastChunkAt) <= fppConnectInFlightTTL {
+			continue
+		}
+		dir, name := fppConnectSplitKey(key)
+		delete(s.inFlight, key)
+		_ = os.Remove(s.stagingFilePath(dir, name))
+	}
+}
+
+// fppConnectSplitKey reverses dir+"/"+name (fppConnectHeldStore's
+// internal map key shape) back into its two parts. name itself is
+// already validated elsewhere (fppConnectValidPlaylistName) to never
+// contain "/", so splitting on the first occurrence is unambiguous even
+// though dir theoretically could in principle; dir is always one of
+// fppConnectAllowedDirs' three literal, slash-free names in practice.
+func fppConnectSplitKey(key string) (dir, name string) {
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		return "", key
+	}
+	return parts[0], parts[1]
+}
+
 // discardFragment removes a staging file, ignoring a not-exist error, and
 // drops any in-memory tracking for key. Every abandonment path in
 // WriteChunk calls this so "the fragment is discarded" (ADR-044 decision
@@ -468,6 +555,17 @@ func (s *fppConnectHeldStore) RecordRefusal(kind, dir, name, reason string, at t
 // bytes equal uploadLength, finalizing the incrementally-computed hash,
 // renaming into the held area, and binding resolution.
 //
+// The store's mutex is held only for validation (prepareChunkLocked) and
+// for reconciling the result (finishChunkLocked), never for the network
+// read itself (review round 3 finding 3): the old single-lock version
+// held it across the whole copy, which meant one slow client blocked
+// Held()/Events() (and so the render report, and every other upload or
+// playlist request) for up to fppConnectFileReadDeadline. prepareChunkLocked
+// marks the in-flight entry writing=true before releasing the lock, so a
+// second concurrent request for the SAME key is refused outright rather
+// than racing this copy; a request for any OTHER key proceeds normally
+// and independently the whole time.
+//
 // body is read directly, never buffered whole in memory (review round 1
 // finding 3): n (the caller's r.ContentLength) bounds exactly how much of
 // body this call reads, and the running SHA-256 in s.inFlight is updated
@@ -481,13 +579,51 @@ func (s *fppConnectHeldStore) RecordRefusal(kind, dir, name, reason string, at t
 // view so this store stays independent of fppConnectView (avoiding an
 // import cycle risk and keeping this file's own test surface small).
 func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	key := dir + "/" + name
 	stagingPath := s.stagingFilePath(dir, name)
 
-	inf, exists := s.inFlight[key]
+	inf, bytesReceived, prepOutcome, prepReason, ok := s.prepareChunkLocked(dir, name, key, stagingPath, offset, uploadLength, n, maxFileBytes, maxAssetDirBytes, at)
+	if !ok {
+		return prepOutcome, prepReason, fppConnectHeldRecord{}
+	}
+
+	// Unlocked from here through the copy: see this function's own doc
+	// comment. TeeReader hashes exactly the bytes the writer actually
+	// reads from body, whether or not the write ultimately succeeds; a
+	// failed write is discarded in finishChunkLocked, so a hash polluted
+	// by an aborted write never survives to be used.
+	teed := io.TeeReader(body, inf.hash)
+	written, writeErr := s.writer.WriteChunk(stagingPath, offset, teed, n, offset == 0)
+
+	return s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow)
+}
+
+// prepareChunkLocked validates one chunk and, on success, installs (or
+// reuses) its in-flight entry with writing set true, all under s.mu,
+// which it releases before returning either way. ok is false whenever the
+// chunk is refused outright (outcome/reason already recorded as evidence
+// where applicable); ok is true only when the caller must proceed to copy
+// the chunk and call finishChunkLocked.
+func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath string, offset, uploadLength, n, maxFileBytes, maxAssetDirBytes int64, at time.Time) (inf *fppConnectInFlight, bytesReceived int64, outcome fppConnectChunkOutcome, reason string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.sweepIdleInFlightLocked(at)
+
+	existing, exists := s.inFlight[key]
+
+	// A concurrent request for the SAME key currently being copied
+	// (review round 3 finding 3) must never be allowed to discard or
+	// continue it out from under the goroutine that owns it: refuse, the
+	// same way an ordinary gap is refused, rather than risk two
+	// goroutines writing one staging file at once. A real xLights client
+	// never sends two requests for the same upload concurrently, so this
+	// never fires in normal operation.
+	if exists && existing.writing {
+		o, r, _ := s.refuseLocked(fppConnectChunkGap, "gap", dir, name, fmt.Sprintf(
+			"another request for %q is already in progress; refused rather than racing it", name), at)
+		return nil, 0, o, r, false
+	}
 
 	if offset == 0 {
 		// Offset 0 always starts fresh: drop any in-memory tracking and
@@ -498,33 +634,46 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 		// doc comment.
 		s.discardFragment(dir, name)
 		exists = false
-	} else if !exists || offset != inf.bytesReceived {
+	} else if !exists || offset != existing.bytesReceived {
 		s.discardFragment(dir, name)
 		got := int64(-1)
 		if exists {
-			got = inf.bytesReceived
+			got = existing.bytesReceived
 		}
-		reason := fmt.Sprintf(
+		o, r, _ := s.refuseLocked(fppConnectChunkGap, "gap", dir, name, fmt.Sprintf(
 			"upload offset %d does not match %d bytes already received for %q; the fragment was discarded",
-			offset, got, name)
-		return s.refuseLocked(fppConnectChunkGap, "gap", dir, name, reason, at)
+			offset, got, name), at)
+		return nil, 0, o, r, false
+	} else if uploadLength != existing.uploadLength {
+		// The declared total changed mid-upload (review round 3 finding
+		// 5): trusting a later, different Upload-Length both mis-sizes
+		// the eventual held record and lets bytesReceived grow past the
+		// reservation frozen at offset 0, driving this upload's own
+		// asset-directory-cap remainder negative and manufacturing free
+		// headroom for a concurrent upload that should not exist.
+		s.discardFragment(dir, name)
+		o, r, _ := s.refuseLocked(fppConnectChunkGap, "length-mismatch", dir, name, fmt.Sprintf(
+			"Upload-Length %d does not match the %d declared at offset 0 for %q; the fragment was discarded",
+			uploadLength, existing.uploadLength, name), at)
+		return nil, 0, o, r, false
 	}
 
-	var bytesReceived int64
 	if exists {
-		bytesReceived = inf.bytesReceived
+		bytesReceived = existing.bytesReceived
 	}
 
 	if offset == 0 {
 		if uploadLength > maxFileBytes {
-			reason := fmt.Sprintf("upload length %d bytes exceeds the per-file cap of %d bytes", uploadLength, maxFileBytes)
-			return s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, reason, at)
+			o, r, _ := s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, fmt.Sprintf(
+				"upload length %d bytes exceeds the per-file cap of %d bytes", uploadLength, maxFileBytes), at)
+			return nil, 0, o, r, false
 		}
 		existingOnDisk, err := fppConnectDirBytes(s.assetDir)
 		if err != nil {
 			s.logger.Warn("fppconnect: failed to measure asset directory size; refusing this upload rather than risk exceeding the cap silently", "error", err)
-			reason := fmt.Sprintf("could not measure the asset directory's current size against the %d byte cap: %v", maxAssetDirBytes, err)
-			return s.refuseLocked(fppConnectChunkDirFull, "dir-full", dir, name, reason, at)
+			o, r, _ := s.refuseLocked(fppConnectChunkDirFull, "dir-full", dir, name, fmt.Sprintf(
+				"could not measure the asset directory's current size against the %d byte cap: %v", maxAssetDirBytes, err), at)
+			return nil, 0, o, r, false
 		}
 		// Every OTHER in-flight upload's still-undelivered remainder
 		// counts against the cap too (review round 1 finding 5): without
@@ -532,73 +681,95 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 		// on-disk usage could both pass this check and, once both
 		// finish, together exceed maxAssetDirBytes. This upload's own
 		// remainder is its full uploadLength, added separately below.
+		// Each other remainder is clamped at zero (review round 3
+		// finding 5): the length-mismatch refusal above stops a negative
+		// remainder from arising going forward, but this clamp is
+		// defense in depth against ever letting one manufacture extra
+		// headroom for somebody else.
 		var reserved int64
 		for k, other := range s.inFlight {
 			if k == key {
 				continue
 			}
-			reserved += other.uploadLength - other.bytesReceived
+			remainder := other.uploadLength - other.bytesReceived
+			if remainder < 0 {
+				remainder = 0
+			}
+			reserved += remainder
 		}
 		if existingOnDisk+reserved+uploadLength > maxAssetDirBytes {
-			reason := fmt.Sprintf(
+			o, r, _ := s.refuseLocked(fppConnectChunkDirFull, "dir-full", dir, name, fmt.Sprintf(
 				"accepting %d declared bytes (plus %d bytes reserved by other in-progress uploads) would bring the asset directory to more than its %d byte cap (%d bytes already used)",
-				uploadLength, reserved, maxAssetDirBytes, existingOnDisk)
-			return s.refuseLocked(fppConnectChunkDirFull, "dir-full", dir, name, reason, at)
+				uploadLength, reserved, maxAssetDirBytes, existingOnDisk), at)
+			return nil, 0, o, r, false
 		}
 	}
 
 	newTotal := bytesReceived + n
 	if newTotal > uploadLength || newTotal > maxFileBytes {
 		s.discardFragment(dir, name)
-		reason := fmt.Sprintf(
+		o, r, _ := s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, fmt.Sprintf(
 			"accumulated upload of %d bytes would exceed the declared length of %d bytes or the per-file cap of %d bytes",
-			newTotal, uploadLength, maxFileBytes)
-		return s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, reason, at)
+			newTotal, uploadLength, maxFileBytes), at)
+		return nil, 0, o, r, false
 	}
 
 	if err := os.MkdirAll(filepath.Dir(stagingPath), 0o755); err != nil {
-		return fppConnectChunkWriteFailed, fmt.Sprintf("creating staging directory for %q: %v", name, err), fppConnectHeldRecord{}
+		return nil, 0, fppConnectChunkWriteFailed, fmt.Sprintf("creating staging directory for %q: %v", name, err), false
 	}
 
 	if offset == 0 {
-		inf = &fppConnectInFlight{hash: sha256.New(), uploadLength: uploadLength}
-		s.inFlight[key] = inf
+		existing = &fppConnectInFlight{hash: sha256.New(), uploadLength: uploadLength}
+		s.inFlight[key] = existing
 	}
-	// TeeReader hashes exactly the bytes the writer actually reads from
-	// body, whether or not the write below ultimately succeeds; a failed
-	// write below discards this whole in-flight record (and its partial
-	// hash) via discardFragment, so a hash polluted by an aborted write
-	// never survives to be used.
-	teed := io.TeeReader(body, inf.hash)
+	existing.lastChunkAt = at
+	existing.writing = true
 
-	written, err := s.writer.WriteChunk(stagingPath, offset, teed, n, offset == 0)
-	if err != nil {
+	return existing, bytesReceived, 0, "", true
+}
+
+// finishChunkLocked reconciles one chunk's copy result under s.mu,
+// retaken here after prepareChunkLocked released it (see WriteChunk's own
+// doc comment): a write failure discards the fragment, a completed
+// upload finalizes the hash and renames into the held area and resolves
+// its binding, and an accepted-but-incomplete chunk just clears the
+// writing flag and updates bytesReceived/lastChunkAt for the next one.
+func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	inf.writing = false
+
+	if writeErr != nil {
 		s.discardFragment(dir, name)
-		if fppConnectIsDiskFull(err) {
-			reason := fmt.Sprintf("the disk is full while writing %q: %v", name, err)
-			return s.refuseLocked(fppConnectChunkDiskFull, "disk-full", dir, name, reason, at)
+		if fppConnectIsDiskFull(writeErr) {
+			return s.refuseLocked(fppConnectChunkDiskFull, "disk-full", dir, name, fmt.Sprintf("the disk is full while writing %q: %v", name, writeErr), at)
 		}
-		return fppConnectChunkWriteFailed, fmt.Sprintf("writing a chunk for %q: %v", name, err), fppConnectHeldRecord{}
+		return fppConnectChunkWriteFailed, fmt.Sprintf("writing a chunk for %q: %v", name, writeErr), fppConnectHeldRecord{}
 	}
 	if written != n {
-		// io.Copy/io.CopyN report a short write as an error rather than a
-		// clean nil, but a client that closes its body early against a
-		// declared Content-Length it does not honor is exactly the kind
-		// of client behavior this listener must never trust silently;
-		// treat it the same as any other write failure rather than
-		// accepting a truncated chunk as if it were the whole one.
+		// io.Copy stops cleanly (nil error) the moment its source
+		// reports EOF, even mid-LimitReader, so a client that closes its
+		// body early against a declared Content-Length it does not
+		// honor produces a short written count here with no error at
+		// all, not the error this code might otherwise be tempted to
+		// rely on catching. Treat it the same as any other write failure
+		// rather than accepting a truncated chunk as if it were the
+		// whole one.
 		s.discardFragment(dir, name)
 		return fppConnectChunkWriteFailed, fmt.Sprintf("short write for %q: wrote %d of %d declared bytes", name, written, n), fppConnectHeldRecord{}
 	}
 
+	newTotal := bytesReceived + n
 	inf.bytesReceived = newTotal
+	inf.lastChunkAt = at
 
 	if inf.bytesReceived < uploadLength {
 		return fppConnectChunkAccepted, "", fppConnectHeldRecord{}
 	}
 
 	hashSum := "sha256:" + hex.EncodeToString(inf.hash.Sum(nil))
-	delete(s.inFlight, key) // clear the reservation on completion (finding 5)
+	delete(s.inFlight, key) // clear the reservation on completion (round 1 finding 5)
 
 	heldPath := s.heldFilePath(dir, name)
 	if err := os.MkdirAll(s.heldFileDir(dir), 0o755); err != nil {
@@ -772,9 +943,10 @@ func (s *fppConnectHeldStore) appendEventLocked(ev fppConnectEvent) {
 // the log line xLights will never surface (it never inspects this
 // request's status).
 func (s *fppConnectHeldStore) RecordUnknownPlaylist(name string, entries []string, at time.Time) {
+	capped, truncated := capEventEntries(entries)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendEventLocked(fppConnectEvent{Kind: "unknown", Name: name, Entries: entries, At: at})
+	s.appendEventLocked(fppConnectEvent{Kind: "unknown", Name: name, Entries: capped, EntriesTruncated: truncated, At: at})
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after an unknown playlist post", "name", name, "error", err)
 	}
@@ -787,9 +959,10 @@ func (s *fppConnectHeldStore) RecordUnknownPlaylist(name string, entries []strin
 // in ShowNames(); this interface carries no show id, so that count is the
 // most specific evidence available for "naming both."
 func (s *fppConnectHeldStore) RecordAmbiguousPlaylist(name string, matchCount int, entries []string, at time.Time) {
+	capped, truncated := capEventEntries(entries)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendEventLocked(fppConnectEvent{Kind: "ambiguous", Name: name, Entries: entries, MatchCount: matchCount, At: at})
+	s.appendEventLocked(fppConnectEvent{Kind: "ambiguous", Name: name, Entries: capped, EntriesTruncated: truncated, MatchCount: matchCount, At: at})
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after an ambiguous playlist post", "name", name, "error", err)
 	}
@@ -853,7 +1026,26 @@ func (s *fppConnectHeldStore) load() error {
 			s.pendingOrder = append(s.pendingOrder, k)
 		}
 	}
+	// Re-apply both caps to whatever was just loaded (review round 3
+	// finding 9): a persisted index can exceed either one if it predates
+	// that cap, if the cap was lowered since, or if the file was edited
+	// or corrupted outside this store's own writes. addPendingLocked and
+	// appendEventLocked only ever enforce the cap going forward; loading
+	// is the one path that can hand this store a collection already over
+	// it, so it must trim on the way in rather than assume its own
+	// invariant already holds.
+	if len(s.pendingOrder) > fppConnectMaxPending {
+		evicted := s.pendingOrder[:len(s.pendingOrder)-fppConnectMaxPending]
+		s.pendingOrder = s.pendingOrder[len(s.pendingOrder)-fppConnectMaxPending:]
+		for _, k := range evicted {
+			delete(s.pending, k)
+		}
+	}
+
 	s.events = idx.Events
+	if len(s.events) > fppConnectMaxEvents {
+		s.events = s.events[len(s.events)-fppConnectMaxEvents:]
+	}
 	return nil
 }
 

@@ -583,6 +583,25 @@ const (
 // envelope cap."
 const maxRenderSurfaces = 8
 
+// maxRenderHeldFiles and maxRenderHeldEvents bound
+// [RenderPayload.FPPConnectHeld] and [RenderPayload.FPPConnectHeldEvents]
+// (review round 3 finding 2): an unbounded held-file list, or an unbounded
+// evidence log, could otherwise ride every render report past
+// [maxEnvelopeSize] once enough files or events accumulate. Conservative,
+// unmeasured guesses at "far more than a real show's node ever holds or
+// generates, far short of the envelope cap," the same reasoning
+// [maxRenderSurfaces] states for Surfaces one field up.
+//
+// maxRenderHeldEvents is deliberately above internal/agent/fppconnectheld.
+// go's own fppConnectMaxEvents (50): that constant already bounds how many
+// events the store itself ever holds, so this wire cap exists only as a
+// backstop against a caller that skips the publisher's own truncation, and
+// must never be smaller than what normal operation legitimately produces.
+const (
+	maxRenderHeldFiles  = 256
+	maxRenderHeldEvents = 64
+)
+
 // maxRenderStderrBytes bounds [RenderSurfaceReport.LastStderr] before
 // [RenderPayload.Validate] rejects the payload outright — the wire-boundary
 // backstop behind whatever cap internal/agent/pipeline already applies when
@@ -849,16 +868,16 @@ type RenderPayload struct {
 	// MultiSyncObservedAt's identical evidence-time reasoning one field up.
 	FPPConnectObservedAt time.Time `json:"fppConnectObservedAt"`
 
-	// FPPConnectHeldCount is len(FPPConnectHeld), carried redundantly so a
-	// consumer that only needs "how many files are held" does not have to
-	// decode the full list.
-	FPPConnectHeldCount int `json:"fppConnectHeldCount"`
-
 	// FPPConnectHeld is nil-safe like Surfaces: this package's own encoder
 	// emits "fppConnectHeld":[] for a nil slice, never null, matching
 	// Surfaces' identical rule. Every file FC2's chunked upload receiver
-	// (ADR-044) currently holds, bound or not, is here. This is the only
-	// place an unbound held file is surfaced to an operator: ADR-044
+	// (ADR-044) currently holds, bound or not, is here, up to
+	// [maxRenderHeldFiles]: FPPConnectHeldCount states the true total
+	// separately, so a publisher that must cut this list down (review
+	// round 3 finding 2: an unbounded list here could otherwise ride
+	// every render report past [maxEnvelopeSize] once enough files
+	// accumulate) never has to also hide how many exist. This is the
+	// only place an unbound held file is surfaced to an operator: ADR-044
 	// decision 8 requires an unresolvable upload be "reported as an
 	// unbound held file the operator can claim," and xLights never
 	// inspects the playlist POST's status, so this node report is the
@@ -866,18 +885,31 @@ type RenderPayload struct {
 	// this field is added after SchemaNodeRenderV1 first shipped, matching
 	// FPPConnectListening's identical additive-compatibility reasoning
 	// (a hard requirement here would reject every render report a node
-	// published before this field existed).
+	// published before this field existed). The length cap IS enforced
+	// (see Validate): that check passes trivially for a nil or short
+	// slice, so it does not weaken the additive-compatibility promise
+	// above, only refuses a payload that is genuinely too large to be
+	// safe regardless of when the field was introduced.
 	FPPConnectHeld []RenderFPPConnectHeldFile `json:"fppConnectHeld"`
+
+	// FPPConnectHeldCount is the true total number of files this node
+	// currently holds, independent of FPPConnectHeld's own length: the two
+	// can differ once the publisher truncates the list to
+	// [maxRenderHeldFiles], and a consumer that only needs "how many files
+	// are held" should read this field rather than len(FPPConnectHeld).
+	FPPConnectHeldCount int `json:"fppConnectHeldCount"`
 
 	// FPPConnectHeldEvents is FC2's bounded evidence log (unknown and
 	// ambiguous playlist posts, and refused uploads: too large, over the
-	// asset-directory cap, disk full, an offset gap, an unsafe upload
-	// name, or a disallowed directory), oldest first. ADR-044 decision 4
-	// requires exceeding a bound, or exhausting the disk, be "reported as
-	// evidence"; xLights never inspects any of these calls' status, so
-	// this is that evidence's only path to an operator. Same additive-
-	// compatibility, not-required-by-Validate treatment as
-	// FPPConnectHeld.
+	// asset-directory cap, disk full, an offset gap, an upload length that
+	// changed mid-upload, an unsafe upload name, or a disallowed
+	// directory), oldest first, up to [maxRenderHeldEvents]. ADR-044
+	// decision 4 requires exceeding a bound, or exhausting the disk, be
+	// "reported as evidence"; xLights never inspects any of these calls'
+	// status, so this is that evidence's only path to an operator. Same
+	// additive-compatibility, not-required-by-Validate treatment as
+	// FPPConnectHeld, and the same reasoning for why its length cap is
+	// enforced regardless.
 	FPPConnectHeldEvents []RenderFPPConnectHeldEvent `json:"fppConnectHeldEvents"`
 }
 
@@ -931,8 +963,9 @@ type RenderFPPConnectHeldFile struct {
 // (this schema's standing "clients ignore what they don't know"
 // convention, ADR-020), currently one of: "unknown" and "ambiguous" (a
 // POST /api/playlist/{name} whose name matched no show, or matched more
-// than one), and "too-large", "dir-full", "disk-full", "gap", "bad-name",
-// and "bad-dir" (a refused upload chunk, ADR-044 decision 4).
+// than one), and "too-large", "dir-full", "disk-full", "gap",
+// "length-mismatch", "bad-name", and "bad-dir" (a refused upload chunk,
+// ADR-044 decision 4).
 type RenderFPPConnectHeldEvent struct {
 	Kind string `json:"kind"`
 
@@ -949,8 +982,17 @@ type RenderFPPConnectHeldEvent struct {
 	Reason string `json:"reason,omitempty"`
 
 	// Entries is the set of file names (sequenceName/mediaName) the
-	// posted playlist body named, set only for "unknown"/"ambiguous".
+	// posted playlist body named, set only for "unknown"/"ambiguous", and
+	// capped independently of this whole event log's own length (review
+	// round 3 finding 2: a single POST /api/playlist/{name} body, up to 1
+	// MiB with no per-entry count limit, could otherwise name tens of
+	// thousands of distinct values and carry every one of them onto every
+	// render report forever). EntriesTruncated states how many were cut.
 	Entries []string `json:"entries,omitempty"`
+
+	// EntriesTruncated is how many additional names the posted body
+	// carried beyond what Entries kept, 0 when nothing was cut.
+	EntriesTruncated int `json:"entriesTruncated,omitempty"`
 
 	// MatchCount is how many times Name occurred in the node's show name
 	// list, set only for "ambiguous".
@@ -1013,6 +1055,18 @@ func (p RenderPayload) Validate() error {
 			return fmt.Errorf("%w: surfaces[%d].failureOutput %q must be %q, %q, or empty",
 				ErrPayloadInvalidDrawing, i, s.FailureOutput, RenderFailureOutputAlert, RenderFailureOutputBlack)
 		}
+	}
+	// These two length caps are enforced even though neither field is
+	// required (see FPPConnectHeld's own doc comment): a nil or short
+	// slice always passes trivially, so this never rejects a payload
+	// built before either field existed, only one that is genuinely too
+	// large to be safe regardless of when the field was introduced
+	// (review round 3 finding 2).
+	if len(p.FPPConnectHeld) > maxRenderHeldFiles {
+		return fmt.Errorf("%w: %d fppConnectHeld entries, max %d", ErrPayloadTooLarge, len(p.FPPConnectHeld), maxRenderHeldFiles)
+	}
+	if len(p.FPPConnectHeldEvents) > maxRenderHeldEvents {
+		return fmt.Errorf("%w: %d fppConnectHeldEvents entries, max %d", ErrPayloadTooLarge, len(p.FPPConnectHeldEvents), maxRenderHeldEvents)
 	}
 	return nil
 }

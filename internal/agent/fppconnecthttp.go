@@ -31,28 +31,39 @@ const (
 	// sending headers.
 	fppConnectReadHeaderTimeout = 5 * time.Second
 
-	// fppConnectWriteTimeout bounds the response-write side of every
-	// route: net/http's WriteTimeout governs only Write() calls on the
-	// connection (the response), never the request body Read() calls, so
-	// this is safe to keep short even for the file PATCH route, whose
-	// body can be tens of megabytes: nothing this listener does writes a
-	// response before it has already finished reading and processing the
-	// request. Before review round 1 finding 4's fix, a synchronous
-	// whole-file re-hash at upload completion ran in that gap and could
-	// itself exceed this timeout on a large file; completion now
-	// finalizes an already-running hash instead (fppconnectheld.go's
-	// fppConnectInFlight), so nothing slow happens between the last byte
-	// read and the response write starting.
-	fppConnectWriteTimeout = 10 * time.Second
+	// fppConnectWriteDeadline bounds the response-write side of every
+	// route, applied per request via fppConnectSetWriteDeadline /
+	// http.ResponseController, never as the server-wide WriteTimeout
+	// (see runFPPConnectHTTPListener's doc comment on why that is 0 now).
+	//
+	// Review round 3 finding 1, CONFIRMED and blocking: net/http arms a
+	// nonzero server-wide WriteTimeout's deadline on the connection as
+	// soon as headers are read, before the handler (and its body reads)
+	// ever runs, and that deadline governs the whole rest of the
+	// request-response cycle on that connection, not merely the final
+	// Write() calls the "WriteTimeout" name suggests. With
+	// fppConnectFileReadDeadline (10 minutes) far longer than the old
+	// fixed 10s WriteTimeout, a real chunk that took more than 10s to
+	// arrive would have that armed deadline expire mid-read: the client
+	// got an EOF instead of a response, and xLights retried the same
+	// chunk into this listener's gap branch, killing the upload with a
+	// 409 it never sent a byte wrong to deserve.
+	//
+	// The fix is to never have an active write deadline while a body read
+	// is still possibly in flight: every route sets this deadline only
+	// once it is actually about to write its response (fppconnectupload.
+	// go's handleFilePatch sets it after WriteChunk returns, never
+	// before), so its window can never overlap a slow chunk transfer
+	// regardless of how the two axes interact underneath net/http.
+	fppConnectWriteDeadline = 10 * time.Second
 
 	// fppConnectDiscoveryReadDeadline bounds request reading (headers
 	// plus body) on every route except the file PATCH route: the four
 	// fixed discovery routes and the playlist routes never wait on
 	// anything slower than reading the holder's in-memory state or a
 	// small POST body, so this stays short. Applied per request via
-	// fppConnectSetReadDeadline / http.ResponseController, not the
-	// server-wide ReadTimeout (see runFPPConnectHTTPListener's doc
-	// comment on why that is 0 now).
+	// fppConnectSetReadDeadline / http.ResponseController, tighter than
+	// the server-wide ReadTimeout floor below.
 	fppConnectDiscoveryReadDeadline = 10 * time.Second
 
 	// fppConnectFileReadDeadline bounds request reading on the file PATCH
@@ -65,6 +76,18 @@ const (
 	// network, not a public upload endpoint that needs to bound a
 	// deliberately slow-drip client's total connection time tightly.
 	fppConnectFileReadDeadline = 10 * time.Minute
+
+	// fppConnectServerReadTimeoutFloor is the http.Server-wide ReadTimeout
+	// (review round 3 finding 8, PLAUSIBLE): kept as a generous floor
+	// under the tighter per-route deadlines above, not 0. If a future
+	// ResponseWriter wrapper's http.ResponseController does not support
+	// SetReadDeadline (Go's own documented possibility), fppConnectSetReadDeadline's
+	// failure is only logged, and request body reads would otherwise be
+	// entirely unbounded on that connection. Well above
+	// fppConnectFileReadDeadline, so it is never the deadline that
+	// actually fires in normal operation; it exists only as the backstop
+	// under a mechanism that has already failed once.
+	fppConnectServerReadTimeoutFloor = 15 * time.Minute
 
 	// fppConnectMaxHeaderBytes bounds the request line plus headers.
 	fppConnectMaxHeaderBytes = 16 * 1024
@@ -455,16 +478,32 @@ func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
 }
 
 // fppConnectSetReadDeadline sets w's underlying connection's read deadline
-// to d from now, via http.ResponseController (Go 1.20+): the per-route
-// replacement for the server-wide ReadTimeout this listener no longer
-// sets (runFPPConnectHTTPListener's doc comment). A failure is logged
-// rather than treated as fatal: SetReadDeadline can fail on a
+// to d from now, via http.ResponseController (Go 1.20+): the per-route,
+// per-request deadline that governs body reading, tighter than the
+// server-wide fppConnectServerReadTimeoutFloor this listener still sets
+// as a backstop (runFPPConnectHTTPListener's doc comment). A failure is
+// logged rather than treated as fatal: SetReadDeadline can fail on a
 // ResponseWriter that does not support it (Go's own documented
-// possibility, e.g. some non-standard Handler wrapping), and this
-// listener's ReadHeaderTimeout already bounds header reading regardless.
+// possibility, e.g. some non-standard Handler wrapping), and
+// fppConnectServerReadTimeoutFloor still bounds the read in that case.
 func fppConnectSetReadDeadline(w http.ResponseWriter, d time.Duration, logger *slog.Logger) {
 	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(d)); err != nil {
 		logger.Warn("fppconnect: failed to set a per-route read deadline", "error", err)
+	}
+}
+
+// fppConnectSetWriteDeadline sets w's underlying connection's write
+// deadline to d from now, via http.ResponseController. The per-route
+// replacement for the server-wide WriteTimeout this listener no longer
+// sets (review round 3 finding 1; see fppConnectWriteDeadline's own doc
+// comment on why that was the actual bug, and runFPPConnectHTTPListener's
+// doc comment on the server construction). Every caller must call this
+// only once it is actually about to write a response, never before a
+// body read that might still be in flight. A failure is logged, not
+// fatal, matching fppConnectSetReadDeadline's identical reasoning.
+func fppConnectSetWriteDeadline(w http.ResponseWriter, d time.Duration, logger *slog.Logger) {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d)); err != nil {
+		logger.Warn("fppconnect: failed to set a per-route write deadline", "error", err)
 	}
 }
 
@@ -472,6 +511,10 @@ func fppConnectSetReadDeadline(w http.ResponseWriter, d time.Duration, logger *s
 // wrapped by route() in fppConnectLimitBody's small body cap.
 func (s *fppConnectServer) routeFixed(w http.ResponseWriter, r *http.Request) {
 	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
+	// Safe to set up front on this route: every branch below responds
+	// immediately with no further body read in between, unlike the file
+	// PATCH route (fppconnectupload.go's handleFilePatch).
+	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.NotFound(w, r)
 		return
@@ -663,6 +706,11 @@ func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Reques
 // "wrong method is 404, not 405" rule.
 func (s *fppConnectServer) handlePlaylistRoute(w http.ResponseWriter, r *http.Request, name string) {
 	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
+	// Safe to set up front: the playlist body (handlePlaylistPost,
+	// fppconnectupload.go) is capped at fppConnectMaxPlaylistBodyBytes
+	// (1 MiB) and read in one bounded io.ReadAll, nothing like the file
+	// PATCH route's multi-minute chunk transfer.
+	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		s.handlePlaylist(w, r, name)
@@ -737,18 +785,33 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 	srv := &http.Server{
 		Handler:           newFPPConnectHandler(view, nodeID, held, time.Now, logger),
 		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
-		// ReadTimeout is 0 (no server-wide bound): review round 1 finding
-		// 4 found the previous fixed 10s value covered header AND body,
-		// so a real 16 MiB xLights chunk (RES-003 section 9.4) on a slow
-		// link could time out mid-transfer. Each route now sets its own
-		// read deadline instead (fppConnectSetReadDeadline): short for
-		// the four discovery routes and the playlist routes
-		// (fppConnectDiscoveryReadDeadline), generous for the file PATCH
-		// route (fppConnectFileReadDeadline). ReadHeaderTimeout above
-		// still bounds a client that never finishes sending headers at
-		// all.
-		ReadTimeout:    0,
-		WriteTimeout:   fppConnectWriteTimeout,
+		// ReadTimeout is fppConnectServerReadTimeoutFloor (15 minutes),
+		// not 0 (review round 3 finding 8): a generous floor under the
+		// tighter per-route deadlines every handler sets itself
+		// (fppConnectSetReadDeadline: fppConnectDiscoveryReadDeadline for
+		// the four discovery routes and the playlist routes,
+		// fppConnectFileReadDeadline for the file PATCH route), so a
+		// ResponseWriter whose http.ResponseController does not support
+		// SetReadDeadline never leaves a body read entirely unbounded.
+		// ReadHeaderTimeout above still bounds a client that never
+		// finishes sending headers at all.
+		ReadTimeout: fppConnectServerReadTimeoutFloor,
+		// WriteTimeout is 0 (review round 3 finding 1, CONFIRMED and
+		// blocking): net/http arms a nonzero WriteTimeout's deadline on
+		// the connection as soon as headers are read, before the handler
+		// or its body reads ever run, and that deadline covers the whole
+		// rest of the request-response cycle on that connection, not
+		// merely the final Write() calls. With fppConnectFileReadDeadline
+		// (10 minutes) far longer than the old fixed 10s WriteTimeout, a
+		// real chunk that took more than 10s to arrive had that armed
+		// deadline expire mid-read: the client got an EOF instead of a
+		// response, and xLights retried the same chunk into this
+		// listener's gap branch, killing the upload with a 409 it never
+		// earned. Every route now sets its own write deadline instead
+		// (fppConnectSetWriteDeadline), only once it is actually about to
+		// write a response, so that window can never overlap a body read
+		// still in flight.
+		WriteTimeout:   0,
 		MaxHeaderBytes: fppConnectMaxHeaderBytes,
 		ConnContext:    fppConnectConnContext,
 		// net/http already recovers a handler panic per connection and logs

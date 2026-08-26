@@ -138,22 +138,40 @@ framing over `internal/agent/fppconnectheld.go`'s store). These two routes
 never pass through the four fixed routes' small (4 KiB)
 `fppConnectMaxBodyBytes` cap; each bounds its own, much larger, body.
 
-**Per-route read deadlines (review round 1 finding 4).** The listener's
-`http.Server` no longer sets a server-wide `ReadTimeout`: the original
-fixed 10s value bounded header AND body together, so a real 16 MiB xLights
-chunk (RES-003 section 9.4) on a slow link could time out mid-transfer.
-Each route now sets its own deadline via `http.ResponseController.
-SetReadDeadline` (`fppConnectSetReadDeadline`): `fppConnectDiscoveryReadDeadline`
-(10s) on the four fixed discovery routes and the playlist routes,
+**Per-route read and write deadlines (review round 1 finding 4, corrected
+by review round 3 findings 1 and 8).** Each route sets its own read
+deadline via `http.ResponseController.SetReadDeadline`
+(`fppConnectSetReadDeadline`): `fppConnectDiscoveryReadDeadline` (10s) on
+the four fixed discovery routes and the playlist routes,
 `fppConnectFileReadDeadline` (10 minutes, generous rather than idle-based)
-on the file PATCH route alone. `ReadHeaderTimeout` (5s) is unchanged and
-still bounds a client that never finishes sending headers.
-`WriteTimeout` (10s) is also unchanged: it governs only the connection's
-Write() calls (the response), never request body reads, so it was never
-the mechanism a slow upload could trip; the real prior risk on that axis
-was a synchronous whole-file re-hash running between the last body byte
-read and the response write, which finding 4's incremental hashing (below)
-removes.
+on the file PATCH route alone. The server-wide `ReadTimeout` is not 0: it
+is `fppConnectServerReadTimeoutFloor` (15 minutes), a generous floor kept
+under those tighter per-route deadlines in case a future `ResponseWriter`
+wrapper's controller does not support `SetReadDeadline` at all (round 3
+finding 8). `ReadHeaderTimeout` (5s) is unchanged and still bounds a
+client that never finishes sending headers.
+
+**`WriteTimeout` was NOT harmless, and round 1's own claim that it was is
+wrong** (round 3 finding 1, CONFIRMED and blocking). `net/http` arms a
+nonzero server-wide `WriteTimeout`'s deadline on the connection as soon as
+headers are read, before the handler or its body reads ever run, and that
+deadline covers the whole rest of the request-response cycle on that
+connection, not merely the final `Write()` calls the name suggests. With
+`fppConnectFileReadDeadline` (10 minutes) far longer than the old fixed
+10s `WriteTimeout`, a real chunk that took more than 10s to arrive had
+that armed deadline expire mid-read: the client got an EOF instead of a
+response, and xLights retried the same chunk into this listener's gap
+branch, killing the upload with a 409 it never sent a byte wrong to
+deserve. Fixed by removing the server-wide `WriteTimeout` (now 0) and
+setting a write deadline (`fppConnectWriteDeadline`, 10s) per route via
+`fppConnectSetWriteDeadline`, only once a route is actually about to write
+its response: the discovery, playlist, and no-op file-POST routes set it
+immediately (nothing before them ever reads a body), and the file PATCH
+route sets it only after `WriteChunk` returns, so its window can never
+overlap a chunk transfer still in flight. Proven by
+`TestFPPConnectUploadDrippedOverTenSeconds`, which drips a body over a
+real, production-configured `http.Server` for longer than the old fixed
+timeout.
 
 - **`PATCH /api/file/{dir}`**: the real chunked-upload transport (RES-003
   section 9.4). Headers `Upload-Offset`, `Upload-Length`, `Upload-Name` are
@@ -248,9 +266,10 @@ says exceeding a bound, or exhausting the disk, "is reported as evidence."
 The original build returned a reason to the HTTP caller and persisted
 nothing. Every refusal now appends one `fppConnectEvent` to the same
 bounded evidence log unknown/ambiguous playlist posts use (below), with a
-`kind` of `too-large`, `dir-full`, `disk-full`, `gap`, `bad-name`, or
-`bad-dir`, the attempted `dir`/`name`, and the refusal reason text. See
-"Reporting" below for how this reaches an operator.
+`kind` of `too-large`, `dir-full`, `disk-full`, `gap`, `length-mismatch`
+(review round 3 finding 5), `bad-name`, or `bad-dir`, the attempted
+`dir`/`name`, and the refusal reason text. See "Reporting" below for how
+this reaches an operator.
 
 **Held area layout**, under `<AssetDir>/fppconnect-uploads/`:
 
@@ -273,19 +292,42 @@ running sum.
 
 Assembly is offset-gated: a chunk is written only when its `Upload-Offset`
 equals the bytes already received for that name (tracked in memory, above);
-a gap or an overlap is `409`, and the fragment is discarded. Offset `0`
-truncates the staging file as it opens (review round 1 finding 7: the
-prior code discarded a stale fragment only via a best-effort `os.Remove`
-whose error was ignored, then reopened without `O_TRUNC`, so a failed
-Remove could leave a longer previous attempt's tail bytes past the new,
-shorter upload's end); `staging/` is also swept at boot
-(`sweepFPPConnectUploadStaging`, called from `agent.go` alongside
-`sweepAssetStaging`), mirroring `internal/agent/assets.go`'s identical
-discipline; `held/` and `index.json` are untouched by that sweep. On
-completion (accumulated bytes equal `Upload-Length`), the in-memory hash is
-finalized (`sha256:<hex>`, the store's identity per ADR-028), then the
+a gap or an overlap is `409`, and the fragment is discarded. A later
+chunk's `Upload-Length` must equal the value declared at offset 0 or it is
+refused the same way, `409` with a `length-mismatch` event (review round 3
+finding 5): trusting a changed value let `bytesReceived` grow past the
+reservation frozen at offset 0, driving that upload's own remainder
+negative and manufacturing free asset-directory-cap headroom for a
+concurrent upload; every reservation is also clamped at zero as defense in
+depth regardless. Offset `0` truncates the staging file as it opens
+(review round 1 finding 7: the prior code discarded a stale fragment only
+via a best-effort `os.Remove` whose error was ignored, then reopened
+without `O_TRUNC`, so a failed Remove could leave a longer previous
+attempt's tail bytes past the new, shorter upload's end); `staging/` is
+also swept at boot (`sweepFPPConnectUploadStaging`, called from `agent.go`
+alongside `sweepAssetStaging`), mirroring `internal/agent/assets.go`'s
+identical discipline; `held/` and `index.json` are untouched by that
+sweep. An in-flight entry with no chunk in longer than
+`fppConnectInFlightTTL` (three times `fppConnectFileReadDeadline`, so 30
+minutes) is swept the same way, at the top of every subsequent
+`WriteChunk` call, so an abandoned upload's reservation does not survive
+for the rest of the process's life (review round 3 finding 4). On
+completion (accumulated bytes equal `Upload-Length`), the in-memory hash
+is finalized (`sha256:<hex>`, the store's identity per ADR-028), then the
 staging file is renamed into `held/`; any failure before that rename
 removes the staging fragment and nothing is registered.
+
+**The store's mutex is held only for validation and for reconciling a
+chunk's result, never across the network read itself (review round 3
+finding 3).** The original single-lock `WriteChunk` held it for the whole
+copy, so one slow client blocked `Held()`/`Events()` (and so render report
+publication, and every other upload or playlist request) for up to
+`fppConnectFileReadDeadline`. `prepareChunkLocked` validates under lock
+and marks the in-flight entry `writing` before releasing it; the unlocked
+copy runs; `finishChunkLocked` retakes the lock to reconcile. A second
+request for the SAME key while one is `writing` is refused (`gap`) rather
+than allowed to race it; a request for any other key is unaffected the
+whole time.
 
 **Pending bindings are bounded too (review round 1 finding 6).** A single
 `POST /api/playlist/{name}` body can name tens of thousands of files
@@ -294,7 +336,19 @@ that this node has not yet received; every one becomes a pending binding.
 `fppConnectHeldStore.pending` is capped at `fppConnectMaxPending` (500)
 the same way the evidence log is capped at `fppConnectMaxEvents` (50):
 oldest evicted first, order tracked and persisted alongside the map so
-eviction survives a restart correctly.
+eviction survives a restart correctly. Each event's own `Entries` field is
+separately capped at `fppConnectMaxEventEntries` (32, with an
+`entriesTruncated` count) at the moment it is recorded, independent of how
+many events the log itself holds (review round 3 finding 2): the two caps
+bound two different things (how many distinct names one event carries,
+versus how many events exist at all), and a single oversized playlist post
+could otherwise defeat the log's own bound by inflating just one entry
+without limit. `load()` re-applies both the pending and event caps to
+whatever was just read from disk (review round 3 finding 9): the two
+`addPendingLocked`/`appendEventLocked` helpers only ever enforce a cap
+going forward, so loading is the one path that can hand this store a
+collection already over it (a persisted index older than a cap, or edited
+outside this store's own writes) and must trim on the way in.
 
 **Binding rules, as built (ADR-044 decision 8):** on `POST
 /api/playlist/{name}`, every held file (in any directory) whose name
@@ -327,16 +381,27 @@ publishes them as `fppConnectHeldCount`/`fppConnectHeld` (every currently
 held file, bound or not, with its `unboundReason` when unbound) and
 `fppConnectHeldEvents` (the bounded evidence log: `unknown` and
 `ambiguous` playlist posts, and refused uploads: `too-large`, `dir-full`,
-`disk-full`, `gap`, `bad-name`, `bad-dir`, ADR-044 decision 4) on the same
-`showmesh.node.render/v1` payload the listener's own bind status already
-travels on. Neither list is enforced as required by
-`RenderPayload.Validate`, matching `fppConnectListening`'s identical
+`disk-full`, `gap`, `length-mismatch`, `bad-name`, `bad-dir`, ADR-044
+decision 4) on the same `showmesh.node.render/v1` payload the listener's
+own bind status already travels on. Neither list is required as present
+by `RenderPayload.Validate` (matching `fppConnectListening`'s identical
 additive-compatibility reasoning: both fields are added after
-`SchemaNodeRenderV1` first shipped. No `node.fppconnect.*` collector
-signal or coordinator API field exists yet to surface this list the way
-the coordinator surfaces other node evidence (matching the bind-status gap
-already noted above); that remains a follow-up, and is listed as an
-acceptance gap on this seam's own pull request.
+`SchemaNodeRenderV1` first shipped), but their LENGTH is capped there
+(`maxRenderHeldFiles` 256, `maxRenderHeldEvents` 64, review round 3
+finding 2): `mqttproto.NewRenderEnvelope` calls `Validate` itself before
+marshalling, so an unbounded list would not merely bloat one publish, it
+would make Validate refuse the payload and cancel every future publish
+outright. `publishOneRenderReport` truncates to those same caps BEFORE
+building the payload, the way `truncateForWire` already did for a
+surface's `lastStderr`: for held files, unbound records are kept first
+(the operator-actionable ones ADR-044 decision 8 exists to surface, kept
+ahead of the ones already resolved when a cut has to happen at all), with
+`fppConnectHeldCount` always stating the true total independent of any
+truncation; for events, the most recent are kept. No `node.fppconnect.*`
+collector signal or coordinator API field exists yet to surface this list
+the way the coordinator surfaces other node evidence (matching the
+bind-status gap already noted above); that remains a follow-up, and is
+listed as an acceptance gap on this seam's own pull request.
 
 **FC3's hook.** `fppConnectHeldStore.SetOnHeld(func(fppConnectHeldRecord))`
 registers a callback invoked whenever a record is created or its binding

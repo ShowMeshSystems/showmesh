@@ -2,11 +2,13 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -301,20 +303,55 @@ func TestFPPConnectUploadDirectoryAllowlist(t *testing.T) {
 		}
 	})
 
-	// Review round 1 finding 9: "." passes every check
-	// fppConnectValidPlaylistName applied before the filepath.Clean fix
-	// (not empty, not "..", no separator) and then failed FC2's rename
-	// into the held area with a 500. It must be refused up front with the
-	// same 403 a slash-containing name gets.
-	t.Run("upload name exactly dot refused", func(t *testing.T) {
-		resp, body := patchChunk(t, srv, "sequences", ".", 0, 3, []byte("abc"))
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("status = %d, want 403; body=%s", resp.StatusCode, body)
-		}
-		if _, ok := findHeldRecord(t, held, "sequences", "."); ok {
-			t.Fatal("a held record exists for a refused name")
-		}
-	})
+	// "." is covered by TestFPPConnectUploadNameBoundCases below, along
+	// with the empty and ".." cases review round 3 finding 6 asked be
+	// turned into a table alongside it.
+}
+
+// TestFPPConnectUploadNameBoundCases is review round 3 finding 6's table:
+// an empty, ".", or ".." Upload-Name must all take fppConnectValidPlaylistName's
+// 403 bad-name path, with an event recorded, never the generic 400
+// "headers required" path an empty name fell into before this fix (which
+// also recorded no evidence at all).
+func TestFPPConnectUploadNameBoundCases(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"empty", ""},
+		{"exactly dot", "."},
+		{"exactly dot-dot", ".."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			held, _ := newTestHeldStore(t)
+			view := fakeFPPConnectView{enabled: true}
+			srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+			req, err := http.NewRequest(http.MethodPatch, srv.URL+"/api/file/sequences", bytes.NewReader([]byte("abc")))
+			if err != nil {
+				t.Fatalf("building request: %v", err)
+			}
+			req.Header.Set("Upload-Name", tc.in)
+			req.Header.Set("Upload-Offset", "0")
+			req.Header.Set("Upload-Length", "3")
+			req.ContentLength = 3
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", resp.StatusCode)
+			}
+			if !hasEventKind(held, "bad-name", tc.in) {
+				t.Fatalf("no bad-name event recorded for %q; events = %+v", tc.in, held.Events())
+			}
+			if _, ok := findHeldRecord(t, held, "sequences", tc.in); ok {
+				t.Fatal("a held record exists for a refused name")
+			}
+		})
+	}
 }
 
 // TestFPPConnectUploadPerFileCap proves Upload-Length over maxFileBytes is
@@ -654,6 +691,74 @@ func TestFPPConnectUploadBootSweepKeepsHeld(t *testing.T) {
 	}
 }
 
+// TestFPPConnectLoadTrimsOversizedPendingAndEvents is review round 3
+// finding 9's regression test: a persisted index.json that already
+// exceeds fppConnectMaxPending or fppConnectMaxEvents (predating either
+// cap, or edited outside this store's own writes) must be trimmed on
+// load, the same as addPendingLocked/appendEventLocked enforce for every
+// mutation afterward, oldest evicted first.
+func TestFPPConnectLoadTrimsOversizedPendingAndEvents(t *testing.T) {
+	dir := t.TempDir()
+
+	total := fppConnectMaxPending + 10
+	pending := make(map[string]string, total)
+	pendingOrder := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		name := fmt.Sprintf("File%04d.fseq", i)
+		pending[name] = "SomeShow"
+		pendingOrder = append(pendingOrder, name)
+	}
+
+	events := make([]fppConnectEvent, 0, fppConnectMaxEvents+10)
+	for i := 0; i < fppConnectMaxEvents+10; i++ {
+		events = append(events, fppConnectEvent{Kind: "unknown", Name: fmt.Sprintf("Show%04d", i), At: time.Now()})
+	}
+
+	idx := fppConnectIndex{
+		Records:      map[string]fppConnectHeldRecord{},
+		Pending:      pending,
+		PendingOrder: pendingOrder,
+		Events:       events,
+	}
+	data, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	indexDir := filepath.Join(dir, fppConnectUploadStateSubdir)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, fppConnectIndexFileName), data, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	held := newFPPConnectHeldStore(dir, discardLogger())
+
+	held.mu.Lock()
+	gotPending := len(held.pending)
+	gotPendingOrder := len(held.pendingOrder)
+	gotEvents := len(held.events)
+	_, newestSurvived := held.pending[fmt.Sprintf("File%04d.fseq", total-1)]
+	_, oldestSurvived := held.pending["File0000.fseq"]
+	held.mu.Unlock()
+
+	if gotPending != fppConnectMaxPending {
+		t.Fatalf("len(pending) = %d, want %d", gotPending, fppConnectMaxPending)
+	}
+	if gotPendingOrder != fppConnectMaxPending {
+		t.Fatalf("len(pendingOrder) = %d, want %d", gotPendingOrder, fppConnectMaxPending)
+	}
+	if !newestSurvived {
+		t.Fatal("the newest pending entry did not survive load's trim")
+	}
+	if oldestSurvived {
+		t.Fatal("the oldest pending entry survived load's trim, want it evicted")
+	}
+	if gotEvents != fppConnectMaxEvents {
+		t.Fatalf("len(events) = %d, want %d", gotEvents, fppConnectMaxEvents)
+	}
+}
+
 // TestFPPConnectUploadRoutesNoProductIdentityLeak extends FC1b's identity
 // sweep (fppconnecthttp_test.go's TestFPPConnectNoProductIdentityLeak) to
 // FC2's new routes.
@@ -816,4 +921,289 @@ func TestFPPConnectChunkWriterTruncatesStaleTailOnOffsetZero(t *testing.T) {
 	if len(got) != len(fresh) || !bytes.Equal(got, fresh) {
 		t.Fatalf("file is %d bytes (%q), want exactly %d bytes (%q): a stale tail from the earlier 50-byte file survived", len(got), got, len(fresh), fresh)
 	}
+}
+
+// blockingChunkWriter blocks inside WriteChunk until release is closed,
+// signaling started first so a test can synchronize on "the copy has
+// actually begun." Used to prove the store's mutex is released during the
+// copy (review round 3 finding 3).
+type blockingChunkWriter struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *blockingChunkWriter) WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (int64, error) {
+	close(w.started)
+	<-w.release
+	return osFPPConnectChunkWriter{}.WriteChunk(path, offset, r, n, truncate)
+}
+
+// TestFPPConnectWriteChunkReleasesLockDuringCopy is review round 3
+// finding 3's regression test: before this fix, WriteChunk held the
+// store's mutex across the whole network read, so a slow client blocked
+// Held() and Events() (and so render report publication) for up to the
+// file read deadline. Held()/Events() must complete promptly while a
+// chunk copy is still blocked mid-write.
+func TestFPPConnectWriteChunkReleasesLockDuringCopy(t *testing.T) {
+	dir := t.TempDir()
+	w := &blockingChunkWriter{started: make(chan struct{}), release: make(chan struct{})}
+	held := newFPPConnectHeldStoreWithWriter(dir, w, discardLogger())
+	neverActive := func() (string, bool, bool) { return "", false, false }
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		held.WriteChunk("sequences", "Slow.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+	}()
+
+	select {
+	case <-w.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the chunk copy to start")
+	}
+
+	snapshotDone := make(chan struct{})
+	go func() {
+		held.Held()
+		held.Events()
+		close(snapshotDone)
+	}()
+	select {
+	case <-snapshotDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Held()/Events() blocked while a chunk copy was still in flight; the store's mutex was not released during the copy")
+	}
+
+	close(w.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for WriteChunk to return after release")
+	}
+
+	rec, ok := findHeldRecord(t, held, "sequences", "Slow.fseq")
+	if !ok || rec.SizeBytes != 5 {
+		t.Fatalf("record = %+v, ok=%v, want a completed 5-byte record", rec, ok)
+	}
+}
+
+// TestFPPConnectWriteChunkSweepsIdleInFlightReservations is review round 3
+// finding 4's regression test: an abandoned upload's asset-directory-cap
+// reservation must not survive past fppConnectInFlightTTL, using a fake
+// clock (the at parameter WriteChunk already takes) rather than a real
+// sleep.
+func TestFPPConnectWriteChunkSweepsIdleInFlightReservations(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	neverActive := func() (string, bool, bool) { return "", false, false }
+
+	start := time.Now()
+	outcome, reason, _ := held.WriteChunk("sequences", "Abandoned.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, start, neverActive)
+	if outcome != fppConnectChunkAccepted {
+		t.Fatalf("setup: outcome = %v reason = %q, want accepted", outcome, reason)
+	}
+
+	held.mu.Lock()
+	if _, ok := held.inFlight["sequences/Abandoned.fseq"]; !ok {
+		held.mu.Unlock()
+		t.Fatal("setup: no in-flight entry recorded")
+	}
+	held.mu.Unlock()
+
+	// A later, unrelated upload's own call to WriteChunk is what triggers
+	// the sweep (sweepIdleInFlightLocked runs at the top of
+	// prepareChunkLocked); the abandoned entry is long past the TTL by
+	// the time this one arrives.
+	later := start.Add(fppConnectInFlightTTL + time.Minute)
+	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive); outcome != fppConnectChunkCompleted {
+		t.Fatalf("fresh upload: outcome = %v reason = %q, want completed", outcome, reason)
+	}
+
+	held.mu.Lock()
+	_, stillInFlight := held.inFlight["sequences/Abandoned.fseq"]
+	held.mu.Unlock()
+	if stillInFlight {
+		t.Fatal("abandoned in-flight entry survived past its TTL, want it swept")
+	}
+	if _, err := os.Stat(held.stagingFilePath("sequences", "Abandoned.fseq")); !os.IsNotExist(err) {
+		t.Fatalf("abandoned staging file survived the sweep, stat err = %v", err)
+	}
+}
+
+// TestFPPConnectUploadLengthMustMatchOffsetZeroDeclaration is review round
+// 3 finding 5's regression test for the reachable half of the fix: a
+// later chunk declaring a different Upload-Length than offset 0's is
+// refused (409) with a length-mismatch event, rather than silently
+// trusted and left to corrupt the asset-directory-cap reservation.
+func TestFPPConnectUploadLengthMustMatchOffsetZeroDeclaration(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	if resp, body := patchChunk(t, srv, "sequences", "Mismatch.fseq", 0, 100, bytes.Repeat([]byte("A"), 10)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("chunk 1: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	resp, body := patchChunk(t, srv, "sequences", "Mismatch.fseq", 10, 200, bytes.Repeat([]byte("B"), 10))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", resp.StatusCode, body)
+	}
+	if !hasEventKind(held, "length-mismatch", "Mismatch.fseq") {
+		t.Fatalf("no length-mismatch event recorded; events = %+v", held.Events())
+	}
+	if _, ok := findHeldRecord(t, held, "sequences", "Mismatch.fseq"); ok {
+		t.Fatal("a held record exists after a length mismatch, want none")
+	}
+	if _, err := os.Stat(held.stagingFilePath("sequences", "Mismatch.fseq")); !os.IsNotExist(err) {
+		t.Fatalf("the fragment survived a length mismatch, stat err = %v", err)
+	}
+}
+
+// TestFPPConnectReservationClampsAtZero is review round 3 finding 5's
+// regression test for the defense-in-depth half of the fix: even if an
+// in-flight entry's bytesReceived somehow exceeds its own uploadLength
+// (the exact state the length-mismatch check above now prevents from
+// arising through the public API), its contribution to another upload's
+// asset-directory-cap check must clamp at zero rather than going
+// negative and manufacturing headroom that is not really there.
+func TestFPPConnectReservationClampsAtZero(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	held.mu.Lock()
+	held.inFlight["sequences/Corrupt.fseq"] = &fppConnectInFlight{
+		hash: sha256.New(), uploadLength: 10, bytesReceived: 50, lastChunkAt: time.Now(),
+	}
+	held.mu.Unlock()
+	neverActive := func() (string, bool, bool) { return "", false, false }
+
+	// maxAssetDirBytes is 50. Corrupt.fseq's raw remainder is
+	// 10-50 = -40. A fresh 51-byte upload: with the remainder wrongly
+	// left negative, 0 (nothing really on disk) + (-40) + 51 = 11 <= 50
+	// would be wrongly accepted. Clamped at zero, 0 + 0 + 51 = 51 > 50
+	// must be refused.
+	outcome, reason, _ := held.WriteChunk("sequences", "New.fseq", 0, 51, strings.NewReader(strings.Repeat("N", 10)), 10, 1<<30, 50, time.Now(), neverActive)
+	if outcome != fppConnectChunkDirFull {
+		t.Fatalf("outcome = %v reason = %q, want dir-full (a negative reservation must clamp to zero, not manufacture headroom)", outcome, reason)
+	}
+}
+
+// TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard is review
+// round 1 finding 5's missing assertions (round 3 finding 7): the
+// in-flight reservation must be gone, not merely inert, both after a
+// clean completion and after a discarded (gapped) upload.
+func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T) {
+	neverActive := func() (string, bool, bool) { return "", false, false }
+
+	t.Run("completion clears the reservation", func(t *testing.T) {
+		held, _ := newTestHeldStore(t)
+		outcome, reason, _ := held.WriteChunk("sequences", "Done.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+		if outcome != fppConnectChunkCompleted {
+			t.Fatalf("outcome = %v reason = %q, want completed", outcome, reason)
+		}
+		held.mu.Lock()
+		_, stillInFlight := held.inFlight["sequences/Done.fseq"]
+		held.mu.Unlock()
+		if stillInFlight {
+			t.Fatal("in-flight reservation survived completion, want it cleared")
+		}
+	})
+
+	t.Run("a gap discards the reservation", func(t *testing.T) {
+		held, _ := newTestHeldStore(t)
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 0, 30, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive); outcome != fppConnectChunkAccepted {
+			t.Fatal("setup: chunk 1 not accepted")
+		}
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 5, 30, strings.NewReader(strings.Repeat("B", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive); outcome != fppConnectChunkGap {
+			t.Fatal("setup: expected a gap")
+		}
+		held.mu.Lock()
+		_, stillInFlight := held.inFlight["sequences/Gapped.fseq"]
+		held.mu.Unlock()
+		if stillInFlight {
+			t.Fatal("in-flight reservation survived a discard, want it cleared")
+		}
+	})
+}
+
+// TestFPPConnectUploadDrippedOverTenSeconds is review round 3 finding 1's
+// regression test: a chunk body that arrives slower than the old,
+// removed, server-wide 10s WriteTimeout must still complete successfully
+// against a server built the production way (the real http.Server field
+// set runFPPConnectHTTPListener constructs, not the lighter httptest
+// wrapper startFPPConnectTestServer's other tests use), proving the
+// per-route write deadline (set only after WriteChunk returns) never
+// overlaps, and is never armed early enough to be tripped by, the slow
+// read.
+func TestFPPConnectUploadDrippedOverTenSeconds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping an eleven-second drip test in -short mode")
+	}
+
+	held, _ := newTestHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	srv := &http.Server{
+		Handler:           newFPPConnectHandler(view, "node-1", held, time.Now, discardLogger()),
+		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
+		ReadTimeout:       fppConnectServerReadTimeoutFloor,
+		WriteTimeout:      0,
+		MaxHeaderBytes:    fppConnectMaxHeaderBytes,
+		ConnContext:       fppConnectConnContext,
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+
+	data := []byte("hello world!") // 12 bytes
+	drip := &slowDripReader{data: data, delay: time.Second}
+
+	req, err := http.NewRequest(http.MethodPatch, "http://"+ln.Addr().String()+"/api/file/sequences", drip)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Header.Set("Upload-Name", "Dripped.fseq")
+	req.Header.Set("Upload-Offset", "0")
+	req.Header.Set("Upload-Length", strconv.Itoa(len(data)))
+	req.ContentLength = int64(len(data))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH with a slow body: %v (the old server-wide WriteTimeout bug delivers an EOF here instead of a response)", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	rec, ok := findHeldRecord(t, held, "sequences", "Dripped.fseq")
+	if !ok || rec.SizeBytes != int64(len(data)) {
+		t.Fatalf("record = %+v, ok=%v, want a completed %d-byte record", rec, ok, len(data))
+	}
+}
+
+// slowDripReader delivers data one byte at a time, sleeping delay before
+// each byte, so a caller reading it to EOF takes roughly
+// len(data)*delay: TestFPPConnectUploadDrippedOverTenSeconds's way of
+// exceeding the old, removed, 10s WriteTimeout without depending on any
+// real network conditions.
+type slowDripReader struct {
+	data  []byte
+	pos   int
+	delay time.Duration
+}
+
+func (r *slowDripReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	time.Sleep(r.delay)
+	n := copy(p, r.data[r.pos:r.pos+1])
+	r.pos += n
+	return n, nil
 }

@@ -55,6 +55,11 @@ func (s *fppConnectServer) handleFileRoute(w http.ResponseWriter, r *http.Reques
 	if !fppConnectAllowedDirs[dir] {
 		reason := fmt.Sprintf("directory %q is not accepted; only sequences, music, and videos are", dir)
 		s.held.RecordRefusal("bad-dir", dir, "", reason, s.now())
+		// Safe to set the write deadline immediately before this
+		// response: nothing above read any of the body, so there is
+		// nothing this deadline's window could overlap (review round 3
+		// finding 1).
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		fppConnectWriteErr(w, http.StatusForbidden, reason)
 		return
 	}
@@ -67,6 +72,7 @@ func (s *fppConnectServer) handleFileRoute(w http.ResponseWriter, r *http.Reques
 		// insisted on this call would break against the real client, and
 		// one that rejects it breaks nothing that client sends but could
 		// break some other FPP Connect tool that does.
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		fppConnectWriteJSON(w, http.StatusOK, map[string]string{"id": uuid.NewString()})
 		return
 	}
@@ -75,29 +81,42 @@ func (s *fppConnectServer) handleFileRoute(w http.ResponseWriter, r *http.Reques
 }
 
 // handleFilePatch assembles one chunk of a chunked upload (RES-003 section
-// 9.4): parse and validate the three required headers, bound the chunk
-// body, then hand the raw bytes to fppConnectHeldStore.WriteChunk, which
-// owns every filesystem and byte-cap decision. dir is already known
-// allowed by the caller.
+// 9.4): parse and validate the required headers, bound the chunk body,
+// then hand the raw bytes to fppConnectHeldStore.WriteChunk, which owns
+// every filesystem and byte-cap decision. dir is already known allowed by
+// the caller.
+//
+// Upload-Offset and Upload-Length are checked for bare presence here (a
+// missing one really is a different, genuinely malformed request, 400).
+// Upload-Name is NOT checked for bare presence before validation (review
+// round 3 finding 6): an empty Upload-Name used to fall into that same
+// 400 branch and record no evidence, when it should take exactly the
+// same 403 bad-name path any other unsafe name does, since
+// fppConnectValidPlaylistName already refuses "" on its own (its first
+// check): an absent header and a present-but-empty one are
+// indistinguishable to r.Header.Get either way, and both are a name
+// problem, not a missing-header problem.
 func (s *fppConnectServer) handleFilePatch(w http.ResponseWriter, r *http.Request, dir string) {
-	name := r.Header.Get("Upload-Name")
 	offsetHeader := r.Header.Get("Upload-Offset")
 	lengthHeader := r.Header.Get("Upload-Length")
-	if name == "" || offsetHeader == "" || lengthHeader == "" {
-		fppConnectWriteErr(w, http.StatusBadRequest, "Upload-Name, Upload-Offset, and Upload-Length headers are all required")
+	if offsetHeader == "" || lengthHeader == "" {
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
+		fppConnectWriteErr(w, http.StatusBadRequest, "Upload-Offset and Upload-Length headers are both required")
 		return
 	}
 
 	// fppConnectValidPlaylistName (fppconnecthttp.go) is reused here
 	// deliberately, not reimplemented: both this header and the fourth
 	// route's {name} are "a string this listener writes near the
-	// filesystem," and both need exactly the same safety checks (no path
-	// separator, no NUL, no ".." segment, no "." or ".." once cleaned,
-	// non-empty). Upload-Name never escaping its directory is ADR-044
+	// filesystem," and both need exactly the same safety checks (empty,
+	// no path separator, no NUL, no ".." segment, no "." or ".." once
+	// cleaned). Upload-Name never escaping its directory is ADR-044
 	// decision 4's second bound.
+	name := r.Header.Get("Upload-Name")
 	if !fppConnectValidPlaylistName(name) {
 		reason := fmt.Sprintf("upload name %q is not a safe bare file name", name)
 		s.held.RecordRefusal("bad-name", dir, name, reason, s.now())
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		fppConnectWriteErr(w, http.StatusForbidden, reason)
 		return
 	}
@@ -105,11 +124,13 @@ func (s *fppConnectServer) handleFilePatch(w http.ResponseWriter, r *http.Reques
 	offset, errOffset := strconv.ParseInt(offsetHeader, 10, 64)
 	length, errLength := strconv.ParseInt(lengthHeader, 10, 64)
 	if errOffset != nil || offset < 0 || errLength != nil || length < 0 {
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		fppConnectWriteErr(w, http.StatusBadRequest, "Upload-Offset and Upload-Length must both be non-negative integers")
 		return
 	}
 
 	if r.ContentLength < 0 || r.ContentLength > fppConnectMaxChunkBytes {
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		fppConnectWriteErr(w, http.StatusBadRequest, fmt.Sprintf(
 			"chunk body must have a known length within this listener's %d byte chunk ceiling", fppConnectMaxChunkBytes))
 		return
@@ -121,6 +142,13 @@ func (s *fppConnectServer) handleFilePatch(w http.ResponseWriter, r *http.Reques
 	// way io.ReadAll would (a real 16 MiB xLights chunk reallocating as
 	// it grows, times however many uploads are in flight).
 	outcome, reason, _ := s.held.WriteChunk(dir, name, offset, length, r.Body, r.ContentLength, s.view.MaxFileBytes(), s.view.MaxAssetDirBytes(), s.now(), s.view.ActiveShow)
+
+	// Only now, after WriteChunk has fully finished reading the request
+	// body, is it safe to bound the response write (review round 3
+	// finding 1): setting this any earlier could have its deadline expire
+	// while the chunk copy above was still in flight, on the very
+	// connection the client is waiting on for its response.
+	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 
 	switch outcome {
 	case fppConnectChunkAccepted, fppConnectChunkCompleted:
