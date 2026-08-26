@@ -311,11 +311,11 @@ func simulateNodeAudioSessionRevision(t *testing.T, activationID string, evidenc
 // plain uint64 column, set directly from the Go value this seam computed
 // (persistAudioSessionDesiredState's in.Revision, audiodispatch.go), so
 // reading it back here is the precise value actually dispatched.
-func dispatchedAudioStopRevision(t *testing.T, st *store.Store) uint64 {
+func dispatchedAudioStopRevision(t *testing.T, st *store.Store, nodeID string) uint64 {
 	t.Helper()
-	rec, err := st.GetAudioSession(context.Background(), blackAndSilenceAudioSessionID)
+	rec, err := st.GetAudioSession(context.Background(), nodeID, blackAndSilenceAudioSessionID)
 	if err != nil {
-		t.Fatalf("get audio session %q: %v", blackAndSilenceAudioSessionID, err)
+		t.Fatalf("get audio session %q for node %q: %v", blackAndSilenceAudioSessionID, nodeID, err)
 	}
 	return rec.Revision
 }
@@ -362,7 +362,7 @@ func TestDispatchBlackAndSilenceAudioStopSurvivesNodeClockAheadOfCoordinator(t *
 	// condition that left the old bare-now derivation refused as stale.
 	h.dispatchBlackAndSilence(context.Background(), now, []string{nodeID}, issuer, "skew-episode-1")
 
-	stopRevision := dispatchedAudioStopRevision(t, setup.st)
+	stopRevision := dispatchedAudioStopRevision(t, setup.st, nodeID)
 
 	rs := simulateNodeAudioSessionRevision(t, act.ActivationID, nodeClockEvidenceAt)
 	decision := rs.Apply(pkgaudio.InvocationID("stop-invocation"), pkgaudio.Revision(stopRevision))
@@ -398,7 +398,7 @@ func TestDispatchBlackAndSilenceAudioStopOrdinaryCoordinatorClockAhead(t *testin
 
 	h.dispatchBlackAndSilence(context.Background(), now, []string{nodeID}, issuer, "ordinary-episode-1")
 
-	stopRevision := dispatchedAudioStopRevision(t, setup.st)
+	stopRevision := dispatchedAudioStopRevision(t, setup.st, nodeID)
 
 	rs := simulateNodeAudioSessionRevision(t, act.ActivationID, nodeClockEvidenceAt)
 	decision := rs.Apply(pkgaudio.InvocationID("stop-invocation"), pkgaudio.Revision(stopRevision))

@@ -63,6 +63,7 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
+	{version: 21, sql: schemaV21},
 	// v21, v22, and v23 are dead numbers: each sits at or below this
 	// migration's own shipped maximum (24), so migrate()'s own
 	// current == target short-circuit means a migration entry at any of
@@ -1109,6 +1110,11 @@ CREATE TABLE node_asset_reports (
 // agent is a session's actual authority: a running session must survive
 // coordinator loss, so this table is the coordinator's durable RECORD of
 // what it last told a session to be, not a second engine.
+//
+// id alone is this table's PRIMARY KEY only up to this migration:
+// schemaV21 re-keys it to (node_id, id), because a session id is not
+// globally unique (see schemaV21's own doc comment) — do not copy this
+// table's shape for a new migration without reading that one first.
 const schemaV9 = `
 CREATE TABLE audio_sessions (
     id           TEXT PRIMARY KEY,
@@ -1490,6 +1496,50 @@ func migrateV26RenameRequestedRevisionToCallerIntent(ctx context.Context, tx *sq
 		return fmt.Errorf("commands table is in an unexpected state for the caller_intent rename: requested_revision present=%v, caller_intent present=%v", hasOldName == 1, hasNewName == 1)
 	}
 }
+
+// schemaV21 re-keys audio_sessions (schemaV9) from `id TEXT PRIMARY KEY`
+// to a composite `(node_id, id)` primary key. The defect it fixes is that
+// a session id is not globally unique — the cue and blackAndSilence
+// session ids are global constants (STEP-9-SPEC.md / TRACK-C-audio-node.md's
+// fixed session-id vocabulary), so two audio nodes each dispatching the
+// same session id shared one row under schemaV9's bare `id` key:
+// whichever node wrote second either silently overwrote the first node's
+// desired state (if its own revision happened to be higher) or had ITS
+// OWN write silently dropped by PutAudioSession's anti-rewind guard (if
+// not) — that guard compares revisions within a row that, after this
+// migration, can never again be shared by two nodes.
+//
+// Follows the same SQLite "12 steps to altering a table" pattern schemaV2/
+// schemaV4 already established (SQLite's ALTER TABLE cannot change an
+// existing PRIMARY KEY in place): create the new table shape, copy every
+// existing row across unchanged — including desired_json, revision,
+// created_at, and updated_at exactly as stored, so no in-flight session's
+// history or revision counter is disturbed by this migration — drop the
+// old table, and rename the new one into its place.
+//
+// audio_sessions_by_node (schemaV9) is not recreated: SQLite maintains an
+// implicit index over a table's PRIMARY KEY, and (node_id, id) already
+// serves every "WHERE node_id = ?" lookup ListAudioSessionsByNode issues,
+// so a separate single-column index on node_id would be redundant with
+// the key itself.
+const schemaV21 = `
+CREATE TABLE audio_sessions_v21 (
+    node_id      TEXT NOT NULL,
+    id           TEXT NOT NULL,
+    desired_json TEXT NOT NULL,
+    revision     INTEGER NOT NULL,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (node_id, id)
+);
+
+INSERT INTO audio_sessions_v21 (node_id, id, desired_json, revision, created_at, updated_at)
+    SELECT node_id, id, desired_json, revision, created_at, updated_at FROM audio_sessions;
+
+DROP TABLE audio_sessions;
+
+ALTER TABLE audio_sessions_v21 RENAME TO audio_sessions;
+`
 
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):
