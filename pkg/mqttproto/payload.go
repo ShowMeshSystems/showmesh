@@ -911,6 +911,20 @@ type RenderPayload struct {
 	// FPPConnectHeld, and the same reasoning for why its length cap is
 	// enforced regardless.
 	FPPConnectHeldEvents []RenderFPPConnectHeldEvent `json:"fppConnectHeldEvents"`
+
+	// FPPConnectHeldEventsTotal is the true total number of events this
+	// node currently holds, independent of FPPConnectHeldEvents' own
+	// length, mirroring FPPConnectHeldCount's identical relationship to
+	// FPPConnectHeld one field up (review round 8 finding 2): the two can
+	// differ once a publisher trims the list, whether for
+	// [maxRenderHeldEvents]'s own count cap or for the envelope's overall
+	// size budget, and neither trim previously left any trace a consumer
+	// could read; len(FPPConnectHeldEvents) alone could not distinguish
+	// "this node has exactly this many events" from "this node has more,
+	// and some were cut to fit." A consumer that only needs "how many
+	// events exist" reads this field rather than
+	// len(FPPConnectHeldEvents).
+	FPPConnectHeldEventsTotal int `json:"fppConnectHeldEventsTotal"`
 }
 
 // RenderFPPConnectHeldFile is one file FC2's chunked upload receiver
@@ -948,7 +962,13 @@ type RenderFPPConnectHeldFile struct {
 	// is false.
 	Show string `json:"show,omitempty"`
 
-	// LogicalSequence is the file name stem, set only when Bound is true.
+	// ShowID is Show's resolved config object id (FC3, ADR-028 decision
+	// 8), the value FC3's registrar sends as POST /api/v1/assets' `show`
+	// field. Empty when Bound is false.
+	ShowID string `json:"showId,omitempty"`
+
+	// LogicalSequence is the file name stem, slugified to the assets
+	// API's own sequence-id rule (FC3), set only when Bound is true.
 	LogicalSequence string `json:"logicalSequence,omitempty"`
 
 	// UnboundReason names which of ADR-039 decision 5's distinct
@@ -956,6 +976,41 @@ type RenderFPPConnectHeldFile struct {
 	// show, pushed an explicit "no active show," or an active show
 	// pushed with an empty name. Empty whenever Bound is true.
 	UnboundReason string `json:"unboundReason,omitempty"`
+
+	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
+	// bound file not yet attempted, "skipped" for a music/videos file
+	// (this lane registers FSEQ content only), "pending" while a
+	// retryable attempt is scheduled, "registered" once the coordinator
+	// has accepted it, or "failed" for a non-retryable refusal or a
+	// content-hash mismatch against the coordinator's response. Always ""
+	// when Bound is false: an unresolved binding is reported as unbound,
+	// never as pending registration.
+	RegistrationState string `json:"registrationState,omitempty"`
+
+	// RegistrationAssetID is the coordinator-assigned asset id, set only
+	// when RegistrationState is "registered".
+	RegistrationAssetID string `json:"registrationAssetId,omitempty"`
+
+	// RegistrationRolledBack mirrors the coordinator's own rolledBack
+	// flag (ADR-028 decision 10) from the registration that produced
+	// RegistrationAssetID.
+	RegistrationRolledBack bool `json:"registrationRolledBack,omitempty"`
+
+	// RegistrationReason is evidence for the current RegistrationState:
+	// why registration is skipped, the retry reason while pending, or the
+	// failure detail. Empty when RegistrationState is "" or "registered".
+	RegistrationReason string `json:"registrationReason,omitempty"`
+
+	// RegistrationProblemType is the coordinator's RFC 9457 problem
+	// `type` for a non-retryable refusal, set only when RegistrationState
+	// is "failed" and the failure came from the coordinator's own
+	// response (empty for a locally-detected failure, e.g. a
+	// content-hash mismatch).
+	RegistrationProblemType string `json:"registrationProblemType,omitempty"`
+
+	// RegistrationNextRetryAt is when the retry loop will next attempt
+	// registration, set only when RegistrationState is "pending".
+	RegistrationNextRetryAt time.Time `json:"registrationNextRetryAt,omitempty"`
 }
 
 // RenderFPPConnectHeldEvent is one entry in FC2's bounded evidence log,
@@ -963,7 +1018,9 @@ type RenderFPPConnectHeldFile struct {
 // (this schema's standing "clients ignore what they don't know"
 // convention, ADR-020), currently one of: "unknown" and "ambiguous" (a
 // POST /api/playlist/{name} whose name matched no show, or matched more
-// than one), and "too-large", "dir-full", "disk-full", "gap",
+// than one), "show-id-not-pushed" (the name matched exactly one show by
+// display name, but that show's config object id has not been pushed
+// yet), and "too-large", "dir-full", "disk-full", "gap",
 // "length-mismatch", "bad-name", and "bad-dir" (a refused upload chunk,
 // ADR-044 decision 4).
 type RenderFPPConnectHeldEvent struct {

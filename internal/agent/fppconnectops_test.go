@@ -71,6 +71,74 @@ func TestFPPConnectConfigureAppliesAndPersists(t *testing.T) {
 	}
 }
 
+// TestFPPConnectConfigureCoordinatorBaseURL proves FC3's additive
+// coordinatorBaseUrl field decodes, applies, and persists like every other
+// field this operation carries, and that omitting it entirely (a push
+// built before this field existed, or a test fixture built before this
+// seam) leaves it "" rather than failing to decode.
+func TestFPPConnectConfigureCoordinatorBaseURL(t *testing.T) {
+	t.Run("present", func(t *testing.T) {
+		dir := t.TempDir()
+		state := newFPPConnectState()
+		op := &fppConnectConfigureOperation{state: state, assetDir: dir}
+
+		params := fppConnectConfigureParamsMap(fppConnectConfigureSchema, "", nil, []string{}, validFPPConnectSettingsMap())
+		params["coordinatorBaseUrl"] = "http://coordinator.example:8080"
+
+		if _, err := op.configure(context.Background(), params, time.Now); err != nil {
+			t.Fatalf("configure: %v", err)
+		}
+		if got := state.CoordinatorBaseURL(); got != "http://coordinator.example:8080" {
+			t.Errorf("state.CoordinatorBaseURL() = %q, want http://coordinator.example:8080", got)
+		}
+
+		restarted := newFPPConnectState()
+		if loaded, err := restarted.Load(dir); err != nil || !loaded {
+			t.Fatalf("Load after configure: loaded=%v err=%v", loaded, err)
+		}
+		if got := restarted.CoordinatorBaseURL(); got != "http://coordinator.example:8080" {
+			t.Errorf("restarted.CoordinatorBaseURL() = %q, want http://coordinator.example:8080", got)
+		}
+	})
+
+	t.Run("absent defaults empty", func(t *testing.T) {
+		dir := t.TempDir()
+		state := newFPPConnectState()
+		op := &fppConnectConfigureOperation{state: state, assetDir: dir}
+
+		params := fppConnectConfigureParamsMap(fppConnectConfigureSchema, "", nil, []string{}, validFPPConnectSettingsMap())
+		delete(params, "coordinatorBaseUrl") // never present in this map to begin with; explicit for clarity
+
+		if _, err := op.configure(context.Background(), params, time.Now); err != nil {
+			t.Fatalf("configure: %v", err)
+		}
+		if got := state.CoordinatorBaseURL(); got != "" {
+			t.Errorf("state.CoordinatorBaseURL() = %q, want empty when the push never carried the field", got)
+		}
+	})
+}
+
+// TestFPPConnectConfigureNotifiesOnPush proves every applied configure
+// call invokes the registered onPush callback (FC3's registrar wakes its
+// retry loops here), including one that changes nothing about the
+// coordinator base URL.
+func TestFPPConnectConfigureNotifiesOnPush(t *testing.T) {
+	dir := t.TempDir()
+	state := newFPPConnectState()
+	op := &fppConnectConfigureOperation{state: state, assetDir: dir}
+
+	var notified int
+	state.SetOnPush(func() { notified++ })
+
+	params := fppConnectConfigureParamsMap(fppConnectConfigureSchema, "", nil, []string{}, validFPPConnectSettingsMap())
+	if _, err := op.configure(context.Background(), params, time.Now); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	if notified != 1 {
+		t.Errorf("onPush invocation count = %d, want 1", notified)
+	}
+}
+
 func TestFPPConnectConfigureNullActiveShow(t *testing.T) {
 	dir := t.TempDir()
 	state := newFPPConnectState()

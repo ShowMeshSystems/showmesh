@@ -84,10 +84,65 @@ type fppConnectHeldRecord struct {
 	ContentHash string    `json:"contentHash"`
 	ReceivedAt  time.Time `json:"receivedAt"`
 
-	Bound           bool   `json:"bound"`
-	Show            string `json:"show,omitempty"`
+	Bound bool   `json:"bound"`
+	Show  string `json:"show,omitempty"`
+
+	// ShowID is Show's resolved config object id (FC3, ADR-028 decision
+	// 8), set whenever Bound is true: xLights and FC2's own binding speak
+	// only Show's display name, but POST /api/v1/assets' `show` field
+	// requires the id, which the coordinator's own showExists validates
+	// against, not the name. Resolved once, at bind time, from the
+	// coordinator's pushed "shows" id/name list (fppConnectView.ShowID),
+	// alongside Show rather than computed again by the registrar, so the
+	// two can never drift apart from each other.
+	ShowID          string `json:"showId,omitempty"`
 	LogicalSequence string `json:"logicalSequence,omitempty"`
 	UnboundReason   string `json:"unboundReason,omitempty"`
+
+	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
+	// bound file this lane has not yet attempted to register, one of
+	// [fppConnectRegistrationSkipped] (a music/videos file: this lane
+	// registers FSEQ content only), [fppConnectRegistrationPending] (an
+	// attempt failed retryably and another is scheduled),
+	// [fppConnectRegistrationRegistered] (the coordinator accepted it), or
+	// [fppConnectRegistrationFailed] (a non-retryable coordinator refusal,
+	// or a local content-hash mismatch against the coordinator's
+	// response). Always "" for an unbound record: ADR-030 decision 5's
+	// "interrupted upload registers nothing" extends to "unresolvable
+	// binding registers nothing," and this state must never read as
+	// "pending" for a file that was never a registration candidate at all.
+	RegistrationState string `json:"registrationState,omitempty"`
+
+	// RegistrationAssetID is the coordinator-assigned asset id, set only
+	// when RegistrationState is "registered".
+	RegistrationAssetID string `json:"registrationAssetId,omitempty"`
+
+	// RegistrationRolledBack mirrors the coordinator's own rolledBack flag
+	// (ADR-028 decision 10) from the registration that produced
+	// RegistrationAssetID.
+	RegistrationRolledBack bool `json:"registrationRolledBack,omitempty"`
+
+	// RegistrationReason is human-readable evidence for the current
+	// RegistrationState: why registration is skipped, the retry reason
+	// while pending, or the failure detail. Empty when RegistrationState
+	// is "" or "registered", except immediately after BindShow resets an
+	// already-registered record to "" for a rebind to a new show or
+	// sequence identity (review round 5 finding 1,
+	// resetRegistrationForRebindLocked): RegistrationReason then carries
+	// the superseded asset id as evidence, until the next registration
+	// attempt under the new identity overwrites it.
+	RegistrationReason string `json:"registrationReason,omitempty"`
+
+	// RegistrationProblemType is the coordinator's RFC 9457 problem `type`
+	// for a non-retryable refusal, set only when RegistrationState is
+	// "failed" and the failure came from the coordinator's own response
+	// (empty for a locally-detected failure, e.g. a content-hash
+	// mismatch).
+	RegistrationProblemType string `json:"registrationProblemType,omitempty"`
+
+	// RegistrationNextRetryAt is when the retry loop will next attempt
+	// registration, set only when RegistrationState is "pending".
+	RegistrationNextRetryAt time.Time `json:"registrationNextRetryAt,omitempty"`
 }
 
 // fppConnectEvent is evidence not (necessarily) tied to any one held
@@ -192,14 +247,40 @@ func capEventEntries(entries []string) (capped []string, truncated int) {
 // without bound from a single POST.
 const fppConnectMaxPending = 500
 
+// fppConnectPendingBinding is one entry of fppConnectHeldStore.pending: the
+// show a POST /api/playlist/{name} named for a file that did not exist
+// yet, resolved to both its display name (what BindShow's own idempotent
+// re-application compares against) and its config object id (FC3, ADR-028
+// decision 8), so a file completing afterwards binds with the same id a
+// same-tick bind would have used, never a name alone that a later
+// registration attempt would have to re-resolve. ShowID is empty exactly
+// when the display name resolved but its id has not been pushed yet
+// (review round 2 finding D, BindPendingShowID): the entry survives in
+// this same map either way, and RebindPendingShowIDs is what fills in
+// ShowID once a later push can.
+type fppConnectPendingBinding struct {
+	ShowName string `json:"showName"`
+	ShowID   string `json:"showId"`
+}
+
+// fppConnectUnboundReasonShowIDNotPushed is fppConnectHeldRecord.
+// UnboundReason's value for review round 2 finding D: a POST
+// /api/playlist/{name} (or the active-show pending fallback) named a
+// show this node's ShowNames() lists exactly once, but whose config
+// object id has not been pushed yet (a node snapshot, or the pushing
+// coordinator, that predates the additive "shows" field). Distinct from
+// genuine ambiguity (two shows sharing the display name): the fix is a
+// later push resolving automatically, not an operator renaming a show.
+const fppConnectUnboundReasonShowIDNotPushed = "show id not yet pushed"
+
 // fppConnectIndex is the whole of fppConnectHeldStore's durable state, and
 // exactly what persistLocked/load read and write as one JSON document,
 // matching internal/agent/heldcatalog.FileStore's identical "one atomic
 // file holds the one durable record" discipline, generalized here to a
 // small collection rather than a single record.
 type fppConnectIndex struct {
-	Records map[string]fppConnectHeldRecord `json:"records"`
-	Pending map[string]string               `json:"pending"`
+	Records map[string]fppConnectHeldRecord     `json:"records"`
+	Pending map[string]fppConnectPendingBinding `json:"pending"`
 	// PendingOrder is Pending's insertion order, oldest first, so
 	// fppConnectMaxPending's eviction survives a restart correctly rather
 	// than reverting to Go's unspecified map iteration order.
@@ -222,6 +303,25 @@ type fppConnectChunkWriter interface {
 	WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (written int64, err error)
 }
 
+// fppConnectChunkFile is the *os.File subset osFPPConnectChunkWriter needs:
+// positioned writes, and a Close whose own error must never be discarded
+// (review round 7 finding 2).
+type fppConnectChunkFile interface {
+	io.WriterAt
+	io.Closer
+}
+
+// fppConnectOpenChunkFile opens path for osFPPConnectChunkWriter.WriteChunk,
+// a package-level var matching fppConnectRegisterHTTPClient's identical
+// swap-for-tests convention: a test substitutes a fppConnectChunkFile whose
+// Close deliberately fails, standing in for a real filesystem condition
+// (ENOSPC under delayed allocation, a network mount) a sandboxed test
+// cannot reliably reproduce, while still exercising osFPPConnectChunkWriter's
+// own real Close-handling logic unchanged.
+var fppConnectOpenChunkFile = func(path string, flags int, perm os.FileMode) (fppConnectChunkFile, error) {
+	return os.OpenFile(path, flags, perm)
+}
+
 // osFPPConnectChunkWriter is fppConnectChunkWriter's real implementation:
 // open (creating or truncating as directed), then a single positioned
 // streaming copy. Offset is always exactly the file's current size by the
@@ -234,12 +334,27 @@ func (osFPPConnectChunkWriter) WriteChunk(path string, offset int64, r io.Reader
 	if truncate {
 		flags |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(path, flags, 0o644)
+	f, err := fppConnectOpenChunkFile(path, flags, 0o644)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = f.Close() }()
-	return io.Copy(io.NewOffsetWriter(f, offset), io.LimitReader(r, n))
+	written, copyErr := io.Copy(io.NewOffsetWriter(f, offset), io.LimitReader(r, n))
+	closeErr := f.Close()
+	if copyErr != nil {
+		return written, copyErr
+	}
+	// A write failure can surface only at Close, not at the write itself
+	// (review round 7 finding 2): delayed allocation means ENOSPC, or any
+	// other write error, on some filesystems (and on a network mount) is
+	// reported only once the kernel actually flushes buffered pages,
+	// which Close is what forces. Discarding this error previously
+	// reported io.Copy's own byte count as a successful chunk regardless,
+	// so finishChunkLocked recorded a content hash for bytes that were
+	// never actually committed to disk. fppConnectIsDiskFull classifies
+	// this the identical way it already classifies a write-time ENOSPC,
+	// since finishChunkLocked branches on writeErr alone, never on which
+	// step produced it.
+	return written, closeErr
 }
 
 // fppConnectIsDiskFull reports whether err is the ENOSPC outcome ADR-044
@@ -334,8 +449,8 @@ type fppConnectHeldStore struct {
 	writer   fppConnectChunkWriter
 	logger   *slog.Logger
 
-	records map[string]fppConnectHeldRecord // key: dir + "/" + name
-	pending map[string]string               // file name -> show name
+	records map[string]fppConnectHeldRecord     // key: dir + "/" + name
+	pending map[string]fppConnectPendingBinding // file name -> show name/id
 	// pendingOrder is pending's insertion order, oldest first; see
 	// fppConnectMaxPending.
 	pendingOrder []string
@@ -368,7 +483,7 @@ func newFPPConnectHeldStoreWithWriter(assetDir string, writer fppConnectChunkWri
 		writer:   writer,
 		logger:   logger,
 		records:  map[string]fppConnectHeldRecord{},
-		pending:  map[string]string{},
+		pending:  map[string]fppConnectPendingBinding{},
 		inFlight: map[string]*fppConnectInFlight{},
 	}
 	if err := s.load(); err != nil {
@@ -424,6 +539,172 @@ func (s *fppConnectHeldStore) Events() []fppConnectEvent {
 	return out
 }
 
+// HeldFilePath returns the on-disk path of the completed, held file for
+// (dir, name), for FC3's registrar to open and stream as the registration
+// request's file part. Exported (unlike the identical unexported
+// heldFilePath below) because the registrar lives in a different file
+// within this same package but has no other need to reach into this
+// store's internal layout.
+func (s *fppConnectHeldStore) HeldFilePath(dir, name string) string {
+	return s.heldFilePath(dir, name)
+}
+
+// RecordFor returns the currently held record for (dir, name), if any.
+// FC3's registerLoop calls this at the top of every iteration to read the
+// record's CURRENT state rather than trust the copy it was started or
+// last retried with, which can be stale by the time it actually runs (a
+// concurrent rebind, or another path already resolving this record's
+// registration state while this goroutine was queued, review round 1
+// finding 3).
+func (s *fppConnectHeldStore) RecordFor(dir, name string) (fppConnectHeldRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.records[dir+"/"+name]
+	return rec, ok
+}
+
+// CollidingRecords returns every OTHER record in dir that shares (dir,
+// name)'s intended identity (review round 7 finding 1: with three or more
+// files sharing one identity, returning only the first match, as a single
+// prior record did, could surface any one of the OTHER competitors, not
+// necessarily the strongest one, letting a caller wrongly conclude that
+// identity has no registered or in-flight owner when it actually does): two
+// distinct file name stems can slugify to the identical sequence id ("My
+// Show.fseq" and "my_show.fseq" both slug to "my-show"), and the assets
+// API's identity is (show, sequence, targetKind, target), never the
+// filename, so registering both under the same show would silently
+// supersede one with the other. A competitor is either another currently
+// bound record sharing showID and logicalSequence, or another record still
+// awaiting its show's config object id
+// (fppConnectUnboundReasonShowIDNotPushed, BindPendingShowID) whose
+// intended show name (showName) and logicalSequence both match (review
+// round 5 finding 4): BindPendingShowID temporarily unbinds a record
+// exactly like this while it waits for a later push to carry the id it
+// needs, and skipping every unbound record here used to make it invisible
+// to a competitor's collision check for as long as that wait lasted,
+// letting whichever of two colliding files happened to attempt while the
+// other was mid-wait claim the identity uncontested, decided by push
+// timing rather than claimIdentity's own ReceivedAt fairness rule.
+// Scoped to dir so a music/videos file, which this lane never registers
+// at all, is never flagged against a sequences file it could never
+// actually collide with at the API. Returns nil when no such collision
+// exists.
+func (s *fppConnectHeldStore) CollidingRecords(dir, name, showID, showName, logicalSequence string) []fppConnectHeldRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []fppConnectHeldRecord
+	for _, rec := range s.records {
+		if rec.Dir != dir || rec.Name == name || rec.LogicalSequence != logicalSequence {
+			continue
+		}
+		if rec.Bound && rec.ShowID == showID {
+			out = append(out, rec)
+			continue
+		}
+		if !rec.Bound && rec.UnboundReason == fppConnectUnboundReasonShowIDNotPushed && rec.Show == showName {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// setRegistrationLocked applies one registration-state transition to
+// key's (dir, name) record and persists it, s.mu already held. A no-op
+// (returns false) when the record no longer exists, its content hash no
+// longer matches wantHash, or its resolved identity (ShowID,
+// LogicalSequence) no longer matches wantShowID/wantLogicalSequence:
+// either the first means a fresh upload has since replaced what this call
+// was about to report on, or the second means a rebind (BindShow) landed
+// while this attempt was in flight (review round 6 finding 1) and the
+// record now belongs to a different show or sequence than the attempt
+// this call reports on ever ran against. Either way, whatever process
+// owns the record now (a fresh upload's own registerLoop, or the same
+// loop's next iteration re-reading the rebound record) owns its state,
+// never this stale call.
+func (s *fppConnectHeldStore) setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence string, apply func(*fppConnectHeldRecord)) bool {
+	key := dir + "/" + name
+	rec, exists := s.records[key]
+	if !exists || rec.ContentHash != wantHash || rec.ShowID != wantShowID || rec.LogicalSequence != wantLogicalSequence {
+		return false
+	}
+	apply(&rec)
+	s.records[key] = rec
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a registration state change", "dir", dir, "name", name, "error", err)
+	}
+	return true
+}
+
+// SetRegistrationSkipped records that (dir, name), whose content hash and
+// resolved identity must still equal wantHash/wantShowID/
+// wantLogicalSequence, is held but will never be registered in this lane
+// (a music or videos upload: FC3 registers FSEQ content only). reason
+// names why, for the render report's evidence. Returns false (a no-op)
+// when wantHash, wantShowID, or wantLogicalSequence no longer matches the
+// current record.
+func (s *fppConnectHeldStore) SetRegistrationSkipped(dir, name, wantHash, wantShowID, wantLogicalSequence, reason string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationSkipped
+		rec.RegistrationReason = reason
+		rec.RegistrationProblemType = ""
+		rec.RegistrationNextRetryAt = time.Time{}
+	})
+}
+
+// SetRegistrationPending records that a registration attempt for (dir,
+// name) failed retryably: reason is the transport error, the coordinator's
+// problem detail, or "coordinator base URL not configured"; nextRetryAt is
+// when the retry loop will try again. Returns false (a no-op) when
+// wantHash, wantShowID, or wantLogicalSequence no longer matches the
+// current record.
+func (s *fppConnectHeldStore) SetRegistrationPending(dir, name, wantHash, wantShowID, wantLogicalSequence, reason string, nextRetryAt time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationPending
+		rec.RegistrationReason = reason
+		rec.RegistrationProblemType = ""
+		rec.RegistrationNextRetryAt = nextRetryAt
+	})
+}
+
+// SetRegistrationFailed records a non-retryable registration failure for
+// (dir, name): problemType is the coordinator's RFC 9457 problem `type`
+// (empty for a locally-detected failure, e.g. a content-hash mismatch),
+// and reason is its detail, verbatim. Returns false (a no-op) when
+// wantHash, wantShowID, or wantLogicalSequence no longer matches the
+// current record.
+func (s *fppConnectHeldStore) SetRegistrationFailed(dir, name, wantHash, wantShowID, wantLogicalSequence, problemType, reason string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationFailed
+		rec.RegistrationReason = reason
+		rec.RegistrationProblemType = problemType
+		rec.RegistrationNextRetryAt = time.Time{}
+	})
+}
+
+// SetRegistrationRegistered records that (dir, name) is now registered
+// with the coordinator's asset store: assetID and rolledBack are the
+// coordinator's own response fields (ADR-028 decision 10). Returns false
+// (a no-op) when wantHash, wantShowID, or wantLogicalSequence no longer
+// matches the current record.
+func (s *fppConnectHeldStore) SetRegistrationRegistered(dir, name, wantHash, wantShowID, wantLogicalSequence, assetID string, rolledBack bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationRegistered
+		rec.RegistrationAssetID = assetID
+		rec.RegistrationRolledBack = rolledBack
+		rec.RegistrationReason = ""
+		rec.RegistrationProblemType = ""
+		rec.RegistrationNextRetryAt = time.Time{}
+	})
+}
+
 // MainPlaylistFor returns one fppConnectPlaylistEntry per held record
 // currently bound to showName, sorted by file name, for GET
 // /api/playlist/{name}. Returns nil (never a non-nil empty slice) when
@@ -474,6 +755,43 @@ func (s *fppConnectHeldStore) MainPlaylistFor(showName string) []fppConnectPlayl
 // no extension is its own stem.
 func fppConnectStem(name string) string {
 	return strings.TrimSuffix(name, filepath.Ext(name))
+}
+
+// fppConnectLogicalSequenceSlug derives the value the assets API's
+// identity requires for POST /api/v1/assets' `sequence` field (FC3,
+// ADR-028 decision 8) from name's file name stem: the same slug rule
+// every other Track E object id uses (config.ValidateShowObjectID,
+// 1 to 64 characters of [a-z0-9-], never starting or ending with a
+// hyphen). The stem is lowercased, every run of characters outside
+// [a-z0-9] (spaces, underscores, punctuation, and any hyphen already
+// present) collapses to one hyphen, leading and trailing hyphens are
+// trimmed, and the result is truncated to 64 characters (trimming a
+// trailing hyphen the truncation itself could newly expose). "" when the
+// stem contains no [a-z0-9] character at all, e.g. a name of only
+// punctuation: the caller stores that empty result as-is, and FC3's
+// registrar refuses to register it (a request built from an empty
+// sequence would only 400 forever) rather than silently sending an
+// invalid value.
+func fppConnectLogicalSequenceSlug(name string) string {
+	stem := strings.ToLower(fppConnectStem(name))
+	var b strings.Builder
+	pendingHyphen := false // suppresses a hyphen until a real character has been written, so the result never starts with one
+	for _, r := range stem {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			if pendingHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+			}
+			pendingHyphen = false
+			b.WriteRune(r)
+			continue
+		}
+		pendingHyphen = true
+	}
+	slug := b.String()
+	if len(slug) > 64 {
+		slug = strings.TrimSuffix(slug[:64], "-")
+	}
+	return slug
 }
 
 // stagingDir, stagingFilePath, heldFileDir, heldFilePath and indexPath are
@@ -634,11 +952,12 @@ func (s *fppConnectHeldStore) RecordRefusal(kind, dir, name, reason string, at t
 //
 // dir is assumed already validated against fppConnectAllowedDirs by the
 // caller (fppconnectupload.go's handleFileRoute); name is assumed already
-// validated by fppConnectValidPlaylistName. activeShow is the view's
-// ActiveShow method, threaded through as a function rather than the whole
-// view so this store stays independent of fppConnectView (avoiding an
-// import cycle risk and keeping this file's own test surface small).
-func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+// validated by fppConnectValidPlaylistName. activeShow and resolveShowID
+// are the view's ActiveShow and ShowID methods, threaded through as
+// functions rather than the whole view so this store stays independent of
+// fppConnectView (keeping this file's own test surface small: a test
+// supplies two small closures rather than a whole fake view).
+func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool), showNames func() []string) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	key := dir + "/" + name
 	stagingPath := s.stagingFilePath(dir, name)
 
@@ -693,7 +1012,7 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 	teed := io.TeeReader(body, inf.hash)
 	written, writeErr := s.writer.WriteChunk(stagingPath, offset, teed, n, offset == 0)
 
-	outcome, reason, rec = s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow)
+	outcome, reason, rec = s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow, resolveShowID, showNames)
 	finishedNormally = true
 	return outcome, reason, rec
 }
@@ -834,7 +1153,7 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 // upload finalizes the hash and renames into the held area and resolves
 // its binding, and an accepted-but-incomplete chunk just clears the
 // writing flag and updates bytesReceived/lastChunkAt for the next one.
-func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool), showNames func() []string) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -893,7 +1212,7 @@ func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath stri
 		return fppConnectChunkWriteFailed, fmt.Sprintf("finalizing held file %q: %v", name, err), fppConnectHeldRecord{}
 	}
 
-	rec = s.completeLocked(dir, name, uploadLength, hashSum, at, activeShow)
+	rec = s.completeLocked(dir, name, uploadLength, hashSum, at, activeShow, resolveShowID, showNames)
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after completion", "dir", dir, "name", name, "error", err)
 	}
@@ -909,29 +1228,71 @@ func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath stri
 // show, in ADR-039 decision 5's tri-state (bound if known AND non-empty,
 // else unbound with a reason distinguishing "pushed null," "never
 // pushed," and "pushed known but with an empty name," review round 1
-// finding 8).
-func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, hash string, at time.Time, activeShow func() (name string, known bool, everSet bool)) fppConnectHeldRecord {
+// finding 8). Every bound branch also resolves the show's config object
+// id via resolveShowID (FC3, ADR-028 decision 8): when the display name
+// does not currently resolve to exactly one show (an active show pushed
+// under a name that two shows now share, a genuinely stale edge case),
+// the file is left unbound with its own distinct reason rather than
+// binding with no id at all, which the registrar could never use. When
+// the name IS known (showNames) but resolveShowID still fails, the
+// coordinator has simply not pushed that show's id yet: bindTo holds the
+// file unbound with fppConnectUnboundReasonShowIDNotPushed and Show set,
+// mirroring handlePlaylistPost's identical distinction, so
+// RebindPendingShowIDs (which requires that exact reason and a non-empty
+// Show) converges it once a later push carries shows (review round 3
+// finding 2; before this, the generic reason left Show empty and this
+// record could never be rebound automatically).
+func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, hash string, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool), showNames func() []string) fppConnectHeldRecord {
 	key := dir + "/" + name
 	prev, hadPrev := s.records[key]
 
 	rec := fppConnectHeldRecord{Dir: dir, Name: name, SizeBytes: sizeBytes, ContentHash: hash, ReceivedAt: at}
 
-	if show, ok := s.pending[name]; ok {
-		rec.Bound = true
-		rec.Show = show
-		rec.LogicalSequence = fppConnectStem(name)
+	bindTo := func(showName string) {
+		id, ok := resolveShowID(showName)
+		if ok {
+			rec.Bound = true
+			rec.Show = showName
+			rec.ShowID = id
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+			return
+		}
+		if fppConnectContainsShow(showNames(), showName) {
+			rec.Show = showName
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+			return
+		}
+		rec.UnboundReason = fmt.Sprintf("show %q does not currently resolve to exactly one show id", showName)
+	}
+
+	if binding, ok := s.pending[fppConnectBoundEventString(name)]; ok {
+		if binding.ShowID == "" {
+			// A POST /api/playlist/{name} named this file's show by
+			// display name before the coordinator ever pushed that
+			// show's id (review round 2 finding D): held unbound, not
+			// guessed, with a reason RebindPendingShowIDs specifically
+			// looks for once a later push carries shows.
+			rec.Show = binding.ShowName
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+		} else {
+			rec.Bound = true
+			rec.Show = binding.ShowName
+			rec.ShowID = binding.ShowID
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+		}
 		s.deletePendingLocked(name)
 	} else if hadPrev && prev.Bound {
 		rec.Bound = true
 		rec.Show = prev.Show
+		rec.ShowID = prev.ShowID
 		rec.LogicalSequence = prev.LogicalSequence
 	} else {
 		showName, known, everSet := activeShow()
 		switch {
 		case known && showName != "":
-			rec.Bound = true
-			rec.Show = showName
-			rec.LogicalSequence = fppConnectStem(name)
+			bindTo(showName)
 		case known:
 			// known==true with an empty name is not a real show to bind
 			// to (review round 1 finding 8): a prior version of this
@@ -954,14 +1315,22 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 
 // BindShow applies one POST /api/playlist/{name} whose name resolved to
 // exactly one show (fppconnectupload.go's handlePlaylistPost decides
-// that): every held record, in any directory, whose Name is in fileNames
-// is bound to showName; a name with no held match yet is remembered in
-// s.pending so a file completing afterwards binds on completion (ADR-044
-// decision 8). Idempotent: binding an already-bound record to the same
-// show sets the same fields again, and re-posting the same fileNames a
-// second time produces the same records, not new ones (RES-003 section
-// 10.6's "up to twice per target" requirement).
-func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at time.Time) {
+// that, and resolves showID from the same name at the same time, FC3,
+// ADR-028 decision 8): every held record, in any directory, whose Name is
+// in fileNames is bound to showName/showID; a name with no held match yet
+// is remembered in s.pending so a file completing afterwards binds on
+// completion (ADR-044 decision 8). Idempotent: binding an already-bound
+// record to the same show sets the same fields again, and re-posting the
+// same fileNames a second time produces the same records, not new ones
+// (RES-003 section 10.6's "up to twice per target" requirement). A record
+// that already carries registration progress under a DIFFERENT resolved
+// identity (ShowID or LogicalSequence) has that progress reset to
+// unregistered first (review round 5 finding 1): without this, a file
+// registered under one show that a later playlist POST renames into
+// another show kept reporting "registered" for the new show while no
+// asset existed there at all, since nothing ever told the registrar to
+// try again under the new identity.
+func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -974,9 +1343,14 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 			if rec.Name != fname {
 				continue
 			}
+			newSeq := fppConnectLogicalSequenceSlug(fname)
+			if rec.RegistrationState != "" && (rec.ShowID != showID || rec.LogicalSequence != newSeq) {
+				rec = resetRegistrationForRebindLocked(rec)
+			}
 			rec.Bound = true
 			rec.Show = showName
-			rec.LogicalSequence = fppConnectStem(fname)
+			rec.ShowID = showID
+			rec.LogicalSequence = newSeq
 			rec.UnboundReason = ""
 			s.records[key] = rec
 			matched = true
@@ -987,7 +1361,7 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 		if matched {
 			s.deletePendingLocked(fname)
 		} else {
-			s.addPendingLocked(fname, showName)
+			s.addPendingLocked(fname, showName, showID)
 		}
 	}
 
@@ -996,14 +1370,165 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 	}
 }
 
-// addPendingLocked records fname -> showName in s.pending, evicting the
-// oldest pending entry first when fppConnectMaxPending would otherwise be
-// exceeded (review round 1 finding 6). Updating an already-pending name's
-// show does not change its position in the eviction order: it is not a
-// fresh entry. s.mu already held.
-func (s *fppConnectHeldStore) addPendingLocked(fname, showName string) {
+// resetRegistrationForRebindLocked clears rec's registration progress
+// ahead of a rebind to a new (ShowID, LogicalSequence) identity (review
+// round 5 finding 1's own helper, called from BindShow): the registrar's
+// OnHeld sees the resulting empty RegistrationState as a fresh, not yet
+// attempted candidate and starts a new attempt under the new identity.
+// When rec was actually registered, the superseded asset id, show id, and
+// sequence survive in RegistrationReason as evidence that a real
+// registration existed under the old identity, even though it is
+// otherwise empty for state "" (see RegistrationReason's own doc
+// comment for that one documented exception).
+func resetRegistrationForRebindLocked(rec fppConnectHeldRecord) fppConnectHeldRecord {
+	reason := ""
+	if rec.RegistrationState == fppConnectRegistrationRegistered {
+		reason = fmt.Sprintf(
+			"previously registered as asset %q under show %q, sequence %q, before being rebound to a different show",
+			rec.RegistrationAssetID, rec.ShowID, rec.LogicalSequence)
+	}
+	rec.RegistrationState = ""
+	rec.RegistrationAssetID = ""
+	rec.RegistrationRolledBack = false
+	rec.RegistrationReason = reason
+	rec.RegistrationProblemType = ""
+	rec.RegistrationNextRetryAt = time.Time{}
+	return rec
+}
+
+// BindPendingShowID applies one POST /api/playlist/{name} whose name
+// resolved to exactly one show by display name, but whose config object
+// id has not been pushed yet (review round 2 finding D,
+// fppConnectUnboundReasonShowIDNotPushed): every already-held record
+// among fileNames is marked unbound with that reason, carrying showName
+// so RebindPendingShowIDs can resolve it once a later push provides
+// shows; a name with no held match yet is remembered in s.pending with an
+// empty ShowID for the identical reason, resolved on completion
+// (fppConnectHeldStore.completeLocked) the same way. Mirrors BindShow's
+// own shape one field over, differing only in that nothing here ever sets
+// Bound true. A record already bound with a non-empty ShowID is left
+// untouched (review round 3 finding 5): without this, a push that
+// regresses the coordinator's shows list back to not carrying this show's
+// id (or a stale playlist POST arriving after a record has already bound
+// and registered) would knock an already-registered record back to
+// unbound, undoing real progress for no benefit, since the record is
+// already bound to a resolvable show id and needs no rescue. Unlike
+// ShowID, LogicalSequence is kept, not cleared (review round 5 finding
+// 4): CollidingRecord matches a record awaiting its show id against
+// showName and logicalSequence precisely so a second, colliding file
+// attempting to register while this one waits still finds it as a
+// competitor, rather than treating this temporary sub-state as if the
+// file did not exist at all.
+func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, fname := range fileNames {
+		if fname == "" {
+			continue
+		}
+		matched := false
+		for key, rec := range s.records {
+			if rec.Name != fname {
+				continue
+			}
+			matched = true
+			if rec.Bound && rec.ShowID != "" {
+				continue
+			}
+			rec.Bound = false
+			rec.Show = showName
+			rec.ShowID = ""
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(fname)
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+			s.records[key] = rec
+			if s.onHeld != nil {
+				s.onHeld(rec)
+			}
+		}
+		if matched {
+			s.deletePendingLocked(fname)
+		} else {
+			s.addPendingLocked(fname, showName, "")
+		}
+	}
+
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a pending-show-id playlist bind", "show", showName, "error", err)
+	}
+}
+
+// RebindPendingShowIDs re-resolves every held record whose UnboundReason
+// is fppConnectUnboundReasonShowIDNotPushed, and every pending binding
+// with an empty ShowID, against resolveShowID (review round 2 finding D):
+// a node whose held store predates the coordinator's shows field, or that
+// bound a playlist post before a push ever carried it, converges
+// automatically the next time any push resolves the show name it already
+// knew, with no operator action required. Called after every applied
+// "fppconnect.configure" push (agent.go), whether or not this particular
+// push actually changed shows: a push carrying the identical list as
+// before just walks and finds nothing left to resolve.
+func (s *fppConnectHeldStore) RebindPendingShowIDs(resolveShowID func(name string) (id string, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	changed := false
+	for key, rec := range s.records {
+		if rec.UnboundReason != fppConnectUnboundReasonShowIDNotPushed || rec.Show == "" {
+			continue
+		}
+		id, ok := resolveShowID(rec.Show)
+		if !ok {
+			continue
+		}
+		rec.Bound = true
+		rec.ShowID = id
+		rec.LogicalSequence = fppConnectLogicalSequenceSlug(rec.Name)
+		rec.UnboundReason = ""
+		s.records[key] = rec
+		changed = true
+		if s.onHeld != nil {
+			s.onHeld(rec)
+		}
+	}
+
+	for fname, binding := range s.pending {
+		if binding.ShowID != "" {
+			continue
+		}
+		id, ok := resolveShowID(binding.ShowName)
+		if !ok {
+			continue
+		}
+		s.pending[fname] = fppConnectPendingBinding{ShowName: binding.ShowName, ShowID: id}
+		changed = true
+	}
+
+	if !changed {
+		return
+	}
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after rebinding pending show ids", "error", err)
+	}
+}
+
+// addPendingLocked records fname -> showName/showID in s.pending, evicting
+// the oldest pending entry first when fppConnectMaxPending would otherwise
+// be exceeded (review round 1 finding 6). Updating an already-pending
+// name's show does not change its position in the eviction order: it is
+// not a fresh entry. fname is bounded with fppConnectBoundEventString
+// (review round 8 finding 1) before it is ever used as a map key: it
+// comes straight from a playlist POST body's file name list, with no
+// length bound of its own, unlike every other string this store persists.
+// deletePendingLocked and completeLocked's own s.pending lookup apply the
+// identical bound, so a later upload of that same file (whose real,
+// unbounded Name completeLocked bounds the same way before looking it up)
+// still matches this entry. s.mu already held.
+func (s *fppConnectHeldStore) addPendingLocked(fname, showName, showID string) {
+	fname = fppConnectBoundEventString(fname)
+	binding := fppConnectPendingBinding{ShowName: showName, ShowID: showID}
 	if _, exists := s.pending[fname]; exists {
-		s.pending[fname] = showName
+		s.pending[fname] = binding
 		return
 	}
 	if len(s.pending) >= fppConnectMaxPending {
@@ -1021,13 +1546,16 @@ func (s *fppConnectHeldStore) addPendingLocked(fname, showName string) {
 			}
 		}
 	}
-	s.pending[fname] = showName
+	s.pending[fname] = binding
 	s.pendingOrder = append(s.pendingOrder, fname)
 }
 
 // deletePendingLocked removes fname from s.pending and s.pendingOrder, if
-// present. s.mu already held.
+// present. fname is bounded the same way addPendingLocked bounds it
+// (review round 8 finding 1), so a raw, unbounded fname still matches the
+// bounded key that was actually stored. s.mu already held.
 func (s *fppConnectHeldStore) deletePendingLocked(fname string) {
+	fname = fppConnectBoundEventString(fname)
 	if _, exists := s.pending[fname]; !exists {
 		return
 	}
@@ -1105,6 +1633,27 @@ func (s *fppConnectHeldStore) RecordAmbiguousPlaylist(name string, matchCount in
 	}
 }
 
+// RecordShowIDNotPushed records that a POST /api/playlist/{name} named a
+// show this node's ShowNames() lists exactly once, but whose config
+// object id ShowID cannot resolve (review round 2 finding D): a node
+// whose held snapshot, or the coordinator push that reached it, predates
+// the additive "shows" id/name list. Distinct from "ambiguous" (two shows
+// sharing this display name): reporting this case as ambiguous with a
+// matchCount of 1 would misname a temporary propagation gap as a genuine
+// naming collision. BindPendingShowID is this event's usual companion
+// call: it is what actually holds the named files pending, and
+// RebindPendingShowIDs is what resolves them once a later push carries
+// shows.
+func (s *fppConnectHeldStore) RecordShowIDNotPushed(name string, entries []string, at time.Time) {
+	capped, truncated := capEventEntries(entries)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendEventLocked(fppConnectEvent{Kind: "show-id-not-pushed", Name: name, Entries: capped, EntriesTruncated: truncated, At: at})
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a show-id-not-pushed playlist post", "name", name, "error", err)
+	}
+}
+
 // persistLocked writes the whole index as one file, temp-then-rename, s.mu
 // already held. Matches internal/agent/heldcatalog.FileStore.Save's exact
 // discipline.
@@ -1129,6 +1678,52 @@ func (s *fppConnectHeldStore) persistLocked() error {
 	return nil
 }
 
+// fppConnectIndexOnDisk mirrors fppConnectIndex's shape exactly, except
+// Pending is left as raw JSON: load decodes it tolerantly against either
+// shape (review round 2 finding E). An index the pre-FC3 build wrote has
+// Pending as map[string]string (a bare show display name); the current
+// build writes map[string]fppConnectPendingBinding. Unmarshaling the
+// WHOLE document strictly against the new shape fails outright on an
+// old-shape Pending value, which previously discarded Records too, even
+// though only Pending's own shape had changed underneath it: the node's
+// entire held-file memory was lost while the files themselves stayed on
+// disk, untracked. persistLocked still always writes the current shape;
+// only decoding needs to tolerate the old one.
+type fppConnectIndexOnDisk struct {
+	Records      map[string]fppConnectHeldRecord `json:"records"`
+	Pending      json.RawMessage                 `json:"pending"`
+	PendingOrder []string                        `json:"pendingOrder"`
+	Events       []fppConnectEvent               `json:"events"`
+}
+
+// decodePendingTolerant decodes raw as the current
+// map[string]fppConnectPendingBinding shape, falling back to the pre-FC3
+// map[string]string shape (a bare show display name, no id) on failure
+// and converting its entries to the current shape with an empty ShowID:
+// exactly fppConnectUnboundReasonShowIDNotPushed's own "not resolved yet"
+// state, which RebindPendingShowIDs (or simply a fresh playlist POST for
+// the same show) heals automatically rather than requiring a distinct
+// migration step. Returns (nil, nil) for an absent or null Pending key,
+// matching encoding/json's own treatment of an omitted map.
+func decodePendingTolerant(raw json.RawMessage) (map[string]fppConnectPendingBinding, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var current map[string]fppConnectPendingBinding
+	if err := json.Unmarshal(raw, &current); err == nil {
+		return current, nil
+	}
+	var legacy map[string]string
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return nil, err
+	}
+	out := make(map[string]fppConnectPendingBinding, len(legacy))
+	for fname, showName := range legacy {
+		out[fname] = fppConnectPendingBinding{ShowName: showName}
+	}
+	return out, nil
+}
+
 // load reads a previously persisted index, if any, matching
 // internal/agent/heldcatalog.FileStore.Load's identical "missing is fine,
 // corrupt is an error" contract. Called only from the constructor, before
@@ -1141,15 +1736,43 @@ func (s *fppConnectHeldStore) load() error {
 		}
 		return fmt.Errorf("fppconnect: read held upload index: %w", err)
 	}
-	var idx fppConnectIndex
+	var idx fppConnectIndexOnDisk
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return fmt.Errorf("fppconnect: decode held upload index: %w", err)
 	}
+	pending, err := decodePendingTolerant(idx.Pending)
+	if err != nil {
+		return fmt.Errorf("fppconnect: decode held upload index pending bindings: %w", err)
+	}
 	if idx.Records != nil {
 		s.records = idx.Records
+		for key, rec := range s.records {
+			if !rec.Bound || rec.ShowID != "" {
+				continue
+			}
+			// A pre-FC3 index predates ShowID entirely (ADR-028 decision
+			// 8, review round 6 finding 2): every record it wrote decoded
+			// as Bound true with ShowID's zero value, "". Left alone,
+			// attemptRegister would send an empty show field forever, a
+			// request the coordinator can only ever refuse terminally,
+			// with nothing left to retry it: RebindPendingShowIDs only
+			// ever walks a record whose UnboundReason already names it as
+			// awaiting an id, and nothing rebinds an already-bound record
+			// on its own. Repaired into that exact awaiting-id shape
+			// instead, the same one BindPendingShowID produces: unbound,
+			// UnboundReason fppConnectUnboundReasonShowIDNotPushed, Show
+			// (a pre-FC3 field, already correct) kept, LogicalSequence
+			// recomputed since a pre-FC3 record predates it too, so
+			// RebindPendingShowIDs converges it the next time any push
+			// resolves the show it already names.
+			rec.Bound = false
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(rec.Name)
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+			s.records[key] = rec
+		}
 	}
-	if idx.Pending != nil {
-		s.pending = idx.Pending
+	if pending != nil {
+		s.pending = pending
 	}
 	if idx.PendingOrder != nil {
 		s.pendingOrder = idx.PendingOrder
@@ -1162,6 +1785,34 @@ func (s *fppConnectHeldStore) load() error {
 		for k := range s.pending {
 			s.pendingOrder = append(s.pendingOrder, k)
 		}
+	}
+	// Re-apply the per-key bound to whatever was just loaded (review round
+	// 8 finding 1): a persisted index written before addPendingLocked
+	// bounded its own key, or one edited or corrupted outside this
+	// store's own writes, can hold a key far longer than
+	// fppConnectMaxEventStringBytes. Rebuilt keyed by the bounded form,
+	// in pendingOrder's own order, deduplicating (last write for a given
+	// bounded key wins, matching addPendingLocked's own update-in-place
+	// behavior for an existing key) so this matches exactly what
+	// addPendingLocked would already produce going forward.
+	if len(s.pending) > 0 {
+		boundedPending := make(map[string]fppConnectPendingBinding, len(s.pending))
+		boundedOrder := make([]string, 0, len(s.pendingOrder))
+		seen := make(map[string]bool, len(s.pendingOrder))
+		for _, k := range s.pendingOrder {
+			binding, ok := s.pending[k]
+			if !ok {
+				continue
+			}
+			bk := fppConnectBoundEventString(k)
+			if !seen[bk] {
+				seen[bk] = true
+				boundedOrder = append(boundedOrder, bk)
+			}
+			boundedPending[bk] = binding
+		}
+		s.pending = boundedPending
+		s.pendingOrder = boundedOrder
 	}
 	// Re-apply both caps to whatever was just loaded (review round 3
 	// finding 9): a persisted index can exceed either one if it predates

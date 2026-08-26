@@ -101,6 +101,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	}
 
 	heldEvents := fcHeld.Events()
+	heldEventsTotal := len(heldEvents)
 	if len(heldEvents) > renderWireHeldEventsCap {
 		// Keep the most recent entries: the oldest-first log's newest
 		// tail is the evidence most likely to still be actionable.
@@ -112,19 +113,28 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	}
 
 	renderPayload := mqttproto.RenderPayload{
-		GstLaunchPath:        gstPath,
-		GstLaunchAvailable:   gstOK,
-		Surfaces:             surfaces,
-		MultiSyncListening:   msListening,
-		MultiSyncReason:      msReason,
-		MultiSyncObservedAt:  msObservedAt,
-		FPPConnectListening:  fcListening,
-		FPPConnectReason:     fcReason,
-		FPPConnectObservedAt: fcObservedAt,
-		FPPConnectHeldCount:  heldTotal,
-		FPPConnectHeld:       held,
-		FPPConnectHeldEvents: events,
+		GstLaunchPath:             gstPath,
+		GstLaunchAvailable:        gstOK,
+		Surfaces:                  surfaces,
+		MultiSyncListening:        msListening,
+		MultiSyncReason:           msReason,
+		MultiSyncObservedAt:       msObservedAt,
+		FPPConnectListening:       fcListening,
+		FPPConnectReason:          fcReason,
+		FPPConnectObservedAt:      fcObservedAt,
+		FPPConnectHeldCount:       heldTotal,
+		FPPConnectHeld:            held,
+		FPPConnectHeldEvents:      events,
+		FPPConnectHeldEventsTotal: heldEventsTotal,
 	}
+	// FPPConnectHeldEventsTotal is captured above, BEFORE either trim
+	// (the count cap just above, or shrinkRenderPayloadToFitEnvelope's own
+	// size-budget trim just below) ever touches
+	// renderPayload.FPPConnectHeldEvents (review round 8 finding 2): it
+	// states the true total regardless of which trim, if either, actually
+	// cuts the published list down, so a consumer can always tell
+	// "exactly this many" from "more than this many, cut to fit" by
+	// comparing it against len(FPPConnectHeldEvents).
 	renderPayload = shrinkRenderPayloadToFitEnvelope(renderPayload, logger)
 
 	env, err := mqttproto.NewRenderEnvelope(now, nodeID, renderPayload)
@@ -181,29 +191,42 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 }
 
 // toRenderFPPConnectHeldFile converts one fppConnectHeldRecord
-// (fppconnectheld.go) to its wire type, field for field. Name alone is
-// bounded (review round 5 finding 6), reusing fppConnectBoundEventString's
-// same cap and truncation marker: it is copied straight from the
-// Upload-Name header, itself bounded only by fppConnectMaxHeaderBytes (16
-// KiB), with no bound of its own on fppConnectHeldRecord. Up to
-// renderWireHeldFilesCap (256) of those, each up to 16 KiB, would make
+// (fppconnectheld.go) to its wire type, field for field. Every string field
+// except ContentHash (a fixed-format computed hash, never attacker- or
+// coordinator-influenced length) is bounded with fppConnectBoundEventString,
+// its same cap and truncation marker (review round 5 finding 6 bounded Name
+// alone; review round 6 finding 5 extends this to the rest, since
+// RegistrationReason can embed a colliding competitor's own raw Name, up to
+// the identical Upload-Name-header-derived 16 KiB, and RegistrationAssetID
+// is coordinator-supplied with no local bound of its own). Name is copied
+// straight from the Upload-Name header, itself bounded only by
+// fppConnectMaxHeaderBytes (16 KiB), with no bound of its own on
+// fppConnectHeldRecord. Up to renderWireHeldFilesCap (256) of these, each
+// otherwise up to 16 KiB per string field, would make
 // shrinkRenderPayloadToFitEnvelope's one-record-at-a-time drop loop
 // re-marshal a multi-megabyte payload on every iteration it took to shrink
 // back under budget: quadratic in the number of entries dropped. Bounding
-// Name here keeps the whole payload within a small multiple of the size
-// budget even at the count cap, so the shrink loop never has more than a
-// few records left to drop.
+// every string here keeps the whole payload within a small multiple of the
+// size budget even at the count cap, so the shrink loop never has more than
+// a few records left to drop.
 func toRenderFPPConnectHeldFile(rec fppConnectHeldRecord) mqttproto.RenderFPPConnectHeldFile {
 	return mqttproto.RenderFPPConnectHeldFile{
-		Dir:             rec.Dir,
-		Name:            fppConnectBoundEventString(rec.Name),
-		SizeBytes:       rec.SizeBytes,
-		ContentHash:     rec.ContentHash,
-		ReceivedAt:      rec.ReceivedAt,
-		Bound:           rec.Bound,
-		Show:            rec.Show,
-		LogicalSequence: rec.LogicalSequence,
-		UnboundReason:   rec.UnboundReason,
+		Dir:                     fppConnectBoundEventString(rec.Dir),
+		Name:                    fppConnectBoundEventString(rec.Name),
+		SizeBytes:               rec.SizeBytes,
+		ContentHash:             rec.ContentHash,
+		ReceivedAt:              rec.ReceivedAt,
+		Bound:                   rec.Bound,
+		Show:                    fppConnectBoundEventString(rec.Show),
+		ShowID:                  fppConnectBoundEventString(rec.ShowID),
+		LogicalSequence:         fppConnectBoundEventString(rec.LogicalSequence),
+		UnboundReason:           fppConnectBoundEventString(rec.UnboundReason),
+		RegistrationState:       fppConnectBoundEventString(rec.RegistrationState),
+		RegistrationAssetID:     fppConnectBoundEventString(rec.RegistrationAssetID),
+		RegistrationRolledBack:  rec.RegistrationRolledBack,
+		RegistrationReason:      fppConnectBoundEventString(rec.RegistrationReason),
+		RegistrationProblemType: fppConnectBoundEventString(rec.RegistrationProblemType),
+		RegistrationNextRetryAt: rec.RegistrationNextRetryAt,
 	}
 }
 

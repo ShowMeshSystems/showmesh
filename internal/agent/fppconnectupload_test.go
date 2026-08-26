@@ -113,6 +113,43 @@ func hasEventKind(held *fppConnectHeldStore, kind, name string) bool {
 	return false
 }
 
+// TestFPPConnectLogicalSequenceSlug is review round 1 finding 2's own
+// regression test: the assets API's `sequence` field must satisfy
+// config.ValidateShowObjectID's slug rule, not a raw file name stem.
+func TestFPPConnectLogicalSequenceSlug(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"Halloween Spooky.fseq", "halloween-spooky"},
+		{"Test_File Name.fseq", "test-file-name"},
+		{"ALLCAPS.fseq", "allcaps"},
+		{"already-a-slug.fseq", "already-a-slug"},
+		{"A--double--hyphen.fseq", "a-double-hyphen"},
+		{"  leading and trailing  .fseq", "leading-and-trailing"},
+		{"???.fseq", ""},
+		{"no-extension", "no-extension"},
+		{strings.Repeat("x", 100) + ".fseq", strings.Repeat("x", 64)},
+		{strings.Repeat("x", 63) + "-.fseq", strings.Repeat("x", 63)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fppConnectLogicalSequenceSlug(tc.name)
+			if got != tc.want {
+				t.Fatalf("fppConnectLogicalSequenceSlug(%q) = %q, want %q", tc.name, got, tc.want)
+			}
+			if got != "" {
+				if len(got) > 64 {
+					t.Fatalf("slug %q exceeds 64 characters", got)
+				}
+				if got[0] == '-' || got[len(got)-1] == '-' {
+					t.Fatalf("slug %q starts or ends with a hyphen", got)
+				}
+			}
+		})
+	}
+}
+
 // TestFPPConnectUploadThreeChunksCompletes is the seam's headline test: a
 // full chunked upload lands one file in the held area whose bytes and
 // SHA-256 match what was sent, and the record carries that hash.
@@ -465,12 +502,110 @@ func TestFPPConnectUploadDiskFull(t *testing.T) {
 	}
 }
 
+// closeFailsFile wraps a real *os.File, forwarding every call except
+// Close, which returns closeErr instead: the real file still actually
+// closes (no fd leak), but the caller observes a failure exactly as it
+// would from a real Close-time error (delayed-allocation ENOSPC, a
+// network mount's write-back failure surfacing only at Close).
+type closeFailsFile struct {
+	*os.File
+	closeErr error
+}
+
+func (f *closeFailsFile) Close() error {
+	_ = f.File.Close()
+	return f.closeErr
+}
+
+// TestOSFPPConnectChunkWriterReturnsCloseError is review round 7 finding
+// 2's own regression test: osFPPConnectChunkWriter.WriteChunk used to
+// discard f.Close()'s own error entirely, so a write failure surfacing
+// only at Close (delayed allocation ENOSPC, a network mount) was reported
+// as a successful chunk, and a held record ended up with a content hash
+// for bytes that were never actually committed to disk. This calls the
+// real osFPPConnectChunkWriter directly, injecting a Close failure via
+// fppConnectOpenChunkFile, and proves the error comes back from WriteChunk
+// itself, classifiable by fppConnectIsDiskFull exactly like a write-time
+// ENOSPC already is.
+func TestOSFPPConnectChunkWriterReturnsCloseError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chunk.bin")
+
+	orig := fppConnectOpenChunkFile
+	t.Cleanup(func() { fppConnectOpenChunkFile = orig })
+	fppConnectOpenChunkFile = func(path string, flags int, perm os.FileMode) (fppConnectChunkFile, error) {
+		f, err := os.OpenFile(path, flags, perm)
+		if err != nil {
+			return nil, err
+		}
+		return &closeFailsFile{File: f, closeErr: &os.PathError{Op: "close", Path: path, Err: syscall.ENOSPC}}, nil
+	}
+
+	written, err := osFPPConnectChunkWriter{}.WriteChunk(path, 0, strings.NewReader("abc"), 3, true)
+	if err == nil {
+		t.Fatal("WriteChunk returned a nil error despite Close failing, want the Close error surfaced")
+	}
+	if !fppConnectIsDiskFull(err) {
+		t.Fatalf("WriteChunk error = %v, want it classified as disk-full (fppConnectIsDiskFull), the same way a write-time ENOSPC already is", err)
+	}
+	if written != 3 {
+		t.Fatalf("written = %d, want 3 (io.Copy's own count, independent of the later Close failure)", written)
+	}
+
+	// The real file descriptor was actually closed by closeFailsFile
+	// despite the injected error, so a real filesystem never leaks an fd
+	// here; the fix is about the RETURNED error, not about skipping the
+	// real close.
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("the file was not actually created/closed: %v", statErr)
+	}
+}
+
+// TestFPPConnectUploadCloseFailureIsTreatedAsWriteFailure is review round
+// 7 finding 2's own end-to-end regression test: a chunk whose write
+// succeeds but whose Close fails must never complete as a held record
+// with a hash for bytes that were never actually committed. Uses the real
+// osFPPConnectChunkWriter (via fppConnectOpenChunkFile injection), not a
+// fake fppConnectChunkWriter, so this exercises the real fix's own code
+// path end to end through the HTTP upload route.
+func TestFPPConnectUploadCloseFailureIsTreatedAsWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+
+	orig := fppConnectOpenChunkFile
+	t.Cleanup(func() { fppConnectOpenChunkFile = orig })
+	fppConnectOpenChunkFile = func(path string, flags int, perm os.FileMode) (fppConnectChunkFile, error) {
+		f, err := os.OpenFile(path, flags, perm)
+		if err != nil {
+			return nil, err
+		}
+		return &closeFailsFile{File: f, closeErr: &os.PathError{Op: "close", Path: path, Err: syscall.ENOSPC}}, nil
+	}
+
+	held := newFPPConnectHeldStoreWithWriter(dir, osFPPConnectChunkWriter{}, discardLogger())
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	resp, body := patchChunk(t, srv, "sequences", "CloseFails.fseq", 0, 3, []byte("abc"))
+	if resp.StatusCode != http.StatusInsufficientStorage {
+		t.Fatalf("status = %d, want 507; body=%s", resp.StatusCode, body)
+	}
+	if _, ok := findHeldRecord(t, held, "sequences", "CloseFails.fseq"); ok {
+		t.Fatal("a held record exists after a chunk whose Close failed: its hash would cover bytes never actually committed to disk")
+	}
+	if !hasEventKind(held, "disk-full", "CloseFails.fseq") {
+		t.Fatalf("no disk-full event recorded; events = %+v", held.Events())
+	}
+}
+
 // TestFPPConnectPlaylistPostBindsIdempotently proves POST
 // /api/playlist/{show} twice with the same body binds once, and GET then
 // lists the bound entries.
 func TestFPPConnectPlaylistPostBindsIdempotently(t *testing.T) {
 	held, _ := newTestHeldStore(t)
-	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	view := fakeFPPConnectView{
+		enabled: true, showNames: []string{"Halloween"},
+		shows: []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}},
+	}
 	srv := startFPPConnectTestServer(t, view, "node-1", held)
 
 	// A file lands first, with no active show, so it starts unbound.
@@ -491,8 +626,8 @@ func TestFPPConnectPlaylistPostBindsIdempotently(t *testing.T) {
 	if !ok {
 		t.Fatal("no held record for sequences/Show.fseq")
 	}
-	if !rec.Bound || rec.Show != "Halloween" || rec.LogicalSequence != "Show" {
-		t.Fatalf("record = %+v, want bound to Halloween with logical sequence Show", rec)
+	if !rec.Bound || rec.Show != "Halloween" || rec.ShowID != "halloween-2026" || rec.LogicalSequence != "show" {
+		t.Fatalf("record = %+v, want bound to Halloween (id halloween-2026) with logical sequence show", rec)
 	}
 
 	resp, body := getBody(t, srv.URL+"/api/playlist/Halloween")
@@ -513,7 +648,10 @@ func TestFPPConnectPlaylistPostBindsIdempotently(t *testing.T) {
 // completing afterwards binds on completion.
 func TestFPPConnectPlaylistPostBeforeFileExists(t *testing.T) {
 	held, _ := newTestHeldStore(t)
-	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	view := fakeFPPConnectView{
+		enabled: true, showNames: []string{"Halloween"},
+		shows: []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}},
+	}
 	srv := startFPPConnectTestServer(t, view, "node-1", held)
 
 	postBody := []byte(`{"mainPlaylist":[{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"Later.fseq","duration":0}]}`)
@@ -529,8 +667,8 @@ func TestFPPConnectPlaylistPostBeforeFileExists(t *testing.T) {
 	if !ok {
 		t.Fatal("no held record for sequences/Later.fseq")
 	}
-	if !rec.Bound || rec.Show != "Halloween" {
-		t.Fatalf("record = %+v, want bound to Halloween from the pending playlist post", rec)
+	if !rec.Bound || rec.Show != "Halloween" || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want bound to Halloween (id halloween-2026) from the pending playlist post", rec)
 	}
 }
 
@@ -542,7 +680,10 @@ func TestFPPConnectPlaylistPostBeforeFileExists(t *testing.T) {
 func TestFPPConnectUploadActiveShowFallback(t *testing.T) {
 	t.Run("known active show binds on completion", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		view := fakeFPPConnectView{enabled: true, activeShowName: "Christmas", activeShowKnown: true, activeShowEver: true}
+		view := fakeFPPConnectView{
+			enabled: true, activeShowName: "Christmas", activeShowKnown: true, activeShowEver: true,
+			shows: []fppConnectShowIDName{{ID: "christmas-2026", Name: "Christmas"}},
+		}
 		srv := startFPPConnectTestServer(t, view, "node-1", held)
 
 		if resp, body := patchChunk(t, srv, "sequences", "Auto.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
@@ -552,8 +693,31 @@ func TestFPPConnectUploadActiveShowFallback(t *testing.T) {
 		if !ok {
 			t.Fatal("no held record")
 		}
-		if !rec.Bound || rec.Show != "Christmas" || rec.LogicalSequence != "Auto" {
-			t.Fatalf("record = %+v, want bound to Christmas with logical sequence Auto", rec)
+		if !rec.Bound || rec.Show != "Christmas" || rec.ShowID != "christmas-2026" || rec.LogicalSequence != "auto" {
+			t.Fatalf("record = %+v, want bound to Christmas (id christmas-2026) with logical sequence auto", rec)
+		}
+	})
+
+	t.Run("active show name does not resolve to exactly one show leaves it held unbound", func(t *testing.T) {
+		held, _ := newTestHeldStore(t)
+		// activeShowName names a show, but the pushed shows list carries no
+		// (or more than one) entry for it: a stale edge case FC3 must treat
+		// as unbound rather than bind with no resolvable show id.
+		view := fakeFPPConnectView{enabled: true, activeShowName: "Christmas", activeShowKnown: true, activeShowEver: true}
+		srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+		if resp, body := patchChunk(t, srv, "sequences", "NoShowID.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+			t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+		}
+		rec, ok := findHeldRecord(t, held, "sequences", "NoShowID.fseq")
+		if !ok {
+			t.Fatal("no held record")
+		}
+		if rec.Bound {
+			t.Fatalf("record = %+v, want unbound: the active show name does not resolve to exactly one show id", rec)
+		}
+		if !strings.Contains(rec.UnboundReason, "does not currently resolve") {
+			t.Fatalf("UnboundReason = %q, want it to name the unresolved show id", rec.UnboundReason)
 		}
 	})
 
@@ -694,6 +858,234 @@ func TestFPPConnectPlaylistPostAmbiguousName(t *testing.T) {
 	}
 }
 
+// TestFPPConnectPlaylistPostShowIDNotPushedYet is review round 2 finding
+// D's own regression test: a name that resolves to exactly one show by
+// display name, but whose config object id has not been pushed yet
+// (ShowNames has it, Shows does not), must record its own "show-id-not-
+// pushed" evidence and its own distinct unbound reason, never the
+// "ambiguous" event a genuine two-shows-share-a-name collision produces.
+func TestFPPConnectPlaylistPostShowIDNotPushedYet(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	// showNames carries "Halloween" (an unambiguous match), but shows is
+	// empty: this node's snapshot (or the coordinator push that reached
+	// it) predates the additive shows id/name list.
+	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	if resp, body := patchChunk(t, srv, "sequences", "NoID.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	postBody := []byte(`{"mainPlaylist":[{"sequenceName":"NoID.fseq"}]}`)
+	resp, body := postPlaylist(t, srv, "Halloween", postBody)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	rec, ok := findHeldRecord(t, held, "sequences", "NoID.fseq")
+	if !ok {
+		t.Fatal("no held record")
+	}
+	if rec.Bound {
+		t.Fatalf("record = %+v, want unbound (show id not yet pushed)", rec)
+	}
+	if rec.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
+		t.Fatalf("UnboundReason = %q, want %q", rec.UnboundReason, fppConnectUnboundReasonShowIDNotPushed)
+	}
+	if rec.Show != "Halloween" {
+		t.Fatalf("Show = %q, want Halloween (remembered so a later push can rebind it)", rec.Show)
+	}
+
+	var found, sawAmbiguous bool
+	for _, ev := range held.Events() {
+		if ev.Kind == "show-id-not-pushed" && ev.Name == "Halloween" {
+			found = true
+		}
+		if ev.Kind == "ambiguous" {
+			sawAmbiguous = true
+		}
+	}
+	if !found {
+		t.Fatalf("no show-id-not-pushed evidence recorded; events = %+v", held.Events())
+	}
+	if sawAmbiguous {
+		t.Fatalf("an ambiguous event was recorded, want show-id-not-pushed only; events = %+v", held.Events())
+	}
+}
+
+// TestFPPConnectRebindPendingShowIDsOnLaterPush is review round 2 finding
+// D's second regression test: once a later push resolves the show name a
+// node already knew, every record held pending only for that reason binds
+// automatically, whether it was already a completed held record, already
+// a pending (not-yet-uploaded) binding, or still pending when the file
+// finally completes after the rebind.
+func TestFPPConnectRebindPendingShowIDsOnLaterPush(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	// "Existing.fseq" is already held when the playlist POST arrives;
+	// "Later.fseq" completes afterward but before the rebind; "Pending.fseq"
+	// is still a bare pending binding when the rebind itself runs.
+	if resp, body := patchChunk(t, srv, "sequences", "Existing.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload Existing.fseq: status = %d, body=%s", resp.StatusCode, body)
+	}
+	postBody := []byte(`{"mainPlaylist":[
+		{"sequenceName":"Existing.fseq"},
+		{"sequenceName":"Later.fseq"},
+		{"sequenceName":"Pending.fseq"}
+	]}`)
+	if resp, body := postPlaylist(t, srv, "Halloween", postBody); resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST: status = %d, body=%s", resp.StatusCode, body)
+	}
+	if resp, body := patchChunk(t, srv, "sequences", "Later.fseq", 0, 4, []byte("late")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload Later.fseq: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	for _, name := range []string{"Existing.fseq", "Later.fseq"} {
+		rec, ok := findHeldRecord(t, held, "sequences", name)
+		if !ok || rec.Bound {
+			t.Fatalf("%s: record = %+v (found=%v), want held and unbound before the rebind", name, rec, ok)
+		}
+	}
+
+	// A later "fppconnect.configure" push resolves "Halloween" to an id
+	// (agent.go wires this exact call to fppConnect.ShowID after every
+	// applied push).
+	held.RebindPendingShowIDs(func(name string) (string, bool) {
+		if name == "Halloween" {
+			return "halloween-2026", true
+		}
+		return "", false
+	})
+
+	for _, name := range []string{"Existing.fseq", "Later.fseq"} {
+		rec, ok := findHeldRecord(t, held, "sequences", name)
+		if !ok {
+			t.Fatalf("%s: no held record after rebind", name)
+		}
+		if !rec.Bound || rec.Show != "Halloween" || rec.ShowID != "halloween-2026" {
+			t.Fatalf("%s: record = %+v, want bound to Halloween (id halloween-2026)", name, rec)
+		}
+		if rec.UnboundReason != "" {
+			t.Fatalf("%s: UnboundReason = %q, want empty after rebind", name, rec.UnboundReason)
+		}
+	}
+
+	// Pending.fseq had no held record at rebind time; its pending entry's
+	// ShowID should now be resolved, so completing it afterward binds
+	// immediately with no further playlist POST needed.
+	if resp, body := patchChunk(t, srv, "sequences", "Pending.fseq", 0, 7, []byte("pending")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload Pending.fseq: status = %d, body=%s", resp.StatusCode, body)
+	}
+	rec, ok := findHeldRecord(t, held, "sequences", "Pending.fseq")
+	if !ok || !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("Pending.fseq record = %+v (found=%v), want bound with id halloween-2026 after its pending entry was rebound", rec, ok)
+	}
+}
+
+// TestFPPConnectBindPendingShowIDSkipsAlreadyBoundRecord is review round 3
+// finding 5's own regression test: a record already bound with a
+// non-empty ShowID must never be knocked back to unbound by
+// BindPendingShowID, even when a later playlist POST names the identical
+// file for a show whose id this node's current snapshot no longer (or not
+// yet) resolves, e.g. a push that regressed shows back to empty.
+func TestFPPConnectBindPendingShowIDSkipsAlreadyBoundRecord(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	if resp, body := (func() (*http.Response, []byte) {
+		srv := startFPPConnectTestServer(t, fakeFPPConnectView{enabled: true}, "node-1", held)
+		defer srv.Close()
+		return patchChunk(t, srv, "sequences", "AlreadyBound.fseq", 0, 3, []byte("abc"))
+	})(); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	held.BindShow("Halloween", "halloween-2026", []string{"AlreadyBound.fseq"}, time.Now())
+	bound, ok := findHeldRecord(t, held, "sequences", "AlreadyBound.fseq")
+	if !ok || !bound.Bound || bound.ShowID != "halloween-2026" {
+		t.Fatalf("record after BindShow = %+v (found=%v), want bound to halloween-2026", bound, ok)
+	}
+
+	// A stale or regressed playlist POST names the same file for a show
+	// whose id this node cannot currently resolve: the already-bound
+	// record must be left exactly as it was.
+	held.BindPendingShowID("Halloween", []string{"AlreadyBound.fseq"}, time.Now())
+
+	after, ok := findHeldRecord(t, held, "sequences", "AlreadyBound.fseq")
+	if !ok {
+		t.Fatal("no held record after BindPendingShowID")
+	}
+	if after != bound {
+		t.Fatalf("record after BindPendingShowID = %+v, want unchanged from %+v", after, bound)
+	}
+}
+
+// TestFPPConnectBindShowToNewIdentityResetsRegistration is review round 5
+// finding 1's own regression test: BindShow rebinding an already-registered
+// record to a different show used to leave RegistrationState,
+// RegistrationAssetID, and RegistrationReason exactly as they were, so a
+// file registered under one show that a later playlist POST names into a
+// different show kept reporting "registered" for the new show even though
+// no asset exists there at all, and OnHeld's own terminal-state check
+// (fppConnectRegistrationTerminal) would then treat the record as done and
+// never even try to register it for real. BindShow must reset registration
+// to unregistered ("") whenever the resolved ShowID changes on a record
+// that already carries registration progress, keeping the superseded asset
+// id in RegistrationReason as evidence.
+func TestFPPConnectBindShowToNewIdentityResetsRegistration(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	srv := startFPPConnectTestServer(t, fakeFPPConnectView{enabled: true}, "node-1", held)
+	if resp, body := patchChunk(t, srv, "sequences", "Rebound.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+		srv.Close()
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+	srv.Close()
+
+	held.BindShow("Halloween", "halloween-2026", []string{"Rebound.fseq"}, time.Now())
+	bound, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
+	if !ok || !bound.Bound || bound.ShowID != "halloween-2026" {
+		t.Fatalf("record after initial BindShow = %+v (found=%v), want bound to halloween-2026", bound, ok)
+	}
+	if !held.SetRegistrationRegistered("sequences", "Rebound.fseq", bound.ContentHash, bound.ShowID, bound.LogicalSequence, "asset-halloween", false) {
+		t.Fatal("SetRegistrationRegistered was a no-op, want it to apply")
+	}
+
+	// A later playlist POST rebinds the SAME file to a DIFFERENT show
+	// (xLights' own playlist naming changed, or an operator error): the
+	// resolved ShowID changes even though the file itself did not.
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, time.Now())
+
+	after, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
+	if !ok {
+		t.Fatal("no held record after rebinding to a different show")
+	}
+	if after.ShowID != "christmas-2026" || after.Show != "Christmas" {
+		t.Fatalf("record = %+v, want bound to Christmas/christmas-2026", after)
+	}
+	if after.RegistrationState != "" {
+		t.Fatalf("RegistrationState = %q after a rebind to a new show, want empty so registration re-runs under the new identity", after.RegistrationState)
+	}
+	if after.RegistrationAssetID != "" {
+		t.Fatalf("RegistrationAssetID = %q after a rebind to a new show, want cleared", after.RegistrationAssetID)
+	}
+	if after.RegistrationRolledBack {
+		t.Fatal("RegistrationRolledBack = true after a rebind to a new show, want cleared")
+	}
+	if !strings.Contains(after.RegistrationReason, "asset-halloween") {
+		t.Fatalf("RegistrationReason = %q, want it to keep the superseded asset id asset-halloween as evidence", after.RegistrationReason)
+	}
+
+	// Rebinding to the SAME show a second time must not disturb the reset
+	// state further (BindShow's own idempotence, unaffected by this fix).
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebound.fseq"}, time.Now())
+	still, ok := findHeldRecord(t, held, "sequences", "Rebound.fseq")
+	if !ok || still.RegistrationState != "" || still.RegistrationReason != after.RegistrationReason {
+		t.Fatalf("record after a same-show rebind = %+v (found=%v), want unchanged from %+v", still, ok, after)
+	}
+}
+
 // TestFPPConnectUploadBootSweepKeepsHeld proves the boot sweep removes
 // stale partials and keeps held files.
 func TestFPPConnectUploadBootSweepKeepsHeld(t *testing.T) {
@@ -737,11 +1129,11 @@ func TestFPPConnectLoadTrimsOversizedPendingAndEvents(t *testing.T) {
 	dir := t.TempDir()
 
 	total := fppConnectMaxPending + 10
-	pending := make(map[string]string, total)
+	pending := make(map[string]fppConnectPendingBinding, total)
 	pendingOrder := make([]string, 0, total)
 	for i := 0; i < total; i++ {
 		name := fmt.Sprintf("File%04d.fseq", i)
-		pending[name] = "SomeShow"
+		pending[name] = fppConnectPendingBinding{ShowName: "SomeShow", ShowID: "some-show"}
 		pendingOrder = append(pendingOrder, name)
 	}
 
@@ -792,6 +1184,144 @@ func TestFPPConnectLoadTrimsOversizedPendingAndEvents(t *testing.T) {
 	}
 	if gotEvents != fppConnectMaxEvents {
 		t.Fatalf("len(events) = %d, want %d", gotEvents, fppConnectMaxEvents)
+	}
+}
+
+// TestFPPConnectLoadToleratesOldShapePendingValues is review round 2
+// finding E's own regression test: an index.json written by the pre-FC3
+// build has "pending" as map[string]string (a bare show display name, no
+// id); this build's own Pending type is map[string]fppConnectPendingBinding.
+// Decoding the whole document strictly against the current shape used to
+// fail the ENTIRE unmarshal on that one field, which meant Records was
+// discarded too and the node started reporting as if it held nothing,
+// while the actual files stayed on disk, orphaned from this store's own
+// memory of them. Loading the old shape must keep Records intact and
+// convert the legacy pending entries to the current shape with an empty
+// ShowID (the same "not resolved yet" state a fresh show-id-not-pushed
+// pending entry has).
+func TestFPPConnectLoadToleratesOldShapePendingValues(t *testing.T) {
+	dir := t.TempDir()
+
+	oldShapeIndex := `{
+		"records": {
+			"sequences/Kept.fseq": {
+				"dir": "sequences",
+				"name": "Kept.fseq",
+				"sizeBytes": 3,
+				"contentHash": "sha256:deadbeef",
+				"receivedAt": "2026-08-01T00:00:00Z",
+				"bound": true,
+				"show": "Halloween",
+				"showId": "halloween-2026",
+				"logicalSequence": "kept"
+			}
+		},
+		"pending": {
+			"Legacy.fseq": "SomeOldShow"
+		},
+		"pendingOrder": ["Legacy.fseq"],
+		"events": []
+	}`
+
+	indexDir := filepath.Join(dir, fppConnectUploadStateSubdir)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, fppConnectIndexFileName), []byte(oldShapeIndex), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	held := newFPPConnectHeldStore(dir, discardLogger())
+
+	rec, ok := findHeldRecord(t, held, "sequences", "Kept.fseq")
+	if !ok {
+		t.Fatal("Records was discarded: no held record for sequences/Kept.fseq after loading an old-shape index")
+	}
+	if !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want the pre-existing bound record intact", rec)
+	}
+
+	held.mu.Lock()
+	binding, exists := held.pending["Legacy.fseq"]
+	held.mu.Unlock()
+	if !exists {
+		t.Fatal("the legacy pending entry did not survive loading")
+	}
+	if binding.ShowName != "SomeOldShow" || binding.ShowID != "" {
+		t.Fatalf("pending binding = %+v, want ShowName=SomeOldShow ShowID=\"\"", binding)
+	}
+}
+
+// TestFPPConnectLoadRepairsPreFC3BoundRecordWithNoShowID is review round 6
+// finding 2's own regression test: a held index a pre-FC3 build persisted
+// predates ShowID and LogicalSequence entirely (ADR-028 decision 8), so a
+// bound record it wrote decodes with both at their zero value, "". Left
+// alone, attemptRegister would send an empty show field forever, a
+// request the coordinator can only ever refuse terminally, with nothing
+// left to retry it: RebindPendingShowIDs only ever walks a record whose
+// UnboundReason already names it as awaiting an id, and nothing rebinds an
+// already-bound record on its own. load must repair such a record into
+// that exact awaiting-id shape instead: unbound,
+// fppConnectUnboundReasonShowIDNotPushed, Show (a pre-FC3 field, already
+// correct) kept, LogicalSequence recomputed from the file name.
+func TestFPPConnectLoadRepairsPreFC3BoundRecordWithNoShowID(t *testing.T) {
+	dir := t.TempDir()
+
+	preFC3Index := `{
+		"records": {
+			"sequences/PreFC3.fseq": {
+				"dir": "sequences",
+				"name": "PreFC3.fseq",
+				"sizeBytes": 3,
+				"contentHash": "sha256:deadbeef",
+				"receivedAt": "2026-08-01T00:00:00Z",
+				"bound": true,
+				"show": "Halloween"
+			}
+		},
+		"pending": {},
+		"pendingOrder": [],
+		"events": []
+	}`
+
+	indexDir := filepath.Join(dir, fppConnectUploadStateSubdir)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, fppConnectIndexFileName), []byte(preFC3Index), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	held := newFPPConnectHeldStore(dir, discardLogger())
+
+	rec, ok := findHeldRecord(t, held, "sequences", "PreFC3.fseq")
+	if !ok {
+		t.Fatal("no held record for sequences/PreFC3.fseq after loading a pre-FC3 index")
+	}
+	if rec.Bound {
+		t.Fatalf("record = %+v, want unbound: a pre-FC3 record with no ShowID must never register with an empty show field", rec)
+	}
+	if rec.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
+		t.Fatalf("UnboundReason = %q, want %q", rec.UnboundReason, fppConnectUnboundReasonShowIDNotPushed)
+	}
+	if rec.Show != "Halloween" {
+		t.Fatalf("Show = %q, want Halloween preserved so a later push can rebind it", rec.Show)
+	}
+	if rec.LogicalSequence != "prefc3" {
+		t.Fatalf("LogicalSequence = %q, want prefc3 recomputed from the file name", rec.LogicalSequence)
+	}
+
+	// A later push carrying the show's id converges it automatically, the
+	// same as any other awaiting-id record.
+	held.RebindPendingShowIDs(func(name string) (string, bool) {
+		if name == "Halloween" {
+			return "halloween-2026", true
+		}
+		return "", false
+	})
+	registered, ok := findHeldRecord(t, held, "sequences", "PreFC3.fseq")
+	if !ok || !registered.Bound || registered.ShowID != "halloween-2026" {
+		t.Fatalf("record after RebindPendingShowIDs = %+v (found=%v), want bound to halloween-2026", registered, ok)
 	}
 }
 
@@ -858,13 +1388,15 @@ func TestFPPConnectUploadRoutesNoProductIdentityLeak(t *testing.T) {
 func TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	const maxDir = int64(150)
 
 	// Upload A declares 100 bytes total, but this call only delivers the
 	// first 10: it is accepted and left in flight, with 90 bytes still
 	// outstanding.
-	outcome, reason, _ := held.WriteChunk("sequences", "A.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, maxDir, time.Now(), neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "A.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("upload A chunk 1: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -874,7 +1406,7 @@ func TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit(t *testin
 	// under 150 alongside B's 100 (110 total): the exact shape of the
 	// bug. Correct behavior adds A's outstanding 90-byte remainder to the
 	// check (10 + 90 + 100 = 200 > 150) and refuses B.
-	outcome, reason, _ = held.WriteChunk("sequences", "B.fseq", 0, 100, strings.NewReader(strings.Repeat("B", 100)), 100, 1<<30, maxDir, time.Now(), neverActive)
+	outcome, reason, _ = held.WriteChunk("sequences", "B.fseq", 0, 100, strings.NewReader(strings.Repeat("B", 100)), 100, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkDirFull {
 		t.Fatalf("upload B: outcome = %v reason = %q, want dir-full (A's in-flight remainder must count against the cap)", outcome, reason)
 	}
@@ -901,7 +1433,7 @@ func TestFPPConnectPendingBindingsAreBoundedAndEvictOldestFirst(t *testing.T) {
 	for i := range names {
 		names[i] = fmt.Sprintf("File%04d.fseq", i)
 	}
-	held.BindShow("SomeShow", names, time.Now())
+	held.BindShow("SomeShow", "some-show", names, time.Now())
 
 	held.mu.Lock()
 	gotLen := len(held.pending)
@@ -922,6 +1454,145 @@ func TestFPPConnectPendingBindingsAreBoundedAndEvictOldestFirst(t *testing.T) {
 	if !newestStillPending {
 		t.Fatalf("the newest pending entry %q was evicted, want it kept", names[total-1])
 	}
+}
+
+// TestFPPConnectPendingBindingKeyIsBoundedAndStillMatchesALaterUpload is
+// review round 8 finding 1's own regression test: a pending binding's key
+// comes straight from a playlist POST body's file name list, with no
+// length bound of its own, unlike every other string this store persists
+// (fppConnectBoundEventString's 256-byte cap). A single POST could name a
+// file whose stem alone runs into the hundreds of kilobytes, and up to
+// fppConnectMaxPending of those, each that large, would all land in
+// index.json verbatim. addPendingLocked, deletePendingLocked, and
+// completeLocked's own lookup all now apply the identical bound, so a
+// later completion of the SAME (unbounded) name still finds and consumes
+// the pending entry, exactly as any shorter name already does.
+// completeLocked is called directly here (bypassing the real chunked
+// upload path entirely): a name this long could never survive a real
+// filesystem write, whose own path-component length limit is far below
+// even fppConnectMaxHeaderBytes, let alone this test's 900 KiB.
+func TestFPPConnectPendingBindingKeyIsBoundedAndStillMatchesALaterUpload(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	longName := strings.Repeat("N", 900*1024) + ".fseq"
+
+	held.BindShow("Halloween", "halloween-2026", []string{longName}, time.Now())
+
+	held.mu.Lock()
+	if got := len(held.pending); got != 1 {
+		held.mu.Unlock()
+		t.Fatalf("pending entries = %d, want exactly 1", got)
+	}
+	var pendingKey string
+	for k := range held.pending {
+		pendingKey = k
+	}
+	held.mu.Unlock()
+	if len(pendingKey) > fppConnectMaxEventStringBytes {
+		t.Fatalf("pending key length = %d, want at most %d", len(pendingKey), fppConnectMaxEventStringBytes)
+	}
+	if !strings.HasSuffix(pendingKey, fppConnectEventStringTruncatedSuffix) {
+		t.Fatalf("pending key = %q, want it to show truncation", pendingKey)
+	}
+
+	data, err := os.ReadFile(held.indexPath())
+	if err != nil {
+		t.Fatalf("reading persisted index: %v", err)
+	}
+	if len(data) > 4096 {
+		t.Fatalf("persisted index length = %d bytes, want it small: the pending key must be bounded on disk, not just in memory", len(data))
+	}
+
+	held.mu.Lock()
+	rec := held.completeLocked("sequences", longName, 3, "sha256:deadbeef", time.Now(),
+		func() (string, bool, bool) { return "", false, false },
+		func(string) (string, bool) { return "", false },
+		func() []string { return nil })
+	_, stillPending := held.pending[pendingKey]
+	held.mu.Unlock()
+
+	if !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want bound to halloween-2026: the pending binding must still match a later completion of the identical name", rec)
+	}
+	if stillPending {
+		t.Fatal("the pending entry survived a matching completion, want it consumed")
+	}
+}
+
+// TestFPPConnectLoadBoundsOversizedPendingKeys is review round 8 finding
+// 1's own load()-repair regression test: a persisted index written before
+// addPendingLocked bounded its own key (or one edited or corrupted
+// outside this store's own writes) can hold a pending key far longer than
+// fppConnectMaxEventStringBytes. load must repair it into the identical
+// bounded form addPendingLocked would already produce today, so a later
+// completion of that same file still matches it.
+func TestFPPConnectLoadBoundsOversizedPendingKeys(t *testing.T) {
+	dir := t.TempDir()
+
+	longName := strings.Repeat("Q", 900*1024) + ".fseq"
+	idx := fppConnectIndexOnDisk{
+		Records: map[string]fppConnectHeldRecord{},
+		Pending: mustMarshalJSON(t, map[string]fppConnectPendingBinding{
+			longName: {ShowName: "Halloween", ShowID: "halloween-2026"},
+		}),
+		PendingOrder: []string{longName},
+		Events:       []fppConnectEvent{},
+	}
+	data, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatalf("setup: encoding the oversized-key index: %v", err)
+	}
+
+	indexDir := filepath.Join(dir, fppConnectUploadStateSubdir)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, fppConnectIndexFileName), data, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	held := newFPPConnectHeldStore(dir, discardLogger())
+
+	held.mu.Lock()
+	if got := len(held.pending); got != 1 {
+		held.mu.Unlock()
+		t.Fatalf("pending entries after load = %d, want exactly 1", got)
+	}
+	var pendingKey string
+	for k := range held.pending {
+		pendingKey = k
+	}
+	orderMatches := len(held.pendingOrder) == 1 && held.pendingOrder[0] == pendingKey
+	held.mu.Unlock()
+
+	if len(pendingKey) > fppConnectMaxEventStringBytes {
+		t.Fatalf("pending key length after load = %d, want at most %d", len(pendingKey), fppConnectMaxEventStringBytes)
+	}
+	if !orderMatches {
+		t.Fatal("pendingOrder was not rebuilt to match the bounded pending key")
+	}
+
+	held.mu.Lock()
+	rec := held.completeLocked("sequences", longName, 3, "sha256:deadbeef", time.Now(),
+		func() (string, bool, bool) { return "", false, false },
+		func(string) (string, bool) { return "", false },
+		func() []string { return nil })
+	held.mu.Unlock()
+	if !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want bound to halloween-2026 after loading an oversized pending key", rec)
+	}
+}
+
+// mustMarshalJSON is a small json.RawMessage helper for tests that build
+// an fppConnectIndexOnDisk directly, matching fppConnectIndexOnDisk's own
+// Pending field's raw-decode contract.
+func mustMarshalJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("encoding JSON: %v", err)
+	}
+	return data
 }
 
 // TestFPPConnectChunkWriterTruncatesStaleTailOnOffsetZero is review round
@@ -985,11 +1656,13 @@ func TestFPPConnectWriteChunkReleasesLockDuringCopy(t *testing.T) {
 	w := &blockingChunkWriter{started: make(chan struct{}), release: make(chan struct{})}
 	held := newFPPConnectHeldStoreWithWriter(dir, w, discardLogger())
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		held.WriteChunk("sequences", "Slow.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+		held.WriteChunk("sequences", "Slow.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	}()
 
 	select {
@@ -1031,9 +1704,11 @@ func TestFPPConnectWriteChunkReleasesLockDuringCopy(t *testing.T) {
 func TestFPPConnectWriteChunkSweepsIdleInFlightReservations(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	start := time.Now()
-	outcome, reason, _ := held.WriteChunk("sequences", "Abandoned.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, start, neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "Abandoned.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, start, neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("setup: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -1050,7 +1725,7 @@ func TestFPPConnectWriteChunkSweepsIdleInFlightReservations(t *testing.T) {
 	// prepareChunkLocked); the abandoned entry is long past the TTL by
 	// the time this one arrives.
 	later := start.Add(fppConnectInFlightTTL + time.Minute)
-	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive); outcome != fppConnectChunkCompleted {
+	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkCompleted {
 		t.Fatalf("fresh upload: outcome = %v reason = %q, want completed", outcome, reason)
 	}
 
@@ -1109,13 +1784,15 @@ func TestFPPConnectReservationClampsAtZero(t *testing.T) {
 	}
 	held.mu.Unlock()
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	// maxAssetDirBytes is 50. Corrupt.fseq's raw remainder is
 	// 10-50 = -40. A fresh 51-byte upload: with the remainder wrongly
 	// left negative, 0 (nothing really on disk) + (-40) + 51 = 11 <= 50
 	// would be wrongly accepted. Clamped at zero, 0 + 0 + 51 = 51 > 50
 	// must be refused.
-	outcome, reason, _ := held.WriteChunk("sequences", "New.fseq", 0, 51, strings.NewReader(strings.Repeat("N", 10)), 10, 1<<30, 50, time.Now(), neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "New.fseq", 0, 51, strings.NewReader(strings.Repeat("N", 10)), 10, 1<<30, 50, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkDirFull {
 		t.Fatalf("outcome = %v reason = %q, want dir-full (a negative reservation must clamp to zero, not manufacture headroom)", outcome, reason)
 	}
@@ -1127,10 +1804,12 @@ func TestFPPConnectReservationClampsAtZero(t *testing.T) {
 // clean completion and after a discarded (gapped) upload.
 func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T) {
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	t.Run("completion clears the reservation", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		outcome, reason, _ := held.WriteChunk("sequences", "Done.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+		outcome, reason, _ := held.WriteChunk("sequences", "Done.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 		if outcome != fppConnectChunkCompleted {
 			t.Fatalf("outcome = %v reason = %q, want completed", outcome, reason)
 		}
@@ -1144,10 +1823,10 @@ func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T)
 
 	t.Run("a gap discards the reservation", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 0, 30, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive); outcome != fppConnectChunkAccepted {
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 0, 30, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkAccepted {
 			t.Fatal("setup: chunk 1 not accepted")
 		}
-		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 5, 30, strings.NewReader(strings.Repeat("B", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive); outcome != fppConnectChunkGap {
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 5, 30, strings.NewReader(strings.Repeat("B", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkGap {
 			t.Fatal("setup: expected a gap")
 		}
 		held.mu.Lock()
@@ -1196,6 +1875,8 @@ func TestFPPConnectWriteChunkClearsWritingFlagOnPanic(t *testing.T) {
 	writer := &panicOnceChunkWriter{inner: osFPPConnectChunkWriter{}}
 	held := newFPPConnectHeldStoreWithWriter(dir, writer, discardLogger())
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	func() {
 		defer func() {
@@ -1203,14 +1884,14 @@ func TestFPPConnectWriteChunkClearsWritingFlagOnPanic(t *testing.T) {
 				t.Fatal("WriteChunk did not panic on the first call; test setup is broken")
 			}
 		}()
-		held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+		held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	}()
 
 	// The deferred reset must have cleared writing before the panic
 	// propagated, so this retry at the same offset is treated as an
 	// ordinary retry, never refused as "another request ... already in
 	// progress."
-	outcome, reason, rec := held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, rec := held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkCompleted {
 		t.Fatalf("outcome = %v reason = %q, want completed (a retry after a panic must succeed normally, not stay refused as still in progress)", outcome, reason)
 	}
@@ -1237,11 +1918,13 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 	writer := &panicOnceChunkWriter{panicOffset: 2, inner: osFPPConnectChunkWriter{}}
 	held := newFPPConnectHeldStoreWithWriter(dir, writer, discardLogger())
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 	const key = "sequences/Panicky2.fseq"
 
 	// First chunk (offset 0, "ab") completes normally: the writer only
 	// panics at offset 2.
-	outcome, reason, _ := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("ab"), 2, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("ab"), 2, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("chunk 1: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -1253,7 +1936,7 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 				t.Fatal("WriteChunk did not panic on the offset-2 call; test setup is broken")
 			}
 		}()
-		held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+		held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	}()
 
 	held.mu.Lock()
@@ -1269,7 +1952,7 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 	// A retry at the same offset the client still believes is correct
 	// must be refused as a gap, never accepted as a continuation of the
 	// now-discarded (and hash-poisoned) fragment.
-	outcome, reason, _ = held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, _ = held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkGap {
 		t.Fatalf("retry at offset 2: outcome = %v reason = %q, want gap (offset-0 restart required)", outcome, reason)
 	}
@@ -1278,7 +1961,7 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 	// upload, not a hash double-counting the panicked attempt's bytes.
 	sum := sha256.Sum256([]byte("abcde"))
 	wantHash := "sha256:" + hex.EncodeToString(sum[:])
-	outcome, reason, rec := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("abcde"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, rec := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("abcde"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkCompleted {
 		t.Fatalf("offset-0 restart: outcome = %v reason = %q, want completed", outcome, reason)
 	}
@@ -1304,6 +1987,8 @@ func TestFPPConnectSweepReclaimsStuckWritingEntry(t *testing.T) {
 	}
 	held.mu.Unlock()
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	held.mu.Lock()
 	held.sweepIdleInFlightLocked(stuckSince.Add(time.Minute))
@@ -1315,7 +2000,7 @@ func TestFPPConnectSweepReclaimsStuckWritingEntry(t *testing.T) {
 
 	// Past fppConnectStuckWritingTTL: this goroutine is gone, not slow.
 	later := stuckSince.Add(fppConnectStuckWritingTTL + time.Minute)
-	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive); outcome != fppConnectChunkCompleted {
+	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkCompleted {
 		t.Fatalf("fresh upload: outcome = %v reason = %q, want completed", outcome, reason)
 	}
 
