@@ -376,3 +376,81 @@ func TestRenderPayloadValidateAcceptsFullContentIdentity(t *testing.T) {
 		t.Errorf("surface-2 (no assignment held) = %+v, want all four content fields empty", got.Surfaces[1])
 	}
 }
+
+// TestRenderPayloadValidateRejectsMismatchedShowAndGeneration proves the
+// identical paired-field rule for Show/Generation: both empty/zero (no
+// authorization tuple held) or both set, never one without the other.
+func TestRenderPayloadValidateRejectsMismatchedShowAndGeneration(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				Show:          "halloween-2026",
+				// Generation left 0: invalid pairing.
+				ObservedAt: time.Now(),
+			},
+		},
+	}
+	err := p.Validate()
+	if err == nil {
+		t.Fatalf("Validate() returned no error for show set with generation 0")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
+	}
+}
+
+// TestRenderPayloadValidateAcceptsShowAndGeneration proves a surface
+// carrying Show/Generation alongside the existing content fields round-trips
+// through NewRenderEnvelope/DecodeRenderPayload exactly, and that a surface
+// reporting neither (no assignment held) is equally valid.
+func TestRenderPayloadValidateAcceptsShowAndGeneration(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:       "surface-1",
+				PipelineState:   RenderPipelineStateRunning,
+				FSEQFilename:    "halloween-01.fseq",
+				FSEQContentHash: "sha256:deadbeef",
+				CueID:           "cue-42",
+				CatalogRevision: "rev-7",
+				Show:            "halloween-2026",
+				Generation:      1,
+				ObservedAt:      time.Now(),
+			},
+			{
+				SurfaceID:     "surface-2",
+				PipelineState: RenderPipelineStateRunning,
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+
+	env, err := NewRenderEnvelope(time.Now, "node-1", p)
+	if err != nil {
+		t.Fatalf("NewRenderEnvelope() error = %v", err)
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	decodedEnv, err := DecodeEnvelope(raw)
+	if err != nil {
+		t.Fatalf("DecodeEnvelope() error = %v", err)
+	}
+	got, err := DecodeRenderPayload(decodedEnv)
+	if err != nil {
+		t.Fatalf("DecodeRenderPayload() error = %v", err)
+	}
+
+	if got.Surfaces[0].Show != "halloween-2026" {
+		t.Errorf("Show = %q, want halloween-2026", got.Surfaces[0].Show)
+	}
+	if got.Surfaces[0].Generation != 1 {
+		t.Errorf("Generation = %d, want 1", got.Surfaces[0].Generation)
+	}
+	if got.Surfaces[1].Show != "" || got.Surfaces[1].Generation != 0 {
+		t.Errorf("surface-2 (no assignment held) = %+v, want Show/Generation empty/zero", got.Surfaces[1])
+	}
+}

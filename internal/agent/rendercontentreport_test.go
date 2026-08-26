@@ -96,6 +96,12 @@ func TestRenderReportCarriesContentIdentityAfterCueActivation(t *testing.T) {
 	if sf.CatalogRevision != "rev-a" {
 		t.Errorf("CatalogRevision = %q, want %q", sf.CatalogRevision, "rev-a")
 	}
+	if sf.Show != "halloween-2026" {
+		t.Errorf("Show = %q, want %q", sf.Show, "halloween-2026")
+	}
+	if sf.Generation != 3 {
+		t.Errorf("Generation = %d, want %d", sf.Generation, 3)
+	}
 }
 
 // TestRenderReportNoAssignmentReportsAbsence proves a surface this node
@@ -133,6 +139,12 @@ func TestRenderReportNoAssignmentReportsAbsence(t *testing.T) {
 	}
 	if sf.CatalogRevision != "" {
 		t.Errorf("CatalogRevision = %q, want empty (no assignment held)", sf.CatalogRevision)
+	}
+	if sf.Show != "" {
+		t.Errorf("Show = %q, want empty (no assignment held)", sf.Show)
+	}
+	if sf.Generation != 0 {
+		t.Errorf("Generation = %d, want 0 (no assignment held)", sf.Generation)
 	}
 }
 

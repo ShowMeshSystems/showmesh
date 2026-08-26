@@ -172,6 +172,52 @@ func TestCmdRenderSettingsRevisionsListsNewestFirst(t *testing.T) {
 // all. Wrong arg count is enough to prove routing without a real server:
 // cmdRenderProbe's own usage error is distinguishable from cmdRender's
 // generic "unknown subcommand" message.
+// TestCmdRenderStatusRendersSupersededVerdictAndAuthTuple is this project's
+// own showmeshctl parity coverage: `render status` renders every render.*
+// signal generically (printRenderStatus), so no code change was needed for
+// it to show a superseded verdict or the new surface.content.show/
+// surface.content.generation signals — this pins that down, rather than
+// leaving it as an unverified architectural claim.
+func TestCmdRenderStatusRendersSupersededVerdictAndAuthTuple(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/nodes/render-01" {
+			t.Errorf("request = %s %s, want GET /api/v1/nodes/render-01", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-26T21:00:00Z","node":{"nodeId":"render-01","capabilities":[],
+			"controlPlane":{"state":"online","reason":""},
+			"evidence":{
+			  "hello":{"signal":"node.hello","value":null,"unit":null,"state":"not_collected","reason":"none","observedAt":null,"collectedAt":"2026-08-26T21:00:00Z","source":"s","quality":"direct"},
+			  "lastWill":{"signal":"node.lastWill","value":null,"unit":null,"state":"not_collected","reason":"none","observedAt":null,"collectedAt":"2026-08-26T21:00:00Z","source":"s","quality":"direct"},
+			  "heartbeat":{"signal":"node.heartbeat","value":null,"unit":null,"state":"not_collected","reason":"none","observedAt":null,"collectedAt":"2026-08-26T21:00:00Z","source":"s","quality":"direct"}
+			},
+			"render":[
+			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.pipeline.state","value":"superseded","unit":null,"state":"current","reason":"this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"lane14-other\" generation 2, and this render's authorization no longer matches its resolved cue catalog","observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"derived","validForSeconds":45},
+			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.content.show","value":"halloween-2026","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"direct","validForSeconds":45},
+			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.content.generation","value":1,"unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"direct","validForSeconds":45}
+			],"audio":[]}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdRenderStatus([]string{"--server", ts.URL, "render-01"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-26T21:00:00Z")))
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"surface.pipeline.state", "superseded",
+		"surface.content.show", "halloween-2026",
+		"surface.content.generation", "1",
+		"lane14-other",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCmdRenderProbeIsRoutedNotUnknown(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdRender([]string{"probe"}, &stdout, &stderr, time.Now)
