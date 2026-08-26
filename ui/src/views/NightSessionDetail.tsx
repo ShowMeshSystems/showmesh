@@ -11,6 +11,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { ShowSelect } from '../components/ShowSelect'
 import type {
   ConfigNightSession,
   ConfigNightSessionBackgroundAudioItem,
@@ -463,7 +464,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
       <fieldset disabled={!editable}>
         <label className="form-field">
           Show
-          <input type="text" value={form.show} onChange={(e) => setForm({ ...form, show: e.target.value })} />
+          <ShowSelect value={form.show} onChange={(show) => setForm({ ...form, show })} />
         </label>
         <label className="form-field">
           Label
@@ -522,10 +523,9 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         <h4 className="panel__title">Resting timeline asset</h4>
         <label className="form-field">
           Show
-          <input
-            type="text"
+          <ShowSelect
             value={form.restingTimelineShow}
-            onChange={(e) => setForm({ ...form, restingTimelineShow: e.target.value })}
+            onChange={(restingTimelineShow) => setForm({ ...form, restingTimelineShow })}
           />
         </label>
         <label className="form-field">
@@ -564,11 +564,10 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
                   value={item.itemId}
                   onChange={(e) => updateBackgroundAudioItem(i, { itemId: e.target.value })}
                 />
-                <input
-                  type="text"
-                  placeholder="show"
+                <ShowSelect
+                  ariaLabel="Show"
                   value={item.show}
-                  onChange={(e) => updateBackgroundAudioItem(i, { show: e.target.value })}
+                  onChange={(show) => updateBackgroundAudioItem(i, { show })}
                 />
                 <input
                   type="text"

@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   NightSessionDetail,
   buildCues,
@@ -12,18 +12,25 @@ import {
   type FormState,
 } from './NightSessionDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel } from '../app/test-support/fixtures'
+import { makeModel, makeShowList } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
-const { putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions } = vi.hoisted(() => ({
-  putNightSessionConfig: vi.fn(),
-  getNightSessionConfig: vi.fn(),
-  getNightSessionConfigRevisions: vi.fn(),
-}))
+const { putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions, listConfigObjects } = vi.hoisted(
+  () => ({
+    putNightSessionConfig: vi.fn(),
+    getNightSessionConfig: vi.fn(),
+    getNightSessionConfigRevisions: vi.fn(),
+    listConfigObjects: vi.fn(),
+  }),
+)
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions }
+  return { ...actual, putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions, listConfigObjects }
+})
+
+beforeEach(() => {
+  listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
 })
 
 afterEach(() => {
@@ -31,7 +38,24 @@ afterEach(() => {
   putNightSessionConfig.mockReset()
   getNightSessionConfig.mockReset()
   getNightSessionConfigRevisions.mockReset()
+  listConfigObjects.mockReset()
 })
+
+/**
+ * Every `show` field on this form (three of them: the session's own,
+ * the resting timeline asset's, and each background audio item's) is a
+ * `ShowSelect` (components/ShowSelect.tsx) that starts disabled while
+ * `GET /config/show` is in flight. Waits for all currently-rendered
+ * "Show"-labelled controls to become `<select>`s before a test drives
+ * them, rather than racing the mocked fetch's own microtask.
+ */
+async function waitForShowSelectsLoaded(): Promise<void> {
+  await waitFor(() => {
+    const controls = screen.getAllByLabelText('Show')
+    expect(controls.length).toBeGreaterThan(0)
+    expect(controls.every((el) => el.tagName === 'SELECT')).toBe(true)
+  })
+}
 
 const writerSession = makeAuthenticatedSession({ scopes: ['config:write'] })
 
@@ -69,9 +93,10 @@ function renderExisting(model: Model, id: string) {
 async function fillMinimalValidForm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.type(screen.getByLabelText('Night session id'), 'halloween-night')
 
+  await waitForShowSelectsLoaded()
   const showInputs = screen.getAllByLabelText('Show')
-  await user.type(showInputs[0]!, 'halloween-2026')
-  await user.type(showInputs[1]!, 'halloween-2026')
+  await user.selectOptions(showInputs[0]!, 'halloween-2026')
+  await user.selectOptions(showInputs[1]!, 'halloween-2026')
 
   await user.type(screen.getByLabelText('Label'), 'Halloween Night')
 
@@ -118,14 +143,18 @@ describe('NightSessionDetail (new night session authoring)', () => {
 
     await user.click(screen.getByLabelText(/Configure background audio/))
     await user.click(screen.getByRole('button', { name: 'Add background audio item' }))
+    await waitForShowSelectsLoaded()
 
     const itemIdInputs = screen.getAllByPlaceholderText('item id')
-    const showInputs = screen.getAllByPlaceholderText('show')
+    // The first two "Show" controls are the session's own and the resting
+    // timeline asset's (getAllByLabelText matches DOM order); each
+    // background audio item's own "Show" select follows those.
+    const showInputs = screen.getAllByLabelText('Show').slice(2)
     const sequenceInputs = screen.getAllByPlaceholderText('sequence')
     const targetInputs = screen.getAllByPlaceholderText('target node')
     for (const [i, input] of itemIdInputs.entries()) {
       await user.type(input, 'dup-id')
-      await user.type(showInputs[i]!, 'halloween-2026')
+      await user.selectOptions(showInputs[i]!, 'halloween-2026')
       await user.type(sequenceInputs[i]!, `bg-seq-${i}`)
       await user.type(targetInputs[i]!, 'node-1')
     }
@@ -146,8 +175,9 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
+    await waitForShowSelectsLoaded()
     await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.type(screen.getByPlaceholderText('show'), 'halloween-2026')
+    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
     await user.selectOptions(screen.getByLabelText('Item transition'), 'crossfade')
@@ -166,8 +196,9 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
+    await waitForShowSelectsLoaded()
     await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.type(screen.getByPlaceholderText('show'), 'halloween-2026')
+    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
     // itemTransition stays at its default ("sequential"), which is not "crossfade".
@@ -208,8 +239,9 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
+    await waitForShowSelectsLoaded()
     await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.type(screen.getByPlaceholderText('show'), 'halloween-2026')
+    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
     const maxGainInput = screen.getByLabelText(/Max gain/)
@@ -238,8 +270,9 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
+    await waitForShowSelectsLoaded()
     await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.type(screen.getByPlaceholderText('show'), 'halloween-2026')
+    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
     const maxGainInput = screen.getByLabelText(/Max gain/)
