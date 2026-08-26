@@ -225,6 +225,10 @@ export type {
   FPPPlaylistDefinitionResponse,
   FPPPlaylistDefinitionEntry,
   FPPPlaylistDefinitionEntriesResponse,
+  // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation an
+  // operator reviews before clearing it.
+  FPPPlaylistEntryObservation,
+  FPPPlaylistEntryObservationsResponse,
 } from './domain'
 export {
   useModel,
