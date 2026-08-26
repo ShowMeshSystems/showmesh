@@ -108,7 +108,7 @@ function buildPayload(form: FormState): { payload: ConfigShowCue } | { error: st
   if (form.audioEnabled) {
     if (form.audioAsset.trim() === '') return { error: 'Audio asset is required when audio is enabled.' }
     const audioStartOffsetMillis = Number(form.audioStartOffsetMillis)
-    if (!Number.isInteger(audioStartOffsetMillis) || audioStartOffsetMillis < 0) {
+    if (form.audioStartOffsetMillis.trim() === '' || !Number.isInteger(audioStartOffsetMillis) || audioStartOffsetMillis < 0) {
       return { error: 'Audio start offset must be a whole number of milliseconds, zero or greater.' }
     }
     outputs.audio = { asset: form.audioAsset.trim(), startOffsetMillis: audioStartOffsetMillis }
@@ -116,7 +116,7 @@ function buildPayload(form: FormState): { payload: ConfigShowCue } | { error: st
 
   if (form.ltcEnabled) {
     const ltcStartOffsetMillis = Number(form.ltcStartOffsetMillis)
-    if (!Number.isInteger(ltcStartOffsetMillis) || ltcStartOffsetMillis < 0 || ltcStartOffsetMillis > 86400000) {
+    if (form.ltcStartOffsetMillis.trim() === '' || !Number.isInteger(ltcStartOffsetMillis) || ltcStartOffsetMillis < 0 || ltcStartOffsetMillis > 86400000) {
       return { error: 'LTC start offset must be a whole number of milliseconds, from 0 up to 24 hours (86400000).' }
     }
     outputs.ltc = { startOffsetMillis: ltcStartOffsetMillis }
@@ -127,7 +127,7 @@ function buildPayload(form: FormState): { payload: ConfigShowCue } | { error: st
       return { error: 'Announcement policy is required and has no default; pick duck, mix, or interrupt.' }
     }
     const fadeMillis = Number(form.announcementFadeMillis)
-    if (!Number.isInteger(fadeMillis) || fadeMillis < 0 || fadeMillis > 60000) {
+    if (form.announcementFadeMillis.trim() === '' || !Number.isInteger(fadeMillis) || fadeMillis < 0 || fadeMillis > 60000) {
       return { error: 'Announcement fade must be a whole number of milliseconds, from 0 to 60000.' }
     }
     if (form.announcementPolicy === 'duck') {

@@ -189,6 +189,59 @@ describe('ShowCueDetail (new cue authoring)', () => {
     )
   })
 
+  it('refuses a blank audio start offset instead of coercing it to zero', async () => {
+    const user = userEvent.setup()
+    renderNew()
+
+    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
+    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Name'), 'Opening number')
+    await user.click(screen.getByLabelText('Audio'))
+    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
+    // Start offset deliberately left blank.
+    await user.click(screen.getByRole('button', { name: 'Create cue' }))
+
+    expect(await screen.findByText(/Audio start offset must be a whole number/)).toBeVisible()
+    expect(putShowCue).not.toHaveBeenCalled()
+  })
+
+  it('refuses a blank LTC start offset instead of coercing it to zero', async () => {
+    const user = userEvent.setup()
+    renderNew()
+
+    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
+    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Name'), 'Opening number')
+    await user.click(screen.getByLabelText('Audio'))
+    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
+    await user.type(screen.getByLabelText(/^Start offset \(milliseconds\)$/), '0')
+    await user.click(screen.getByLabelText(/^LTC/))
+    // LTC start offset deliberately left blank.
+    await user.click(screen.getByRole('button', { name: 'Create cue' }))
+
+    expect(await screen.findByText(/LTC start offset must be a whole number/)).toBeVisible()
+    expect(putShowCue).not.toHaveBeenCalled()
+  })
+
+  it('refuses a blank announcement fade instead of coercing it to zero (an audible hard cut)', async () => {
+    const user = userEvent.setup()
+    renderNew()
+
+    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
+    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Name'), 'Opening number')
+    await user.click(screen.getByLabelText('Audio'))
+    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
+    await user.type(screen.getByLabelText(/^Start offset \(milliseconds\)$/), '0')
+    await user.click(screen.getByLabelText(/^Announcement/))
+    await user.selectOptions(screen.getByLabelText('Policy'), 'mix')
+    // Fade deliberately left blank.
+    await user.click(screen.getByRole('button', { name: 'Create cue' }))
+
+    expect(await screen.findByText(/Announcement fade must be a whole number/)).toBeVisible()
+    expect(putShowCue).not.toHaveBeenCalled()
+  })
+
   it('requires a duck gain when the announcement policy is "duck"', async () => {
     const user = userEvent.setup()
     renderNew()
