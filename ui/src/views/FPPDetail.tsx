@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { acknowledgeFPPInstanceUUIDChange } from '../api'
+import { ApiError, acknowledgeFPPInstanceUUIDChange, getFPPPlaylistEntryReconciliation } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError } from '../app/session'
-import { FPPHealthBadge } from '../components/DomainBadges'
+import { FPPHealthBadge, FPPPlaylistReconciliationOutcomeBadge } from '../components/DomainBadges'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
 import { FPPStopPlaylistControl } from '../components/FPPStopPlaylistControl'
@@ -22,7 +22,7 @@ import { PortGrid } from '../components/PortGrid'
 import { ScopedButton } from '../components/ScopedButton'
 import { formatAbsolute } from '../app/time'
 import { findObservation, groupFppObservations } from '../app/fppSignals'
-import type { FPPInstance } from '../app/types'
+import type { FPPInstance, FPPPlaylistEntryReconciliationResponse } from '../app/types'
 
 // FPP instance detail. Not named in spec section 6.4's view list, which
 // enumerates Dashboard/Nodes/Capabilities/Events, but OBSERVABILITY
@@ -82,6 +82,25 @@ export function FPPDetail() {
                 <dd>{instance.lastPollError ?? 'none'}</dd>
               </dl>
             </section>
+          </PanelErrorBoundary>
+
+          {/* The resolved answer to "what is this instance actually
+              playing, and which ShowMesh cue does that resolve to" was
+              previously only reachable from the Playlist readiness page
+              (views/PlaylistReadiness.tsx), keyed separately by
+              instanceUuid -- an operator watching THIS page, the one with
+              the transport controls, had to leave it to find out. Its own
+              panel, placed here (right after the summary, before the
+              transport Commands below) rather than folded into Recovery
+              further down: reading what is playing and clearing a wedged
+              observation are different actions with different
+              consequences and should not share a panel. Reuses
+              FPPPlaylistReconciliationOutcomeBadge and the same verbatim
+              "never reworded" reason rendering PlaylistReadiness.tsx's own
+              ReconciliationRow already uses, rather than inventing a
+              second copy of either. */}
+          <PanelErrorBoundary panelLabel="Current playback">
+            <FPPCurrentEntryPanel instanceUuid={instance.instanceUuid} snapshotReceivedAt={model.snapshotReceivedAt} />
           </PanelErrorBoundary>
 
           {/* `FPPInstance.instanceUuidChange` (api/openapi.yaml): non-null
@@ -268,6 +287,114 @@ export function FPPDetail() {
         </>
       )}
     </div>
+  )
+}
+
+type CurrentEntryState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; response: FPPPlaylistEntryReconciliationResponse }
+  // No accepted playlist-entry observation for this instanceUuid yet
+  // (openapi's own 404): the same "normal afternoon state, not a fault"
+  // posture PlaylistReadiness.tsx's own ReconciliationRow already takes.
+  | { kind: 'no-observation'; detail: string }
+  | { kind: 'error'; message: string }
+
+// Same fetch, generation-guard, and reconnect-refetch discipline as
+// PlaylistReadiness.tsx's own useReconciliation -- this view has no live
+// model field to key off yet, so refresh here is reconnect-triggered
+// only, not an added polling interval.
+function useCurrentEntryReconciliation(
+  instanceUuid: string | null,
+  snapshotReceivedAt: number | null,
+): CurrentEntryState {
+  const [state, setState] = useState<CurrentEntryState>({ kind: 'loading' })
+
+  useEffect(() => {
+    if (instanceUuid === null) return
+    let cancelled = false
+    setState({ kind: 'loading' })
+    getFPPPlaylistEntryReconciliation(instanceUuid)
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', response })
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setState({ kind: 'no-observation', detail: err.message })
+          return
+        }
+        setState({ kind: 'error', message: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [instanceUuid, snapshotReceivedAt])
+
+  return state
+}
+
+// What this instance is actually playing, and which ShowMesh cue
+// that resolves to -- previously only visible from
+// views/PlaylistReadiness.tsx, keyed by instanceUuid there too. Renders
+// nothing distinctive for an instance that has never reported a uuid,
+// same posture FPPResetObservationSequenceControl already takes for the
+// identical precondition.
+function FPPCurrentEntryPanel({
+  instanceUuid,
+  snapshotReceivedAt,
+}: {
+  instanceUuid: string | null
+  snapshotReceivedAt: number | null
+}) {
+  const reconciliation = useCurrentEntryReconciliation(instanceUuid, snapshotReceivedAt)
+
+  if (instanceUuid === null) {
+    return (
+      <section className="panel">
+        <h3 className="panel__title">Current playback</h3>
+        <p className="text-muted">
+          This instance has not yet reported an instance UUID, so no reconciliation verdict can
+          exist for it yet.
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="panel">
+      <h3 className="panel__title">Current playback</h3>
+      {reconciliation.kind === 'loading' && <p className="text-muted">Checking...</p>}
+      {reconciliation.kind === 'error' && (
+        <p role="alert" className="render-surface__error">
+          Could not check: {reconciliation.message}
+        </p>
+      )}
+      {reconciliation.kind === 'no-observation' && (
+        <p className="text-muted">{reconciliation.detail}</p>
+      )}
+      {reconciliation.kind === 'loaded' && (
+        <dl className="field-list" role="status">
+          <dt>Current entry</dt>
+          <dd>{reconciliation.response.observedEntryKey ?? 'unknown'}</dd>
+          <dt>Outcome</dt>
+          <dd>
+            <FPPPlaylistReconciliationOutcomeBadge outcome={reconciliation.response.outcome} />
+          </dd>
+          <dt>Reason</dt>
+          {/* Verbatim, never reworded: this task's own instruction, matching
+              PlaylistReadiness.tsx's own ReconciliationRow. */}
+          <dd>{reconciliation.response.reason}</dd>
+          {reconciliation.response.outcome === 'resolved' && (
+            <>
+              <dt>Entry id</dt>
+              <dd>{reconciliation.response.entryId}</dd>
+              <dt>Cue id</dt>
+              <dd>{reconciliation.response.cueId}</dd>
+            </>
+          )}
+        </dl>
+      )}
+    </section>
   )
 }
 
