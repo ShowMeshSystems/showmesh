@@ -1208,6 +1208,53 @@ func TestFPPConnectRegisterThreeCollidingSlugsNeverDisplaceTheRegisteredOwner(t 
 	}
 }
 
+// TestFPPConnectStrongestCompetitorTieBreaksDeterministically is review
+// round 8 finding 3's own regression test: two candidates that tie on
+// both tier and ReceivedAt (BindShow's own single call could bind several
+// files with the identical `at` timestamp) used to let whichever one a
+// strongerThan loop happened to visit first decide both the chosen
+// competitor and its own awaitingShowID flag, which could differ run to
+// run purely from Go's randomized map iteration order. strongestCompetitor
+// now sorts candidates by (tier, ReceivedAt, Name) before choosing, and
+// decides awaitingShowID from the sorted choice alone: this proves the
+// same two candidates, passed in either order, always produce the
+// identical strongest competitor and the identical awaitingShowID.
+func TestFPPConnectStrongestCompetitorTieBreaksDeterministically(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	reg, _, _ := newTestFPPConnectRegistrar(t, held, "", "")
+
+	at := time.Now()
+	bound := fppConnectHeldRecord{
+		Dir: "sequences", Name: "Bravo.fseq", Bound: true,
+		Show: "Halloween", ShowID: "halloween-2026", LogicalSequence: "same-slug", ReceivedAt: at,
+	}
+	awaiting := fppConnectHeldRecord{
+		Dir: "sequences", Name: "Alpha.fseq", Bound: false,
+		Show: "Halloween", UnboundReason: fppConnectUnboundReasonShowIDNotPushed, LogicalSequence: "same-slug", ReceivedAt: at,
+	}
+
+	strongestAB, knownAB, awaitingAB := reg.strongestCompetitor([]fppConnectHeldRecord{awaiting, bound})
+	strongestBA, knownBA, awaitingBA := reg.strongestCompetitor([]fppConnectHeldRecord{bound, awaiting})
+
+	if !knownAB || !knownBA {
+		t.Fatalf("known = %v, %v, want both true", knownAB, knownBA)
+	}
+	if strongestAB.Name != strongestBA.Name {
+		t.Fatalf("strongest competitor depends on input order: %q vs %q, want the identical choice regardless of order", strongestAB.Name, strongestBA.Name)
+	}
+	if awaitingAB != awaitingBA {
+		t.Fatalf("awaitingShowID depends on input order: %v vs %v, want the identical value regardless of order", awaitingAB, awaitingBA)
+	}
+	// Name is the final deterministic tie-break: "Alpha.fseq" sorts
+	// before "Bravo.fseq".
+	if strongestAB.Name != "Alpha.fseq" {
+		t.Fatalf("strongest = %q, want Alpha.fseq (the Name tie-break, since both share the identical tier and ReceivedAt)", strongestAB.Name)
+	}
+	if !awaitingAB {
+		t.Fatal("awaitingShowID = false, want true: the chosen strongest (Alpha.fseq) is the awaiting-show-id record")
+	}
+}
+
 // TestFPPConnectRegisterLateBindingNeverSupersedesAlreadyRegistered is
 // review round 3 finding 1's own regression test: an unbound file (A) that
 // completed uploading FIRST must not be able to supersede a colliding file

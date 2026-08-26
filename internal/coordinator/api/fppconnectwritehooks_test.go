@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +49,32 @@ func waitForPublishCount(t *testing.T, pub *fakeRenderPublisher, action string, 
 	}
 }
 
+// fppConnectConfigureTargetNodeIDs returns the target node id of every
+// fppconnect.configure publish pub recorded, in publish order, decoded
+// from each entry's own topic (mqttproto.CmdTopic's own
+// "showmesh/nodes/<node-id>/cmd" shape, matched directly here rather than
+// through an mqttproto import, following this file's own established
+// avoid-importing-the-wire-type convention, see fakeRenderPublisher's own
+// mqttCmdEnvelopeForTest).
+func fppConnectConfigureTargetNodeIDs(t *testing.T, pub *fakeRenderPublisher) []string {
+	t.Helper()
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	const prefix, suffix = "showmesh/nodes/", "/cmd"
+	var ids []string
+	for i, env := range pub.payload {
+		if env.Payload.Action != "fppconnect.configure" {
+			continue
+		}
+		topic := pub.topics[i]
+		if !strings.HasPrefix(topic, prefix) || !strings.HasSuffix(topic, suffix) {
+			t.Fatalf("fppconnect.configure publish %d has an unexpected topic shape: %q", i, topic)
+		}
+		ids = append(ids, strings.TrimSuffix(strings.TrimPrefix(topic, prefix), suffix))
+	}
+	return ids
+}
+
 func TestPutShowSurfacePushesOnlyItsOwnNode(t *testing.T) {
 	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
@@ -72,9 +100,17 @@ func TestPutShowSurfacePushesOnlyItsOwnNode(t *testing.T) {
 	// Exactly one push total: the surface's own node (render-01), never
 	// render-02, which this surface does not reference.
 	pub.mu.Lock()
-	defer pub.mu.Unlock()
-	if len(pub.payload) != 1 {
-		t.Fatalf("published %d commands, want exactly 1 (only render-01)", len(pub.payload))
+	total := len(pub.payload)
+	pub.mu.Unlock()
+	if total != 1 {
+		t.Fatalf("published %d commands, want exactly 1 (only render-01)", total)
+	}
+
+	// review round 8 finding 4: assert the target node id itself, not
+	// only the count, so a push wrongly aimed at render-02 would fail
+	// this test even if the total count still happened to match.
+	if got := fppConnectConfigureTargetNodeIDs(t, pub); len(got) != 1 || got[0] != "render-01" {
+		t.Fatalf("fppconnect.configure target node ids = %v, want exactly [render-01]", got)
 	}
 }
 
@@ -115,6 +151,24 @@ func TestPutShowSurfaceMoveToNewNodePushesBothNodes(t *testing.T) {
 	// One push for the first PUT (render-01), then two more for the move
 	// (render-02, the new node, and render-01, the vacated one) = 3 total.
 	waitForPublishCount(t, pub, "fppconnect.configure", 3)
+
+	// review round 8 finding 4: assert the actual target node ids, not
+	// only the count, so a defect that pushed the wrong node (or the
+	// right node the wrong number of times) would fail this test even
+	// though the total count of 3 still matched by coincidence. render-01
+	// is targeted twice (the first PUT, then vacating the surface);
+	// render-02 is targeted once (the surface's new node).
+	got := fppConnectConfigureTargetNodeIDs(t, pub)
+	sort.Strings(got)
+	want := []string{"render-01", "render-01", "render-02"}
+	if len(got) != len(want) {
+		t.Fatalf("fppconnect.configure target node ids = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("fppconnect.configure target node ids = %v, want %v", got, want)
+		}
+	}
 }
 
 func TestPutShowActivePushesEveryInventoryNode(t *testing.T) {

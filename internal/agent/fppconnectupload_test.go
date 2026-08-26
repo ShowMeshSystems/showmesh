@@ -1456,6 +1456,145 @@ func TestFPPConnectPendingBindingsAreBoundedAndEvictOldestFirst(t *testing.T) {
 	}
 }
 
+// TestFPPConnectPendingBindingKeyIsBoundedAndStillMatchesALaterUpload is
+// review round 8 finding 1's own regression test: a pending binding's key
+// comes straight from a playlist POST body's file name list, with no
+// length bound of its own, unlike every other string this store persists
+// (fppConnectBoundEventString's 256-byte cap). A single POST could name a
+// file whose stem alone runs into the hundreds of kilobytes, and up to
+// fppConnectMaxPending of those, each that large, would all land in
+// index.json verbatim. addPendingLocked, deletePendingLocked, and
+// completeLocked's own lookup all now apply the identical bound, so a
+// later completion of the SAME (unbounded) name still finds and consumes
+// the pending entry, exactly as any shorter name already does.
+// completeLocked is called directly here (bypassing the real chunked
+// upload path entirely): a name this long could never survive a real
+// filesystem write, whose own path-component length limit is far below
+// even fppConnectMaxHeaderBytes, let alone this test's 900 KiB.
+func TestFPPConnectPendingBindingKeyIsBoundedAndStillMatchesALaterUpload(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	longName := strings.Repeat("N", 900*1024) + ".fseq"
+
+	held.BindShow("Halloween", "halloween-2026", []string{longName}, time.Now())
+
+	held.mu.Lock()
+	if got := len(held.pending); got != 1 {
+		held.mu.Unlock()
+		t.Fatalf("pending entries = %d, want exactly 1", got)
+	}
+	var pendingKey string
+	for k := range held.pending {
+		pendingKey = k
+	}
+	held.mu.Unlock()
+	if len(pendingKey) > fppConnectMaxEventStringBytes {
+		t.Fatalf("pending key length = %d, want at most %d", len(pendingKey), fppConnectMaxEventStringBytes)
+	}
+	if !strings.HasSuffix(pendingKey, fppConnectEventStringTruncatedSuffix) {
+		t.Fatalf("pending key = %q, want it to show truncation", pendingKey)
+	}
+
+	data, err := os.ReadFile(held.indexPath())
+	if err != nil {
+		t.Fatalf("reading persisted index: %v", err)
+	}
+	if len(data) > 4096 {
+		t.Fatalf("persisted index length = %d bytes, want it small: the pending key must be bounded on disk, not just in memory", len(data))
+	}
+
+	held.mu.Lock()
+	rec := held.completeLocked("sequences", longName, 3, "sha256:deadbeef", time.Now(),
+		func() (string, bool, bool) { return "", false, false },
+		func(string) (string, bool) { return "", false },
+		func() []string { return nil })
+	_, stillPending := held.pending[pendingKey]
+	held.mu.Unlock()
+
+	if !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want bound to halloween-2026: the pending binding must still match a later completion of the identical name", rec)
+	}
+	if stillPending {
+		t.Fatal("the pending entry survived a matching completion, want it consumed")
+	}
+}
+
+// TestFPPConnectLoadBoundsOversizedPendingKeys is review round 8 finding
+// 1's own load()-repair regression test: a persisted index written before
+// addPendingLocked bounded its own key (or one edited or corrupted
+// outside this store's own writes) can hold a pending key far longer than
+// fppConnectMaxEventStringBytes. load must repair it into the identical
+// bounded form addPendingLocked would already produce today, so a later
+// completion of that same file still matches it.
+func TestFPPConnectLoadBoundsOversizedPendingKeys(t *testing.T) {
+	dir := t.TempDir()
+
+	longName := strings.Repeat("Q", 900*1024) + ".fseq"
+	idx := fppConnectIndexOnDisk{
+		Records: map[string]fppConnectHeldRecord{},
+		Pending: mustMarshalJSON(t, map[string]fppConnectPendingBinding{
+			longName: {ShowName: "Halloween", ShowID: "halloween-2026"},
+		}),
+		PendingOrder: []string{longName},
+		Events:       []fppConnectEvent{},
+	}
+	data, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatalf("setup: encoding the oversized-key index: %v", err)
+	}
+
+	indexDir := filepath.Join(dir, fppConnectUploadStateSubdir)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, fppConnectIndexFileName), data, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	held := newFPPConnectHeldStore(dir, discardLogger())
+
+	held.mu.Lock()
+	if got := len(held.pending); got != 1 {
+		held.mu.Unlock()
+		t.Fatalf("pending entries after load = %d, want exactly 1", got)
+	}
+	var pendingKey string
+	for k := range held.pending {
+		pendingKey = k
+	}
+	orderMatches := len(held.pendingOrder) == 1 && held.pendingOrder[0] == pendingKey
+	held.mu.Unlock()
+
+	if len(pendingKey) > fppConnectMaxEventStringBytes {
+		t.Fatalf("pending key length after load = %d, want at most %d", len(pendingKey), fppConnectMaxEventStringBytes)
+	}
+	if !orderMatches {
+		t.Fatal("pendingOrder was not rebuilt to match the bounded pending key")
+	}
+
+	held.mu.Lock()
+	rec := held.completeLocked("sequences", longName, 3, "sha256:deadbeef", time.Now(),
+		func() (string, bool, bool) { return "", false, false },
+		func(string) (string, bool) { return "", false },
+		func() []string { return nil })
+	held.mu.Unlock()
+	if !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want bound to halloween-2026 after loading an oversized pending key", rec)
+	}
+}
+
+// mustMarshalJSON is a small json.RawMessage helper for tests that build
+// an fppConnectIndexOnDisk directly, matching fppConnectIndexOnDisk's own
+// Pending field's raw-decode contract.
+func mustMarshalJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("encoding JSON: %v", err)
+	}
+	return data
+}
+
 // TestFPPConnectChunkWriterTruncatesStaleTailOnOffsetZero is review round
 // 1 finding 7's regression test, exercised directly against
 // osFPPConnectChunkWriter rather than through discardFragment's best-

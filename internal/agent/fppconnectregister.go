@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -543,6 +544,20 @@ func (r *fppConnectRegistrar) isInFlight(key string) bool {
 	return r.inFlight[key]
 }
 
+// fppConnectCompetitorTier ranks rec for strongestCompetitor's own sort: 2
+// for a registered record (never displaced by anything), 1 for one
+// currently in flight, 0 for anything else. Higher wins.
+func (r *fppConnectRegistrar) fppConnectCompetitorTier(rec fppConnectHeldRecord) int {
+	switch {
+	case rec.RegistrationState == fppConnectRegistrationRegistered:
+		return 2
+	case r.isInFlight(rec.Dir + "/" + rec.Name):
+		return 1
+	default:
+		return 0
+	}
+}
+
 // strongestCompetitor reduces colliding (every record CollidingRecords
 // found for one identity) to the single record claimIdentity should treat
 // as "the" competitor (review round 7 finding 1): with three or more
@@ -554,26 +569,18 @@ func (r *fppConnectRegistrar) isInFlight(key string) bool {
 // Every candidate that failed non-retryably (review round 5 finding 2) or
 // that is only awaiting a show id already independently confirmed
 // resolvable (review round 6 finding 3) is dropped first, exactly as
-// attemptRegister already did for a single candidate; among what remains,
-// a registered record always wins outright, since a registered owner must
-// never be displaced by anything, else one currently in flight wins
-// outright, else the earliest ReceivedAt wins. known is false only when
-// colliding has no surviving candidate at all.
+// attemptRegister already did for a single candidate. What remains is
+// sorted by (tier, ReceivedAt, Name), strongest first, so the choice is
+// fully deterministic even when two candidates tie on both tier and
+// ReceivedAt (review round 8 finding 3: two records BindShow's own single
+// call bound with the identical `at` timestamp could otherwise be picked
+// either way depending on Go's own randomized map iteration order,
+// nothing here or in CollidingRecords ever sorted first). known is false
+// only when colliding has no surviving candidate at all; awaitingShowID
+// is decided from the chosen strongest candidate alone, after sorting,
+// never from whichever candidate the sort happened to visit first.
 func (r *fppConnectRegistrar) strongestCompetitor(colliding []fppConnectHeldRecord) (strongest fppConnectHeldRecord, known, awaitingShowID bool) {
-	strongerThan := func(a, b fppConnectHeldRecord) bool {
-		aReg := a.RegistrationState == fppConnectRegistrationRegistered
-		bReg := b.RegistrationState == fppConnectRegistrationRegistered
-		if aReg != bReg {
-			return aReg
-		}
-		aFlight := r.isInFlight(a.Dir + "/" + a.Name)
-		bFlight := r.isInFlight(b.Dir + "/" + b.Name)
-		if aFlight != bFlight {
-			return aFlight
-		}
-		return a.ReceivedAt.Before(b.ReceivedAt)
-	}
-
+	var candidates []fppConnectHeldRecord
 	for _, cand := range colliding {
 		if cand.RegistrationState == fppConnectRegistrationFailed {
 			// A competitor that failed non-retryably will never attempt
@@ -582,8 +589,7 @@ func (r *fppConnectRegistrar) strongestCompetitor(colliding []fppConnectHeldReco
 			// returned in the first place would not.
 			continue
 		}
-		candAwaiting := !cand.Bound
-		if candAwaiting {
+		if !cand.Bound {
 			if _, ok := r.state.ShowID(cand.Show); ok {
 				// Its own show id is already confirmed resolvable but it
 				// still has not bound: whatever is stopping
@@ -592,11 +598,25 @@ func (r *fppConnectRegistrar) strongestCompetitor(colliding []fppConnectHeldReco
 				continue
 			}
 		}
-		if !known || strongerThan(cand, strongest) {
-			strongest, known, awaitingShowID = cand, true, candAwaiting
-		}
+		candidates = append(candidates, cand)
 	}
-	return strongest, known, awaitingShowID
+	if len(candidates) == 0 {
+		return fppConnectHeldRecord{}, false, false
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if ta, tb := r.fppConnectCompetitorTier(a), r.fppConnectCompetitorTier(b); ta != tb {
+			return ta > tb
+		}
+		if !a.ReceivedAt.Equal(b.ReceivedAt) {
+			return a.ReceivedAt.Before(b.ReceivedAt)
+		}
+		return a.Name < b.Name
+	})
+
+	strongest = candidates[0]
+	return strongest, true, !strongest.Bound
 }
 
 // fppConnectRegisterFields is the exact, required order the assets API's

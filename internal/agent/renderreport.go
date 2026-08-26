@@ -101,6 +101,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	}
 
 	heldEvents := fcHeld.Events()
+	heldEventsTotal := len(heldEvents)
 	if len(heldEvents) > renderWireHeldEventsCap {
 		// Keep the most recent entries: the oldest-first log's newest
 		// tail is the evidence most likely to still be actionable.
@@ -112,19 +113,28 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	}
 
 	renderPayload := mqttproto.RenderPayload{
-		GstLaunchPath:        gstPath,
-		GstLaunchAvailable:   gstOK,
-		Surfaces:             surfaces,
-		MultiSyncListening:   msListening,
-		MultiSyncReason:      msReason,
-		MultiSyncObservedAt:  msObservedAt,
-		FPPConnectListening:  fcListening,
-		FPPConnectReason:     fcReason,
-		FPPConnectObservedAt: fcObservedAt,
-		FPPConnectHeldCount:  heldTotal,
-		FPPConnectHeld:       held,
-		FPPConnectHeldEvents: events,
+		GstLaunchPath:             gstPath,
+		GstLaunchAvailable:        gstOK,
+		Surfaces:                  surfaces,
+		MultiSyncListening:        msListening,
+		MultiSyncReason:           msReason,
+		MultiSyncObservedAt:       msObservedAt,
+		FPPConnectListening:       fcListening,
+		FPPConnectReason:          fcReason,
+		FPPConnectObservedAt:      fcObservedAt,
+		FPPConnectHeldCount:       heldTotal,
+		FPPConnectHeld:            held,
+		FPPConnectHeldEvents:      events,
+		FPPConnectHeldEventsTotal: heldEventsTotal,
 	}
+	// FPPConnectHeldEventsTotal is captured above, BEFORE either trim
+	// (the count cap just above, or shrinkRenderPayloadToFitEnvelope's own
+	// size-budget trim just below) ever touches
+	// renderPayload.FPPConnectHeldEvents (review round 8 finding 2): it
+	// states the true total regardless of which trim, if either, actually
+	// cuts the published list down, so a consumer can always tell
+	// "exactly this many" from "more than this many, cut to fit" by
+	// comparing it against len(FPPConnectHeldEvents).
 	renderPayload = shrinkRenderPayloadToFitEnvelope(renderPayload, logger)
 
 	env, err := mqttproto.NewRenderEnvelope(now, nodeID, renderPayload)

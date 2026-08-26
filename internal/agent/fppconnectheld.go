@@ -1266,7 +1266,7 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 		rec.UnboundReason = fmt.Sprintf("show %q does not currently resolve to exactly one show id", showName)
 	}
 
-	if binding, ok := s.pending[name]; ok {
+	if binding, ok := s.pending[fppConnectBoundEventString(name)]; ok {
 		if binding.ShowID == "" {
 			// A POST /api/playlist/{name} named this file's show by
 			// display name before the coordinator ever pushed that
@@ -1516,8 +1516,16 @@ func (s *fppConnectHeldStore) RebindPendingShowIDs(resolveShowID func(name strin
 // the oldest pending entry first when fppConnectMaxPending would otherwise
 // be exceeded (review round 1 finding 6). Updating an already-pending
 // name's show does not change its position in the eviction order: it is
-// not a fresh entry. s.mu already held.
+// not a fresh entry. fname is bounded with fppConnectBoundEventString
+// (review round 8 finding 1) before it is ever used as a map key: it
+// comes straight from a playlist POST body's file name list, with no
+// length bound of its own, unlike every other string this store persists.
+// deletePendingLocked and completeLocked's own s.pending lookup apply the
+// identical bound, so a later upload of that same file (whose real,
+// unbounded Name completeLocked bounds the same way before looking it up)
+// still matches this entry. s.mu already held.
 func (s *fppConnectHeldStore) addPendingLocked(fname, showName, showID string) {
+	fname = fppConnectBoundEventString(fname)
 	binding := fppConnectPendingBinding{ShowName: showName, ShowID: showID}
 	if _, exists := s.pending[fname]; exists {
 		s.pending[fname] = binding
@@ -1543,8 +1551,11 @@ func (s *fppConnectHeldStore) addPendingLocked(fname, showName, showID string) {
 }
 
 // deletePendingLocked removes fname from s.pending and s.pendingOrder, if
-// present. s.mu already held.
+// present. fname is bounded the same way addPendingLocked bounds it
+// (review round 8 finding 1), so a raw, unbounded fname still matches the
+// bounded key that was actually stored. s.mu already held.
 func (s *fppConnectHeldStore) deletePendingLocked(fname string) {
+	fname = fppConnectBoundEventString(fname)
 	if _, exists := s.pending[fname]; !exists {
 		return
 	}
@@ -1774,6 +1785,34 @@ func (s *fppConnectHeldStore) load() error {
 		for k := range s.pending {
 			s.pendingOrder = append(s.pendingOrder, k)
 		}
+	}
+	// Re-apply the per-key bound to whatever was just loaded (review round
+	// 8 finding 1): a persisted index written before addPendingLocked
+	// bounded its own key, or one edited or corrupted outside this
+	// store's own writes, can hold a key far longer than
+	// fppConnectMaxEventStringBytes. Rebuilt keyed by the bounded form,
+	// in pendingOrder's own order, deduplicating (last write for a given
+	// bounded key wins, matching addPendingLocked's own update-in-place
+	// behavior for an existing key) so this matches exactly what
+	// addPendingLocked would already produce going forward.
+	if len(s.pending) > 0 {
+		boundedPending := make(map[string]fppConnectPendingBinding, len(s.pending))
+		boundedOrder := make([]string, 0, len(s.pendingOrder))
+		seen := make(map[string]bool, len(s.pendingOrder))
+		for _, k := range s.pendingOrder {
+			binding, ok := s.pending[k]
+			if !ok {
+				continue
+			}
+			bk := fppConnectBoundEventString(k)
+			if !seen[bk] {
+				seen[bk] = true
+				boundedOrder = append(boundedOrder, bk)
+			}
+			boundedPending[bk] = binding
+		}
+		s.pending = boundedPending
+		s.pendingOrder = boundedOrder
 	}
 	// Re-apply both caps to whatever was just loaded (review round 3
 	// finding 9): a persisted index can exceed either one if it predates

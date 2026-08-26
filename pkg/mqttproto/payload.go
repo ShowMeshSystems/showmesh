@@ -911,6 +911,20 @@ type RenderPayload struct {
 	// FPPConnectHeld, and the same reasoning for why its length cap is
 	// enforced regardless.
 	FPPConnectHeldEvents []RenderFPPConnectHeldEvent `json:"fppConnectHeldEvents"`
+
+	// FPPConnectHeldEventsTotal is the true total number of events this
+	// node currently holds, independent of FPPConnectHeldEvents' own
+	// length, mirroring FPPConnectHeldCount's identical relationship to
+	// FPPConnectHeld one field up (review round 8 finding 2): the two can
+	// differ once a publisher trims the list, whether for
+	// [maxRenderHeldEvents]'s own count cap or for the envelope's overall
+	// size budget, and neither trim previously left any trace a consumer
+	// could read; len(FPPConnectHeldEvents) alone could not distinguish
+	// "this node has exactly this many events" from "this node has more,
+	// and some were cut to fit." A consumer that only needs "how many
+	// events exist" reads this field rather than
+	// len(FPPConnectHeldEvents).
+	FPPConnectHeldEventsTotal int `json:"fppConnectHeldEventsTotal"`
 }
 
 // RenderFPPConnectHeldFile is one file FC2's chunked upload receiver

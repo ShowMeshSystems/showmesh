@@ -377,6 +377,92 @@ func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
 	if !foundEvent {
 		t.Fatalf("no unknown-playlist event in the published report; events = %+v", report.FPPConnectHeldEvents)
 	}
+	if report.FPPConnectHeldEventsTotal != len(report.FPPConnectHeldEvents) {
+		t.Fatalf("FPPConnectHeldEventsTotal = %d, want it to equal the published length %d when nothing was trimmed", report.FPPConnectHeldEventsTotal, len(report.FPPConnectHeldEvents))
+	}
+}
+
+// TestRunRenderReportSetsFPPConnectHeldEventsTotalWhenEventsAreDroppedForSize
+// is review round 8 finding 2's own regression test: shrinkRenderPayloadToFitEnvelope
+// drops events (and then held records) to fit the envelope's size budget
+// with nothing on the wire saying so; a consumer reading only
+// len(FPPConnectHeldEvents) could never tell "this node genuinely has
+// exactly this many events" from "some were cut to fit." Many held
+// records, each carrying several near-maximum bounded string fields, push
+// this report well past its size budget on their own, so
+// shrinkRenderPayloadToFitEnvelope's event-drop branch (checked first)
+// has to give up at least one of the held events to make room. This
+// proves FPPConnectHeldEventsTotal still reports the true total,
+// independent of how many of those events survive onto the wire.
+func TestRunRenderReportSetsFPPConnectHeldEventsTotalWhenEventsAreDroppedForSize(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+
+	held.mu.Lock()
+	for i := 0; i < 200; i++ {
+		name := fmt.Sprintf("Big%04d.fseq", i)
+		held.records["sequences/"+name] = fppConnectHeldRecord{
+			Dir: "sequences", Name: name, ContentHash: "sha256:deadbeef",
+			ReceivedAt:         time.Now(),
+			Bound:              true,
+			Show:               strings.Repeat("S", 2000),
+			ShowID:             strings.Repeat("I", 2000),
+			LogicalSequence:    strings.Repeat("L", 2000),
+			RegistrationState:  fppConnectRegistrationPending,
+			RegistrationReason: strings.Repeat("R", 2000),
+		}
+	}
+	const wantEventsTotal = 5
+	for i := 0; i < wantEventsTotal; i++ {
+		held.events = append(held.events, fppConnectEvent{
+			Kind: "unknown", Name: fmt.Sprintf("Mystery%d", i), At: time.Now(),
+		})
+	}
+	held.mu.Unlock()
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish")
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+
+	if report.FPPConnectHeldEventsTotal != wantEventsTotal {
+		t.Fatalf("FPPConnectHeldEventsTotal = %d, want %d (the true total, independent of how many the size budget left standing)", report.FPPConnectHeldEventsTotal, wantEventsTotal)
+	}
+	if len(report.FPPConnectHeldEvents) >= wantEventsTotal {
+		t.Fatalf("published events = %d, want fewer than the true total %d: the size budget must have dropped at least one", len(report.FPPConnectHeldEvents), wantEventsTotal)
+	}
 }
 
 // TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost is
