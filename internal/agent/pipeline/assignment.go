@@ -50,7 +50,7 @@ type Assignment struct {
 	// involved. Informational only, never compared by the boot-time
 	// resume decision: AssignmentAuth's own doc comment is deliberate
 	// that a render assignment is scoped to a surface, not a Cue, and
-	// this field does not change that — it exists solely so a periodic
+	// this field does not change that: it exists solely so a periodic
 	// render report can state which Cue is the node's own evidence for
 	// the file it opened.
 	CueID string `json:"cueId,omitempty"`

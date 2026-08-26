@@ -293,7 +293,7 @@ func TestDecodeRenderPayloadRejectsNullSurfacesKey(t *testing.T) {
 
 // TestRenderPayloadValidateRejectsMismatchedFSEQFilenameAndHash proves
 // the paired-field rule: fseqFilename and fseqContentHash must be
-// both empty (no assignment held) or both set (a real content identity) —
+// both empty (no assignment held) or both set (a real content identity):
 // never one without the other, which would be evidence the node cannot
 // actually have (a hash with no named file, or a named file with no
 // verified hash).

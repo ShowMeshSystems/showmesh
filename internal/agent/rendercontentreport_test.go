@@ -13,7 +13,7 @@ import (
 
 // publishAndDecodeRenderReport builds one render report exactly as
 // runRenderReport's tick path does, and decodes it back through the wire
-// codec — so these tests exercise the same round trip a real coordinator
+// codec, so these tests exercise the same round trip a real coordinator
 // would see, not just publishOneRenderReport's in-memory return value.
 func publishAndDecodeRenderReport(t *testing.T, sup *pipeline.Supervisor, store *pipeline.AssignmentStore) mqttproto.RenderPayload {
 	t.Helper()
@@ -139,11 +139,11 @@ func TestRenderReportNoAssignmentReportsAbsence(t *testing.T) {
 // TestRenderReportReappliedWithoutFSEQReportsAbsenceNotStale is the direct
 // regression this build item names: a surface that DID carry content, then
 // received a fresh render.surface.apply for a test-pattern-only pipeline
-// (no fseqFilename at all — the same shape B2a runs), must report absence
+// (no fseqFilename at all, the same shape B2a runs), must report absence
 // on the next tick, never the filename it used to render. Before this fix
 // there was no read route at all for content identity, so this specific
 // "a stale name survives a content-less re-apply" defect could not
-// previously be observed on the wire — this test pins the fix in place.
+// previously be observed on the wire; this test pins the fix in place.
 func TestRenderReportReappliedWithoutFSEQReportsAbsenceNotStale(t *testing.T) {
 	dir := t.TempDir()
 	clock := &fakeClock{t: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}

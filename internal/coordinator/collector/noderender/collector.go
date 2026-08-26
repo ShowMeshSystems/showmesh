@@ -233,8 +233,8 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 // cue and catalog revision that authorized it, from the node's own
 // persisted evidence (mqttproto.RenderSurfaceReport.FSEQFilename etc,
 // internal/agent/renderreport.go's applyContentIdentity). sf.FSEQFilename
-// == "" means this surface holds no assignment at all — never a stale
-// filename left over from a previous one — so all four signals are
+// == "" means this surface holds no assignment at all: never a stale
+// filename left over from a previous one, so all four signals are
 // NotCollected together with one reason, mirroring
 // surfaceDrawStateObservations' identical "no active writer" grouping.
 func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
@@ -254,7 +254,7 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 	}
 
 	// CueID is only meaningful when the current assignment was applied by
-	// a cue activation — a direct render.surface.apply assignment has no
+	// a cue activation: a direct render.surface.apply assignment has no
 	// cue at all, stated as not applicable rather than fabricated as "".
 	if sf.CueID == "" {
 		obs = append(obs, notCollected(res, SignalSurfaceContentCueID, SourceFor(nodeID),
@@ -264,7 +264,7 @@ func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf m
 	}
 
 	// CatalogRevision is only meaningful when the persisted assignment
-	// carries an authorization tuple (TRACK-H-H3-SPEC.md section 5) —
+	// carries an authorization tuple (TRACK-H-H3-SPEC.md section 5),
 	// absent for a legacy assignment persisted before that tuple existed.
 	if sf.CatalogRevision == "" {
 		obs = append(obs, notCollected(res, SignalSurfaceContentCatalogRevision, SourceFor(nodeID),

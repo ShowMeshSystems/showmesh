@@ -780,7 +780,7 @@ func TestPollIdleDrawingLeavesFailureOutputNotCollected(t *testing.T) {
 // TestPollContentIdentityProducesAllFourSignals proves a surface reporting
 // full content identity (an assignment applied by a cue activation, with a
 // catalog authorization tuple) renders all four surface.content.* signals
-// as real values — the whole point: a content swap provable from the
+// as real values, the whole point: a content swap provable from the
 // node's own evidence, not inferred from pipelineState or frame counters.
 func TestPollContentIdentityProducesAllFourSignals(t *testing.T) {
 	st := NewStore()
@@ -859,8 +859,8 @@ func TestPollNoContentIdentityIsNotCollected(t *testing.T) {
 
 // TestPollContentIdentityWithoutCueLeavesCueIDNotCollected proves a
 // surface carrying real content (a filename, hash, and catalog revision)
-// but no cue id — a direct render.surface.apply with no cue activation
-// involved — reports the filename/hash/catalog revision as real values
+// but no cue id (a direct render.surface.apply with no cue activation
+// involved) reports the filename/hash/catalog revision as real values
 // while stating cue_id as not applicable, mirroring
 // SignalSurfaceOutputIdleMode's identical "only meaningful when a
 // condition holds" pattern one signal family over.

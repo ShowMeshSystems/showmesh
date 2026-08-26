@@ -67,7 +67,7 @@ const (
 
 	// Four signals minted for the node content-identity build item
 	// (docs/build/IDENTIFIER-REGISTER.md):
-	// the content identity this surface's frame writer actually applied —
+	// the content identity this surface's frame writer actually applied:
 	// the node's own evidence for which FSEQ it is rendering, so a content
 	// swap can be proven from the node's own report rather than inferred
 	// from pipelineState/frame counters alone (which read identically

@@ -70,7 +70,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	// surface id, so the report carries what this node actually PERSISTED
 	// for that surface rather than anything the coordinator most
 	// recently asked for. A read failure is logged and treated as "no
-	// assignment known" for this tick — a report with a stale or fabricated
+	// assignment known" for this tick: a report with a stale or fabricated
 	// filename would be worse than one that states absence and recovers on
 	// the next tick.
 	assignments := map[string]pipeline.Assignment{}
@@ -157,9 +157,9 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 }
 
 // applyContentIdentity stamps rep's four content-identity fields from
-// a — the assignment this node actually PERSISTED for this
+// a, the assignment this node actually PERSISTED for this
 // surface, the same record cueactivationrender.go and renderops.go read
-// back at boot to resume rendering — never from anything the coordinator
+// back at boot to resume rendering, never from anything the coordinator
 // most recently requested. Leaves every field "" (already rep's zero
 // value) when a's params carry no fseqFilename, so an undecodable or
 // content-less assignment reports absence rather than propagating a

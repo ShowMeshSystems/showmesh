@@ -729,7 +729,7 @@ type RenderSurfaceReport struct {
 	// FSEQFilename is the runtime filename this surface's frame writer
 	// actually opened for its current assignment (internal/agent/
 	// cueactivationrender.go, internal/agent/renderops.go's
-	// buildAssignedSpec) — the node's own statement about the file it is
+	// buildAssignedSpec): the node's own statement about the file it is
 	// rendering, never the coordinator's or a cue's requested filename
 	// echoed back. "" whenever this surface holds no assignment; never a
 	// stale filename left over from a previous assignment once one is
@@ -744,7 +744,7 @@ type RenderSurfaceReport struct {
 
 	// CueID is the Cue that authorized this surface's current assignment
 	// ([cueactivation.Activation.CueID], carried on
-	// [pipeline.AssignmentAuth.CueID]) — "" whenever the current
+	// [pipeline.AssignmentAuth.CueID]): "" whenever the current
 	// assignment was applied directly (render.surface.apply with no cue
 	// activation) or no assignment is held at all. Never inferred; only
 	// ever the node's own persisted record of the activation that applied
@@ -752,7 +752,7 @@ type RenderSurfaceReport struct {
 	CueID string `json:"cueId"`
 
 	// CatalogRevision is [pipeline.AssignmentAuth.CatalogRevision] for
-	// this surface's current assignment — "" whenever the assignment
+	// this surface's current assignment: "" whenever the assignment
 	// carries no authorization tuple (a legacy assignment persisted before
 	// TRACK-H-H3-SPEC.md section 5 existed, or a coordinator that has not
 	// yet started sending it) or no assignment is held at all.
