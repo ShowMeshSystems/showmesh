@@ -16,6 +16,7 @@ import {
   makeEvent,
   makeEventsResponse,
   makeFPPInstance,
+  makeFPPPlaylistEntryObservation,
   makeMacroRunSummary,
   makeNightSessionChangedEvent,
   makeNode,
@@ -3410,6 +3411,140 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
 
     await waitFor(() => store.getSnapshot().nightSession === null, {
       message: 'stream.reset did not clear model.nightSession',
+    })
+  })
+
+  it('applies an fppPlaylistEntry.changed frame as a whole-object replace of the named instance in model.fppPlaylistEntryObservations', async () => {
+    const observation = makeFPPPlaylistEntryObservation({
+      instanceUuid: 'fpp-uuid-1',
+      sequence: 7,
+      entryKey: 'entry-two',
+    })
+    const nextObservation = makeFPPPlaylistEntryObservation({
+      instanceUuid: 'fpp-uuid-1',
+      sequence: 8,
+      entryKey: 'entry-three',
+    })
+    let streamRes = null as import('node:http').ServerResponse | null
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamRes = res
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'fppPlaylistEntry.changed', {
+            seq: 1,
+            serverTime: new Date().toISOString(),
+            observation,
+          })
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+
+    // Not part of Snapshot (Model.fppPlaylistEntryObservations's own
+    // comment, matching nightSession's identical posture above): empty
+    // before the first live frame.
+    expect(store.getSnapshot().fppPlaylistEntryObservations).toEqual([])
+
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(
+      () => store.getSnapshot().fppPlaylistEntryObservations.some((o) => o.instanceUuid === 'fpp-uuid-1'),
+      { message: 'fppPlaylistEntry.changed was never applied to the model' },
+    )
+
+    expect(store.getSnapshot().fppPlaylistEntryObservations).toEqual([observation])
+
+    // A later frame for the SAME instanceUuid replaces the entry in
+    // place rather than appending a second one, matching
+    // applyResolumeChanged's identical upsert-by-key posture.
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'fppPlaylistEntry.changed', {
+      seq: 2,
+      serverTime: new Date().toISOString(),
+      observation: nextObservation,
+    })
+
+    await waitFor(
+      () => store.getSnapshot().fppPlaylistEntryObservations.some((o) => o.sequence === 8),
+      { message: 'the second fppPlaylistEntry.changed frame was never applied' },
+    )
+
+    expect(store.getSnapshot().fppPlaylistEntryObservations).toEqual([nextObservation])
+  })
+
+  it('a stream.reset clears model.fppPlaylistEntryObservations back to empty rather than leaving a value this connection has no evidence still holds', async () => {
+    const observation = makeFPPPlaylistEntryObservation({ instanceUuid: 'fpp-uuid-1' })
+    let streamRes = null as import('node:http').ServerResponse | null
+
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        streamRes = res
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        setTimeout(() => {
+          writeSSEFrame(res, 'fppPlaylistEntry.changed', {
+            seq: 1,
+            serverTime: new Date().toISOString(),
+            observation,
+          })
+        }, 20)
+        return
+      }
+      if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const store = makeStore(s.baseUrl)
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(
+      () => store.getSnapshot().fppPlaylistEntryObservations.length === 1,
+      { message: 'fppPlaylistEntry.changed was never applied to the model' },
+    )
+
+    if (streamRes === null) throw new Error('no open /stream response captured')
+    writeSSEFrame(streamRes, 'stream.reset', {
+      seq: 1,
+      serverTime: new Date().toISOString(),
+      reason: 'subscriber_too_slow',
+      snapshotRequired: true,
+    })
+
+    await waitFor(() => store.getSnapshot().fppPlaylistEntryObservations.length === 0, {
+      message: 'stream.reset did not clear model.fppPlaylistEntryObservations',
     })
   })
 

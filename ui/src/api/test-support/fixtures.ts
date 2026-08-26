@@ -27,6 +27,8 @@ type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
 // Track F seam F2.
 type NightSessionState = components['schemas']['NightSessionState']
 type NightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
+// TRACK-H-H2-SPEC.md §5.1.
+type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 
 const NOW = '2026-08-11T12:00:00.000Z'
 
@@ -292,6 +294,22 @@ export function makeNightSessionChangedEvent(
     seq: 1,
     serverTime: NOW,
     session: makeNightSessionState(),
+    ...overrides,
+  }
+}
+
+export function makeFPPPlaylistEntryObservation(
+  overrides: Partial<FPPPlaylistEntryObservation> = {},
+): FPPPlaylistEntryObservation {
+  return {
+    instanceUuid: 'fpp-uuid-1',
+    endpointId: 'fpp-1',
+    schemaVersion: 1,
+    sequence: 1,
+    action: 'playing',
+    observedAt: NOW,
+    coalescedSincePreviousAcknowledged: 0,
+    receivedAt: NOW,
     ...overrides,
   }
 }

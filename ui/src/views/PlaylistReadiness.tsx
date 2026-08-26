@@ -73,22 +73,28 @@ export function PlaylistReadiness() {
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, PLAYLIST_LIST_READ_SCOPES)
   const playlists = usePlaylists(readGate.allowed)
 
-  // Neither verdict below is streamed: both are point-in-time answers
-  // this view fetches on demand, so nothing refreshes it automatically
-  // once the operator has it open (the defect this state exists to
-  // close: a verdict read at 18:40 still reading unchanged, with no way
-  // to tell, at 21:15). `model.snapshotReceivedAt` changes on every
-  // resnapshot (the initial connect, every reconnect, and every
-  // `stream.reset`, per store.ts's own applySnapshot comment), so wiring
-  // it into each row's fetch effect below re-asks the coordinator exactly
-  // when this browser's connection to it was re-established, without
-  // inventing a second freshness mechanism alongside the one
-  // DataFreshnessNotice already uses for the rest of this page.
-  // `reloadGeneration` is this page's own explicit "recheck now" control
-  // (the same bump-a-counter shape as NightSession.tsx's per-section
-  // Reload button): this seam has no existing polling-interval precedent
-  // for a fetched-not-snapshot verdict, so a manual recheck plus
-  // reconnect-triggered refetch is preferred here over inventing one.
+  // Both verdicts below are point-in-time answers this view fetches on
+  // demand, not resources the snapshot itself carries, so nothing
+  // refreshes either one automatically just from being open (the defect
+  // this state exists to close: a verdict read at 18:40 still reading
+  // unchanged, with no way to tell, at 21:15). `model.snapshotReceivedAt`
+  // changes on every resnapshot (the initial connect, every reconnect,
+  // and every `stream.reset`, per store.ts's own applySnapshot comment),
+  // so wiring it into each row's fetch effect below re-asks the
+  // coordinator exactly when this browser's connection to it was
+  // re-established, without inventing a second freshness mechanism
+  // alongside the one DataFreshnessNotice already uses for the rest of
+  // this page. `reloadGeneration` is this page's own explicit "recheck
+  // now" control (the same bump-a-counter shape as NightSession.tsx's
+  // per-section Reload button). The reconciliation row also has a third
+  // trigger: `fppPlaylistEntry.changed` frames
+  // (store.ts's applyFppPlaylistEntryChanged) mean FPP itself reported a
+  // new entry, so that row also refetches on its own without waiting for
+  // either a reconnect or the operator's own click; see ReconciliationRow
+  // below. The readiness row has no equivalent live trigger: nothing in
+  // the change stream announces a Playlist binding or FPP configuration
+  // change, so a manual recheck plus reconnect-triggered refetch remains
+  // the only freshness this seam has for it.
   const [reloadGeneration, setReloadGeneration] = useState(0)
 
   // Every FPP instance the coordinator currently knows a uuid for:
@@ -334,6 +340,15 @@ function useReconciliation(
   instanceUuid: string,
   snapshotReceivedAt: number | null,
   reloadGeneration: number,
+  // The latest `fppPlaylistEntry.changed` frame's `receivedAt` for
+  // this instance (store.ts's applyFppPlaylistEntryChanged), or `null`
+  // before this connection has ever seen one. Not read inside the effect
+  // body, same as `snapshotReceivedAt`/`reloadGeneration` above; it
+  // exists purely so a fresh observation retriggers the refetch below,
+  // the same "re-fetch the authoritative state" discipline this hook
+  // already uses for a reconnect or the operator's own manual recheck,
+  // now also for FPP actually advancing.
+  latestObservationReceivedAt: string | null,
 ): ReconciliationRowState {
   const [state, setState] = useState<ReconciliationRowState>({ kind: 'loading' })
 
@@ -355,8 +370,9 @@ function useReconciliation(
     return () => {
       cancelled = true
     }
-    // Same reconnect/manual-recheck shape as usePlaylistReadiness above.
-  }, [instanceUuid, snapshotReceivedAt, reloadGeneration])
+    // Same reconnect/manual-recheck shape as usePlaylistReadiness above,
+    // plus a live retrigger on latestObservationReceivedAt.
+  }, [instanceUuid, snapshotReceivedAt, reloadGeneration, latestObservationReceivedAt])
 
   return state
 }
@@ -372,7 +388,18 @@ function ReconciliationRow({
   snapshotReceivedAt: number | null
   reloadGeneration: number
 }) {
-  const reconciliation = useReconciliation(instanceUuid, snapshotReceivedAt, reloadGeneration)
+  const model = useModelContext()
+  // Keyed by instanceUuid, matching how `fppPlaylistEntry.changed`
+  // itself is keyed (store.ts's applyFppPlaylistEntryChanged), not
+  // instanceId, same distinction this file's own reconcilableInstances
+  // filter above already draws.
+  const latestObservation = model.fppPlaylistEntryObservations.find((o) => o.instanceUuid === instanceUuid)
+  const reconciliation = useReconciliation(
+    instanceUuid,
+    snapshotReceivedAt,
+    reloadGeneration,
+    latestObservation?.receivedAt ?? null,
+  )
 
   return (
     <tr>
