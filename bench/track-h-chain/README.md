@@ -105,3 +105,9 @@ export INSTANCE_UUID=...      # the FPP instance UUID the plugin reports
 ```
 
 Captures land in `bench/track-h-chain/captures/`, which is git-ignored.
+
+`COORD` and `FPP` must both resolve to loopback (`localhost`, `127.0.0.0/8`,
+or `::1`); the script refuses before any write otherwise. It also bounds the
+wait for FPP to report idle and fails loudly on timeout rather than hanging.
+See [docs/bench/TRACK-H-CHAIN.md](../../docs/bench/TRACK-H-CHAIN.md) for the
+override variable and the timeout's default.
