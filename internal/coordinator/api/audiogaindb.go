@@ -14,11 +14,20 @@ import (
 // engine — stays a linear amplitude multiplier. The arithmetic itself
 // lives in pkg/audio and is not repeated here.
 //
-// The night-session controller reaches internal/agent through
-// executeAudioSessionDispatch directly, not through this file's caller,
-// and converts its own already-decibel configuration with the same
-// pkg/audio helpers. So there is exactly one conversion per path and
-// never two on one value.
+// There are two entry paths, and each converts exactly once:
+//
+//   - the HTTP dispatch (dispatchAudioSessionCommand) calls
+//     convertAudioGainParamsToLinear, which REQUIRES the decibel
+//     parameter, because an operator is on the other end of it;
+//   - an authored show.action reaches a node through
+//     nightDispatchCueAudio, which calls
+//     convertAuthoredAudioGainParams. That one converts a decibel
+//     parameter when it is present and otherwise leaves params alone,
+//     because the night background-audio controller builds its own
+//     targets from resting.backgroundAudio.maxGainDb and has ALREADY
+//     converted them (nightbackgroundaudio.go). Operator-authored params
+//     can never be the linear kind: config.decodeAudioTarget refuses the
+//     pre-decibel names at authoring time.
 
 // audioGainDbFields names, per action, the decibel parameter an operator
 // sends and the linear parameter the node receives.
@@ -72,7 +81,28 @@ func convertAudioGainParamsToLinear(action string, params map[string]any) *v1.Pr
 	return nil
 }
 
-// audioGainDbMax is the same +12 dB typo guard audio.settings puts on its
-// own ceiling: not a tuned headroom figure, just the point past which a
-// number is far more likely to be a mistake than an intended level.
-const audioGainDbMax = 12.0
+// convertAuthoredAudioGainParams converts an authored show.action gain
+// target's decibel parameter to the linear one the node expects, in
+// place, and does nothing at all when no decibel parameter is present.
+// See this file's doc comment for why "absent is fine" is correct here
+// and would be wrong on the HTTP path.
+func convertAuthoredAudioGainParams(action string, params map[string]any) {
+	fields, ok := audioGainDbFields[action]
+	if !ok {
+		return
+	}
+	raw, present := params[fields.dbKey]
+	if !present {
+		return
+	}
+	db, ok := raw.(float64)
+	if !ok {
+		return
+	}
+	delete(params, fields.dbKey)
+	params[fields.linearKey] = float64(pkgaudio.GainFromDb(db))
+}
+
+// audioGainDbMax is [pkgaudio.MaxOperatorGainDb], the bound every
+// operator-facing gain shares.
+const audioGainDbMax = pkgaudio.MaxOperatorGainDb

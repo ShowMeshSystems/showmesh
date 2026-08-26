@@ -154,3 +154,45 @@ func TestAudioGainBoundaryUsesTheSharedSilenceFloor(t *testing.T) {
 		t.Errorf("params.gain = %v, want exactly 0", params["gain"])
 	}
 }
+
+// An authored show.action gain target carries decibels and is converted
+// on the way to the node, exactly once.
+func TestAuthoredAudioGainParamsConvertDecibels(t *testing.T) {
+	params := map[string]any{"gainDb": -6.0206}
+	convertAuthoredAudioGainParams("audio.gain.set", params)
+	if _, present := params["gainDb"]; present {
+		t.Error("gainDb survived conversion; the node must receive linear")
+	}
+	gain, ok := params["gain"].(float64)
+	if !ok || math.Abs(gain-0.5) > 1e-4 {
+		t.Errorf("gain = %v, want 0.5", params["gain"])
+	}
+
+	fade := map[string]any{"targetGainDb": pkgaudio.SilenceFloorDb, "durationMs": float64(500)}
+	convertAuthoredAudioGainParams("audio.gain.fade", fade)
+	if fade["targetGain"] != float64(0) || fade["durationMs"] != float64(500) {
+		t.Errorf("fade params = %v, want targetGain 0 and durationMs carried through", fade)
+	}
+}
+
+// The night background-audio controller builds its own gain targets from
+// resting.backgroundAudio.maxGainDb and has already converted them. Those
+// carry no decibel key, and this path must leave them exactly alone
+// rather than refuse them or convert a second time. A regression here
+// silences the resting bed, so it is asserted rather than assumed.
+func TestAuthoredAudioGainParamsLeaveAlreadyLinearTargetsAlone(t *testing.T) {
+	params := map[string]any{"gain": 0.6}
+	convertAuthoredAudioGainParams("audio.gain.set", params)
+	if params["gain"] != 0.6 || len(params) != 1 {
+		t.Errorf("params = %v, want the already-linear gain untouched", params)
+	}
+}
+
+// Nothing else is a gain action, so nothing else is touched.
+func TestAuthoredAudioGainParamsIgnoreOtherActions(t *testing.T) {
+	params := map[string]any{"gainDb": -6.0}
+	convertAuthoredAudioGainParams("audio.session.apply", params)
+	if params["gainDb"] != -6.0 || len(params) != 1 {
+		t.Errorf("params = %v, want a non-gain action's params untouched", params)
+	}
+}

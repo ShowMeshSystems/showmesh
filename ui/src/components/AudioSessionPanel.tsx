@@ -41,8 +41,10 @@ const AUDIO_COMMAND_SCOPE = 'audio:command'
 // The decibel range openapi.yaml gives params.gainDb and
 // params.targetGainDb. 0 dB is unity, -60 dB is the silence floor, and
 // +12 dB is a typo guard rather than a tuned headroom figure. The
-// coordinator refuses anything outside this too; these bounds only spare
-// the operator a round trip.
+// coordinator refuses anything above +12 dB; below the floor it accepts
+// the value and resolves it to silence, so this lower bound is stricter
+// than the API rather than a mirror of it, and exists to keep the
+// operator from typing a number whose extra digits change nothing.
 const GAIN_DB_MIN = -60
 const GAIN_DB_MAX = 12
 

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -1147,6 +1148,10 @@ func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyCl
 		}
 	}
 
+	if verr := validateAudioTargetGainParams(action, params); verr != nil {
+		return ShowActionTarget{}, verr
+	}
+
 	registeredClass := audioActionDeclaredSafetyClass[action]
 	if registeredClass == "" {
 		registeredClass = ShowSafetyClassNone
@@ -1162,6 +1167,59 @@ func decodeAudioTarget(targetFields map[string]json.RawMessage, declaredSafetyCl
 		Integration: ShowActionIntegrationAudio, AudioNodeID: nodeID, AudioSessionID: sessionID,
 		AudioAction: action, Params: params,
 	}, nil
+}
+
+// showActionGainDbParams names, per audio action, the decibel parameter
+// an authored target carries and the pre-decibel name it replaced.
+var showActionGainDbParams = map[string]struct{ dbKey, retiredKey string }{
+	"audio.gain.set":  {dbKey: "gainDb", retiredKey: "gain"},
+	"audio.gain.fade": {dbKey: "targetGainDb", retiredKey: "targetGain"},
+}
+
+// validateAudioTargetGainParams holds an authored audio.gain.* target to
+// the same unit every other operator surface uses: decibels, 0 dB unity,
+// at most [audio.MaxOperatorGainDb]. target.params is otherwise opaque
+// here (the node validates it), but a gain is the one member whose unit
+// changed, and the two units share a number range: a target still
+// carrying the pre-decibel name would dispatch a halving as a
+// half-decibel lift, so it is refused at AUTHORING time rather than
+// discovered mid-show when the cue fires.
+func validateAudioTargetGainParams(action string, params map[string]any) *ValidationError {
+	names, ok := showActionGainDbParams[action]
+	if !ok {
+		return nil
+	}
+	if _, present := params[names.retiredKey]; present {
+		return &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.params." + names.retiredKey,
+			Detail: fmt.Sprintf(
+				"target.params.%s was a linear amplitude multiplier and no longer exists; use %s, in decibels (0 dB is unity, %g dB is silence)",
+				names.retiredKey, names.dbKey, audio.SilenceFloorDb),
+		}
+	}
+	raw, present := params[names.dbKey]
+	if !present {
+		return &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: "target.params." + names.dbKey,
+			Detail: fmt.Sprintf("target.params.%s is required for %s, in decibels (0 dB is unity, %g dB is silence)",
+				names.dbKey, action, audio.SilenceFloorDb),
+		}
+	}
+	db, ok := raw.(float64)
+	if !ok {
+		return &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.params." + names.dbKey,
+			Detail: fmt.Sprintf("target.params.%s must be a JSON number in decibels, got %T", names.dbKey, raw),
+		}
+	}
+	if db > audio.MaxOperatorGainDb {
+		return &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "target.params." + names.dbKey,
+			Detail: fmt.Sprintf("target.params.%s is in decibels and must not exceed %g dB: a larger value is a typo, not a level",
+				names.dbKey, audio.MaxOperatorGainDb),
+		}
+	}
+	return nil
 }
 
 // decodeResolumeTarget decodes and validates target.integration ==

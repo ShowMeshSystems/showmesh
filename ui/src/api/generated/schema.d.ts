@@ -3886,7 +3886,7 @@ export interface components {
             audioNodeId?: string;
             /** @description audio-only: the target pkg/audio session id. */
             audioSessionId?: string;
-            /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. */
+            /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. `params` is otherwise opaque here and validated by the node, with one exception: `audio.gain.set` requires `params.gainDb` and `audio.gain.fade` requires `params.targetGainDb`, both in DECIBELS on the same scale as the gain endpoints (0 dB unity, -60 dB silence, +12 dB the most accepted). The pre-decibel `params.gain`/`params.targetGain` are refused here at authoring time, naming the replacement, rather than discovered when the Cue fires mid-show. */
             audioAction?: string;
         };
         /** @description The WRITE shape of show.action.target. Identical to ConfigShowActionTarget except that publish, when present, is ConfigShowActionMQTTPublishWrite, which allows retain to be absent. The response to a successful write is always the resolved ConfigShowActionTarget shape, never this one. */

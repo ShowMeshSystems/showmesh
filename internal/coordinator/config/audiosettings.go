@@ -43,10 +43,9 @@ const (
 	minFadeDurationMs = 1
 	maxFadeDurationMs = 600000
 
-	// maxDefaultMaxBackgroundGainDb bounds defaultMaxBackgroundGainDb at
-	// +12 dB of amplification above unity purely to catch a typo; it is
-	// not a tuned headroom figure.
-	maxDefaultMaxBackgroundGainDb = 12.0
+	// maxDefaultMaxBackgroundGainDb is [audio.MaxOperatorGainDb], the
+	// typo guard every operator-facing gain shares.
+	maxDefaultMaxBackgroundGainDb = audio.MaxOperatorGainDb
 
 	// maxDuckTargetGainDb is exclusive: a duck lowers a session, so unity
 	// (0 dB) or louder is not a duck at all. The silence floor remains

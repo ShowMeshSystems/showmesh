@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
@@ -117,7 +118,7 @@ func v19RewriteAudioSettingsPayload(raw string) (string, bool, error) {
 		if err := json.Unmarshal(maxRaw, &linear); err != nil {
 			return "", false, fmt.Errorf("defaultMaxBackgroundGain is not a number: %w", err)
 		}
-		db := pkgaudio.CeilingToDb(pkgaudio.Ceiling(linear))
+		db := v19RoundDb(pkgaudio.CeilingToDb(pkgaudio.Ceiling(linear)))
 		// The old bound allowed exactly 4.0, which is +12.04 dB and just
 		// past the new +12 dB bound. Clamp rather than leave behind a
 		// revision the post-change validator would refuse to read.
@@ -133,11 +134,16 @@ func v19RewriteAudioSettingsPayload(raw string) (string, bool, error) {
 		if err := json.Unmarshal(duckRaw, &linear); err != nil {
 			return "", false, fmt.Errorf("duckTargetGain is not a number: %w", err)
 		}
-		db := pkgaudio.GainToDb(pkgaudio.Gain(linear))
+		// Round BEFORE the bound check, not after: a stored duck of
+		// 0.9995 is -0.004 dB, which is legally negative but renders as
+		// "-0.00" and decodes as negative zero, and negative zero is not
+		// below the zero bound. Checking the rounded value is what makes
+		// the written number the one that was validated.
+		db := v19RoundDb(pkgaudio.GainToDb(pkgaudio.Gain(linear)))
 		// The old bound was exclusive at 1.0, so every stored value is
-		// already below unity; a value that somehow reached the store at
-		// or above it is clamped just under 0 dB rather than left as a
-		// revision that no longer reads back.
+		// already below unity; a value that rounds to zero or above is
+		// clamped to the smallest duck this unit can express rather than
+		// left as a revision that no longer reads back.
 		if db >= v19DuckTargetGainDbCeiling {
 			db = -0.01
 		}
@@ -152,10 +158,18 @@ func v19RewriteAudioSettingsPayload(raw string) (string, bool, error) {
 	return string(out), true, nil
 }
 
+// v19RoundDb rounds to the two decimal places v19EncodeDb writes, so a
+// bound check runs against the number that actually lands in the store
+// rather than against a value rounding is about to change.
+func v19RoundDb(db float64) float64 {
+	return math.Round(db*100) / 100
+}
+
 // v19EncodeDb renders a decibel value as JSON. Two decimal places: a
 // hundredth of a decibel is far below audibility, and a full float64
 // expansion would put a 17-digit number in front of an operator reading
-// the revision back.
+// the revision back. Its input is always already v19RoundDb's output, so
+// this only formats.
 func v19EncodeDb(db float64) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf("%.2f", db))
 }

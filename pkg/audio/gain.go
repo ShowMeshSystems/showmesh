@@ -105,6 +105,14 @@ const SilenceFloorDb = -60.0
 // linear multiplier of 1.0.
 const UnityDb = 0.0
 
+// MaxOperatorGainDb is the ceiling every operator-facing gain shares: a
+// typo guard, not a tuned headroom figure. Above +12 dB a number is far
+// more likely to be a mistake (a millisecond count, a percentage) than an
+// intended level. Defined once here so the API boundary, the
+// audio.settings validator, and show.action authoring all refuse at the
+// same bound rather than at three drifting copies of the number.
+const MaxOperatorGainDb = 12.0
+
 // linearFromDb is THIS PROJECT'S ONLY decibel-to-amplitude conversion.
 // Amplitude (not power) decibels, so the exponent divides by 20: -6.02 dB
 // halves the amplitude, +6.02 dB doubles it. Every operator-facing gain
