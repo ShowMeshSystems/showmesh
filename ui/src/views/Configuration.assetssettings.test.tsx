@@ -84,7 +84,9 @@ function renderConfiguration(model: Model) {
 }
 
 async function assetsSettingsSection() {
-  const heading = await screen.findByText('Asset store settings')
+  // Queried as a heading, not plain text: the section index at the top of
+  // the page also links to an "Asset store settings" text node.
+  const heading = await screen.findByRole('heading', { name: 'Asset store settings' })
   return heading.closest('section')!
 }
 
