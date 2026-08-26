@@ -25,6 +25,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -261,6 +262,10 @@ func Run() int {
 			return
 		}
 		go audioconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
+		// Track E phase 2 seam FC1a (ADR-044 decision 5): the identical
+		// hello-triggered convergence, one config surface over — see
+		// internal/coordinator/fppconnectpush.
+		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
 	}
 
 	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))

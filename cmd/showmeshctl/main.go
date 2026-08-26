@@ -78,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdRender(rest, stdout, stderr, clock)
 	case "audio":
 		return cmdAudio(rest, stdout, stderr, clock)
+	case "fppconnect":
+		return cmdFPPConnect(rest, stdout, stderr, clock)
 	case "fpp-mqtt":
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
@@ -251,6 +253,11 @@ Commands:
                                         replacement; refused unless the node has already
                                         advertised both routes, requires config:write)
   audio node revisions <nodeId>        list audio.node revision history, newest first
+  fppconnect settings get              show the active fppconnect.settings configuration
+                                        (ADR-044; never 404s — reports the built-in default)
+  fppconnect settings set              write a new fppconnect.settings revision (write,
+                                        full replacement, requires config:write)
+  fppconnect settings revisions        list fppconnect.settings revision history, newest first
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields

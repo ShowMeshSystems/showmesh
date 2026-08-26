@@ -1962,6 +1962,15 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
 
+	// GET/PUT /api/v1/config/fppconnect.settings (Track E phase 2 seam
+	// FC1a, ADR-044 decision 5): the enable flag and the two byte caps
+	// bounding a node's xLights ingestion listener. Mirrors
+	// /config/audio.settings' config:write-only, never-404 posture exactly
+	// (fppconnectsettingsconfig.go).
+	mux.HandleFunc("GET /api/v1/config/fppconnect.settings", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPConnectSettingsConfig))
+	mux.HandleFunc("PUT /api/v1/config/fppconnect.settings", h.writeGuard(&scopeConfigWrite, h.handlePutFPPConnectSettingsConfig))
+	mux.HandleFunc("GET /api/v1/config/fppconnect.settings/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetFPPConnectSettingsConfigRevisions))
+
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"
 	// is an explicit path segment, not a bare {id} under /resolume/, because

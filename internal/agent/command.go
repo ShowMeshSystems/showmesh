@@ -186,7 +186,7 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // "cuecatalog.deploy". Adding a further allowlisted operation later means
 // adding a further entry to this map, not building a second enforcement
 // path.
-func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore) map[string]OperationFunc {
+func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, fppConnect *fppConnectState) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
@@ -222,6 +222,9 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		ops[action] = op
 	}
 	for action, op := range audioNodeConfigureOperations(binding) {
+		ops[action] = op
+	}
+	for action, op := range fppConnectOperations(fppConnect, assetDir) {
 		ops[action] = op
 	}
 	return ops
@@ -394,10 +397,10 @@ type CommandHandler struct {
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, fppConnect *fppConnectState, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
 		nodeID:            nodeID,
-		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore),
+		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore, fppConnect),
 		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
 		now:               now,
 		logger:            logger,

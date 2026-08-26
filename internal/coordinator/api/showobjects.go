@@ -167,6 +167,12 @@ func (h *handlers) handlePutShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ADR-044 decision 5: a show's display name feeds every node's pushed
+	// showNames list and, for whichever node currently has this show
+	// active, its activeShow field too — push every known node rather
+	// than tracking which ones actually reference this show id.
+	h.pushFPPConnectToAllNodes(r.Context(), now)
+
 	jsonWrite(w, mapShowConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,
 	}, payload))
@@ -269,6 +275,31 @@ func (h *handlers) handleGetShowSurface(w http.ResponseWriter, r *http.Request) 
 	jsonWrite(w, mapShowSurfaceConfigResponse(now, rev, obj, payload))
 }
 
+// previousShowSurfaceNode reads id's currently active show.surface
+// revision's "node" field, ahead of a PUT that may change it — the
+// ADR-044 decision 5 push needs both the node a surface is moving TO and
+// the node it is moving FROM, and the write itself (writeShowConfigRevision)
+// returns only the newly activated revision. ok is false for a first-time
+// PUT (no active revision yet), matching refuseShowChange's identical
+// "nothing stored yet" case one function over.
+func (h *handlers) previousShowSurfaceNode(ctx context.Context, id string) (node string, ok bool) {
+	obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowSurfaceConfigKind, id)
+	if err != nil || obj.CurrentRevision == 0 {
+		return "", false
+	}
+	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowSurfaceConfigKind, id, obj.CurrentRevision)
+	if err != nil {
+		return "", false
+	}
+	var head struct {
+		Node string `json:"node"`
+	}
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &head); err != nil {
+		return "", false
+	}
+	return head.Node, true
+}
+
 func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ac := authFromContext(r.Context())
@@ -277,6 +308,8 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
 	}
+
+	previousNode, hadPreviousNode := h.previousShowSurfaceNode(r.Context(), id)
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxShowConfigRequestBodyBytes+1))
 	if err != nil {
@@ -305,6 +338,14 @@ func (h *handlers) handlePutShowSurface(w http.ResponseWriter, r *http.Request) 
 	if writeErr != nil {
 		h.writeInternalError(w, now, "write show.surface config revision", writeErr)
 		return
+	}
+
+	// ADR-044 decision 5: push the surface's own node, and, if this write
+	// moved the surface from a different node, that previous node too —
+	// its own channel ranges just lost this surface's contribution.
+	h.pushFPPConnectToNode(r.Context(), payload.Node)
+	if hadPreviousNode && previousNode != payload.Node {
+		h.pushFPPConnectToNode(r.Context(), previousNode)
 	}
 
 	jsonWrite(w, mapShowSurfaceConfigResponse(now, activated, store.ConfigObjectRecord{
@@ -417,6 +458,10 @@ func (h *handlers) handlePutShowActive(w http.ResponseWriter, r *http.Request) {
 	// waits out a whole sync interval before anything starts fetching the
 	// new show's assets.
 	h.deps.AssetSyncNudger.Nudge()
+
+	// ADR-044 decision 5: the active show is part of every node's pushed
+	// fppconnect.configure state.
+	h.pushFPPConnectToAllNodes(r.Context(), now)
 
 	jsonWrite(w, mapShowActiveConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.ShowActiveConfigKind, ID: id, CurrentRevision: nextRevisionNo, UpdatedAt: now,

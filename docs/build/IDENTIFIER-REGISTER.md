@@ -105,7 +105,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `audio.node` | operator-chosen (the node id) | shipped | Track C seam C1b |
 | `night.session` | operator-chosen | reserved | Track F seam F1 |
 | `night.session.active` | `default` singleton | reserved | Track F seam F1 |
-| `fppconnect.settings` | `default` singleton | reserved | Track E phase 2 seam FC1a |
+| `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -355,7 +355,7 @@ after shipping a breaking change to stored history.
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
-| `fppconnect.configure` | reserved | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
+| `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
