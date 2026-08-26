@@ -106,8 +106,11 @@ sudo ./install.sh /path/to/showmesh-agent-native
 
 This is idempotent. On a fresh host it:
 
-- runs `preflight.sh` and refuses to continue if anything is missing (it
-  names the exact apt package to install);
+- runs `preflight.sh --runtime-only` and refuses to continue if anything
+  is missing (it names the exact apt package to install). It checks only
+  what the agent needs to RUN, because it installs an already-built
+  binary; run `./preflight.sh` with no arguments to also check the
+  build-time toolchain on a host that will build the agent itself;
 - creates the `showmesh` system user/group;
 - creates `/etc/showmesh` (0755) and `/etc/showmesh/agent.env` (0600,
   root:root) from `agent.env.example`, **only if that file does not
