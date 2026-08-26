@@ -29,7 +29,7 @@ func TestOpenAPIAudioGainSetResponseMatchesRealResponse(t *testing.T) {
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/gain",
-		`{"revision":1,"idempotencyKey":"key-gain-1","params":{"gain":0.5}}`, token)
+		`{"revision":1,"idempotencyKey":"key-gain-1","params":{"gainDb":-6.02}}`, token)
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
@@ -52,7 +52,7 @@ func TestOpenAPIAudioGainFadeResponseMatchesRealResponse(t *testing.T) {
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/gain/fade",
-		`{"revision":1,"idempotencyKey":"key-fade-1","params":{"targetGain":0,"durationMs":500,"curve":"linear"}}`, token)
+		`{"revision":1,"idempotencyKey":"key-fade-1","params":{"targetGainDb":-60,"durationMs":500,"curve":"linear"}}`, token)
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)

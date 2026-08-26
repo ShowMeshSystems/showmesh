@@ -233,13 +233,13 @@ func (h *handlers) pushAudioSettingsToAllNodes(ctx context.Context, now time.Tim
 
 func mapAudioSettingsPayload(p config.AudioSettingsPayload) v1.ConfigAudioSettingsPayload {
 	return v1.ConfigAudioSettingsPayload{
-		DriftIgnoreThresholdMs:   p.DriftIgnoreThresholdMs,
-		DefaultFadeCurve:         p.DefaultFadeCurve,
-		DefaultFadeDurationMs:    p.DefaultFadeDurationMs,
-		DefaultMaxBackgroundGain: p.DefaultMaxBackgroundGain,
-		DuckTargetGain:           p.DuckTargetGain,
-		LTCFrameRate:             p.LTCFrameRate,
-		LTCDefaultStartOffset:    p.LTCDefaultStartOffset,
+		DriftIgnoreThresholdMs:     p.DriftIgnoreThresholdMs,
+		DefaultFadeCurve:           p.DefaultFadeCurve,
+		DefaultFadeDurationMs:      p.DefaultFadeDurationMs,
+		DefaultMaxBackgroundGainDb: p.DefaultMaxBackgroundGainDb,
+		DuckTargetGainDb:           p.DuckTargetGainDb,
+		LTCFrameRate:               p.LTCFrameRate,
+		LTCDefaultStartOffset:      p.LTCDefaultStartOffset,
 	}
 }
 

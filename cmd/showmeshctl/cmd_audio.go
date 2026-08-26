@@ -24,13 +24,13 @@ import (
 
 // configAudioSettingsPayload mirrors v1.ConfigAudioSettingsPayload.
 type configAudioSettingsPayload struct {
-	DriftIgnoreThresholdMs   int     `json:"driftIgnoreThresholdMs"`
-	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
-	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
-	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
-	DuckTargetGain           float64 `json:"duckTargetGain"`
-	LTCFrameRate             string  `json:"ltcFrameRate"`
-	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
+	DriftIgnoreThresholdMs     int     `json:"driftIgnoreThresholdMs"`
+	DefaultFadeCurve           string  `json:"defaultFadeCurve"`
+	DefaultFadeDurationMs      int     `json:"defaultFadeDurationMs"`
+	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
+	DuckTargetGainDb           float64 `json:"duckTargetGainDb"`
+	LTCFrameRate               string  `json:"ltcFrameRate"`
+	LTCDefaultStartOffset      string  `json:"ltcDefaultStartOffset"`
 }
 
 type audioSettingsConfigResponse struct {
@@ -153,10 +153,13 @@ func printAudioSettingsUsage(w io.Writer) {
 Read or write the coordinator's audio.settings configuration (ADR-039):
 driftIgnoreThresholdMs (never measured — a starting point, not a tuned
 value), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
-defaultMaxBackgroundGain (a linear multiplier, 1.0 is unity gain),
-duckTargetGain (how far a bed drops under an announcement, same linear
-unit, below 1.0 — the shipped value is PROVISIONAL and has never been
-heard on real speakers),
+defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB —
+a linear-looking 0.5 here is only half a decibel, not a halving, so enter
+-6.02 if you meant half amplitude),
+duckTargetGainDb (how far a bed drops under an announcement, also in
+decibels: must be negative and at least -60 dB, where -60 dB is silence —
+the shipped value is PROVISIONAL and has never been heard on real
+speakers),
 ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
 and ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
 ltcStartOffset overrides this).
@@ -626,13 +629,13 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 		by = "by " + *resp.CreatedByPrincipalName
 	}
 	_, _ = fmt.Fprintf(w, "audio.settings revision %d (source %s, %s):\n", resp.Revision, resp.Source, by)
-	_, _ = fmt.Fprintf(w, "  driftIgnoreThresholdMs:   %d\n", resp.Payload.DriftIgnoreThresholdMs)
-	_, _ = fmt.Fprintf(w, "  defaultFadeCurve:         %s\n", resp.Payload.DefaultFadeCurve)
-	_, _ = fmt.Fprintf(w, "  defaultFadeDurationMs:    %d\n", resp.Payload.DefaultFadeDurationMs)
-	_, _ = fmt.Fprintf(w, "  defaultMaxBackgroundGain: %v\n", resp.Payload.DefaultMaxBackgroundGain)
-	_, _ = fmt.Fprintf(w, "  duckTargetGain:           %v\n", resp.Payload.DuckTargetGain)
-	_, _ = fmt.Fprintf(w, "  ltcFrameRate:             %s\n", resp.Payload.LTCFrameRate)
-	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:    %s\n", resp.Payload.LTCDefaultStartOffset)
+	_, _ = fmt.Fprintf(w, "  driftIgnoreThresholdMs:     %d\n", resp.Payload.DriftIgnoreThresholdMs)
+	_, _ = fmt.Fprintf(w, "  defaultFadeCurve:           %s\n", resp.Payload.DefaultFadeCurve)
+	_, _ = fmt.Fprintf(w, "  defaultFadeDurationMs:      %d\n", resp.Payload.DefaultFadeDurationMs)
+	_, _ = fmt.Fprintf(w, "  defaultMaxBackgroundGainDb: %v dB\n", resp.Payload.DefaultMaxBackgroundGainDb)
+	_, _ = fmt.Fprintf(w, "  duckTargetGainDb:           %v dB\n", resp.Payload.DuckTargetGainDb)
+	_, _ = fmt.Fprintf(w, "  ltcFrameRate:               %s\n", resp.Payload.LTCFrameRate)
+	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
 }
 
 func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {

@@ -28,7 +28,7 @@ func TestGetAudioSettingsDefaultsBeforeAnyWrite(t *testing.T) {
 	}
 }
 
-const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGain":0.4,"duckTargetGain":0.2,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
+const validAudioSettingsBody = `{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96,"duckTargetGainDb":-13.98,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
 
 // TestPutAudioSettingsThenGetReflectsWrittenValue proves the zero-to-one
 // transition: an unconfigured kind, one write, and a subsequent GET that
@@ -46,7 +46,7 @@ func TestPutAudioSettingsThenGetReflectsWrittenValue(t *testing.T) {
 	}
 
 	_, getBody := doRequest(t, api.Handler, "GET", "/api/v1/config/audio.settings", map[string]string{"Authorization": "Bearer " + token})
-	if !containsAll(string(getBody), `"driftIgnoreThresholdMs":30`) || !containsAll(string(getBody), `"duckTargetGain":0.2`) || !containsAll(string(getBody), `"source":"api"`) {
+	if !containsAll(string(getBody), `"driftIgnoreThresholdMs":30`) || !containsAll(string(getBody), `"duckTargetGainDb":-13.98`) || !containsAll(string(getBody), `"source":"api"`) {
 		t.Fatalf("GET does not reflect written value; body: %s", getBody)
 	}
 }

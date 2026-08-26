@@ -1341,8 +1341,15 @@ paths:
       summary: Dispatch audio.gain.set to a node's playback session
       description: >-
         Behind `audio:command`. Sets the session's CONFIGURED gain,
-        clamped to its ceiling (`params.gain` is linear, not dB - see
-        AUDIO-ENGINE.md). The ceiling is enforced at the point a gain
+        clamped to its ceiling. `params.gainDb` is in DECIBELS: `0` is
+        unity, `-6.02` is half amplitude, `-60` and below is silence, and
+        `+12` is the most this accepts. The coordinator converts it to
+        the engine's linear amplitude multiplier once, at its own
+        boundary; the node and the engine below it stay linear
+        (AUDIO-ENGINE.md). The pre-decibel `params.gain` is refused by
+        name, naming `params.gainDb` as its replacement, because the two
+        units share a number range and a `0.5` meant for a halving would
+        otherwise dispatch as a half-decibel lift. The ceiling is enforced at the point a gain
         takes effect, not only at validation, and a clamp is reported as
         evidence rather than silently applied. While the session is
         muted or ducked by a higher-priority announcement, this
@@ -1417,12 +1424,19 @@ paths:
       summary: Dispatch audio.gain.fade to a node's playback session
       description: >-
         Behind `audio:command`. Sets the session's CONFIGURED gain to
-        `params.targetGain` (linear, not dB) immediately, clamped to the
+        `params.targetGainDb` immediately, clamped to the
         session's ceiling, and schedules a fade toward it over
         `params.durationMs` along `params.curve` (only `"linear"`
-        ships). While the session is muted or ducked, the ramp actually
+        ships - that names the fade SHAPE, not the gain unit).
+        `params.targetGainDb` is in DECIBELS: `0` is unity, `-6.02` is
+        half amplitude, `-60` and below is silence, and `+12` is the most
+        this accepts. The coordinator converts it to the engine's linear
+        amplitude multiplier once, at its own boundary. The pre-decibel
+        `params.targetGain` is refused by name, naming
+        `params.targetGainDb` as its replacement.
+        While the session is muted or ducked, the ramp actually
         dispatched to the output targets that suppression's own level,
-        not `params.targetGain`: the configured gain this call records
+        not `params.targetGainDb`: the configured gain this call records
         is what the node returns to once every such reason releases, but
         the fade itself never bypasses an active mute or duck. This
         response reports the fade as DISPATCHED, never as complete -
@@ -10459,13 +10473,20 @@ components:
         playback; its default is a starting point, not a tuned value.
         `defaultFadeCurve` must be a member of the audio engine's own
         closed fade-curve vocabulary (only "linear" ships today).
-        `defaultMaxBackgroundGain` is a linear amplitude multiplier - 1.0
-        is unity gain - applied as the default ceiling on a background bed.
-        `duckTargetGain` is how far a node lowers a session while a
+        `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain,
+        `+12` is the most accepted - applied as the default ceiling on a
+        background bed.
+        `duckTargetGainDb` is how far a node lowers a session while a
         higher-priority session ducks it (an announcement over a resting
-        background bed), in that same linear unit: `0` is full silence,
-        and a value of `1` or more is refused because it would not duck
-        anything. THE SHIPPED VALUE IS PROVISIONAL: it has never been
+        background bed), also in decibels: it must be negative and at
+        least `-60`, where `-60` is full silence, and `0` or louder is
+        refused because it would not duck anything. Both are converted to
+        the engine's linear amplitude multiplier once, at the
+        coordinator's own boundary, before anything reaches a node. The
+        pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are
+        refused by name, each naming its replacement, because the two
+        units share a number range.
+        THE SHIPPED VALUE IS PROVISIONAL: it has never been
         heard on the installation's speakers, and the owner picks the
         real one by ear (RES-007). A muted session is unaffected;
         mute silences unconditionally.
@@ -10477,7 +10498,7 @@ components:
         point when its own audio.session.apply carries no override.
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
-         defaultMaxBackgroundGain, duckTargetGain, ltcFrameRate,
+         defaultMaxBackgroundGainDb, duckTargetGainDb, ltcFrameRate,
          ltcDefaultStartOffset]
       properties:
         driftIgnoreThresholdMs:
@@ -10487,15 +10508,19 @@ components:
           enum: [linear]
         defaultFadeDurationMs:
           type: integer
-        defaultMaxBackgroundGain:
+        defaultMaxBackgroundGainDb:
           type: number
-        duckTargetGain:
-          type: number
-          minimum: 0
-          exclusiveMaximum: 1
+          maximum: 12
           description: >-
-            Linear multiplier a ducked session is driven to. Provisional
-            value, not measured.
+            Decibels. 0 dB is unity gain; +12 dB is the typo guard, not a
+            tuned headroom figure.
+        duckTargetGainDb:
+          type: number
+          minimum: -60
+          exclusiveMaximum: 0
+          description: >-
+            Decibels a ducked session is driven to. Must be negative;
+            -60 dB is silence. Provisional value, not measured.
         ltcFrameRate:
           type: string
           enum: ["24", "25", "29.97", "30"]

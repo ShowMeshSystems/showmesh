@@ -22,6 +22,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -127,11 +128,15 @@ func pushSettings(ctx context.Context, cs ConfigStore, pub Publisher, now func()
 	}
 
 	params := map[string]any{
-		"driftIgnoreThresholdMs":   payload.DriftIgnoreThresholdMs,
-		"defaultFadeCurve":         payload.DefaultFadeCurve,
-		"defaultFadeDurationMs":    payload.DefaultFadeDurationMs,
-		"defaultMaxBackgroundGain": payload.DefaultMaxBackgroundGain,
-		"duckTargetGain":           payload.DuckTargetGain,
+		"driftIgnoreThresholdMs": payload.DriftIgnoreThresholdMs,
+		"defaultFadeCurve":       payload.DefaultFadeCurve,
+		"defaultFadeDurationMs":  payload.DefaultFadeDurationMs,
+		// The coordinator-to-agent wire stays LINEAR: the
+		// stored operator values are decibels and are converted here, at
+		// the coordinator's own boundary, so the agent and the engine
+		// below it never see a decibel.
+		"defaultMaxBackgroundGain": float64(pkgaudio.CeilingFromDb(payload.DefaultMaxBackgroundGainDb)),
+		"duckTargetGain":           float64(pkgaudio.GainFromDb(payload.DuckTargetGainDb)),
 		"ltcFrameRate":             payload.LTCFrameRate,
 		"ltcDefaultStartOffset":    payload.LTCDefaultStartOffset,
 		"revision":                 revision,

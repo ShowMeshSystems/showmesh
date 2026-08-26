@@ -1,0 +1,156 @@
+package api
+
+import (
+	"encoding/json"
+	"math"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
+)
+
+// This file is the decibel boundary's acceptance proof: an operator sends
+// dB over HTTP, and what leaves for the node is the linear amplitude
+// multiplier the agent and the engine have always taken.
+
+func gainDbTestSetup(t *testing.T) (*audioDispatchTestSetup, string) {
+	t.Helper()
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeUnconfirmed, Reason: "no confirmation evidence was reported",
+		Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "gain", "reason": ""}},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	return setup, mustIssueToken(t, setup.svc, op.ID)
+}
+
+func TestAudioGainSetConvertsDecibelsToLinearBeforeDispatch(t *testing.T) {
+	setup, token := gainDbTestSetup(t)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/gain",
+		`{"revision":1,"idempotencyKey":"k1","params":{"gainDb":-6.0206}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	if _, present := setup.pub.lastParams["gainDb"]; present {
+		t.Error("params.gainDb reached the node; the coordinator-to-agent wire must stay linear")
+	}
+	gain, ok := setup.pub.lastParams["gain"].(float64)
+	if !ok {
+		t.Fatalf("params.gain = %v, want the linear multiplier the agent's audio.gain.set requires", setup.pub.lastParams["gain"])
+	}
+	if math.Abs(gain-0.5) > 1e-4 {
+		t.Errorf("params.gain = %v, want 0.5 (the linear value of -6.0206 dB)", gain)
+	}
+}
+
+func TestAudioGainFadeConvertsDecibelsToLinearBeforeDispatch(t *testing.T) {
+	setup, token := gainDbTestSetup(t)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/gain/fade",
+		`{"revision":1,"idempotencyKey":"k1","params":{"targetGainDb":-60,"durationMs":500,"curve":"linear"}}`, token)
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	if _, present := setup.pub.lastParams["targetGainDb"]; present {
+		t.Error("params.targetGainDb reached the node; the coordinator-to-agent wire must stay linear")
+	}
+	target, ok := setup.pub.lastParams["targetGain"].(float64)
+	if !ok {
+		t.Fatalf("params.targetGain = %v, want the linear multiplier the agent's audio.gain.fade requires", setup.pub.lastParams["targetGain"])
+	}
+	if target != 0 {
+		t.Errorf("params.targetGain = %v, want exactly 0: the silence floor means silence", target)
+	}
+	// Everything the node also needs is passed through untouched.
+	if setup.pub.lastParams["durationMs"] != float64(500) || setup.pub.lastParams["curve"] != "linear" {
+		t.Errorf("the fade's other params were altered: %v", setup.pub.lastParams)
+	}
+}
+
+// The pre-decibel names are refused rather than accepted, because the two
+// units share a number range: a client still sending {"gain": 0.5} means
+// a halving and would otherwise dispatch as a half-decibel lift.
+func TestAudioGainRefusesPreDecibelParamNames(t *testing.T) {
+	for _, tc := range []struct{ path, body, wants string }{
+		{"gain", `{"revision":1,"params":{"gain":0.5}}`, "gainDb"},
+		{"gain/fade", `{"revision":1,"params":{"targetGain":0.5,"durationMs":500}}`, "targetGainDb"},
+	} {
+		setup, token := gainDbTestSetup(t)
+		api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+		req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/"+tc.path, tc.body, token)
+		resp, body := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400; body: %s", tc.path, resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), tc.wants) {
+			t.Errorf("%s refusal must name %s, got: %s", tc.path, tc.wants, body)
+		}
+		if setup.pub.count() != 0 {
+			t.Errorf("%s was dispatched despite being refused", tc.path)
+		}
+	}
+}
+
+// A missing decibel parameter and a decibel value past the typo guard are
+// both refused at the boundary, so a node never sees an intent this
+// coordinator could not read.
+func TestAudioGainRefusesMissingAndOutOfRangeDecibels(t *testing.T) {
+	for _, tc := range []struct{ name, body, wants string }{
+		{"missing", `{"revision":1,"params":{}}`, "required"},
+		{"too loud", `{"revision":1,"params":{"gainDb":40}}`, "12"},
+		{"not a number", `{"revision":1,"params":{"gainDb":"loud"}}`, "number"},
+	} {
+		setup, token := gainDbTestSetup(t)
+		api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+		req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/gain", tc.body, token)
+		resp, body := doRawRequest(t, api.Handler, req)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400; body: %s", tc.name, resp.StatusCode, body)
+		}
+		var problem struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(body, &problem); err != nil {
+			t.Fatalf("%s: decode problem: %v", tc.name, err)
+		}
+		if !strings.Contains(problem.Detail, tc.wants) {
+			t.Errorf("%s: detail = %q, want it to mention %q", tc.name, problem.Detail, tc.wants)
+		}
+	}
+}
+
+// Every other audio session command is untouched by the boundary: only
+// the two gain commands carry a decibel parameter.
+func TestAudioNonGainCommandsPassParamsThroughUnchanged(t *testing.T) {
+	params := map[string]any{"positionMs": float64(1500)}
+	if problem := convertAudioGainParamsToLinear("audio.session.seek", params); problem != nil {
+		t.Fatalf("seek was refused by the decibel boundary: %+v", problem)
+	}
+	if params["positionMs"] != float64(1500) || len(params) != 1 {
+		t.Errorf("seek params were altered: %v", params)
+	}
+}
+
+// The silence floor the boundary uses is the one pkg/audio defines, not a
+// second copy that could drift from it.
+func TestAudioGainBoundaryUsesTheSharedSilenceFloor(t *testing.T) {
+	params := map[string]any{"gainDb": pkgaudio.SilenceFloorDb}
+	if problem := convertAudioGainParamsToLinear("audio.gain.set", params); problem != nil {
+		t.Fatalf("the silence floor was refused: %+v", problem)
+	}
+	if params["gain"] != float64(0) {
+		t.Errorf("params.gain = %v, want exactly 0", params["gain"])
+	}
+}
