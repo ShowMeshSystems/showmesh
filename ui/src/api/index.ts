@@ -33,6 +33,12 @@ export type {
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPayload,
   ConfigAssetsSettingsPutPayload,
+  // ADR-039/ADR-018: the audio.settings engine-wide singleton and
+  // audio.node per-node object.
+  AudioSettingsConfigResponse,
+  ConfigAudioSettingsPayload,
+  AudioNodeConfigResponse,
+  ConfigAudioNode,
   FPPInstance,
   // The pending-instanceUuid-change acknowledgement.
   FPPInstanceUUIDChange,
@@ -238,6 +244,12 @@ export {
   getAssetsSettingsConfig,
   putAssetsSettingsConfig,
   getAssetsSettingsConfigRevisions,
+  getAudioSettingsConfig,
+  putAudioSettingsConfig,
+  getAudioSettingsConfigRevisions,
+  getAudioNode,
+  putAudioNode,
+  getAudioNodeConfigRevisions,
   stopFPPPlaylist,
   startFPPPlaylist,
   stopFPPPlaylistGracefully,

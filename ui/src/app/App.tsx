@@ -20,6 +20,12 @@ import { FPPDetail } from '../views/FPPDetail'
 import { Capabilities } from '../views/Capabilities'
 import { Events } from '../views/Events'
 import { Configuration } from '../views/Configuration'
+// ADR-039/ADR-018: the audio.settings engine-wide singleton and audio.node
+// per-node object, the last two configuration kinds that shipped with a
+// full API path/showmeshctl coverage and no Operator UI control.
+import { AudioSettings } from '../views/AudioSettings'
+import { AudioNodes } from '../views/AudioNodes'
+import { AudioNodeDetail } from '../views/AudioNodeDetail'
 import { Macros } from '../views/Macros'
 import { MacroDetail } from '../views/MacroDetail'
 import { MacroRunView } from '../views/MacroRunView'
@@ -106,6 +112,14 @@ export default function App() {
             <Route path="config/show.cue" element={<ShowCues />} />
             <Route path="config/show.cue/new" element={<ShowCueDetail isNew />} />
             <Route path="config/show.cue/:id" element={<ShowCueDetail />} />
+
+            {/* ADR-039/ADR-018: audio.settings/audio.node, "new" listed
+                before its ":id" sibling for the same readability reason as
+                every other pair above. */}
+            <Route path="config/audio.settings" element={<AudioSettings />} />
+            <Route path="config/audio.node" element={<AudioNodes />} />
+            <Route path="config/audio.node/new" element={<AudioNodeDetail isNew />} />
+            <Route path="config/audio.node/:id" element={<AudioNodeDetail />} />
 
             <Route path="config/show.playlist" element={<ShowPlaylists />} />
             <Route path="config/show.playlist/new" element={<ShowPlaylistDetail isNew />} />

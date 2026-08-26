@@ -79,6 +79,12 @@ export type {
   ConfigShowCueOutputs,
   ConfigShowCue,
   ShowCueConfigResponse,
+  // ADR-039/ADR-018: the audio.settings engine-wide singleton and
+  // audio.node per-node object.
+  ConfigAudioSettingsPayload,
+  AudioSettingsConfigResponse,
+  ConfigAudioNode,
+  AudioNodeConfigResponse,
 
   ConfigShowPlaylistFPPBinding,
   ConfigShowPlaylistShowmeshAudio,

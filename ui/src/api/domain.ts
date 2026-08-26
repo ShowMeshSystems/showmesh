@@ -175,6 +175,16 @@ export type ConfigShowCueOutputs = components['schemas']['ConfigShowCueOutputs']
 export type ConfigShowCue = components['schemas']['ConfigShowCue']
 export type ShowCueConfigResponse = components['schemas']['ShowCueConfigResponse']
 
+// The audio.settings engine-wide singleton and audio.node per-node
+// object (ADR-039/ADR-018), aliased for the identical reason as every
+// type above (ADR-015). Both are full-replacement config kinds (every
+// field required and non-null on every PUT), unlike assets.settings/
+// fpp.mqtt's partial-update shape above.
+export type ConfigAudioSettingsPayload = components['schemas']['ConfigAudioSettingsPayload']
+export type AudioSettingsConfigResponse = components['schemas']['AudioSettingsConfigResponse']
+export type ConfigAudioNode = components['schemas']['ConfigAudioNode']
+export type AudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
+
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring. Aliased for the identical reason as every type above
 // (ADR-015).

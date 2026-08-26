@@ -112,6 +112,11 @@ const NAV_GROUPS: Array<{
       // reachable only from showmeshctl.
       { to: '/config/show.cue', label: 'Cues', end: false },
 
+      // ADR-039/ADR-018: the audio.settings/audio.node configuration
+      // kinds, previously reachable only from showmeshctl.
+      { to: '/config/audio.settings', label: 'Audio settings', end: false },
+      { to: '/config/audio.node', label: 'Audio nodes', end: false },
+
       // Track H seam H6: show.playlist authoring, previously reachable
       // only from showmeshctl.
       { to: '/config/show.playlist', label: 'Playlists', end: false },
