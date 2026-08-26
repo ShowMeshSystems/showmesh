@@ -405,13 +405,14 @@ https://github.com/FalconChristmas/fpp/blob/139d7e6ba8c70d5a5f835a9664ddbab36853
 
 ### 10.7 Owner rulings, 2026-08-25
 
-The five questions section 9 and the Track E seam document left open were answered by the owner on 2026-08-25 and are recorded durably in [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md). Summarised here because a reader of this record needs to know which way the facts above were resolved:
+The five questions section 9 and the Track E seam document left open were answered by the owner on 2026-08-25, and one further ruling was made during implementation; all six are recorded durably in [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md). Summarised here because a reader of this record needs to know which way the facts above were resolved:
 
 1. **`typeId` is `0x7F`, provisional**, with the reasoning of section 10.2 and never `0x01`. Upstream registration in both projects is a separate follow-up and gates nothing.
 2. **The listener binds port 80**, granted by `AmbientCapabilities=CAP_NET_BIND_SERVICE` on the node service unit, with `SHOWMESH_FPPCONNECT_LISTEN_ADDR` as a start-time override for dev stacks and tests. Port 80 is not negotiable with the client (section 10.4), so the choice was only ever about how the process obtains it.
 3. **The upload endpoint is unauthenticated, as an accepted and recorded risk**, bounded by a directory allowlist (`sequences`, `music`, `videos`, everything else refused), a per-file byte cap, and a total asset-directory byte cap. Section 9.8's open question about xLights' credential behaviour is unchanged and stays a bench item; the ruling does not depend on its answer, because the node demands nothing.
 4. **Binding is by playlist name.** The node serves its ShowMesh show names at `GET /api/playlists`, so the operator's playlist choice is the show; `POST /api/playlist/{name}` binds the named files to it, joined by file name with extension per section 10.6, with the file name stem as the logical sequence. With no playlist chosen, bind to the active show the coordinator pushed. Anything unresolvable is kept on disk, registered nowhere, and reported as an unbound held file. Absent, null and empty stay three different things.
 5. **The two byte caps are operator configuration and are store-backed**, as a `fppconnect.settings` kind under [ADR-039](../decisions/ADR-039-operator-configuration-is-store-backed.md), pushed to nodes together with the channel range string, the active show and the show name list. They are not environment variables.
+6. **The MultiSync ping's mode byte stays `remote`.** FPP unicasts sync only to nodes whose ping reports remote (section 10.2's `supportsUnicast = type < 0x80 && fppMode == REMOTE_MODE`), while `player` is served through `GET /api/system/info`'s `Mode` field, which is what xLights itself reads. Owner ruling, 2026-08-25.
 
 ### 10.8 What this amendment does not establish
 

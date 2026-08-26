@@ -77,6 +77,8 @@ The node advertises `"Mode": "player"`, not `"remote"`, because xLights renders 
 
 It advertises `"Version": "9.5.0"` with explicit `"majorVersion": 9` and `"minorVersion": 5`: past the 7.1 eligibility gate, past the 7.0 and 9.3 FSEQ gates, and deliberately below 10.0 so xLights takes none of the branches a render node does not implement. Both values are recorded with their reasoning in RES-003 §10.5 and §10.6, and both change which xLights code path runs, so neither may be edited as a cosmetic detail.
 
+The MultiSync ping's own mode byte is a separate field from this HTTP value and stays `remote` (`0x08`, `PingModeRemote`): FPP unicasts sync only to nodes whose ping reports remote (RES-003 §10.2, `supportsUnicast = type < 0x80 && fppMode == REMOTE_MODE`), while xLights itself reads `player` from `GET /api/system/info`'s `Mode` field. Owner ruling, 2026-08-25.
+
 ### 8. An upload binds to a show by playlist name, and an unresolvable upload is held, never guessed
 
 The node serves its ShowMesh show names at `GET /api/playlists`, so the playlist the operator picks in FPP Connect **is** the ShowMesh show. `POST /api/playlist/{name}` binds the named files to it. The join key between the bytes and the binding is the **file name with its extension**, which xLights sends identically as `Upload-Name` and as the playlist entry's `sequenceName`. The **file name stem** is the logical sequence.
