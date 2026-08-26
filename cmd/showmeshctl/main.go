@@ -147,23 +147,50 @@ Commands:
   fpp next-playlist-item <id>         dispatch FPP's Next Playlist Item and confirm by evidence (write)
   fpp prev-playlist-item <id>         dispatch FPP's Prev Playlist Item and confirm by evidence (write)
   fpp set-volume <id> <volume>        dispatch FPP's Volume Set and confirm by evidence (write)
+  fpp reset-observation-sequence --confirm <id>
+                                       clear one instance's stored playlist-entry observation and
+                                       its sequence anchor (write, requires fpp:command, TRACK-H-H2-SPEC.md §5.1)
+  fpp acknowledge-instance-uuid-change --confirm <id>
+                                       clear a pending, unacknowledged FPP instance uuid change
+                                       (write, requires config:write)
+  fpp playlist-definitions list        metadata for every stored playlist definition (read,
+                                       requires observation:read)
+  fpp playlist-definitions get <id> <hash>
+                                       the stored playlist definition itself (read)
+  fpp playlist-definitions entries <id> <hash>
+                                       its parsed leadIn/mainPlaylist/leadOut entries (read)
+  fpp playlist-entry-observations list the latest accepted observation for every known instance
+                                       (read, requires observation:read)
+  fpp playlist-entry-observations reconciliation <id>
+                                       what the coordinator makes of one instance's latest
+                                       accepted observation (read)
+  fpp playlist-readiness <playlistId>  whether one FPP-backed Playlist is ready (read)
   events                   show event history
   snapshot                 show the authoritative snapshot
   watch                    fetch the snapshot, then stream live changes
   session                  show the current principal, role, and effective scopes
   audit                    show the audit log (requires the audit:read scope)
-  config                   read or write the fpp.endpoints configuration
-                           ("config set" is a write, requires config:write)
+  config get               show the active fpp.endpoints configuration
+  config set               write a new fpp.endpoints revision (write, requires config:write)
+  config revisions         list fpp.endpoints revision history, newest first
   discover                 run discovery and print proposals (write)
   declare <id>             promote a node to declared, or update its label/notes (write)
   undeclare <id>           remove a node's declaration, requires --confirm (write)
   macro list                          enumerate show.macro objects
   macro show <id>                     show one macro's full definition
   macro run <id> [--follow]           submit a macro run (write, 202 accepted; asynchronous unless --follow)
+  macro put <id>                      write a new show.macro revision (write, full replacement,
+                                       requires config:write)
   run show <runId> [--follow]         show one macro run, including every step's outcome
   run list [--macro <id>] [--state]   list macro runs, most recent first
   action list                         enumerate show.action objects
   action show <id>                    show one action's full definition
+  action put <id>                     write a new show.action revision (write, full replacement,
+                                       requires config:write)
+  action check [<id>] [--show <id>]   re-resolve one action's (or every action's) stored target;
+                                       exits 29 if any checked binding is broken (read)
+  action invoke <id>                  invoke one stored action outside of a macro run (write,
+                                       requires show:action:invoke)
   show list                           enumerate show objects
   show get <id>                       show one show's full definition
   show set <id>                       write a new show revision (write, full replacement)
@@ -172,6 +199,7 @@ Commands:
   show activate <id>                  make <id> the active show (write, full replacement)
   show mode                           print the installation-wide operating mode, program or
                                        show (ADR-033; needs only observation:read)
+  show mode get                       same as bare "show mode" (explicit form)
   show mode set <program|show>        set the operating mode (write, requires config:write)
   show mode revisions                 list show.mode revision history, newest first
   surface list [--show <id>]          enumerate show.surface objects, optionally by show
@@ -194,6 +222,25 @@ Commands:
   night active                        print the currently active night session (404 if none set)
   night activate <id>                 make <id> the active night session (write, full replacement)
   night deactivate                    clear the active night session back to unset (write)
+  night status                        print the current night session lifecycle state (read)
+  night prepare-site                  open a new preparation epoch (write, requires night:command;
+                                       may be refused 409 by a configured "block" interlock)
+  night readiness                     run readiness for the current preparation epoch (write,
+                                       requires night:command; rejected with no open epoch)
+  night preshow                       enter the configured pre-show presentation (write, requires
+                                       night:command; requires the current preparation epoch)
+  night start                         authorize the night session (write, requires night:command;
+                                       requires a completed readiness result from the same epoch)
+  night final-show                    close admission after one final complete show (write,
+                                       requires night:command; accepted even while degraded)
+  night fade-out                      fade the active presentation out and stop FPP (write,
+                                       requires night:command; accepted even while degraded)
+  night power-down                    close the session after playback and the fade have stopped
+                                       (write, requires night:command; accepted even while degraded)
+  night end-session                   PROVISIONAL: abandon the current session, reaching "stopped"
+                                       without clearing its degraded record (write, requires
+                                       night:command; the only lifecycle command accepted while
+                                       degraded besides the three above)
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports
@@ -204,6 +251,21 @@ Commands:
   resolume action blackout                    disconnect every tracked layer and confirm by evidence (write)
   resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
   resolume action set-layer-master <id> <value>  set a layer's master (continuous value) and confirm by evidence (write)
+  resolume instance list               show the configured resolume.instances configuration
+  resolume instance set --id --url     write a new resolume.instances revision naming exactly
+                                       one instance (write, requires config:write)
+  resolume instance remove             write a new resolume.instances revision naming zero
+                                       instances (write, requires config:write)
+  resolume recovery status             the auto-restore toggle, recovery record, and last
+                                       restore report (read)
+  resolume recovery enable             turn Arena crash-recovery auto-restore on (write,
+                                       requires config:write)
+  resolume recovery disable            turn Arena crash-recovery auto-restore off (write,
+                                       requires config:write)
+  resolume recovery restore            run the crash-recovery restore on demand (write,
+                                       requires resolume:action)
+  resolume recovery revisions          list the auto-restore toggle's revision history, newest
+                                       first (requires config:write)
   assets list [--show <id>] [--node <id>] [--sequence <id>]
                            enumerate asset metadata
   assets get <assetId>    show one asset's full metadata
@@ -216,10 +278,17 @@ Commands:
   assets manifest [--node <id>] [--require-ready]
                            what each node should hold for the active show,
                            versus what it actually holds (Track E seam E5)
+  assets settings get     show the active assets.settings configuration (Track G seam G-4,
+                           ADR-039)
+  assets settings set     write a new assets.settings revision; only the flags passed are
+                           changed (write, requires config:write)
   cuecatalog get <nodeId>              one node's resolved Cue catalog (Track H seam H3)
   cuecatalog acknowledge <nodeId> <revision> -show <show> -generation <n>
                                         report which catalog revision this node holds (write,
                                         requires node:observe; NOT readiness)
+  cuecatalog deploy <nodeId>           resolve this coordinator's current Cue catalog for
+                                        <nodeId> and push it to the node (write, requires the
+                                        cuecatalog:deploy scope, admin only)
   resolume status [id]                 show the configured Resolume instance's health, loaded
                                         composition, and every resolume.* observation
   render settings get                  show the active render.settings configuration (Track B,
@@ -251,6 +320,32 @@ Commands:
                                         replacement; refused unless the node has already
                                         advertised both routes, requires config:write)
   audio node revisions <nodeId>        list audio.node revision history, newest first
+  audio session apply <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.apply (write, requires audio:command)
+  audio session prepare <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.prepare (write, requires audio:command)
+  audio session start <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.start (write, requires audio:command)
+  audio session pause <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.pause (write, requires audio:command)
+  audio session resume <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.resume (write, requires audio:command)
+  audio session seek <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.seek (write, requires audio:command)
+  audio session advance <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.advance (write, requires audio:command)
+  audio session stop <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.stop (write, requires audio:command)
+  audio session clear <nodeId> <sessionId> [params-json]
+                                        dispatch audio.session.clear (write, requires audio:command)
+  audio gain set <nodeId> <sessionId> [params-json]
+                                        dispatch audio.gain.set (write, requires audio:command)
+  audio gain fade <nodeId> <sessionId> [params-json]
+                                        dispatch audio.gain.fade (write, requires audio:command)
+  audio output mute <nodeId> <sessionId>
+                                        dispatch audio.output.mute (write, requires audio:command)
+  audio output unmute <nodeId> <sessionId>
+                                        dispatch audio.output.unmute (write, requires audio:command)
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields
