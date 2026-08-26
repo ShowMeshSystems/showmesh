@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { deployNodeCueCatalog, getNodeCueCatalog } from '../api'
 import type { CueCatalogDeployResult, CueCatalogResponse } from '../api'
+import { useModelContext } from '../app/ModelContext'
 import { describeApiError } from '../app/session'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from './ScopedButton'
@@ -24,7 +25,7 @@ type CatalogState =
   | { kind: 'loaded'; response: CueCatalogResponse }
   | { kind: 'error'; message: string }
 
-function useNodeCueCatalog(nodeId: string, refreshToken: number): CatalogState {
+function useNodeCueCatalog(nodeId: string, refreshToken: number, snapshotReceivedAt: number | null): CatalogState {
   const [state, setState] = useState<CatalogState>({ kind: 'loading' })
 
   useEffect(() => {
@@ -42,7 +43,14 @@ function useNodeCueCatalog(nodeId: string, refreshToken: number): CatalogState {
     return () => {
       cancelled = true
     }
-  }, [nodeId, refreshToken])
+    // Same shape as PlaylistReadiness.tsx's own usePlaylistReadiness:
+    // `snapshotReceivedAt` changes on every resnapshot (initial connect,
+    // reconnect, stream.reset, per store.ts's applySnapshot), so this
+    // re-asks the coordinator whenever this browser's connection to it
+    // was re-established, without a second freshness mechanism.
+    // `refreshToken` covers both this panel's existing post-deploy
+    // re-check and its own explicit "Reload" control below.
+  }, [nodeId, refreshToken, snapshotReceivedAt])
 
   return state
 }
@@ -54,11 +62,16 @@ type DeployState =
   | { kind: 'error'; message: string }
 
 export function CueCatalogPanel({ nodeId }: CueCatalogPanelProps) {
+  const model = useModelContext()
   // Bumped after a deploy resolves so the "required" side re-fetches —
   // the desired-versus-observed rule cuts both ways: a deploy can also
   // reveal that the active show moved again while it was in flight.
+  // Also bumped by the explicit "Reload" control below: this is a
+  // one-shot fetch with no polling precedent in this seam, so a manual
+  // recheck plus the reconnect-triggered refetch in useNodeCueCatalog
+  // are preferred over inventing an interval.
   const [refreshToken, setRefreshToken] = useState(0)
-  const catalog = useNodeCueCatalog(nodeId, refreshToken)
+  const catalog = useNodeCueCatalog(nodeId, refreshToken, model.snapshotReceivedAt)
   const [deploy, setDeploy] = useState<DeployState>({ kind: 'idle' })
 
   async function runDeploy(): Promise<void> {
@@ -85,9 +98,22 @@ export function CueCatalogPanel({ nodeId }: CueCatalogPanelProps) {
           Could not read this node's Cue catalog: {catalog.message}
         </p>
       )}
-      {catalog.kind === 'loaded' && <RequiredCatalog response={catalog.response} deploy={deploy} />}
+      {catalog.kind === 'loaded' && (
+        <>
+          {/* ADR-011: every observation carries freshness. `serverTime`
+              is required on this response and is the coordinator's own
+              clock at the moment it resolved THIS catalog, not the
+              browser's: the only way an operator can tell a catalog
+              read minutes ago from one read just now. */}
+          <p className="text-muted">As of {formatAbsolute(catalog.response.serverTime)}.</p>
+          <RequiredCatalog response={catalog.response} deploy={deploy} />
+        </>
+      )}
 
       <div className="render-surface__controls">
+        <button type="button" onClick={() => setRefreshToken((n) => n + 1)}>
+          Reload
+        </button>
         <ScopedButton
           requiredScope="cuecatalog:deploy"
           onClick={() => void runDeploy()}

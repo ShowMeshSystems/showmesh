@@ -1,4 +1,5 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PlaylistReadiness } from './PlaylistReadiness'
@@ -6,6 +7,7 @@ import { ModelContext } from '../app/ModelContext'
 import { makeFPPInstance, makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import { ApiError } from '../api'
+import { formatAbsolute } from '../app/time'
 import type { Model } from '../app/types'
 
 // Same isolation pattern as Macros.test.tsx: mock the API calls this view
@@ -149,6 +151,108 @@ describe('PlaylistReadiness', () => {
     expect(await screen.findByText('unbound')).toBeInTheDocument()
     expect(screen.getByText('no show.playlist binding names this instance and hash')).toBeInTheDocument()
     expect(screen.queryByText('resolved')).not.toBeInTheDocument()
+  })
+
+  it('renders the readiness verdict\'s own serverTime, so a stale verdict is dated', async () => {
+    listConfigObjects.mockResolvedValue(playlistListResponse)
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: true,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    renderView(makeModel({ session }))
+
+    await screen.findByText('ready')
+    expect(screen.getByText(formatAbsolute('2026-08-25T18:40:00Z'))).toBeInTheDocument()
+  })
+
+  it('renders the reconciliation verdict\'s own serverTime', async () => {
+    listConfigObjects.mockResolvedValue({ ...playlistListResponse, objects: [] })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-1',
+      outcome: 'resolved',
+      reason: 'matches the current binding',
+      playlistId: 'opener',
+      playlistRevision: 2,
+      entryId: 'entry-1',
+      cueId: 'cue-1',
+      cueRevision: 1,
+      definitionAvailable: true,
+      serverTime: '2026-08-25T21:15:00Z',
+    })
+    const instance = makeFPPInstance('fpp-01', { instanceUuid: 'uuid-1' })
+    renderView(makeModel({ session, fpp: [instance] }))
+
+    await screen.findByText('resolved')
+    expect(screen.getByText(formatAbsolute('2026-08-25T21:15:00Z'))).toBeInTheDocument()
+  })
+
+  it('refetches both verdicts on reconnect, so a re-import after the operator opened the tab is caught', async () => {
+    listConfigObjects.mockResolvedValue(playlistListResponse)
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: true,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    const instance = makeFPPInstance('fpp-01', { instanceUuid: 'uuid-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-1',
+      outcome: 'resolved',
+      reason: 'matches the current binding',
+      definitionAvailable: true,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    const view = renderView(makeModel({ session, fpp: [instance], snapshotReceivedAt: 1000 }))
+
+    await waitFor(() => expect(getFPPPlaylistReadiness).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(1))
+
+    // A later resnapshot (store.ts's own applySnapshot: initial connect,
+    // every reconnect, every stream.reset) bumps `snapshotReceivedAt` --
+    // simulated here the same way a real reconnect would present itself
+    // to this component: a changed `model.snapshotReceivedAt` prop, not
+    // a new mechanism this test invents.
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: false,
+      reason: 'a binding hash went stale after re-import',
+      serverTime: '2026-08-25T21:15:00Z',
+    })
+    view.rerender(
+      <ModelContext.Provider value={makeModel({ session, fpp: [instance], snapshotReceivedAt: 2000 })}>
+        <MemoryRouter>
+          <PlaylistReadiness />
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+
+    await waitFor(() => expect(getFPPPlaylistReadiness).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('not ready')).toBeInTheDocument()
+    expect(screen.getByText(formatAbsolute('2026-08-25T21:15:00Z'))).toBeInTheDocument()
+  })
+
+  it('refetches the readiness verdict when the operator clicks Recheck readiness', async () => {
+    listConfigObjects.mockResolvedValue(playlistListResponse)
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: true,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    renderView(makeModel({ session }))
+
+    await waitFor(() => expect(getFPPPlaylistReadiness).toHaveBeenCalledTimes(1))
+
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: false,
+      reason: 'a binding hash went stale after re-import',
+      serverTime: '2026-08-25T21:15:00Z',
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Recheck readiness' }))
+
+    expect(await screen.findByText('not ready')).toBeInTheDocument()
+    expect(getFPPPlaylistReadiness).toHaveBeenCalledTimes(2)
   })
 
   it('renders sensibly, not a broken panel, when no FPP instance has reported a uuid yet', async () => {
