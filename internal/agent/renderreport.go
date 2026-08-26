@@ -91,7 +91,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	for _, s := range snapshots {
 		rep := toRenderSurfaceReport(s)
 		if a, ok := assignments[s.SurfaceID]; ok {
-			applyContentIdentity(&rep, a)
+			applyContentIdentity(&rep, a, now())
 		}
 		surfaces = append(surfaces, rep)
 	}
@@ -164,7 +164,16 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 // value) when a's params carry no fseqFilename, so an undecodable or
 // content-less assignment reports absence rather than propagating a
 // decode failure into a fabricated identity.
-func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignment) {
+//
+// observedAt is this node's own read time for a — the caller's now() at
+// the moment it re-read the persisted assignment store, stamped onto
+// rep.ContentObservedAt only when a genuine identity is actually applied.
+// The store is re-read fresh on every report tick (publishOneRenderReport's
+// doc comment), so "when I read this" is a real, continuously refreshed
+// observation: a cue activation swaps the frame writer without
+// transitioning PipelineState, and a surface rendering the same content
+// steadily must not read stale merely because ObservedAt never moves.
+func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignment, observedAt time.Time) {
 	var params map[string]any
 	if err := json.Unmarshal(a.RawParams, &params); err != nil {
 		return
@@ -181,6 +190,7 @@ func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignm
 	if a.Auth != nil {
 		rep.CatalogRevision = a.Auth.CatalogRevision
 	}
+	rep.ContentObservedAt = observedAt
 }
 
 // renderWireStderrCap mirrors mqttproto's own maxRenderStderrBytes (an

@@ -23,6 +23,15 @@ var sampleObservedAt = time.Unix(2000, 0).UTC()
 // sampleObservedAt.
 var sampleFramesObservedAt = time.Unix(2200, 0).UTC()
 
+// sampleContentObservedAt is samplePayload's content-identity evidence
+// timestamp — deliberately distinct from both sampleObservedAt (pipeline
+// lifecycle) and sampleFramesObservedAt (frame counters), so a test that
+// mixes any of the three up fails loudly. This is the timestamp behind the
+// content-signal regression fixed below: a cue activation swaps the frame
+// writer without transitioning PipelineState, so sampleObservedAt alone
+// cannot prove the content signals are fresh.
+var sampleContentObservedAt = time.Unix(2400, 0).UTC()
+
 func samplePayload(state string) mqttproto.RenderPayload {
 	return mqttproto.RenderPayload{
 		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
@@ -889,5 +898,128 @@ func TestPollContentIdentityWithoutCueLeavesCueIDNotCollected(t *testing.T) {
 	revision := findObs(t, obs, SignalSurfaceContentCatalogRevision)
 	if revision.Absence != observation.StateNotCollected {
 		t.Errorf("surface.content.catalog_revision without an auth tuple: Absence = %q, want %q", revision.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestPollContentSignalsAgeFromTheirOwnObservedAtNotPipelineState is
+// this issue's own regression test. Before the fix, the four surface.content.*
+// signals were stamped with sf.ObservedAt — the pipeline-lifecycle
+// timestamp, which only moves when PipelineState transitions
+// (pipeline.runner.setState). A cue activation swaps the frame writer
+// WITHOUT transitioning pipeline state, so the content identity changes
+// while sf.ObservedAt sits frozen at whatever it was before the swap: on a
+// bench run this reported a content signal with an evidence time 1m41s
+// BEFORE the node's own appliedAt for that content, and every healthy
+// surface read stale because the 45s validity window was measured from
+// that unrelated timestamp.
+//
+// samplePayload gives sampleObservedAt and sampleContentObservedAt
+// deliberately different values, with sampleObservedAt the OLDER of the
+// two by more than DefaultValidFor (45s): a surface whose pipeline-state
+// evidence is stale but whose content was read fresh must still report its
+// four content signals as CURRENT. This must fail against unmodified code,
+// where the content signals are judged against sf.ObservedAt (already
+// stale by construction here) instead of sf.ContentObservedAt.
+func TestPollContentSignalsAgeFromTheirOwnObservedAtNotPipelineState(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].FSEQFilename = "halloween-01.fseq"
+	payload.Surfaces[0].FSEQContentHash = "sha256:deadbeef"
+	payload.Surfaces[0].CueID = "cue-42"
+	payload.Surfaces[0].CatalogRevision = "rev-7"
+	payload.Surfaces[0].ContentObservedAt = sampleContentObservedAt
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	// checkAt is chosen so it is PAST sampleObservedAt+DefaultValidFor (the
+	// pipeline-lifecycle evidence has gone stale) but still BEFORE
+	// sampleContentObservedAt+DefaultValidFor (the content evidence is
+	// still fresh) — exactly the "old ObservedAt, fresh content read"
+	// scenario this issue describes.
+	checkAt := sampleObservedAt.Add(DefaultValidFor + time.Minute)
+	if !checkAt.Before(sampleContentObservedAt.Add(DefaultValidFor)) {
+		t.Fatalf("test fixture bug: checkAt %s is not before sampleContentObservedAt+DefaultValidFor %s",
+			checkAt, sampleContentObservedAt.Add(DefaultValidFor))
+	}
+
+	pipelineState := findObs(t, obs, SignalSurfacePipelineState)
+	if pipelineState.StateAt(checkAt) != observation.StateStale {
+		t.Fatalf("test fixture bug: surface.pipeline_state at checkAt (%s) = %s, want stale (sampleObservedAt must have aged out)",
+			checkAt, pipelineState.StateAt(checkAt))
+	}
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceContentFSEQFilename,
+		SignalSurfaceContentFSEQContentHash,
+		SignalSurfaceContentCueID,
+		SignalSurfaceContentCatalogRevision,
+	} {
+		o := findObs(t, obs, sig)
+		if o.StateAt(checkAt) != observation.StateCurrent {
+			t.Errorf("%s at checkAt (%s), with pipeline-state evidence stale but content read fresh: StateAt = %s, want current — this signal must age from its own ContentObservedAt, not sf.ObservedAt",
+				sig, checkAt, o.StateAt(checkAt))
+		}
+
+		if o.ObservedAt == nil {
+			t.Fatalf("%s: ObservedAt is nil, want %s", sig, sampleContentObservedAt)
+		}
+		if !o.ObservedAt.Equal(sampleContentObservedAt) {
+			t.Errorf("%s: ObservedAt = %s, want the node-reported sampleContentObservedAt %s (not sampleObservedAt %s)",
+				sig, o.ObservedAt, sampleContentObservedAt, sampleObservedAt)
+		}
+	}
+}
+
+// TestPollContentObservedAtPostDatesAContentChange proves the content
+// signal's ObservedAt tracks a genuine content change (a cue activation
+// applying a new FSEQ) rather than predating it: this issue's own defect
+// was a content signal reporting an evidence time BEFORE the node's
+// appliedAt for that content. Two consecutive polls simulate a cue
+// activation between them; the second poll's content signals must carry an
+// ObservedAt no earlier than the moment the new content was reported.
+func TestPollContentObservedAtPostDatesAContentChange(t *testing.T) {
+	st := NewStore()
+
+	before := samplePayload(mqttproto.RenderPipelineStateRunning)
+	before.Surfaces[0].FSEQFilename = "pre-show-loop.fseq"
+	before.Surfaces[0].FSEQContentHash = "sha256:aaaa"
+	before.Surfaces[0].ContentObservedAt = time.Unix(1000, 0).UTC()
+	st.Put("render-01", before, false, time.Now())
+
+	c := New(st)
+	firstObs, _ := c.Poll(context.Background())
+	firstFilename := findObs(t, firstObs, SignalSurfaceContentFSEQFilename)
+	if firstFilename.ObservedAt == nil || !firstFilename.ObservedAt.Equal(time.Unix(1000, 0).UTC()) {
+		t.Fatalf("pre-activation: ObservedAt = %v, want %s", firstFilename.ObservedAt, time.Unix(1000, 0).UTC())
+	}
+
+	// The cue activation itself: PipelineState does NOT transition (still
+	// running), only the content identity changes — this is exactly the
+	// case that produced the defect, since sf.ObservedAt alone would never
+	// move here.
+	activatedAt := time.Unix(1200, 0).UTC()
+	after := samplePayload(mqttproto.RenderPipelineStateRunning)
+	after.Surfaces[0].FSEQFilename = "halloween-01.fseq"
+	after.Surfaces[0].FSEQContentHash = "sha256:deadbeef"
+	after.Surfaces[0].CueID = "cue-42"
+	after.Surfaces[0].ContentObservedAt = activatedAt
+	st.Put("render-01", after, false, time.Now())
+
+	secondObs, _ := c.Poll(context.Background())
+	secondFilename := findObs(t, secondObs, SignalSurfaceContentFSEQFilename)
+	if secondFilename.Value != "halloween-01.fseq" {
+		t.Fatalf("post-activation: Value = %v, want %q", secondFilename.Value, "halloween-01.fseq")
+	}
+	if secondFilename.ObservedAt == nil {
+		t.Fatalf("post-activation: ObservedAt is nil, want %s", activatedAt)
+	}
+	if secondFilename.ObservedAt.Before(activatedAt) {
+		t.Errorf("post-activation: ObservedAt = %s predates the content change at %s, want it to post-date the change",
+			secondFilename.ObservedAt, activatedAt)
+	}
+	if !secondFilename.ObservedAt.Equal(activatedAt) {
+		t.Errorf("post-activation: ObservedAt = %s, want %s (the node's own content-identity read time)", secondFilename.ObservedAt, activatedAt)
 	}
 }

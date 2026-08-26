@@ -222,8 +222,23 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		)
 	}
 
+	// contentObservedAt is the node's OWN evidence timestamp for the content
+	// identity fields (sf.ContentObservedAt, carried over the wire from
+	// internal/agent/renderreport.go's applyContentIdentity), deliberately
+	// not observedAt/sf.ObservedAt. A cue activation swaps the frame writer
+	// without transitioning PipelineState, so sf.ObservedAt does not move
+	// even though the content identity just changed — judging the four
+	// content signals' freshness against it made a fresh cue swap read as
+	// arbitrarily stale evidence from before the change, and a surface
+	// rendering the same content steadily read stale 45s after any prior
+	// apply. The node re-reads its persisted assignment fresh on every
+	// report tick, so this is a real, continuously refreshed observation —
+	// framesObservedAt's identical reasoning two lines up, applied here to
+	// content identity instead of frame counters.
+	contentObservedAt := sf.ContentObservedAt
+
 	obs = append(obs, surfaceDrawStateObservations(nodeID, res, sf, observedAt, rep)...)
-	obs = append(obs, surfaceContentObservations(nodeID, res, sf, observedAt, rep)...)
+	obs = append(obs, surfaceContentObservations(nodeID, res, sf, contentObservedAt, rep)...)
 
 	return obs
 }
@@ -237,6 +252,10 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 // filename left over from a previous one, so all four signals are
 // NotCollected together with one reason, mirroring
 // surfaceDrawStateObservations' identical "no active writer" grouping.
+//
+// observedAt is sf.ContentObservedAt (the node's own content-identity read
+// time), NOT sf.ObservedAt — see surfaceReportObservations' contentObservedAt
+// comment for why the two must stay independent.
 func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
 	if sf.FSEQFilename == "" {
 		reason := "this surface holds no render assignment"
