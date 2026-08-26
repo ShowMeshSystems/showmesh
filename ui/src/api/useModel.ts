@@ -80,6 +80,11 @@ type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlay
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts.
 type SchemaFPPPlaylistReadinessResponse = components['schemas']['FPPPlaylistReadinessResponse']
 type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPlaylistEntryReconciliationResponse']
+// TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
+// evidence.
+type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
+type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
+type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
 type SchemaConfigObjectsListResponse = components['schemas']['ConfigObjectsListResponse']
 type SchemaShowActionConfigResponse = components['schemas']['ShowActionConfigResponse']
@@ -185,6 +190,26 @@ export function getFPPPlaylistEntryReconciliation(
   instanceUuid: string,
 ): Promise<SchemaFPPPlaylistEntryReconciliationResponse> {
   return store.getFPPPlaylistEntryReconciliation(instanceUuid)
+}
+
+// TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
+// evidence surface. Same thin pass-through pattern as every method above.
+export function listFPPPlaylistDefinitions(): Promise<SchemaFPPPlaylistDefinitionsListResponse> {
+  return store.listFPPPlaylistDefinitions()
+}
+
+export function getFPPPlaylistDefinition(
+  instanceUuid: string,
+  playlistHash: string,
+): Promise<SchemaFPPPlaylistDefinitionResponse> {
+  return store.getFPPPlaylistDefinition(instanceUuid, playlistHash)
+}
+
+export function getFPPPlaylistDefinitionEntries(
+  instanceUuid: string,
+  playlistHash: string,
+): Promise<SchemaFPPPlaylistDefinitionEntriesResponse> {
+  return store.getFPPPlaylistDefinitionEntries(instanceUuid, playlistHash)
 }
 
 export function getFPPEndpointsConfigRevisions(): Promise<ConfigRevisionsResponse> {

@@ -212,6 +212,13 @@ export type {
   // verdicts.
   FPPPlaylistReadinessResponse,
   FPPPlaylistEntryReconciliationResponse,
+  // TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
+  // evidence.
+  FPPPlaylistDefinitionMetadata,
+  FPPPlaylistDefinitionsListResponse,
+  FPPPlaylistDefinitionResponse,
+  FPPPlaylistDefinitionEntry,
+  FPPPlaylistDefinitionEntriesResponse,
 } from './domain'
 export {
   useModel,
@@ -229,6 +236,9 @@ export {
   acknowledgeFPPInstanceUUIDChange,
   getFPPPlaylistReadiness,
   getFPPPlaylistEntryReconciliation,
+  listFPPPlaylistDefinitions,
+  getFPPPlaylistDefinition,
+  getFPPPlaylistDefinitionEntries,
   getResolumeInstancesConfig,
   putResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,

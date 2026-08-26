@@ -58,6 +58,11 @@ import { NightSessionActive } from '../views/NightSessionActive'
 // instance reconciliation verdicts, previously reachable only from
 // `showmeshctl fpp`.
 import { PlaylistReadiness } from '../views/PlaylistReadiness'
+// TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
+// evidence, an authoring surface (unlike PlaylistReadiness above), so it
+// routes under Configure rather than Show night.
+import { FPPPlaylistDefinitions } from '../views/FPPPlaylistDefinitions'
+import { FPPPlaylistDefinitionDetail } from '../views/FPPPlaylistDefinitionDetail'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
@@ -110,6 +115,17 @@ export default function App() {
             <Route path="config/show.playlist" element={<ShowPlaylists />} />
             <Route path="config/show.playlist/new" element={<ShowPlaylistDetail isNew />} />
             <Route path="config/show.playlist/:id" element={<ShowPlaylistDetail />} />
+            {/* TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition
+                import evidence -- an authoring question (what has FPP
+                actually reported, and does its hash still match a
+                binding), not the show-night readiness question
+                /playlists/readiness answers, so it sits beside the other
+                Configure authoring routes instead. */}
+            <Route path="config/fpp-playlist-definitions" element={<FPPPlaylistDefinitions />} />
+            <Route
+              path="config/fpp-playlist-definitions/:instanceUuid/:playlistHash"
+              element={<FPPPlaylistDefinitionDetail />}
+            />
             <Route path="config/show.active" element={<ShowActive />} />
             {/* Track F seam F2 (UI half): the night-session lifecycle
                 operating view lives under Monitor/Control (Layout.tsx),

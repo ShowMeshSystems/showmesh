@@ -115,6 +115,12 @@ const NAV_GROUPS: Array<{
       // Track H seam H6: show.playlist authoring, previously reachable
       // only from showmeshctl.
       { to: '/config/show.playlist', label: 'Playlists', end: false },
+      // TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition
+      // import evidence -- what an author sees to decide whether a
+      // Playlist binding still matches what FPP will actually play.
+      // Previously reachable only from `showmeshctl fpp
+      // playlist-definitions`.
+      { to: '/config/fpp-playlist-definitions', label: 'FPP playlist definitions', end: false },
       // Track F seam F1 (UI half): the night.session/night.session.active
       // authoring surfaces, previously reachable only from showmeshctl.
       { to: '/config/night.session', label: 'Night sessions', end: false },

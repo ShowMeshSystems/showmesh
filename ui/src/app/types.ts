@@ -159,6 +159,14 @@ export type {
   // verdicts.
   FPPPlaylistReadinessResponse,
   FPPPlaylistEntryReconciliationResponse,
+  // TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
+  // evidence: the list of what has been reported, one full definition,
+  // and its parsed entries.
+  FPPPlaylistDefinitionMetadata,
+  FPPPlaylistDefinitionsListResponse,
+  FPPPlaylistDefinitionResponse,
+  FPPPlaylistDefinitionEntry,
+  FPPPlaylistDefinitionEntriesResponse,
 } from '../api'
 // Renamed on import, not re-declared: seam B's `Event` is identical to
 // the wire schema's Event plus a branded `EventSeq` (see api/domain.ts);
