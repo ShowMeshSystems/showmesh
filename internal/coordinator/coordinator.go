@@ -981,26 +981,34 @@ func Run() int {
 	// backgroundWG before this function returns — see the shutdown sequence
 	// below — so a caller (and this task's own goroutine-count test) can
 	// verify nothing is left running once Run returns.
+	// spawnBackground pairs backgroundWG.Add(1) with the goroutine it
+	// counts at a single call site, so a seam that starts a new background
+	// loop here cannot add the goroutine without also adding to the count
+	// (or the reverse): the two can no longer drift apart the way a
+	// leading backgroundWG.Add(N) drifted from the goroutines below it.
 	var backgroundWG sync.WaitGroup
-	backgroundWG.Add(10)
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground := func(fn func()) {
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			fn()
+		}()
+	}
+	spawnBackground(func() {
 		hub.Run(ctx)
-	}()
-	go func() {
-		defer backgroundWG.Done()
+	})
+	spawnBackground(func() {
 		fppRunner.Run(ctx)
-	}()
+	})
 	// assetSync.Run owns Track E seam E5/E6's own periodic gap-close loop
 	// (assetsync/sync.go), joined via the identical backgroundWG so
 	// shutdown waits for it cleanly like every other background loop here.
 	// Track G seam G-4 (ADR-039 decision 6): it no longer returns early
 	// when disabled — it keeps looping and picks up a later assets.settings
 	// change (including the zero-to-one transition) with no restart.
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground(func() {
 		assetSync.Run(ctx)
-	}()
+	})
 	// runAssetSettingsReconciler is the OTHER half of that same no-restart
 	// guarantee: it re-reads the active assets.settings configuration every
 	// assetSettingsReconcileInterval and applies any change to assetSync
@@ -1009,20 +1017,18 @@ func Run() int {
 	// goroutine — or the HTTP server — ever starts, mirroring
 	// resolumeMgr.reconcile's identical "no request observes a pre-reconcile
 	// state" property.
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground(func() {
 		runAssetSettingsReconciler(ctx, assetSettingsSrc, assetSync)
-	}()
+	})
 	// resolumeCompositionWire.Run owns Track D seam D-2/B's own periodic
 	// refresh loop (resolumewiring.go), started unconditionally — see
 	// resolumeCompositionWiring's own doc comment for why this does not
 	// share resolumeMgr's "an instance is currently configured" gate.
 	// Joined via the identical backgroundWG so shutdown waits for it
 	// cleanly like every other background loop here.
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground(func() {
 		resolumeCompositionWire.Run(ctx)
-	}()
+	})
 	// watchUnclaimedBootstrap is ADR-024 decision 9's "loud and
 	// persistent" unclaimed-bootstrap signal's other half — the log side,
 	// alongside SessionResponse.bootstrapRequired's UI-banner side (see
@@ -1035,10 +1041,9 @@ func Run() int {
 	// coordinator to zero principals with reads still open, so the
 	// dashboard renders and nothing looks wrong unless something says so
 	// loudly and keeps saying so.
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground(func() {
 		watchUnclaimedBootstrap(ctx, identitySvc, logger)
-	}()
+	})
 
 	// nightLoop.Run owns Track F seam F3's own event-driven driver
 	// (nightloop.go): it advances a night session out of the states F2's
@@ -1047,10 +1052,9 @@ func Run() int {
 	// unconditionally like every other reconcile loop above — a session
 	// only ever exists once an operator configures and starts one.
 	nightLoop := api.NewNightLoop(apiDeps, apiOpts)
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground(func() {
 		nightLoop.Run(ctx)
-	}()
+	})
 
 	// cueActivationLoop.Run owns Track H seam H4's own activation trigger
 	// (cueactivationloop.go): it resolves and dispatches a cue.activate (or
@@ -1062,10 +1066,9 @@ func Run() int {
 	// fppobservations.go's POST handler nudging it does not give ingestion
 	// execution authority: see [api.CueActivationNudger]'s own doc
 	// comment.
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground(func() {
 		cueActivationLoop.Run(ctx)
-	}()
+	})
 
 	// fppMQTTMgr.Run owns Track G seam G-3's own reconcile loop, mirroring
 	// resolumeMgr.Run immediately below: it keeps the current
@@ -1075,12 +1078,11 @@ func Run() int {
 	// UNCONDITIONALLY, replacing the old cfg.FPPMQTTBrokerURL != "" gated
 	// goroutine this block used to run: this loop is what notices a FIRST
 	// broker being configured (the zero-to-one transition ADR-039 decision
-	// 6 requires work with no restart). Counted in this function's own
-	// backgroundWG.Add(8) above.
-	go func() {
-		defer backgroundWG.Done()
+	// 6 requires work with no restart). Counted via spawnBackground above,
+	// like every other unconditional loop in this block.
+	spawnBackground(func() {
 		fppMQTTMgr.Run(ctx)
-	}()
+	})
 
 	// resolumeMgr.Run owns Track G seam G-2's own reconcile loop: it keeps
 	// the current bundle (collector, watcher, action dispatcher, recovery)
@@ -1095,14 +1097,13 @@ func Run() int {
 	// own ctx.Done() branch tears down whatever bundle is still active
 	// before returning (resolumeManager.Run's own doc comment) — mirroring
 	// reconcileFPPCollectors' identical "always running, adds/removes as
-	// configuration changes" shape one field over. Counted in this
-	// function's own backgroundWG.Add(8) above, alongside hub.Run and
-	// fppRunner.Run, rather than a standalone conditional Add — it is
-	// unconditional, matching them.
-	go func() {
-		defer backgroundWG.Done()
+	// configuration changes" shape one field over. Counted via
+	// spawnBackground above, alongside hub.Run and fppRunner.Run, rather
+	// than a standalone conditional Add: it is unconditional, matching
+	// them.
+	spawnBackground(func() {
 		resolumeMgr.Run(ctx, resolumeInstanceSrc)
-	}()
+	})
 
 	// runShowMode owns ADR-033's own apply loop (showmode.go): it resolves
 	// the active show.mode revision on its own cadence and makes this
@@ -1112,10 +1113,9 @@ func Run() int {
 	// rebuilt whenever resolume.instances changes and the mode has to
 	// survive that. bm is the node-delivery consumer: one retained,
 	// installation-wide message, never a per-node command re-dispatch.
-	go func() {
-		defer backgroundWG.Done()
+	spawnBackground(func() {
 		runShowMode(ctx, showModeSrc, resolumeMgr, bm, time.Now, logger, showModeReconcileInterval)
-	}()
+	})
 
 	serveErrCh := make(chan error, 1)
 	go func() {
