@@ -365,6 +365,13 @@ export type FPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDe
 export type FPPPlaylistDefinitionEntry = components['schemas']['FPPPlaylistDefinitionEntry']
 export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
 
+// TRACK-H-H2-SPEC.md §5.1's show-night observation-sequence reset: the
+// stored playlist-entry observation an operator reviews before clearing
+// it. Same "aliased, not re-declared" and "plain on-demand side call, not
+// part of Model" posture as the types above.
+export type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
+export type FPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

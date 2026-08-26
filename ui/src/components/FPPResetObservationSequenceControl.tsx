@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react'
 import { deleteFPPPlaylistEntryObservation, listFPPPlaylistEntryObservations } from '../api'
+import type { FPPPlaylistEntryObservation } from '../api'
 import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from './ScopedButton'
-import type { components } from '../api/generated/schema'
-
-type SchemaFPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 
 // TRACK-H-H2-SPEC.md §5.1's show-night recovery path, given a UI home: an
 // FPP instance's stored playlist-entry observation and sequence anchor
@@ -34,7 +32,7 @@ const REQUIRED_SCOPE = 'fpp:command'
 type ObservationFetchState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
-  | { kind: 'loaded'; observation: SchemaFPPPlaylistEntryObservation | undefined }
+  | { kind: 'loaded'; observation: FPPPlaylistEntryObservation | undefined }
 
 export function FPPResetObservationSequenceControl({ instanceUuid }: FPPResetObservationSequenceControlProps) {
   const model = useModelContext()
@@ -92,10 +90,15 @@ export function FPPResetObservationSequenceControl({ instanceUuid }: FPPResetObs
 
   async function confirmClear(): Promise<void> {
     if (deleting) return
+    // `instanceUuid === null` returns early above before this handler can
+    // ever be wired up (the whole armed/confirm UI is unreachable), but
+    // narrow explicitly rather than asserting it away so a future
+    // reordering fails safe instead of dereferencing null.
+    if (instanceUuid === null) return
     setDeleting(true)
     setDeleteError(null)
     try {
-      await deleteFPPPlaylistEntryObservation(instanceUuid!)
+      await deleteFPPPlaylistEntryObservation(instanceUuid)
       setArmed(false)
       setJustCleared(true)
       setReloadGeneration((g) => g + 1)
