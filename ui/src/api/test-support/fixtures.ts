@@ -27,7 +27,7 @@ type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
 // Track F seam F2.
 type NightSessionState = components['schemas']['NightSessionState']
 type NightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
-// SM-283/TRACK-H-H2-SPEC.md §5.1.
+// TRACK-H-H2-SPEC.md §5.1.
 type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 
 const NOW = '2026-08-11T12:00:00.000Z'

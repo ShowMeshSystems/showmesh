@@ -232,7 +232,7 @@ describe('PlaylistReadiness', () => {
     expect(screen.getByText(formatAbsolute('2026-08-25T21:15:00Z'))).toBeInTheDocument()
   })
 
-  it('SM-283: refetches the reconciliation verdict, but not the readiness verdict, when a live fppPlaylistEntry.changed observation arrives for the instance', async () => {
+  it('refetches the reconciliation verdict, but not the readiness verdict, when a live fppPlaylistEntry.changed observation arrives for the instance', async () => {
     listConfigObjects.mockResolvedValue(playlistListResponse)
     getFPPPlaylistReadiness.mockResolvedValue({
       playlistId: 'opener',
@@ -261,7 +261,7 @@ describe('PlaylistReadiness', () => {
     expect(screen.getByText(/entry entry-one/)).toBeInTheDocument()
 
     // FPP advances: store.ts's applyFppPlaylistEntryChanged upserted a
-    // new observation for this instanceUuid (SM-283). Presented to this
+    // new observation for this instanceUuid. Presented to this
     // component the same way a real live frame would be -- a changed
     // `model.fppPlaylistEntryObservations` prop, not a new mechanism this
     // test invents, matching the reconnect test's own approach above.

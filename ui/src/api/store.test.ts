@@ -3414,7 +3414,7 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     })
   })
 
-  it('SM-283: applies an fppPlaylistEntry.changed frame as a whole-object replace of the named instance in model.fppPlaylistEntryObservations', async () => {
+  it('applies an fppPlaylistEntry.changed frame as a whole-object replace of the named instance in model.fppPlaylistEntryObservations', async () => {
     const observation = makeFPPPlaylistEntryObservation({
       instanceUuid: 'fpp-uuid-1',
       sequence: 7,
@@ -3492,7 +3492,7 @@ describe('ApiStore: macro runs (Step 9, STEP-9-SPEC.md section 6.6)', () => {
     expect(store.getSnapshot().fppPlaylistEntryObservations).toEqual([nextObservation])
   })
 
-  it('SM-283: a stream.reset clears model.fppPlaylistEntryObservations back to empty rather than leaving a value this connection has no evidence still holds', async () => {
+  it('a stream.reset clears model.fppPlaylistEntryObservations back to empty rather than leaving a value this connection has no evidence still holds', async () => {
     const observation = makeFPPPlaylistEntryObservation({ instanceUuid: 'fpp-uuid-1' })
     let streamRes = null as import('node:http').ServerResponse | null
 

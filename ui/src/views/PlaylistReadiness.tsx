@@ -86,8 +86,8 @@ export function PlaylistReadiness() {
   // alongside the one DataFreshnessNotice already uses for the rest of
   // this page. `reloadGeneration` is this page's own explicit "recheck
   // now" control (the same bump-a-counter shape as NightSession.tsx's
-  // per-section Reload button). SM-283 adds a third trigger for the
-  // reconciliation row specifically: `fppPlaylistEntry.changed` frames
+  // per-section Reload button). The reconciliation row also has a third
+  // trigger: `fppPlaylistEntry.changed` frames
   // (store.ts's applyFppPlaylistEntryChanged) mean FPP itself reported a
   // new entry, so that row also refetches on its own without waiting for
   // either a reconnect or the operator's own click; see ReconciliationRow
@@ -340,7 +340,7 @@ function useReconciliation(
   instanceUuid: string,
   snapshotReceivedAt: number | null,
   reloadGeneration: number,
-  // SM-283: the latest `fppPlaylistEntry.changed` frame's `receivedAt` for
+  // The latest `fppPlaylistEntry.changed` frame's `receivedAt` for
   // this instance (store.ts's applyFppPlaylistEntryChanged), or `null`
   // before this connection has ever seen one. Not read inside the effect
   // body, same as `snapshotReceivedAt`/`reloadGeneration` above; it
@@ -371,7 +371,7 @@ function useReconciliation(
       cancelled = true
     }
     // Same reconnect/manual-recheck shape as usePlaylistReadiness above,
-    // plus SM-283's live retrigger on latestObservationReceivedAt.
+    // plus a live retrigger on latestObservationReceivedAt.
   }, [instanceUuid, snapshotReceivedAt, reloadGeneration, latestObservationReceivedAt])
 
   return state
@@ -389,7 +389,7 @@ function ReconciliationRow({
   reloadGeneration: number
 }) {
   const model = useModelContext()
-  // SM-283: keyed by instanceUuid, matching how `fppPlaylistEntry.changed`
+  // Keyed by instanceUuid, matching how `fppPlaylistEntry.changed`
   // itself is keyed (store.ts's applyFppPlaylistEntryChanged), not
   // instanceId, same distinction this file's own reconcilableInstances
   // filter above already draws.

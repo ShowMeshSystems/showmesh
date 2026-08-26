@@ -3263,7 +3263,7 @@ export class ApiStore {
         return
       }
       case 'fppPlaylistEntry.changed': {
-        // SM-283: mirrors `fpp.changed`/`node.changed`'s own shape, a
+        // Mirrors `fpp.changed`/`node.changed`'s own shape, a
         // `serverTime` wrapper around one full-frame value (`observation`
         // here, `instance`/`node` there), not `macroRun.changed`'s
         // flattened-top-level shape. This frame's own `seq` field is
@@ -3389,7 +3389,7 @@ export class ApiStore {
       // re-establish ground truth rather than trusting a value this
       // connection has no evidence still holds.
       nightSession: null,
-      // SM-283: same "invalidate, do not carry forward" posture as
+      // Same "invalidate, do not carry forward" posture as
       // `nightSession` immediately above, and for the identical reason:
       // this is not part of `Snapshot` either (Model.fppPlaylistEntryObservations's
       // own comment), so a stale entry from before a reconnect must not
@@ -3576,7 +3576,7 @@ export class ApiStore {
   }
 
   /**
-   * `fppPlaylistEntry.changed` (SM-283) carries one instance's
+   * `fppPlaylistEntry.changed` carries one instance's
    * COMPLETE latest observation (api/openapi.yaml's
    * FPPPlaylistEntryChangedEvent: "full-frame only - no ADR-023 delta
    * narrowing exists for this resource"), matching [applyResolumeChanged]'s
