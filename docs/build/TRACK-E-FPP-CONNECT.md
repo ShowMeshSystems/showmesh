@@ -109,11 +109,11 @@ filesystem.
 **Disabled behaviour.** While the pushed `fppconnect.settings.enabled` flag
 is false, every route above answers 404 and the listener's status reports
 "disabled by configuration." The socket stays bound throughout, so the next
-enable takes effect with no restart. On this branch there is no push to
-read yet: `fppConnectStatePlaceholderView.Enabled` hardcodes `true` until
-FC1a lands the coordinator push and extends the holder with a real
-`fppconnect.settings.enabled` value, so this behaviour is unreachable in
-practice before that seam merges.
+enable takes effect with no restart. `fppConnectStateView.Enabled` reads this
+flag from the holder the coordinator's `fppconnect.configure` push
+(`internal/agent/fppconnectops.go`) applies, and reports `true` (enabled)
+before the coordinator has ever pushed settings, matching the coordinator's
+own `resolveFPPConnectSettings` default.
 
 **Bind-failure behaviour.** A bind failure (most commonly a node without
 `CAP_NET_BIND_SERVICE` trying to bind `:80`) never stops the agent. It is

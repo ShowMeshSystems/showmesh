@@ -185,15 +185,14 @@ func Run() int {
 	// fppConnectStatus carries this listener's bind outcome into the
 	// render report the same way multiSyncStatus does (ADR-044): a bind
 	// failure degrades this node's FPP Connect eligibility without
-	// stopping the agent. fppConnectStatePlaceholderView stands in for
-	// FC1a's Enabled/ActiveShow/ShowNames until that seam extends
-	// fppConnect with them; see fppconnecthttp.go's fppConnectView doc
-	// comment.
+	// stopping the agent. fppConnectStateView adapts the held fppConnect
+	// state (fppconnectstate.go, FC1a) to the listener's fppConnectView;
+	// see that type's own doc comment in fppconnecthttp.go.
 	fppConnectStatus := newFPPConnectHTTPStatus()
 	fppConnectHTTPDone := make(chan struct{})
 	go func() {
 		defer close(fppConnectHTTPDone)
-		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, fppConnectStatePlaceholderView{state: fppConnect}, cfg.NodeID, fppConnectStatus, logger)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, fppConnectStateView{state: fppConnect}, cfg.NodeID, fppConnectStatus, logger)
 	}()
 
 	// showMode is ADR-033's installation-wide operating mode as this node

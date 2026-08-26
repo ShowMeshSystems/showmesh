@@ -19,19 +19,24 @@ import (
 // fakeFPPConnectView is the test fake fppConnectView's own doc comment
 // promises: every handler test in this file is built against this
 // interface, never against fppConnectState, so these tests do not depend on
-// FC1a's eventual extension of that holder.
+// that holder's own construction. See TestFPPConnectStateViewDisabledEndToEnd
+// (fppconnectstate_test.go) for a test built against the real holder and
+// its fppConnectStateView adapter instead.
 type fakeFPPConnectView struct {
-	channelRanges string
-	enabled       bool
-	activeShow    string
-	hasActiveShow bool
-	showNames     []string
+	channelRanges   string
+	enabled         bool
+	activeShowName  string
+	activeShowKnown bool
+	activeShowEver  bool
+	showNames       []string
 }
 
-func (f fakeFPPConnectView) ChannelRanges() string      { return f.channelRanges }
-func (f fakeFPPConnectView) Enabled() bool              { return f.enabled }
-func (f fakeFPPConnectView) ActiveShow() (string, bool) { return f.activeShow, f.hasActiveShow }
-func (f fakeFPPConnectView) ShowNames() []string        { return f.showNames }
+func (f fakeFPPConnectView) ChannelRanges() string { return f.channelRanges }
+func (f fakeFPPConnectView) Enabled() bool         { return f.enabled }
+func (f fakeFPPConnectView) ActiveShow() (name string, known bool, ever bool) {
+	return f.activeShowName, f.activeShowKnown, f.activeShowEver
+}
+func (f fakeFPPConnectView) ShowNames() []string { return f.showNames }
 
 // startFPPConnectTestServer serves the real handler newFPPConnectHandler
 // builds over a real loopback listener (httptest.Server, an OS-assigned
@@ -661,5 +666,51 @@ func TestFPPConnectPollEnabledTransitionsBothWays(t *testing.T) {
 	fppConnectPollEnabled(fakeFPPConnectView{enabled: true}, status)
 	if listening, reason, _ := status.get(); !listening || reason != "" {
 		t.Fatalf("re-enabled: listening=%v reason=%q, want true/empty", listening, reason)
+	}
+}
+
+// TestFPPConnectStateViewEnabledDefaultsTrueBeforePush proves
+// fppConnectStateView.Enabled defaults true when the coordinator has never
+// pushed fppconnect.settings, matching the coordinator's own
+// resolveFPPConnectSettings default (ADR-044 decision 5): a node with a
+// bound listener and no push yet must still be discoverable, not disabled
+// by the absence of a setting nobody sent.
+func TestFPPConnectStateViewEnabledDefaultsTrueBeforePush(t *testing.T) {
+	view := fppConnectStateView{state: newFPPConnectState()}
+	if !view.Enabled() {
+		t.Fatal("view.Enabled() = false before any settings push, want true (default)")
+	}
+}
+
+// TestFPPConnectStateViewDisabledEndToEnd proves the disabled path is
+// reachable through the real production wiring, not just
+// fakeFPPConnectView: pushing an fppconnect.settings enabled=false snapshot
+// through fppConnectState.Apply (the same call fppconnectops.go's
+// "fppconnect.configure" operation makes) must make fppConnectStateView's
+// Enabled() report false, which must make every route on a listener built
+// over that view answer 404, and must make fppConnectPollEnabled record the
+// listener as disabled on fppConnectHTTPStatus.
+func TestFPPConnectStateViewDisabledEndToEnd(t *testing.T) {
+	state := newFPPConnectState()
+	state.Apply(fppConnectSnapshot{
+		SettingsEverSet: true,
+		Settings:        fppConnectSettings{Enabled: false},
+	})
+	view := fppConnectStateView{state: state}
+
+	if view.Enabled() {
+		t.Fatal("view.Enabled() = true after Apply pushed enabled=false")
+	}
+
+	srv := startFPPConnectTestServer(t, view, "node-1")
+	resp, body := getBody(t, srv.URL+"/api/system/info")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 while disabled; body=%s", resp.StatusCode, body)
+	}
+
+	status := newFPPConnectHTTPStatus()
+	fppConnectPollEnabled(view, status)
+	if listening, reason, _ := status.get(); !listening || reason != fppConnectDisabledReason {
+		t.Fatalf("status: listening=%v reason=%q, want true/%q", listening, reason, fppConnectDisabledReason)
 	}
 }

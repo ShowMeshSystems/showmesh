@@ -97,16 +97,12 @@ func fppConnectNodeUUID(nodeID string) uuid.UUID {
 
 // fppConnectView is the read-only view of this node's FPP Connect
 // compatibility state that this listener's handlers need. It is defined
-// here, against a small interface, rather than against fppConnectState
-// directly: on this branch fppConnectState (fppconnectstate.go) carries
-// only ChannelRanges, and the active show, the show name list, and the
-// fppconnect.settings enabled flag are FC1a's addition, in a seam that
-// merges after this one. Building against this interface, plus a test fake,
-// means this seam's tests do not depend on fppConnectState's eventual
-// shape. After rebasing onto FC1a, wire the real (by-then-extended) holder
-// directly against this interface in place of
-// fppConnectStatePlaceholderView below; if a method name differs there,
-// adapt this interface, not the holder.
+// here, against a small interface, rather than directly against
+// fppConnectState's own method set, so this seam's tests keep exercising
+// the handlers through fakeFPPConnectView (fppconnecthttp_test.go)
+// independent of fppConnectState's own construction. fppConnectStateView
+// below is the production adapter over the real holder (fppconnectstate.go,
+// FC1a).
 type fppConnectView interface {
 	// ChannelRanges returns the advertised channel range string, or "" for
 	// a node with no configured surface.
@@ -118,34 +114,48 @@ type fppConnectView interface {
 	// restart.
 	Enabled() bool
 
-	// ActiveShow returns the coordinator-pushed active show's name and
-	// true, or ("", false) when this node holds no active show. Not read
-	// by any route this seam serves; it exists on this interface because
-	// FC2's upload binding (ADR-044 decision 8) needs it from the same
-	// holder.
-	ActiveShow() (string, bool)
+	// ActiveShow returns the coordinator-pushed active show's tri-state
+	// (fppConnectState.ActiveShow's own shape, ADR-044 decision 5): ever
+	// is false only before this node has ever been told an active show at
+	// all, in which case known and name are meaningless; once ever is
+	// true, known distinguishes an explicit "no active show" (known
+	// false) from a named active show (known true, name is its display
+	// name). Not read by any route this seam serves; it exists on this
+	// interface because FC2's upload binding (ADR-044 decision 8) needs it
+	// from the same holder.
+	ActiveShow() (name string, known bool, ever bool)
 
 	// ShowNames returns the ShowMesh show names this node currently knows.
 	// GET /api/playlists serves exactly this list, as a bare array.
 	ShowNames() []string
 }
 
-// fppConnectStatePlaceholderView adapts the current *fppConnectState, which
-// only carries ChannelRanges on this branch, to fppConnectView. It stands
-// in for FC1a's Enabled/ActiveShow/ShowNames until that seam lands:
-// Enabled defaults true (a node with a bound listener should be
-// discoverable; there is no fppconnect.settings row yet to read a real
-// value from), and ActiveShow/ShowNames report empty (no show binding
-// exists on this branch yet). See fppConnectView's own doc comment for the
-// rebase instruction that replaces this type with the real holder.
-type fppConnectStatePlaceholderView struct {
+// fppConnectStateView adapts *fppConnectState (fppconnectstate.go, FC1a) to
+// fppConnectView. Enabled defaults true when the coordinator has never
+// pushed fppconnect.settings (Settings' second return is false): a node
+// with a bound listener and no push yet should still be discoverable,
+// matching the coordinator's own resolveFPPConnectSettings default
+// (ADR-044 decision 5) rather than reporting disabled for a setting that
+// was simply never sent.
+type fppConnectStateView struct {
 	state *fppConnectState
 }
 
-func (v fppConnectStatePlaceholderView) ChannelRanges() string      { return v.state.ChannelRanges() }
-func (v fppConnectStatePlaceholderView) Enabled() bool              { return true }
-func (v fppConnectStatePlaceholderView) ActiveShow() (string, bool) { return "", false }
-func (v fppConnectStatePlaceholderView) ShowNames() []string        { return nil }
+func (v fppConnectStateView) ChannelRanges() string { return v.state.ChannelRanges() }
+
+func (v fppConnectStateView) Enabled() bool {
+	settings, ok := v.state.Settings()
+	if !ok {
+		return true
+	}
+	return settings.Enabled
+}
+
+func (v fppConnectStateView) ActiveShow() (name string, known bool, ever bool) {
+	return v.state.ActiveShow()
+}
+
+func (v fppConnectStateView) ShowNames() []string { return v.state.ShowNames() }
 
 // fppConnectLocalAddrKey is the context key runFPPConnectHTTPListener's
 // ConnContext hook stores each accepted connection's real local address
