@@ -22,6 +22,13 @@ const MAX_LIMIT = 500
 // REQUEST_CAP bounds that walk so a very long retained history cannot hang
 // this screen or hammer the coordinator with requests.
 const REQUEST_CAP = 20
+// The walk can collect up to REQUEST_CAP * MAX_LIMIT entries, and rendering
+// every one of them as a table row is its own separate cost (DOM size, not
+// network traffic). WINDOW_SIZE bounds how many of the newest fetched
+// entries are rendered at once; WINDOW_STEP is how much "Show more" widens
+// that render window, up to everything the walk collected.
+const WINDOW_SIZE = 200
+const WINDOW_STEP = 200
 
 type LoadState =
   | { kind: 'loading' }
@@ -37,11 +44,13 @@ export function Audit() {
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, AUDIT_READ_SCOPE)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [windowSize, setWindowSize] = useState(WINDOW_SIZE)
 
   useEffect(() => {
     if (!scopeGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
+    setWindowSize(WINDOW_SIZE)
 
     async function walkToEnd(): Promise<{ entries: AuditEntry[]; capped: boolean }> {
       const collected: AuditEntry[] = []
@@ -78,6 +87,10 @@ export function Audit() {
     }
   }, [scopeGate.allowed])
 
+  const newestFirst = state.kind === 'loaded' ? [...state.entries].reverse() : []
+  const visible = newestFirst.slice(0, windowSize)
+  const hiddenOlderCount = newestFirst.length - visible.length
+
   return (
     <div>
       <h2 className="panel__title">Audit log</h2>
@@ -103,6 +116,11 @@ export function Audit() {
       )}
       {scopeGate.allowed && state.kind === 'loaded' && (
         <>
+          {/* The request-cap fact (the walk stopped short of the true end
+              of retained history) and the render-window fact (only some of
+              what the walk collected is drawn as rows) are different
+              things and are reported separately so one is never mistaken
+              for the other. */}
           {state.capped && (
             <p className="panel panel--error" role="status">
               Stopped after {REQUEST_CAP} requests: showing the oldest {state.entries.length} entries
@@ -112,41 +130,53 @@ export function Audit() {
           {state.entries.length === 0 ? (
             <p className="text-muted">No audit entries retained.</p>
           ) : (
-            <div className="table-scroll">
-              <table className="config-table">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Principal</th>
-                    <th>Kind</th>
-                    <th>Action</th>
-                    <th>Target</th>
-                    <th>Outcome</th>
-                    <th>Evidence state</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {/* Newest first: entries arrive oldest-first off the wire
-                      (ascending by an id GET /audit never exposes), reversed
-                      here purely for display. */}
-                  {[...state.entries].reverse().map((entry, index) => (
-                    <tr key={`${entry.timestamp}-${index}`}>
-                      <td>{formatAbsolute(entry.timestamp)}</td>
-                      <td>
-                        {entry.principalName} ({entry.form})
-                      </td>
-                      <td>{entry.kind}</td>
-                      <td>{entry.action}</td>
-                      <td>{entry.target}</td>
-                      <td>{outcomeLabel(entry)}</td>
-                      <td>{entry.outcomeState === '' ? '—' : entry.outcomeState}</td>
-                      <td>{entry.outcomeReason === '' ? '—' : entry.outcomeReason}</td>
+            <>
+              <p className="text-muted">
+                {hiddenOlderCount > 0
+                  ? `Showing the most recent ${visible.length} entries; ${hiddenOlderCount} older fetched entries are not shown.`
+                  : `Showing all ${visible.length} entries, most recent first.`}
+              </p>
+              <div className="table-scroll">
+                <table className="config-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Principal</th>
+                      <th>Kind</th>
+                      <th>Action</th>
+                      <th>Target</th>
+                      <th>Outcome</th>
+                      <th>Evidence state</th>
+                      <th>Reason</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {visible.map((entry, index) => (
+                      <tr key={`${entry.timestamp}-${index}`}>
+                        <td>{formatAbsolute(entry.timestamp)}</td>
+                        <td>
+                          {entry.principalName} ({entry.form})
+                        </td>
+                        <td>{entry.kind}</td>
+                        <td>{entry.action}</td>
+                        <td>{entry.target}</td>
+                        <td>{outcomeLabel(entry)}</td>
+                        <td>{entry.outcomeState === '' ? '—' : entry.outcomeState}</td>
+                        <td>{entry.outcomeReason === '' ? '—' : entry.outcomeReason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {hiddenOlderCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setWindowSize((w) => Math.min(w + WINDOW_STEP, newestFirst.length))}
+                >
+                  Show more
+                </button>
+              )}
+            </>
           )}
         </>
       )}
