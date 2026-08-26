@@ -1099,7 +1099,7 @@ func Run() int {
 	// reconcileFPPCollectors' identical "always running, adds/removes as
 	// configuration changes" shape one field over. Counted via
 	// spawnBackground above, alongside hub.Run and fppRunner.Run, rather
-	// than a standalone conditional Add — it is unconditional, matching
+	// than a standalone conditional Add: it is unconditional, matching
 	// them.
 	spawnBackground(func() {
 		resolumeMgr.Run(ctx, resolumeInstanceSrc)
