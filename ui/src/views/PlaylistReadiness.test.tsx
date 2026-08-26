@@ -89,6 +89,43 @@ describe('PlaylistReadiness', () => {
     expect(screen.getByText('entry filename mismatch')).toBeInTheDocument()
   })
 
+  // A newer definition on file for the same instance/playlist name is its
+  // own distinguishable failing condition, detected without FPP ever
+  // having played the edit.
+  it('renders a definition-superseded verdict with its own label', async () => {
+    listConfigObjects.mockResolvedValue(playlistListResponse)
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: false,
+      failingCondition: 'definition-superseded',
+      reason: 'a newer playlist definition is stored for instance "inst-1" playlist "Main" than the bound hash',
+      serverTime: '2026-08-25T00:00:00Z',
+    })
+    renderView(makeModel({ session }))
+
+    expect(await screen.findByText('not ready')).toBeInTheDocument()
+    expect(screen.getByText('definition superseded')).toBeInTheDocument()
+  })
+
+  // Readiness must never render ready:true for a check it could not
+  // evaluate — evidence-unavailable is its own failing condition, not
+  // folded into the "ready" badge with a warning.
+  it('renders an evidence-unavailable verdict as not ready, never as a ready warning', async () => {
+    listConfigObjects.mockResolvedValue(playlistListResponse)
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: false,
+      failingCondition: 'evidence-unavailable',
+      reason: 'the latest observation for this instance could not establish identity (missing_playlist_name), so its playlistHash cannot be compared',
+      serverTime: '2026-08-25T00:00:00Z',
+    })
+    renderView(makeModel({ session }))
+
+    expect(await screen.findByText('not ready')).toBeInTheDocument()
+    expect(screen.getByText('evidence unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('ready', { selector: 'span' })).not.toBeInTheDocument()
+  })
+
   it('renders a fetch failure as a failure to read, distinct from a not-ready verdict', async () => {
     listConfigObjects.mockResolvedValue(playlistListResponse)
     getFPPPlaylistReadiness.mockRejectedValue(new Error('network unreachable'))

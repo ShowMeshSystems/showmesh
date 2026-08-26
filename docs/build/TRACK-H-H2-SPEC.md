@@ -193,6 +193,8 @@ An FPP-backed Playlist is ready when all of these hold, and reports the exact
 failing one when not:
 
 - a definition is stored for its `(instanceUuid, playlistHash)`;
+- no NEWER stored definition exists for the same instance and playlist name
+  under a different hash (`definition-superseded`, SM-290 — see below);
 - every entry's `(section, position)` exists in that definition;
 - every entry's expected filenames match the definition at that position;
 - every referenced Cue exists, belongs to the same Show, and passes its own
@@ -206,12 +208,33 @@ observation has been received at all, because an FPP host that has not played
 anything since the coordinator started is the normal afternoon state, not a
 fault.
 
-This is H2's own list, frozen to this seam's original scope. Lane 16
-later opened §6's vocabulary and added two more, fleet-wide conditions; the
-current, authoritative list lives in
+This is H2's own list, frozen to this seam's original scope. §6's vocabulary
+was later opened and has taken four more conditions; the current,
+authoritative list lives in
 `internal/coordinator/fppreconcile/readiness.go`'s own doc comment, with the
-full account of what Lane 16 added and why in
+full account of what was added and why in
 [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) section H6.
+
+**Amendment (2026-08-26).** The last condition above only ever compares
+against the latest PLAYBACK observation, and FPP's own `Playlist::GetInfo()`
+legitimately returns no identity once a playlist goes idle, so the last
+observation of every run erases the only evidence that check reads. From the
+moment a playlist finishes until the next one starts, an edited-but-never-
+played FPP playlist read `ready: true`, which is exactly the state an operator
+checks readiness in. Two changes close this:
+
+1. `definition-superseded` compares the bound hash against the definition
+   store directly (the plugin re-scans and re-posts on its own schedule, not
+   only on play), so it can fail readiness with FPP idle and nothing played
+   since the edit, with no observation needed at all.
+2. An observation that exists but could not establish identity (contracts
+   section 1.4) is no longer folded into a `ready: true` warning. It is its
+   own failing condition, `evidence-unavailable`: a required check that DID
+   have evidence to look at and could not conclude anything from it, which
+   must never render the same as "checked and fine." The one remaining
+   warning case is "no observation has been received at all": genuinely
+   nothing has happened yet to check, the normal afternoon state, not a
+   fault.
 
 ## 7. Surfaces
 
