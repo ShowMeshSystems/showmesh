@@ -8,6 +8,10 @@ import (
 	"go/token"
 	"strings"
 	"testing"
+	"time"
+
+	agentaudio "github.com/showmeshsystems/showmesh/internal/agent/audio"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 )
 
 // TestResolveFeedAnchorStaysUnresolvedWithNoPipeline proves
@@ -109,4 +113,53 @@ func containsAll(haystack string, needles ...string) bool {
 		}
 	}
 	return true
+}
+
+// TestBeginTransitionGuardsOutgoingEvidence is a fast, unit-level guard
+// for the transition guard beginTransition and observe implement
+// together: while a swap is pending, observe must keep reporting the
+// outgoing run's own evidence rather than the incoming placeholder, and
+// only fall through to the placeholder once the guard window elapses.
+// This does not need a running pipeline; it drives ltcChannel's state
+// directly the way StartLTC and StopLTC do under their own lock.
+func TestBeginTransitionGuardsOutgoingEvidence(t *testing.T) {
+	ch := &ltcChannel{}
+	now := time.Now()
+	ch.mu.Lock()
+	ch.obs = agentaudio.LTCObservation{
+		State: agentaudio.LTCRunning, FrameRateKnown: true, FrameRate: pkgaudio.LTCFrameRate25,
+		TimecodeKnown: true, Timecode: "01:00:00:00", ObservedAt: now,
+	}
+	ch.lastConfirmed = now
+	ch.beginTransition(now)
+	ch.obs = agentaudio.LTCObservation{State: agentaudio.LTCStopped, Reason: "LTC run requested; no output confirmed yet"}
+	ch.mu.Unlock()
+
+	mid := now.Add(50 * time.Millisecond)
+	if got := ch.observe(mid); got.State != agentaudio.LTCRunning {
+		t.Fatalf("observe mid-transition = %+v, want still reporting the outgoing run as running", got)
+	}
+
+	after := now.Add(ltcTransitionGuardDuration + 50*time.Millisecond)
+	if got := ch.observe(after); got.State != agentaudio.LTCStopped {
+		t.Fatalf("observe after the transition guard elapsed = %+v, want the incoming placeholder", got)
+	}
+}
+
+// TestBeginTransitionSkipsGuardWhenNothingWasRunning proves the guard
+// never delays a cold start: when the run being replaced was never
+// itself confirmed running, there is no real audio in flight to protect,
+// and observe must report the incoming state immediately.
+func TestBeginTransitionSkipsGuardWhenNothingWasRunning(t *testing.T) {
+	ch := &ltcChannel{}
+	now := time.Now()
+	ch.mu.Lock()
+	ch.obs = agentaudio.LTCObservation{State: agentaudio.LTCStopped, Reason: "no LTC run has been requested"}
+	ch.beginTransition(now)
+	ch.obs = agentaudio.LTCObservation{State: agentaudio.LTCStopped, Reason: "LTC run requested; no output confirmed yet"}
+	ch.mu.Unlock()
+
+	if got := ch.observe(now); got.Reason != "LTC run requested; no output confirmed yet" {
+		t.Fatalf("observe immediately after a cold start = %+v, want the incoming placeholder with no guard delay", got)
+	}
 }

@@ -58,6 +58,18 @@ const ltcAppSrcLeadSeconds = 0.2
 // is a worse failure than the queue lag this constant corrects for.
 const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
 
+// ltcTransitionGuardDuration bounds [ltcChannel.beginTransition]'s guard
+// window: appsink measurement of the real tail after a Stop or Start
+// swap (loopback, no flush) showed real audio on the wire for close to
+// 0.29s, above ltcAppSrcLeadDuration's own 0.2s nominal queue depth --
+// scheduling and downstream pipeline latency beyond the appsrc's own
+// queue add to it. This constant is sized with headroom over that
+// measurement rather than reused from the nominal bound, because
+// erring toward reporting the outgoing run's evidence a little longer
+// is the safe direction; claiming the run stopped while it is still on
+// the wire is the defect this guards against.
+const ltcTransitionGuardDuration = 2 * ltcAppSrcLeadDuration
+
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
 // feeder goroutine to exit after unblocking it. It is a backstop, not the
 // normal path: setting the pipeline to NULL should return a blocked
@@ -93,6 +105,21 @@ type ltcChannel struct {
 	// LTCRunning to LTCFailed once it is older than ltcLivenessTimeout.
 	obs           agentaudio.LTCObservation
 	lastConfirmed time.Time
+
+	// transitionDeadline and preTransitionObs guard against Start or Stop
+	// claiming the outgoing run is gone the instant either call returns.
+	// Neither flushes the appsrc (see ltcAppSrcLeadDuration's doc comment
+	// on why not), so real audio from the outgoing run stays on the wire
+	// for up to ltcTransitionGuardDuration after the swap. While
+	// now is before transitionDeadline, observe reports preTransitionObs
+	// (extrapolated forward when it was running) instead of the
+	// incoming placeholder or a stopped claim, so the report never says
+	// LTC has stopped while it is still audible. Armed only when the run
+	// being replaced was itself confirmed running: a run that was never
+	// confirmed has nothing real still in flight to protect. Guarded by
+	// mu.
+	transitionDeadline time.Time
+	preTransitionObs   agentaudio.LTCObservation
 
 	// feedStarted is set once [Engine.runLTCFeeder] is actually launched
 	// for this channel, distinguishing that from a structural pipeline
@@ -199,10 +226,35 @@ func (ch *ltcChannel) resolveFeedAnchor() {
 	}
 }
 
+// beginTransition arms the outgoing-audio guard [ltcChannel.observe] reads,
+// but only when the run being replaced was itself confirmed running: see
+// transitionDeadline's doc comment. Caller holds mu and calls this before
+// overwriting ch.obs for the incoming run.
+func (ch *ltcChannel) beginTransition(now time.Time) {
+	if ch.obs.State != agentaudio.LTCRunning {
+		ch.transitionDeadline = time.Time{}
+		return
+	}
+	ch.preTransitionObs = ch.obs
+	ch.transitionDeadline = now.Add(ltcTransitionGuardDuration)
+}
+
 func (ch *ltcChannel) observe(now time.Time) agentaudio.LTCObservation {
 	ch.mu.Lock()
 	o := ch.obs
 	lastConfirmed := ch.lastConfirmed
+	if !ch.transitionDeadline.IsZero() {
+		if now.Before(ch.transitionDeadline) {
+			o = ch.preTransitionObs
+			if o.TimecodeKnown && o.FrameRateKnown {
+				if extended, err := o.Timecode.Advance(now.Sub(o.ObservedAt), o.FrameRate); err == nil {
+					o.Timecode = extended
+				}
+			}
+		} else {
+			ch.transitionDeadline = time.Time{}
+		}
+	}
 	ch.mu.Unlock()
 	if o.State == agentaudio.LTCRunning && now.Sub(lastConfirmed) > ltcLivenessTimeout {
 		o = agentaudio.LTCObservation{
@@ -283,6 +335,7 @@ func (e *Engine) StartLTC(ctx context.Context, spec agentaudio.LTCSpec) (agentau
 	e.ltc.rate = spec.FrameRate
 	e.ltc.generation++
 	e.ltc.active = true
+	e.ltc.beginTransition(now)
 	e.ltc.obs = agentaudio.LTCObservation{State: agentaudio.LTCStopped, Reason: "LTC run requested; no output confirmed yet"}
 	e.ltc.mu.Unlock()
 	if old != nil {
@@ -306,6 +359,7 @@ func (e *Engine) StopLTC(ctx context.Context) (agentaudio.LTCObservation, error)
 	e.ltc.encoder = nil
 	e.ltc.active = false
 	e.ltc.generation++
+	e.ltc.beginTransition(now)
 	e.ltc.obs = agentaudio.LTCObservation{State: agentaudio.LTCStopped, Reason: "stopped"}
 	e.ltc.mu.Unlock()
 	if old != nil {
