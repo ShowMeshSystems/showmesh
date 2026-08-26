@@ -353,10 +353,10 @@ func printAuditTable(w io.Writer, resp auditResponse) {
 		return
 	}
 	tw := newTabWriter(w)
-	_, _ = fmt.Fprintln(tw, "TIMESTAMP\tKIND\tPRINCIPAL\tFORM\tACTION\tTARGET\tOUTCOME\tOUTCOME STATE")
+	_, _ = fmt.Fprintln(tw, "ID\tTIMESTAMP\tKIND\tPRINCIPAL\tFORM\tACTION\tTARGET\tOUTCOME\tOUTCOME STATE")
 	for _, e := range resp.Entries {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s (%s)\t%s\t%s\t%s\t%s\t%s\n",
-			e.Timestamp.Format(time.RFC3339), auditKindGlyph(e.Kind),
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s (%s)\t%s\t%s\t%s\t%s\t%s\n",
+			e.ID, e.Timestamp.Format(time.RFC3339), auditKindGlyph(e.Kind),
 			emptyOrDash(e.PrincipalName), emptyOrDash(e.PrincipalID), emptyOrDash(e.Form),
 			e.Action, e.Target, emptyOrDash(e.Outcome), emptyOrDash(e.OutcomeState))
 	}

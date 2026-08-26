@@ -452,6 +452,13 @@ const (
 // exemption, which lives in how the API layer calls [Service.WriteAudit]
 // under decision 11's failure rule, not in this type.
 type AuditEntry struct {
+	// ID is the append-only row id store assigned this entry
+	// (AUTOINCREMENT, never reused, strictly increasing). Ignored on the
+	// way in ([Service.WriteAudit] assigns it), reported on the way out,
+	// and it is what both audit cursors, [Service.ListAudit]'s since and
+	// [Service.ListAuditNewestFirst]'s before, are expressed in.
+	ID int64
+
 	Timestamp      time.Time
 	PrincipalID    string
 	PrincipalName  string

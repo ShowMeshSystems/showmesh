@@ -697,6 +697,9 @@ export interface paths {
         /**
          * Audit log (ADR-024 decision 11)
          * @description Append-only. Always requires `audit:read`, regardless of whether reads are otherwise open - this is not one of the four pre-existing read resources the open-reads posture covers. Not carried on the SSE change stream.
+         *     Pages in both directions, over ONE cursor: every entry carries its own `id` (`AuditEntry.id`), and both `since` and `before` are expressed in that id. `order=asc` (the default) walks forward from `since`, oldest first. `order=desc` walks backward from `before`, newest first, and `before` omitted means "start at the newest retained entry" - which is how a client opens on the most recent activity in one request instead of walking up to the whole retained log to reach the end of it.
+         *     An id is NOT a position in the result. Retention prunes from the oldest end and ids are never reused, so the lowest retained id is normally greater than zero; a client that advanced a cursor by counting the entries it received would re-read the same page indefinitely. Advance `since` to the LAST entry's id of an ascending page, and `before` to the LAST entry's id of a descending page.
+         *     `AuditResponse.oldestRetainedId` is what makes the backward walk honest at its far end: a descending client has reached the true beginning of retained history when it has returned that id, not merely when a page comes back short - retention can trim below the cursor between two pages. This endpoint still reports no `gap` flag: ADR-024 promises no "no gap and no duplicate" guarantee across a prune the way ADR-020's events contract does, and `oldestRetainedId` reports what the audit service can actually establish rather than a guarantee it cannot.
          */
         get: operations["listAudit"];
         put?: never;
@@ -3031,6 +3034,8 @@ export interface components {
         };
         /** @description One element of GET /audit (ADR-024 decision 11). params is never null (an entry with none still reports an empty object). */
         AuditEntry: {
+            /** @description This entry's append-only row id: strictly increasing, never reused, and the value BOTH of this endpoint's cursors are expressed in (`since` forward, `before` backward). Not a position in the result - see this operation's own description for why counting entries is not a cursor. */
+            id: number;
             /** Format: date-time */
             timestamp: string;
             principalId: string;
@@ -3056,10 +3061,13 @@ export interface components {
             outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported" | "";
             outcomeReason: string;
         };
-        /** @description The body of GET /audit. Unlike EventsResponse, this carries no gap/oldestRetainedSeq-shaped fields: the coordinator's audit service currently exposes no oldest-retained cursor for this endpoint to report one honestly. */
+        /** @description The body of GET /audit. `order` is the ordering the entries are actually in, echoed rather than inferred. `oldestRetainedId` is the lowest id still retained, or null when the log retains nothing at all; it mirrors EventsResponse.oldestRetainedSeq and is what lets a client paging backward tell the beginning of retained history from a page boundary. Unlike EventsResponse there is still no `gap` flag, and that absence is deliberate rather than unreported - see this operation's description. */
         AuditResponse: {
             /** Format: date-time */
             serverTime: string;
+            /** @enum {string} */
+            order: "asc" | "desc";
+            oldestRetainedId: number | null;
             entries: components["schemas"]["AuditEntry"][];
         };
         /** @description One principal as Track G seam G-5's admin surface renders it. Distinct from PrincipalSummary (SessionResponse's own narrower "who am I" shape): this is the full object GET/POST /principals and its sub-resources return. hasPassword and reserved are booleans, never a password hash or any other secret - reserved is true only for the built-in Resolume recovery principal, which is visible wherever principals are listed but cannot be created, disabled, renamed, re-roled, or re-credentialed through this surface. */
@@ -6648,8 +6656,12 @@ export interface operations {
     listAudit: {
         parameters: {
             query?: {
-                /** @description An opaque cursor: return entries after this value. 0 (the default) means "from the beginning of retained history". */
+                /** @description `asc` (the default, and the behaviour before this parameter existed) returns entries oldest first and pages with `since`. `desc` returns entries newest first and pages with `before`. The ordering actually used is echoed as `AuditResponse.order`. */
+                order?: "asc" | "desc";
+                /** @description Exclusive lower bound: return entries whose `id` is strictly greater than this value, oldest first. 0 (the default) means "from the beginning of retained history". Valid only with `order=asc`; sending it with `order=desc`, or alongside `before`, is a `400` rather than a silently ignored parameter. */
                 since?: number;
+                /** @description Exclusive upper bound: return entries whose `id` is strictly less than this value, newest first. 0 (the default) means "from the newest retained entry". Requires `order=desc`; sending it with `order=asc`, or alongside `since`, is a `400`. */
+                before?: number;
                 /** @description Maximum number of entries to return. Defaults to 100; values above 500 are silently clamped to 500. */
                 limit?: number;
             };

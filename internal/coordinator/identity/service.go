@@ -236,7 +236,15 @@ type Service interface {
 	ListTokens(ctx context.Context, principalID string) ([]TokenInfo, error)
 
 	WriteAudit(ctx context.Context, entry AuditEntry) error
+
+	// ListAudit pages FORWARD from since, oldest first.
+	// ListAuditNewestFirst pages BACKWARD from before, newest first, and
+	// is how an operator surface opens on recent activity without walking
+	// retained history. OldestAuditID is what keeps the backward walk
+	// honest at its far end.
 	ListAudit(ctx context.Context, since int64, limit int) ([]AuditEntry, error)
+	ListAuditNewestFirst(ctx context.Context, before int64, limit int) ([]AuditEntry, error)
+	OldestAuditID(ctx context.Context) (int64, bool, error)
 }
 
 // TokenInfo is an API token's non-secret metadata — what [Service.ListTokens]
