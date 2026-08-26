@@ -84,10 +84,11 @@ function buildPayload(form: FormState): { payload: ConfigAudioSettingsPayload } 
   if (
     form.defaultMaxBackgroundGainDb.trim() === '' ||
     !Number.isFinite(defaultMaxBackgroundGainDb) ||
-    defaultMaxBackgroundGainDb > MAX_BACKGROUND_GAIN_DB
+    defaultMaxBackgroundGainDb > MAX_BACKGROUND_GAIN_DB ||
+    defaultMaxBackgroundGainDb < SILENCE_FLOOR_DB
   ) {
     return {
-      error: `Default maximum background gain is in dB (0 dB is unity) and must not exceed ${MAX_BACKGROUND_GAIN_DB} dB.`,
+      error: `Default maximum background gain is in dB (0 dB is unity) and must be between ${SILENCE_FLOOR_DB} and ${MAX_BACKGROUND_GAIN_DB} dB.`,
     }
   }
 
@@ -275,9 +276,10 @@ export function AudioSettings() {
           </label>
 
           <label className="form-field">
-            Default maximum background gain (dB - 0 dB is unity gain, at most +12 dB)
+            Default maximum background gain (dB - 0 dB is unity gain, -60 to +12 dB)
             <input
               type="number"
+              min={SILENCE_FLOOR_DB}
               max={MAX_BACKGROUND_GAIN_DB}
               step="any"
               aria-label="Default maximum background gain in dB"

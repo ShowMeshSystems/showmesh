@@ -10581,10 +10581,12 @@ components:
           type: integer
         defaultMaxBackgroundGainDb:
           type: number
+          minimum: -60
           maximum: 12
           description: >-
             Decibels. 0 dB is unity gain; +12 dB is the typo guard, not a
-            tuned headroom figure.
+            tuned headroom figure. -60 dB is the same silence floor
+            duckTargetGainDb bounds against.
         duckTargetGainDb:
           type: number
           minimum: -60

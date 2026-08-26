@@ -182,6 +182,47 @@ func TestDecodeAudioSettingsPayloadRejectsExcessiveGain(t *testing.T) {
 	}
 }
 
+// The floor matches duckTargetGainDb's -60 dB: without it an
+// operator reaching for the same number as the duck field gets a ceiling
+// so low every background bed goes inaudible, and a very large negative
+// value underflows to 0 with an error naming neither the field nor its
+// bound.
+func TestDecodeAudioSettingsPayloadRejectsBelowFloorGain(t *testing.T) {
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGainDb":-61,"duckTargetGainDb":-13.98,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
+	_, verr := DecodeAudioSettingsPayload(raw)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "defaultMaxBackgroundGainDb" {
+		t.Fatalf("verr = %v, want field-invalid on defaultMaxBackgroundGainDb", verr)
+	}
+	if !strings.Contains(verr.Detail, "defaultMaxBackgroundGainDb") || !strings.Contains(verr.Detail, "decibel") || !strings.Contains(verr.Detail, "-60") {
+		t.Fatalf("refusal must name defaultMaxBackgroundGainDb, decibels, and -60, got %q", verr.Detail)
+	}
+}
+
+func TestDecodeAudioSettingsPayloadAcceptsGainAtFloor(t *testing.T) {
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGainDb":-60,"duckTargetGainDb":-13.98,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
+	p, verr := DecodeAudioSettingsPayload(raw)
+	if verr != nil {
+		t.Fatalf("a ceiling of -60 dB (the floor, inclusive) must decode: %v", verr)
+	}
+	if p.DefaultMaxBackgroundGainDb != -60 {
+		t.Fatalf("defaultMaxBackgroundGainDb = %v, want -60", p.DefaultMaxBackgroundGainDb)
+	}
+}
+
+// The very-large-negative case from the issue: without the floor this
+// underflows CeilingFromDb to 0 and is refused by [audio.Ceiling]'s own
+// validity check instead of the named floor error.
+func TestDecodeAudioSettingsPayloadRejectsVeryLargeNegativeGainWithNamedFloorError(t *testing.T) {
+	raw := `{"driftIgnoreThresholdMs":10,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGainDb":-1000,"duckTargetGainDb":-13.98,"ltcFrameRate":"30","ltcDefaultStartOffset":"00:00:00:00"}`
+	_, verr := DecodeAudioSettingsPayload(raw)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "defaultMaxBackgroundGainDb" {
+		t.Fatalf("verr = %v, want field-invalid on defaultMaxBackgroundGainDb", verr)
+	}
+	if !strings.Contains(verr.Detail, "-60") {
+		t.Fatalf("refusal of a very large negative gain must name the -60 dB floor, got %q", verr.Detail)
+	}
+}
+
 // The two pre-decibel names are refused by name, each naming its
 // replacement. Silently accepting them would reinterpret a halving as a
 // half-decibel lift, which is the whole reason the names changed.
