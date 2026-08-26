@@ -112,6 +112,6 @@ describe('ShowModeIndicator', () => {
     await waitFor(() => screen.getByLabelText('Show mode'))
     const badge = screen.getByLabelText('Show mode')
     expect(badge.tagName).toBe('A')
-    expect(badge).toHaveAttribute('href', '/config')
+    expect(badge).toHaveAttribute('href', '/config#show-mode')
   })
 })

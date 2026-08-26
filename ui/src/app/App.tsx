@@ -80,13 +80,16 @@ import '../styles/index.css'
 // top), and skipped on a browser back/forward navigation (`POP`) so this
 // does not fight the browser's own scroll restoration for that case.
 function ScrollToTop() {
-  const { pathname } = useLocation()
+  const { pathname, hash } = useLocation()
   const navigationType = useNavigationType()
 
   useEffect(() => {
     if (navigationType === 'POP') return
+    // A link carrying a hash is asking for a specific section, so scrolling
+    // to the top would defeat it. The browser handles the anchor itself.
+    if (hash !== '') return
     window.scrollTo(0, 0)
-  }, [pathname, navigationType])
+  }, [pathname, hash, navigationType])
 
   return null
 }

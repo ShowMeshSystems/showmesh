@@ -71,7 +71,7 @@ export function ShowModeIndicator() {
 
   if (state.kind === 'loading') {
     return (
-      <Link to="/config" className="show-mode show-mode--unknown" role="status" aria-label="Show mode">
+      <Link to="/config#show-mode" className="show-mode show-mode--unknown" role="status" aria-label="Show mode">
         Mode: loading…
       </Link>
     )
@@ -80,7 +80,7 @@ export function ShowModeIndicator() {
   if (state.kind === 'error') {
     return (
       <Link
-        to="/config"
+        to="/config#show-mode"
         className="show-mode show-mode--unknown"
         role="status"
         aria-label="Show mode"
@@ -95,7 +95,7 @@ export function ShowModeIndicator() {
   const never = state.config.revision === 0
   return (
     <Link
-      to="/config"
+      to="/config#show-mode"
       className={`show-mode show-mode--${mode}`}
       role="status"
       aria-label="Show mode"
