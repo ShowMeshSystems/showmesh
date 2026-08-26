@@ -187,6 +187,71 @@ func TestEntryKeyFixtures(t *testing.T) {
 	}
 }
 
+// --- section-mapping.json ---
+
+type sectionMappingFixture struct {
+	Description string               `json:"description"`
+	Cases       []sectionMappingCase `json:"cases"`
+}
+
+type sectionMappingCase struct {
+	Name                     string                 `json:"name"`
+	Description              string                 `json:"description"`
+	RuntimeSection           string                 `json:"runtimeSection"`
+	ExpectedCanonicalSection string                 `json:"expectedCanonicalSection"`
+	Identity                 sectionMappingIdentity `json:"identity"`
+	ExpectedEntryKey         string                 `json:"expectedEntryKey"`
+}
+
+type sectionMappingIdentity struct {
+	InstanceUUID string `json:"instanceUuid"`
+	PlaylistName string `json:"playlistName"`
+	PlaylistHash string `json:"playlistHash"`
+	Position     int    `json:"position"`
+}
+
+// TestSectionMappingFixtures exercises the mapping step entry-key.json
+// cannot: it starts from FPP's own runtime section string, maps it with
+// fppidentity.CanonicalSection, and only then derives entryKey. A
+// reference implementation that hashes the runtime string directly
+// (contract section 1.2's defect this fixture exists to catch) produces a
+// different entryKey and fails here.
+func TestSectionMappingFixtures(t *testing.T) {
+	var fixture sectionMappingFixture
+	loadFixture(t, "section-mapping.json", &fixture)
+	if len(fixture.Cases) == 0 {
+		t.Fatal("section-mapping.json has no cases")
+	}
+	seen := map[string]bool{}
+	for _, tc := range fixture.Cases {
+		tc := tc
+		if seen[tc.Name] {
+			t.Fatalf("duplicate case name %q in section-mapping.json", tc.Name)
+		}
+		seen[tc.Name] = true
+		t.Run(tc.Name, func(t *testing.T) {
+			canonical := fppidentity.CanonicalSection(tc.RuntimeSection)
+			if canonical != tc.ExpectedCanonicalSection {
+				t.Fatalf("case %q: CanonicalSection(%q) = %q, want %q", tc.Name, tc.RuntimeSection, canonical, tc.ExpectedCanonicalSection)
+			}
+			id := fppidentity.EntryIdentity{
+				InstanceUUID: tc.Identity.InstanceUUID,
+				PlaylistName: tc.Identity.PlaylistName,
+				PlaylistHash: tc.Identity.PlaylistHash,
+				Section:      canonical,
+				Position:     tc.Identity.Position,
+			}
+			key, err := fppidentity.DeriveEntryKey(id)
+			if err != nil {
+				t.Fatalf("case %q: DeriveEntryKey error: %v", tc.Name, err)
+			}
+			if key != tc.ExpectedEntryKey {
+				t.Errorf("case %q: entryKey = %s, want %s", tc.Name, key, tc.ExpectedEntryKey)
+			}
+		})
+	}
+}
+
 func jsonQuote(s string) string {
 	raw, err := json.Marshal(s)
 	if err != nil {
