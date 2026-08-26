@@ -344,6 +344,17 @@ export type NightCommandName =
 export type FPPPlaylistReadinessResponse = components['schemas']['FPPPlaylistReadinessResponse']
 export type FPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPlaylistEntryReconciliationResponse']
 
+// TRACK-H-H2-SPEC.md §3.6/§4: the stored-definition import evidence:
+// what an author sees to decide whether a Playlist binding still points
+// at what FPP will actually play. Same "aliased, not re-declared" and
+// "plain on-demand side call, not part of Model" posture as the two
+// verdict types above.
+export type FPPPlaylistDefinitionMetadata = components['schemas']['FPPPlaylistDefinitionMetadata']
+export type FPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
+export type FPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
+export type FPPPlaylistDefinitionEntry = components['schemas']['FPPPlaylistDefinitionEntry']
+export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
+
 /**
  * One recorded event, as held in the model. Identical to the wire
  * `Event` schema except `seq` is branded EventSeq rather than a bare

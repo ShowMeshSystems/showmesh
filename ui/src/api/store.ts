@@ -134,6 +134,12 @@ type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlay
 // observation still matches the show's bindings.
 type SchemaFPPPlaylistReadinessResponse = components['schemas']['FPPPlaylistReadinessResponse']
 type SchemaFPPPlaylistEntryReconciliationResponse = components['schemas']['FPPPlaylistEntryReconciliationResponse']
+// TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
+// evidence: the list of what has been reported, one full definition,
+// and its parsed entries.
+type SchemaFPPPlaylistDefinitionsListResponse = components['schemas']['FPPPlaylistDefinitionsListResponse']
+type SchemaFPPPlaylistDefinitionResponse = components['schemas']['FPPPlaylistDefinitionResponse']
+type SchemaFPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPlaylistDefinitionEntriesResponse']
 // Track B seam B2b-front: the three render.* dispatch endpoints.
 type SchemaRenderCommandResponse = components['schemas']['RenderCommandResponse']
 type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
@@ -685,6 +691,74 @@ export class ApiStore {
     try {
       return await this.client.getJson<SchemaFPPPlaylistEntryReconciliationResponse>(
         `/integrations/fpp/playlist-entry-observations/${encodeURIComponent(instanceUuid)}/reconciliation`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/integrations/fpp/playlist-definitions`
+   * (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): metadata for every FPP
+   * playlist definition the coordinator has ever accepted, newest
+   * received first. Open under `observation:read`, same posture as
+   * [getFPPPlaylistReadiness] above. No definition payload here: a
+   * caller picks a (instanceUuid, playlistHash) from this list, then
+   * calls [getFPPPlaylistDefinition] or [getFPPPlaylistDefinitionEntries]
+   * for that one definition's own content.
+   */
+  async listFPPPlaylistDefinitions(): Promise<SchemaFPPPlaylistDefinitionsListResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPPlaylistDefinitionsListResponse>(
+        '/integrations/fpp/playlist-definitions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}`
+   * (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3.6): the stored definition
+   * itself, as the coordinator canonicalized it. Open under
+   * `observation:read`, same posture as [listFPPPlaylistDefinitions]
+   * above. Throws (404) when no definition is stored for this pair: a
+   * real, distinguishable answer, never confused with a failure to ask.
+   */
+  async getFPPPlaylistDefinition(
+    instanceUuid: string,
+    playlistHash: string,
+  ): Promise<SchemaFPPPlaylistDefinitionResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPPlaylistDefinitionResponse>(
+        `/integrations/fpp/playlist-definitions/${encodeURIComponent(instanceUuid)}/${encodeURIComponent(playlistHash)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `GET /api/v1/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash}/entries`
+   * (TRACK-H-H2-SPEC.md §4 step 2): the definition's parsed entries,
+   * `leadIn` then `mainPlaylist` then `leadOut`, each section positioned
+   * from zero independently. Open under `observation:read`, same posture
+   * as [getFPPPlaylistDefinition] above. Throws (404) for the same reason
+   * as that method.
+   */
+  async getFPPPlaylistDefinitionEntries(
+    instanceUuid: string,
+    playlistHash: string,
+  ): Promise<SchemaFPPPlaylistDefinitionEntriesResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPPlaylistDefinitionEntriesResponse>(
+        `/integrations/fpp/playlist-definitions/${encodeURIComponent(instanceUuid)}/${encodeURIComponent(playlistHash)}/entries`,
         controller.signal,
       )
     } finally {
