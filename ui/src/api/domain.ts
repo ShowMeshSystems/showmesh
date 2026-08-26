@@ -51,6 +51,13 @@ export type EvidenceState = components['schemas']['Evidence']['state']
 export type Evidence = components['schemas']['Evidence']
 export type ResourceRef = components['schemas']['ResourceRef']
 
+// `GET /` (getServiceDescriptor): the coordinator's own self-description
+// -- served/supported API versions and build metadata. Not part of
+// `Model`/the SSE stream: it is fetched once by the UI shell, never
+// re-derived from anything the change stream models.
+export type ServiceDescriptor = components['schemas']['ServiceDescriptor']
+export type CoordinatorInfo = components['schemas']['CoordinatorInfo']
+
 // ADR-024: the session/identity shapes, aliased from the generated schema
 // for the same reason as every type above (ADR-015: generated from or
 // verified against the Go types, never hand-copied a second time).
@@ -206,6 +213,15 @@ export type ResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryRe
 export type ResolumeRecoveryRestoreResponse = components['schemas']['ResolumeRecoveryRestoreResponse']
 export type ConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
 export type ResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
+
+// The pending-instanceUuid-change acknowledgement (POST
+// /fpp/{instanceId}/instance-uuid/acknowledge): a human asserting a
+// configured FPP endpoint's hardware really was replaced, clearing the
+// ONE conflict marker FPPInstance.instanceUuidChange carries. Aliased
+// for the identical ADR-015 reason as every type above.
+export type FPPInstanceUUIDChange = components['schemas']['FPPInstanceUUIDChange']
+export type AcknowledgeFPPInstanceUUIDChangeResponse =
+  components['schemas']['AcknowledgeFPPInstanceUUIDChangeResponse']
 
 // Track B seam B2c (ADR-039): the render.settings configuration singleton.
 // Aliased for the identical reason as every type above. Not part of

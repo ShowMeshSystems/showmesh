@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { FPPDetail } from './FPPDetail'
 import { ModelContext } from '../app/ModelContext'
@@ -23,19 +23,34 @@ type SchemaObservation = components['schemas']['FPPPlaylistEntryObservation']
 // isolating what this view is responsible for: rendering what is about to
 // be discarded, gating the destructive path on fpp:command, and rendering
 // the OBSERVED post-delete state rather than the bare fact a request went out.
-const { listFPPPlaylistEntryObservations, deleteFPPPlaylistEntryObservation } = vi.hoisted(() => ({
+// acknowledgeFPPInstanceUUIDChange (FPPInstanceUuidChangeNotice, rendered
+// inside FPPDetail directly) is mocked here for the identical reason: this
+// view's own job is rendering the pending change and the observed
+// post-acknowledge state, not exercising the real network path.
+const {
+  listFPPPlaylistEntryObservations,
+  deleteFPPPlaylistEntryObservation,
+  acknowledgeFPPInstanceUUIDChange,
+} = vi.hoisted(() => ({
   listFPPPlaylistEntryObservations: vi.fn(),
   deleteFPPPlaylistEntryObservation: vi.fn(),
+  acknowledgeFPPInstanceUUIDChange: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, listFPPPlaylistEntryObservations, deleteFPPPlaylistEntryObservation }
+  return {
+    ...actual,
+    listFPPPlaylistEntryObservations,
+    deleteFPPPlaylistEntryObservation,
+    acknowledgeFPPInstanceUUIDChange,
+  }
 })
 
 afterEach(() => {
   cleanup()
   listFPPPlaylistEntryObservations.mockReset()
   deleteFPPPlaylistEntryObservation.mockReset()
+  acknowledgeFPPInstanceUUIDChange.mockReset()
 })
 
 function renderFPPDetail(instanceId: string, model: Model) {
@@ -342,5 +357,107 @@ describe("FPPDetail's reset-observation-sequence recovery control", () => {
 
     expect(within(recoveryPanel()).getByText(/has not yet reported an instance UUID/)).toBeInTheDocument()
     expect(listFPPPlaylistEntryObservations).not.toHaveBeenCalled()
+  })
+})
+
+function uuidChangeSection() {
+  return screen.getByRole('heading', { name: 'Pending instance uuid change' }).closest('section')!
+}
+
+// FPPInstanceUuidChangeNotice (defined in FPPDetail.tsx itself, not its
+// own file): FPPInstance.instanceUuidChange, a coordinator-raised
+// conflict a rebuilt or replaced Pi produces, previously reachable only
+// from `showmeshctl fpp acknowledge-instance-uuid-change`.
+describe("FPPDetail's pending instance uuid change notice", () => {
+  // Every fixture below sets a non-null instanceUuid, which also makes
+  // FPPResetObservationSequenceControl (the Recovery panel just above
+  // this one) fetch its own stored observation -- resolved trivially
+  // empty here since that control's own behaviour is not what these
+  // tests are about.
+  beforeEach(() => {
+    listFPPPlaylistEntryObservations.mockResolvedValue({ observations: [], serverTime: RECOVERY_NOW })
+  })
+
+  it('renders nothing for an instance with no pending uuid change', () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: null, instanceUuidChange: null })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn() }))
+
+    expect(screen.queryByRole('heading', { name: 'Pending instance uuid change' })).not.toBeInTheDocument()
+  })
+
+  it('names the previous uuid, the current uuid, and when the change was first seen', () => {
+    const instance = makeFPPInstance('fpp-1', {
+      instanceUuid: 'uuid-new',
+      instanceUuidChange: { previousUuid: 'uuid-old', changedAt: RECOVERY_NOW },
+    })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn({ scopes: ['config:write'] }) }))
+
+    const section = uuidChangeSection()
+    expect(within(section).getByText('uuid-old')).toBeInTheDocument()
+    expect(within(section).getByText('uuid-new')).toBeInTheDocument()
+    expect(
+      within(section).getByRole('button', { name: 'Acknowledge: this hardware was replaced' }),
+    ).toBeInTheDocument()
+  })
+
+  it('dispatches the acknowledgement to the right instance and renders the observed post-acknowledge state', async () => {
+    const user = userEvent.setup()
+    const instance = makeFPPInstance('fpp-1', {
+      instanceUuid: 'uuid-new',
+      instanceUuidChange: { previousUuid: 'uuid-old', changedAt: RECOVERY_NOW },
+    })
+    acknowledgeFPPInstanceUUIDChange.mockResolvedValue({
+      serverTime: RECOVERY_NOW,
+      instance: { ...instance, instanceUuidChange: null },
+    })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn({ scopes: ['config:write'] }) }))
+
+    await user.click(
+      within(uuidChangeSection()).getByRole('button', { name: 'Acknowledge: this hardware was replaced' }),
+    )
+
+    expect(acknowledgeFPPInstanceUUIDChange).toHaveBeenCalledWith('fpp-1')
+    await waitFor(() =>
+      expect(
+        within(uuidChangeSection()).getByText('Acknowledged: no pending instance uuid change remains for this instance.'),
+      ).toBeInTheDocument(),
+    )
+    // The observed result comes from the response body, not the bare fact
+    // the POST returned: the old uuid this panel showed a moment ago is
+    // no longer rendered anywhere in it.
+    expect(within(uuidChangeSection()).queryByText('uuid-old')).not.toBeInTheDocument()
+  })
+
+  it('renders the refusal reason on a failed acknowledgement, and never claims the conflict is cleared', async () => {
+    const user = userEvent.setup()
+    const instance = makeFPPInstance('fpp-1', {
+      instanceUuid: 'uuid-new',
+      instanceUuidChange: { previousUuid: 'uuid-old', changedAt: RECOVERY_NOW },
+    })
+    acknowledgeFPPInstanceUUIDChange.mockRejectedValue(new Error('coordinator refused'))
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn({ scopes: ['config:write'] }) }))
+
+    await user.click(
+      within(uuidChangeSection()).getByRole('button', { name: 'Acknowledge: this hardware was replaced' }),
+    )
+
+    const alert = await within(uuidChangeSection()).findByRole('alert')
+    expect(alert.textContent).toContain('coordinator refused')
+    expect(within(uuidChangeSection()).queryByText(/^Acknowledged/)).not.toBeInTheDocument()
+    // Refused: the pending change still stands, unchanged.
+    expect(within(uuidChangeSection()).getByText('uuid-old')).toBeInTheDocument()
+  })
+
+  it('renders the control unavailable, with no way to acknowledge, when the principal lacks config:write', () => {
+    const instance = makeFPPInstance('fpp-1', {
+      instanceUuid: 'uuid-new',
+      instanceUuidChange: { previousUuid: 'uuid-old', changedAt: RECOVERY_NOW },
+    })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance], session: signedIn({ scopes: ['fpp:command'] }) }))
+
+    const section = uuidChangeSection()
+    const button = within(section).getByRole('button', { name: 'Acknowledge: this hardware was replaced' })
+    expect(button).toBeDisabled()
+    expect(acknowledgeFPPInstanceUUIDChange).not.toHaveBeenCalled()
   })
 })

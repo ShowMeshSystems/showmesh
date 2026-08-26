@@ -22,6 +22,7 @@
 import { useSyncExternalStore } from 'react'
 import { ApiStore } from './store'
 import type {
+  AcknowledgeFPPInstanceUUIDChangeResponse,
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
@@ -65,6 +66,7 @@ import type {
   ResolumeRecoveryConfigResponse,
   ResolumeRecoveryResponse,
   ResolumeRecoveryRestoreResponse,
+  ServiceDescriptor,
   SetPrincipalPasswordRequest,
   SetPrincipalRoleRequest,
   TokensResponse,
@@ -135,6 +137,12 @@ export function claimBootstrap(
   return store.claimBootstrap(code, name, password, deviceLabel)
 }
 
+// `GET /` (getServiceDescriptor): the coordinator's own build metadata.
+// Same thin pass-through pattern as every method above.
+export function getServiceDescriptor(): Promise<ServiceDescriptor> {
+  return store.getServiceDescriptor()
+}
+
 // Step 7 seam A (RES-008 D1): the same thin pass-through pattern as
 // login/logout/claimBootstrap above, for the configuration write surface —
 // see store.ts's "Step 7 seam A" methods for why none of these three
@@ -157,6 +165,14 @@ export function listFPPPlaylistEntryObservations(): Promise<SchemaFPPPlaylistEnt
 
 export function deleteFPPPlaylistEntryObservation(instanceUuid: string): Promise<void> {
   return store.deleteFPPPlaylistEntryObservation(instanceUuid)
+}
+
+// The pending-instanceUuid-change acknowledgement. Same thin pass-through
+// pattern as every method above.
+export function acknowledgeFPPInstanceUUIDChange(
+  instanceId: string,
+): Promise<AcknowledgeFPPInstanceUUIDChangeResponse> {
+  return store.acknowledgeFPPInstanceUUIDChange(instanceId)
 }
 
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts. Same
@@ -245,6 +261,10 @@ export function putResolumeRecoveryConfig(
 
 export function restoreResolumeRecovery(): Promise<ResolumeRecoveryRestoreResponse> {
   return store.restoreResolumeRecovery()
+}
+
+export function getResolumeRecoveryConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getResolumeRecoveryConfigRevisions()
 }
 
 // Track B seam B2c (ADR-039): render.settings. Same thin pass-through

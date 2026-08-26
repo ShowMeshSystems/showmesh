@@ -34,6 +34,9 @@ export type {
   ConfigAssetsSettingsPayload,
   ConfigAssetsSettingsPutPayload,
   FPPInstance,
+  // The pending-instanceUuid-change acknowledgement.
+  FPPInstanceUUIDChange,
+  AcknowledgeFPPInstanceUUIDChangeResponse,
   Model,
   Node,
   NodeDeclaration,
@@ -96,6 +99,9 @@ export type {
   SessionInfo,
   SessionResponse,
   StreamSeq,
+  // `GET /` (getServiceDescriptor): the coordinator's own build metadata.
+  ServiceDescriptor,
+  CoordinatorInfo,
   // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
   // configuration objects and the macro run surface.
   ConfigObjectSummary,
@@ -214,11 +220,13 @@ export {
   login,
   logout,
   claimBootstrap,
+  getServiceDescriptor,
   getFPPEndpointsConfig,
   putFPPEndpointsConfig,
   getFPPEndpointsConfigRevisions,
   listFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,
+  acknowledgeFPPInstanceUUIDChange,
   getFPPPlaylistReadiness,
   getFPPPlaylistEntryReconciliation,
   getResolumeInstancesConfig,
@@ -280,6 +288,7 @@ export {
   getResolumeRecovery,
   getResolumeRecoveryConfig,
   putResolumeRecoveryConfig,
+  getResolumeRecoveryConfigRevisions,
   restoreResolumeRecovery,
   getRenderSettingsConfig,
   putRenderSettingsConfig,

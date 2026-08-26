@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
+import { getServiceDescriptor, type ServiceDescriptor } from '../api'
 import { ConnectionBanner } from '../components/ConnectionBanner'
 import { TokenPrompt } from '../components/TokenPrompt'
 import { SessionPanel } from '../components/SessionPanel'
 import { ShowModeIndicator } from '../components/ShowModeIndicator'
+import { describeApiError } from './session'
 import { useHighContrast } from './useHighContrast'
 import { useModelContext } from './ModelContext'
 
@@ -181,6 +184,15 @@ export function Layout({ onSubmitToken }: LayoutProps) {
           </button>
         </header>
         <ConnectionBanner connection={model.connection} />
+        {/* GET / (getServiceDescriptor): "is this the thing I just
+            deployed" has no other answer anywhere in this UI during a
+            fleet upgrade -- showmeshctl version reports it, this did not.
+            Placed right next to ConnectionBanner, not on a settings page,
+            because it is about the SAME coordinator this UI is currently
+            talking to; low-noise reference text, never an alert, since an
+            unreachable coordinator already has ConnectionBanner's own
+            alert above it. */}
+        <CoordinatorBuildNotice />
         {model.connection.kind === 'unauthorized' && (
           <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
         )}
@@ -205,5 +217,66 @@ export function Layout({ onSubmitToken }: LayoutProps) {
         </main>
       </div>
     </div>
+  )
+}
+
+type DescriptorState =
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'loaded'; descriptor: ServiceDescriptor }
+
+// `GET /` is "Always open, with no credential and regardless of whether
+// reads are otherwise closed" (api/openapi.yaml's own doc comment), so
+// this fetches exactly once on mount, independent of `model.connection`
+// and `model.session` above -- there is no scope to gate it on and no
+// stream frame that would ever refresh it. A failed fetch renders as a
+// stated fact, never a blank or a guessed version: the reader must be
+// able to tell "unknown" apart from "same build as before".
+function CoordinatorBuildNotice() {
+  const [state, setState] = useState<DescriptorState>({ kind: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+    async function load(): Promise<void> {
+      try {
+        const descriptor = await getServiceDescriptor()
+        if (cancelled) return
+        setState({ kind: 'loaded', descriptor })
+      } catch (err) {
+        if (cancelled) return
+        setState({ kind: 'error', message: describeApiError(err) })
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (state.kind === 'loading') {
+    return (
+      <p className="text-muted coordinator-build-notice" role="status">
+        Coordinator build: loading…
+      </p>
+    )
+  }
+
+  if (state.kind === 'error') {
+    return (
+      <p className="text-muted coordinator-build-notice" role="status">
+        Coordinator build: could not be read ({state.message}).
+      </p>
+    )
+  }
+
+  const { coordinator, apiVersion } = state.descriptor
+  return (
+    <p
+      className="text-muted coordinator-build-notice"
+      role="status"
+      title={`Commit ${coordinator.commit}, built ${coordinator.buildDate}, ${coordinator.goVersion}`}
+    >
+      Coordinator {coordinator.version} ({coordinator.commit.slice(0, 7)}, API v{apiVersion})
+    </p>
   )
 }

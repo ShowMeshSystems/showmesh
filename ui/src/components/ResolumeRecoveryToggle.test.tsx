@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ResolumeRecoveryToggle } from './ResolumeRecoveryToggle'
@@ -8,23 +8,25 @@ import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
 // Track D seam D-3a §2.6: this component's own test, mirroring
-// Configuration.test.tsx's pattern — the two API functions are mocked to
+// Configuration.test.tsx's pattern -- the API functions are mocked to
 // isolate this component's own branching; store.test.ts proves
-// getResolumeRecovery/putResolumeRecoveryConfig issue the right real
-// requests.
-const { getResolumeRecovery, putResolumeRecoveryConfig } = vi.hoisted(() => ({
+// getResolumeRecovery/putResolumeRecoveryConfig/
+// getResolumeRecoveryConfigRevisions issue the right real requests.
+const { getResolumeRecovery, putResolumeRecoveryConfig, getResolumeRecoveryConfigRevisions } = vi.hoisted(() => ({
   getResolumeRecovery: vi.fn(),
   putResolumeRecoveryConfig: vi.fn(),
+  getResolumeRecoveryConfigRevisions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getResolumeRecovery, putResolumeRecoveryConfig }
+  return { ...actual, getResolumeRecovery, putResolumeRecoveryConfig, getResolumeRecoveryConfigRevisions }
 })
 
 afterEach(() => {
   cleanup()
   getResolumeRecovery.mockReset()
   putResolumeRecoveryConfig.mockReset()
+  getResolumeRecoveryConfigRevisions.mockReset()
 })
 
 function renderToggle(model: Model) {
@@ -83,6 +85,7 @@ describe('ResolumeRecoveryToggle', () => {
       autoRestoreEnabled: false,
       autoRestoreConfigured: true,
     })
+    getResolumeRecoveryConfigRevisions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', revisions: [] })
 
     renderToggle(
       makeModel({
@@ -110,5 +113,65 @@ describe('ResolumeRecoveryToggle', () => {
     await waitFor(() => screen.getByRole('status'))
     expect(screen.getByRole('status').textContent).toContain('not configured')
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  // The revision history beside the toggle (GET
+  // /config/resolume.recovery/revisions), matching every other
+  // configuration view's own RevisionsTable rendering (config-table
+  // inside table-scroll).
+  describe('revision history', () => {
+    function revisionsSection() {
+      return screen.getByRole('heading', { name: 'Revision history' }).closest('section')!
+    }
+
+    it('renders the revision history for a principal holding config:write', async () => {
+      getResolumeRecovery.mockResolvedValue(baseResponse)
+      getResolumeRecoveryConfigRevisions.mockResolvedValue({
+        serverTime: '2026-08-16T00:00:00Z',
+        revisions: [
+          {
+            revision: 2,
+            createdAt: '2026-08-16T00:00:00Z',
+            createdByPrincipalId: 'p1',
+            createdByPrincipalName: 'admin',
+            source: 'api',
+            note: null,
+            active: true,
+          },
+          {
+            revision: 1,
+            createdAt: '2026-08-15T00:00:00Z',
+            createdByPrincipalId: null,
+            createdByPrincipalName: null,
+            source: 'env_migration',
+            note: null,
+            active: false,
+          },
+        ],
+      })
+      renderToggle(
+        makeModel({
+          session: makeAuthenticatedSession({
+            principal: { id: 'p1', name: 'admin', kind: 'human', role: 'admin' },
+            scopes: ['config:write'],
+          }),
+        }),
+      )
+
+      const section = revisionsSection()
+      await waitFor(() => expect(within(section).getByText('admin')).toBeInTheDocument())
+      expect(within(section).getByText('(coordinator startup migration)')).toBeInTheDocument()
+      expect(within(section).getByText('active')).toBeInTheDocument()
+    })
+
+    it('renders the scope requirement, not a table, for a principal without config:write', async () => {
+      getResolumeRecovery.mockResolvedValue(baseResponse)
+      renderToggle(makeModel({})) // no session
+
+      const section = revisionsSection()
+      await waitFor(() => expect(within(section).getByText(/Requires the/)).toBeInTheDocument())
+      expect(within(section).queryByRole('table')).not.toBeInTheDocument()
+      expect(getResolumeRecoveryConfigRevisions).not.toHaveBeenCalled()
+    })
   })
 })
