@@ -648,9 +648,10 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 	}
 
 	// finishedNormally guards the deferred cleanup below so it only ever
-	// resets inf.writing on the panic path (review round 4 finding 5): the
-	// ordinary path already clears it, and reconciles far more besides,
-	// inside finishChunkLocked.
+	// runs on the panic path (review round 4 finding 5, tightened by
+	// review round 5 finding 1): the ordinary path already clears
+	// inf.writing, and reconciles far more besides, inside
+	// finishChunkLocked.
 	finishedNormally := false
 	defer func() {
 		if finishedNormally {
@@ -658,16 +659,29 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 		}
 		// A panic during the unlocked copy below is recovered per
 		// connection by net/http, so the process keeps running, but this
-		// goroutine never reaches finishChunkLocked. Without this,
-		// inf.writing would stay true forever: sweepIdleInFlightLocked's
-		// ordinary path skips a writing entry by design (its owning
-		// goroutine is assumed still active), and every future request
-		// for this exact key would be refused as "already in progress"
-		// (prepareChunkLocked's own guard), including a fresh offset-0
-		// retry, with no path back short of fppConnectStuckWritingTTL
-		// expiring or a process restart.
+		// goroutine never reaches finishChunkLocked. TeeReader has
+		// already fed whatever bytes the writer read before panicking
+		// into inf.hash, but inf.bytesReceived was never advanced to
+		// match (only finishChunkLocked does that, and it is never
+		// reached), so the in-flight entry's hash and offset have gone
+		// out of sync with each other. Merely resetting writing back to
+		// false (review round 4's fix) left that poisoned entry in
+		// place: a retry at the offset the client still believes is
+		// correct would be accepted as an ordinary continuation, feed
+		// its bytes into the same already-poisoned hash a second time,
+		// and complete with a ContentHash that does not match the bytes
+		// actually on disk. Discarding the whole fragment instead forces
+		// any retry to restart at offset 0, the one place a fresh hash
+		// and stagingPath truncation are guaranteed. Guarded by an
+		// identity check against s.inFlight[key] (review round 5 finding
+		// 5's same guard): if this entry was already swept and replaced
+		// by the time the panic unwinds, that replacement, not this
+		// panicked attempt, owns the key now, and must not be discarded
+		// out from under it.
 		s.mu.Lock()
-		inf.writing = false
+		if s.inFlight[key] == inf {
+			s.discardFragment(dir, name)
+		}
 		s.mu.Unlock()
 	}()
 
@@ -823,6 +837,18 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.inFlight[key] != inf {
+		// This attempt's own in-flight entry was swept as idle (review
+		// round 5 finding 5) while its chunk copy ran unlocked above
+		// (see WriteChunk's own doc comment for why the copy runs
+		// unlocked at all). Whatever now occupies key, if anything,
+		// belongs to a newer attempt: this stale one must never clear
+		// its writing flag, discard its staging file, or rename it into
+		// place as if it were the newer upload's own bytes. Refuse
+		// without touching key's current entry.
+		return fppConnectChunkGap, fmt.Sprintf("upload for %q was reclaimed as idle while this chunk was still being written; restart at offset 0", name), fppConnectHeldRecord{}
+	}
 
 	inf.writing = false
 
@@ -1014,17 +1040,21 @@ func (s *fppConnectHeldStore) deletePendingLocked(fname string) {
 	}
 }
 
-// fppConnectBoundEvent returns ev with every per-event bound applied: Name
-// and Reason each capped to fppConnectMaxEventStringBytes, and Entries
-// capped both in count (fppConnectMaxEventEntries) and in each surviving
-// entry's own length, via capEventEntries. EntriesTruncated is increased
-// (never reset) by however many entries this call newly cuts, so a value
-// already carried on ev survives. Shared by appendEventLocked (every
-// freshly recorded event) and load (review round 4 finding 2: a persisted
-// index can carry an event that predates this bound, or one edited or
-// corrupted outside this store's own writes).
+// fppConnectBoundEvent returns ev with every per-event bound applied: Name,
+// Dir, and Reason each capped to fppConnectMaxEventStringBytes, and
+// Entries capped both in count (fppConnectMaxEventEntries) and in each
+// surviving entry's own length, via capEventEntries. EntriesTruncated is
+// increased (never reset) by however many entries this call newly cuts, so
+// a value already carried on ev survives. Shared by appendEventLocked
+// (every freshly recorded event) and load (review round 4 finding 2: a
+// persisted index can carry an event that predates this bound, or one
+// edited or corrupted outside this store's own writes). Dir joined Name
+// and Reason under this bound in review round 5 finding 2: a "bad-dir"
+// refusal records the raw {dir} URL segment verbatim, which carries none
+// of Upload-Name's own length limit.
 func fppConnectBoundEvent(ev fppConnectEvent) fppConnectEvent {
 	ev.Name = fppConnectBoundEventString(ev.Name)
+	ev.Dir = fppConnectBoundEventString(ev.Dir)
 	ev.Reason = fppConnectBoundEventString(ev.Reason)
 	capped, truncated := capEventEntries(ev.Entries)
 	ev.Entries = capped

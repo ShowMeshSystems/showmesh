@@ -26,6 +26,37 @@ func decodeRenderReport(t *testing.T, payload []byte) mqttproto.RenderPayload {
 	return p
 }
 
+// TestTruncateHeldFilesForWirePartitionsUnboundFirstEvenUnderCap is review
+// round 5 finding 4's regression test: before this fix,
+// truncateHeldFilesForWire only partitioned records unbound-first inside
+// its len(records) > maxEntries branch, so a records slice at or under the
+// count cap came back in its original dir-then-name order, untouched.
+// shrinkRenderPayloadToFitEnvelope's own tail-drop assumes unbound-first
+// ordering to drop bound records before unbound ones once the byte budget,
+// not the count cap, is what forces a cut, so a report under the count cap
+// but still over budget could drop an unbound (operator-actionable) record
+// before a bound (already-resolved) one. This proves the reordering
+// happens regardless of whether the count cap ever fires.
+func TestTruncateHeldFilesForWirePartitionsUnboundFirstEvenUnderCap(t *testing.T) {
+	records := []fppConnectHeldRecord{
+		{Dir: "sequences", Name: "A.fseq", Bound: true},
+		{Dir: "sequences", Name: "B.fseq", Bound: false},
+		{Dir: "sequences", Name: "C.fseq", Bound: true},
+		{Dir: "sequences", Name: "D.fseq", Bound: false},
+	}
+
+	got := truncateHeldFilesForWire(records, len(records)+10)
+	if len(got) != len(records) {
+		t.Fatalf("got %d records, want %d (well under the cap, nothing should be dropped)", len(got), len(records))
+	}
+	want := []string{"B.fseq", "D.fseq", "A.fseq", "C.fseq"}
+	for i, w := range want {
+		if got[i].Name != w {
+			t.Fatalf("got[%d].Name = %q, want %q; got order = %+v", i, got[i].Name, w, got)
+		}
+	}
+}
+
 // TestToRenderSurfaceReportCarriesRealFrameCounters is a direct regression
 // test for a defect this seam's review found: toRenderSurfaceReport
 // hardcoded FramesWritten/FramesLate/FramesDropped to 0 behind a stale
@@ -251,11 +282,14 @@ func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
 // POST /api/playlist/{name} can name tens of thousands of distinct
 // sequenceName/mediaName values in a single 1 MiB body. Before this fix,
 // every one of them rode the resulting event onto every subsequent render
-// report, with no cap anywhere between the store and RenderPayload.
-// Validate, and mqttproto.NewRenderEnvelope calls Validate itself before
-// marshalling, so an unbounded field would not merely bloat one publish,
-// it would make every future publish fail outright (a report skipped
-// forever, not degraded once). This proves the publish still succeeds and
+// report, with no cap anywhere between the store and this report's own
+// size budget. NewRenderEnvelope's Validate call would not have caught
+// this: it never checks the payload's total serialized size, only field
+// counts (review round 5 finding 3). Left unbounded, this would have
+// built and published successfully, then been rejected by the
+// coordinator's DecodeEnvelope once the oversized bytes actually arrived,
+// a report skipped forever, not degraded once, for as long as the event
+// kept riding every publish. This proves the publish still succeeds and
 // the resulting bytes still decode under the wire envelope limit.
 func TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost(t *testing.T) {
 	clock := newTestClock()
@@ -318,7 +352,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost(t *te
 	select {
 	case <-pub.notify:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for publish (an unbounded field would make NewRenderEnvelope's own Validate call refuse to build the envelope at all)")
+		t.Fatal("timed out waiting for publish (an unbounded field would push the published bytes over DecodeEnvelope's size limit on the receiving end)")
 	}
 	cancel()
 	<-done
@@ -391,7 +425,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithASingleOversizedEntry(t *test
 	select {
 	case <-pub.notify:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for publish (an unbounded entry would make NewRenderEnvelope's own Validate call refuse to build the envelope at all)")
+		t.Fatal("timed out waiting for publish (an unbounded entry would push the published bytes over DecodeEnvelope's size limit on the receiving end)")
 	}
 	cancel()
 	<-done
@@ -480,7 +514,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithManyBadNameRefusals(t *testin
 	select {
 	case <-pub.notify:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for publish (unbounded Name/Reason fields would make NewRenderEnvelope's own Validate call refuse to build the envelope at all)")
+		t.Fatal("timed out waiting for publish (unbounded Name/Reason fields would push the published bytes over DecodeEnvelope's size limit on the receiving end)")
 	}
 	cancel()
 	<-done

@@ -135,14 +135,22 @@ decision 9 because a bind address must be known before the process starts.
 **FC2's addition: the chunked upload and playlist bind routes.** Built and
 tested as specified below (`internal/agent/fppconnectupload.go`'s HTTP
 framing over `internal/agent/fppconnectheld.go`'s store). These two routes
-never pass through the four fixed routes' small (4 KiB)
-`fppConnectMaxBodyBytes` cap; each bounds its own, much larger, body.
+never pass through the three fixed routes' small (4 KiB)
+`fppConnectMaxBodyBytes` cap (`GET /api/playlist/{name}` does not either:
+`route()` matches it, like the file and playlist-bind routes, ahead of the
+fixed-route switch that cap wraps); each bounds its own, much larger, body.
 
 **Per-route read and write deadlines (review round 1 finding 4, corrected
 by review round 3 findings 1 and 8).** Each route sets its own read
 deadline via `http.ResponseController.SetReadDeadline`
 (`fppConnectSetReadDeadline`): `fppConnectDiscoveryReadDeadline` (10s) on
-the four fixed discovery routes and the playlist routes,
+the three fixed discovery routes (`GET /api/system/info`,
+`GET /api/fppd/multiSyncSystems`, `GET /api/playlists`) and the two
+playlist routes (`GET`/`POST /api/playlist/{name}`, review round 5 finding
+6 correcting an earlier count that put the playlist `GET` in both groups:
+`routeFixed`'s own switch dispatches only the first three, never
+`/api/playlist/{name}`, which `route()` matches ahead of it and sends to
+the shared playlist dispatcher instead, alongside its `POST`),
 `fppConnectFileReadDeadline` (10 minutes, generous rather than idle-based)
 on the file PATCH route alone. The server-wide `ReadTimeout` is not 0: it
 is `fppConnectServerReadTimeoutFloor` (15 minutes), a generous floor kept
@@ -165,7 +173,7 @@ branch, killing the upload with a 409 it never sent a byte wrong to
 deserve. Fixed by removing the server-wide `WriteTimeout` (now 0) and
 setting a write deadline (`fppConnectWriteDeadline`, 10s) per route via
 `fppConnectSetWriteDeadline`, only once a route is actually about to write
-its response: the four discovery routes and the no-op file-POST route set
+its response: the three discovery routes and the no-op file-POST route set
 it immediately (nothing before them ever reads a body); the file PATCH
 route sets it only after `WriteChunk` returns; the two playlist routes
 each set it individually right before each of their own writes, not once

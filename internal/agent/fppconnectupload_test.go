@@ -308,6 +308,42 @@ func TestFPPConnectUploadDirectoryAllowlist(t *testing.T) {
 	// turned into a table alongside it.
 }
 
+// TestFPPConnectBadDirEventDirIsBounded is review round 5 finding 2's
+// regression test: a "bad-dir" refusal records dir, the raw {dir} URL
+// segment, straight from route()'s decode, with no length limit of its
+// own short of whatever the server accepts on a request line. Before this
+// fix, fppConnectBoundEvent bounded Name and Reason but never Dir, so an
+// oversized directory segment rode every subsequent render report at full
+// length, on the one event field the round 4 fix missed.
+func TestFPPConnectBadDirEventDirIsBounded(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	longDir := strings.Repeat("d", 4*fppConnectMaxEventStringBytes)
+	resp, body := patchChunk(t, srv, longDir, "Bad.fseq", 0, 3, []byte("abc"))
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", resp.StatusCode, body)
+	}
+
+	var found bool
+	for _, ev := range held.Events() {
+		if ev.Kind != "bad-dir" {
+			continue
+		}
+		found = true
+		if got := len(ev.Dir); got > fppConnectMaxEventStringBytes {
+			t.Fatalf("event Dir length = %d, want at most %d", got, fppConnectMaxEventStringBytes)
+		}
+		if !strings.HasSuffix(ev.Dir, fppConnectEventStringTruncatedSuffix) {
+			t.Fatalf("event Dir = %q, want it to end with the truncation suffix", ev.Dir)
+		}
+	}
+	if !found {
+		t.Fatalf("no bad-dir event recorded; events = %+v", held.Events())
+	}
+}
+
 // TestFPPConnectUploadNameBoundCases is review round 3 finding 6's table:
 // an empty, ".", or ".." Upload-Name must all take fppConnectValidPlaylistName's
 // 403 bad-name path, with an event recorded, never the generic 400
@@ -1123,18 +1159,24 @@ func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T)
 	})
 }
 
-// panicOnceChunkWriter panics on its first call, then delegates to inner
-// for every call after that: TestFPPConnectWriteChunkClearsWritingFlagOnPanic's
-// way of simulating a panic mid-copy (net/http recovers one per
-// connection in production) without leaving every subsequent chunk on the
-// same key unable to ever complete.
+// panicOnceChunkWriter panics on its first call whose offset matches
+// panicOffset, then delegates to inner for every call after that (and for
+// every call at a different offset before that): a way of simulating a
+// panic mid-copy (net/http recovers one per connection in production)
+// without leaving every subsequent chunk on the same key unable to ever
+// complete. panicOffset 0 (its zero value) matches
+// TestFPPConnectWriteChunkClearsWritingFlagOnPanic's single offset-0
+// chunk; TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload sets it
+// to a later chunk's nonzero offset instead, so the FIRST chunk of a
+// multi-chunk upload completes normally and the panic lands mid-upload.
 type panicOnceChunkWriter struct {
-	panicked bool
-	inner    fppConnectChunkWriter
+	panicked    bool
+	panicOffset int64
+	inner       fppConnectChunkWriter
 }
 
 func (w *panicOnceChunkWriter) WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (int64, error) {
-	if !w.panicked {
+	if !w.panicked && offset == w.panicOffset {
 		w.panicked = true
 		panic("simulated panic mid chunk copy")
 	}
@@ -1174,6 +1216,74 @@ func TestFPPConnectWriteChunkClearsWritingFlagOnPanic(t *testing.T) {
 	}
 	if rec.SizeBytes != 3 {
 		t.Fatalf("rec.SizeBytes = %d, want 3", rec.SizeBytes)
+	}
+}
+
+// TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload is review round
+// 5 finding 1's regression test: a panic mid-copy is recovered only after
+// TeeReader has already fed whatever bytes the writer read into the
+// in-flight entry's running hash, but before finishChunkLocked ever runs
+// to advance bytesReceived to match. Merely resetting writing back to
+// false (round 4's fix) left that hash/offset mismatch in place, so a
+// retry at the offset the client still believed was correct would be
+// accepted as an ordinary continuation, feed the same bytes into the
+// already-poisoned hash a second time, and complete with a ContentHash
+// that does not match the bytes actually on disk. This proves the whole
+// fragment is discarded instead: the retry at that same offset is refused
+// as a gap, requiring the client to restart at offset 0, and a real
+// offset-0 restart then completes with the correct hash.
+func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
+	dir := t.TempDir()
+	writer := &panicOnceChunkWriter{panicOffset: 2, inner: osFPPConnectChunkWriter{}}
+	held := newFPPConnectHeldStoreWithWriter(dir, writer, discardLogger())
+	neverActive := func() (string, bool, bool) { return "", false, false }
+	const key = "sequences/Panicky2.fseq"
+
+	// First chunk (offset 0, "ab") completes normally: the writer only
+	// panics at offset 2.
+	outcome, reason, _ := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("ab"), 2, 1<<30, 1<<30, time.Now(), neverActive)
+	if outcome != fppConnectChunkAccepted {
+		t.Fatalf("chunk 1: outcome = %v reason = %q, want accepted", outcome, reason)
+	}
+
+	// Second chunk (offset 2, "cde") panics mid-copy.
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("WriteChunk did not panic on the offset-2 call; test setup is broken")
+			}
+		}()
+		held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	}()
+
+	held.mu.Lock()
+	_, stillInFlight := held.inFlight[key]
+	held.mu.Unlock()
+	if stillInFlight {
+		t.Fatal("in-flight entry survived a panic mid-copy, want the fragment discarded")
+	}
+	if _, err := os.Stat(held.stagingFilePath("sequences", "Panicky2.fseq")); !os.IsNotExist(err) {
+		t.Fatalf("staging fragment survived a panic mid-copy, stat err = %v", err)
+	}
+
+	// A retry at the same offset the client still believes is correct
+	// must be refused as a gap, never accepted as a continuation of the
+	// now-discarded (and hash-poisoned) fragment.
+	outcome, reason, _ = held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	if outcome != fppConnectChunkGap {
+		t.Fatalf("retry at offset 2: outcome = %v reason = %q, want gap (offset-0 restart required)", outcome, reason)
+	}
+
+	// A real offset-0 restart succeeds with the correct hash: the whole
+	// upload, not a hash double-counting the panicked attempt's bytes.
+	sum := sha256.Sum256([]byte("abcde"))
+	wantHash := "sha256:" + hex.EncodeToString(sum[:])
+	outcome, reason, rec := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("abcde"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+	if outcome != fppConnectChunkCompleted {
+		t.Fatalf("offset-0 restart: outcome = %v reason = %q, want completed", outcome, reason)
+	}
+	if rec.ContentHash != wantHash {
+		t.Fatalf("rec.ContentHash = %q, want %q", rec.ContentHash, wantHash)
 	}
 }
 

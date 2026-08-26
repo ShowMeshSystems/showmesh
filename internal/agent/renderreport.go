@@ -181,11 +181,22 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 }
 
 // toRenderFPPConnectHeldFile converts one fppConnectHeldRecord
-// (fppconnectheld.go) to its wire type, field for field.
+// (fppconnectheld.go) to its wire type, field for field. Name alone is
+// bounded (review round 5 finding 6), reusing fppConnectBoundEventString's
+// same cap and truncation marker: it is copied straight from the
+// Upload-Name header, itself bounded only by fppConnectMaxHeaderBytes (16
+// KiB), with no bound of its own on fppConnectHeldRecord. Up to
+// renderWireHeldFilesCap (256) of those, each up to 16 KiB, would make
+// shrinkRenderPayloadToFitEnvelope's one-record-at-a-time drop loop
+// re-marshal a multi-megabyte payload on every iteration it took to shrink
+// back under budget: quadratic in the number of entries dropped. Bounding
+// Name here keeps the whole payload within a small multiple of the size
+// budget even at the count cap, so the shrink loop never has more than a
+// few records left to drop.
 func toRenderFPPConnectHeldFile(rec fppConnectHeldRecord) mqttproto.RenderFPPConnectHeldFile {
 	return mqttproto.RenderFPPConnectHeldFile{
 		Dir:             rec.Dir,
-		Name:            rec.Name,
+		Name:            fppConnectBoundEventString(rec.Name),
 		SizeBytes:       rec.SizeBytes,
 		ContentHash:     rec.ContentHash,
 		ReceivedAt:      rec.ReceivedAt,
@@ -225,17 +236,21 @@ const (
 	renderWireHeldEventsCap = 64
 )
 
-// truncateHeldFilesForWire cuts records down to at most cap entries when
-// it must, keeping unbound records first: those are the operator-
-// actionable evidence ADR-044 decision 8 exists to surface, so if the
-// list has to be cut down at all, the files still awaiting a claim are
-// worth more than the ones already resolved. records is already sorted
-// by dir then name (fppConnectHeldStore.Held); ordering within each of
-// the two groups is preserved.
+// truncateHeldFilesForWire always reorders records unbound-first, cutting
+// down to at most cap entries when it must (review round 5 finding 4:
+// partitioning only inside the len(records) > maxEntries branch left the
+// dir-then-name order untouched whenever the count cap did not fire, so
+// shrinkRenderPayloadToFitEnvelope's own tail-drop, which assumes
+// unbound-first ordering to drop bound records before unbound ones, could
+// instead drop an unbound record first whenever a report was under the
+// count cap but still over the byte budget). Unbound records sort first:
+// those are the operator-actionable evidence ADR-044 decision 8 exists to
+// surface, so whether cut here or later by the byte-budget shrink, the
+// files still awaiting a claim are worth more than the ones already
+// resolved. records is already sorted by dir then name
+// (fppConnectHeldStore.Held); ordering within each of the two groups is
+// preserved.
 func truncateHeldFilesForWire(records []fppConnectHeldRecord, maxEntries int) []fppConnectHeldRecord {
-	if len(records) <= maxEntries {
-		return records
-	}
 	var unbound, bound []fppConnectHeldRecord
 	for _, r := range records {
 		if r.Bound {
@@ -245,6 +260,9 @@ func truncateHeldFilesForWire(records []fppConnectHeldRecord, maxEntries int) []
 		}
 	}
 	combined := append(unbound, bound...)
+	if len(combined) <= maxEntries {
+		return combined
+	}
 	return combined[:maxEntries]
 }
 
@@ -269,10 +287,15 @@ const renderReportEnvelopeSizeBudget = 240 * 1024
 // already established stays intact here too), until p's own serialized
 // size fits under renderReportEnvelopeSizeBudget, or until there is
 // nothing left to drop. mqttproto.NewRenderEnvelope's own Validate call
-// would rather refuse the whole publish outright than accept an
-// over-budget payload. Since Validate runs before marshalling, not after,
-// that refusal would skip every following report too, not just this one,
-// so degrading this field is strictly better than that.
+// never checks the payload's total serialized size, only the per-field
+// counts and lengths already satisfied by the caps applied before this
+// runs; the actual size limit, mqttproto.DecodeEnvelope's maxEnvelopeSize,
+// is enforced only on the receiving end, once the coordinator reads the
+// published bytes off the wire. Without this shrink, an over-budget
+// payload would build and publish successfully here, then be rejected
+// there instead, silently and per message, for as long as the offending
+// content keeps riding every report that carries it, so degrading this
+// field before publish is strictly better than that.
 func shrinkRenderPayloadToFitEnvelope(p mqttproto.RenderPayload, logger *slog.Logger) mqttproto.RenderPayload {
 	dropped := 0
 	for {
