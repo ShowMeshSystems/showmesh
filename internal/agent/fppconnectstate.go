@@ -161,9 +161,19 @@ func (s *fppConnectState) ShowNames() []string {
 }
 
 // SetShowNames replaces the held show name list.
+// SetShowNames copies names into the held show name list rather than
+// retaining the caller's own slice, matching ShowNames' and Snapshot's
+// identical copy discipline: a caller that mutates names after this call
+// returns, or reuses its backing array for something else, must never be
+// able to change what this holder reports.
 func (s *fppConnectState) SetShowNames(names []string) {
+	var copied []string
+	if names != nil {
+		copied = make([]string, len(names))
+		copy(copied, names)
+	}
 	s.mu.Lock()
-	s.showNames = names
+	s.showNames = copied
 	s.mu.Unlock()
 }
 

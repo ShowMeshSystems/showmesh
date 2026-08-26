@@ -125,9 +125,18 @@ type fppConnectConfigureOperation struct {
 // restart would actually recover. Confirmed reports the clamp honestly:
 // it compares the read-back value against the ALREADY-CLAMPED
 // channelRanges this command actually persisted, not the coordinator's
-// original (over-long) request, a persist failure is returned as an
-// error (never silently swallowed), so the coordinator's confirmation
-// stays honest either way.
+// original (over-long) request. A persist failure is returned as an
+// error (never silently swallowed) and marked with
+// [markDoNotCacheFailure]: the coordinator's own idempotency key for
+// this push is deterministic in the resolved state
+// (internal/coordinator/fppconnectpush), so a transient Save failure
+// (the disk was full, a permissions problem) must not be cached under
+// that key, or a later redelivery of the identical push (its next
+// hello, or the coordinator's own periodic re-push) would replay the
+// cached failure verbatim instead of re-executing, leaving this node
+// with no held configuration until the pushed state changes, the cache
+// evicts, or the agent restarts. [HandleMessage] releases the
+// idempotency claim instead of completing it for exactly this error.
 func (o *fppConnectConfigureOperation) configure(_ context.Context, params map[string]any, now func() time.Time) (OperationResult, error) {
 	p, err := decodeFPPConnectConfigureParams(params)
 	if err != nil {
@@ -155,7 +164,7 @@ func (o *fppConnectConfigureOperation) configure(_ context.Context, params map[s
 
 	executedAt := now()
 	if err := saveFPPConnectSnapshot(o.assetDir, snap); err != nil {
-		return OperationResult{}, fmt.Errorf("fppconnect.configure: persist state: %w", err)
+		return OperationResult{}, markDoNotCacheFailure(fmt.Errorf("fppconnect.configure: persist state: %w", err))
 	}
 	o.state.Apply(snap)
 	observedAt := now()

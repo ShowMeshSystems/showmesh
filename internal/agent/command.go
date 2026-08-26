@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -13,6 +14,40 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
+
+// doNotCacheError marks its wrapped error as one whose failure result must
+// NOT be retained in the idempotency cache: [HandleMessage] releases the
+// idempotency key's claim instead of completing it (see [idempotencyCache.
+// release]), so a LATER redelivery of the same key re-executes from
+// scratch rather than replaying this exact failure forever. Reserved for a
+// failure that is genuinely transient and whose cause can clear on its own
+// (a local disk write failure, for instance); the coordinator's own
+// idempotency key for a config push is deterministic in the resolved
+// state (internal/coordinator/fppconnectpush), so without this a single
+// transient failure would otherwise strand the agent on that failure
+// until the pushed state changes, the cache evicts, or the agent
+// restarts. Error() and Unwrap() both defer to the wrapped error, so
+// wrapping never changes what a caller sees in the wire Reason string or
+// in an errors.Is/errors.As chain looking past this marker; only
+// markDoNotCacheFailure's own caller, and errors.As(err, &target) with a
+// *doNotCacheError target, ever need to know it is there. Every
+// OperationFunc that does not use markDoNotCacheFailure is unaffected:
+// its failures are cached exactly as before.
+type doNotCacheError struct {
+	err error
+}
+
+func (e *doNotCacheError) Error() string { return e.err.Error() }
+func (e *doNotCacheError) Unwrap() error { return e.err }
+
+// markDoNotCacheFailure wraps err (nil-safe: nil in, nil out) so
+// [HandleMessage] treats it as [doNotCacheError] describes.
+func markDoNotCacheFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &doNotCacheError{err: err}
+}
 
 // commandPublishTimeout bounds a single result (or agent-echo observation)
 // publish attempt, matching heartbeat.go's heartbeatPublishTimeout pattern:
@@ -359,6 +394,29 @@ func (c *idempotencyCache) complete(key string, result mqttproto.ResultPayload) 
 	}
 }
 
+// release closes out key's in-flight claim WITHOUT retaining result in the
+// completed cache: unlike [idempotencyCache.complete], key is never added
+// to entries/order, so a LATER redelivery of the same key finds neither an
+// in-flight claim nor a cached entry and re-executes from scratch. A
+// caller currently blocked in claimOrAwait's in-flight wait for this key
+// still receives result exactly once (a genuinely concurrent redelivery
+// must not be left hanging or silently dropped), so this is a strict
+// narrowing of complete's retention, not a change to its release
+// semantics. Called instead of complete only for a failure an operation
+// marked with [markDoNotCacheFailure]; every other completion path uses
+// complete, which retains its result permanently (until FIFO eviction).
+func (c *idempotencyCache) release(key string, result mqttproto.ResultPayload) {
+	c.mu.Lock()
+	inf := c.inFlight[key]
+	delete(c.inFlight, key)
+	c.mu.Unlock()
+
+	if inf != nil {
+		inf.result = result
+		close(inf.done)
+	}
+}
+
 // CommandHandler receives, allowlist-checks, dispatches, and reports the
 // outcome of commands sent to one node's cmd topic — this seam's entire
 // receive -> allowlist -> execute -> evidence -> report path. See
@@ -568,7 +626,12 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 				CollectedAt: h.now(),
 			}
 		}
-		h.cache.complete(cmd.IdempotencyKey, result)
+		var doNotCache *doNotCacheError
+		if errors.As(err, &doNotCache) {
+			h.cache.release(cmd.IdempotencyKey, result)
+		} else {
+			h.cache.complete(cmd.IdempotencyKey, result)
+		}
 		h.publishResult(ctx, publisher, result)
 		return
 	}

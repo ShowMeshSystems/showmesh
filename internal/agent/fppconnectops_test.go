@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
@@ -275,5 +276,97 @@ func TestFPPConnectConfigureSaveFailureLeavesStateUnchanged(t *testing.T) {
 	}
 	if _, ok := state.Settings(); ok {
 		t.Error("state.Settings() ok = true after a failed Save, want false, unchanged")
+	}
+}
+
+// baseFPPConnectConfigureCmd builds a valid "fppconnect.configure"
+// CmdPayload carrying idempotencyKey, mirroring baseEchoCmd
+// (command_test.go) one action over.
+func baseFPPConnectConfigureCmd(commandID, idempotencyKey string) mqttproto.CmdPayload {
+	return mqttproto.CmdPayload{
+		CommandID:      commandID,
+		IdempotencyKey: idempotencyKey,
+		Action:         "fppconnect.configure",
+		Target:         mqttproto.CmdTarget{Kind: "node", ID: testNodeID},
+		Params: fppConnectConfigureParamsMap(fppConnectConfigureSchema, "0-149", "Front Yard",
+			[]string{"Front Yard"}, validFPPConnectSettingsMap()),
+		Issuer:             mqttproto.CmdIssuer{PrincipalID: "showmesh-coordinator-config-push", PrincipalName: "showmesh-coordinator-config-push"},
+		ConfirmationMethod: confirmationMethodEvidence,
+	}
+}
+
+// TestHandleMessageFPPConnectConfigureSaveFailureDoesNotStrandTheIdempotencyKey
+// proves the review-round-2 fix for the bug review round 1 introduced: a
+// Save failure must not occupy the idempotency cache under its key,
+// because the coordinator's own key for a config push is deterministic in
+// the resolved state (internal/coordinator/fppconnectpush) and a real
+// redelivery (the node's own next hello, or the coordinator's periodic
+// re-push) would otherwise carry the SAME key and be answered from the
+// cached failure without ever executing again. This drives the real
+// CommandHandler.HandleMessage path (not fppConnectConfigureOperation.
+// configure directly), because the fix lives in HandleMessage's own
+// cache-vs-release decision, not in the operation.
+func TestHandleMessageFPPConnectConfigureSaveFailureDoesNotStrandTheIdempotencyKey(t *testing.T) {
+	dir := t.TempDir()
+	state := newFPPConnectState()
+	ops := fppConnectOperations(state, dir, discardLogger())
+	clock := &fakeClock{t: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)}
+	h := newTestHandler(ops, clock)
+
+	// Occupy the state subdirectory's own path with a file, so the first
+	// delivery's Save fails.
+	blocker := filepath.Join(dir, fppConnectStateSubdir)
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cmd := baseFPPConnectConfigureCmd("cmd-1", "idem-fppconnect-1")
+	topic, payload := buildCmdMessage(t, clock, cmd)
+
+	pub1 := newFakePublisher()
+	h.HandleMessage(context.Background(), pub1, topic, payload)
+	calls1 := pub1.snapshot()
+	if len(calls1) != 1 {
+		t.Fatalf("first delivery: %d results published, want 1", len(calls1))
+	}
+	result1 := decodeResultFromCall(t, calls1[0])
+	if result1.Outcome != mqttproto.OutcomeFailed {
+		t.Fatalf("first delivery outcome = %q, want %q", result1.Outcome, mqttproto.OutcomeFailed)
+	}
+	if got := state.ChannelRanges(); got != "" {
+		t.Fatalf("state.ChannelRanges() after the failed first delivery = %q, want empty", got)
+	}
+
+	// The directory is writable again (the transient condition cleared),
+	// and the SAME command (same IdempotencyKey) is redelivered, exactly
+	// as a real QoS 1 redelivery, or the coordinator's own next push
+	// carrying the identical resolved state, would.
+	if err := os.Remove(blocker); err != nil {
+		t.Fatalf("clearing the blocker: %v", err)
+	}
+
+	pub2 := newFakePublisher()
+	h.HandleMessage(context.Background(), pub2, topic, payload)
+	calls2 := pub2.snapshot()
+	if len(calls2) != 1 {
+		t.Fatalf("redelivery: %d results published, want 1", len(calls2))
+	}
+	result2 := decodeResultFromCall(t, calls2[0])
+	if result2.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("redelivery outcome = %q, want %q (a cached failure replay would still be %q); body: %+v",
+			result2.Outcome, mqttproto.OutcomeConfirmed, mqttproto.OutcomeFailed, result2)
+	}
+
+	if got := state.ChannelRanges(); got != "0-149" {
+		t.Errorf("state.ChannelRanges() after the redelivery = %q, want 0-149 (the redelivery must actually re-execute)", got)
+	}
+
+	restarted := newFPPConnectState()
+	loaded, err := restarted.Load(dir)
+	if err != nil || !loaded {
+		t.Fatalf("Load after redelivery: loaded=%v err=%v (the redelivery must have persisted, not merely applied in memory)", loaded, err)
+	}
+	if got := restarted.ChannelRanges(); got != "0-149" {
+		t.Errorf("restarted.ChannelRanges() = %q, want 0-149", got)
 	}
 }

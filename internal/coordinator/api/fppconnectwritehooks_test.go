@@ -13,8 +13,8 @@ import (
 // (ADR-044 decision 5): a write to show.surface, show.active, show, or
 // fppconnect.settings triggers exactly one fppconnect.configure push per
 // affected node. pushFPPConnectToNode/pushFPPConnectToAllNodes
-// (fppconnectsettingsconfig.go) fire their pushes in a detached goroutine
-//, matching pushAudioSettingsToAllNodes' identical fire-and-forget shape
+// (fppconnectsettingsconfig.go) fire their pushes in a detached goroutine,
+// matching pushAudioSettingsToAllNodes' identical fire-and-forget shape
 // one kind over, so this file uses fakeRenderPublisher's onPublish hook
 // (renderdispatch_test.go) to synchronize on the exact moment a publish
 // lands, rather than a fixed sleep.

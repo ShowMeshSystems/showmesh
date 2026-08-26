@@ -92,6 +92,23 @@ func TestFPPConnectStateShowNames(t *testing.T) {
 	}
 }
 
+// TestFPPConnectStateSetShowNamesCopiesTheCallersSlice proves the
+// review-round-2 fix: mutating the slice passed to SetShowNames after the
+// call returns must never change what the holder reports, matching
+// ShowNames' and Snapshot's identical copy discipline one field over.
+func TestFPPConnectStateSetShowNamesCopiesTheCallersSlice(t *testing.T) {
+	s := newFPPConnectState()
+	names := []string{"Front Yard", "Back Yard"}
+	s.SetShowNames(names)
+
+	names[0] = "Mutated After The Call"
+
+	got := s.ShowNames()
+	if len(got) != 2 || got[0] != "Front Yard" || got[1] != "Back Yard" {
+		t.Errorf("ShowNames() = %v after mutating the caller's own slice, want [Front Yard Back Yard] unchanged", got)
+	}
+}
+
 func TestFPPConnectStateSettings(t *testing.T) {
 	s := newFPPConnectState()
 	if _, ok := s.Settings(); ok {
