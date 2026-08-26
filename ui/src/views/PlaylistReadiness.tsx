@@ -90,7 +90,7 @@ export function PlaylistReadiness() {
   // reconciliation row specifically: `fppPlaylistEntry.changed` frames
   // (store.ts's applyFppPlaylistEntryChanged) mean FPP itself reported a
   // new entry, so that row also refetches on its own without waiting for
-  // either a reconnect or the operator's own click — see ReconciliationRow
+  // either a reconnect or the operator's own click; see ReconciliationRow
   // below. The readiness row has no equivalent live trigger: nothing in
   // the change stream announces a Playlist binding or FPP configuration
   // change, so a manual recheck plus reconnect-triggered refetch remains
@@ -343,7 +343,7 @@ function useReconciliation(
   // SM-283: the latest `fppPlaylistEntry.changed` frame's `receivedAt` for
   // this instance (store.ts's applyFppPlaylistEntryChanged), or `null`
   // before this connection has ever seen one. Not read inside the effect
-  // body, same as `snapshotReceivedAt`/`reloadGeneration` above — it
+  // body, same as `snapshotReceivedAt`/`reloadGeneration` above; it
   // exists purely so a fresh observation retriggers the refetch below,
   // the same "re-fetch the authoritative state" discipline this hook
   // already uses for a reconnect or the operator's own manual recheck,
@@ -390,7 +390,7 @@ function ReconciliationRow({
 }) {
   const model = useModelContext()
   // SM-283: keyed by instanceUuid, matching how `fppPlaylistEntry.changed`
-  // itself is keyed (store.ts's applyFppPlaylistEntryChanged) — not
+  // itself is keyed (store.ts's applyFppPlaylistEntryChanged), not
   // instanceId, same distinction this file's own reconcilableInstances
   // filter above already draws.
   const latestObservation = model.fppPlaylistEntryObservations.find((o) => o.instanceUuid === instanceUuid)

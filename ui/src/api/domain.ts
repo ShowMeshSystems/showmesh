@@ -367,7 +367,7 @@ export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPla
 
 // TRACK-H-H2-SPEC.md §5.1's show-night observation-sequence reset: the
 // stored playlist-entry observation an operator reviews before clearing
-// it. Aliased, not re-declared, same as the types above — but unlike
+// it. Aliased, not re-declared, same as the types above, but unlike
 // them, SM-283 makes this one PART of `Model` too (see
 // `Model.fppPlaylistEntryObservations`'s own comment): the on-demand
 // `listFPPPlaylistEntryObservations` side call below still exists
@@ -483,10 +483,10 @@ export interface Model {
   /**
    * SM-283: each FPP instance's latest accepted playlist-entry
    * observation, kept live by `fppPlaylistEntry.changed` frames (store.ts's
-   * applyFppPlaylistEntryChanged) — a whole-object replace per
+   * applyFppPlaylistEntryChanged), a whole-object replace per
    * `instanceUuid`, matching `resolume.changed`'s posture (this event
    * carries "one instance's latest observation, full-frame only", per
-   * api/openapi.yaml's FPPPlaylistEntryChangedEvent — no delta variant
+   * api/openapi.yaml's FPPPlaylistEntryChangedEvent; no delta variant
    * exists). Like `nightSession` above and for the identical reason, this
    * is NOT part of `Snapshot`: it stays empty until a live frame arrives
    * for a given instance, and is cleared back to empty by every

@@ -3263,7 +3263,7 @@ export class ApiStore {
         return
       }
       case 'fppPlaylistEntry.changed': {
-        // SM-283: mirrors `fpp.changed`/`node.changed`'s own shape — a
+        // SM-283: mirrors `fpp.changed`/`node.changed`'s own shape, a
         // `serverTime` wrapper around one full-frame value (`observation`
         // here, `instance`/`node` there), not `macroRun.changed`'s
         // flattened-top-level shape. This frame's own `seq` field is
@@ -3390,7 +3390,7 @@ export class ApiStore {
       // connection has no evidence still holds.
       nightSession: null,
       // SM-283: same "invalidate, do not carry forward" posture as
-      // `nightSession` immediately above, and for the identical reason —
+      // `nightSession` immediately above, and for the identical reason:
       // this is not part of `Snapshot` either (Model.fppPlaylistEntryObservations's
       // own comment), so a stale entry from before a reconnect must not
       // keep rendering as current across a generation boundary this
@@ -3582,7 +3582,7 @@ export class ApiStore {
    * narrowing exists for this resource"), matching [applyResolumeChanged]'s
    * exact same whole-object-replace-by-key posture. Unlike `resolume`,
    * this array is not seeded from `Snapshot` at all (see
-   * `Model.fppPlaylistEntryObservations`'s own comment) — a connection
+   * `Model.fppPlaylistEntryObservations`'s own comment): a connection
    * that has never heard a live frame for a given `instanceUuid` simply
    * has no entry here yet, which is correct: there is nothing to render
    * eagerly, and `views/PlaylistReadiness.tsx`'s own fetch of the
