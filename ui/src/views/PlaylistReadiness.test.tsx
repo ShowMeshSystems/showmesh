@@ -232,6 +232,85 @@ describe('PlaylistReadiness', () => {
     expect(screen.getByText(formatAbsolute('2026-08-25T21:15:00Z'))).toBeInTheDocument()
   })
 
+  it('SM-283: refetches the reconciliation verdict, but not the readiness verdict, when a live fppPlaylistEntry.changed observation arrives for the instance', async () => {
+    listConfigObjects.mockResolvedValue(playlistListResponse)
+    getFPPPlaylistReadiness.mockResolvedValue({
+      playlistId: 'opener',
+      ready: true,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    const instance = makeFPPInstance('fpp-01', { instanceUuid: 'uuid-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-1',
+      outcome: 'resolved',
+      playlistId: 'opener',
+      playlistRevision: 1,
+      entryId: 'entry-one',
+      cueId: 'cue-one',
+      cueRevision: 1,
+      reason: 'matches the current binding',
+      definitionAvailable: true,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    const view = renderView(
+      makeModel({ session, fpp: [instance], snapshotReceivedAt: 1000, fppPlaylistEntryObservations: [] }),
+    )
+
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(getFPPPlaylistReadiness).toHaveBeenCalledTimes(1))
+    expect(screen.getByText(/entry entry-one/)).toBeInTheDocument()
+
+    // FPP advances: store.ts's applyFppPlaylistEntryChanged upserted a
+    // new observation for this instanceUuid (SM-283). Presented to this
+    // component the same way a real live frame would be -- a changed
+    // `model.fppPlaylistEntryObservations` prop, not a new mechanism this
+    // test invents, matching the reconnect test's own approach above.
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-1',
+      outcome: 'resolved',
+      playlistId: 'opener',
+      playlistRevision: 1,
+      entryId: 'entry-two',
+      cueId: 'cue-two',
+      cueRevision: 1,
+      reason: 'matches the current binding',
+      definitionAvailable: true,
+      serverTime: '2026-08-25T18:41:00Z',
+    })
+    view.rerender(
+      <ModelContext.Provider
+        value={makeModel({
+          session,
+          fpp: [instance],
+          snapshotReceivedAt: 1000,
+          fppPlaylistEntryObservations: [
+            {
+              instanceUuid: 'uuid-1',
+              endpointId: 'fpp-01',
+              schemaVersion: 1,
+              sequence: 2,
+              action: 'playing',
+              observedAt: '2026-08-25T18:41:00Z',
+              coalescedSincePreviousAcknowledged: 0,
+              receivedAt: '2026-08-25T18:41:00Z',
+            },
+          ],
+        })}
+      >
+        <MemoryRouter>
+          <PlaylistReadiness />
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(/entry entry-two/)).toBeInTheDocument()
+    // The readiness verdict has no live trigger of its own (this file's
+    // own comment on why): it must not be refetched just because the
+    // reconciliation row's own observation moved.
+    expect(getFPPPlaylistReadiness).toHaveBeenCalledTimes(1)
+  })
+
   it('refetches the readiness verdict when the operator clicks Recheck readiness', async () => {
     listConfigObjects.mockResolvedValue(playlistListResponse)
     getFPPPlaylistReadiness.mockResolvedValue({

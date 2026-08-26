@@ -80,6 +80,7 @@ import {
   type EventSeq,
   type FPPCommandResult,
   type FPPInstance,
+  type FPPPlaylistEntryObservation,
   type Model,
   type NightCommandName,
   type RenderCommandResult,
@@ -136,6 +137,7 @@ type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation surface,
 // the recovery path for a wedged sequence anchor.
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+type SchemaFPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts:
 // whether a Playlist is ready, and whether an instance's latest accepted
 // observation still matches the show's bindings.
@@ -3260,6 +3262,20 @@ export class ApiStore {
         this.applyNightSessionChanged(payload)
         return
       }
+      case 'fppPlaylistEntry.changed': {
+        // SM-283: mirrors `fpp.changed`/`node.changed`'s own shape — a
+        // `serverTime` wrapper around one full-frame value (`observation`
+        // here, `instance`/`node` there), not `macroRun.changed`'s
+        // flattened-top-level shape. This frame's own `seq` field is
+        // per-connection only (api/openapi.yaml's FPPPlaylistEntryChangedEvent),
+        // never a durable cursor, so it is deliberately not read here.
+        const payload = tryParse<{ serverTime: string; observation: SchemaFPPPlaylistEntryObservation }>(
+          frame.data,
+        )
+        if (payload === null || gen !== this.generation) return
+        this.applyFppPlaylistEntryChanged(payload.observation, payload.serverTime)
+        return
+      }
       default:
         // Unknown event: name — ignored, not an error. v1 is
         // additive-only (api/openapi.yaml's /stream description).
@@ -3373,6 +3389,13 @@ export class ApiStore {
       // re-establish ground truth rather than trusting a value this
       // connection has no evidence still holds.
       nightSession: null,
+      // SM-283: same "invalidate, do not carry forward" posture as
+      // `nightSession` immediately above, and for the identical reason —
+      // this is not part of `Snapshot` either (Model.fppPlaylistEntryObservations's
+      // own comment), so a stale entry from before a reconnect must not
+      // keep rendering as current across a generation boundary this
+      // connection cannot vouch for.
+      fppPlaylistEntryObservations: [],
     })
   }
 
@@ -3549,6 +3572,37 @@ export class ApiStore {
       clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
       serverTimeReceivedAt: receivedAt,
       nightSession: event.session,
+    })
+  }
+
+  /**
+   * `fppPlaylistEntry.changed` (SM-283) carries one instance's
+   * COMPLETE latest observation (api/openapi.yaml's
+   * FPPPlaylistEntryChangedEvent: "full-frame only - no ADR-023 delta
+   * narrowing exists for this resource"), matching [applyResolumeChanged]'s
+   * exact same whole-object-replace-by-key posture. Unlike `resolume`,
+   * this array is not seeded from `Snapshot` at all (see
+   * `Model.fppPlaylistEntryObservations`'s own comment) — a connection
+   * that has never heard a live frame for a given `instanceUuid` simply
+   * has no entry here yet, which is correct: there is nothing to render
+   * eagerly, and `views/PlaylistReadiness.tsx`'s own fetch of the
+   * reconciliation endpoint is what establishes ground truth on mount.
+   */
+  private applyFppPlaylistEntryChanged(observation: SchemaFPPPlaylistEntryObservation, serverTime: string): void {
+    const idx = this.model.fppPlaylistEntryObservations.findIndex(
+      (o) => o.instanceUuid === observation.instanceUuid,
+    )
+    const fppPlaylistEntryObservations: FPPPlaylistEntryObservation[] =
+      idx === -1
+        ? [...this.model.fppPlaylistEntryObservations, observation]
+        : replaceAt(this.model.fppPlaylistEntryObservations, idx, observation)
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime,
+      clockSkewMs: this.computeClockSkewMs(serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      fppPlaylistEntryObservations,
     })
   }
 

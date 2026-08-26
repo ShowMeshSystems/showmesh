@@ -83,6 +83,7 @@ function model(
     macroRuns: [],
     resolume: [],
     nightSession: null,
+    fppPlaylistEntryObservations: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

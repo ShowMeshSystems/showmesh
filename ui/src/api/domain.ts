@@ -367,8 +367,11 @@ export type FPPPlaylistDefinitionEntriesResponse = components['schemas']['FPPPla
 
 // TRACK-H-H2-SPEC.md §5.1's show-night observation-sequence reset: the
 // stored playlist-entry observation an operator reviews before clearing
-// it. Same "aliased, not re-declared" and "plain on-demand side call, not
-// part of Model" posture as the types above.
+// it. Aliased, not re-declared, same as the types above — but unlike
+// them, SM-283 makes this one PART of `Model` too (see
+// `Model.fppPlaylistEntryObservations`'s own comment): the on-demand
+// `listFPPPlaylistEntryObservations` side call below still exists
+// unchanged for FPPResetObservationSequenceControl.tsx's own use.
 export type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 export type FPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
 
@@ -477,6 +480,23 @@ export interface Model {
    * never confirmed against.
    */
   nightSession: NightSessionState | null
+  /**
+   * SM-283: each FPP instance's latest accepted playlist-entry
+   * observation, kept live by `fppPlaylistEntry.changed` frames (store.ts's
+   * applyFppPlaylistEntryChanged) — a whole-object replace per
+   * `instanceUuid`, matching `resolume.changed`'s posture (this event
+   * carries "one instance's latest observation, full-frame only", per
+   * api/openapi.yaml's FPPPlaylistEntryChangedEvent — no delta variant
+   * exists). Like `nightSession` above and for the identical reason, this
+   * is NOT part of `Snapshot`: it stays empty until a live frame arrives
+   * for a given instance, and is cleared back to empty by every
+   * `applySnapshot` rather than carried across a reconnect this connection
+   * has no evidence still holds. views/PlaylistReadiness.tsx's
+   * ReconciliationRow watches the entry for its own `instanceUuid` here to
+   * refetch the reconciliation verdict promptly when the underlying
+   * observation moves, instead of polling.
+   */
+  fppPlaylistEntryObservations: FPPPlaylistEntryObservation[]
   /** Newest first, bounded — see MAX_RETAINED_EVENTS in store.ts. */
   events: Event[]
   /**
@@ -532,6 +552,7 @@ export function initialModel(): Model {
     macroRuns: [],
     resolume: [],
     nightSession: null,
+    fppPlaylistEntryObservations: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,

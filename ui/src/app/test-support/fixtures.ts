@@ -362,6 +362,9 @@ export function makeModel(overrides: Partial<Model> = {}): Model {
     // Track F seam F2: required on Model — a test that cares about the
     // night session overrides this.
     nightSession: null,
+    // SM-283: required on Model — a test that cares about live
+    // reconciliation refresh overrides this.
+    fppPlaylistEntryObservations: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,
