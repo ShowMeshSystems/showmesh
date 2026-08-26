@@ -365,27 +365,42 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 // assets are present and verified — and reason names the sequence, the
 // asset, and the Cue the missing asset belongs to, so a refusal is never
 // silent about what is actually missing.
-func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation) (outcome cueauth.Outcome, reason string, ok bool, err error) {
+//
+// outputs is act.CueID's own resolved [cuecatalog.Outputs] for nodeID —
+// populated whenever the catalog holds an entry for act.CueID at all,
+// regardless of outcome/ok — the zero value only when act.CueID is not in
+// nodeID's catalog (OutcomeUnknownCue, or the cross-show/no-active-show
+// early returns below). A caller that must fail a REFUSED cue to black
+// (never the whole node — Eric's ruling) needs to know which outputs this
+// specific Cue actually declares for this node: an audio-only refusal
+// (outputs.Render nil) must never clear a render surface, and a
+// render-only refusal must never stop the background or announcement
+// audio session, neither of which this Cue's own outputs touch.
+func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
 	active, err := assetsync.ResolveActiveShow(ctx, st)
 	if err != nil {
-		return "", "", false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
+		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
 	}
 	if !active.Configured {
-		return cueauth.OutcomeCrossShow, "", false, nil
+		return cueauth.OutcomeCrossShow, "", cuecatalog.Outputs{}, false, nil
 	}
 	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
 	if err != nil {
-		return "", "", false, fmt.Errorf("cueactivate: authorize: resolve cue catalog for node %q: %w", nodeID, err)
+		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve cue catalog for node %q: %w", nodeID, err)
 	}
 	held := cueauth.HeldState{
 		Show: active.ShowID, Generation: active.Generation, CatalogRevision: catalog.Revision,
 		KnownCueRevisions: knownCueRevisions(catalog),
 	}
 
+	entry, participates := catalogEntry(catalog, act.CueID)
+	if participates {
+		outputs = entry.Outputs
+	}
+
 	var assetReason string
 	var assetErr error
 	outcome, ok = cueauth.CheckLazy(act.Tuple(), held, func() bool {
-		entry, participates := catalogEntry(catalog, act.CueID)
 		if !participates {
 			// Unreachable in practice: CheckLazy only reaches this closure
 			// once OutcomeUnknownCue has already passed, which means
@@ -398,12 +413,12 @@ func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInt
 		return present
 	})
 	if assetErr != nil {
-		return "", "", false, fmt.Errorf("cueactivate: authorize: resolve asset presence for node %q cue %q: %w", nodeID, act.CueID, assetErr)
+		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve asset presence for node %q cue %q: %w", nodeID, act.CueID, assetErr)
 	}
 	if outcome == cueauth.OutcomeAssetMissing {
 		reason = assetReason
 	}
-	return outcome, reason, ok, nil
+	return outcome, reason, outputs, ok, nil
 }
 
 // catalogEntry returns catalog's entry for cueID, if any.

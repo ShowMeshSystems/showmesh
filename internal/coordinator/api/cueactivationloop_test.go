@@ -12,6 +12,7 @@ import (
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
 // countingFPPObservationStore counts every call to
@@ -408,33 +409,48 @@ func TestDispatchBlackAndSilenceAudioStopOrdinaryCoordinatorClockAhead(t *testin
 
 // --- Asset-missing fail-to-black is show-mode gated ---
 
-// TestAssetMissingNodeIDsOnlyCollectsAssetMissingRefusals proves
-// [assetMissingNodeIDs] names only the nodes THIS coordinator's own
-// pre-dispatch Authorize refused for a genuinely missing asset — never a
-// node dispatched successfully, never a node the node itself refused
-// post-dispatch, and never a node Authorize refused for an unrelated
-// reason (cross-show here) that fail-to-black has no bearing on.
-func TestAssetMissingNodeIDsOnlyCollectsAssetMissingRefusals(t *testing.T) {
+// TestAssetMissingFailToBlackTargetsCollectsBothRefusalKinds proves
+// [assetMissingFailToBlackTargets] names every node refused asset-missing
+// from EITHER side — this coordinator's own pre-dispatch Authorize
+// refusal (AuthorizeOutcome) AND the node's own post-dispatch refusal
+// (NodeOutcome) — carrying that node's own RefusedCueOutputs so the
+// scoped dispatch downstream can black exactly what the Cue declared;
+// never a node dispatched successfully, and never a node refused for an
+// unrelated reason (cross-show, stale-cue) that fail-to-black has no
+// bearing on.
+func TestAssetMissingFailToBlackTargetsCollectsBothRefusalKinds(t *testing.T) {
+	audioOutputs := cuecatalog.Outputs{Audio: &cuecatalog.AudioOutput{Asset: "asset-x"}}
 	outcomes := []cueActivationDispatchOutcome{
 		{NodeID: "node-confirmed", Dispatched: true, Confirmed: true},
-		{NodeID: "node-asset-missing", AuthorizeOutcome: cueauth.OutcomeAssetMissing, AuthorizeReason: "cue \"x\": asset missing"},
+		{NodeID: "node-coordinator-refused", AuthorizeOutcome: cueauth.OutcomeAssetMissing, AuthorizeReason: "cue \"x\": asset missing", RefusedCueOutputs: audioOutputs},
 		{NodeID: "node-cross-show", AuthorizeOutcome: cueauth.OutcomeCrossShow},
-		{NodeID: "node-node-refused", Dispatched: true, Confirmed: false, NodeOutcome: string(cueauth.OutcomeStaleCue)},
+		{NodeID: "node-stale-cue-refused", Dispatched: true, Confirmed: false, NodeOutcome: string(cueauth.OutcomeStaleCue)},
+		{NodeID: "node-node-refused", Dispatched: true, Confirmed: false, NodeOutcome: string(cueauth.OutcomeAssetMissing), RefusedCueOutputs: audioOutputs},
 	}
-	got := assetMissingNodeIDs(outcomes)
-	if len(got) != 1 || got[0] != "node-asset-missing" {
-		t.Fatalf("assetMissingNodeIDs() = %v, want exactly [node-asset-missing]", got)
+	got := assetMissingFailToBlackTargets(outcomes)
+	want := map[string]bool{"node-coordinator-refused": true, "node-node-refused": true}
+	if len(got) != len(want) {
+		t.Fatalf("assetMissingFailToBlackTargets() = %+v, want exactly nodes %v", got, want)
+	}
+	for _, target := range got {
+		if !want[target.NodeID] {
+			t.Fatalf("assetMissingFailToBlackTargets() included unexpected node %q; got %+v", target.NodeID, got)
+		}
+		if target.Outputs.Audio == nil {
+			t.Fatalf("target %q Outputs.Audio = nil, want the refused Cue's own RefusedCueOutputs carried through", target.NodeID)
+		}
 	}
 }
 
-// TestAssetMissingNodeIDsEmptyWhenNothingRefusedAssetMissing proves the
-// zero-value/empty case: no asset-missing outcome anywhere yields no
-// nodes to black, never a nil-vs-empty-slice surprise a caller's own
-// len() check would already handle either way, but pinned explicitly.
-func TestAssetMissingNodeIDsEmptyWhenNothingRefusedAssetMissing(t *testing.T) {
+// TestAssetMissingFailToBlackTargetsEmptyWhenNothingRefusedAssetMissing
+// proves the zero-value/empty case: no asset-missing outcome anywhere
+// yields no targets to black, never a nil-vs-empty-slice surprise a
+// caller's own len() check would already handle either way, but pinned
+// explicitly.
+func TestAssetMissingFailToBlackTargetsEmptyWhenNothingRefusedAssetMissing(t *testing.T) {
 	outcomes := []cueActivationDispatchOutcome{{NodeID: "node-confirmed", Dispatched: true, Confirmed: true}}
-	if got := assetMissingNodeIDs(outcomes); len(got) != 0 {
-		t.Fatalf("assetMissingNodeIDs() = %v, want none", got)
+	if got := assetMissingFailToBlackTargets(outcomes); len(got) != 0 {
+		t.Fatalf("assetMissingFailToBlackTargets() = %v, want none", got)
 	}
 }
 
@@ -445,11 +461,11 @@ func TestAssetMissingNodeIDsEmptyWhenNothingRefusedAssetMissing(t *testing.T) {
 // operator programming the show is expected to be watching for exactly
 // this kind of error.
 func TestAssetMissingFailToBlackOnlyFiresInShowMode(t *testing.T) {
-	nodes := []string{"node-1"}
-	if !assetMissingFailToBlack(config.ShowModeShow, nodes) {
+	targets := []cueScopedFailToBlackTarget{{NodeID: "node-1"}}
+	if !assetMissingFailToBlack(config.ShowModeShow, targets) {
 		t.Error("assetMissingFailToBlack(show, [node-1]) = false, want true")
 	}
-	if assetMissingFailToBlack(config.ShowModeProgram, nodes) {
+	if assetMissingFailToBlack(config.ShowModeProgram, targets) {
 		t.Error("assetMissingFailToBlack(program, [node-1]) = true, want false: setup/program mode keeps the refusal loud, never blacked (the owner's own ruling)")
 	}
 	if assetMissingFailToBlack(config.ShowModeShow, nil) {

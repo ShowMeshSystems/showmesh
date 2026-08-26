@@ -262,7 +262,7 @@ func TestAuthorizeCrossShowRefusesDispatchingNothing(t *testing.T) {
 	putShow(t, st, "show-2", "Show Two")
 	putActiveShow(t, st, "show-2")
 
-	outcome, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestAuthorizeStaleGenerationRefused(t *testing.T) {
 	// now older than what the coordinator holds.
 	putActiveShow(t, st, "show-1")
 
-	outcome, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -691,7 +691,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 		t.Fatalf("no activation built for node-1/cue-other")
 	}
 
-	outcome, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", ownAct)
+	outcome, _, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", ownAct)
 	if err != nil {
 		t.Fatalf("Authorize(cue-own): %v", err)
 	}
@@ -700,7 +700,7 @@ func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing
 			"an unrelated cue's missing asset must never refuse it", outcome)
 	}
 
-	outcome, reason, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", otherAct)
+	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", otherAct)
 	if err != nil {
 		t.Fatalf("Authorize(cue-other): %v", err)
 	}

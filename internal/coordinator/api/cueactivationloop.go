@@ -14,6 +14,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
 // This file is Track H seam H4's own activation trigger: the periodic,
@@ -243,19 +244,33 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 			h.dispatchBlackAndSilence(ctx, now, dec.ClearNodes, issuer, blackAndSilenceEpisode(obs))
 		}
 		// A genuinely missing asset must never leave a node showing WRONG
-		// content while an operator is not looking at it. In show mode
-		// only — never in setup/program mode, where an operator IS looking
-		// and the refusal must stay loud rather than disappear to black —
-		// fail that one node to black the identical way an H0.2 mismatch
-		// does, reusing the SAME effect.
-		assetMissingNodes := assetMissingNodeIDs(outcomes)
-		if len(assetMissingNodes) > 0 && h.deps.Config != nil {
-			mode, _, _, _, merr := resolveShowMode(ctx, h.deps.Config)
-			if merr != nil {
-				h.logWarn("cue activation loop: resolve show mode for asset-missing fail-to-black failed", "instanceUuid", obs.InstanceUUID, "error", merr)
-			} else if assetMissingFailToBlack(mode.Mode, assetMissingNodes) {
-				h.dispatchBlackAndSilence(ctx, now, assetMissingNodes, issuer, blackAndSilenceEpisode(obs))
-			}
+		// content while an operator is not looking at it — but it must
+		// also never black anything the refused Cue does not itself
+		// declare (Eric's ruling: "it should not fail for the entire
+		// show, just that single bad cue"). assetMissingFailToBlackTargets
+		// collects BOTH kinds of asset-missing refusal this seam can see
+		// (this coordinator's own pre-dispatch refusal, and the node's
+		// own post-dispatch refusal — see that function's own doc
+		// comment for why both must reach this path), each carrying the
+		// refused Cue's own resolved outputs so the dispatch below can
+		// scope to exactly those.
+		//
+		// Dispatched in its own goroutine, detached from this tick's own
+		// return: [dispatchCueScopedBlackAndSilence] awaits real node
+		// confirmation per surface/session (renderCommandConfirmDeadline/
+		// audioCommandConfirmDeadline, 15s each), and this method is
+		// called once per FPP instance from cueActivationTick's own
+		// sequential loop over EVERY instance — a node that never
+		// confirms (the exact case an asset-missing refusal often is)
+		// would otherwise stall every OTHER instance's tick behind a
+		// repeated multi-second wait, paid again at every new entry-start
+		// on the bad node. ctx here is [CueActivationLoop.Run]'s own
+		// long-lived context (this tick's caller), not a per-request one,
+		// so it outlives this method's own return exactly the way the
+		// outer per-tick goroutine (runTick) already does one level up.
+		if targets := assetMissingFailToBlackTargets(outcomes); len(targets) > 0 {
+			episode := blackAndSilenceEpisode(obs)
+			go h.dispatchAssetMissingFailToBlack(ctx, now, obs.InstanceUUID, targets, issuer, episode)
 		}
 	case cueactivate.StateUnbound, cueactivate.StateIdentityUnavailable:
 		// Nothing to dispatch or hold — see [cueactivate.State]'s own doc
@@ -263,34 +278,89 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 	}
 }
 
-// assetMissingNodeIDs returns the node ids among outcomes whose own
-// [cueActivationDispatchOutcome.AuthorizeOutcome] is [cueauth.
-// OutcomeAssetMissing] — the fail-to-black target set: every node THIS
-// coordinator's own pre-dispatch [cueactivate.Authorize] refused because
-// the activated Cue's own asset is genuinely missing, never a node
-// refused for an unrelated reason (cross-show, stale generation/catalog/
-// cue) that fail-to-black has no bearing on.
-func assetMissingNodeIDs(outcomes []cueActivationDispatchOutcome) []string {
-	var out []string
+// cueScopedFailToBlackTarget is one node this tick must fail to black,
+// scoped to exactly the outputs the refused Cue itself declared for it —
+// never the node's every surface and every audio session, which is
+// [dispatchBlackAndSilence]'s own broader H0.2 mismatch effect (still
+// correct for THAT case: an entire Playlist binding mismatch is not "one
+// bad cue").
+type cueScopedFailToBlackTarget struct {
+	NodeID  string
+	Outputs cuecatalog.Outputs
+}
+
+// assetMissingFailToBlackTargets collects the fail-to-black target set
+// from outcomes: every node refused asset-missing, from EITHER of the two
+// places that refusal can come from —
+//
+//  1. AuthorizeOutcome == [cueauth.OutcomeAssetMissing]: THIS
+//     coordinator's own pre-dispatch [cueactivate.Authorize] refused
+//     before anything ever reached the wire.
+//  2. NodeOutcome == string([cueauth.OutcomeAssetMissing]): the ACTIVATION
+//     was dispatched (this coordinator's own Authorize passed), but the
+//     node's own post-dispatch [cueauth.CheckLazy] refused it against
+//     its own, independently-observed asset inventory. Before this fix,
+//     this case reached no fail-to-black path at all: a node-side
+//     asset-missing refusal only produced a log line
+//     (outcome.Dispatched && !outcome.Confirmed, cueActivationTickOne's
+//     own switch above), identical to a bare unconfirmed dispatch. This
+//     matters because a never-uploaded sequence can be resolved
+//     "present" by this coordinator's own manifest computation (an
+//     unauthored sequence is not "missing" — see [cueactivate.
+//     cueAssetsPresent]'s own doc comment) while the node itself, asked
+//     to open a file that was never uploaded at all, refuses — the
+//     single worst case Eric's ruling named, and the one case a
+//     fail-to-black gated only on THIS coordinator's own opinion could
+//     never reach. Whether that coordinator/node disagreement about a
+//     never-uploaded sequence is itself a separate defect is a question
+//     for its own fix; this path does not depend on the coordinator
+//     having noticed first, which is the requirement here.
+//
+// Every other outcome (successfully confirmed, refused for an unrelated
+// reason, or no result at all) is excluded — fail-to-black has no bearing
+// on any of them.
+func assetMissingFailToBlackTargets(outcomes []cueActivationDispatchOutcome) []cueScopedFailToBlackTarget {
+	var out []cueScopedFailToBlackTarget
 	for _, o := range outcomes {
-		if o.AuthorizeOutcome == cueauth.OutcomeAssetMissing {
-			out = append(out, o.NodeID)
+		if o.AuthorizeOutcome == cueauth.OutcomeAssetMissing || o.NodeOutcome == string(cueauth.OutcomeAssetMissing) {
+			out = append(out, cueScopedFailToBlackTarget{NodeID: o.NodeID, Outputs: o.RefusedCueOutputs})
 		}
 	}
 	return out
 }
 
 // assetMissingFailToBlack reports whether the fail-to-black effect should
-// fire for assetMissingNodes under mode: true only in show mode
-// (config.ShowModeShow) and only when there is at least one node to
+// fire for targets under mode: true only in show mode
+// (config.ShowModeShow) and only when there is at least one target to
 // black. In setup/program mode the refusal stays loud — the existing
 // per-node log line and audit entry — rather than disappearing to black,
 // per the owner's own ruling: errors can be caught in programming mode
 // since it is designed to be used while the operator is looking at the
 // show, so a refusal there must stay visible rather than fail silently to
 // black.
-func assetMissingFailToBlack(mode string, assetMissingNodes []string) bool {
-	return mode == config.ShowModeShow && len(assetMissingNodes) > 0
+func assetMissingFailToBlack(mode string, targets []cueScopedFailToBlackTarget) bool {
+	return mode == config.ShowModeShow && len(targets) > 0
+}
+
+// dispatchAssetMissingFailToBlack resolves show mode and, only in show
+// mode, dispatches [dispatchCueScopedBlackAndSilence] for targets — split
+// out from cueActivationTickOne so it can run in its own goroutine (see
+// that method's own doc comment for why: this is the call that awaits
+// real per-surface/per-session node confirmation and must not stall the
+// sequential tick loop over every OTHER FPP instance).
+func (h *handlers) dispatchAssetMissingFailToBlack(ctx context.Context, now time.Time, instanceUUID string, targets []cueScopedFailToBlackTarget, issuer cueActivationIssuer, episode string) {
+	if h.deps.Config == nil {
+		return
+	}
+	mode, _, _, _, merr := resolveShowMode(ctx, h.deps.Config)
+	if merr != nil {
+		h.logWarn("cue activation loop: resolve show mode for asset-missing fail-to-black failed", "instanceUuid", instanceUUID, "error", merr)
+		return
+	}
+	if !assetMissingFailToBlack(mode.Mode, targets) {
+		return
+	}
+	h.dispatchCueScopedBlackAndSilence(ctx, now, targets, issuer, episode)
 }
 
 // cueActivationSystemPrincipalID attributes an autonomous tick's own
@@ -365,36 +435,93 @@ func (h *handlers) dispatchBlackAndSilence(ctx context.Context, now time.Time, n
 		return
 	}
 	for _, nodeID := range nodeIDs {
-		surfaceIDs, err := surfaceIDsForNodeAnyShow(ctx, h.deps.Config, nodeID)
-		if err != nil {
-			h.logWarn("cue activation loop: resolve surfaces for blackAndSilence failed", "nodeId", nodeID, "error", err)
-		} else {
-			for _, surfaceID := range surfaceIDs {
-				in := renderDispatchInput{
-					Action: "render.surface.clear", NodeID: nodeID, SurfaceID: surfaceID,
-					IdempotencyKey: "cueact-clear-" + nodeID + "-" + surfaceID + "-" + episode,
-					DesiredState:   "stopped",
-					IssuerID:       issuer.PrincipalID, IssuerName: issuer.PrincipalName,
-					Form: issuer.Form, CredentialID: issuer.CredentialID,
-				}
-				result, problem, err := h.executeRenderDispatch(ctx, now, in)
-				switch {
-				case err != nil:
-					h.logWarn("cue activation loop: blackAndSilence clear dispatch failed", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "error", err)
-				case problem != nil:
-					h.logWarn("cue activation loop: blackAndSilence clear dispatch refused", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "detail", problem.Detail)
-				case result.Replay:
-					// Not a failure: this episode's clear was already
-					// dispatched on an earlier tick and this is a repeat
-					// tick of the SAME episode — logged so a suppressed
-					// dispatch is visible evidence, never a silent no-op
-					// (TRACK-H-H3-SPEC.md section 6).
-					h.logDebug("cue activation loop: blackAndSilence clear suppressed as a replay of an unchanged episode", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode)
-				}
-			}
-		}
-
+		h.dispatchBlackAndSilenceClearSurfaces(ctx, now, nodeID, issuer, episode)
 		h.dispatchBlackAndSilenceAudioStop(ctx, now, nodeID, issuer, episode)
+	}
+}
+
+// dispatchBlackAndSilenceClearSurfaces dispatches render.surface.clear to
+// every show.surface belonging to nodeID (H0.2's render half of the
+// blackAndSilence effect) — split out of [dispatchBlackAndSilence] so
+// [dispatchCueScopedBlackAndSilence] can reuse the identical clear logic
+// (idempotency key shape, log lines) for a scoped target that must clear
+// render surfaces WITHOUT also stopping every audio session on the node,
+// which dispatchBlackAndSilence's own node-wide effect always does.
+func (h *handlers) dispatchBlackAndSilenceClearSurfaces(ctx context.Context, now time.Time, nodeID string, issuer cueActivationIssuer, episode string) {
+	surfaceIDs, err := surfaceIDsForNodeAnyShow(ctx, h.deps.Config, nodeID)
+	if err != nil {
+		h.logWarn("cue activation loop: resolve surfaces for blackAndSilence failed", "nodeId", nodeID, "error", err)
+		return
+	}
+	for _, surfaceID := range surfaceIDs {
+		in := renderDispatchInput{
+			Action: "render.surface.clear", NodeID: nodeID, SurfaceID: surfaceID,
+			IdempotencyKey: "cueact-clear-" + nodeID + "-" + surfaceID + "-" + episode,
+			DesiredState:   "stopped",
+			IssuerID:       issuer.PrincipalID, IssuerName: issuer.PrincipalName,
+			Form: issuer.Form, CredentialID: issuer.CredentialID,
+		}
+		result, problem, err := h.executeRenderDispatch(ctx, now, in)
+		switch {
+		case err != nil:
+			h.logWarn("cue activation loop: blackAndSilence clear dispatch failed", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "error", err)
+		case problem != nil:
+			h.logWarn("cue activation loop: blackAndSilence clear dispatch refused", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode, "detail", problem.Detail)
+		case result.Replay:
+			// Not a failure: this episode's clear was already
+			// dispatched on an earlier tick and this is a repeat
+			// tick of the SAME episode — logged so a suppressed
+			// dispatch is visible evidence, never a silent no-op
+			// (TRACK-H-H3-SPEC.md section 6).
+			h.logDebug("cue activation loop: blackAndSilence clear suppressed as a replay of an unchanged episode", "nodeId", nodeID, "surfaceId", surfaceID, "episode", episode)
+		}
+	}
+}
+
+// dispatchCueScopedBlackAndSilence fails targets to black, each scoped to
+// exactly the outputs its own refused Cue declared for it (Eric's ruling:
+// "it should not fail for the entire show, just that single bad cue") —
+// never [dispatchBlackAndSilence]'s node-wide clear-every-surface-and-
+// stop-every-session effect, which is correct for an H0.2 Playlist-binding
+// mismatch (the WHOLE binding is wrong) but was wrong here: an audio-only
+// Cue's refusal must never clear a render surface that Cue never touches,
+// and a render-only Cue's refusal must never stop the background bed or
+// an in-flight announcement, neither of which that Cue's own outputs
+// declare.
+//
+//   - target.Outputs.Render != nil: clear every one of the node's own
+//     show.surface objects (render is scoped by surface ASSIGNMENT, not
+//     further per-Cue — [assetsync.ResolveCueCatalog]'s own doc comment —
+//     so "the surfaces this Cue declares" is exactly the node's own
+//     assigned surfaces).
+//   - target.Outputs.Audio != nil: stop ONLY [cueactivation.AudioSessionID],
+//     the one session an ordinary Cue's audio output ever runs in — never
+//     [cueactivation.BackgroundSessionID] (the showmesh-audio runner's own
+//     background Playlist, which no Cue's own outputs ever name) and
+//     never [cueactivation.AnnouncementSessionID] unless this SAME Cue
+//     also declares its own announcement output (handled by the very next
+//     case, not this one).
+//   - target.Outputs.Announcement != nil: stop ONLY
+//     [cueactivation.AnnouncementSessionID].
+//   - target.Outputs.LTC declares no asset and no session of its own — it
+//     rides on the audio output's own session ([cuecatalog.LTCOutput]'s
+//     own doc comment) — so the Audio case above already covers it; LTC
+//     alone with no Audio output cannot occur (config.ShowCuePayload's own
+//     authoring-time "outputs.ltc requires outputs.audio" rule).
+func (h *handlers) dispatchCueScopedBlackAndSilence(ctx context.Context, now time.Time, targets []cueScopedFailToBlackTarget, issuer cueActivationIssuer, episode string) {
+	if h.deps.Config == nil {
+		return
+	}
+	for _, target := range targets {
+		if target.Outputs.Render != nil {
+			h.dispatchBlackAndSilenceClearSurfaces(ctx, now, target.NodeID, issuer, episode)
+		}
+		if target.Outputs.Audio != nil {
+			h.dispatchBlackAndSilenceAudioStopSession(ctx, now, target.NodeID, cueactivation.AudioSessionID, issuer, episode)
+		}
+		if target.Outputs.Announcement != nil {
+			h.dispatchBlackAndSilenceAudioStopSession(ctx, now, target.NodeID, cueactivation.AnnouncementSessionID, issuer, episode)
+		}
 	}
 }
 
