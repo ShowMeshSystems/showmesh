@@ -78,7 +78,7 @@ func main() {
 	if err != nil {
 		panic(fmt.Sprintf("verify %s: %v", path, err))
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	dst := make([]byte, 6)
 	if err := f.ChannelRange(f.FrameCount()-1, 0, 6, dst); err != nil {
 		panic(err)
