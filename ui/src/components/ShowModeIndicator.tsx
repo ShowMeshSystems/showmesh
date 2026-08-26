@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { getShowModeConfig, type ShowModeConfigResponse } from '../api'
 import { describeApiError } from '../app/session'
 
@@ -21,6 +22,14 @@ import { describeApiError } from '../app/session'
 // collapsed into another. "Loading" is not "program". A failed read is not
 // "program" either: it says the mode could not be read, because inventing
 // a mode here would be the UI asserting a system state from no evidence.
+//
+// Operator-reported: this reads as a clickable affordance but was a plain
+// <span>, so clicking it did nothing. It is now a link to /config, the
+// route holding ShowModePanel -- the config:write-gated control that
+// actually changes the mode. It stays a link to that page, never the
+// switch itself: changing the installation-wide operating mode from a
+// persistent header element, with no context and no confirmation, is the
+// wrong place for the control, only for the way to reach it.
 
 // SHOWMESH CHOICE, NOT MEASURED. The mode is not carried on the change
 // stream (it is configuration, not a resource ADR-020 models), so this
@@ -62,29 +71,31 @@ export function ShowModeIndicator() {
 
   if (state.kind === 'loading') {
     return (
-      <span className="show-mode show-mode--unknown" role="status" aria-label="Show mode">
+      <Link to="/config" className="show-mode show-mode--unknown" role="status" aria-label="Show mode">
         Mode: loading…
-      </span>
+      </Link>
     )
   }
 
   if (state.kind === 'error') {
     return (
-      <span
+      <Link
+        to="/config"
         className="show-mode show-mode--unknown"
         role="status"
         aria-label="Show mode"
         title={state.message}
       >
         Mode: cannot be read
-      </span>
+      </Link>
     )
   }
 
   const mode = state.config.payload.mode
   const never = state.config.revision === 0
   return (
-    <span
+    <Link
+      to="/config"
       className={`show-mode show-mode--${mode}`}
       role="status"
       aria-label="Show mode"
@@ -95,6 +106,6 @@ export function ShowModeIndicator() {
     >
       Mode: {mode === 'show' ? 'Show' : 'Program'}
       {never && <span className="show-mode__note"> (default)</span>}
-    </span>
+    </Link>
   )
 }

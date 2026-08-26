@@ -1,6 +1,18 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { ShowModeIndicator } from './ShowModeIndicator'
+
+// Now a router Link (it takes the operator to /config, the route holding
+// ShowModePanel), so rendering it needs a Router in scope, same as any
+// other react-router-dom Link/NavLink test in this codebase.
+function renderIndicator() {
+  return render(
+    <MemoryRouter>
+      <ShowModeIndicator />
+    </MemoryRouter>,
+  )
+}
 
 // ADR-033 decision 3's own component test. The point under test is that
 // the three states are rendered DISTINCTLY: loading is not program, and a
@@ -42,7 +54,7 @@ const showConfigured = {
 describe('ShowModeIndicator', () => {
   it('renders the mode once it has been read', async () => {
     getShowModeConfig.mockResolvedValue(showConfigured)
-    render(<ShowModeIndicator />)
+    renderIndicator()
 
     await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/Show/))
     expect(screen.getByLabelText('Show mode').className).toContain('show-mode--show')
@@ -50,7 +62,7 @@ describe('ShowModeIndicator', () => {
 
   it('marks the built-in default as a default rather than as a stored choice', async () => {
     getShowModeConfig.mockResolvedValue(programDefault)
-    render(<ShowModeIndicator />)
+    renderIndicator()
 
     await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/Program/))
     expect(screen.getByLabelText('Show mode').textContent).toMatch(/default/i)
@@ -58,7 +70,7 @@ describe('ShowModeIndicator', () => {
 
   it('does not render "program" while it is still loading', () => {
     getShowModeConfig.mockReturnValue(new Promise(() => {}))
-    render(<ShowModeIndicator />)
+    renderIndicator()
 
     const badge = screen.getByLabelText('Show mode')
     expect(badge.textContent).toMatch(/loading/i)
@@ -68,7 +80,7 @@ describe('ShowModeIndicator', () => {
 
   it('says the mode could not be read rather than inventing one when the read fails', async () => {
     getShowModeConfig.mockRejectedValue(new Error('network error requesting /config/show.mode'))
-    render(<ShowModeIndicator />)
+    renderIndicator()
 
     await waitFor(() => expect(screen.getByLabelText('Show mode').textContent).toMatch(/cannot be read/i))
     const badge = screen.getByLabelText('Show mode')
@@ -80,12 +92,26 @@ describe('ShowModeIndicator', () => {
   // its reason, and this is where an operator reads it.
   it('carries the mode-stated effect as the badge title', async () => {
     getShowModeConfig.mockResolvedValue(showConfigured)
-    render(<ShowModeIndicator />)
+    renderIndicator()
 
     await waitFor(() => screen.getByLabelText('Show mode'))
     expect(screen.getByLabelText('Show mode')).toHaveAttribute(
       'title',
       showConfigured.resolumeWebSocketEffect,
     )
+  })
+
+  // Operator-reported: this read as a clickable affordance but did nothing
+  // when clicked. It must actually take the operator to /config, the route
+  // holding ShowModePanel (the config:write-gated control), rather than
+  // becoming the mode switch itself.
+  it('links to /config, where the mode switch actually lives, rather than switching the mode itself', async () => {
+    getShowModeConfig.mockResolvedValue(showConfigured)
+    renderIndicator()
+
+    await waitFor(() => screen.getByLabelText('Show mode'))
+    const badge = screen.getByLabelText('Show mode')
+    expect(badge.tagName).toBe('A')
+    expect(badge).toHaveAttribute('href', '/config')
   })
 })
