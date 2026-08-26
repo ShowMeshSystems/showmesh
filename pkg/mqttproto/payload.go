@@ -682,6 +682,25 @@ type RenderSurfaceReport struct {
 	// reject every fixture and payload built before it existed.
 	FramesObservedAt time.Time `json:"framesObservedAt"`
 
+	// ContentObservedAt is when the node last read the persisted assignment
+	// it is reporting content identity for (FSEQFilename/FSEQContentHash/
+	// CueID/CatalogRevision below): its own evidence timestamp, deliberately
+	// independent of ObservedAt above. A cue activation swaps the frame
+	// writer without transitioning PipelineState, so ObservedAt would not
+	// move even though the content identity just changed; conversely, a
+	// surface rendering the SAME content steadily for ten minutes must not
+	// read stale merely because nothing transitioned. internal/agent/
+	// renderreport.go re-reads the persisted assignment fresh on every
+	// report tick and stamps this field from that read, so "when I last
+	// read this" is a real, continuously refreshed observation. Zero
+	// (IsZero()) means unknown (ADR-011: zero/nil is unknown, never
+	// defaulted to "now"), not enforced as required by Validate, matching
+	// FramesObservedAt's identical additive-compatibility reasoning two
+	// fields up: this field is added after RenderSurfaceReport first
+	// shipped, and a hard requirement here would reject every fixture and
+	// payload built before it existed.
+	ContentObservedAt time.Time `json:"contentObservedAt"`
+
 	// TimelineState is the multisync.Timeline state ("playing",
 	// "unsynchronized", "opened", "stopping", "stopped", "unknown") this
 	// surface's frame writer most recently sampled. "" means no frame
