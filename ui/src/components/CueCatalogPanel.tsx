@@ -43,13 +43,8 @@ function useNodeCueCatalog(nodeId: string, refreshToken: number, snapshotReceive
     return () => {
       cancelled = true
     }
-    // Same shape as PlaylistReadiness.tsx's own usePlaylistReadiness:
-    // `snapshotReceivedAt` changes on every resnapshot (initial connect,
-    // reconnect, stream.reset, per store.ts's applySnapshot), so this
-    // re-asks the coordinator whenever this browser's connection to it
-    // was re-established, without a second freshness mechanism.
-    // `refreshToken` covers both this panel's existing post-deploy
-    // re-check and its own explicit "Reload" control below.
+    // Refetches on reconnect and on an explicit Reload, the same shape
+    // PlaylistReadiness.tsx uses and for the same reason.
   }, [nodeId, refreshToken, snapshotReceivedAt])
 
   return state
