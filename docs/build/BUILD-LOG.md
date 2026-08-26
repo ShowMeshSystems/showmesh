@@ -44,7 +44,55 @@ The **Current state** block at the top of this file is overwritten each session:
 >
 > **Nothing in this fold ran on real hardware, in a browser, on a deployment, or against Resolume Arena.** Every gate recorded above is `make check` or `make test-integration` on a merged tree or on `main`. Hardware, browser, deployed-fleet and live-Arena acceptance remain open exactly where the tracks left them.
 >
+> **Track E phase 2, FPP Connect, is built on the integration branch `dev/fpp-connect` and is not on `main`.** Seams FC0, FC1a, FC1b, FC2 and FC3 merged there on 2026-08-26 as `9292931` (#118), `e445e24` (#127), `8e79e15` (#126), `31165fc` (#136) and `5e57e9f` (#144), which is the branch tip. Each was gated by `showmesh-check` on the `showmesh-dev-01` build VM and by GitHub checks, and reviewed by Hermes and by an independent Opus reviewer. **Nothing ran against a real xLights or a real FPP, and no node has run it on hardware**, so FC4, the owner's bench, is still the acceptance gate. The branch rebases onto `main` and opens its pull request after the 28 August landing. The 2026-08-26 entry below is its record.
+>
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
+
+---
+
+## 2026-08-26 (Track E phase 2, FPP Connect: seams FC0, FC1a, FC1b, FC2 and FC3 built and merged to `dev/fpp-connect`; nothing on `main`)
+
+**Goal:** build the FPP Connect upload base that [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md) pulled forward on 2026-08-25, so xLights' FPP Connect dialog can discover a ShowMesh render node, upload a sequence to it in chunks, and have the completed file registered as a dispatchable asset through the coordinator's existing asset path.
+
+**Integration branch, not `main`.** All five pull requests merged into `dev/fpp-connect` on 2026-08-26 and its tip is `5e57e9f`. **Nothing from this work reached `main`**, which is unchanged by this entry. The branch lands on `main` only after the 28 August hardware landing, per the schedule in the track document and in [BUILD-PLAN.md](BUILD-PLAN.md).
+
+**Completed:** five seams, one pull request each, in merge order.
+
+- **FC0, pull request #118, merged as `9292931`.** The render node's MultiSync discover-ping reply now advertises the values the FPP Connect dialog needs before it will offer the node as an upload target: `typeId` `0x7f` as its own constant rather than an alias for `0xC0`, version 9.5.0, and a channel range string read fresh from a holder at reply time. The v3 wire layout itself is unchanged; only the advertised field values and the source of the ranges field changed.
+- **FC1a, pull request #127, merged as `e445e24`.** The coordinator holds a store-backed `fppconnect.settings` kind and computes each node's 0-based channel range string from its `show.surface` objects, then pushes that range, the active show, the show name list and the two byte caps to the node over the existing MQTT command path as `fppconnect.configure`, on every hello and on every write that changes an input. The render node persists what it was pushed before applying it, so a restart answers from disk. Adds the `GET`/`PUT`/`revisions` endpoints, their OpenAPI schemas, and `showmeshctl fppconnect settings get|set|revisions`.
+- **FC1b, pull request #126, merged as `8e79e15`.** The render node's first inbound HTTP listener (ADR-044), serving the four xLights-required discovery routes on port 80 and 404 for everything else, including a known path with the wrong method. Adds `SHOWMESH_FPPCONNECT_LISTEN_ADDR` as a start-time override, `AmbientCapabilities=CAP_NET_BIND_SERVICE` on the node service unit, listener status on the render report, and the "Listener surface" section of the track document as the listener's specification in place of `api/openapi.yaml`.
+- **FC2, pull request #136, merged as `31165fc`.** The chunked upload receiver and the show binding: xLights can PATCH a sequence, audio or video file in 16 MiB chunks, and the render node streams the bytes to disk, hashes incrementally, and holds the file, binding it to a ShowMesh show by playlist name or by the active-show fallback. Held bound, held unbound and refused are each recorded as evidence and published on the render report. A partial upload leaves nothing the node treats as complete.
+- **FC3, pull request #144, merged as `5e57e9f`.** A held, bound FSEQ is registered through the coordinator's existing `POST /api/v1/assets` with `targetKind=node`, which makes it dispatchable over the existing `asset.fetch` path with no FPP Connect special case. Terminal statuses (`400`, `401`, `403`, `405`, `413`) are never retried; every other non-terminal `4xx`, every `5xx` including `507`, and every transport error retry with capped exponential backoff.
+
+**Decisions made:** one owner ruling, made 2026-08-25 and implemented here. **The MultiSync ping's mode byte stays `remote`, while `player` is served over HTTP.** FPP unicasts sync only to nodes whose ping reports remote, and xLights reads `player` from `GET /api/system/info`'s `Mode` field instead, so the two fields carry different values deliberately. The durable record is [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 7, amended 2026-08-25, restated as item 6 of [RES-003](../research/RES-003-xlights-fpp-connect-compatibility.md) section 10.7. Nothing else in these five seams rose to an ADR. One reversible builder default is flagged on its own pull request rather than ruled: `fppconnect.settings.enabled` defaults to `true` (#127).
+
+**Questions raised with the owner:** one, recorded on #144 and unanswered. Registration requires `SHOWMESH_AGENT_API_TOKEN` to carry `asset:write`, and whether a node principal should instead get a scoped write capability rather than that broad token is open.
+
+**Reviews:** every seam had Hermes `showmesh-review` runs and independent Opus review rounds, all recorded on the pull requests. Round counts, as stated in the pull request bodies: FC0 two Opus rounds (six findings applied, delta pass confirmed all six), FC1a three (the blocking one: the push idempotency key repeated when a surface was moved off a node, so the vacated node kept advertising the old range), FC1b three (the two contract ones: `http.ServeMux` redirecting an uncleaned path with an HTML body, and 405 instead of 404 on a non-GET), FC2 five (among them: held files were reported nowhere an operator could see, refused uploads left no evidence, chunks were buffered whole, and a server-wide write timeout killed slow chunks after they had already been applied), and FC3 eight, with four Hermes runs alongside them. Hermes was clean at `7dfb797` and `572d1a6` (FC0), `cd847ef` and `15240de` (FC1a), `59d899e` (FC1b) and `89936f4` (FC2).
+
+**Deferred, and the follow-ups this work leaves behind.**
+
+- **A 32-bit coordinator build cannot write the byte caps the settings kind documents.** The decoder for `maxFileBytes` and `maxAssetDirBytes` reads them into Go's `int`, which is 32 bits on a 32-bit build, while the documented default per-file cap is 2 GiB, one byte past what such a build can hold. Read from the code on this branch, not measured against a 32-bit build.
+- **There is no operator-visible evidence when a node's channel range is dropped.** When the coordinator cannot format a node's range (no surfaces, a refused range, or a string longer than the ping's 120-byte field) it pushes an empty string and logs a warning, and a pushed string the node cannot fit is clamped to empty with a warning in the node's log; nothing else records either case, and xLights treats an empty range as render everything. The same gap covers the listener's bind status and the held-file list: they travel on the render report, and no coordinator collector signal, API field or Operator UI surface reads them yet.
+
+**Acceptance gaps, stated as the pull requests state them.**
+
+- **Nothing ran against a real xLights or a real FPP.** Every behaviour above is implemented from RES-003's source-read protocol and ADR-044's decisions, not observed against a live client.
+- **No multi-hundred-megabyte upload was exercised.** Tests use small in-memory payloads, plus one real `http.Server` drip test sized for timeout behaviour rather than volume.
+- **No node has bound port 80 with `CAP_NET_BIND_SERVICE` on real hardware**, and no node has run any of this on real hardware.
+- **Held-file and listener evidence exists only in the render report payload.** It has been exercised in unit tests against that payload, never watched by an operator.
+
+**Verification gates, per pull request, as each body records them.** All are `showmesh-check`, the wrapper on the `showmesh-dev-01` build VM for `make check` (`fmt-check vet lint test ui-lint ui-test ui-build ui-gen-check`), plus GitHub checks.
+
+- #118: `showmesh-check` passed against `6f77fc3`; GitHub checks passed at `6f77fc3` (10 checks).
+- #127: `showmesh-check` passed against `833d4d8`; the comment-only final round was gated more narrowly with `gofmt -l internal/agent`, `go vet ./internal/agent/` and `go test -count=1 ./internal/agent/` against `bfd4242`; GitHub checks passed at `bfd4242` (10 checks).
+- #126: `showmesh-check` passed against `eedd60d`; GitHub checks passed at `eedd60d` (10 checks).
+- #136: `showmesh-check` passed against `0173f9c`, with `gstengine` run alone (ok 182.3 s) and every other package in the batch; GitHub checks passed at `0173f9c` (10 checks).
+- #144: `showmesh-check` passed against `4c22174`, plus `go test -race ./internal/agent/... -run 'FPPConnect'` and `go test -race ./internal/coordinator/api/...` at the same commit; GitHub checks passed at `4c22174` (10 checks, after a re-run during the GitHub Actions incident of 2026-08-26).
+
+**Not run and not claimed:** `make test-integration` was not run for any of the five, and each body says why: no FPP or broker behaviour changed (FC0), no FPP integration target exercises the seam (FC1a, FC1b, FC2), and no coordinator-plus-agent integration target was run on the VM's own Docker (FC3). Nothing ran on real hardware, in a browser, on a deployment, or against a real xLights or FPP.
+
+**What is next:** rebase `dev/fpp-connect` onto `main` after the 28 August landing, open the pull request into `main`, then run FC4, the owner's bench against his real xLights, which is the acceptance gate for everything above and the only thing that raises RES-003 section 9's conclusions above L1.
 
 ---
 
