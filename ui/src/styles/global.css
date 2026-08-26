@@ -72,11 +72,17 @@ input {
   z-index: 20;
 }
 
-/* Phone: the group wrapper vanishes from the box tree so its links remain
-   direct flex children of the bottom tab bar, and the heading is hidden.
-   The tab bar's layout is therefore exactly what it was before grouping
-   was introduced. */
+/* Phone: the group wrapper AND its links list both vanish from the box
+   tree (nested `display: contents`) so links remain direct flex children
+   of the bottom tab bar, and the heading control is hidden. Collapsing is
+   a sidebar-only affordance -- this layout is exactly what it was before
+   collapsible groups (and before grouping) were introduced, and `[data-
+   open]` is never read here. */
 .app-nav__group {
+  display: contents;
+}
+
+.app-nav__group-links {
   display: contents;
 }
 
@@ -142,18 +148,63 @@ input {
   .app-nav__group {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
     padding: var(--space-3) var(--space-2);
   }
 
+  /* Each group's heading is now a real toggle control (a <button
+     aria-expanded>, not a div with a click handler -- see Layout.tsx),
+     so this resets it back to reading like the plain heading label it
+     replaced rather than a browser button. */
   .app-nav__group-heading {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    width: 100%;
     margin: 0 0 var(--space-1);
-    padding: 0 var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    min-height: var(--touch-target-min);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
     font-size: var(--font-size-sm);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
+  .app-nav__group-heading:hover {
+    color: var(--color-text);
+  }
+
+  /* Owner-reported density fix: 25 links across 5 groups (13 alone in
+     Configure) sat below the fold with only #114's internal scroll to
+     reach them, which macOS's auto-hiding scrollbar made read as
+     truncated rather than scrollable. Collapsing groups the operator is
+     not using keeps the column short; `.app-nav__group[data-open='true']`
+     needs no rule of its own because `.app-nav__group-links`'s own
+     `display: flex` above already applies whenever this `display: none`
+     override does not. */
+  .app-nav__group[data-open='false'] .app-nav__group-links {
+    display: none;
+  }
+
+  .app-nav__group-links {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  /* A collapsed group still shows how many links it holds, so it never
+     reads as empty. Hidden while expanded, where the links themselves
+     already answer that question. */
+  .app-nav__group-count {
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
     color: var(--color-text-muted);
   }
 
