@@ -33,7 +33,7 @@ const (
 
 // Bounds on audio.settings' numeric fields. Sanity bounds catching a typo (a
 // duration entered in seconds instead of milliseconds, a gain entered as a
-// percentage instead of decibels), not tuned ceilings — the
+// percentage instead of decibels), not tuned ceilings. The
 // drift threshold in particular has never been measured (see
 // AudioSettingsDefaultPayload's own doc comment).
 const (
@@ -89,7 +89,7 @@ type AudioSettingsPayload struct {
 	DefaultFadeDurationMs int `json:"defaultFadeDurationMs"`
 
 	// DefaultMaxBackgroundGainDb is the default ceiling applied to a
-	// background bed, in decibels — 0 dB is unity gain, and the
+	// background bed, in decibels: 0 dB is unity gain, and the
 	// coordinator converts it to [audio.Ceiling]'s linear multiplier once,
 	// at its own boundary, before anything reaches a node.
 	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
@@ -98,7 +98,7 @@ type AudioSettingsPayload struct {
 	// higher-priority session ducks it (an announcement over a resting
 	// background bed), in decibels: it must be negative (0 dB would be no
 	// duck at all) and at or above [audio.SilenceFloorDb], where the bed
-	// goes fully silent. PROVISIONAL, NOT MEASURED — the shipped value
+	// goes fully silent. PROVISIONAL, NOT MEASURED: the shipped value
 	// has never been heard on the installation's speakers (RES-007). A muted session is unaffected: mute silences
 	// unconditionally.
 	DuckTargetGainDb float64 `json:"duckTargetGainDb"`

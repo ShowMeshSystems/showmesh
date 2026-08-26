@@ -153,12 +153,12 @@ func printAudioSettingsUsage(w io.Writer) {
 Read or write the coordinator's audio.settings configuration (ADR-039):
 driftIgnoreThresholdMs (never measured — a starting point, not a tuned
 value), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
-defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB —
+defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB;
 a linear-looking 0.5 here is only half a decibel, not a halving, so enter
 -6.02 if you meant half amplitude),
 duckTargetGainDb (how far a bed drops under an announcement, also in
-decibels: must be negative and at least -60 dB, where -60 dB is silence —
-the shipped value is PROVISIONAL and has never been heard on real
+decibels: must be negative and at least -60 dB, where -60 dB is silence.
+The shipped value is PROVISIONAL and has never been heard on real
 speakers),
 ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
 and ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply

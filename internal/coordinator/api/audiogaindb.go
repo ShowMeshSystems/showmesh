@@ -9,9 +9,9 @@ import (
 
 // This file is THE coordinator's decibel boundary for the two
 // operator-facing gain commands. An operator sends
-// params.gainDb / params.targetGainDb; everything below this line —
-// the coordinator-to-agent wire, pkg/audio.Gain, the agent, and the
-// engine — stays a linear amplitude multiplier. The arithmetic itself
+// params.gainDb / params.targetGainDb; everything below this line
+// (the coordinator-to-agent wire, pkg/audio.Gain, the agent, and the
+// engine) stays a linear amplitude multiplier. The arithmetic itself
 // lives in pkg/audio and is not repeated here.
 //
 // There are two entry paths, and each converts exactly once:
@@ -43,7 +43,7 @@ var audioGainDbFields = map[string]struct{ dbKey, linearKey string }{
 // The pre-change linear parameter name is refused rather than accepted:
 // the two units overlap numerically, so a client still sending
 // {"gain": 0.5} means a halving and would otherwise be dispatched as a
-// half-decibel lift — audibly wrong and silently so.
+// half-decibel lift, which is audibly wrong and silently so.
 func convertAudioGainParamsToLinear(action string, params map[string]any) *v1.Problem {
 	fields, ok := audioGainDbFields[action]
 	if !ok {

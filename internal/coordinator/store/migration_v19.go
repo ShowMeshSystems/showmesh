@@ -33,7 +33,7 @@ const (
 // gain members inside it move.
 //
 // Each revision is rewritten in place rather than reinterpreted, because
-// the two units share a number range — a stored 0.5 meant a halving and
+// the two units share a number range: a stored 0.5 meant a halving and
 // would read as a barely audible half-decibel lift if the name were kept
 // and the value left alone. Rewriting keeps every existing revision at
 // the same audible level, which is the property this migration exists
@@ -99,7 +99,7 @@ func migrateV19AudioSettingsGainToDb(ctx context.Context, tx *sql.Tx) error {
 // changed=false, with no error, for a payload that carries neither old
 // field name: a revision already written in the new unit, and a payload
 // this migration has no business touching. Unrecognised members are
-// carried through untouched — this migration owns two keys and nothing
+// carried through untouched, because this migration owns two keys and nothing
 // else.
 func v19RewriteAudioSettingsPayload(raw string) (string, bool, error) {
 	var top map[string]json.RawMessage
