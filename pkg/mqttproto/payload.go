@@ -725,6 +725,38 @@ type RenderSurfaceReport struct {
 	// an operator reading this report has to know which one is in front of
 	// the audience.
 	FailureOutput string `json:"failureOutput"`
+
+	// FSEQFilename is the runtime filename this surface's frame writer
+	// actually opened for its current assignment (internal/agent/
+	// cueactivationrender.go, internal/agent/renderops.go's
+	// buildAssignedSpec) — the node's own statement about the file it is
+	// rendering, never the coordinator's or a cue's requested filename
+	// echoed back. "" whenever this surface holds no assignment; never a
+	// stale filename left over from a previous assignment once one is
+	// cleared or replaced: pipelineState/frame counters alone cannot
+	// distinguish a healthy swap from rendering the wrong sequence.
+	FSEQFilename string `json:"fseqFilename"`
+
+	// FSEQContentHash is the content hash the node verified against
+	// FSEQFilename before opening it (renderops.go's "validate before
+	// persist" ordering). "" exactly when FSEQFilename is "".
+	FSEQContentHash string `json:"fseqContentHash"`
+
+	// CueID is the Cue that authorized this surface's current assignment
+	// ([cueactivation.Activation.CueID], carried on
+	// [pipeline.AssignmentAuth.CueID]) — "" whenever the current
+	// assignment was applied directly (render.surface.apply with no cue
+	// activation) or no assignment is held at all. Never inferred; only
+	// ever the node's own persisted record of the activation that applied
+	// the file it opened.
+	CueID string `json:"cueId"`
+
+	// CatalogRevision is [pipeline.AssignmentAuth.CatalogRevision] for
+	// this surface's current assignment — "" whenever the assignment
+	// carries no authorization tuple (a legacy assignment persisted before
+	// TRACK-H-H3-SPEC.md section 5 existed, or a coordinator that has not
+	// yet started sending it) or no assignment is held at all.
+	CatalogRevision string `json:"catalogRevision"`
 }
 
 // RenderDrawingContent, RenderDrawingIdle, and RenderDrawingFailure are the
@@ -882,6 +914,10 @@ func (p RenderPayload) Validate() error {
 		if s.FailureOutput != "" && s.FailureOutput != RenderFailureOutputAlert && s.FailureOutput != RenderFailureOutputBlack {
 			return fmt.Errorf("%w: surfaces[%d].failureOutput %q must be %q, %q, or empty",
 				ErrPayloadInvalidDrawing, i, s.FailureOutput, RenderFailureOutputAlert, RenderFailureOutputBlack)
+		}
+		if (s.FSEQFilename == "") != (s.FSEQContentHash == "") {
+			return fmt.Errorf("%w: surfaces[%d].fseqFilename and fseqContentHash must be both empty or both set",
+				ErrPayloadMissingField, i)
 		}
 	}
 	return nil

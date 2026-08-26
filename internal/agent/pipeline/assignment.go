@@ -43,6 +43,17 @@ type Assignment struct {
 	// tuple that happens to be the zero value" needs the pointer, not an
 	// empty struct, to tell the two apart.
 	Auth *AssignmentAuth `json:"auth,omitempty"`
+
+	// CueID is the Cue whose activation applied this assignment
+	// (cueactivation.Activation.CueID), or "" when this assignment was
+	// applied directly by render.surface.apply with no cue activation
+	// involved. Informational only, never compared by the boot-time
+	// resume decision: AssignmentAuth's own doc comment is deliberate
+	// that a render assignment is scoped to a surface, not a Cue, and
+	// this field does not change that — it exists solely so a periodic
+	// render report can state which Cue is the node's own evidence for
+	// the file it opened.
+	CueID string `json:"cueId,omitempty"`
 }
 
 // AssignmentAuth is the subset of TRACK-H-H3-SPEC.md section 5's
