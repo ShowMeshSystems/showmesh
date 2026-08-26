@@ -423,15 +423,23 @@ clean-fpp-plugin-dist:
 # Artifact contract, pinned here as the FPP plugin's own comment pins
 # its contract:
 #   asset: showmesh-node-agent_<VERSION>_<GOOS>_<GOARCH>.tar.gz
-#   sums:  showmesh-node-agent_<VERSION>_SHA256SUMS
+#   sums:  showmesh-node-agent_<VERSION>_SHA256SUMS, covering EVERY
+#          platform tarball present at this VERSION (glob, like
+#          release-fpp-plugin's), so packaging a second platform into
+#          the same dist directory does not leave a sums file naming
+#          only the last one.
 # Nothing here publishes a GitHub Release; this only builds and
 # self-verifies the artifact locally, exactly like release-fpp-plugin.
 NODE_AGENT_DIST    := ./dist/node-agent
 NODE_AGENT_VERSION ?= $(VERSION)
 # The cgo agent links host C libraries, so the target platform is always
 # the host's own. Naming the tarball from `go env` keeps an arm64 build
-# from claiming to be linux_amd64.
-NODE_AGENT_PLATFORM := $(shell go env GOOS)_$(shell go env GOARCH)
+# from claiming to be linux_amd64. One `go env` call, guarded like every
+# other parse-time shell here: this runs on EVERY make invocation,
+# including `make help` on a host with no Go, and must not print an
+# error there. An empty result is caught in the recipe rather than
+# silently producing a `__` tarball.
+NODE_AGENT_PLATFORM := $(shell go env GOOS GOARCH 2>/dev/null | paste -sd_ - )
 NODE_AGENT_TARBALL  := showmesh-node-agent_$(NODE_AGENT_VERSION)_$(NODE_AGENT_PLATFORM).tar.gz
 NODE_AGENT_COMMIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 NODE_AGENT_LDFLAGS := -X $(MODULE)/internal/version.Version=$(NODE_AGENT_VERSION) \
@@ -450,6 +458,10 @@ NODE_AGENT_LDFLAGS := -X $(MODULE)/internal/version.Version=$(NODE_AGENT_VERSION
 # none of which -trimpath touches because none of it is in the binary.
 .PHONY: package-node-agent
 package-node-agent:
+	@if [ "$(NODE_AGENT_PLATFORM)" = "_" ] || [ -z "$(NODE_AGENT_PLATFORM)" ]; then \
+		echo "package-node-agent: could not determine the target platform ('go env GOOS GOARCH' produced nothing). Install Go and put it on PATH; refusing to package an unnamed platform." >&2; \
+		exit 1; \
+	fi
 	mkdir -p $(NODE_AGENT_DIST)
 	rm -rf $(NODE_AGENT_DIST)/showmesh-node-agent
 	mkdir -p $(NODE_AGENT_DIST)/showmesh-node-agent
@@ -464,7 +476,7 @@ package-node-agent:
 		tar -C $(NODE_AGENT_DIST) -czf $(NODE_AGENT_DIST)/$(NODE_AGENT_TARBALL) showmesh-node-agent; \
 	fi
 	rm -rf $(NODE_AGENT_DIST)/showmesh-node-agent
-	cd $(NODE_AGENT_DIST) && sha256sum $(NODE_AGENT_TARBALL) > showmesh-node-agent_$(NODE_AGENT_VERSION)_SHA256SUMS
+	cd $(NODE_AGENT_DIST) && sha256sum showmesh-node-agent_$(NODE_AGENT_VERSION)_*.tar.gz > showmesh-node-agent_$(NODE_AGENT_VERSION)_SHA256SUMS
 	cd $(NODE_AGENT_DIST) && sha256sum -c showmesh-node-agent_$(NODE_AGENT_VERSION)_SHA256SUMS
 	@echo "package-node-agent: built and self-verified $(NODE_AGENT_DIST)/showmesh-node-agent_$(NODE_AGENT_VERSION)_SHA256SUMS"
 

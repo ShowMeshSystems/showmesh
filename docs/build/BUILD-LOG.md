@@ -142,6 +142,21 @@ this one target: `build-agent-native` is `CGO_ENABLED=1` and links host C
 libraries (go-gst, libltc), so unlike the CGO-free FPP plugin it cannot
 cross-compile and can only ever target the platform it is built on.
 
+Two further packaging corrections came out of review. `NODE_AGENT_PLATFORM`
+is a parse-time `:=`, so it runs on every `make` invocation including
+`make help` on a host with no Go; it is now one guarded `go env GOOS
+GOARCH` call like every other parse-time shell in this Makefile, and
+`package-node-agent` refuses outright rather than producing a
+`showmesh-node-agent_<VERSION>__.tar.gz` when the platform cannot be
+determined. And now that the tarball name varies by platform, the
+SHA256SUMS file is written with a glob covering every tarball at that
+version, following `release-fpp-plugin`'s own precedent: packaging two
+platforms into one dist directory previously left a sums file naming
+only the last one, where before this change the collision was on the
+tarball itself and the pair stayed self-consistent. Verified by
+packaging twice into one directory: the sums file lists both tarballs
+and `sha256sum -c` reports OK for each.
+
 The deterministic tar and gzip discipline is untouched
 (`--sort=name --owner=0 --group=0 --numeric-owner --mtime='@0'`,
 `gzip -n -9`), and so is the `sha256sum -c` self-verification. Both were
@@ -176,25 +191,29 @@ attempt**, which was genuinely unknown before this: CI's arm64 leg is a
 that architecture. The binary is 15,662,032 bytes unstripped; the tarball
 is 7,575,764 bytes and is named `..._linux_arm64.tar.gz`.
 
-**The container-built binary loads and runs on Raspberry Pi OS.** This
-was the open question and the answer is yes. On a Raspberry Pi 3 Model B
-Plus Rev 1.3 running Pi OS Lite 64-bit on the Debian 13 trixie base,
+**The container-built binary loads and runs on the one Pi OS image
+tested.** This was the open question and on that image the answer is
+yes. On a Raspberry Pi 3 Model B Plus Rev 1.3 running Pi OS Lite 64-bit
+on the Debian 13 trixie base (`DEBIAN_VERSION_FULL=13.5`, kernel
+`6.18.34+rpt-rpi-v8`),
 `sha256sum -c` verified the tarball on the Pi, `ldd` on the unpacked
 binary resolved every dependency with no `not found` line, and the binary
 ran and printed its version. Debian 13 in a container and Pi OS Trixie do
 share a compatible glibc, GStreamer 1.26 and libltc 11 ABI, which SM-307
-predicted but nothing had confirmed. One caveat this does not cover: the
+predicted but nothing had confirmed. State the limit plainly: the
 Raspberry Pi archive ships `+rpt`-patched GStreamer (1.26.2-1+rpt3) while
-the container had plain Debian 1.26.2. Soname-level compatibility is what
-was proven, and nothing wider.
+the container had plain Debian 1.26.2, and the two proved soname
+compatible **as observed by `ldd` and one successful start on one image,
+one image revision and one Pi model**. That is an ABI observation, not a
+general guarantee about Pi OS or about future `+rpt` revisions.
 
 **Gates.** `make check` in the foreground. No integration target was run:
 this change touches the packaging target's file naming and a README, and
 no Go code, no generated output and no API contract.
 
-**Not verified.** The amd64 leg of this target was not re-run, so the
-change is proven to produce the right name on arm64 and is unexercised on
-amd64 since the edit. Byte-for-byte reproducibility across two runs was
+**Not verified.** The linux/amd64 leg of this target was not re-run, so
+the change is proven to produce the right name on linux/arm64 and on
+darwin/arm64 and is unexercised on linux/amd64 since the edit. Byte-for-byte reproducibility across two runs was
 not re-measured; only the deterministic flags and the self-check were
 observed to work. Nothing was published as a release.
 
