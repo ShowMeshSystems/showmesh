@@ -134,7 +134,9 @@ value this feature needs is in the kind above.
 **Track C's two kinds split engine-wide defaults from per-node physical
 binding.** `audio.settings` holds what is engine-wide and operator-settable
 (drift ignore threshold, LTC frame rate, default fade curve and duration,
-default background gain ceiling). `audio.node` holds what is true of one
+default background gain ceiling; the two gain fields are decibels on the
+operator surface and are converted to the engine's linear multiplier at
+the coordinator's own boundary). `audio.node` holds what is true of one
 node's installed interface: which discovered output route carries program,
 which carries LTC, and the declared clock domain. Both are store-backed
 because ADR-039's test is temporal — the coordinator reads them from its own
@@ -749,7 +751,8 @@ The store schema version, bumped by migrations in
 | v16 | shipped | per-endpoint observed FPP instance uuid history (`fpp_instance_uuid_observations`), closing the gap FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5 recorded between `fpp.endpoints`, the plugin's `instanceUuid`, and `node_declarations` |
 | v17 | shipped | Track H seam H3: per-node cue-catalog acknowledgement storage (TRACK-H-H3-SPEC.md §4) |
 | v18 | shipped | Track H seam H4 defect fix: `entry_occurrence_sequence` on `fpp_playlist_entry_observations`, the entry-start identity a looping FPP playlist needs to re-activate its Cues |
-| v19+ | unallocated | free |
+| v19 | shipped | operator-facing audio gain moves to decibels: every stored `audio.settings` revision's `defaultMaxBackgroundGain`/`duckTargetGain` is rewritten to `defaultMaxBackgroundGainDb`/`duckTargetGainDb` so an existing revision reads back at the same audible level |
+| v20+ | unallocated | free |
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are

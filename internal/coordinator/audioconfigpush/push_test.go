@@ -8,6 +8,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -152,8 +153,21 @@ func TestToNodePushesDefaultAudioSettings(t *testing.T) {
 	if params["defaultFadeCurve"] != config.AudioSettingsDefaultPayload.DefaultFadeCurve {
 		t.Errorf("defaultFadeCurve = %v, want %v", params["defaultFadeCurve"], config.AudioSettingsDefaultPayload.DefaultFadeCurve)
 	}
-	if params["duckTargetGain"] != config.AudioSettingsDefaultPayload.DuckTargetGain {
-		t.Errorf("duckTargetGain = %v, want %v", params["duckTargetGain"], config.AudioSettingsDefaultPayload.DuckTargetGain)
+	// The stored value is decibels; what leaves for the node is the linear
+	// multiplier the agent and the engine have always taken.
+	wantDuck := float64(pkgaudio.GainFromDb(config.AudioSettingsDefaultPayload.DuckTargetGainDb))
+	if params["duckTargetGain"] != wantDuck {
+		t.Errorf("duckTargetGain = %v, want the linear %v", params["duckTargetGain"], wantDuck)
+	}
+	if _, present := params["duckTargetGainDb"]; present {
+		t.Error("duckTargetGainDb reached the node; the coordinator-to-agent wire must stay linear")
+	}
+	wantCeiling := float64(pkgaudio.CeilingFromDb(config.AudioSettingsDefaultPayload.DefaultMaxBackgroundGainDb))
+	if params["defaultMaxBackgroundGain"] != wantCeiling {
+		t.Errorf("defaultMaxBackgroundGain = %v, want the linear %v", params["defaultMaxBackgroundGain"], wantCeiling)
+	}
+	if _, present := params["defaultMaxBackgroundGainDb"]; present {
+		t.Error("defaultMaxBackgroundGainDb reached the node; the coordinator-to-agent wire must stay linear")
 	}
 	if rev, _ := params["revision"].(float64); rev != 0 {
 		t.Errorf("revision = %v, want 0 (never written)", params["revision"])

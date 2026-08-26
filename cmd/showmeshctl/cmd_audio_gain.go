@@ -37,13 +37,16 @@ func printAudioGainUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl audio gain <set|fade> [flags] <node-id> <session-id> [params-json]
 
 Dispatch audio.gain.set or audio.gain.fade (requires audio:command).
-Gain is linear (1.0 unity, 0.0 silence), never dB. It is always clamped
-to the session's configured ceiling, and the clamp is reported as
-evidence in the command's "reason" field when it changes the requested
-value.
+Gain is in DECIBELS: 0 dB is unity, -6.02 dB is half amplitude, -60 dB
+and below is silence, and +12 dB is the most this accepts. A
+linear-looking 0.5 is half a decibel here, not a halving. The
+coordinator converts to the engine's linear multiplier once, at its own
+boundary. The gain is always clamped to the session's configured
+ceiling, and the clamp is reported as evidence in the command's "reason"
+field when it changes the requested value.
 
-  set   params: {"gain": <number>}
-  fade  params: {"targetGain": <number>, "durationMs": <number>, "curve": "linear"}
+  set   params: {"gainDb": <number>}
+  fade  params: {"targetGainDb": <number>, "durationMs": <number>, "curve": "linear"}
                 A fade's own dispatch reports it as STARTED, never as
                 complete: fade completion is observed by the engine
                 reaching the target gain, never assumed once

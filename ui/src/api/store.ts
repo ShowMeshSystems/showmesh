@@ -1402,14 +1402,14 @@ export class ApiStore {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'seek', revision, { positionMs })
   }
 
-  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain`. Requires audio:command. params.gain is linear, not dB (openapi.yaml), clamped server-side to the session's own ceiling. */
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain`. Requires audio:command. params.gainDb is in decibels: 0 dB is unity, -60 dB and below is silence. The coordinator converts it to the engine's linear multiplier and clamps it to the session's own ceiling. */
   async setAudioSessionGain(
     nodeId: string,
     sessionId: string,
     revision: number,
-    gain: number,
+    gainDb: number,
   ): Promise<AudioSessionCommandResult> {
-    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gain })
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gainDb })
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/apply`. Requires audio:command. params is the same opaque, node-validated session definition (sourceRole/media/playlist/outputs/mixPolicy) `showmeshctl audio session apply` takes as its params-json argument; omitted entirely (not sent as `{}`) when the caller supplies none, matching that CLI's own optional positional argument. */
@@ -1422,16 +1422,16 @@ export class ApiStore {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'apply', revision, params)
   }
 
-  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade`. Requires audio:command. params.targetGain is linear, not dB; params.durationMs is the fade duration in milliseconds; params.curve is fixed to "linear", the only curve the node ships. */
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade`. Requires audio:command. params.targetGainDb is in decibels, like setAudioSessionGain's own gainDb; params.durationMs is the fade duration in milliseconds; params.curve is fixed to "linear", which names the fade SHAPE and not the gain unit. */
   async fadeAudioSessionGain(
     nodeId: string,
     sessionId: string,
     revision: number,
-    targetGain: number,
+    targetGainDb: number,
     durationMs: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain/fade', revision, {
-      targetGain,
+      targetGainDb,
       durationMs,
       curve: 'linear',
     })

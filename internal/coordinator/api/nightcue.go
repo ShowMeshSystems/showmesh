@@ -279,6 +279,11 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 	for k, v := range target.Params {
 		params[k] = v
 	}
+	// An authored show.action carries its gain in decibels; the night
+	// background-audio controller builds its own targets already linear.
+	// See audiogaindb.go for why converting only when a decibel key is
+	// present is right on this path and would be wrong on the HTTP one.
+	convertAuthoredAudioGainParams(target.AudioAction, params)
 	params["sessionId"] = target.AudioSessionID
 	params["invocationId"] = idemKey
 	params["revision"] = uint64(actionRevision)

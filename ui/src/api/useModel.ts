@@ -480,9 +480,9 @@ export function setAudioSessionGain(
   nodeId: string,
   sessionId: string,
   revision: number,
-  gain: number,
+  gainDb: number,
 ): Promise<AudioSessionCommandResult> {
-  return store.setAudioSessionGain(nodeId, sessionId, revision, gain)
+  return store.setAudioSessionGain(nodeId, sessionId, revision, gainDb)
 }
 
 export function applyAudioSession(
@@ -498,10 +498,10 @@ export function fadeAudioSessionGain(
   nodeId: string,
   sessionId: string,
   revision: number,
-  targetGain: number,
+  targetGainDb: number,
   durationMs: number,
 ): Promise<AudioSessionCommandResult> {
-  return store.fadeAudioSessionGain(nodeId, sessionId, revision, targetGain, durationMs)
+  return store.fadeAudioSessionGain(nodeId, sessionId, revision, targetGainDb, durationMs)
 }
 
 export function probeRenderTransport(nodeId: string, surfaceId: string): Promise<RenderCommandResult> {

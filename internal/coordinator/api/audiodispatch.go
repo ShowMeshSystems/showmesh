@@ -235,6 +235,12 @@ func (h *handlers) dispatchAudioSessionCommand(w http.ResponseWriter, r *http.Re
 	if params == nil {
 		params = map[string]any{}
 	}
+	// The decibel boundary (audiogaindb.go): an operator sends dB, the
+	// node receives the linear multiplier it has always received.
+	if problem := convertAudioGainParamsToLinear(action, params); problem != nil {
+		writeProblem(w, h.logger, now, *problem)
+		return
+	}
 	params["sessionId"] = sessionID
 
 	ac := authFromContext(ctx)

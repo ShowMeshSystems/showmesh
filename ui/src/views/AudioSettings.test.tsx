@@ -42,8 +42,8 @@ const activeConfig = {
     driftIgnoreThresholdMs: 40,
     defaultFadeCurve: 'linear' as const,
     defaultFadeDurationMs: 500,
-    defaultMaxBackgroundGain: 0.8,
-    duckTargetGain: 0.2,
+    defaultMaxBackgroundGainDb: -1.94,
+    duckTargetGainDb: -13.98,
     ltcFrameRate: '30' as const,
     ltcDefaultStartOffset: '00:00:00:00',
   },
@@ -73,13 +73,16 @@ describe('AudioSettings', () => {
     expect(await screen.findByDisplayValue('40')).toBeInTheDocument()
     expect(screen.getByLabelText('Default fade curve')).toHaveValue('linear')
     expect(screen.getByDisplayValue('500')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('0.8')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('0.2')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('-1.94')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('-13.98')).toBeInTheDocument()
     expect(screen.getByLabelText('LTC frame rate')).toHaveValue('30')
     expect(screen.getByDisplayValue('00:00:00:00')).toBeInTheDocument()
-    // Gain fields are explicitly labeled linear, never dB (a settled
-    // decision this schema states outright).
-    expect(screen.getAllByText(/linear amplitude multiplier, not dB/i).length).toBe(2)
+    // Gain fields are labelled in dB, never as a linear multiplier (the
+    // settled unit ruling), with 0 dB named as unity.
+    expect(screen.getAllByText(/\(dB/i).length).toBe(2)
+    expect(screen.queryByText(/linear amplitude multiplier/i)).toBeNull()
+    expect(screen.getByLabelText('Default maximum background gain in dB')).toBeInTheDocument()
+    expect(screen.getByLabelText('Duck target gain in dB')).toBeInTheDocument()
   })
 
   it('saves the full payload and reloads on success', async () => {
@@ -100,8 +103,8 @@ describe('AudioSettings', () => {
         driftIgnoreThresholdMs: 40,
         defaultFadeCurve: 'linear',
         defaultFadeDurationMs: 750,
-        defaultMaxBackgroundGain: 0.8,
-        duckTargetGain: 0.2,
+        defaultMaxBackgroundGainDb: -1.94,
+        duckTargetGainDb: -13.98,
         ltcFrameRate: '30',
         ltcDefaultStartOffset: '00:00:00:00',
       }),
@@ -112,7 +115,7 @@ describe('AudioSettings', () => {
   it("renders the coordinator's own refusal reason and does not read as saved", async () => {
     getAudioSettingsConfig.mockResolvedValue(activeConfig)
     getAudioSettingsConfigRevisions.mockResolvedValue(emptyRevisions)
-    putAudioSettingsConfig.mockRejectedValue(new ApiError('duck target gain must be below 1', 400))
+    putAudioSettingsConfig.mockRejectedValue(new ApiError('duckTargetGainDb must be negative', 400))
     const user = userEvent.setup()
     renderView()
 
@@ -120,7 +123,7 @@ describe('AudioSettings', () => {
     await user.click(screen.getByRole('button', { name: /save audio settings/i }))
 
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(/duck target gain must be below 1/i)
+    expect(alert).toHaveTextContent(/duckTargetGainDb must be negative/i)
     // Still on revision 3: a refused write never reloads, so the screen
     // never reads as having saved anything.
     expect(getAudioSettingsConfig).toHaveBeenCalledTimes(1)
@@ -160,6 +163,33 @@ describe('AudioSettings', () => {
     const summary = screen.getByText('Revision history')
     expect(summary.closest('details')).not.toHaveAttribute('open')
     expect(screen.getByText('admin-1', { selector: 'td' })).not.toBeVisible()
+  })
+
+  // A linear-looking value is the mistake this unit change exists to
+  // prevent: 0.5 in the duck field used to mean a halving and is now a
+  // positive half-decibel, which does not duck anything. It is refused
+  // here rather than sent and refused by the coordinator.
+  it('refuses a linear-looking duck target and a ceiling past the typo guard', async () => {
+    getAudioSettingsConfig.mockResolvedValue(activeConfig)
+    getAudioSettingsConfigRevisions.mockResolvedValue(emptyRevisions)
+    const user = userEvent.setup()
+    renderView()
+
+    const duck = await screen.findByLabelText('Duck target gain in dB')
+    await user.clear(duck)
+    await user.type(duck, '0.5')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+    expect(putAudioSettingsConfig).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/must be negative and at least -60 dB/i)
+
+    await user.clear(duck)
+    await user.type(duck, '-13.98')
+    const ceiling = screen.getByLabelText('Default maximum background gain in dB')
+    await user.clear(ceiling)
+    await user.type(ceiling, '20')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+    expect(putAudioSettingsConfig).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/must not exceed 12 dB/i)
   })
 
   it('is unavailable, with a stated reason, without the config:write scope', () => {

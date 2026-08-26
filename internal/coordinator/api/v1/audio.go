@@ -12,13 +12,16 @@ package v1
 // replacement — every field required), and the "payload" member of GET
 // /config/audio.settings' response.
 type ConfigAudioSettingsPayload struct {
-	DriftIgnoreThresholdMs   int     `json:"driftIgnoreThresholdMs"`
-	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
-	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
-	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
-	DuckTargetGain           float64 `json:"duckTargetGain"`
-	LTCFrameRate             string  `json:"ltcFrameRate"`
-	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
+	DriftIgnoreThresholdMs int    `json:"driftIgnoreThresholdMs"`
+	DefaultFadeCurve       string `json:"defaultFadeCurve"`
+	DefaultFadeDurationMs  int    `json:"defaultFadeDurationMs"`
+	// Both gains are DECIBELS on this surface: 0 dB is
+	// unity. The coordinator converts them to the engine's linear
+	// multiplier once, at its own boundary.
+	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
+	DuckTargetGainDb           float64 `json:"duckTargetGainDb"`
+	LTCFrameRate               string  `json:"ltcFrameRate"`
+	LTCDefaultStartOffset      string  `json:"ltcDefaultStartOffset"`
 }
 
 // AudioSettingsConfigResponse is the body of GET and PUT

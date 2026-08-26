@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -349,13 +348,14 @@ func nightBackgroundSuspendKind(resume string) string {
 	return nightBGStepStop
 }
 
+// nightBackgroundCeilingGain converts resting.backgroundAudio.maxGainDb
+// once, through the project's single decibel conversion (pkg/audio), into
+// the gain to request and the ceiling to request it against. The two
+// differ only at the extreme: a maxGainDb at or below the silence floor
+// resolves to a gain of exactly 0, while the ceiling stays a small
+// positive number because pkgaudio.Ceiling refuses zero on purpose.
 func nightBackgroundCeilingGain(maxGainDb float64) (pkgaudio.Gain, pkgaudio.Ceiling) {
-	linear := dbToLinearGain(maxGainDb)
-	return pkgaudio.Gain(linear), pkgaudio.Ceiling(linear)
-}
-
-func dbToLinearGain(db float64) float64 {
-	return math.Pow(10, db/20)
+	return pkgaudio.GainFromDb(maxGainDb), pkgaudio.CeilingFromDb(maxGainDb)
 }
 
 func nightAudioTarget(nodeID, sessionID, action string, params map[string]any) config.ShowActionTarget {

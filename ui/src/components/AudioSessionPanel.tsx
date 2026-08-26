@@ -27,8 +27,8 @@ import { ScopedButton } from './ScopedButton'
 //
 // This second slice adds prepare/start/advance/clear (no operator
 // parameters) and seek/gain/gain.fade (each carrying the parameters
-// openapi.yaml's own operation descriptions name -- positionMs, gain,
-// targetGain/durationMs), plus apply. apply's own params are a full
+// openapi.yaml's own operation descriptions name -- positionMs, gainDb,
+// targetGainDb/durationMs), plus apply. apply's own params are a full
 // session definition (sourceRole/media/playlist/outputs/mixPolicy) with
 // no per-field schema in openapi.yaml -- but showmeshctl (cmd_audio_
 // session.go) takes that same params body as a raw JSON positional
@@ -37,6 +37,16 @@ import { ScopedButton } from './ScopedButton'
 // designed. This panel validates that the JSON parses before dispatch,
 // which the CLI does not.
 const AUDIO_COMMAND_SCOPE = 'audio:command'
+
+// The decibel range openapi.yaml gives params.gainDb and
+// params.targetGainDb. 0 dB is unity, -60 dB is the silence floor, and
+// +12 dB is a typo guard rather than a tuned headroom figure. The
+// coordinator refuses anything above +12 dB; below the floor it accepts
+// the value and resolves it to silence, so this lower bound is stricter
+// than the API rather than a mirror of it, and exists to keep the
+// operator from typing a number whose extra digits change nothing.
+const GAIN_DB_MIN = -60
+const GAIN_DB_MAX = 12
 
 // Node.audio (api/openapi.yaml) is a flat ObservationEntry[] spanning
 // BOTH node-scoped node.audio.* signals (resource.kind "node") and
@@ -507,12 +517,13 @@ function SeekControl({
   )
 }
 
-// GainControl sets the session's configured gain. openapi.yaml states
-// this plainly: "params.gain is linear, not dB - see AUDIO-ENGINE.md".
-// No numeric range is given in the schema -- the node clamps to the
+// GainControl sets the session's configured gain, in decibels
+// (params.gainDb). The coordinator converts to the engine's linear
+// multiplier at its own boundary. Beyond the schema's own -60 to +12 dB
+// range this control refuses nothing else: the node clamps to the
 // session's own ceiling and reports the clamp as evidence rather than
-// silently applying it -- so this control only refuses a non-numeric or
-// negative entry, leaving the actual ceiling to the node.
+// silently applying it, so the actual ceiling stays the node's to
+// enforce.
 function GainControl({
   nodeId,
   sessionId,
@@ -530,12 +541,14 @@ function GainControl({
   function parseGain(): number | null {
     const trimmed = raw.trim()
     if (trimmed === '') {
-      setValidationError('Enter a gain value (linear, not dB).')
+      setValidationError('Enter a gain in dB (0 dB is unity).')
       return null
     }
     const n = Number(trimmed)
-    if (!Number.isFinite(n) || n < 0) {
-      setValidationError(`"${raw}" is not valid. Gain must be a non-negative number (linear, not dB).`)
+    if (!Number.isFinite(n) || n < GAIN_DB_MIN || n > GAIN_DB_MAX) {
+      setValidationError(
+        `"${raw}" is not valid. Gain is in dB and must be between ${GAIN_DB_MIN} and ${GAIN_DB_MAX} (0 dB is unity, ${GAIN_DB_MIN} dB is silence).`,
+      )
       return null
     }
     setValidationError(null)
@@ -558,10 +571,11 @@ function GainControl({
   return (
     <div>
       <label>
-        Gain (linear, not dB){' '}
+        Gain (dB, 0 is unity){' '}
         <input
           type="number"
-          min={0}
+          min={GAIN_DB_MIN}
+          max={GAIN_DB_MAX}
           step="any"
           value={raw}
           disabled={submitting}
@@ -593,11 +607,12 @@ function GainControl({
   )
 }
 
-// GainFadeControl sets the configured gain to params.targetGain
-// (linear, not dB, same as GainControl above) immediately, then ramps
-// toward it over params.durationMs. params.curve is sent as "linear" --
-// the only curve the node ships (openapi.yaml) -- rather than offered as
-// a one-option control with nothing to actually choose.
+// GainFadeControl sets the configured gain to params.targetGainDb (in
+// decibels, same as GainControl above) immediately, then ramps toward it
+// over params.durationMs. params.curve is sent as "linear" -- the only
+// curve the node ships (openapi.yaml), naming the fade SHAPE and not the
+// gain unit -- rather than offered as a one-option control with nothing
+// to actually choose.
 function GainFadeControl({
   nodeId,
   sessionId,
@@ -613,15 +628,17 @@ function GainFadeControl({
   const [state, setState] = useState<ParamCallState>({ kind: 'idle' })
   const submitting = state.kind === 'submitting'
 
-  function parseInputs(): { targetGain: number; durationMs: number } | null {
+  function parseInputs(): { targetGainDb: number; durationMs: number } | null {
     const trimmedGain = rawGain.trim()
     if (trimmedGain === '') {
-      setValidationError('Enter a target gain value (linear, not dB).')
+      setValidationError('Enter a target gain in dB (0 dB is unity).')
       return null
     }
-    const targetGain = Number(trimmedGain)
-    if (!Number.isFinite(targetGain) || targetGain < 0) {
-      setValidationError(`"${rawGain}" is not valid. Target gain must be a non-negative number (linear, not dB).`)
+    const targetGainDb = Number(trimmedGain)
+    if (!Number.isFinite(targetGainDb) || targetGainDb < GAIN_DB_MIN || targetGainDb > GAIN_DB_MAX) {
+      setValidationError(
+        `"${rawGain}" is not valid. Target gain is in dB and must be between ${GAIN_DB_MIN} and ${GAIN_DB_MAX} (0 dB is unity, ${GAIN_DB_MIN} dB is silence).`,
+      )
       return null
     }
     const trimmedDuration = rawDuration.trim()
@@ -637,7 +654,7 @@ function GainFadeControl({
       return null
     }
     setValidationError(null)
-    return { targetGain, durationMs }
+    return { targetGainDb, durationMs }
   }
 
   async function handleClick(): Promise<void> {
@@ -650,7 +667,7 @@ function GainFadeControl({
         nodeId,
         sessionId,
         nextRevision(entries),
-        parsed.targetGain,
+        parsed.targetGainDb,
         parsed.durationMs,
       )
       setState({ kind: 'result', result })
@@ -662,10 +679,11 @@ function GainFadeControl({
   return (
     <div>
       <label>
-        Target gain (linear, not dB){' '}
+        Target gain (dB, 0 is unity){' '}
         <input
           type="number"
-          min={0}
+          min={GAIN_DB_MIN}
+          max={GAIN_DB_MAX}
           step="any"
           value={rawGain}
           disabled={submitting}

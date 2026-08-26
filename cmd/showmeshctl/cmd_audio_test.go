@@ -34,7 +34,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.settings","revision":0,
-			"payload":{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"duckTargetGain":0.25},
+			"payload":{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGainDb":-4.44,"duckTargetGainDb":-12.04},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":null,"createdByPrincipalName":null,"source":"default"}`)
 	}))
 	defer ts.Close()
@@ -45,7 +45,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"revision 0", "source default", "built-in default", "driftIgnoreThresholdMs:   20", "defaultFadeCurve:         linear", "duckTargetGain:           0.25"} {
+	for _, want := range []string{"revision 0", "source default", "built-in default", "driftIgnoreThresholdMs:     20", "defaultFadeCurve:           linear", "duckTargetGainDb:           -12.04 dB", "defaultMaxBackgroundGainDb: -4.44 dB"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -54,7 +54,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 
 // TestCmdAudioSettingsSetPutsTheFileContents proves `audio settings set
 // --file` issues a real PUT carrying the file's contents unmodified, even
-// when the file is INCOMPLETE (omits defaultMaxBackgroundGain): the CLI
+// when the file is INCOMPLETE (omits defaultMaxBackgroundGainDb): the CLI
 // must never reshape the payload through a typed struct, because doing so
 // would silently turn the omitted field into an explicit 0.0 the server
 // would accept, making the server's own field_required refusal
@@ -68,7 +68,7 @@ func TestCmdAudioSettingsSetPutsTheFileContents(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.settings","revision":1,
-			"payload":{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGain":0.4},
+			"payload":{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
