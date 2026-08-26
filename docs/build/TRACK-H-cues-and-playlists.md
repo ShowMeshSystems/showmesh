@@ -291,6 +291,10 @@ Readiness refuses stale FPP imports, unresolved or cross-show references, missin
 
 ### H7. Integrated and failure verification
 
+The bench that runs this path, and the record of what a first assembled run
+actually showed, are [bench/track-h-chain](../../bench/track-h-chain/README.md)
+and [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md).
+
 Prove the complete path with running binaries, not only unit tests:
 
 - FPP advances through two entries and rendering, audio, and LTC all select the second Cue exactly once.
