@@ -212,7 +212,7 @@ export function Macros() {
                                 <StatusBadge tone="unknown" icon="▶" label="Running" />
                               </Link>
                             ) : (
-                              <span className="text-muted">—</span>
+                              <span className="text-muted">-</span>
                             )}
                           </td>
                           <td>

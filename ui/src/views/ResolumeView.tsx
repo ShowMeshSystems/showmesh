@@ -96,11 +96,11 @@ function RestoreReportView({
               <td>
                 <ResolumeRestoreResultBadge result={layer.result} />
               </td>
-              <td>{layer.clip ?? '—'}</td>
-              <td>{layer.actionOutcome ?? '—'}</td>
+              <td>{layer.clip ?? '-'}</td>
+              <td>{layer.actionOutcome ?? '-'}</td>
               {/* Review finding 3: reason is server-built free text and can
                   embed a raw Arena object id — sanitize before rendering. */}
-              <td>{layer.reason === undefined ? '—' : sanitizeResolumeValueString(layer.reason, composition)}</td>
+              <td>{layer.reason === undefined ? '-' : sanitizeResolumeValueString(layer.reason, composition)}</td>
             </tr>
           ))}
         </tbody>
@@ -435,9 +435,9 @@ export function ResolumeView() {
                               </div>
                             )}
                           </td>
-                          <td>{entry.clip ?? '—'}</td>
+                          <td>{entry.clip ?? '-'}</td>
                           <td>{entry.establishedAt ?? 'never established'}</td>
-                          <td>{entry.source ?? '—'}</td>
+                          <td>{entry.source ?? '-'}</td>
                         </tr>
                       ))}
                     </tbody>

@@ -364,7 +364,7 @@ export function NightSessionActive() {
                   <td>{rev.revision}</td>
                   <td>{rev.active ? 'active' : ''}</td>
                   <td>{formatAbsolute(rev.createdAt)}</td>
-                  <td>{rev.createdByPrincipalName ?? '—'}</td>
+                  <td>{rev.createdByPrincipalName ?? '-'}</td>
                 </tr>
               ))}
             </tbody>
