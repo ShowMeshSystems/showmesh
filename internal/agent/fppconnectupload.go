@@ -44,6 +44,7 @@ const (
 // PATCH or POST is this listener's ordinary 404, checked first so a wrong
 // method never leaks whether dir happened to be valid.
 func (s *fppConnectServer) handleFileRoute(w http.ResponseWriter, r *http.Request, dir string) {
+	fppConnectSetReadDeadline(w, fppConnectFileReadDeadline, s.logger)
 	switch r.Method {
 	case http.MethodPatch, http.MethodPost:
 	default:
@@ -52,8 +53,9 @@ func (s *fppConnectServer) handleFileRoute(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !fppConnectAllowedDirs[dir] {
-		fppConnectWriteErr(w, http.StatusForbidden, fmt.Sprintf(
-			"directory %q is not accepted; only sequences, music, and videos are", dir))
+		reason := fmt.Sprintf("directory %q is not accepted; only sequences, music, and videos are", dir)
+		s.held.RecordRefusal("bad-dir", dir, "", reason, s.now())
+		fppConnectWriteErr(w, http.StatusForbidden, reason)
 		return
 	}
 
@@ -90,10 +92,13 @@ func (s *fppConnectServer) handleFilePatch(w http.ResponseWriter, r *http.Reques
 	// deliberately, not reimplemented: both this header and the fourth
 	// route's {name} are "a string this listener writes near the
 	// filesystem," and both need exactly the same safety checks (no path
-	// separator, no NUL, no ".." segment, non-empty). Upload-Name never
-	// escaping its directory is ADR-044 decision 4's second bound.
+	// separator, no NUL, no ".." segment, no "." or ".." once cleaned,
+	// non-empty). Upload-Name never escaping its directory is ADR-044
+	// decision 4's second bound.
 	if !fppConnectValidPlaylistName(name) {
-		fppConnectWriteErr(w, http.StatusForbidden, fmt.Sprintf("upload name %q is not a safe bare file name", name))
+		reason := fmt.Sprintf("upload name %q is not a safe bare file name", name)
+		s.held.RecordRefusal("bad-name", dir, name, reason, s.now())
+		fppConnectWriteErr(w, http.StatusForbidden, reason)
 		return
 	}
 
@@ -109,18 +114,13 @@ func (s *fppConnectServer) handleFilePatch(w http.ResponseWriter, r *http.Reques
 			"chunk body must have a known length within this listener's %d byte chunk ceiling", fppConnectMaxChunkBytes))
 		return
 	}
-	chunk, err := io.ReadAll(io.LimitReader(r.Body, fppConnectMaxChunkBytes+1))
-	if err != nil {
-		fppConnectWriteErr(w, http.StatusBadRequest, "failed to read the chunk body")
-		return
-	}
-	if int64(len(chunk)) > fppConnectMaxChunkBytes {
-		fppConnectWriteErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
-			"chunk body exceeds this listener's %d byte chunk ceiling", fppConnectMaxChunkBytes))
-		return
-	}
 
-	outcome, reason, _ := s.held.WriteChunk(dir, name, offset, length, chunk, s.view.MaxFileBytes(), s.view.MaxAssetDirBytes(), s.now(), s.view.ActiveShow)
+	// The chunk body streams straight into WriteChunk (review round 1
+	// finding 3): it is read directly off r.Body, at most r.ContentLength
+	// bytes, and never buffered whole in this handler's own memory the
+	// way io.ReadAll would (a real 16 MiB xLights chunk reallocating as
+	// it grows, times however many uploads are in flight).
+	outcome, reason, _ := s.held.WriteChunk(dir, name, offset, length, r.Body, r.ContentLength, s.view.MaxFileBytes(), s.view.MaxAssetDirBytes(), s.now(), s.view.ActiveShow)
 
 	switch outcome {
 	case fppConnectChunkAccepted, fppConnectChunkCompleted:

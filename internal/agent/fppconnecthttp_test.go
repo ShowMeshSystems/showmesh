@@ -79,7 +79,7 @@ func startFPPConnectTestServer(t *testing.T, view fppConnectView, nodeID string,
 	if held == nil {
 		held = newTestFPPConnectHeldStore(t)
 	}
-	srv := httptest.NewUnstartedServer(newFPPConnectHandler(view, nodeID, held, time.Now))
+	srv := httptest.NewUnstartedServer(newFPPConnectHandler(view, nodeID, held, time.Now, discardLogger()))
 	srv.Config.ConnContext = fppConnectConnContext
 	srv.Config.DisableGeneralOptionsHandler = true
 	srv.Start()
@@ -668,6 +668,12 @@ func TestFPPConnectValidPlaylistName(t *testing.T) {
 		{"embedded NUL", "a\x00b", false},
 		{"exactly dot-dot", "..", false},
 		{"starts with dot-dot but is not one", "..foo", true},
+		// Review round 1 finding 9: "." passed every check above (it is
+		// not "..", contains no separator) and then failed FC2's rename
+		// into the held area with a 500 instead of being refused up
+		// front.
+		{"exactly a single dot", ".", false},
+		{"a dot with an extension is fine", ".hidden", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +108,7 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -154,6 +155,95 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	}
 }
 
+// TestRunRenderReportIncludesHeldFilesAndEvents is review round 1 finding
+// 1's regression test: before this fix, fppConnectHeldStore's Held() and
+// Events() had no non-test caller at all, so ADR-044 decision 8's
+// "reported as an unbound held file the operator can claim" had no place
+// to actually reach an operator, since xLights never inspects the
+// playlist POST's status. A completed-but-unbound held file and an
+// unknown-playlist evidence event must both appear in a published report.
+func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	neverActive := func() (string, bool, bool) { return "", false, false }
+	outcome, reason, rec := held.WriteChunk("sequences", "Unbound.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	if outcome != fppConnectChunkCompleted {
+		t.Fatalf("setup: outcome = %v reason = %q, want completed", outcome, reason)
+	}
+	if rec.Bound {
+		t.Fatalf("setup: record unexpectedly bound: %+v", rec)
+	}
+	held.RecordUnknownPlaylist("Mystery", []string{"Foo.fseq"}, time.Now())
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runRenderReport to return")
+	}
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+
+	if report.FPPConnectHeldCount != 1 {
+		t.Fatalf("FPPConnectHeldCount = %d, want 1", report.FPPConnectHeldCount)
+	}
+	if len(report.FPPConnectHeld) != 1 {
+		t.Fatalf("got %d held files, want 1: %+v", len(report.FPPConnectHeld), report.FPPConnectHeld)
+	}
+	f := report.FPPConnectHeld[0]
+	if f.Name != "Unbound.fseq" || f.Dir != "sequences" {
+		t.Fatalf("held file = %+v, want sequences/Unbound.fseq", f)
+	}
+	if f.Bound {
+		t.Fatalf("held file = %+v, want unbound", f)
+	}
+	if f.UnboundReason == "" {
+		t.Fatal("UnboundReason is empty, want it to name why this file is unbound")
+	}
+
+	var foundEvent bool
+	for _, ev := range report.FPPConnectHeldEvents {
+		if ev.Kind == "unknown" && ev.Name == "Mystery" {
+			foundEvent = true
+		}
+	}
+	if !foundEvent {
+		t.Fatalf("no unknown-playlist event in the published report; events = %+v", report.FPPConnectHeldEvents)
+	}
+}
+
 // TestRunRenderReportPublishesOnTrigger proves a signal on triggered
 // produces an immediate publish, out of cadence — the render-state
 // counterpart to runAssetInventory's identical trigger behaviour.
@@ -175,7 +265,7 @@ func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, nil, triggered, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, nil, triggered, discardLogger())
 	}()
 
 	select {
@@ -232,7 +322,7 @@ func TestRunRenderReportStartingStateDecodes(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {

@@ -22,12 +22,17 @@ const renderReportPublishTimeout = 5 * time.Second
 // runAssetInventory's exact shape (ticker plus a trigger channel), so a
 // pipeline state transition is visible without waiting out the interval.
 // sup is read via [pipeline.Supervisor.SnapshotAll], which is safe to call
-// concurrently with every runner's own supervision goroutine.
+// concurrently with every runner's own supervision goroutine. fcHeld is
+// FC2's upload/binding store (fppconnectheld.go); its Held() and Events()
+// are this render report's only path for ADR-044 decision 8's unbound-
+// held-file evidence and ADR-044 decision 4's refused-upload evidence to
+// reach an operator, since xLights never inspects any of those calls'
+// response status.
 //
 // runRenderReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runHeartbeat's and
 // runAssetInventory's identical contract.
-func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
+func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "render")
 	if err != nil {
 		// nodeID is validated at config load, matching runHeartbeat's and
@@ -45,22 +50,23 @@ func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pip
 			if !ok {
 				return
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, fcHeld, now, logger)
 		case _, ok := <-triggered:
 			if !ok {
 				triggered = nil
 				continue
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, fcHeld, now, logger)
 		}
 	}
 }
 
 // publishOneRenderReport snapshots every surface sup currently supervises,
-// plus msStatus's current MultiSync bind evidence (finding 7) and fcStatus's
-// current FPP Connect HTTP listener evidence (ADR-044), and publishes a
-// single render report.
-func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, now func() time.Time, logger *slog.Logger) {
+// plus msStatus's current MultiSync bind evidence (finding 7), fcStatus's
+// current FPP Connect HTTP listener evidence (ADR-044), and fcHeld's
+// currently held files and bounded evidence log, and publishes a single
+// render report.
+func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, logger *slog.Logger) {
 	pubCtx, cancel := context.WithTimeout(ctx, renderReportPublishTimeout)
 	defer cancel()
 
@@ -78,6 +84,18 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 		surfaces = append(surfaces, toRenderSurfaceReport(s))
 	}
 
+	heldRecords := fcHeld.Held()
+	held := make([]mqttproto.RenderFPPConnectHeldFile, 0, len(heldRecords))
+	for _, rec := range heldRecords {
+		held = append(held, toRenderFPPConnectHeldFile(rec))
+	}
+
+	heldEvents := fcHeld.Events()
+	events := make([]mqttproto.RenderFPPConnectHeldEvent, 0, len(heldEvents))
+	for _, ev := range heldEvents {
+		events = append(events, toRenderFPPConnectHeldEvent(ev))
+	}
+
 	env, err := mqttproto.NewRenderEnvelope(now, nodeID, mqttproto.RenderPayload{
 		GstLaunchPath:        gstPath,
 		GstLaunchAvailable:   gstOK,
@@ -88,6 +106,9 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 		FPPConnectListening:  fcListening,
 		FPPConnectReason:     fcReason,
 		FPPConnectObservedAt: fcObservedAt,
+		FPPConnectHeldCount:  len(held),
+		FPPConnectHeld:       held,
+		FPPConnectHeldEvents: events,
 	})
 	if err != nil {
 		logger.Error("failed to build render report envelope", "error", err)
@@ -138,6 +159,36 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 		Drawing:             s.Drawing,
 		IdleMode:            s.IdleMode,
 		FailureOutput:       s.FailureOutput,
+	}
+}
+
+// toRenderFPPConnectHeldFile converts one fppConnectHeldRecord
+// (fppconnectheld.go) to its wire type, field for field.
+func toRenderFPPConnectHeldFile(rec fppConnectHeldRecord) mqttproto.RenderFPPConnectHeldFile {
+	return mqttproto.RenderFPPConnectHeldFile{
+		Dir:             rec.Dir,
+		Name:            rec.Name,
+		SizeBytes:       rec.SizeBytes,
+		ContentHash:     rec.ContentHash,
+		ReceivedAt:      rec.ReceivedAt,
+		Bound:           rec.Bound,
+		Show:            rec.Show,
+		LogicalSequence: rec.LogicalSequence,
+		UnboundReason:   rec.UnboundReason,
+	}
+}
+
+// toRenderFPPConnectHeldEvent converts one fppConnectEvent
+// (fppconnectheld.go) to its wire type, field for field.
+func toRenderFPPConnectHeldEvent(ev fppConnectEvent) mqttproto.RenderFPPConnectHeldEvent {
+	return mqttproto.RenderFPPConnectHeldEvent{
+		Kind:       ev.Kind,
+		Name:       ev.Name,
+		Dir:        ev.Dir,
+		Reason:     ev.Reason,
+		Entries:    ev.Entries,
+		MatchCount: ev.MatchCount,
+		At:         ev.At,
 	}
 }
 

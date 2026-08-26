@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -19,22 +23,31 @@ import (
 // and 9): the node's memory of every file a chunked xLights upload has
 // completed, its content hash, and its show binding, persisted so a
 // restart does not lose it. fppconnectupload.go's HTTP handlers are its
-// only writer; fppconnecthttp.go's GET /api/playlist/{name} handler and
-// FC3's registration seam (via SetOnHeld/Held) are its readers.
+// only writer; fppconnecthttp.go's GET /api/playlist/{name} handler,
+// internal/agent/renderreport.go (the only place ADR-044 decision 8's
+// unbound-held-file evidence reaches an operator), and FC3's registration
+// seam (via SetOnHeld/Held) are its readers.
 //
 // Layout under <AssetDir>/fppConnectUploadStateSubdir:
 //
-//	staging/<dir>/<Upload-Name>.partial            in-progress bytes
-//	staging/<dir>/<Upload-Name>.partial.meta.json  offset/length sidecar
-//	held/<dir>/<Upload-Name>                       assembled, hashed bytes
-//	index.json                                     every held record, every
-//	                                                pending binding, and the
-//	                                                bounded evidence log
+//	staging/<dir>/<Upload-Name>.partial  in-progress bytes
+//	held/<dir>/<Upload-Name>             assembled, hashed bytes
+//	index.json                           every held record, every pending
+//	                                      binding, and the bounded evidence
+//	                                      log
 //
 // staging/ is swept at boot (sweepFPPConnectUploadStaging, mirroring
 // assets.go's sweepAssetStaging): a partial file left behind by an
 // interrupted process is never a partially-usable asset. held/ and
 // index.json are never touched by that sweep.
+//
+// An in-progress upload's offset, running content hash, and asset-
+// directory-cap reservation live only in memory (s.inFlight), not on disk:
+// a restart already discards every partial file at boot regardless (the
+// sweep above), so persisting that bookkeeping to disk would only add I/O
+// per chunk for state a restart throws away anyway. Review round 1 on this
+// seam's PR flagged the earlier on-disk sidecar as exactly that: an unused
+// durability guarantee paid for on every chunk.
 
 // fppConnectUploadStateSubdir roots FC2's own durable state under the
 // agent's asset directory, matching internal/agent/heldcatalog.stateSubdir
@@ -77,26 +90,43 @@ type fppConnectHeldRecord struct {
 	UnboundReason   string `json:"unboundReason,omitempty"`
 }
 
-// fppConnectPlaylistEvent is evidence not tied to any one held file:
-// a POST /api/playlist/{name} whose name matched no show, or matched more
-// than one (ADR-044 decision 8's unknown and ambiguous cases). Kept as a
-// small bounded log (fppConnectMaxEvents) alongside the held records
-// rather than invented as a second store, since both exist for the same
-// reason: an operator must be able to see what happened without reading
-// logs.
-type fppConnectPlaylistEvent struct {
-	Kind       string    `json:"kind"` // "unknown" or "ambiguous"
-	Name       string    `json:"name"`
-	Entries    []string  `json:"entries"`
-	MatchCount int       `json:"matchCount,omitempty"`
-	At         time.Time `json:"at"`
+// fppConnectEvent is evidence not (necessarily) tied to any one held
+// file's current state: a POST /api/playlist/{name} whose name matched no
+// show or matched more than one ("unknown"/"ambiguous", ADR-044 decision
+// 8), or a refused upload chunk ("too-large", "dir-full", "disk-full",
+// "gap", "bad-name", "bad-dir", ADR-044 decision 4). Kept as a small
+// bounded log (fppConnectMaxEvents) alongside the held records rather than
+// invented as a second store, since both exist for the same reason: an
+// operator must be able to see what happened without reading logs, and
+// xLights never inspects any of these calls' response status.
+type fppConnectEvent struct {
+	Kind string    `json:"kind"`
+	Name string    `json:"name"`
+	At   time.Time `json:"at"`
+
+	// Dir and Reason are set for a refused-upload event; Entries and
+	// MatchCount are set for an "unknown"/"ambiguous" playlist event. The
+	// two families never populate each other's fields.
+	Dir        string   `json:"dir,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+	Entries    []string `json:"entries,omitempty"`
+	MatchCount int      `json:"matchCount,omitempty"`
 }
 
 // fppConnectMaxEvents bounds fppConnectHeldStore.events: the oldest event
 // is dropped once this many are held, so a misbehaving or merely curious
-// client posting many unknown playlist names cannot grow this file
-// without bound.
+// client posting many unknown playlist names, or triggering many refused
+// uploads, cannot grow this file without bound.
 const fppConnectMaxEvents = 50
+
+// fppConnectMaxPending bounds fppConnectHeldStore.pending the same way
+// fppConnectMaxEvents bounds events: oldest entries are evicted first once
+// this many are held. RES-003 section 10.6's playlist body has no size
+// limit of its own beyond fppConnectMaxPlaylistBodyBytes (1 MiB), which
+// alone could carry tens of thousands of distinct sequenceName/mediaName
+// entries, so an unbounded pending map would grow (and be persisted)
+// without bound from a single POST.
+const fppConnectMaxPending = 500
 
 // fppConnectIndex is the whole of fppConnectHeldStore's durable state, and
 // exactly what persistLocked/load read and write as one JSON document,
@@ -106,7 +136,11 @@ const fppConnectMaxEvents = 50
 type fppConnectIndex struct {
 	Records map[string]fppConnectHeldRecord `json:"records"`
 	Pending map[string]string               `json:"pending"`
-	Events  []fppConnectPlaylistEvent       `json:"events"`
+	// PendingOrder is Pending's insertion order, oldest first, so
+	// fppConnectMaxPending's eviction survives a restart correctly rather
+	// than reverting to Go's unspecified map iteration order.
+	PendingOrder []string          `json:"pendingOrder"`
+	Events       []fppConnectEvent `json:"events"`
 }
 
 // fppConnectChunkWriter is the seam a test substitutes to inject a disk-
@@ -114,23 +148,34 @@ type fppConnectIndex struct {
 // filling a disk. The production implementation, osFPPConnectChunkWriter,
 // writes through the real filesystem.
 type fppConnectChunkWriter interface {
-	WriteAt(path string, offset int64, data []byte) error
+	// WriteChunk copies up to n bytes read from r into path at offset,
+	// creating path if needed, and returns how many bytes were actually
+	// written. When truncate is true (offset 0's "start fresh" case;
+	// review round 1 finding 7), path is truncated to exactly the bytes
+	// this call writes: no tail from a longer previous attempt at this
+	// name can ever survive into the new one, even if an earlier
+	// best-effort os.Remove of the stale file silently failed.
+	WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (written int64, err error)
 }
 
 // osFPPConnectChunkWriter is fppConnectChunkWriter's real implementation:
-// open-or-create, then a single positioned write. Offset is always exactly
-// the file's current size by the time this is called (WriteChunk's gap
-// check enforces that), so this never leaves a hole.
+// open (creating or truncating as directed), then a single positioned
+// streaming copy. Offset is always exactly the file's current size by the
+// time this is called for a non-truncating write (WriteChunk's gap check
+// enforces that), so this never leaves a hole.
 type osFPPConnectChunkWriter struct{}
 
-func (osFPPConnectChunkWriter) WriteAt(path string, offset int64, data []byte) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+func (osFPPConnectChunkWriter) WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (int64, error) {
+	flags := os.O_CREATE | os.O_WRONLY
+	if truncate {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, flags, 0o644)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = f.Close() }()
-	_, err = f.WriteAt(data, offset)
-	return err
+	return io.Copy(io.NewOffsetWriter(f, offset), io.LimitReader(r, n))
 }
 
 // fppConnectIsDiskFull reports whether err is the ENOSPC outcome ADR-044
@@ -141,19 +186,6 @@ func (osFPPConnectChunkWriter) WriteAt(path string, offset int64, data []byte) e
 // real ENOSPC from the kernel, both produce.
 func fppConnectIsDiskFull(err error) bool {
 	return errors.Is(err, syscall.ENOSPC)
-}
-
-// fppConnectStagingMeta is the sidecar WriteChunk keeps beside a partial
-// file: what Upload-Length this attempt declared, how many bytes have
-// landed so far, and when the last chunk arrived. Read on every chunk
-// after the first to detect a gap or overlap (ADR-044 decision 9); a
-// restart never needs to trust anything beyond what is actually on disk,
-// since sweepFPPConnectUploadStaging discards every partial (and its
-// sidecar) at boot rather than trying to resume across a restart.
-type fppConnectStagingMeta struct {
-	UploadLength  int64     `json:"uploadLength"`
-	BytesReceived int64     `json:"bytesReceived"`
-	LastChunkAt   time.Time `json:"lastChunkAt"`
 }
 
 // fppConnectChunkOutcome is WriteChunk's result: exactly one of these per
@@ -182,16 +214,33 @@ const (
 	// writing; the fragment was discarded.
 	fppConnectChunkDiskFull
 	// fppConnectChunkWriteFailed: any other I/O failure (creating a
-	// directory, writing, hashing, or renaming into place); the fragment
-	// was discarded and nothing was registered.
+	// directory, writing, or renaming into place); the fragment was
+	// discarded and nothing was registered.
 	fppConnectChunkWriteFailed
 )
 
+// fppConnectInFlight is one upload's in-memory bookkeeping while chunks
+// are still arriving: its running content hash (review round 1 finding 4:
+// hashed incrementally as chunks land, so completion only finalizes
+// rather than re-reading a multi-gigabyte file from disk against
+// WriteTimeout), how many bytes have landed so far, and the total this
+// attempt declared. Also this upload's asset-directory-cap reservation
+// (review round 1 finding 5): uploadLength-bytesReceived is what it still
+// intends to write, added to any concurrent upload's own offset-0 check so
+// two uploads that individually fit under today's on-disk usage cannot
+// together exceed the cap. Lives only in s.inFlight, never on disk: see
+// this file's package doc comment.
+type fppConnectInFlight struct {
+	hash          hash.Hash
+	bytesReceived int64
+	uploadLength  int64
+}
+
 // fppConnectHeldStore is the whole of FC2's server-side state: in-flight
-// chunk bookkeeping lives on disk as sidecars (fppConnectStagingMeta), but
-// every completed file's record, every pending (not-yet-held) binding, and
-// the bounded evidence log live here, guarded by one mutex and persisted
-// as one atomic JSON document (fppConnectIndex) on every mutation.
+// chunk bookkeeping (fppConnectInFlight) lives only in memory, but every
+// completed file's record, every pending (not-yet-held) binding, and the
+// bounded evidence log live here, guarded by one mutex and persisted as
+// one atomic JSON document (fppConnectIndex) on every mutation.
 //
 // One mutex serializes every upload chunk and every playlist POST across
 // every directory and every file: a deliberate simplification, not an
@@ -208,7 +257,12 @@ type fppConnectHeldStore struct {
 
 	records map[string]fppConnectHeldRecord // key: dir + "/" + name
 	pending map[string]string               // file name -> show name
-	events  []fppConnectPlaylistEvent
+	// pendingOrder is pending's insertion order, oldest first; see
+	// fppConnectMaxPending.
+	pendingOrder []string
+	events       []fppConnectEvent
+
+	inFlight map[string]*fppConnectInFlight // key: dir + "/" + name
 
 	onHeld func(fppConnectHeldRecord)
 }
@@ -236,6 +290,7 @@ func newFPPConnectHeldStoreWithWriter(assetDir string, writer fppConnectChunkWri
 		logger:   logger,
 		records:  map[string]fppConnectHeldRecord{},
 		pending:  map[string]string{},
+		inFlight: map[string]*fppConnectInFlight{},
 	}
 	if err := s.load(); err != nil {
 		logger.Warn("fppconnect: failed to load held upload index; starting with an empty catalog", "error", err)
@@ -261,7 +316,9 @@ func (s *fppConnectHeldStore) SetOnHeld(fn func(fppConnectHeldRecord)) {
 // Held returns every held record, sorted by dir then name for a stable,
 // readable listing. This is FC3's second hook: a registration seam that
 // starts after this node already holds files (a restart, for instance)
-// reads its backlog here rather than waiting on SetOnHeld alone.
+// reads its backlog here rather than waiting on SetOnHeld alone. It is
+// also what internal/agent/renderreport.go reads to publish ADR-044
+// decision 8's unbound-held-file evidence.
 func (s *fppConnectHeldStore) Held() []fppConnectHeldRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,12 +335,12 @@ func (s *fppConnectHeldStore) Held() []fppConnectHeldRecord {
 	return out
 }
 
-// Events returns a copy of the bounded evidence log (unknown and
-// ambiguous playlist posts), oldest first.
-func (s *fppConnectHeldStore) Events() []fppConnectPlaylistEvent {
+// Events returns a copy of the bounded evidence log (unknown/ambiguous
+// playlist posts and refused uploads), oldest first.
+func (s *fppConnectHeldStore) Events() []fppConnectEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]fppConnectPlaylistEvent, len(s.events))
+	out := make([]fppConnectEvent, len(s.events))
 	copy(out, s.events)
 	return out
 }
@@ -293,6 +350,18 @@ func (s *fppConnectHeldStore) Events() []fppConnectPlaylistEvent {
 // /api/playlist/{name}. Returns nil (never a non-nil empty slice) when
 // nothing is bound; the HTTP handler is what turns that into a JSON "[]"
 // rather than "null".
+//
+// Every entry uses RES-003 section 10.6's "without media" shape
+// regardless of which directory the underlying file came from: a held
+// music/ or videos/ file bound to a show is emitted here as a
+// sequenceName entry too, not the "with media" shape RES-003 documents
+// for a paired sequence+media row. That is a real divergence from the
+// documented shape, not an oversight; see
+// docs/build/TRACK-E-FPP-CONNECT.md's "Listener surface" section for the
+// reasoning (this store binds a sequence file and a media file as two
+// independent held records sharing one show, never as one paired entry,
+// so there is no mediaName to attach to any single entry it constructs),
+// and for why it does not break xLights' read-modify-write round trip.
 func (s *fppConnectHeldStore) MainPlaylistFor(showName string) []fppConnectPlaylistEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -328,19 +397,15 @@ func fppConnectStem(name string) string {
 	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 
-// stagingDir, stagingFilePath, stagingMetaPath, heldFileDir, heldFilePath
-// and indexPath are this store's own path layout, all rooted at
-// s.assetDir; see this file's package doc comment for the full tree.
+// stagingDir, stagingFilePath, heldFileDir, heldFilePath and indexPath are
+// this store's own path layout, all rooted at s.assetDir; see this file's
+// package doc comment for the full tree.
 func (s *fppConnectHeldStore) stagingDir(dir string) string {
 	return filepath.Join(s.assetDir, fppConnectUploadStateSubdir, "staging", dir)
 }
 
 func (s *fppConnectHeldStore) stagingFilePath(dir, name string) string {
 	return filepath.Join(s.stagingDir(dir), name+".partial")
-}
-
-func (s *fppConnectHeldStore) stagingMetaPath(dir, name string) string {
-	return filepath.Join(s.stagingDir(dir), name+".partial.meta.json")
 }
 
 func (s *fppConnectHeldStore) heldFileDir(dir string) string {
@@ -355,151 +420,197 @@ func (s *fppConnectHeldStore) indexPath() string {
 	return filepath.Join(s.assetDir, fppConnectUploadStateSubdir, fppConnectIndexFileName)
 }
 
-// readStagingMeta reads and decodes the sidecar at path. A missing or
-// undecodable sidecar reports ok=false: WriteChunk treats that exactly
-// like a genuine gap, since without it there is no trustworthy "bytes
-// received so far" to compare offset against.
-func (s *fppConnectHeldStore) readStagingMeta(path string) (meta fppConnectStagingMeta, ok bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fppConnectStagingMeta{}, false
-	}
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return fppConnectStagingMeta{}, false
-	}
-	return meta, true
-}
-
-// writeStagingMeta persists meta at path, best-effort: a failure here
-// does not undo the chunk bytes already written, and is logged rather than
-// failing the request, since the sidecar is recovery bookkeeping, not the
-// upload's own content.
-func (s *fppConnectHeldStore) writeStagingMeta(path string, meta fppConnectStagingMeta) {
-	data, err := json.Marshal(meta)
-	if err != nil {
-		s.logger.Warn("fppconnect: failed to encode upload staging sidecar", "path", path, "error", err)
-		return
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		s.logger.Warn("fppconnect: failed to write upload staging sidecar", "path", path, "error", err)
-	}
-}
-
-// discardFragment removes both a staging file and its sidecar, ignoring a
-// not-exist error: every refusal path in WriteChunk calls this so "the
-// fragment is discarded" (ADR-044 decision 9) is one code path, not
-// several copies that could drift apart.
+// discardFragment removes a staging file, ignoring a not-exist error, and
+// drops any in-memory tracking for key. Every abandonment path in
+// WriteChunk calls this so "the fragment is discarded" (ADR-044 decision
+// 9) is one code path, not several copies that could drift apart. It is
+// NOT what guarantees a stale tail cannot survive an offset-0 restart
+// (this os.Remove's error is deliberately ignored, exactly the case review
+// round 1 finding 7 flagged); the writer's truncate=true on that path is
+// what makes that guarantee real regardless of whether this Remove
+// succeeds.
 func (s *fppConnectHeldStore) discardFragment(dir, name string) {
+	key := dir + "/" + name
+	delete(s.inFlight, key)
 	_ = os.Remove(s.stagingFilePath(dir, name))
-	_ = os.Remove(s.stagingMetaPath(dir, name))
+}
+
+// refuseLocked records one refusal as evidence (review round 1 finding 2:
+// ADR-044 decision 4 says exceeding a bound, or exhausting the disk, "is
+// reported as evidence," and every refusal previously returned its reason
+// to the HTTP caller and persisted nothing), then returns WriteChunk's
+// result shape. s.mu already held.
+func (s *fppConnectHeldStore) refuseLocked(outcome fppConnectChunkOutcome, kind, dir, name, reason string, at time.Time) (fppConnectChunkOutcome, string, fppConnectHeldRecord) {
+	s.appendEventLocked(fppConnectEvent{Kind: kind, Dir: dir, Name: name, Reason: reason, At: at})
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a refusal", "kind", kind, "dir", dir, "name", name, "error", err)
+	}
+	return outcome, reason, fppConnectHeldRecord{}
+}
+
+// RecordRefusal records a refusal that happens before WriteChunk is ever
+// called: the directory allowlist ("bad-dir") and Upload-Name safety
+// ("bad-name") checks in fppconnectupload.go's HTTP handlers, ahead of any
+// staging. Public (unlike refuseLocked) because those checks run outside
+// this store's lock.
+func (s *fppConnectHeldStore) RecordRefusal(kind, dir, name, reason string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendEventLocked(fppConnectEvent{Kind: kind, Dir: dir, Name: name, Reason: reason, At: at})
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a refusal", "kind", kind, "dir", dir, "name", name, "error", err)
+	}
 }
 
 // WriteChunk applies one PATCH /api/file/{dir} chunk: offset-0 discard,
 // gap detection, the per-file and asset-directory byte caps, the actual
-// write (classifying ENOSPC distinctly), and, once accumulated bytes equal
-// uploadLength, hashing, renaming into the held area, and binding
-// resolution. dir is assumed already validated against
-// fppConnectAllowedDirs by the caller (fppconnectupload.go's
-// handleFileRoute); name is assumed already validated by
-// fppConnectValidPlaylistName. activeShow is the view's ActiveShow method,
-// threaded through as a function rather than the whole view so this store
-// stays independent of fppConnectView (avoiding an import cycle risk and
-// keeping this file's own test surface small).
-func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, chunk []byte, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+// streaming write (classifying ENOSPC distinctly), and, once accumulated
+// bytes equal uploadLength, finalizing the incrementally-computed hash,
+// renaming into the held area, and binding resolution.
+//
+// body is read directly, never buffered whole in memory (review round 1
+// finding 3): n (the caller's r.ContentLength) bounds exactly how much of
+// body this call reads, and the running SHA-256 in s.inFlight is updated
+// as bytes stream through (finding 4), so completion never re-reads the
+// finished file from disk to hash it.
+//
+// dir is assumed already validated against fppConnectAllowedDirs by the
+// caller (fppconnectupload.go's handleFileRoute); name is assumed already
+// validated by fppConnectValidPlaylistName. activeShow is the view's
+// ActiveShow method, threaded through as a function rather than the whole
+// view so this store stays independent of fppConnectView (avoiding an
+// import cycle risk and keeping this file's own test surface small).
+func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	key := dir + "/" + name
 	stagingPath := s.stagingFilePath(dir, name)
-	metaPath := s.stagingMetaPath(dir, name)
+
+	inf, exists := s.inFlight[key]
+
+	if offset == 0 {
+		// Offset 0 always starts fresh: drop any in-memory tracking and
+		// best-effort remove any stale fragment of the same name before
+		// anything else (ADR-044 decision 9's "the first chunk" reasoning
+		// starts here). The write below's truncate=true is the real
+		// guarantee against a surviving stale tail; see discardFragment's
+		// doc comment.
+		s.discardFragment(dir, name)
+		exists = false
+	} else if !exists || offset != inf.bytesReceived {
+		s.discardFragment(dir, name)
+		got := int64(-1)
+		if exists {
+			got = inf.bytesReceived
+		}
+		reason := fmt.Sprintf(
+			"upload offset %d does not match %d bytes already received for %q; the fragment was discarded",
+			offset, got, name)
+		return s.refuseLocked(fppConnectChunkGap, "gap", dir, name, reason, at)
+	}
 
 	var bytesReceived int64
-	if offset == 0 {
-		// Offset 0 always starts fresh: discard any stale fragment of the
-		// same name before anything else (ADR-044 decision 9's "the first
-		// chunk" reasoning starts here).
-		s.discardFragment(dir, name)
-	} else {
-		meta, ok := s.readStagingMeta(metaPath)
-		if !ok || offset != meta.BytesReceived {
-			s.discardFragment(dir, name)
-			got := int64(-1)
-			if ok {
-				got = meta.BytesReceived
-			}
-			return fppConnectChunkGap, fmt.Sprintf(
-				"upload offset %d does not match %d bytes already received for %q; the fragment was discarded",
-				offset, got, name), fppConnectHeldRecord{}
-		}
-		bytesReceived = meta.BytesReceived
+	if exists {
+		bytesReceived = inf.bytesReceived
 	}
 
 	if offset == 0 {
 		if uploadLength > maxFileBytes {
-			return fppConnectChunkTooLarge, fmt.Sprintf(
-				"upload length %d bytes exceeds the per-file cap of %d bytes", uploadLength, maxFileBytes,
-			), fppConnectHeldRecord{}
+			reason := fmt.Sprintf("upload length %d bytes exceeds the per-file cap of %d bytes", uploadLength, maxFileBytes)
+			return s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, reason, at)
 		}
-		existingTotal, err := fppConnectDirBytes(s.assetDir)
+		existingOnDisk, err := fppConnectDirBytes(s.assetDir)
 		if err != nil {
 			s.logger.Warn("fppconnect: failed to measure asset directory size; refusing this upload rather than risk exceeding the cap silently", "error", err)
-			return fppConnectChunkDirFull, fmt.Sprintf(
-				"could not measure the asset directory's current size against the %d byte cap: %v", maxAssetDirBytes, err,
-			), fppConnectHeldRecord{}
+			reason := fmt.Sprintf("could not measure the asset directory's current size against the %d byte cap: %v", maxAssetDirBytes, err)
+			return s.refuseLocked(fppConnectChunkDirFull, "dir-full", dir, name, reason, at)
 		}
-		if existingTotal+uploadLength > maxAssetDirBytes {
-			return fppConnectChunkDirFull, fmt.Sprintf(
-				"accepting %d declared bytes would bring the asset directory to more than its %d byte cap (%d bytes already used)",
-				uploadLength, maxAssetDirBytes, existingTotal,
-			), fppConnectHeldRecord{}
+		// Every OTHER in-flight upload's still-undelivered remainder
+		// counts against the cap too (review round 1 finding 5): without
+		// this, two concurrent uploads each individually under today's
+		// on-disk usage could both pass this check and, once both
+		// finish, together exceed maxAssetDirBytes. This upload's own
+		// remainder is its full uploadLength, added separately below.
+		var reserved int64
+		for k, other := range s.inFlight {
+			if k == key {
+				continue
+			}
+			reserved += other.uploadLength - other.bytesReceived
+		}
+		if existingOnDisk+reserved+uploadLength > maxAssetDirBytes {
+			reason := fmt.Sprintf(
+				"accepting %d declared bytes (plus %d bytes reserved by other in-progress uploads) would bring the asset directory to more than its %d byte cap (%d bytes already used)",
+				uploadLength, reserved, maxAssetDirBytes, existingOnDisk)
+			return s.refuseLocked(fppConnectChunkDirFull, "dir-full", dir, name, reason, at)
 		}
 	}
 
-	newTotal := bytesReceived + int64(len(chunk))
+	newTotal := bytesReceived + n
 	if newTotal > uploadLength || newTotal > maxFileBytes {
 		s.discardFragment(dir, name)
-		return fppConnectChunkTooLarge, fmt.Sprintf(
+		reason := fmt.Sprintf(
 			"accumulated upload of %d bytes would exceed the declared length of %d bytes or the per-file cap of %d bytes",
-			newTotal, uploadLength, maxFileBytes,
-		), fppConnectHeldRecord{}
+			newTotal, uploadLength, maxFileBytes)
+		return s.refuseLocked(fppConnectChunkTooLarge, "too-large", dir, name, reason, at)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(stagingPath), 0o755); err != nil {
 		return fppConnectChunkWriteFailed, fmt.Sprintf("creating staging directory for %q: %v", name, err), fppConnectHeldRecord{}
 	}
-	if err := s.writer.WriteAt(stagingPath, offset, chunk); err != nil {
-		if fppConnectIsDiskFull(err) {
-			s.discardFragment(dir, name)
-			return fppConnectChunkDiskFull, fmt.Sprintf("the disk is full while writing %q: %v", name, err), fppConnectHeldRecord{}
-		}
+
+	if offset == 0 {
+		inf = &fppConnectInFlight{hash: sha256.New(), uploadLength: uploadLength}
+		s.inFlight[key] = inf
+	}
+	// TeeReader hashes exactly the bytes the writer actually reads from
+	// body, whether or not the write below ultimately succeeds; a failed
+	// write below discards this whole in-flight record (and its partial
+	// hash) via discardFragment, so a hash polluted by an aborted write
+	// never survives to be used.
+	teed := io.TeeReader(body, inf.hash)
+
+	written, err := s.writer.WriteChunk(stagingPath, offset, teed, n, offset == 0)
+	if err != nil {
 		s.discardFragment(dir, name)
+		if fppConnectIsDiskFull(err) {
+			reason := fmt.Sprintf("the disk is full while writing %q: %v", name, err)
+			return s.refuseLocked(fppConnectChunkDiskFull, "disk-full", dir, name, reason, at)
+		}
 		return fppConnectChunkWriteFailed, fmt.Sprintf("writing a chunk for %q: %v", name, err), fppConnectHeldRecord{}
 	}
+	if written != n {
+		// io.Copy/io.CopyN report a short write as an error rather than a
+		// clean nil, but a client that closes its body early against a
+		// declared Content-Length it does not honor is exactly the kind
+		// of client behavior this listener must never trust silently;
+		// treat it the same as any other write failure rather than
+		// accepting a truncated chunk as if it were the whole one.
+		s.discardFragment(dir, name)
+		return fppConnectChunkWriteFailed, fmt.Sprintf("short write for %q: wrote %d of %d declared bytes", name, written, n), fppConnectHeldRecord{}
+	}
 
-	bytesReceived = newTotal
-	s.writeStagingMeta(metaPath, fppConnectStagingMeta{UploadLength: uploadLength, BytesReceived: bytesReceived, LastChunkAt: at})
+	inf.bytesReceived = newTotal
 
-	if bytesReceived < uploadLength {
+	if inf.bytesReceived < uploadLength {
 		return fppConnectChunkAccepted, "", fppConnectHeldRecord{}
 	}
 
-	hash, err := hashFile(stagingPath)
-	if err != nil {
-		s.discardFragment(dir, name)
-		return fppConnectChunkWriteFailed, fmt.Sprintf("hashing completed upload %q: %v", name, err), fppConnectHeldRecord{}
-	}
+	hashSum := "sha256:" + hex.EncodeToString(inf.hash.Sum(nil))
+	delete(s.inFlight, key) // clear the reservation on completion (finding 5)
 
 	heldPath := s.heldFilePath(dir, name)
 	if err := os.MkdirAll(s.heldFileDir(dir), 0o755); err != nil {
-		s.discardFragment(dir, name)
+		_ = os.Remove(stagingPath)
 		return fppConnectChunkWriteFailed, fmt.Sprintf("creating held directory for %q: %v", name, err), fppConnectHeldRecord{}
 	}
 	if err := os.Rename(stagingPath, heldPath); err != nil {
-		s.discardFragment(dir, name)
+		_ = os.Remove(stagingPath)
 		return fppConnectChunkWriteFailed, fmt.Sprintf("finalizing held file %q: %v", name, err), fppConnectHeldRecord{}
 	}
-	_ = os.Remove(metaPath)
 
-	rec = s.completeLocked(dir, name, bytesReceived, hash, at, activeShow)
+	rec = s.completeLocked(dir, name, uploadLength, hashSum, at, activeShow)
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after completion", "dir", dir, "name", name, "error", err)
 	}
@@ -512,8 +623,10 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 // wins first and is consumed; otherwise a PRIOR record for this (dir,
 // name) that was already bound keeps its binding (a re-uploaded file, same
 // identity, updated bytes, is not silently unbound); otherwise the active
-// show, in ADR-039 decision 5's tri-state (bound if known, else unbound
-// with a reason distinguishing "pushed null" from "never pushed").
+// show, in ADR-039 decision 5's tri-state (bound if known AND non-empty,
+// else unbound with a reason distinguishing "pushed null," "never
+// pushed," and "pushed known but with an empty name," review round 1
+// finding 8).
 func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, hash string, at time.Time, activeShow func() (name string, known bool, everSet bool)) fppConnectHeldRecord {
 	key := dir + "/" + name
 	prev, hadPrev := s.records[key]
@@ -524,7 +637,7 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 		rec.Bound = true
 		rec.Show = show
 		rec.LogicalSequence = fppConnectStem(name)
-		delete(s.pending, name)
+		s.deletePendingLocked(name)
 	} else if hadPrev && prev.Bound {
 		rec.Bound = true
 		rec.Show = prev.Show
@@ -532,10 +645,16 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 	} else {
 		showName, known, everSet := activeShow()
 		switch {
-		case known:
+		case known && showName != "":
 			rec.Bound = true
 			rec.Show = showName
 			rec.LogicalSequence = fppConnectStem(name)
+		case known:
+			// known==true with an empty name is not a real show to bind
+			// to (review round 1 finding 8): a prior version of this
+			// code bound to the empty show here, which is exactly the
+			// kind of wrong silent guess ADR-044 decision 8 forbids.
+			rec.UnboundReason = "active show was pushed as known but with an empty name"
 		case everSet:
 			rec.UnboundReason = "no active show: the coordinator explicitly pushed no active show (pushed null)"
 		default:
@@ -583,9 +702,9 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 			}
 		}
 		if matched {
-			delete(s.pending, fname)
+			s.deletePendingLocked(fname)
 		} else {
-			s.pending[fname] = showName
+			s.addPendingLocked(fname, showName)
 		}
 	}
 
@@ -594,9 +713,53 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 	}
 }
 
+// addPendingLocked records fname -> showName in s.pending, evicting the
+// oldest pending entry first when fppConnectMaxPending would otherwise be
+// exceeded (review round 1 finding 6). Updating an already-pending name's
+// show does not change its position in the eviction order: it is not a
+// fresh entry. s.mu already held.
+func (s *fppConnectHeldStore) addPendingLocked(fname, showName string) {
+	if _, exists := s.pending[fname]; exists {
+		s.pending[fname] = showName
+		return
+	}
+	if len(s.pending) >= fppConnectMaxPending {
+		if len(s.pendingOrder) > 0 {
+			oldest := s.pendingOrder[0]
+			s.pendingOrder = s.pendingOrder[1:]
+			delete(s.pending, oldest)
+		} else {
+			// Should be unreachable given load's own fallback below, but
+			// never silently grow past the cap: drop one arbitrary entry
+			// rather than skip eviction.
+			for k := range s.pending {
+				delete(s.pending, k)
+				break
+			}
+		}
+	}
+	s.pending[fname] = showName
+	s.pendingOrder = append(s.pendingOrder, fname)
+}
+
+// deletePendingLocked removes fname from s.pending and s.pendingOrder, if
+// present. s.mu already held.
+func (s *fppConnectHeldStore) deletePendingLocked(fname string) {
+	if _, exists := s.pending[fname]; !exists {
+		return
+	}
+	delete(s.pending, fname)
+	for i, k := range s.pendingOrder {
+		if k == fname {
+			s.pendingOrder = append(s.pendingOrder[:i], s.pendingOrder[i+1:]...)
+			break
+		}
+	}
+}
+
 // appendEventLocked appends ev to s.events, dropping the oldest entries
 // once fppConnectMaxEvents is exceeded. s.mu already held.
-func (s *fppConnectHeldStore) appendEventLocked(ev fppConnectPlaylistEvent) {
+func (s *fppConnectHeldStore) appendEventLocked(ev fppConnectEvent) {
 	s.events = append(s.events, ev)
 	if len(s.events) > fppConnectMaxEvents {
 		s.events = s.events[len(s.events)-fppConnectMaxEvents:]
@@ -611,7 +774,7 @@ func (s *fppConnectHeldStore) appendEventLocked(ev fppConnectPlaylistEvent) {
 func (s *fppConnectHeldStore) RecordUnknownPlaylist(name string, entries []string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendEventLocked(fppConnectPlaylistEvent{Kind: "unknown", Name: name, Entries: entries, At: at})
+	s.appendEventLocked(fppConnectEvent{Kind: "unknown", Name: name, Entries: entries, At: at})
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after an unknown playlist post", "name", name, "error", err)
 	}
@@ -626,7 +789,7 @@ func (s *fppConnectHeldStore) RecordUnknownPlaylist(name string, entries []strin
 func (s *fppConnectHeldStore) RecordAmbiguousPlaylist(name string, matchCount int, entries []string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendEventLocked(fppConnectPlaylistEvent{Kind: "ambiguous", Name: name, Entries: entries, MatchCount: matchCount, At: at})
+	s.appendEventLocked(fppConnectEvent{Kind: "ambiguous", Name: name, Entries: entries, MatchCount: matchCount, At: at})
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after an ambiguous playlist post", "name", name, "error", err)
 	}
@@ -636,7 +799,7 @@ func (s *fppConnectHeldStore) RecordAmbiguousPlaylist(name string, matchCount in
 // already held. Matches internal/agent/heldcatalog.FileStore.Save's exact
 // discipline.
 func (s *fppConnectHeldStore) persistLocked() error {
-	idx := fppConnectIndex{Records: s.records, Pending: s.pending, Events: s.events}
+	idx := fppConnectIndex{Records: s.records, Pending: s.pending, PendingOrder: s.pendingOrder, Events: s.events}
 	data, err := json.Marshal(idx)
 	if err != nil {
 		return fmt.Errorf("fppconnect: encode held upload index: %w", err)
@@ -677,6 +840,18 @@ func (s *fppConnectHeldStore) load() error {
 	}
 	if idx.Pending != nil {
 		s.pending = idx.Pending
+	}
+	if idx.PendingOrder != nil {
+		s.pendingOrder = idx.PendingOrder
+	} else if len(s.pending) > 0 {
+		// A pre-finding-6 index has Pending but no PendingOrder: rebuild
+		// one (Go map iteration order, arbitrary but deterministic for
+		// this one rebuild) so eviction has a well-defined "oldest" from
+		// here on, rather than panicking on an empty pendingOrder the
+		// first time addPendingLocked needs to evict.
+		for k := range s.pending {
+			s.pendingOrder = append(s.pendingOrder, k)
+		}
 	}
 	s.events = idx.Events
 	return nil
@@ -719,9 +894,10 @@ func fppConnectDirBytes(root string) (int64, error) {
 // assets.go's sweepAssetStaging: a partial upload left behind by a
 // previous, interrupted process run is never a partially-usable asset and
 // must never be resumed against a chunk sequence a fresh process has no
-// memory of. held/ and index.json, siblings of staging/, are untouched:
-// this never removes an already-completed held file or its record.
-// Missing dir or missing staging/ is not an error.
+// memory of (this store never resumes across a restart at all: see this
+// file's package doc comment). held/ and index.json, siblings of
+// staging/, are untouched: this never removes an already-completed held
+// file or its record. Missing dir or missing staging/ is not an error.
 func sweepFPPConnectUploadStaging(assetDir string) error {
 	stagingRoot := filepath.Join(assetDir, fppConnectUploadStateSubdir, "staging")
 	entries, err := os.ReadDir(stagingRoot)

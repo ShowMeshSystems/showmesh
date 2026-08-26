@@ -373,7 +373,7 @@ func Run() int {
 		defer close(renderReportDone)
 		ticker := time.NewTicker(cfg.RenderReportInterval)
 		defer ticker.Stop()
-		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, fppConnectStatus, time.Now, ticker.C, renderTrigger, logger)
+		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, fppConnectStatus, fppConnectHeld, time.Now, ticker.C, renderTrigger, logger)
 	}()
 
 	// Audio report: hardware discovery evidence (cached) plus a fresh

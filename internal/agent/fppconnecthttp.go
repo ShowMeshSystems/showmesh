@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,13 +26,45 @@ import (
 // docs/build/TRACK-E-FPP-CONNECT.md's "Listener surface" section, not here.
 
 const (
-	// fppConnectReadHeaderTimeout and fppConnectReadTimeout bound how long a
-	// slow or hostile client can hold this listener's goroutines open; none
-	// of these routes ever wait on anything slower than reading the
-	// holder's in-memory state, so both are short.
+	// fppConnectReadHeaderTimeout bounds how long a slow or hostile client
+	// can hold this listener's goroutines open before it has even finished
+	// sending headers.
 	fppConnectReadHeaderTimeout = 5 * time.Second
-	fppConnectReadTimeout       = 10 * time.Second
-	fppConnectWriteTimeout      = 10 * time.Second
+
+	// fppConnectWriteTimeout bounds the response-write side of every
+	// route: net/http's WriteTimeout governs only Write() calls on the
+	// connection (the response), never the request body Read() calls, so
+	// this is safe to keep short even for the file PATCH route, whose
+	// body can be tens of megabytes: nothing this listener does writes a
+	// response before it has already finished reading and processing the
+	// request. Before review round 1 finding 4's fix, a synchronous
+	// whole-file re-hash at upload completion ran in that gap and could
+	// itself exceed this timeout on a large file; completion now
+	// finalizes an already-running hash instead (fppconnectheld.go's
+	// fppConnectInFlight), so nothing slow happens between the last byte
+	// read and the response write starting.
+	fppConnectWriteTimeout = 10 * time.Second
+
+	// fppConnectDiscoveryReadDeadline bounds request reading (headers
+	// plus body) on every route except the file PATCH route: the four
+	// fixed discovery routes and the playlist routes never wait on
+	// anything slower than reading the holder's in-memory state or a
+	// small POST body, so this stays short. Applied per request via
+	// fppConnectSetReadDeadline / http.ResponseController, not the
+	// server-wide ReadTimeout (see runFPPConnectHTTPListener's doc
+	// comment on why that is 0 now).
+	fppConnectDiscoveryReadDeadline = 10 * time.Second
+
+	// fppConnectFileReadDeadline bounds request reading on the file PATCH
+	// route alone: review round 1 finding 4 found the old server-wide
+	// ReadTimeout of 10s covered a chunk's body too, so a 16 MiB xLights
+	// chunk (RES-003 section 9.4) on a slow link could time out mid-
+	// transfer. Generous rather than idle-based (a single deadline set
+	// once, not reset per read): simpler to reason about, and this is a
+	// compatibility shim for one intended client on an isolated show
+	// network, not a public upload endpoint that needs to bound a
+	// deliberately slow-drip client's total connection time tightly.
+	fppConnectFileReadDeadline = 10 * time.Minute
 
 	// fppConnectMaxHeaderBytes bounds the request line plus headers.
 	fppConnectMaxHeaderBytes = 16 * 1024
@@ -348,6 +381,7 @@ type fppConnectServer struct {
 	uuid   string
 	held   *fppConnectHeldStore
 	now    func() time.Time
+	logger *slog.Logger
 }
 
 // newFPPConnectHandler builds the complete handler for this node's FPP
@@ -362,13 +396,14 @@ type fppConnectServer struct {
 // held is FC2's upload/binding state; now is this server's clock,
 // threaded through rather than read from time.Now directly so a test can
 // control it.
-func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHeldStore, now func() time.Time) http.Handler {
+func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHeldStore, now func() time.Time, logger *slog.Logger) http.Handler {
 	srv := &fppConnectServer{
 		view:   view,
 		nodeID: nodeID,
 		uuid:   fppConnectNodeUUID(nodeID).String(),
 		held:   held,
 		now:    now,
+		logger: logger,
 	}
 
 	return fppConnectRequireEnabled(view, http.HandlerFunc(srv.route))
@@ -419,9 +454,24 @@ func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
 	fppConnectLimitBody(http.HandlerFunc(s.routeFixed)).ServeHTTP(w, r)
 }
 
+// fppConnectSetReadDeadline sets w's underlying connection's read deadline
+// to d from now, via http.ResponseController (Go 1.20+): the per-route
+// replacement for the server-wide ReadTimeout this listener no longer
+// sets (runFPPConnectHTTPListener's doc comment). A failure is logged
+// rather than treated as fatal: SetReadDeadline can fail on a
+// ResponseWriter that does not support it (Go's own documented
+// possibility, e.g. some non-standard Handler wrapping), and this
+// listener's ReadHeaderTimeout already bounds header reading regardless.
+func fppConnectSetReadDeadline(w http.ResponseWriter, d time.Duration, logger *slog.Logger) {
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(d)); err != nil {
+		logger.Warn("fppconnect: failed to set a per-route read deadline", "error", err)
+	}
+}
+
 // routeFixed is FC1's original four-route dispatch table: GET/HEAD only,
 // wrapped by route() in fppConnectLimitBody's small body cap.
 func (s *fppConnectServer) routeFixed(w http.ResponseWriter, r *http.Request) {
+	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.NotFound(w, r)
 		return
@@ -505,6 +555,15 @@ func fppConnectValidPlaylistName(name string) bool {
 		if seg == ".." {
 			return false
 		}
+	}
+	// Review round 1 finding 9: "." passed every check above (it is not
+	// "..", contains no separator) and then failed FC2's rename into the
+	// held area with a 500, rather than being refused up front with the
+	// 403 ADR-044 decision 4's bounds specify. filepath.Clean also
+	// catches "..", already refused above, so this is belt-and-braces
+	// against any other name that cleans down to either.
+	if cleaned := filepath.Clean(name); cleaned == "." || cleaned == ".." {
+		return false
 	}
 	return true
 }
@@ -603,6 +662,7 @@ func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Reques
 // method is this listener's ordinary 404, matching every other route's
 // "wrong method is 404, not 405" rule.
 func (s *fppConnectServer) handlePlaylistRoute(w http.ResponseWriter, r *http.Request, name string) {
+	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		s.handlePlaylist(w, r, name)
@@ -675,12 +735,22 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 	}
 
 	srv := &http.Server{
-		Handler:           newFPPConnectHandler(view, nodeID, held, time.Now),
+		Handler:           newFPPConnectHandler(view, nodeID, held, time.Now, logger),
 		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
-		ReadTimeout:       fppConnectReadTimeout,
-		WriteTimeout:      fppConnectWriteTimeout,
-		MaxHeaderBytes:    fppConnectMaxHeaderBytes,
-		ConnContext:       fppConnectConnContext,
+		// ReadTimeout is 0 (no server-wide bound): review round 1 finding
+		// 4 found the previous fixed 10s value covered header AND body,
+		// so a real 16 MiB xLights chunk (RES-003 section 9.4) on a slow
+		// link could time out mid-transfer. Each route now sets its own
+		// read deadline instead (fppConnectSetReadDeadline): short for
+		// the four discovery routes and the playlist routes
+		// (fppConnectDiscoveryReadDeadline), generous for the file PATCH
+		// route (fppConnectFileReadDeadline). ReadHeaderTimeout above
+		// still bounds a client that never finishes sending headers at
+		// all.
+		ReadTimeout:    0,
+		WriteTimeout:   fppConnectWriteTimeout,
+		MaxHeaderBytes: fppConnectMaxHeaderBytes,
+		ConnContext:    fppConnectConnContext,
 		// net/http already recovers a handler panic per connection and logs
 		// it through this *log.Logger rather than letting it reach the
 		// agent's own structured logger by default; routing it through

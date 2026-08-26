@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // newTestHeldStore builds an fppConnectHeldStore rooted at a fresh
@@ -32,8 +34,8 @@ func newTestHeldStore(t *testing.T) (*fppConnectHeldStore, string) {
 // real ENOSPC would.
 type fakeENOSPCWriter struct{}
 
-func (fakeENOSPCWriter) WriteAt(path string, offset int64, data []byte) error {
-	return &os.PathError{Op: "write", Path: path, Err: syscall.ENOSPC}
+func (fakeENOSPCWriter) WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (int64, error) {
+	return 0, &os.PathError{Op: "write", Path: path, Err: syscall.ENOSPC}
 }
 
 // patchChunk sends one PATCH /api/file/{dir} chunk and returns the
@@ -92,6 +94,21 @@ func findHeldRecord(t *testing.T, held *fppConnectHeldStore, dir, name string) (
 		}
 	}
 	return fppConnectHeldRecord{}, false
+}
+
+// hasEventKind reports whether held's evidence log contains an event of
+// kind whose Name matches name ("" to match any name, used for events like
+// "bad-dir" that carry no name).
+func hasEventKind(held *fppConnectHeldStore, kind, name string) bool {
+	for _, ev := range held.Events() {
+		if ev.Kind != kind {
+			continue
+		}
+		if name == "" || ev.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // TestFPPConnectUploadThreeChunksCompletes is the seam's headline test: a
@@ -226,6 +243,9 @@ func TestFPPConnectUploadGapIsRefused(t *testing.T) {
 	if _, ok := findHeldRecord(t, held, "sequences", "Gap.fseq"); ok {
 		t.Fatal("a held record exists after a gap, want none")
 	}
+	if !hasEventKind(held, "gap", "Gap.fseq") {
+		t.Fatalf("no gap event recorded; events = %+v", held.Events())
+	}
 }
 
 // TestFPPConnectUploadDirectoryAllowlist proves "effects", "../sequences",
@@ -243,6 +263,9 @@ func TestFPPConnectUploadDirectoryAllowlist(t *testing.T) {
 		}
 		if _, ok := findHeldRecord(t, held, "effects", "Bad.eseq"); ok {
 			t.Fatal("a held record exists for a refused directory")
+		}
+		if !hasEventKind(held, "bad-dir", "") {
+			t.Fatalf("no bad-dir event recorded; events = %+v", held.Events())
 		}
 	})
 
@@ -273,6 +296,24 @@ func TestFPPConnectUploadDirectoryAllowlist(t *testing.T) {
 		if _, ok := findHeldRecord(t, held, "sequences", "sub/Escape.fseq"); ok {
 			t.Fatal("a held record exists for a refused name")
 		}
+		if !hasEventKind(held, "bad-name", "sub/Escape.fseq") {
+			t.Fatalf("no bad-name event recorded; events = %+v", held.Events())
+		}
+	})
+
+	// Review round 1 finding 9: "." passes every check
+	// fppConnectValidPlaylistName applied before the filepath.Clean fix
+	// (not empty, not "..", no separator) and then failed FC2's rename
+	// into the held area with a 500. It must be refused up front with the
+	// same 403 a slash-containing name gets.
+	t.Run("upload name exactly dot refused", func(t *testing.T) {
+		resp, body := patchChunk(t, srv, "sequences", ".", 0, 3, []byte("abc"))
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", resp.StatusCode, body)
+		}
+		if _, ok := findHeldRecord(t, held, "sequences", "."); ok {
+			t.Fatal("a held record exists for a refused name")
+		}
 	})
 }
 
@@ -292,6 +333,9 @@ func TestFPPConnectUploadPerFileCap(t *testing.T) {
 	}
 	if _, ok := findHeldRecord(t, held, "sequences", "TooBig.fseq"); ok {
 		t.Fatal("a held record exists for a refused oversized upload")
+	}
+	if !hasEventKind(held, "too-large", "TooBig.fseq") {
+		t.Fatalf("no too-large event recorded; events = %+v", held.Events())
 	}
 }
 
@@ -319,6 +363,9 @@ func TestFPPConnectUploadAssetDirCap(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(assetDir, "seed.bin")); err != nil {
 		t.Fatalf("the pre-existing seed file was removed: %v", err)
 	}
+	if !hasEventKind(held, "dir-full", "TooMuch.fseq") {
+		t.Fatalf("no dir-full event recorded; events = %+v", held.Events())
+	}
 }
 
 // TestFPPConnectUploadDiskFull proves ENOSPC while writing is classified
@@ -339,6 +386,9 @@ func TestFPPConnectUploadDiskFull(t *testing.T) {
 	}
 	if _, ok := findHeldRecord(t, held, "sequences", "Full.fseq"); ok {
 		t.Fatal("a held record exists after a disk-full write")
+	}
+	if !hasEventKind(held, "disk-full", "Full.fseq") {
+		t.Fatalf("no disk-full event recorded; events = %+v", held.Events())
 	}
 }
 
@@ -471,6 +521,37 @@ func TestFPPConnectUploadActiveShowFallback(t *testing.T) {
 		}
 		if !strings.Contains(rec.UnboundReason, "null") {
 			t.Fatalf("UnboundReason = %q, want it to say the coordinator pushed null", rec.UnboundReason)
+		}
+	})
+
+	// Review round 1 finding 8: known==true with an empty show name bound
+	// to the empty show, a silent wrong guess ADR-044 decision 8
+	// forbids. A known-but-empty active show must leave the file unbound
+	// with its own distinct reason, never the never-pushed or pushed-null
+	// reasons above.
+	t.Run("known but empty active show name leaves it held unbound with a distinct reason", func(t *testing.T) {
+		held, _ := newTestHeldStore(t)
+		view := fakeFPPConnectView{enabled: true, activeShowName: "", activeShowKnown: true, activeShowEver: true}
+		srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+		if resp, body := patchChunk(t, srv, "sequences", "EmptyName.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+			t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+		}
+		rec, ok := findHeldRecord(t, held, "sequences", "EmptyName.fseq")
+		if !ok {
+			t.Fatal("no held record")
+		}
+		if rec.Bound {
+			t.Fatalf("record = %+v, want unbound: an active show known but pushed with an empty name must never bind", rec)
+		}
+		if rec.Show != "" {
+			t.Fatalf("record.Show = %q, want empty", rec.Show)
+		}
+		if !strings.Contains(rec.UnboundReason, "empty") {
+			t.Fatalf("UnboundReason = %q, want it to name the empty-name case", rec.UnboundReason)
+		}
+		if strings.Contains(rec.UnboundReason, "never") || strings.Contains(rec.UnboundReason, "null") {
+			t.Fatalf("UnboundReason = %q, want a reason distinct from the never-pushed and pushed-null cases", rec.UnboundReason)
 		}
 	})
 }
@@ -620,4 +701,119 @@ func TestFPPConnectUploadRoutesNoProductIdentityLeak(t *testing.T) {
 	defer func() { _ = resp3.Body.Close() }()
 	body3, _ := io.ReadAll(resp3.Body)
 	check("POST /api/file/sequences (no-op)", resp3, body3)
+}
+
+// TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit is
+// review round 1 finding 5's regression test. Before this fix, the
+// asset-directory cap was checked only against bytes already on disk at
+// offset 0, so two uploads interleaved at the chunk level (A's first
+// chunk lands, then B's offset-0 check runs before A finishes) could each
+// individually pass that check and together exceed the cap: A's own
+// still-undelivered remainder was invisible to B's check. WriteChunk is
+// called directly, twice, with neither upload completing in between, to
+// exercise exactly that interleaving deterministically (the store's own
+// mutex would otherwise serialize two real concurrent HTTP requests
+// anyway, making a goroutine-based test no more meaningful than this).
+func TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	neverActive := func() (string, bool, bool) { return "", false, false }
+
+	const maxDir = int64(150)
+
+	// Upload A declares 100 bytes total, but this call only delivers the
+	// first 10: it is accepted and left in flight, with 90 bytes still
+	// outstanding.
+	outcome, reason, _ := held.WriteChunk("sequences", "A.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, maxDir, time.Now(), neverActive)
+	if outcome != fppConnectChunkAccepted {
+		t.Fatalf("upload A chunk 1: outcome = %v reason = %q, want accepted", outcome, reason)
+	}
+
+	// Upload B also declares 100 bytes, all in its first chunk. Bytes
+	// actually on disk right now are only A's 10, which alone would fit
+	// under 150 alongside B's 100 (110 total): the exact shape of the
+	// bug. Correct behavior adds A's outstanding 90-byte remainder to the
+	// check (10 + 90 + 100 = 200 > 150) and refuses B.
+	outcome, reason, _ = held.WriteChunk("sequences", "B.fseq", 0, 100, strings.NewReader(strings.Repeat("B", 100)), 100, 1<<30, maxDir, time.Now(), neverActive)
+	if outcome != fppConnectChunkDirFull {
+		t.Fatalf("upload B: outcome = %v reason = %q, want dir-full (A's in-flight remainder must count against the cap)", outcome, reason)
+	}
+	if !strings.Contains(reason, "90") {
+		t.Fatalf("reason = %q, want it to name the 90 bytes reserved by upload A", reason)
+	}
+
+	// Once A completes (freeing its reservation), B's own declared length
+	// still exceeds what remains, so B stays refused for the same
+	// fundamental reason; the point already proven above is that the
+	// check considered A's reservation at all.
+}
+
+// TestFPPConnectPendingBindingsAreBoundedAndEvictOldestFirst is review
+// round 1 finding 6's regression test: a single POST /api/playlist/{name}
+// body can carry many sequenceName/mediaName entries with no held file to
+// match yet, and every one becomes a pending binding. Without a cap that
+// map (and the index.json it is persisted in) grows without bound.
+func TestFPPConnectPendingBindingsAreBoundedAndEvictOldestFirst(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	total := fppConnectMaxPending + 10
+	names := make([]string, total)
+	for i := range names {
+		names[i] = fmt.Sprintf("File%04d.fseq", i)
+	}
+	held.BindShow("SomeShow", names, time.Now())
+
+	held.mu.Lock()
+	gotLen := len(held.pending)
+	gotOrderLen := len(held.pendingOrder)
+	_, oldestStillPending := held.pending[names[0]]
+	_, newestStillPending := held.pending[names[total-1]]
+	held.mu.Unlock()
+
+	if gotLen != fppConnectMaxPending {
+		t.Fatalf("len(pending) = %d, want %d", gotLen, fppConnectMaxPending)
+	}
+	if gotOrderLen != fppConnectMaxPending {
+		t.Fatalf("len(pendingOrder) = %d, want %d", gotOrderLen, fppConnectMaxPending)
+	}
+	if oldestStillPending {
+		t.Fatalf("the oldest pending entry %q survived eviction, want the oldest evicted first", names[0])
+	}
+	if !newestStillPending {
+		t.Fatalf("the newest pending entry %q was evicted, want it kept", names[total-1])
+	}
+}
+
+// TestFPPConnectChunkWriterTruncatesStaleTailOnOffsetZero is review round
+// 1 finding 7's regression test, exercised directly against
+// osFPPConnectChunkWriter rather than through discardFragment's best-
+// effort os.Remove (whose own error is deliberately ignored, so a test
+// relying on it succeeding would not prove the fix): a longer stale file
+// already at path, then a shorter offset-0, truncate=true write, must
+// leave the file at exactly the new, shorter length, never the old
+// longer one.
+func TestFPPConnectChunkWriterTruncatesStaleTailOnOffsetZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stale.partial")
+	stale := bytes.Repeat([]byte("L"), 50)
+	if err := os.WriteFile(path, stale, 0o644); err != nil {
+		t.Fatalf("setup: writing the stale partial: %v", err)
+	}
+
+	w := osFPPConnectChunkWriter{}
+	fresh := bytes.Repeat([]byte("S"), 10)
+	written, err := w.WriteChunk(path, 0, bytes.NewReader(fresh), int64(len(fresh)), true)
+	if err != nil {
+		t.Fatalf("WriteChunk: %v", err)
+	}
+	if written != int64(len(fresh)) {
+		t.Fatalf("written = %d, want %d", written, len(fresh))
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the file back: %v", err)
+	}
+	if len(got) != len(fresh) || !bytes.Equal(got, fresh) {
+		t.Fatalf("file is %d bytes (%q), want exactly %d bytes (%q): a stale tail from the earlier 50-byte file survived", len(got), got, len(fresh), fresh)
+	}
 }

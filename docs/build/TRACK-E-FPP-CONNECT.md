@@ -138,6 +138,23 @@ framing over `internal/agent/fppconnectheld.go`'s store). These two routes
 never pass through the four fixed routes' small (4 KiB)
 `fppConnectMaxBodyBytes` cap; each bounds its own, much larger, body.
 
+**Per-route read deadlines (review round 1 finding 4).** The listener's
+`http.Server` no longer sets a server-wide `ReadTimeout`: the original
+fixed 10s value bounded header AND body together, so a real 16 MiB xLights
+chunk (RES-003 section 9.4) on a slow link could time out mid-transfer.
+Each route now sets its own deadline via `http.ResponseController.
+SetReadDeadline` (`fppConnectSetReadDeadline`): `fppConnectDiscoveryReadDeadline`
+(10s) on the four fixed discovery routes and the playlist routes,
+`fppConnectFileReadDeadline` (10 minutes, generous rather than idle-based)
+on the file PATCH route alone. `ReadHeaderTimeout` (5s) is unchanged and
+still bounds a client that never finishes sending headers.
+`WriteTimeout` (10s) is also unchanged: it governs only the connection's
+Write() calls (the response), never request body reads, so it was never
+the mechanism a slow upload could trip; the real prior risk on that axis
+was a synchronous whole-file re-hash running between the last body byte
+read and the response write, which finding 4's incremental hashing (below)
+removes.
+
 - **`PATCH /api/file/{dir}`**: the real chunked-upload transport (RES-003
   section 9.4). Headers `Upload-Offset`, `Upload-Length`, `Upload-Name` are
   all required; the body is one chunk, capped at 32 MiB
@@ -166,6 +183,21 @@ never pass through the four fixed routes' small (4 KiB)
   `sequenceName` presence, never `duration`, so the round trip holds
   without it. This is what makes xLights' GET-then-append merge
   idempotent across the up-to-twice-per-target POST RES-003 records.
+  **Review round 1 finding 10, stated here rather than only in code: a
+  held file from `music/` or `videos/` gets exactly this same shape.**
+  RES-003 section 10.6 also documents a "with media" entry pairing one
+  sequence with one media file
+  (`{"type":"both",...,"sequenceName":"<seq>","mediaName":"<media>",...}`),
+  which this store never emits: a bound sequence file and a bound media
+  file are two independent held records that happen to share a `show`,
+  not one paired binding this store tracks together, so there is no
+  `mediaName` to attach to either one's entry. A held `Halloween.mp3` in
+  `music/` therefore comes back as `{"type":"sequence",...,
+  "sequenceName":"Halloween.mp3",...}`, not paired with any sequence.
+  This does not break xLights' round trip (it only ever checks whether a
+  `sequenceName` it already posted is present, never `type` or pairing),
+  but a future reader of this endpoint that expects real pairing
+  information will not find it here.
 
 **The three bounds (ADR-044 decision 4), as built:**
 
@@ -178,9 +210,12 @@ never pass through the four fixed routes' small (4 KiB)
    requirement POST's no-op behavior demands.
 2. **Upload-Name never escapes its directory.** Validated by the same
    `fppConnectValidPlaylistName` check the fourth route's `{name}` already
-   used (no `/`, `\`, NUL byte, or `..` segment, non-empty), reused rather
-   than reimplemented: both are "a string this listener writes near the
-   filesystem." A violation is `403`.
+   used (no `/`, `\`, NUL byte, or `..` segment, no name that
+   `filepath.Clean`s down to `.` or `..` (review round 1 finding 9: a bare
+   `.` passed every other check and then failed the rename into the held
+   area with a `500`), non-empty), reused rather than reimplemented: both
+   are "a string this listener writes near the filesystem." A violation is
+   `403`.
 3. **Per-file and total asset-directory byte caps**
    (`fppConnectHeldStore.WriteChunk`). `Upload-Length` over
    `fppconnect.settings.maxFileBytes` is refused at offset `0` (the first
@@ -189,37 +224,77 @@ never pass through the four fixed routes' small (4 KiB)
    declared `Upload-Length` or `maxFileBytes` is refused the same way on
    any later chunk, discarding the fragment. The bytes already under
    `AssetDir` (assets, held files, staging, checked by walking the whole
-   tree) plus the declared `Upload-Length` exceeding
+   tree), **plus every other in-progress upload's own still-outstanding
+   remainder** (review round 1 finding 5: checking only bytes already on
+   disk let two uploads that each individually fit under the cap pass
+   independently and together exceed it, since neither's check saw the
+   other's undelivered bytes), plus the declared `Upload-Length` exceeding
    `fppconnect.settings.maxAssetDirBytes` is refused with `507` naming
-   both numbers, checked once, at offset `0`. Both refusals remove the
+   the numbers, checked once, at offset `0`. Both refusals remove the
    staging fragment and leave every existing file untouched.
 
 **Disk-full outcome.** `ENOSPC` while writing a chunk is classified
 distinctly from a generic write failure: `507`, a reason naming the disk
 as full, the staging fragment removed, nothing registered. Injected in
 tests through `fppConnectChunkWriter`, the small interface
-`fppConnectHeldStore.WriteChunk` writes through, rather than by filling a
-real disk.
+`fppConnectHeldStore.WriteChunk` streams through (a chunk is read directly
+off the request body and copied into the positioned staging file via
+`io.Copy`/`io.NewOffsetWriter`, review round 1 finding 3: never buffered
+whole in memory the way an earlier `io.ReadAll` version did) rather than
+by filling a real disk.
+
+**Refused-upload evidence (review round 1 finding 2).** ADR-044 decision 4
+says exceeding a bound, or exhausting the disk, "is reported as evidence."
+The original build returned a reason to the HTTP caller and persisted
+nothing. Every refusal now appends one `fppConnectEvent` to the same
+bounded evidence log unknown/ambiguous playlist posts use (below), with a
+`kind` of `too-large`, `dir-full`, `disk-full`, `gap`, `bad-name`, or
+`bad-dir`, the attempted `dir`/`name`, and the refusal reason text. See
+"Reporting" below for how this reaches an operator.
 
 **Held area layout**, under `<AssetDir>/fppconnect-uploads/`:
 
 ```
-staging/<dir>/<Upload-Name>.partial             in-progress bytes
-staging/<dir>/<Upload-Name>.partial.meta.json    Upload-Length, bytes received, last chunk time
-held/<dir>/<Upload-Name>                         assembled bytes, renamed in only after hashing
-index.json                                       every held record, pending binding, and evidence event
+staging/<dir>/<Upload-Name>.partial   in-progress bytes
+held/<dir>/<Upload-Name>              assembled bytes, renamed in only after hashing
+index.json                            every held record, pending binding, and evidence event
 ```
 
+An in-progress upload's offset, running SHA-256, and asset-directory-cap
+reservation live only in memory (`fppConnectHeldStore.inFlight`), not as a
+per-chunk on-disk sidecar: review round 1 findings 3 and 4 found the
+original sidecar file added a JSON read-modify-write on every chunk for
+state a restart already discards regardless (the boot sweep below), and
+found completion re-hashing the whole finished file from disk risked
+exceeding the listener's write timeout on a large upload. The hash is now
+computed incrementally as each chunk streams through
+(`io.TeeReader`/`hash.Hash`), so completion only finalizes an already-
+running sum.
+
 Assembly is offset-gated: a chunk is written only when its `Upload-Offset`
-equals the bytes already received for that name; a gap or an overlap is
-`409`, and the fragment (staging file and sidecar) is discarded. `staging/`
-is swept at boot (`sweepFPPConnectUploadStaging`, called from `agent.go`
-alongside `sweepAssetStaging`), mirroring `internal/agent/assets.go`'s
-identical discipline; `held/` and `index.json` are untouched by that
-sweep. On completion (accumulated bytes equal `Upload-Length`), the file is
-hashed (SHA-256, `sha256:<hex>`, the store's identity per ADR-028), then
-renamed into `held/`; any failure before that rename removes the staging
-fragment and nothing is registered.
+equals the bytes already received for that name (tracked in memory, above);
+a gap or an overlap is `409`, and the fragment is discarded. Offset `0`
+truncates the staging file as it opens (review round 1 finding 7: the
+prior code discarded a stale fragment only via a best-effort `os.Remove`
+whose error was ignored, then reopened without `O_TRUNC`, so a failed
+Remove could leave a longer previous attempt's tail bytes past the new,
+shorter upload's end); `staging/` is also swept at boot
+(`sweepFPPConnectUploadStaging`, called from `agent.go` alongside
+`sweepAssetStaging`), mirroring `internal/agent/assets.go`'s identical
+discipline; `held/` and `index.json` are untouched by that sweep. On
+completion (accumulated bytes equal `Upload-Length`), the in-memory hash is
+finalized (`sha256:<hex>`, the store's identity per ADR-028), then the
+staging file is renamed into `held/`; any failure before that rename
+removes the staging fragment and nothing is registered.
+
+**Pending bindings are bounded too (review round 1 finding 6).** A single
+`POST /api/playlist/{name}` body can name tens of thousands of files
+(`fppConnectMaxPlaylistBodyBytes` is 1 MiB, with no per-entry count limit)
+that this node has not yet received; every one becomes a pending binding.
+`fppConnectHeldStore.pending` is capped at `fppConnectMaxPending` (500)
+the same way the evidence log is capped at `fppConnectMaxEvents` (50):
+oldest evicted first, order tracked and persisted alongside the map so
+eviction survives a restart correctly.
 
 **Binding rules, as built (ADR-044 decision 8):** on `POST
 /api/playlist/{name}`, every held file (in any directory) whose name
@@ -241,12 +316,37 @@ distinguishing "never pushed" from "pushed null" in the record's
 a first-class, visible state (`fppConnectHeldRecord.Bound == false`,
 `UnboundReason` naming why), never deleted and never guessed.
 
+**Reporting.** Review round 1 finding 1 caught this as a gap in the
+original build: `Held()`, `Events()`, and `SetOnHeld` existed with no
+non-test caller, so ADR-044 decision 8's "reported as an unbound held file
+the operator can claim" had nowhere to actually reach an operator, since
+xLights never inspects any of these calls' response status. Fixed in this
+seam, not deferred to FC3: `internal/agent/renderreport.go` reads
+`fcHeld.Held()` and `fcHeld.Events()` on every render report tick and
+publishes them as `fppConnectHeldCount`/`fppConnectHeld` (every currently
+held file, bound or not, with its `unboundReason` when unbound) and
+`fppConnectHeldEvents` (the bounded evidence log: `unknown` and
+`ambiguous` playlist posts, and refused uploads: `too-large`, `dir-full`,
+`disk-full`, `gap`, `bad-name`, `bad-dir`, ADR-044 decision 4) on the same
+`showmesh.node.render/v1` payload the listener's own bind status already
+travels on. Neither list is enforced as required by
+`RenderPayload.Validate`, matching `fppConnectListening`'s identical
+additive-compatibility reasoning: both fields are added after
+`SchemaNodeRenderV1` first shipped. No `node.fppconnect.*` collector
+signal or coordinator API field exists yet to surface this list the way
+the coordinator surfaces other node evidence (matching the bind-status gap
+already noted above); that remains a follow-up, and is listed as an
+acceptance gap on this seam's own pull request.
+
 **FC3's hook.** `fppConnectHeldStore.SetOnHeld(func(fppConnectHeldRecord))`
 registers a callback invoked whenever a record is created or its binding
 changes (upload completion and every successful bind); `Held() []
-fppConnectHeldRecord` lists every currently held record, for a
-registration seam that starts after files already exist. Both are internal
-to `internal/agent`; FC3 wires them from `agent.go`.
+fppConnectHeldRecord` (the same method the render report above reads) lists
+every currently held record, for a registration seam that starts after
+files already exist. This hook is a separate concern from the reporting
+paragraph above: it is how FC3 learns a file is ready to register with the
+coordinator's asset store, not how an operator learns a file exists. Both
+are internal to `internal/agent`; FC3 wires the callback from `agent.go`.
 
 ## Acceptance criteria
 

@@ -848,6 +848,115 @@ type RenderPayload struct {
 	// Connect HTTP listener's status was last determined, mirroring
 	// MultiSyncObservedAt's identical evidence-time reasoning one field up.
 	FPPConnectObservedAt time.Time `json:"fppConnectObservedAt"`
+
+	// FPPConnectHeldCount is len(FPPConnectHeld), carried redundantly so a
+	// consumer that only needs "how many files are held" does not have to
+	// decode the full list.
+	FPPConnectHeldCount int `json:"fppConnectHeldCount"`
+
+	// FPPConnectHeld is nil-safe like Surfaces: this package's own encoder
+	// emits "fppConnectHeld":[] for a nil slice, never null, matching
+	// Surfaces' identical rule. Every file FC2's chunked upload receiver
+	// (ADR-044) currently holds, bound or not, is here. This is the only
+	// place an unbound held file is surfaced to an operator: ADR-044
+	// decision 8 requires an unresolvable upload be "reported as an
+	// unbound held file the operator can claim," and xLights never
+	// inspects the playlist POST's status, so this node report is the
+	// only evidence path available. Not enforced as required by Validate:
+	// this field is added after SchemaNodeRenderV1 first shipped, matching
+	// FPPConnectListening's identical additive-compatibility reasoning
+	// (a hard requirement here would reject every render report a node
+	// published before this field existed).
+	FPPConnectHeld []RenderFPPConnectHeldFile `json:"fppConnectHeld"`
+
+	// FPPConnectHeldEvents is FC2's bounded evidence log (unknown and
+	// ambiguous playlist posts, and refused uploads: too large, over the
+	// asset-directory cap, disk full, an offset gap, an unsafe upload
+	// name, or a disallowed directory), oldest first. ADR-044 decision 4
+	// requires exceeding a bound, or exhausting the disk, be "reported as
+	// evidence"; xLights never inspects any of these calls' status, so
+	// this is that evidence's only path to an operator. Same additive-
+	// compatibility, not-required-by-Validate treatment as
+	// FPPConnectHeld.
+	FPPConnectHeldEvents []RenderFPPConnectHeldEvent `json:"fppConnectHeldEvents"`
+}
+
+// RenderFPPConnectHeldFile is one file FC2's chunked upload receiver
+// (internal/agent/fppconnectheld.go) currently holds, inside
+// [RenderPayload.FPPConnectHeld]. Field-for-field the same evidence that
+// package's own fppConnectHeldRecord carries, independently reproduced
+// for this wire boundary per this codebase's standing convention.
+type RenderFPPConnectHeldFile struct {
+	// Dir is the accepted upload directory ("sequences", "music", or
+	// "videos") this file was received into.
+	Dir string `json:"dir"`
+
+	// Name is the file name with its extension, exactly as xLights sent
+	// it in Upload-Name (RES-003 section 10.6's join key). Never a
+	// resolved or sanitized variant.
+	Name string `json:"name"`
+
+	SizeBytes int64 `json:"sizeBytes"`
+
+	// ContentHash is "sha256:<hex>", matching ADR-028 decision 1's
+	// identity scheme and AssetInventoryEntry.ContentHash's identical
+	// shape.
+	ContentHash string `json:"contentHash"`
+
+	// ReceivedAt is when this node finished assembling and hashing this
+	// file, on the node's own clock.
+	ReceivedAt time.Time `json:"receivedAt"`
+
+	// Bound is false for a held-but-unbound file (ADR-044 decision 8):
+	// kept, registered nowhere, and visible here rather than guessed at
+	// or silently dropped.
+	Bound bool `json:"bound"`
+
+	// Show is the ShowMesh show this file is bound to, empty when Bound
+	// is false.
+	Show string `json:"show,omitempty"`
+
+	// LogicalSequence is the file name stem, set only when Bound is true.
+	LogicalSequence string `json:"logicalSequence,omitempty"`
+
+	// UnboundReason names which of ADR-039 decision 5's distinct
+	// unresolved states produced Bound==false: never pushed an active
+	// show, pushed an explicit "no active show," or an active show
+	// pushed with an empty name. Empty whenever Bound is true.
+	UnboundReason string `json:"unboundReason,omitempty"`
+}
+
+// RenderFPPConnectHeldEvent is one entry in FC2's bounded evidence log,
+// inside [RenderPayload.FPPConnectHeldEvents]. Kind is an open vocabulary
+// (this schema's standing "clients ignore what they don't know"
+// convention, ADR-020), currently one of: "unknown" and "ambiguous" (a
+// POST /api/playlist/{name} whose name matched no show, or matched more
+// than one), and "too-large", "dir-full", "disk-full", "gap", "bad-name",
+// and "bad-dir" (a refused upload chunk, ADR-044 decision 4).
+type RenderFPPConnectHeldEvent struct {
+	Kind string `json:"kind"`
+
+	// Name is the playlist name for a "unknown"/"ambiguous" event, or the
+	// attempted Upload-Name for a refused-upload event.
+	Name string `json:"name"`
+
+	// Dir is the attempted upload directory, set only for a refused-
+	// upload event.
+	Dir string `json:"dir,omitempty"`
+
+	// Reason is the human-readable refusal text, set only for a refused-
+	// upload event.
+	Reason string `json:"reason,omitempty"`
+
+	// Entries is the set of file names (sequenceName/mediaName) the
+	// posted playlist body named, set only for "unknown"/"ambiguous".
+	Entries []string `json:"entries,omitempty"`
+
+	// MatchCount is how many times Name occurred in the node's show name
+	// list, set only for "ambiguous".
+	MatchCount int `json:"matchCount,omitempty"`
+
+	At time.Time `json:"at"`
 }
 
 // Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
