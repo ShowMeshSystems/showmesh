@@ -41,30 +41,38 @@ type AudioNodePayload struct {
 	// program audio.
 	ProgramRoute string `json:"programRoute"`
 
-	// LTCRoute names the discovered output route carrying LTC. ADR-018
-	// requires it be a DISCRETE channel, never mixed into program;
-	// whether a given route can supply that is probe evidence (the
-	// audio.output.ltc capability), not something this package can check
-	// on its own — see [ValidateAudioNodePlacement]. Program and LTC leave
-	// through one interface in one clock domain, so DecodeAudioNodePayload
-	// refuses a payload where this differs from ProgramRoute; the two
-	// fields stay separate so an existing revision still decodes.
-	LTCRoute string `json:"ltcRoute"`
+	// LTCRoute names the discovered output route carrying LTC, or is
+	// empty on a program-only node that emits no LTC at all (a
+	// two-output interface has no channel to spare for it, and ADR-042
+	// section 5 already treats LTC as losable without costing program
+	// audio). Empty exactly when LTCChannel is zero: DecodeAudioNodePayload
+	// refuses one without the other. ADR-018 requires LTC be a DISCRETE
+	// channel, never mixed into program; whether a given route can supply
+	// that is probe evidence (the audio.output.ltc capability), not
+	// something this package can check on its own — see
+	// [ValidateAudioNodePlacement]. Program and LTC leave through one
+	// interface in one clock domain, so DecodeAudioNodePayload refuses a
+	// non-empty value that differs from ProgramRoute.
+	LTCRoute string `json:"ltcRoute,omitempty"`
 
 	// ProgramChannels is the ordered, 1-based channel indices on
 	// ProgramRoute carrying program audio: [1, 2] for reference stereo,
 	// [1] for mono.
 	ProgramChannels []int `json:"programChannels"`
 
-	// LTCChannel is the 1-based channel index on LTCRoute carrying LTC.
-	// Never a member of ProgramChannels — ADR-018 requires LTC on a
-	// discrete channel, never mixed into program.
-	LTCChannel int `json:"ltcChannel"`
+	// LTCChannel is the 1-based channel index on LTCRoute carrying LTC,
+	// or zero on a program-only node. Zero exactly when LTCRoute is
+	// empty. Never a member of ProgramChannels — ADR-018 requires LTC on
+	// a discrete channel, never mixed into program.
+	LTCChannel int `json:"ltcChannel,omitempty"`
 
 	// ClockDomain is the operator's own name for the shared hardware
-	// clock ProgramRoute and LTCRoute are declared to share. Never
-	// inferred: no software call on this platform proves two outputs
-	// share a clock.
+	// clock ProgramRoute and LTCRoute are declared to share. Required
+	// even on a program-only node, where it names the clock the program
+	// route runs on: it is what a later LTC or multi-node alignment
+	// question is answered against, and asking for it once at declaration
+	// time is cheaper than inferring it afterwards. Never inferred: no
+	// software call on this platform proves two outputs share a clock.
 	ClockDomain string `json:"clockDomain"`
 
 	// ClockDomainProvenance is the operator's stated reason for the
@@ -106,15 +114,11 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 	if verr != nil {
 		return AudioNodePayload{}, verr
 	}
-	ltcRoute, verr := decodeRequiredString(top, "ltcRoute", "ltcRoute")
-	if verr != nil {
-		return AudioNodePayload{}, verr
-	}
 	programChannels, verr := decodeAudioNodeProgramChannels(top)
 	if verr != nil {
 		return AudioNodePayload{}, verr
 	}
-	ltcChannel, verr := decodeAudioNodeLTCChannel(top, programChannels)
+	ltcRoute, ltcChannel, verr := decodeAudioNodeLTC(top, programChannels)
 	if verr != nil {
 		return AudioNodePayload{}, verr
 	}
@@ -127,7 +131,7 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		return AudioNodePayload{}, verr
 	}
 
-	if programRoute != ltcRoute {
+	if ltcRoute != "" && programRoute != ltcRoute {
 		return AudioNodePayload{}, &ValidationError{
 			Code: ValidationCodeAudioNodeRouteMismatch, Field: "ltcRoute",
 			Detail: fmt.Sprintf(
@@ -172,29 +176,56 @@ func decodeAudioNodeProgramChannels(top map[string]json.RawMessage) ([]int, *Val
 	return channels, nil
 }
 
-// decodeAudioNodeLTCChannel decodes and validates the required
-// "ltcChannel" field: a positive 1-based index not already claimed by
-// programChannels.
-func decodeAudioNodeLTCChannel(top map[string]json.RawMessage, programChannels []int) (int, *ValidationError) {
+// decodeAudioNodeLTC decodes the optional "ltcRoute" and "ltcChannel"
+// pair. Both absent declares a program-only node, which emits no LTC:
+// a two-output interface has no discrete channel to carry it, and
+// ADR-042 section 5 already treats losing LTC as costing timecode and
+// never the audience's audio. Either one alone is refused rather than
+// half-honoured, because a payload naming an LTC route with no channel
+// (or the reverse) is an operator mistake with two plausible readings.
+// When both are present the rules are unchanged: a positive 1-based
+// index not already claimed by programChannels.
+func decodeAudioNodeLTC(top map[string]json.RawMessage, programChannels []int) (string, int, *ValidationError) {
+	_, haveRoute := top["ltcRoute"]
+	_, haveChannel := top["ltcChannel"]
+	switch {
+	case !haveRoute && !haveChannel:
+		return "", 0, nil
+	case haveRoute && !haveChannel:
+		return "", 0, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: "ltcChannel",
+			Detail: "ltcChannel is required when ltcRoute is given; omit both to declare a program-only node that emits no LTC",
+		}
+	case !haveRoute && haveChannel:
+		return "", 0, &ValidationError{
+			Code: ValidationCodeFieldRequired, Field: "ltcRoute",
+			Detail: "ltcRoute is required when ltcChannel is given; omit both to declare a program-only node that emits no LTC",
+		}
+	}
+
+	ltcRoute, verr := decodeRequiredString(top, "ltcRoute", "ltcRoute")
+	if verr != nil {
+		return "", 0, verr
+	}
 	ltcChannel, verr := decodeRequiredInt(top, "ltcChannel", "ltcChannel")
 	if verr != nil {
-		return 0, verr
+		return "", 0, verr
 	}
 	if ltcChannel < 1 {
-		return 0, &ValidationError{
+		return "", 0, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "ltcChannel",
 			Detail: "ltcChannel must be a positive 1-based channel index",
 		}
 	}
 	for _, ch := range programChannels {
 		if ch == ltcChannel {
-			return 0, &ValidationError{
+			return "", 0, &ValidationError{
 				Code: ValidationCodeAudioNodeChannelOverlap, Field: "ltcChannel",
 				Detail: fmt.Sprintf("ltcChannel %d also appears in programChannels; LTC must be on a channel discrete from program", ltcChannel),
 			}
 		}
 	}
-	return ltcChannel, nil
+	return ltcRoute, ltcChannel, nil
 }
 
 // decodeRequiredIntList reads key from top as a required, non-null,
@@ -248,6 +279,13 @@ var ErrAudioNodeNoEvidence = fmt.Errorf("audio.node: this node has advertised no
 // anything), which is told apart from "advertised something, but not this
 // route" ([ErrAudioNodeNoEvidence] vs. a named-route error) because an
 // operator fixing a typo needs to know which case they are in.
+//
+// A program-only p (empty LTCRoute) is checked against programRoutes
+// alone. That is what makes a two-output interface placeable: its
+// ltcRoutes list is correctly empty, because ADR-018 needs a third
+// channel beyond the program pair, so no LTC declaration could ever
+// pass. Every refusal below still applies unchanged to a p that DOES
+// declare LTC, whatever the node advertises.
 func ValidateAudioNodePlacement(p AudioNodePayload, programRoutes, ltcRoutes []string) error {
 	if len(programRoutes) == 0 && len(ltcRoutes) == 0 {
 		return ErrAudioNodeNoEvidence
@@ -255,6 +293,12 @@ func ValidateAudioNodePlacement(p AudioNodePayload, programRoutes, ltcRoutes []s
 	if !containsString(programRoutes, p.ProgramRoute) {
 		return fmt.Errorf("audio.node: programRoute %q is not among this node's advertised program-capable routes %v",
 			p.ProgramRoute, programRoutes)
+	}
+	if p.LTCRoute == "" {
+		// A program-only node declares no LTC route, so there is nothing
+		// to check it against. This is the only path by which a node
+		// whose every route is two-channel can be placed at all.
+		return nil
 	}
 	if !containsString(ltcRoutes, p.LTCRoute) {
 		return fmt.Errorf("audio.node: ltcRoute %q is not among this node's advertised discrete LTC-capable routes %v "+

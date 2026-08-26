@@ -42,13 +42,15 @@ type AudioSettingsConfigResponse struct {
 
 // ConfigAudioNode is the "audio.node" configuration kind's decoded
 // payload: the body PUT /config/audio.node/{nodeId} accepts (a full
-// replacement — every field required), and the "payload" member of GET
-// /config/audio.node/{nodeId}'s response.
+// replacement), and the "payload" member of GET
+// /config/audio.node/{nodeId}'s response. LTCRoute and LTCChannel are
+// the one optional pair: both absent declares a program-only node that
+// emits no LTC, which is how a two-output interface is declared at all.
 type ConfigAudioNode struct {
 	ProgramRoute          string `json:"programRoute"`
-	LTCRoute              string `json:"ltcRoute"`
+	LTCRoute              string `json:"ltcRoute,omitempty"`
 	ProgramChannels       []int  `json:"programChannels"`
-	LTCChannel            int    `json:"ltcChannel"`
+	LTCChannel            int    `json:"ltcChannel,omitempty"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
 }

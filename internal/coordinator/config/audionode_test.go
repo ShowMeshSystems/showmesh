@@ -67,18 +67,131 @@ func TestDecodeAudioNodePayloadRejectsUnknownTopLevelKey(t *testing.T) {
 	}
 }
 
-// TestDecodeAudioNodePayloadRejectsAbsentField proves every field is
-// required on every write — PUT is a full replacement, matching every
-// other collection kind in this package.
+// TestDecodeAudioNodePayloadAcceptsProgramOnly proves a node with no LTC
+// at all decodes: both ltcRoute and ltcChannel omitted together. This is
+// the only shape a two-output interface can be declared in, because
+// ADR-018 needs a channel discrete from the program pair to carry LTC
+// and such a device has none to spare.
+func TestDecodeAudioNodePayloadAcceptsProgramOnly(t *testing.T) {
+	raw := `{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"single interface"}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("verr = %v, want nil", verr)
+	}
+	if p.LTCRoute != "" {
+		t.Errorf("LTCRoute = %q, want empty on a program-only node", p.LTCRoute)
+	}
+	if p.LTCChannel != 0 {
+		t.Errorf("LTCChannel = %d, want 0 on a program-only node", p.LTCChannel)
+	}
+	if p.ProgramRoute != "hw:CARD=USB,DEV=0" || len(p.ProgramChannels) != 2 {
+		t.Errorf("program half decoded wrong: %+v", p)
+	}
+}
+
+// TestEncodeDecodeProgramOnlyRoundTrips proves a program-only payload
+// survives the store: it must not come back with an empty ltcRoute and a
+// zero ltcChannel present as keys, or the re-decode would refuse it.
+func TestEncodeDecodeProgramOnlyRoundTrips(t *testing.T) {
+	want := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	encoded, err := EncodeAudioNodePayload(want)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got, verr := DecodeAudioNodePayload(encoded)
+	if verr != nil {
+		t.Fatalf("re-decode of %s: %v", encoded, verr)
+	}
+	if got.LTCRoute != "" || got.LTCChannel != 0 {
+		t.Errorf("round trip invented LTC: %+v", got)
+	}
+	if got.ProgramRoute != want.ProgramRoute || got.ClockDomain != want.ClockDomain {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC proves one of the LTC
+// pair without the other is refused rather than half-honoured: naming a
+// route with no channel, or a channel with no route, is an operator
+// mistake with two plausible readings.
+func TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		wantField string
+	}{
+		{"route without channel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`, "ltcChannel"},
+		{"channel without route", `{"programRoute":"a","ltcChannel":2,"programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`, "ltcRoute"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, verr := DecodeAudioNodePayload(tc.raw)
+			if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != tc.wantField {
+				t.Fatalf("verr = %v, want field-required on %s", verr, tc.wantField)
+			}
+		})
+	}
+}
+
+// TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice is
+// the defect this whole shape exists for: a node whose only routes are
+// two-channel advertises an EMPTY LTC-capable route list, so before
+// program-only declarations existed no audio.node could be placed on it
+// at all.
+func TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0", "hw:CARD=Headphones,DEV=0"}, nil); err != nil {
+		t.Fatalf("placement = %v, want accepted", err)
+	}
+}
+
+// TestValidateAudioNodePlacementRejectsProgramOnlyUnevidencedRoute
+// proves the program half is still checked against probe evidence when
+// no LTC is declared: dropping LTC must not drop every check with it.
+func TestValidateAudioNodePlacementRejectsProgramOnlyUnevidencedRoute(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=TYPO,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0"}, nil); err == nil {
+		t.Fatal("placement accepted an unevidenced program route on a program-only node")
+	}
+}
+
+// TestValidateAudioNodePlacementStillRejectsUnevidencedLTCRoute proves
+// making the pair optional did not weaken the LTC case: a declaration
+// that DOES name an LTC route is refused exactly as before when the node
+// never advertised that route as LTC-capable.
+func TestValidateAudioNodePlacementStillRejectsUnevidencedLTCRoute(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", LTCRoute: "hw:CARD=USB,DEV=0",
+		ProgramChannels: []int{1, 2}, LTCChannel: 3,
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0"}, nil); err == nil {
+		t.Fatal("placement accepted an LTC route the node never advertised as LTC-capable")
+	}
+}
+
+// TestDecodeAudioNodePayloadRejectsAbsentField proves every required
+// field is required on every write — PUT is a full replacement, matching
+// every other collection kind in this package. ltcRoute and ltcChannel
+// are covered separately by
+// TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC, being the one pair
+// that may be omitted together.
 func TestDecodeAudioNodePayloadRejectsAbsentField(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
 	}{
 		{"programRoute", `{"ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"ltcRoute", `{"programRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
 		{"programChannels", `{"programRoute":"a","ltcRoute":"a","ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"ltcChannel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`},
 		{"clockDomain", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomainProvenance":"p"}`},
 		{"clockDomainProvenance", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d"}`},
 	}
