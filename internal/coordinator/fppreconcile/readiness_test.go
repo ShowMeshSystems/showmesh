@@ -69,6 +69,42 @@ func putObservation(t *testing.T, st *store.Store, rec store.FPPPlaylistEntryObs
 	}
 }
 
+// putNodeOnline records nodeID as currently online: a live last-will
+// "online: true" plus a fresh health heartbeat, exactly what
+// internal/coordinator/inventory.deriveLiveness requires to return
+// [inventory.LivenessOnline] rather than offline/unknown. Both timestamps
+// are stamped from the real wall clock (time.Now()) rather than a fixed
+// value, since deriveLiveness's own staleness check is against the real
+// clock too and this must read as fresh whenever the test actually runs.
+func putNodeOnline(t *testing.T, st *store.Store, nodeID string) {
+	t.Helper()
+	now := time.Now()
+	if err := st.RecordLWT(context.Background(), nodeID, store.LWTRecord{
+		Online: true, ObservedAt: &now, Provenance: store.ProvenanceAgentReport,
+	}); err != nil {
+		t.Fatalf("record lwt for %q: %v", nodeID, err)
+	}
+	if _, err := st.RecordHealth(context.Background(), nodeID, store.HealthRecord{
+		BootID: "boot-1", Sequence: 1, AgentState: "running",
+		ObservedAt: &now, Provenance: store.ProvenanceAgentReport,
+	}); err != nil {
+		t.Fatalf("record health for %q: %v", nodeID, err)
+	}
+}
+
+// putNodeOffline records nodeID's last-will evidence as offline, with no
+// health evidence to disagree with it — internal/coordinator/inventory.
+// deriveLiveness's unconditional [inventory.LivenessOffline] case.
+func putNodeOffline(t *testing.T, st *store.Store, nodeID string) {
+	t.Helper()
+	now := time.Now()
+	if err := st.RecordLWT(context.Background(), nodeID, store.LWTRecord{
+		Online: false, Reason: "clean shutdown", ObservedAt: &now, Provenance: store.ProvenanceAgentReport,
+	}); err != nil {
+		t.Fatalf("record lwt for %q: %v", nodeID, err)
+	}
+}
+
 func TestPlaylistReadinessDefinitionMissing(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "show-1", "Show One")
@@ -458,5 +494,157 @@ func TestPlaylistReadinessNoRenderOutputSkipsNodeRenderCheck(t *testing.T) {
 	}
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true (failing condition %q: %s): no cue declares outputs.render", report.FailingCondition, report.Reason)
+	}
+}
+
+// TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeNeverReported
+// covers this condition's central rework target: nodeHoldsRenderAssignment
+// previously inferred "node-1 holds no render assignment" from the mere
+// ABSENCE of
+// surface.pipeline.state evidence, which is exactly as true when a node is
+// simply powered off, unreachable, or silent since a coordinator restart.
+// Asserting an unqualified "holds no render assignment" in that case
+// repeats the issue's own root defect one layer up: an operator would hunt
+// for a missing render-surface assignment on a node that is actually down.
+// node-1 here has no render-assignment evidence AND no inventory evidence
+// of its own (no hello, no last-will, no health ever recorded) — the
+// never-reported case — so the Reason must name that, not the assignment.
+func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeNeverReported(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putSurface(t, st, "wall-1", "show-1", "node-1")
+	// Deliberately no surface.pipeline.state observation, and no hello/
+	// LWT/health evidence of any kind for node-1.
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: no render-assignment evidence exists for wall-1")
+	}
+	if report.FailingCondition != ReadinessNodeRenderUnassigned {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeRenderUnassigned)
+	}
+	if strings.Contains(report.Reason, "holds no render assignment") {
+		t.Fatalf("Reason = %q, must not assert the node holds no assignment when the node itself has never been observed reporting anything", report.Reason)
+	}
+	if !strings.Contains(report.Reason, "not currently reporting") {
+		t.Fatalf("Reason = %q, want it to say the node is not currently reporting", report.Reason)
+	}
+	if !strings.Contains(report.Reason, "node-1") || !strings.Contains(report.Reason, "wall-1") {
+		t.Fatalf("Reason = %q, want it to name both node-1 and wall-1", report.Reason)
+	}
+}
+
+// TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOnline is this
+// same condition's other half: node-1 IS currently reporting (a fresh
+// last-will "online" plus a fresh health heartbeat), it just genuinely has
+// no render assignment for wall-1. The Reason here must make the opposite
+// claim from the never-reported case above — the node is there, and it
+// really does hold nothing — since that is the one case where "go fix the
+// node's assignment" is the correct operator action.
+func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOnline(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putSurface(t, st, "wall-1", "show-1", "node-1")
+	putNodeOnline(t, st, "node-1")
+	// Deliberately no surface.pipeline.state observation for node-1/wall-1.
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: node-1 is online but reports no assignment for wall-1")
+	}
+	if report.FailingCondition != ReadinessNodeRenderUnassigned {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeRenderUnassigned)
+	}
+	if !strings.Contains(report.Reason, "is reporting and holds no render assignment") {
+		t.Fatalf("Reason = %q, want it to confirm the node is reporting and genuinely holds no assignment", report.Reason)
+	}
+}
+
+// TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOffline asserts
+// the offline half of the liveness distinction (as opposed to
+// never-having-reported, covered above): node-1's own last-will evidence
+// says offline, with nothing else here to disagree. The Reason must still
+// name "not currently reporting" rather than assert an unassignment.
+func TestPlaylistReadinessNodeRenderUnassignedReasonWhenNodeOffline(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putSurface(t, st, "wall-1", "show-1", "node-1")
+	putNodeOffline(t, st, "node-1")
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false")
+	}
+	if report.FailingCondition != ReadinessNodeRenderUnassigned {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeRenderUnassigned)
+	}
+	if strings.Contains(report.Reason, "holds no render assignment") {
+		t.Fatalf("Reason = %q, must not assert the node holds no assignment when its own last-will evidence reports it offline", report.Reason)
+	}
+	if !strings.Contains(report.Reason, "not currently reporting") {
+		t.Fatalf("Reason = %q, want it to say the node is not currently reporting", report.Reason)
+	}
+}
+
+// TestPlaylistReadinessNodeRenderStaleAssignmentFails covers this
+// condition's third sub-case: node-1 IS online, and DID report holding
+// wall-1 at some point, but that specific surface.pipeline.state evidence
+// has aged past its own ValidFor window (noderender.DefaultValidFor). This
+// package's own decision (see nodeHoldsRenderAssignment's doc comment) is
+// to treat an aged-out reading as unassigned rather than confirmed —
+// mirroring this same file's freshness discipline for its other
+// conditions, never trusting evidence that stopped being current — and
+// the Reason must name it as stale rather than as a settled
+// unassignment or a "not reporting" claim (health evidence here is fresh;
+// only the render-specific signal itself is old).
+func TestPlaylistReadinessNodeRenderStaleAssignmentFails(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putSurface(t, st, "wall-1", "show-1", "node-1")
+	putNodeOnline(t, st, "node-1")
+
+	res := observation.ResourceRef{Kind: observation.ResourceSurface, ID: "wall-1"}
+	o, err := observation.Measured(res, noderender.SignalSurfacePipelineState, "running", time.Unix(1000, 0).UTC(),
+		observation.WithSource(noderender.SourceFor("node-1")), observation.WithValidFor(noderender.DefaultValidFor))
+	if err != nil {
+		t.Fatalf("build stale surface.pipeline.state observation: %v", err)
+	}
+	if err := st.UpsertObservation(context.Background(), o); err != nil {
+		t.Fatalf("upsert stale surface.pipeline.state observation: %v", err)
+	}
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: the only render-assignment evidence for wall-1 has aged past its ValidFor window")
+	}
+	if report.FailingCondition != ReadinessNodeRenderUnassigned {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeRenderUnassigned)
+	}
+	if !strings.Contains(report.Reason, "stale") {
+		t.Fatalf("Reason = %q, want it to name the evidence as stale rather than assert an unqualified unassignment", report.Reason)
 	}
 }
