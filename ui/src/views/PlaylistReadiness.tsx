@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { ApiError, getFPPPlaylistEntryReconciliation, getFPPPlaylistReadiness, listConfigObjects } from '../api'
 import { describeApiError, evaluateAnyScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
+import { formatAbsolute } from '../app/time'
+import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import {
   FPPPlaylistReadinessBadge,
   FPPPlaylistReadinessFailingConditionBadge,
@@ -71,6 +73,24 @@ export function PlaylistReadiness() {
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, PLAYLIST_LIST_READ_SCOPES)
   const playlists = usePlaylists(readGate.allowed)
 
+  // Neither verdict below is streamed: both are point-in-time answers
+  // this view fetches on demand, so nothing refreshes it automatically
+  // once the operator has it open (the defect this state exists to
+  // close: a verdict read at 18:40 still reading unchanged, with no way
+  // to tell, at 21:15). `model.snapshotReceivedAt` changes on every
+  // resnapshot (the initial connect, every reconnect, and every
+  // `stream.reset`, per store.ts's own applySnapshot comment), so wiring
+  // it into each row's fetch effect below re-asks the coordinator exactly
+  // when this browser's connection to it was re-established, without
+  // inventing a second freshness mechanism alongside the one
+  // DataFreshnessNotice already uses for the rest of this page.
+  // `reloadGeneration` is this page's own explicit "recheck now" control
+  // (the same bump-a-counter shape as NightSession.tsx's per-section
+  // Reload button): this seam has no existing polling-interval precedent
+  // for a fetched-not-snapshot verdict, so a manual recheck plus
+  // reconnect-triggered refetch is preferred here over inventing one.
+  const [reloadGeneration, setReloadGeneration] = useState(0)
+
   // Every FPP instance the coordinator currently knows a uuid for:
   // reconciliation is keyed by instanceUuid, not by instanceId, and an
   // instance that has never reported a uuid (instance.instanceUuid ===
@@ -83,11 +103,14 @@ export function PlaylistReadiness() {
 
   return (
     <div>
+      <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
       <h2 className="panel__title">Playlist readiness</h2>
       <p className="text-muted">
         Whether each Playlist bound to an FPP playlist still matches what FPP is configured to
         play, and whether the latest accepted observation from each FPP instance still matches
         what the show declares. Read-only: nothing here starts, stops, or imports anything.
+        Each verdict below is its own point-in-time answer, dated by the "As of" column; it does
+        not update on its own while this tab stays open.
       </p>
 
       {!readGate.allowed && (
@@ -98,7 +121,12 @@ export function PlaylistReadiness() {
 
       {readGate.allowed && (
         <>
-          <h3 className="section-title">Playlists</h3>
+          <h3 className="section-title">
+            Playlists{' '}
+            <button type="button" onClick={() => setReloadGeneration((g) => g + 1)}>
+              Recheck readiness
+            </button>
+          </h3>
           {playlists.kind === 'loading' && <p className="text-muted">Loading configured Playlists…</p>}
           {playlists.kind === 'error' && (
             <p className="panel panel--error" role="alert">
@@ -117,11 +145,17 @@ export function PlaylistReadiness() {
                     <th scope="col">Show</th>
                     <th scope="col">Verdict</th>
                     <th scope="col">Reason</th>
+                    <th scope="col">As of</th>
                   </tr>
                 </thead>
                 <tbody>
                   {playlists.playlists.map((playlist) => (
-                    <PlaylistReadinessRow key={playlist.id} playlist={playlist} />
+                    <PlaylistReadinessRow
+                      key={playlist.id}
+                      playlist={playlist}
+                      snapshotReceivedAt={model.snapshotReceivedAt}
+                      reloadGeneration={reloadGeneration}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -130,7 +164,12 @@ export function PlaylistReadiness() {
         </>
       )}
 
-      <h3 className="section-title">FPP instance reconciliation</h3>
+      <h3 className="section-title">
+        FPP instance reconciliation{' '}
+        <button type="button" onClick={() => setReloadGeneration((g) => g + 1)}>
+          Recheck reconciliation
+        </button>
+      </h3>
       {reconcilableInstances.length === 0 ? (
         <p className="text-muted">
           No FPP instance has reported a SystemUUID yet, so there is nothing to reconcile.
@@ -143,6 +182,7 @@ export function PlaylistReadiness() {
                 <th scope="col">Instance</th>
                 <th scope="col">Verdict</th>
                 <th scope="col">Detail</th>
+                <th scope="col">As of</th>
               </tr>
             </thead>
             <tbody>
@@ -151,6 +191,8 @@ export function PlaylistReadiness() {
                   key={instance.instanceId}
                   instanceId={instance.instanceId}
                   instanceUuid={instance.instanceUuid}
+                  snapshotReceivedAt={model.snapshotReceivedAt}
+                  reloadGeneration={reloadGeneration}
                 />
               ))}
             </tbody>
@@ -177,7 +219,11 @@ type ReadinessRowState =
   // failure as not ready."
   | { kind: 'error'; message: string }
 
-function usePlaylistReadiness(playlistId: string): ReadinessRowState {
+function usePlaylistReadiness(
+  playlistId: string,
+  snapshotReceivedAt: number | null,
+  reloadGeneration: number,
+): ReadinessRowState {
   const [state, setState] = useState<ReadinessRowState>({ kind: 'loading' })
 
   useEffect(() => {
@@ -202,13 +248,25 @@ function usePlaylistReadiness(playlistId: string): ReadinessRowState {
     return () => {
       cancelled = true
     }
-  }, [playlistId])
+    // snapshotReceivedAt re-asks on every resnapshot (initial connect,
+    // reconnect, stream.reset); reloadGeneration re-asks on the
+    // operator's own "Recheck readiness" button. Neither is read inside
+    // the effect body; both exist purely to retrigger it.
+  }, [playlistId, snapshotReceivedAt, reloadGeneration])
 
   return state
 }
 
-function PlaylistReadinessRow({ playlist }: { playlist: ConfigObjectSummary }) {
-  const readiness = usePlaylistReadiness(playlist.id)
+function PlaylistReadinessRow({
+  playlist,
+  snapshotReceivedAt,
+  reloadGeneration,
+}: {
+  playlist: ConfigObjectSummary
+  snapshotReceivedAt: number | null
+  reloadGeneration: number
+}) {
+  const readiness = usePlaylistReadiness(playlist.id, snapshotReceivedAt, reloadGeneration)
 
   return (
     <tr>
@@ -250,6 +308,14 @@ function PlaylistReadinessRow({ playlist }: { playlist: ConfigObjectSummary }) {
           </span>
         )}
       </td>
+      <td className="text-muted">
+        {/* ADR-011: every observation carries freshness. `serverTime` is
+            the coordinator's own clock at the moment it computed THIS
+            verdict, required on every 200 response: the one piece of
+            evidence that lets an operator tell a "Ready" verdict read
+            hours ago from one read a moment ago. */}
+        {readiness.kind === 'loaded' ? formatAbsolute(readiness.response.serverTime) : 'unknown'}
+      </td>
     </tr>
   )
 }
@@ -264,7 +330,11 @@ type ReconciliationRowState =
   | { kind: 'no-observation'; detail: string }
   | { kind: 'error'; message: string }
 
-function useReconciliation(instanceUuid: string): ReconciliationRowState {
+function useReconciliation(
+  instanceUuid: string,
+  snapshotReceivedAt: number | null,
+  reloadGeneration: number,
+): ReconciliationRowState {
   const [state, setState] = useState<ReconciliationRowState>({ kind: 'loading' })
 
   useEffect(() => {
@@ -285,13 +355,24 @@ function useReconciliation(instanceUuid: string): ReconciliationRowState {
     return () => {
       cancelled = true
     }
-  }, [instanceUuid])
+    // Same reconnect/manual-recheck shape as usePlaylistReadiness above.
+  }, [instanceUuid, snapshotReceivedAt, reloadGeneration])
 
   return state
 }
 
-function ReconciliationRow({ instanceId, instanceUuid }: { instanceId: string; instanceUuid: string }) {
-  const reconciliation = useReconciliation(instanceUuid)
+function ReconciliationRow({
+  instanceId,
+  instanceUuid,
+  snapshotReceivedAt,
+  reloadGeneration,
+}: {
+  instanceId: string
+  instanceUuid: string
+  snapshotReceivedAt: number | null
+  reloadGeneration: number
+}) {
+  const reconciliation = useReconciliation(instanceUuid, snapshotReceivedAt, reloadGeneration)
 
   return (
     <tr>
@@ -346,6 +427,11 @@ function ReconciliationRow({ instanceId, instanceUuid }: { instanceId: string; i
             {reconciliation.message}
           </span>
         )}
+      </td>
+      <td className="text-muted">
+        {/* Same ADR-011 freshness rule as the readiness table's own "As
+            of" column: `serverTime` is required on this response. */}
+        {reconciliation.kind === 'loaded' ? formatAbsolute(reconciliation.response.serverTime) : 'unknown'}
       </td>
     </tr>
   )

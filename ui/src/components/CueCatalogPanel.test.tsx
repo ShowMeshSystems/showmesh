@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CueCatalogPanel } from './CueCatalogPanel'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
+import { formatAbsolute } from '../app/time'
 import type { CueCatalogDeployResult, CueCatalogResponse, Model, SessionResponse } from '../app/types'
 
 // Mirrors RenderSurfacePanel.test.tsx's own mocking shape: mocked at the
@@ -98,7 +99,7 @@ function unconfirmedDeployResult(overrides: Partial<CueCatalogDeployResult> = {}
 }
 
 function renderPanel(model: Model) {
-  render(
+  return render(
     <ModelContext.Provider value={model}>
       <CueCatalogPanel nodeId="media-01" />
     </ModelContext.Provider>,
@@ -120,6 +121,48 @@ describe('CueCatalogPanel', () => {
     renderPanel(makeModel({ session: signedIn() }))
 
     expect(await screen.findByText(/No active show is configured/)).toBeInTheDocument()
+  })
+
+  it("renders the catalog's own serverTime, so a stale-looking catalog is dated", async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ serverTime: '2026-08-25T18:40:00Z' }))
+    renderPanel(makeModel({ session: signedIn() }))
+
+    await screen.findByText(/show halloween/)
+    expect(screen.getByText(`As of ${formatAbsolute('2026-08-25T18:40:00Z')}.`)).toBeInTheDocument()
+  })
+
+  it('refetches the catalog on reconnect, so a re-import while the panel is open is caught', async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ serverTime: '2026-08-25T18:40:00Z' }))
+    const view = renderPanel(makeModel({ session: signedIn(), snapshotReceivedAt: 1000 }))
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(1))
+
+    // A later resnapshot (store.ts's own applySnapshot: initial connect,
+    // every reconnect, every stream.reset) bumps `snapshotReceivedAt` --
+    // simulated here as a changed `model.snapshotReceivedAt` prop.
+    getNodeCueCatalog.mockResolvedValue(catalog({ generation: 4, revision: 'sha256:newer', serverTime: '2026-08-25T21:15:00Z' }))
+    view.rerender(
+      <ModelContext.Provider value={makeModel({ session: signedIn(), snapshotReceivedAt: 2000 })}>
+        <CueCatalogPanel nodeId="media-01" />
+      </ModelContext.Provider>,
+    )
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(`As of ${formatAbsolute('2026-08-25T21:15:00Z')}.`)).toBeInTheDocument()
+    expect(screen.getByText(/generation 4/)).toBeInTheDocument()
+  })
+
+  it('refetches the catalog when the operator clicks Reload', async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ serverTime: '2026-08-25T18:40:00Z' }))
+    renderPanel(makeModel({ session: signedIn() }))
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(1))
+
+    getNodeCueCatalog.mockResolvedValue(catalog({ generation: 4, revision: 'sha256:newer', serverTime: '2026-08-25T21:15:00Z' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Reload' }))
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(/generation 4/)).toBeInTheDocument()
   })
 
   it('renders a fetch error distinctly rather than a blank panel', async () => {
