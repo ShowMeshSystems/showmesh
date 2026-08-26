@@ -296,7 +296,7 @@ function FPPEndpointsSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status" role="status">
+            <div className="config-status panel" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -481,7 +481,7 @@ function ResolumeInstancesSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status" role="status">
+            <div className="config-status panel" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -712,7 +712,7 @@ function FPPMQTTSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status" role="status">
+            <div className="config-status panel" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -757,6 +757,10 @@ function FPPMQTTSection() {
               Password {state.kind === 'loaded' && state.config.payload.passwordSet && '(currently set)'}
               {state.kind === 'loaded' && !state.config.payload.passwordSet && '(not set)'}
             </label>
+            <p className="text-muted">
+              The broker password is never shown once set: leave the password field blank to keep it
+              unchanged.
+            </p>
             <input
               id="fpp-mqtt-password"
               type="password"
@@ -836,8 +840,7 @@ function FPPMQTTSection() {
 
           <p className="text-muted">
             The Step 5 FPP MQTT collector&rsquo;s broker, credentials, topic prefix, and host map, moved
-            out of <code>SHOWMESH_FPP_MQTT_*</code> into this coordinator&rsquo;s own store. The broker
-            password is never shown once set: leave the password field blank to keep it unchanged.
+            out of <code>SHOWMESH_FPP_MQTT_*</code> into this coordinator&rsquo;s own store.
           </p>
 
           {/* Revision history: same rationale as FPPEndpointsSection's own
@@ -959,7 +962,7 @@ function AssetsSettingsSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status" role="status">
+            <div className="config-status panel" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -969,6 +972,12 @@ function AssetsSettingsSection() {
               </p>
             </div>
           )}
+
+          <p className="text-muted">
+            Content base URL must be an address every render node can reach, not this coordinator&rsquo;s
+            own loopback or localhost address. A node fetching asset bytes from loopback fetches from
+            itself, not from this coordinator.
+          </p>
 
           <table className="config-table">
             <thead>
@@ -1040,11 +1049,6 @@ function AssetsSettingsSection() {
             <code>SHOWMESH_ASSET_SYNC_INTERVAL</code>/<code>SHOWMESH_ASSET_INVENTORY_INTERVAL</code> into
             this coordinator&rsquo;s own store. <code>SHOWMESH_ASSET_DIR</code> is unaffected; it stays
             environment-only.
-          </p>
-          <p className="text-muted">
-            Content base URL must be an address every render node can reach, not this coordinator&rsquo;s
-            own loopback or localhost address. A node fetching asset bytes from loopback fetches from
-            itself, not from this coordinator.
           </p>
 
           {/* Revision history: same rationale as FPPEndpointsSection's own

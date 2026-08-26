@@ -234,7 +234,16 @@ export function ResolumeView() {
                               <th scope="row">{row.label}</th>
                               <td>
                                 {row.connected === null ? (
-                                  '—'
+                                  // No Evidence envelope exists at all for this
+                                  // clip's connected signal (groupClipObservations
+                                  // leaves the field null when the flat
+                                  // observation list never carried it) -- this is
+                                  // not a value to hand EvidenceValue, which
+                                  // renders a coordinator-reported state/reason
+                                  // this clip never sent. Say plainly that the
+                                  // signal was never reported, not that it is
+                                  // merely blank.
+                                  <span className="text-muted">not reported</span>
                                 ) : (
                                   <EvidenceValue
                                     evidence={sanitizeResolumeEvidence(row.connected, composition)}
@@ -246,7 +255,7 @@ export function ResolumeView() {
                               </td>
                               <td>
                                 {row.transportType === null ? (
-                                  '—'
+                                  <span className="text-muted">not reported</span>
                                 ) : (
                                   <EvidenceValue
                                     evidence={sanitizeResolumeEvidence(row.transportType, composition)}

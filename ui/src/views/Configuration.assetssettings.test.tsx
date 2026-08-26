@@ -141,6 +141,26 @@ describe('Configuration: assets.settings section', () => {
     expect(screen.getByRole('button', { name: /save asset settings/i })).toBeEnabled()
   })
 
+  // Defect follow-up to #116 (controls-before-prose): the loopback warning
+  // is safety-relevant, not ordinary explanation -- an operator who sets a
+  // loopback/localhost content base URL and saves without reading past the
+  // button breaks asset fetches for every render node in the fleet. It
+  // must sit at or above the content base URL field, not below Save where
+  // #116 moved every other note.
+  it('renders the loopback warning before the content base URL field, not below Save', async () => {
+    getAssetsSettingsConfig.mockResolvedValue(activeAssetsSettingsConfig)
+    getAssetsSettingsConfigRevisions.mockResolvedValue(emptyAssetsSettingsRevisions)
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    const section = await assetsSettingsSection()
+    const urlInput = within(section).getByLabelText('Asset content base URL')
+    const note = within(section).getByText(/not this coordinator.s own loopback or localhost address/i)
+    const saveButton = within(section).getByRole('button', { name: /save asset settings/i })
+
+    expect(note.compareDocumentPosition(urlInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(note.compareDocumentPosition(saveButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it("renders the coordinator's own 404 reason with an empty editor, not as an error", async () => {
     getAssetsSettingsConfig.mockRejectedValue(
       new ApiError('no assets.settings configuration has been created yet; PUT one to create it', 404,

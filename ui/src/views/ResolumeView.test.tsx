@@ -375,7 +375,7 @@ describe('ResolumeView', () => {
       const row = screen.getByRole('rowheader', { name: 'clip "Snowfall"' }).closest('tr') as HTMLTableRowElement
       const cells = within(row).getAllByRole('cell')
       expect(cells).toHaveLength(2)
-      expect(cells[1]?.textContent).toBe('—')
+      expect(cells[1]?.textContent).toBe('not reported')
     })
 
     it('still renders a non-clip observation like resolume.reachable, never swallowed into the clip table', async () => {
