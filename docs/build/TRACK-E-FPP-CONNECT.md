@@ -132,6 +132,122 @@ port 80.
 variable this feature adds (ADR-044 decision 5), allow-listed under ADR-039
 decision 9 because a bind address must be known before the process starts.
 
+**FC2's addition: the chunked upload and playlist bind routes.** Built and
+tested as specified below (`internal/agent/fppconnectupload.go`'s HTTP
+framing over `internal/agent/fppconnectheld.go`'s store). These two routes
+never pass through the four fixed routes' small (4 KiB)
+`fppConnectMaxBodyBytes` cap; each bounds its own, much larger, body.
+
+- **`PATCH /api/file/{dir}`**: the real chunked-upload transport (RES-003
+  section 9.4). Headers `Upload-Offset`, `Upload-Length`, `Upload-Name` are
+  all required; the body is one chunk, capped at 32 MiB
+  (`fppConnectMaxChunkBytes`, headroom over xLights' own 16 MiB chunks, not
+  an operator-configured cap). `{dir}` is matched as everything after the
+  fixed prefix, including a literal `/`, so the directory allowlist check
+  below is what turns a malformed segment into a 403 rather than routing
+  matching it away as an unmapped 404.
+- **`POST /api/file/{dir}`**: the documented initiating call xLights never
+  sends. Accepted as FPP's own handler treats it, a no-op returning `200`
+  with a JSON body carrying an opaque id (`{"id": "<uuid>"}`), after the
+  same directory allowlist check PATCH applies.
+- **`POST /api/playlist/{name}`**: binds files to a show (ADR-044 decision
+  8). Reads only `mainPlaylist[].sequenceName` and `mainPlaylist[].mediaName`
+  from the body; every other field of FPP's playlist object is ignored.
+  Always answers `200` regardless of outcome, matching RES-003 section
+  10.6's finding that xLights never inspects this call's status. `{name}`
+  is validated by the same `fppConnectValidPlaylistName` check GET applies
+  (a path-shaped name is a 404, before any show-name membership check).
+- **`GET /api/playlist/{name}`** (FC1's route, FC2's data): `mainPlaylist`
+  is no longer always empty. It lists one entry per held file currently
+  bound to `name`, in RES-003 section 10.6's "without media" shape
+  (`{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"<name>","duration":0}`),
+  sorted by file name. `duration` is always `0`: this seam parses no FSEQ
+  or media metadata, and xLights' own read-modify-write only checks
+  `sequenceName` presence, never `duration`, so the round trip holds
+  without it. This is what makes xLights' GET-then-append merge
+  idempotent across the up-to-twice-per-target POST RES-003 records.
+
+**The three bounds (ADR-044 decision 4), as built:**
+
+1. **Directory allowlist.** Exactly `sequences`, `music`, `videos`
+   (`fppConnectAllowedDirs`). Anything else, including `effects`, a
+   `../`-prefixed segment, an empty segment, or a segment containing `/`,
+   is refused with `403` and a plain-text reason naming the directory,
+   before either PATCH or POST writes anything. Checked for both methods,
+   not just PATCH, even though POST never writes: consistency, not a
+   requirement POST's no-op behavior demands.
+2. **Upload-Name never escapes its directory.** Validated by the same
+   `fppConnectValidPlaylistName` check the fourth route's `{name}` already
+   used (no `/`, `\`, NUL byte, or `..` segment, non-empty), reused rather
+   than reimplemented: both are "a string this listener writes near the
+   filesystem." A violation is `403`.
+3. **Per-file and total asset-directory byte caps**
+   (`fppConnectHeldStore.WriteChunk`). `Upload-Length` over
+   `fppconnect.settings.maxFileBytes` is refused at offset `0` (the first
+   chunk of a fresh attempt; offset `0` always starts fresh) with `413`
+   naming both numbers. An accumulated total that would exceed either the
+   declared `Upload-Length` or `maxFileBytes` is refused the same way on
+   any later chunk, discarding the fragment. The bytes already under
+   `AssetDir` (assets, held files, staging, checked by walking the whole
+   tree) plus the declared `Upload-Length` exceeding
+   `fppconnect.settings.maxAssetDirBytes` is refused with `507` naming
+   both numbers, checked once, at offset `0`. Both refusals remove the
+   staging fragment and leave every existing file untouched.
+
+**Disk-full outcome.** `ENOSPC` while writing a chunk is classified
+distinctly from a generic write failure: `507`, a reason naming the disk
+as full, the staging fragment removed, nothing registered. Injected in
+tests through `fppConnectChunkWriter`, the small interface
+`fppConnectHeldStore.WriteChunk` writes through, rather than by filling a
+real disk.
+
+**Held area layout**, under `<AssetDir>/fppconnect-uploads/`:
+
+```
+staging/<dir>/<Upload-Name>.partial             in-progress bytes
+staging/<dir>/<Upload-Name>.partial.meta.json    Upload-Length, bytes received, last chunk time
+held/<dir>/<Upload-Name>                         assembled bytes, renamed in only after hashing
+index.json                                       every held record, pending binding, and evidence event
+```
+
+Assembly is offset-gated: a chunk is written only when its `Upload-Offset`
+equals the bytes already received for that name; a gap or an overlap is
+`409`, and the fragment (staging file and sidecar) is discarded. `staging/`
+is swept at boot (`sweepFPPConnectUploadStaging`, called from `agent.go`
+alongside `sweepAssetStaging`), mirroring `internal/agent/assets.go`'s
+identical discipline; `held/` and `index.json` are untouched by that
+sweep. On completion (accumulated bytes equal `Upload-Length`), the file is
+hashed (SHA-256, `sha256:<hex>`, the store's identity per ADR-028), then
+renamed into `held/`; any failure before that rename removes the staging
+fragment and nothing is registered.
+
+**Binding rules, as built (ADR-044 decision 8):** on `POST
+/api/playlist/{name}`, every held file (in any directory) whose name
+appears as a `sequenceName` or `mediaName` in the body is bound to `name`,
+recording the file name stem as its logical sequence; a name in the body
+that matches no held file yet is remembered as a pending binding so a file
+completing afterwards binds on completion. `name` matching none of the
+holder's show names is an unknown-playlist evidence event (bound nothing,
+still `200`); `name` occurring more than once in the holder's show name
+list (two shows sharing a display name, the only ambiguity this listener
+can detect without a show id) is an ambiguous-playlist evidence event
+(bound nothing, still `200`, naming the match count). On completion of a
+file with no binding already recorded for it: a pending binding from an
+earlier POST wins first; otherwise a prior record for the same file name
+that was already bound keeps that binding (a re-uploaded file is not
+silently unbound); otherwise the active show's tri-state decides,
+distinguishing "never pushed" from "pushed null" in the record's
+`unboundReason` when neither yields a bound show. An unbound held file is
+a first-class, visible state (`fppConnectHeldRecord.Bound == false`,
+`UnboundReason` naming why), never deleted and never guessed.
+
+**FC3's hook.** `fppConnectHeldStore.SetOnHeld(func(fppConnectHeldRecord))`
+registers a callback invoked whenever a record is created or its binding
+changes (upload completion and every successful bind); `Held() []
+fppConnectHeldRecord` lists every currently held record, for a
+registration seam that starts after files already exist. Both are internal
+to `internal/agent`; FC3 wires them from `agent.go`.
+
 ## Acceptance criteria
 
 1. From an unmodified, shipping xLights on the owner's machine: a ShowMesh render node is discovered and listed in FPP Connect alongside real FPP targets, with no ShowMesh-side content claiming to be Falcon Player.

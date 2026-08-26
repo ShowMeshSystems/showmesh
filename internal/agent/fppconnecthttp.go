@@ -79,6 +79,11 @@ const (
 	// fppConnectPlaylistPrefix is the fourth route's fixed prefix; route()
 	// matches anything after it as the (still escaped) playlist name.
 	fppConnectPlaylistPrefix = "/api/playlist/"
+
+	// fppConnectFilePrefix is FC2's chunked-upload route's fixed prefix;
+	// route() matches anything after it as the (still escaped) directory
+	// name, validated against fppConnectAllowedDirs in fppconnectupload.go.
+	fppConnectFilePrefix = "/api/file/"
 )
 
 // fppConnectNodeNamespace is a fixed, arbitrary namespace UUID used to
@@ -120,15 +125,42 @@ type fppConnectView interface {
 	// all, in which case known and name are meaningless; once ever is
 	// true, known distinguishes an explicit "no active show" (known
 	// false) from a named active show (known true, name is its display
-	// name). Not read by any route this seam serves; it exists on this
-	// interface because FC2's upload binding (ADR-044 decision 8) needs it
-	// from the same holder.
+	// name). FC2's upload binding (ADR-044 decision 8) is this method's
+	// only reader.
 	ActiveShow() (name string, known bool, ever bool)
 
 	// ShowNames returns the ShowMesh show names this node currently knows.
-	// GET /api/playlists serves exactly this list, as a bare array.
+	// GET /api/playlists serves exactly this list, as a bare array. FC2's
+	// upload binding also reads it to resolve (or find ambiguous, or find
+	// unknown) a posted playlist name: a name occurring more than once in
+	// this slice is two distinct shows sharing one display name (ADR-044
+	// decision 8's ambiguous case), since this interface carries no show
+	// id, only names.
 	ShowNames() []string
+
+	// MaxFileBytes returns the current fppconnect.settings per-file byte
+	// cap (ADR-044 decision 4's second bound). Read fresh per upload
+	// chunk, matching Enabled's fresh-per-request read.
+	MaxFileBytes() int64
+
+	// MaxAssetDirBytes returns the current fppconnect.settings total
+	// asset-directory byte cap (ADR-044 decision 4's third bound). Read
+	// fresh per upload chunk, matching Enabled's fresh-per-request read.
+	MaxAssetDirBytes() int64
 }
+
+// fppConnectDefaultMaxFileBytes and fppConnectDefaultMaxAssetDirBytes
+// mirror IDENTIFIER-REGISTER.md's stated fppconnect.settings defaults
+// (2 GiB, 20 GiB; see internal/coordinator/config.
+// FPPConnectSettingsDefaultPayload) so fppConnectStateView's byte caps
+// match what the coordinator itself would report before any push has ever
+// landed. Not a builder choice made twice: this must not ship a different
+// default than the coordinator's own owner-reviewed one, so it is copied
+// rather than reinvented.
+const (
+	fppConnectDefaultMaxFileBytes     = 2 * 1024 * 1024 * 1024
+	fppConnectDefaultMaxAssetDirBytes = 20 * 1024 * 1024 * 1024
+)
 
 // fppConnectStateView adapts *fppConnectState (fppconnectstate.go, FC1a) to
 // fppConnectView. Enabled defaults true when the coordinator has never
@@ -136,9 +168,30 @@ type fppConnectView interface {
 // with a bound listener and no push yet should still be discoverable,
 // matching the coordinator's own resolveFPPConnectSettings default
 // (ADR-044 decision 5) rather than reporting disabled for a setting that
-// was simply never sent.
+// was simply never sent. The two byte caps take the same never-pushed
+// fallback, using fppConnectDefaultMaxFileBytes/
+// fppConnectDefaultMaxAssetDirBytes so FC2's bounds are real even before a
+// push ever lands. Construct through newFPPConnectStateView, not this
+// struct literal directly: a nil state would otherwise reach every method
+// below and panic unpredictably on whichever route is hit first, instead
+// of failing clearly at construction.
 type fppConnectStateView struct {
 	state *fppConnectState
+}
+
+// newFPPConnectStateView builds a fppConnectStateView over state, panicking
+// if state is nil. A nil holder here is a construction bug, never a
+// runtime condition this listener should degrade through: agent.go always
+// builds the real *fppConnectState before starting this listener, so the
+// only way state is nil is a future call site wiring an empty
+// fppConnectStateView{} literal (or an equivalent nil) into a handler,
+// which would otherwise fail unpredictably per-route instead of loudly at
+// startup.
+func newFPPConnectStateView(state *fppConnectState) fppConnectStateView {
+	if state == nil {
+		panic("fppconnect: newFPPConnectStateView called with a nil *fppConnectState")
+	}
+	return fppConnectStateView{state: state}
 }
 
 func (v fppConnectStateView) ChannelRanges() string { return v.state.ChannelRanges() }
@@ -156,6 +209,22 @@ func (v fppConnectStateView) ActiveShow() (name string, known bool, ever bool) {
 }
 
 func (v fppConnectStateView) ShowNames() []string { return v.state.ShowNames() }
+
+func (v fppConnectStateView) MaxFileBytes() int64 {
+	settings, ok := v.state.Settings()
+	if !ok {
+		return fppConnectDefaultMaxFileBytes
+	}
+	return settings.MaxFileBytes
+}
+
+func (v fppConnectStateView) MaxAssetDirBytes() int64 {
+	settings, ok := v.state.Settings()
+	if !ok {
+		return fppConnectDefaultMaxAssetDirBytes
+	}
+	return settings.MaxAssetDirBytes
+}
 
 // fppConnectLocalAddrKey is the context key runFPPConnectHTTPListener's
 // ConnContext hook stores each accepted connection's real local address
@@ -238,15 +307,37 @@ type fppConnectPlaylistInfo struct {
 	TotalItems    int `json:"total_items"`
 }
 
+// fppConnectPlaylistEntry is one mainPlaylist element, in the "without
+// media" shape RES-003 section 10.6 documents:
+//
+//	{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"<name>","duration":<float seconds>}
+//
+// FC2's held store (fppconnectheld.go) always emits this shape rather than
+// the "with media" variant: it binds a sequence file and a media file as
+// two independent held records sharing one show, not as one paired entry,
+// so there is no mediaName to carry on any single entry it can construct.
+// Duration is always 0: this seam never parses FSEQ or media duration:
+// duration is not read back by xLights' own read-modify-write (RES-003
+// section 10.6), only sequenceName presence is, so an honest 0 is
+// sufficient for the round trip this exists to support.
+type fppConnectPlaylistEntry struct {
+	Type         string  `json:"type"`
+	Enabled      int     `json:"enabled"`
+	PlayOnce     int     `json:"playOnce"`
+	SequenceName string  `json:"sequenceName"`
+	Duration     float64 `json:"duration"`
+}
+
 // fppConnectPlaylistResponse is GET /api/playlist/{name}'s body for a name
-// on the holder's show list. mainPlaylist is always empty here: FC2's
-// upload receiver is what populates it, later.
+// on the holder's show list. mainPlaylist is populated from the held
+// store's current bindings for name (fppConnectHeldStore.MainPlaylistFor),
+// so xLights' own read-modify-write round-trips (RES-003 section 10.6).
 type fppConnectPlaylistResponse struct {
-	Name         string                 `json:"name"`
-	MainPlaylist []any                  `json:"mainPlaylist"`
-	LeadIn       []any                  `json:"leadIn"`
-	LeadOut      []any                  `json:"leadOut"`
-	PlaylistInfo fppConnectPlaylistInfo `json:"playlistInfo"`
+	Name         string                    `json:"name"`
+	MainPlaylist []fppConnectPlaylistEntry `json:"mainPlaylist"`
+	LeadIn       []any                     `json:"leadIn"`
+	LeadOut      []any                     `json:"leadOut"`
+	PlaylistInfo fppConnectPlaylistInfo    `json:"playlistInfo"`
 }
 
 // fppConnectServer holds the fixed, per-node values this listener's
@@ -255,23 +346,32 @@ type fppConnectServer struct {
 	view   fppConnectView
 	nodeID string
 	uuid   string
+	held   *fppConnectHeldStore
+	now    func() time.Time
 }
 
 // newFPPConnectHandler builds the complete handler for this node's FPP
-// Connect HTTP listener: the four routes ADR-044 decision 1 names for this
-// seam (the upload and playlist-write routes are FC2's), a request body
-// size cap, and the enabled-flag gate that 404s every route when this
-// node's fppconnect.settings.enabled is false. Anything not matching one of
-// the four routes gets route's own 404: a short plain-text body, never
-// HTML and never a stack trace.
-func newFPPConnectHandler(view fppConnectView, nodeID string) http.Handler {
+// Connect HTTP listener: the six routes ADR-044 decision 1 names for this
+// seam (FC1's four discovery routes plus FC2's chunked upload and
+// playlist-write routes), the enabled-flag gate that 404s every route when
+// this node's fppconnect.settings.enabled is false, and a request body
+// size cap on FC1's four fixed routes (FC2's upload and playlist-POST
+// routes bound their own, much larger, bodies themselves; see route's own
+// doc comment). Anything not matching one of the six routes gets route's
+// own 404: a short plain-text body, never HTML and never a stack trace.
+// held is FC2's upload/binding state; now is this server's clock,
+// threaded through rather than read from time.Now directly so a test can
+// control it.
+func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHeldStore, now func() time.Time) http.Handler {
 	srv := &fppConnectServer{
 		view:   view,
 		nodeID: nodeID,
 		uuid:   fppConnectNodeUUID(nodeID).String(),
+		held:   held,
+		now:    now,
 	}
 
-	return fppConnectLimitBody(fppConnectRequireEnabled(view, http.HandlerFunc(srv.route)))
+	return fppConnectRequireEnabled(view, http.HandlerFunc(srv.route))
 }
 
 // route is this listener's entire dispatch table, deliberately not built on
@@ -281,20 +381,47 @@ func newFPPConnectHandler(view fppConnectView, nodeID string) http.Handler {
 // GET /api/playlist/../system/info both come back as a 301 to the cleaned
 // path with a text/html body), regardless of which patterns are
 // registered, since the cleaning check runs before pattern matching. ADR-044
-// decision 1 permits only 404 for a request outside the four named routes,
+// decision 1 permits only 404 for a request outside the six named routes,
 // and this package's own doc comment promises no served content is HTML;
 // a redirect breaks both. Matching r.URL.EscapedPath() by hand, and never
 // handing a request to anything that performs its own path cleaning, makes
 // that redirect path structurally unreachable rather than merely unobserved.
 //
-// Only GET and HEAD are served. net/http's server already strips a HEAD
-// response's body while sending accurate headers (verified: Content-Length
-// reflects the real body size, the body itself is empty), so no handler
-// below needs its own HEAD case. Every other method is a plain 404: ADR-044
-// decision 1 says everything outside the four routes is 404, not the 405 +
-// Allow header http.ServeMux would answer with for a wrong method on a
-// registered path.
+// The file and playlist routes are matched first, ahead of the fixed
+// four-route switch, and each dispatches on method itself
+// (handleFileRoute, handlePlaylistRoute): they carry PATCH and POST, which
+// the fixed routes never do, and the file route in particular carries a
+// chunk body far larger than fppConnectMaxBodyBytes, so it must never pass
+// through fppConnectLimitBody's small cap. Only the fixed four-route
+// switch is wrapped in that cap, applied here rather than in
+// newFPPConnectHandler so the file and playlist routes bound their own
+// bodies instead (fppConnectMaxChunkBytes, fppConnectMaxPlaylistBodyBytes).
+//
+// The fixed routes serve only GET and HEAD. net/http's server already
+// strips a HEAD response's body while sending accurate headers (verified:
+// Content-Length reflects the real body size, the body itself is empty),
+// so no handler below needs its own HEAD case. Every other method on a
+// fixed route is a plain 404: ADR-044 decision 1 says everything outside
+// the six routes is 404, not the 405 + Allow header http.ServeMux would
+// answer with for a wrong method on a registered path.
 func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.EscapedPath()
+
+	if dir, ok := fppConnectMatchFilePath(path); ok {
+		s.handleFileRoute(w, r, dir)
+		return
+	}
+	if name, ok := fppConnectMatchPlaylistPath(path); ok {
+		s.handlePlaylistRoute(w, r, name)
+		return
+	}
+
+	fppConnectLimitBody(http.HandlerFunc(s.routeFixed)).ServeHTTP(w, r)
+}
+
+// routeFixed is FC1's original four-route dispatch table: GET/HEAD only,
+// wrapped by route() in fppConnectLimitBody's small body cap.
+func (s *fppConnectServer) routeFixed(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.NotFound(w, r)
 		return
@@ -303,21 +430,13 @@ func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.EscapedPath() {
 	case fppConnectPathSystemInfo:
 		s.handleSystemInfo(w, r)
-		return
 	case fppConnectPathMultiSyncSystems:
 		s.handleMultiSyncSystems(w, r)
-		return
 	case fppConnectPathPlaylists:
 		s.handlePlaylists(w, r)
-		return
+	default:
+		http.NotFound(w, r)
 	}
-
-	if name, ok := fppConnectMatchPlaylistPath(r.URL.EscapedPath()); ok {
-		s.handlePlaylist(w, r, name)
-		return
-	}
-
-	http.NotFound(w, r)
 }
 
 // fppConnectMatchPlaylistPath reports whether escapedPath is
@@ -332,6 +451,31 @@ func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
 func fppConnectMatchPlaylistPath(escapedPath string) (name string, ok bool) {
 	rest, found := strings.CutPrefix(escapedPath, fppConnectPlaylistPrefix)
 	if !found || rest == "" || strings.Contains(rest, "/") {
+		return "", false
+	}
+	decoded, err := url.PathUnescape(rest)
+	if err != nil {
+		return "", false
+	}
+	return decoded, true
+}
+
+// fppConnectMatchFilePath reports whether escapedPath is
+// fppConnectFilePrefix followed by anything at all, and if so returns that
+// remainder decoded as dir. Unlike fppConnectMatchPlaylistPath, a literal
+// "/" in the remainder does NOT fail the match here: ADR-044 decision 4's
+// directory allowlist check (fppConnectAllowedDirs, in
+// fppconnectupload.go) must itself refuse "../sequences", an empty
+// segment, and a name containing "/" with a 403 naming the reason, per the
+// seam spec's explicit list of what that refusal covers. Requiring a
+// single segment at the routing layer would instead send those shapes to
+// this listener's generic 404, which is a different, less informative
+// outcome than the one specified. A decode failure (malformed percent-
+// encoding) is treated as no match at all, falling through to the generic
+// 404, mirroring fppConnectMatchPlaylistPath's identical choice.
+func fppConnectMatchFilePath(escapedPath string) (dir string, ok bool) {
+	rest, found := strings.CutPrefix(escapedPath, fppConnectFilePrefix)
+	if !found {
 		return "", false
 	}
 	decoded, err := url.PathUnescape(rest)
@@ -453,6 +597,22 @@ func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Reques
 	fppConnectWriteJSON(w, http.StatusOK, names)
 }
 
+// handlePlaylistRoute is the fourth route's method dispatch: GET/HEAD
+// serves the read-modify-write's read half (handlePlaylist); POST is FC2's
+// binding write (handlePlaylistPost, fppconnectupload.go). Any other
+// method is this listener's ordinary 404, matching every other route's
+// "wrong method is 404, not 405" rule.
+func (s *fppConnectServer) handlePlaylistRoute(w http.ResponseWriter, r *http.Request, name string) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		s.handlePlaylist(w, r, name)
+	case http.MethodPost:
+		s.handlePlaylistPost(w, r, name)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 // handlePlaylist serves a name route() has already matched and decoded
 // (url.PathUnescape, so '+' stays literal rather than becoming a space:
 // that conversion is query-string-only behavior FPP's own receiver does not
@@ -461,18 +621,25 @@ func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Reques
 // path (a separator, a NUL byte, or a ".." segment) is refused with the
 // same 404 an unknown name gets, never reaching the membership check that
 // would otherwise tell an attacker whether it happened to collide with a
-// real show name.
+// real show name. mainPlaylist is populated from s.held's current bindings
+// for name (FC2), so xLights' own read-modify-write round-trips (RES-003
+// section 10.6): a name it already posted comes back present, so its
+// client-side merge never re-appends it.
 func (s *fppConnectServer) handlePlaylist(w http.ResponseWriter, r *http.Request, name string) {
 	if !fppConnectValidPlaylistName(name) || !fppConnectContainsShow(s.view.ShowNames(), name) {
 		http.NotFound(w, r)
 		return
 	}
+	entries := s.held.MainPlaylistFor(name)
+	if entries == nil {
+		entries = []fppConnectPlaylistEntry{}
+	}
 	fppConnectWriteJSON(w, http.StatusOK, fppConnectPlaylistResponse{
 		Name:         name,
-		MainPlaylist: []any{},
+		MainPlaylist: entries,
 		LeadIn:       []any{},
 		LeadOut:      []any{},
-		PlaylistInfo: fppConnectPlaylistInfo{TotalDuration: 0, TotalItems: 0},
+		PlaylistInfo: fppConnectPlaylistInfo{TotalDuration: 0, TotalItems: len(entries)},
 	})
 }
 
@@ -497,7 +664,7 @@ func fppConnectWriteJSON(w http.ResponseWriter, status int, v any) {
 // the listener still renders, still answers MQTT"): it is recorded on
 // status, exactly like runMultiSyncListener's identical bind-failure
 // handling in multisync.go, and this function simply returns.
-func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, status *fppConnectHTTPStatus, logger *slog.Logger) {
+func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, held *fppConnectHeldStore, status *fppConnectHTTPStatus, logger *slog.Logger) {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		reason := fmt.Sprintf("failed to bind fppconnect http listener on %s: %v", listenAddr, err)
@@ -508,7 +675,7 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 	}
 
 	srv := &http.Server{
-		Handler:           newFPPConnectHandler(view, nodeID),
+		Handler:           newFPPConnectHandler(view, nodeID, held, time.Now),
 		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
 		ReadTimeout:       fppConnectReadTimeout,
 		WriteTimeout:      fppConnectWriteTimeout,
