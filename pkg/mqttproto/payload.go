@@ -948,7 +948,13 @@ type RenderFPPConnectHeldFile struct {
 	// is false.
 	Show string `json:"show,omitempty"`
 
-	// LogicalSequence is the file name stem, set only when Bound is true.
+	// ShowID is Show's resolved config object id (FC3, ADR-028 decision
+	// 8), the value FC3's registrar sends as POST /api/v1/assets' `show`
+	// field. Empty when Bound is false.
+	ShowID string `json:"showId,omitempty"`
+
+	// LogicalSequence is the file name stem, slugified to the assets
+	// API's own sequence-id rule (FC3), set only when Bound is true.
 	LogicalSequence string `json:"logicalSequence,omitempty"`
 
 	// UnboundReason names which of ADR-039 decision 5's distinct

@@ -67,9 +67,10 @@ func fppConnectMediaTypeForDir(dir string) (mediaType string, registrable bool) 
 
 // fppConnectRegisterOutcome is one registration attempt's result.
 type fppConnectRegisterOutcome struct {
-	// kind is one of the fppConnectRegistration* constants (never "" and
-	// never fppConnectRegistrationSkipped's absence — a skip is decided
-	// before any attempt is made, see attemptRegister).
+	// kind is one of the fppConnectRegistration* constants (never "";
+	// fppConnectRegistrationSkipped's absence is not meaningful either,
+	// since a skip is decided before any attempt is made, see
+	// attemptRegister).
 	kind string
 
 	assetID     string
@@ -98,8 +99,17 @@ type fppConnectRegistrar struct {
 	// non-blocking-send discipline exactly (this IS that same channel).
 	triggerInventory func()
 
-	mu   sync.Mutex
-	wake chan struct{}
+	mu       sync.Mutex
+	wake     chan struct{}
+	inFlight map[string]bool // dir/name of every (dir, name) a registerLoop goroutine is currently running for
+
+	// wg counts every registerLoop goroutine this registrar has ever
+	// started that has not yet returned, so agent.go's clean-shutdown path
+	// can join it like every other long-lived goroutine there (review
+	// round 1 finding 4): before this field existed, a registration
+	// attempt in flight when the agent began shutting down was simply
+	// abandoned mid-request with nothing downstream ever waiting on it.
+	wg sync.WaitGroup
 }
 
 // newFPPConnectRegistrar constructs a registrar. ctx bounds every retry
@@ -111,8 +121,19 @@ func newFPPConnectRegistrar(ctx context.Context, held *fppConnectHeldStore, stat
 	return &fppConnectRegistrar{
 		ctx: ctx, held: held, state: state, nodeID: nodeID, token: token,
 		triggerInventory: triggerInventory, now: now, logger: logger,
-		wake: make(chan struct{}),
+		wake:     make(chan struct{}),
+		inFlight: map[string]bool{},
 	}
+}
+
+// Wait blocks until every registerLoop goroutine this registrar has ever
+// started has returned. Called from agent.go's clean-shutdown path,
+// joined alongside every other long-lived goroutine there, after sigCtx
+// has already been canceled: every registerLoop observes that via r.ctx
+// (the same context) and returns promptly, either from its own ctx.Err()
+// check or because the canceled context aborts its in-flight HTTP request.
+func (r *fppConnectRegistrar) Wait() {
+	r.wg.Wait()
 }
 
 // wakeChan returns the channel a waiting retry loop should select on
@@ -134,6 +155,19 @@ func (r *fppConnectRegistrar) Wake() {
 	r.mu.Unlock()
 }
 
+// fppConnectRegistrationTerminal reports whether state is a state
+// registerLoop never attempts again: registered (done), skipped (this
+// lane never registers this mediaType), or failed (a non-retryable
+// refusal that will not change on its own).
+func fppConnectRegistrationTerminal(state string) bool {
+	switch state {
+	case fppConnectRegistrationRegistered, fppConnectRegistrationSkipped, fppConnectRegistrationFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // OnHeld is FC2's SetOnHeld callback (fppconnectheld.go): invoked
 // synchronously under the held store's own lock whenever a record is
 // created or its binding changes. It must return quickly and must never
@@ -146,42 +180,93 @@ func (r *fppConnectRegistrar) OnHeld(rec fppConnectHeldRecord) {
 		// nothing, and must never be reported as pending registration.
 		return
 	}
-	go r.registerLoop(rec)
+	if fppConnectRegistrationTerminal(rec.RegistrationState) {
+		// xLights fires POST /api/playlist/{name} up to twice per target
+		// (RES-003 section 10.6), re-firing OnHeld for a record that is
+		// already done: this is the common case that check alone catches
+		// (review round 1 finding 3).
+		return
+	}
+	r.startLoop(rec)
 }
 
 // BootWalk registers (or resumes retrying) every currently held record
 // that is bound but not yet registered, once, after FC2's own startup
-// sweep. A registered record is left alone; an unbound one stays unbound
-// (never even considered here).
+// sweep. A registered, skipped, or failed record is left alone; an
+// unbound one stays unbound (never even considered here).
 func (r *fppConnectRegistrar) BootWalk() {
 	for _, rec := range r.held.Held() {
 		if !rec.Bound {
 			continue
 		}
-		if rec.RegistrationState == fppConnectRegistrationRegistered {
+		if fppConnectRegistrationTerminal(rec.RegistrationState) {
 			continue
 		}
-		go r.registerLoop(rec)
+		r.startLoop(rec)
 	}
+}
+
+// startLoop starts registerLoop for rec's (dir, name), unless a loop for
+// that key is already running. This is the other half of review round 1
+// finding 3: OnHeld's terminal-state check alone cannot catch xLights'
+// second playlist POST arriving WHILE the first registerLoop's own first
+// attempt is still in flight, since the record can still legitimately read
+// "" (or "pending") the second time OnHeld fires, before that first
+// attempt has had a chance to write anything back at all. Only an
+// explicit "a loop for this key already owns it" guard prevents the
+// resulting double dispatch (two concurrent requests, two inventory
+// triggers).
+func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
+	key := rec.Dir + "/" + rec.Name
+	r.mu.Lock()
+	if r.inFlight[key] {
+		r.mu.Unlock()
+		return
+	}
+	r.inFlight[key] = true
+	r.mu.Unlock()
+
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		defer func() {
+			r.mu.Lock()
+			delete(r.inFlight, key)
+			r.mu.Unlock()
+		}()
+		r.registerLoop(rec)
+	}()
 }
 
 // registerLoop drives one held record from its current state to
 // "registered", retrying a retryable failure with capped exponential
 // backoff (woken early by Wake) for as long as r.ctx is alive, and
-// returning without a further attempt on "skipped", "registered" or
-// "failed" (ADR-030 decision 5 applied here: a 400 or 403 will not change
-// on their own, so this loop never spends another request on one). Every
-// state it writes back is guarded against a fresher upload of the same
-// (dir, name) having replaced rec's own bytes in the meantime
-// (fppConnectHeldStore.setRegistrationLocked's content-hash check): when
-// that has happened, this loop simply stops, since the newer upload's own
-// registerLoop call owns the record now.
+// returning without a further attempt once the record reaches a terminal
+// state (registered, skipped, or failed; ADR-030 decision 5 applied to
+// failed: a 400 or 403 will not change on their own, so this loop never
+// spends another request on one). Every iteration re-reads the record's
+// CURRENT state via fppConnectHeldStore.RecordFor rather than trust the
+// rec argument (which can be stale the moment this goroutine actually
+// starts running, and staler still after a long backoff wait, review
+// round 1 finding 3): a concurrent rebind, or a fresher upload of the same
+// (dir, name) replacing these bytes entirely, is picked up before the next
+// attempt rather than acted on with what this loop last knew. The
+// fresher-upload case is also independently guarded by
+// fppConnectHeldStore.setRegistrationLocked's own content-hash check on
+// every write back: even a rec this loop is mid-attempt with, if it has
+// since been superseded, never overwrites the newer upload's own state.
 func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 	backoff := fppConnectRegisterInitialBackoff
 	for {
 		if r.ctx.Err() != nil {
 			return
 		}
+
+		current, ok := r.held.RecordFor(rec.Dir, rec.Name)
+		if !ok || fppConnectRegistrationTerminal(current.RegistrationState) {
+			return
+		}
+		rec = current
 
 		// Captured BEFORE the attempt runs, not after: a Wake() call that
 		// lands anytime from here through the end of this iteration's
@@ -229,10 +314,14 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 
 // fppConnectRegisterFields is the exact, required order the assets API's
 // POST /assets multipart body must arrive in: every field part before the
-// file part (api/openapi.yaml's uploadAsset operation description).
+// file part (api/openapi.yaml's uploadAsset operation description). show
+// sends rec.ShowID, not rec.Show: the API's showExists validates `show`
+// against the show config OBJECT ID, never the display name FC2's own
+// binding carries (review round 1 finding 1). rec.ShowID is that id,
+// resolved once at bind time (fppconnectheld.go's completeLocked/BindShow).
 func fppConnectRegisterFields(rec fppConnectHeldRecord, mediaType, nodeID string) [][2]string {
 	return [][2]string{
-		{"show", rec.Show},
+		{"show", rec.ShowID},
 		{"sequence", rec.LogicalSequence},
 		{"mediaType", mediaType},
 		{"targetKind", "node"},
@@ -240,18 +329,49 @@ func fppConnectRegisterFields(rec fppConnectHeldRecord, mediaType, nodeID string
 	}
 }
 
+// fppConnectRegisterTerminalStatuses are the response statuses that will
+// never change on their own (ADR-030 decision 5's "an interrupted upload
+// registers nothing" extended to a refusal this lane could spend forever
+// retrying for no benefit): a malformed field (400), a credential that
+// does not carry asset:write (401, 403), a method this coordinator does
+// not accept on this route (405), or a file over the coordinator's own
+// upload size bound (413). api/openapi.yaml's uploadAsset operation
+// documents exactly these five plus 500 and 507, both retried below: a
+// coordinator can recover from being out of memory or disk, and neither
+// names a defect this node's own request could ever repeat forever.
+var fppConnectRegisterTerminalStatuses = map[int]bool{
+	http.StatusBadRequest:            true,
+	http.StatusUnauthorized:          true,
+	http.StatusForbidden:             true,
+	http.StatusMethodNotAllowed:      true,
+	http.StatusRequestEntityTooLarge: true,
+}
+
 // attemptRegister makes at most one registration attempt for rec (or none
-// at all, for a coordinator base URL that is not configured, or a
-// mediaType this lane does not register), and classifies the result
-// exactly as this seam's spec requires: 200 verified against rec's own
-// content hash is "registered"; 400 and 403 are "failed" and never
-// retried; every other 4xx, 5xx, and transport error is "pending" (retry).
+// at all, for a coordinator base URL that is not configured, a mediaType
+// this lane does not register, or a name whose slug is empty), and
+// classifies the result exactly as this seam's spec requires: 200
+// verified against rec's own content hash is "registered";
+// fppConnectRegisterTerminalStatuses are "failed" and never retried;
+// every other 4xx, 5xx, and transport error is "pending" (retry).
 func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConnectRegisterOutcome {
 	mediaType, registrable := fppConnectMediaTypeForDir(rec.Dir)
 	if !registrable {
 		return fppConnectRegisterOutcome{
 			kind:   fppConnectRegistrationSkipped,
 			reason: fmt.Sprintf("mediaType for directory %q is not registered by this lane", rec.Dir),
+		}
+	}
+
+	// A local, always-true condition independent of the coordinator: no
+	// value of coordinatorBaseUrl or any retry would ever make an empty
+	// sequence slug valid, so this is checked, and failed, before ever
+	// looking at the coordinator base URL or opening the file (review
+	// round 1 finding 2).
+	if rec.LogicalSequence == "" {
+		return fppConnectRegisterOutcome{
+			kind:   fppConnectRegistrationFailed,
+			reason: fmt.Sprintf("file name %q has no [a-z0-9] character to derive a sequence id from", rec.Name),
 		}
 	}
 
@@ -273,14 +393,24 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 	}
 	defer func() { _ = f.Close() }()
 
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
-	go fppConnectWriteRegisterBody(mw, pw, f, rec, mediaType, r.nodeID)
-
 	ctx, cancel := context.WithTimeout(r.ctx, fppConnectRegisterTimeout)
 	defer cancel()
 
+	// The request is built BEFORE the pipe writer goroutine ever starts
+	// (review round 1 finding 5): http.NewRequestWithContext can fail (a
+	// malformed coordinator base URL), and starting the writer first would
+	// leave it blocked forever on its first pw.Write with nothing ever
+	// reading pr, a goroutine leak this function's own early return could
+	// not reach to unblock. defer pr.Close() is registered immediately
+	// after io.Pipe(), AFTER the file's own defer above: defers run in
+	// reverse order, so the pipe closes before the file on every return
+	// from here on, and pr.Close() also unblocks the writer goroutine (a
+	// closed pipe's Write returns io.ErrClosedPipe) on every early return
+	// that follows it, not only a successful one.
 	url := strings.TrimRight(baseURL, "/") + "/api/v1/assets"
+	pr, pw := io.Pipe()
+	defer func() { _ = pr.Close() }()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, pr)
 	if err != nil {
 		return fppConnectRegisterOutcome{
@@ -288,10 +418,14 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 			reason: fmt.Sprintf("building registration request: %v", err),
 		}
 	}
+
+	mw := multipart.NewWriter(pw)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	if r.token != "" {
 		req.Header.Set("Authorization", "Bearer "+r.token)
 	}
+
+	go fppConnectWriteRegisterBody(mw, pw, f, rec, mediaType, r.nodeID)
 
 	resp, err := fppConnectRegisterHTTPClient.Do(req)
 	if err != nil {
@@ -312,11 +446,7 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 	}
 
 	problemType, detail := fppConnectDecodeProblem(body)
-	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusForbidden {
-		// ADR-030 decision 5's "an interrupted upload registers nothing"
-		// extends here: a 400 or 403 names a condition that will not
-		// change on its own (a malformed field, a missing scope), so
-		// spending another request on it is never correct.
+	if fppConnectRegisterTerminalStatuses[resp.StatusCode] {
 		if detail == "" {
 			detail = fmt.Sprintf("registration refused with status %d", resp.StatusCode)
 		}

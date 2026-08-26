@@ -489,25 +489,45 @@ are internal to `internal/agent`; FC3 wires the callback from `agent.go`.
 
 **FC3, as built.** `internal/agent/fppconnectregister.go`'s registrar wires
 `SetOnHeld` and walks `Held()` once at startup, after FC2's own sweep: a
-registered record is left alone, a bound-but-unregistered one enters the
-retry loop, and an unbound one stays unbound (never even considered).
+registered, skipped, or failed record is left alone, a bound record in any
+other state enters the retry loop, and an unbound one stays unbound (never
+even considered). `OnHeld` and the boot walk both go through one `startLoop`
+gate keyed by `dir/name`, so xLights' documented up-to-twice-per-target
+playlist POST re-firing `OnHeld` for a record a loop already owns never
+starts a second one; every loop iteration re-reads the record's current
+state before acting, rather than trust the copy it was started or last
+retried with.
 
 Only `sequences` uploads register: `mediaType` `fseq`, `show` the bound
-show, `sequence` the file name stem, `targetKind` `node`, `target` this
-node id, `file` streamed last from the held file, never buffered whole. A
-`music` or `videos` upload is held and bound exactly as FC2 already does,
-but its record's `registrationState` is `skipped` and says so; nothing
-from those two directories ever reaches `POST /api/v1/assets`. A `200` is
-verified against FC2's own content hash before it is trusted: a mismatch
-is recorded as a failure, never as a registration. `400` and `403` are
-recorded as failures and never retried (their cause will not change on its
-own); every other 4xx, every 5xx, and every transport error retries with
-capped exponential backoff (10s, doubling, capped at 5 minutes), and a
-fresh `fppconnect.configure` push wakes every retry loop immediately,
-since the operator may have just fixed the coordinator base URL or the
-coordinator's reachability. A successful registration signals the asset
-inventory to republish out of cadence, reusing `command.go`'s
-`assetFetchTrigger`.
+show's config object id (never its display name: the assets API validates
+`show` against the id, review round 1 finding 1), `sequence` the file name
+stem slugified to that same API's own id rule (lowercased, every run of
+non-`[a-z0-9]` characters collapsed to one hyphen, trimmed and truncated to
+64 characters, review round 1 finding 2; an empty result fails registration
+with no request ever sent), `targetKind` `node`, `target` this node id,
+`file` streamed last from the held file, never buffered whole, and the
+request built before the streaming writer goroutine ever starts so a
+request-build failure cannot leave that goroutine blocked forever on an
+unread pipe. Both the show id and the slug are resolved once, at bind time
+in `fppconnectheld.go`, and stored on the held record so the render report
+and the registration request always agree; a display name that no longer
+resolves to exactly one show id leaves the file unbound with its own
+reason, the same as any other unresolved binding. A `music` or `videos`
+upload is held and bound exactly as FC2 already does, but its record's
+`registrationState` is `skipped` and says so; nothing from those two
+directories ever reaches `POST /api/v1/assets`. A `200` is verified against
+FC2's own content hash before it is trusted: a mismatch is recorded as a
+failure, never as a registration. `400`, `401`, `403`, `405`, and `413` are
+recorded as failures and never retried (none of their causes changes on its
+own); `500` and `507` retry with capped exponential backoff (10s, doubling,
+capped at 5 minutes), as does a transport error, and a fresh
+`fppconnect.configure` push wakes every retry loop immediately, since the
+operator may have just fixed the coordinator base URL or the coordinator's
+reachability. A successful registration signals the asset inventory to
+republish out of cadence, reusing `command.go`'s `assetFetchTrigger`.
+Every `registerLoop` goroutine is counted on the registrar's own
+`sync.WaitGroup`, joined from `agent.go`'s clean-shutdown path like every
+other long-lived loop there.
 
 **`coordinatorBaseUrl`.** The agent has no configured coordinator base URL
 of its own (ADR-044 decision 5 allows exactly one environment variable,
@@ -517,18 +537,36 @@ one additive field, `coordinatorBaseUrl`, resolved from
 `assets.settings.contentBaseUrl` the same way
 `internal/coordinator/assetsync.Service.fetchURL` resolves it, including
 its own default (`""`, unconfigured) and its own revision tuple in the
-push's idempotency fingerprint, so an operator setting or changing it
-alone (with no other of the four watched kinds touched) still produces a
-fresh push next time one of those four fires or the node reconnects — this
-package does not yet treat `assets.settings` itself as a fifth kind that
-triggers an immediate fleet-wide push on its own write, which is a real
-propagation-latency gap, called out below. `showmesh.node.fppconnect.
-config/v1` is unchanged: an added optional field is wire-compatible, and
-the agent decodes its absence as `""`, identical to an explicit empty
-push. An empty `coordinatorBaseUrl`, whether never pushed or pushed empty,
-leaves every bound `sequences` record pending with the reason "coordinator
-base URL not configured" and sends no request at all: a visible operator
-problem, never a silent stall.
+push's idempotency fingerprint. A write to `assets.settings` is this
+package's fifth push trigger, alongside `show`, `show.surface`,
+`show.active`, and `fppconnect.settings`: it fans out to every inventory
+node immediately, the identical best-effort push every other trigger here
+uses, so a changed `contentBaseUrl` reaches a node without waiting on its
+next hello. `showmesh.node.fppconnect.config/v1` is unchanged: an added
+optional field is wire-compatible, and the agent decodes its absence as
+`""`, identical to an explicit empty push. An empty `coordinatorBaseUrl`,
+whether never pushed or pushed empty, leaves every bound `sequences`
+record pending with the reason "coordinator base URL not configured" and
+sends no request at all: a visible operator problem, never a silent stall.
+
+**`shows`.** A second additive field alongside `coordinatorBaseUrl`: every
+show's config object id paired with its display name, sorted by id.
+`showNames` is unchanged and remains what `GET /api/playlists` serves; a
+node resolves a display name to its id through `shows` only when FC2's own
+binding needs to send that id onward to the assets API. A name shared by
+more than one show resolves to no id at all, the identical ambiguity
+`showNames`' own duplicate count already detects.
+
+**Credential scope.** `SHOWMESH_AGENT_API_TOKEN` (ADR-044, this document's
+own FC3 paragraph above) is the one token this registrar sends. It was
+already documented as the `asset.fetch` read credential
+(`internal/agent/config/config.go`); registration is a second, write use of
+the identical token, gated by `asset:write` rather than `node:read`. A node
+that ever receives an FPP Connect upload needs a token carrying both
+scopes, or every registration attempt fails with a permanent `403`. Whether
+a node principal should instead carry a narrower, write-scoped credential
+of its own is an open owner question, not resolved by this seam; see the
+acceptance gap on this seam's own pull request.
 
 **Reporting.** `registrationState` (`""`, `skipped`, `pending`,
 `registered`, or `failed`), `registrationAssetId`, `registrationRolledBack`,
@@ -537,14 +575,8 @@ problem, never a silent stall.
 report's existing `fppConnectHeld` entries directly, rather than a second
 block: an unbound record's `registrationState` is always `""`, never
 `pending`, matching ADR-030 decision 5's "an interrupted upload registers
-nothing" extended to an unresolved binding.
-
-**Known gap.** A write to `assets.settings` alone does not yet trigger an
-immediate push to every node the way a write to `show`, `show.surface`,
-`show.active`, or `fppconnect.settings` does; a node whose coordinator base
-URL just changed converges on its own next hello, its own retry backoff,
-or the next push any of those four kinds happens to trigger, not
-immediately. Listed as an acceptance gap on this seam's own pull request.
+nothing" extended to an unresolved binding. `showId` sits next to `show` on
+the same record and report entry.
 
 ## Acceptance criteria
 

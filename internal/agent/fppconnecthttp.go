@@ -209,6 +209,14 @@ type fppConnectView interface {
 	// id, only names.
 	ShowNames() []string
 
+	// ShowID resolves name to its show object id, when name currently
+	// names EXACTLY ONE held show (FC3, ADR-028 decision 8): ok is false
+	// when name matches zero shows or more than one. FC2's upload binding
+	// is this method's only reader, always after ShowNames' own duplicate
+	// count has already decided a name is unambiguous; POST /api/v1/assets
+	// requires this id, never the display name, as its `show` field.
+	ShowID(name string) (id string, ok bool)
+
 	// MaxFileBytes returns the current fppconnect.settings per-file byte
 	// cap (ADR-044 decision 4's second bound). Read fresh per upload
 	// chunk, matching Enabled's fresh-per-request read.
@@ -280,6 +288,8 @@ func (v fppConnectStateView) ActiveShow() (name string, known bool, ever bool) {
 }
 
 func (v fppConnectStateView) ShowNames() []string { return v.state.ShowNames() }
+
+func (v fppConnectStateView) ShowID(name string) (string, bool) { return v.state.ShowID(name) }
 
 func (v fppConnectStateView) MaxFileBytes() int64 {
 	settings, ok := v.state.Settings()

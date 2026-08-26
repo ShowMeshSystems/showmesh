@@ -54,6 +54,14 @@ type fppConnectState struct {
 
 	showNames []string
 
+	// shows is FC3's addition (ADR-028 decision 8): every show's config
+	// object id paired with its display name, as pushed in the additive
+	// "shows" field. This is what lets FC2's own name-based binding
+	// (fppconnectheld.go) resolve the show object id POST /api/v1/assets'
+	// `show` field requires, without changing what xLights itself ever
+	// sees: showNames above stays the plain name list that surface reads.
+	shows []fppConnectShowIDName
+
 	settingsEverSet bool
 	settings        fppConnectSettings
 
@@ -75,6 +83,15 @@ type fppConnectState struct {
 	onPush func()
 }
 
+// fppConnectShowIDName mirrors internal/coordinator/fppconnectpush.
+// ShowIDName's JSON tags exactly, independently reproduced, not imported,
+// matching fppConnectSettings' identical no-coordinator-dependency
+// convention one struct up.
+type fppConnectShowIDName struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // fppConnectSettings mirrors internal/coordinator/config.
 // FPPConnectSettingsPayload's JSON tags exactly, independently
 // reproduced, not imported: this package has no coordinator dependency,
@@ -91,14 +108,15 @@ type fppConnectSettings struct {
 // [fppConnectState.Apply]), and the exact shape [fppConnectState.Save]
 // persists and [fppConnectState.Load] restores.
 type fppConnectSnapshot struct {
-	ChannelRanges      string             `json:"channelRanges"`
-	ActiveShowEverSet  bool               `json:"activeShowEverSet"`
-	ActiveShowKnown    bool               `json:"activeShowKnown"`
-	ActiveShowName     string             `json:"activeShowName"`
-	ShowNames          []string           `json:"showNames"`
-	SettingsEverSet    bool               `json:"settingsEverSet"`
-	Settings           fppConnectSettings `json:"settings"`
-	CoordinatorBaseURL string             `json:"coordinatorBaseUrl"`
+	ChannelRanges      string                 `json:"channelRanges"`
+	ActiveShowEverSet  bool                   `json:"activeShowEverSet"`
+	ActiveShowKnown    bool                   `json:"activeShowKnown"`
+	ActiveShowName     string                 `json:"activeShowName"`
+	ShowNames          []string               `json:"showNames"`
+	Shows              []fppConnectShowIDName `json:"shows"`
+	SettingsEverSet    bool                   `json:"settingsEverSet"`
+	Settings           fppConnectSettings     `json:"settings"`
+	CoordinatorBaseURL string                 `json:"coordinatorBaseUrl"`
 }
 
 // newFPPConnectState returns an empty holder: no channel ranges, no
@@ -194,6 +212,53 @@ func (s *fppConnectState) SetShowNames(names []string) {
 	s.mu.Unlock()
 }
 
+// Shows returns a copy of the currently held show id/name list, nil before
+// anything has ever been pushed, matching ShowNames' identical copy-out
+// discipline one field up.
+func (s *fppConnectState) Shows() []fppConnectShowIDName {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.shows == nil {
+		return nil
+	}
+	out := make([]fppConnectShowIDName, len(s.shows))
+	copy(out, s.shows)
+	return out
+}
+
+// SetShows copies shows into the held show id/name list, matching
+// SetShowNames' identical copy-in discipline one field up.
+func (s *fppConnectState) SetShows(shows []fppConnectShowIDName) {
+	var copied []fppConnectShowIDName
+	if shows != nil {
+		copied = make([]fppConnectShowIDName, len(shows))
+		copy(copied, shows)
+	}
+	s.mu.Lock()
+	s.shows = copied
+	s.mu.Unlock()
+}
+
+// ShowID resolves name to its show object id, when name currently names
+// EXACTLY ONE held show. ok is false when name matches zero shows
+// (unknown) or more than one (two shows sharing a display name, ADR-044
+// decision 8's ambiguous case): FC2's own binding never needs to tell
+// those two apart through this method, since ShowNames' own duplicate
+// count already decided which case applies before a caller resolves an id
+// at all.
+func (s *fppConnectState) ShowID(name string) (id string, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, show := range s.shows {
+		if show.Name == name {
+			id = show.ID
+			count++
+		}
+	}
+	return id, count == 1
+}
+
 // Settings returns the currently held fppconnect.settings and whether it
 // has ever been pushed at all; before the first push there is no
 // well-defined "held" value to return, unlike the coordinator's own
@@ -261,12 +326,15 @@ func (s *fppConnectState) Snapshot() fppConnectSnapshot {
 	defer s.mu.RUnlock()
 	names := make([]string, len(s.showNames))
 	copy(names, s.showNames)
+	shows := make([]fppConnectShowIDName, len(s.shows))
+	copy(shows, s.shows)
 	return fppConnectSnapshot{
 		ChannelRanges:      s.channelRanges,
 		ActiveShowEverSet:  s.activeShowEverSet,
 		ActiveShowKnown:    s.activeShowKnown,
 		ActiveShowName:     s.activeShowName,
 		ShowNames:          names,
+		Shows:              shows,
 		SettingsEverSet:    s.settingsEverSet,
 		Settings:           s.settings,
 		CoordinatorBaseURL: s.coordinatorBaseURL,
@@ -289,6 +357,7 @@ func (s *fppConnectState) Apply(snap fppConnectSnapshot) {
 	s.activeShowKnown = snap.ActiveShowKnown
 	s.activeShowName = snap.ActiveShowName
 	s.showNames = snap.ShowNames
+	s.shows = snap.Shows
 	s.settingsEverSet = snap.SettingsEverSet
 	s.settings = snap.Settings
 	s.coordinatorBaseURL = snap.CoordinatorBaseURL

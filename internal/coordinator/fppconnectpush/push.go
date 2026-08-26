@@ -61,13 +61,30 @@ const pushIssuer = "showmesh-coordinator-config-push"
 // (IDENTIFIER-REGISTER.md, ADR-044).
 const schemaVersion = "showmesh.node.fppconnect.config/v1"
 
+// ShowIDName is one entry of "fppconnect.configure"'s `shows` field
+// (FC3, ADR-028 decision 8): a show's config object id paired with its
+// display name.
+type ShowIDName struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // resolvedFPPConnectState is what [resolveForNode] computes for one node:
 // everything "fppconnect.configure" pushes, plus revisions, the raw
 // ingredient [idempotencyKeyFor] hashes.
 type resolvedFPPConnectState struct {
-	ChannelRanges      string
-	ActiveShow         *string
-	ShowNames          []string
+	ChannelRanges string
+	ActiveShow    *string
+	ShowNames     []string
+	// Shows is FC3's addition (ADR-028 decision 8): every show's config
+	// object id paired with its display name, sorted by id, so a node can
+	// resolve the id POST /api/v1/assets' `show` field requires from the
+	// display name FC2's own upload binding carries (xLights speaks only
+	// names; ShowNames stays exactly as it was for that surface). A
+	// display name shared by more than one show is exactly ShowNames'
+	// existing ambiguity, carried here as two entries with the same Name
+	// and different ID, resolved (or left ambiguous) the same way.
+	Shows              []ShowIDName
 	Settings           config.FPPConnectSettingsPayload
 	CoordinatorBaseURL string
 
@@ -115,6 +132,7 @@ func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.
 		"channelRanges": resolved.ChannelRanges,
 		"activeShow":    resolved.ActiveShow,
 		"showNames":     resolved.ShowNames,
+		"shows":         resolved.Shows,
 		"settings": map[string]any{
 			"enabled":          resolved.Settings.Enabled,
 			"maxFileBytes":     resolved.Settings.MaxFileBytes,
@@ -173,10 +191,13 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 	}
 	revisions = append(revisions, showRevisions...)
 	showNames := make([]string, 0, len(showNamesByID))
-	for _, name := range showNamesByID {
+	shows := make([]ShowIDName, 0, len(showNamesByID))
+	for id, name := range showNamesByID {
 		showNames = append(showNames, name)
+		shows = append(shows, ShowIDName{ID: id, Name: name})
 	}
 	sort.Strings(showNames)
+	sort.Slice(shows, func(i, j int) bool { return shows[i].ID < shows[j].ID })
 
 	activeShow, activeShowRevision, err := activeShowName(ctx, cs, showNamesByID)
 	if err != nil {
@@ -200,6 +221,7 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 		ChannelRanges:      channelRanges,
 		ActiveShow:         activeShow,
 		ShowNames:          showNames,
+		Shows:              shows,
 		Settings:           settings,
 		CoordinatorBaseURL: coordinatorBaseURL,
 		revisions:          revisions,
@@ -435,6 +457,13 @@ func idempotencyKeyFor(nodeID string, resolved resolvedFPPConnectState) string {
 	_, _ = fmt.Fprintf(h, "activeShow:%s\x00", activeShow)
 	for _, name := range sortedShowNames {
 		_, _ = fmt.Fprintf(h, "showName:%s\x00", name)
+	}
+	// resolved.Shows is already sorted by ID (resolveForNode), which is
+	// itself the config object id: a stable sort key independent of
+	// ListConfigObjects' unspecified order, unlike sortedShowNames above,
+	// which sorts by the (possibly duplicated) display name alone.
+	for _, s := range resolved.Shows {
+		_, _ = fmt.Fprintf(h, "show:%s=%s\x00", s.ID, s.Name)
 	}
 	_, _ = fmt.Fprintf(h, "settings:%v\x00%d\x00%d", resolved.Settings.Enabled, resolved.Settings.MaxFileBytes, resolved.Settings.MaxAssetDirBytes)
 	_, _ = fmt.Fprintf(h, "coordinatorBaseUrl:%s\x00", resolved.CoordinatorBaseURL)

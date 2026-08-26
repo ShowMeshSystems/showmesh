@@ -32,6 +32,7 @@ type fakeFPPConnectView struct {
 	activeShowEver  bool
 
 	showNames []string
+	shows     []fppConnectShowIDName
 
 	maxFileBytes     int64
 	maxAssetDirBytes int64
@@ -43,6 +44,16 @@ func (f fakeFPPConnectView) ActiveShow() (name string, known bool, ever bool) {
 	return f.activeShowName, f.activeShowKnown, f.activeShowEver
 }
 func (f fakeFPPConnectView) ShowNames() []string { return f.showNames }
+func (f fakeFPPConnectView) ShowID(name string) (id string, ok bool) {
+	count := 0
+	for _, s := range f.shows {
+		if s.Name == name {
+			id = s.ID
+			count++
+		}
+	}
+	return id, count == 1
+}
 func (f fakeFPPConnectView) MaxFileBytes() int64 {
 	if f.maxFileBytes != 0 {
 		return f.maxFileBytes

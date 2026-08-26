@@ -230,6 +230,18 @@ func Run() int {
 	// one is left alone; an unbound one stays unbound.
 	fppConnectRegistrar.BootWalk()
 
+	// fppConnectRegisterDone is joined below like every other long-lived
+	// goroutine's own done channel: fppConnectRegistrar.Wait blocks until
+	// every registerLoop it has ever started has returned, which happens
+	// promptly once sigCtx (r.ctx) is canceled (review round 1 finding 4;
+	// before this existed, an in-flight registration attempt was simply
+	// abandoned with nothing downstream ever waiting on it).
+	fppConnectRegisterDone := make(chan struct{})
+	go func() {
+		defer close(fppConnectRegisterDone)
+		fppConnectRegistrar.Wait()
+	}()
+
 	fppConnectHTTPDone := make(chan struct{})
 	go func() {
 		defer close(fppConnectHTTPDone)
@@ -433,10 +445,10 @@ func Run() int {
 	stopSignal()
 
 	// The heartbeat, asset inventory, render report, audio report, audio
-	// session watcher, MultiSync listener, and FPP Connect HTTP listener
-	// loops also select on sigCtx.Done() and exit on their own; wait for
-	// all seven so none can race the final offline publish below with a
-	// publish still in flight.
+	// session watcher, MultiSync listener, FPP Connect HTTP listener, FPP
+	// Connect registrar, and show mode watch loops also select on
+	// sigCtx.Done() and exit on their own; wait for all nine so none can
+	// race the final offline publish below with a publish still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
@@ -444,6 +456,7 @@ func Run() int {
 	<-audioWatchDone
 	<-multiSyncDone
 	<-fppConnectHTTPDone
+	<-fppConnectRegisterDone
 	<-showModeWatchDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

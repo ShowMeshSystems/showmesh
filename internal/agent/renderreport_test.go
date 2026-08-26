@@ -206,7 +206,8 @@ func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
 
 	held := newTestFPPConnectHeldStore(t)
 	neverActive := func() (string, bool, bool) { return "", false, false }
-	outcome, reason, rec := held.WriteChunk("sequences", "Unbound.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	outcome, reason, rec := held.WriteChunk("sequences", "Unbound.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID)
 	if outcome != fppConnectChunkCompleted {
 		t.Fatalf("setup: outcome = %v reason = %q, want completed", outcome, reason)
 	}

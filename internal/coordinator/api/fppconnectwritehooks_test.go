@@ -10,9 +10,10 @@ import (
 )
 
 // This file proves Track E phase 2 seam FC1a's own write-hook contract
-// (ADR-044 decision 5): a write to show.surface, show.active, show, or
-// fppconnect.settings triggers exactly one fppconnect.configure push per
-// affected node. pushFPPConnectToNode/pushFPPConnectToAllNodes
+// (ADR-044 decision 5): a write to show.surface, show.active, show,
+// fppconnect.settings, or (FC3, ADR-028 decision 8) assets.settings
+// triggers exactly one fppconnect.configure push per affected node.
+// pushFPPConnectToNode/pushFPPConnectToAllNodes
 // (fppconnectsettingsconfig.go) fire their pushes in a detached goroutine,
 // matching pushAudioSettingsToAllNodes' identical fire-and-forget shape
 // one kind over, so this file uses fakeRenderPublisher's onPublish hook
@@ -147,6 +148,40 @@ func TestPutShowActivePushesEveryInventoryNode(t *testing.T) {
 	defer pub.mu.Unlock()
 	if len(pub.payload) != 2 {
 		t.Fatalf("published %d commands, want exactly 2 (one per inventory node)", len(pub.payload))
+	}
+}
+
+// TestPutAssetsSettingsPushesEveryInventoryNode proves a write to
+// assets.settings is the fifth write-hook trigger (FC3, ADR-028 decision
+// 8): a node's own coordinatorBaseUrl comes from this same push, so a
+// changed contentBaseUrl must reach every inventory node exactly like a
+// show/show.active/fppconnect.settings write already does, not only on
+// that node's next hello.
+func TestPutAssetsSettingsPushesEveryInventoryNode(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+
+	deps := configTestDeps(svc, st)
+	pub := &fakeRenderPublisher{}
+	deps.RenderPublisher = pub
+	nodes := &fakeNodeLister{}
+	nodes.setViews([]inventory.NodeView{{NodeID: "render-01"}, {NodeID: "render-02"}, {NodeID: "render-03"}})
+	deps.Nodes = nodes
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/assets.settings", validAssetsSettingsBody, map[string]string{"Authorization": "Bearer " + token})
+	resp, body := doRawRequest(t, api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT assets.settings status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	waitForPublishCount(t, pub, "fppconnect.configure", 3)
+
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	if len(pub.payload) != 3 {
+		t.Fatalf("published %d commands, want exactly 3 (one per inventory node)", len(pub.payload))
 	}
 }
 

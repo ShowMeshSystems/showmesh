@@ -202,6 +202,7 @@ func toRenderFPPConnectHeldFile(rec fppConnectHeldRecord) mqttproto.RenderFPPCon
 		ReceivedAt:              rec.ReceivedAt,
 		Bound:                   rec.Bound,
 		Show:                    rec.Show,
+		ShowID:                  rec.ShowID,
 		LogicalSequence:         rec.LogicalSequence,
 		UnboundReason:           rec.UnboundReason,
 		RegistrationState:       rec.RegistrationState,

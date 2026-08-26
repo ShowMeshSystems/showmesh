@@ -38,6 +38,15 @@ type fppConnectConfigureParams struct {
 	ShowNames     []string           `json:"showNames"`
 	Settings      fppConnectSettings `json:"settings"`
 
+	// Shows is FC3's additive field (internal/coordinator/fppconnectpush,
+	// ADR-028 decision 8): every show's config object id paired with its
+	// display name. Deliberately NOT in the required-fields loop below,
+	// for the identical additive-compatibility reason CoordinatorBaseURL
+	// is not: an absent shows list decodes as nil, which ShowID
+	// (fppconnectstate.go) resolves as "matches nothing" rather than a
+	// decode failure.
+	Shows []fppConnectShowIDName `json:"shows"`
+
 	// CoordinatorBaseURL is FC3's additive field (internal/coordinator/
 	// fppconnectpush): the coordinator's assets.settings.contentBaseUrl,
 	// or "" when the coordinator has none configured. Deliberately NOT in
@@ -52,6 +61,7 @@ type fppConnectConfigureParams struct {
 var fppConnectConfigureKnownKeys = map[string]bool{
 	"schema": true, "channelRanges": true, "activeShow": true,
 	"showNames": true, "settings": true, "coordinatorBaseUrl": true,
+	"shows": true,
 }
 
 // decodeFPPConnectConfigureParams validates params' shape against
@@ -168,6 +178,7 @@ func (o *fppConnectConfigureOperation) configure(_ context.Context, params map[s
 		ActiveShowKnown:    p.ActiveShow != nil,
 		ActiveShowName:     derefOrEmpty(p.ActiveShow),
 		ShowNames:          p.ShowNames,
+		Shows:              p.Shows,
 		SettingsEverSet:    true,
 		Settings:           p.Settings,
 		CoordinatorBaseURL: p.CoordinatorBaseURL,

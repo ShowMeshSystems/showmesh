@@ -113,6 +113,43 @@ func hasEventKind(held *fppConnectHeldStore, kind, name string) bool {
 	return false
 }
 
+// TestFPPConnectLogicalSequenceSlug is review round 1 finding 2's own
+// regression test: the assets API's `sequence` field must satisfy
+// config.ValidateShowObjectID's slug rule, not a raw file name stem.
+func TestFPPConnectLogicalSequenceSlug(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"Halloween Spooky.fseq", "halloween-spooky"},
+		{"Test_File Name.fseq", "test-file-name"},
+		{"ALLCAPS.fseq", "allcaps"},
+		{"already-a-slug.fseq", "already-a-slug"},
+		{"A--double--hyphen.fseq", "a-double-hyphen"},
+		{"  leading and trailing  .fseq", "leading-and-trailing"},
+		{"???.fseq", ""},
+		{"no-extension", "no-extension"},
+		{strings.Repeat("x", 100) + ".fseq", strings.Repeat("x", 64)},
+		{strings.Repeat("x", 63) + "-.fseq", strings.Repeat("x", 63)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fppConnectLogicalSequenceSlug(tc.name)
+			if got != tc.want {
+				t.Fatalf("fppConnectLogicalSequenceSlug(%q) = %q, want %q", tc.name, got, tc.want)
+			}
+			if got != "" {
+				if len(got) > 64 {
+					t.Fatalf("slug %q exceeds 64 characters", got)
+				}
+				if got[0] == '-' || got[len(got)-1] == '-' {
+					t.Fatalf("slug %q starts or ends with a hyphen", got)
+				}
+			}
+		})
+	}
+}
+
 // TestFPPConnectUploadThreeChunksCompletes is the seam's headline test: a
 // full chunked upload lands one file in the held area whose bytes and
 // SHA-256 match what was sent, and the record carries that hash.
@@ -470,7 +507,10 @@ func TestFPPConnectUploadDiskFull(t *testing.T) {
 // lists the bound entries.
 func TestFPPConnectPlaylistPostBindsIdempotently(t *testing.T) {
 	held, _ := newTestHeldStore(t)
-	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	view := fakeFPPConnectView{
+		enabled: true, showNames: []string{"Halloween"},
+		shows: []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}},
+	}
 	srv := startFPPConnectTestServer(t, view, "node-1", held)
 
 	// A file lands first, with no active show, so it starts unbound.
@@ -491,8 +531,8 @@ func TestFPPConnectPlaylistPostBindsIdempotently(t *testing.T) {
 	if !ok {
 		t.Fatal("no held record for sequences/Show.fseq")
 	}
-	if !rec.Bound || rec.Show != "Halloween" || rec.LogicalSequence != "Show" {
-		t.Fatalf("record = %+v, want bound to Halloween with logical sequence Show", rec)
+	if !rec.Bound || rec.Show != "Halloween" || rec.ShowID != "halloween-2026" || rec.LogicalSequence != "show" {
+		t.Fatalf("record = %+v, want bound to Halloween (id halloween-2026) with logical sequence show", rec)
 	}
 
 	resp, body := getBody(t, srv.URL+"/api/playlist/Halloween")
@@ -513,7 +553,10 @@ func TestFPPConnectPlaylistPostBindsIdempotently(t *testing.T) {
 // completing afterwards binds on completion.
 func TestFPPConnectPlaylistPostBeforeFileExists(t *testing.T) {
 	held, _ := newTestHeldStore(t)
-	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	view := fakeFPPConnectView{
+		enabled: true, showNames: []string{"Halloween"},
+		shows: []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}},
+	}
 	srv := startFPPConnectTestServer(t, view, "node-1", held)
 
 	postBody := []byte(`{"mainPlaylist":[{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"Later.fseq","duration":0}]}`)
@@ -529,8 +572,8 @@ func TestFPPConnectPlaylistPostBeforeFileExists(t *testing.T) {
 	if !ok {
 		t.Fatal("no held record for sequences/Later.fseq")
 	}
-	if !rec.Bound || rec.Show != "Halloween" {
-		t.Fatalf("record = %+v, want bound to Halloween from the pending playlist post", rec)
+	if !rec.Bound || rec.Show != "Halloween" || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want bound to Halloween (id halloween-2026) from the pending playlist post", rec)
 	}
 }
 
@@ -542,7 +585,10 @@ func TestFPPConnectPlaylistPostBeforeFileExists(t *testing.T) {
 func TestFPPConnectUploadActiveShowFallback(t *testing.T) {
 	t.Run("known active show binds on completion", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		view := fakeFPPConnectView{enabled: true, activeShowName: "Christmas", activeShowKnown: true, activeShowEver: true}
+		view := fakeFPPConnectView{
+			enabled: true, activeShowName: "Christmas", activeShowKnown: true, activeShowEver: true,
+			shows: []fppConnectShowIDName{{ID: "christmas-2026", Name: "Christmas"}},
+		}
 		srv := startFPPConnectTestServer(t, view, "node-1", held)
 
 		if resp, body := patchChunk(t, srv, "sequences", "Auto.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
@@ -552,8 +598,31 @@ func TestFPPConnectUploadActiveShowFallback(t *testing.T) {
 		if !ok {
 			t.Fatal("no held record")
 		}
-		if !rec.Bound || rec.Show != "Christmas" || rec.LogicalSequence != "Auto" {
-			t.Fatalf("record = %+v, want bound to Christmas with logical sequence Auto", rec)
+		if !rec.Bound || rec.Show != "Christmas" || rec.ShowID != "christmas-2026" || rec.LogicalSequence != "auto" {
+			t.Fatalf("record = %+v, want bound to Christmas (id christmas-2026) with logical sequence auto", rec)
+		}
+	})
+
+	t.Run("active show name does not resolve to exactly one show leaves it held unbound", func(t *testing.T) {
+		held, _ := newTestHeldStore(t)
+		// activeShowName names a show, but the pushed shows list carries no
+		// (or more than one) entry for it: a stale edge case FC3 must treat
+		// as unbound rather than bind with no resolvable show id.
+		view := fakeFPPConnectView{enabled: true, activeShowName: "Christmas", activeShowKnown: true, activeShowEver: true}
+		srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+		if resp, body := patchChunk(t, srv, "sequences", "NoShowID.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+			t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+		}
+		rec, ok := findHeldRecord(t, held, "sequences", "NoShowID.fseq")
+		if !ok {
+			t.Fatal("no held record")
+		}
+		if rec.Bound {
+			t.Fatalf("record = %+v, want unbound: the active show name does not resolve to exactly one show id", rec)
+		}
+		if !strings.Contains(rec.UnboundReason, "does not currently resolve") {
+			t.Fatalf("UnboundReason = %q, want it to name the unresolved show id", rec.UnboundReason)
 		}
 	})
 
@@ -737,11 +806,11 @@ func TestFPPConnectLoadTrimsOversizedPendingAndEvents(t *testing.T) {
 	dir := t.TempDir()
 
 	total := fppConnectMaxPending + 10
-	pending := make(map[string]string, total)
+	pending := make(map[string]fppConnectPendingBinding, total)
 	pendingOrder := make([]string, 0, total)
 	for i := 0; i < total; i++ {
 		name := fmt.Sprintf("File%04d.fseq", i)
-		pending[name] = "SomeShow"
+		pending[name] = fppConnectPendingBinding{ShowName: "SomeShow", ShowID: "some-show"}
 		pendingOrder = append(pendingOrder, name)
 	}
 
@@ -858,13 +927,14 @@ func TestFPPConnectUploadRoutesNoProductIdentityLeak(t *testing.T) {
 func TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
 
 	const maxDir = int64(150)
 
 	// Upload A declares 100 bytes total, but this call only delivers the
 	// first 10: it is accepted and left in flight, with 90 bytes still
 	// outstanding.
-	outcome, reason, _ := held.WriteChunk("sequences", "A.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, maxDir, time.Now(), neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "A.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("upload A chunk 1: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -874,7 +944,7 @@ func TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit(t *testin
 	// under 150 alongside B's 100 (110 total): the exact shape of the
 	// bug. Correct behavior adds A's outstanding 90-byte remainder to the
 	// check (10 + 90 + 100 = 200 > 150) and refuses B.
-	outcome, reason, _ = held.WriteChunk("sequences", "B.fseq", 0, 100, strings.NewReader(strings.Repeat("B", 100)), 100, 1<<30, maxDir, time.Now(), neverActive)
+	outcome, reason, _ = held.WriteChunk("sequences", "B.fseq", 0, 100, strings.NewReader(strings.Repeat("B", 100)), 100, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID)
 	if outcome != fppConnectChunkDirFull {
 		t.Fatalf("upload B: outcome = %v reason = %q, want dir-full (A's in-flight remainder must count against the cap)", outcome, reason)
 	}
@@ -901,7 +971,7 @@ func TestFPPConnectPendingBindingsAreBoundedAndEvictOldestFirst(t *testing.T) {
 	for i := range names {
 		names[i] = fmt.Sprintf("File%04d.fseq", i)
 	}
-	held.BindShow("SomeShow", names, time.Now())
+	held.BindShow("SomeShow", "some-show", names, time.Now())
 
 	held.mu.Lock()
 	gotLen := len(held.pending)
@@ -985,11 +1055,12 @@ func TestFPPConnectWriteChunkReleasesLockDuringCopy(t *testing.T) {
 	w := &blockingChunkWriter{started: make(chan struct{}), release: make(chan struct{})}
 	held := newFPPConnectHeldStoreWithWriter(dir, w, discardLogger())
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		held.WriteChunk("sequences", "Slow.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+		held.WriteChunk("sequences", "Slow.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID)
 	}()
 
 	select {
@@ -1031,9 +1102,10 @@ func TestFPPConnectWriteChunkReleasesLockDuringCopy(t *testing.T) {
 func TestFPPConnectWriteChunkSweepsIdleInFlightReservations(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
 
 	start := time.Now()
-	outcome, reason, _ := held.WriteChunk("sequences", "Abandoned.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, start, neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "Abandoned.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, start, neverActive, neverResolveShowID)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("setup: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -1050,7 +1122,7 @@ func TestFPPConnectWriteChunkSweepsIdleInFlightReservations(t *testing.T) {
 	// prepareChunkLocked); the abandoned entry is long past the TTL by
 	// the time this one arrives.
 	later := start.Add(fppConnectInFlightTTL + time.Minute)
-	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive); outcome != fppConnectChunkCompleted {
+	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive, neverResolveShowID); outcome != fppConnectChunkCompleted {
 		t.Fatalf("fresh upload: outcome = %v reason = %q, want completed", outcome, reason)
 	}
 
@@ -1109,13 +1181,14 @@ func TestFPPConnectReservationClampsAtZero(t *testing.T) {
 	}
 	held.mu.Unlock()
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
 
 	// maxAssetDirBytes is 50. Corrupt.fseq's raw remainder is
 	// 10-50 = -40. A fresh 51-byte upload: with the remainder wrongly
 	// left negative, 0 (nothing really on disk) + (-40) + 51 = 11 <= 50
 	// would be wrongly accepted. Clamped at zero, 0 + 0 + 51 = 51 > 50
 	// must be refused.
-	outcome, reason, _ := held.WriteChunk("sequences", "New.fseq", 0, 51, strings.NewReader(strings.Repeat("N", 10)), 10, 1<<30, 50, time.Now(), neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "New.fseq", 0, 51, strings.NewReader(strings.Repeat("N", 10)), 10, 1<<30, 50, time.Now(), neverActive, neverResolveShowID)
 	if outcome != fppConnectChunkDirFull {
 		t.Fatalf("outcome = %v reason = %q, want dir-full (a negative reservation must clamp to zero, not manufacture headroom)", outcome, reason)
 	}
@@ -1127,10 +1200,11 @@ func TestFPPConnectReservationClampsAtZero(t *testing.T) {
 // clean completion and after a discarded (gapped) upload.
 func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T) {
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
 
 	t.Run("completion clears the reservation", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		outcome, reason, _ := held.WriteChunk("sequences", "Done.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+		outcome, reason, _ := held.WriteChunk("sequences", "Done.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID)
 		if outcome != fppConnectChunkCompleted {
 			t.Fatalf("outcome = %v reason = %q, want completed", outcome, reason)
 		}
@@ -1144,10 +1218,10 @@ func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T)
 
 	t.Run("a gap discards the reservation", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 0, 30, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive); outcome != fppConnectChunkAccepted {
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 0, 30, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID); outcome != fppConnectChunkAccepted {
 			t.Fatal("setup: chunk 1 not accepted")
 		}
-		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 5, 30, strings.NewReader(strings.Repeat("B", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive); outcome != fppConnectChunkGap {
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 5, 30, strings.NewReader(strings.Repeat("B", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID); outcome != fppConnectChunkGap {
 			t.Fatal("setup: expected a gap")
 		}
 		held.mu.Lock()

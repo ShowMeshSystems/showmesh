@@ -145,7 +145,7 @@ func (s *fppConnectServer) handleFilePatch(w http.ResponseWriter, r *http.Reques
 	// bytes, and never buffered whole in this handler's own memory the
 	// way io.ReadAll would (a real 16 MiB xLights chunk reallocating as
 	// it grows, times however many uploads are in flight).
-	outcome, reason, _ := s.held.WriteChunk(dir, name, offset, length, r.Body, r.ContentLength, s.view.MaxFileBytes(), s.view.MaxAssetDirBytes(), s.now(), s.view.ActiveShow)
+	outcome, reason, _ := s.held.WriteChunk(dir, name, offset, length, r.Body, r.ContentLength, s.view.MaxFileBytes(), s.view.MaxAssetDirBytes(), s.now(), s.view.ActiveShow, s.view.ShowID)
 
 	// Only now, after WriteChunk has fully finished reading the request
 	// body, is it safe to bound the response write (review round 3
@@ -278,7 +278,17 @@ func (s *fppConnectServer) handlePlaylistPost(w http.ResponseWriter, r *http.Req
 	case matches > 1:
 		s.held.RecordAmbiguousPlaylist(name, matches, fileNames, now)
 	default:
-		s.held.BindShow(name, fileNames, now)
+		showID, ok := s.view.ShowID(name)
+		if !ok {
+			// matches == 1 against ShowNames() should always resolve
+			// through ShowID too: both read the same pushed shows list.
+			// Treat a disagreement defensively as the identical evidence
+			// an ambiguous name already produces, rather than bind with
+			// no id the registrar could never use.
+			s.held.RecordAmbiguousPlaylist(name, matches, fileNames, now)
+			break
+		}
+		s.held.BindShow(name, showID, fileNames, now)
 	}
 
 	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,7 +160,10 @@ func newTestFPPConnectRegistrar(t *testing.T, held *fppConnectHeldStore, coordin
 // see TestFPPConnectUploadActiveShowFallback).
 func uploadAndBind(t *testing.T, held *fppConnectHeldStore, dir, name string, data []byte) fppConnectHeldRecord {
 	t.Helper()
-	view := fakeFPPConnectView{enabled: true, activeShowName: "Halloween", activeShowKnown: true, activeShowEver: true}
+	view := fakeFPPConnectView{
+		enabled: true, activeShowName: "Halloween", activeShowKnown: true, activeShowEver: true,
+		shows: []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}},
+	}
 	srv := startFPPConnectTestServer(t, view, "node-1", held)
 	defer srv.Close()
 
@@ -241,9 +245,9 @@ func TestFPPConnectRegisterCompletedBoundFileRegisters(t *testing.T) {
 	if !equalStringSlices(req.fieldOrder, wantOrder) {
 		t.Fatalf("field order = %v, want %v", req.fieldOrder, wantOrder)
 	}
-	if req.fields["show"] != "Halloween" || req.fields["sequence"] != "Test" ||
+	if req.fields["show"] != "halloween-2026" || req.fields["sequence"] != "test" ||
 		req.fields["mediaType"] != "fseq" || req.fields["targetKind"] != "node" || req.fields["target"] != "node-1" {
-		t.Fatalf("fields = %+v, want show=Halloween sequence=Test mediaType=fseq targetKind=node target=node-1", req.fields)
+		t.Fatalf("fields = %+v, want show=halloween-2026 sequence=test mediaType=fseq targetKind=node target=node-1", req.fields)
 	}
 	if req.auth != "Bearer test-token" {
 		t.Fatalf("Authorization = %q, want %q", req.auth, "Bearer test-token")
@@ -428,7 +432,10 @@ func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
 		detail      string
 	}{
 		{"400", http.StatusBadRequest, "invalid-parameter", "sequence is required"},
+		{"401", http.StatusUnauthorized, "unauthorized", "no valid credential"},
 		{"403", http.StatusForbidden, "forbidden", "missing asset:write"},
+		{"405", http.StatusMethodNotAllowed, "method-not-allowed", "POST not accepted here"},
+		{"413", http.StatusRequestEntityTooLarge, "payload-too-large", "exceeds the coordinator's upload size bound"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			held, _ := newTestHeldStore(t)
@@ -458,33 +465,157 @@ func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
 	}
 }
 
-// TestFPPConnectRegister503IsRetried proves a 5xx is retryable: the first
-// attempt fails, the record goes pending, and a woken retry succeeds.
-func TestFPPConnectRegister503IsRetried(t *testing.T) {
-	held, _ := newTestHeldStore(t)
+// TestFPPConnectRegister5xxAndStorageFullAreRetried proves a 5xx and a 507
+// are both retryable: the first attempt fails, the record goes pending,
+// and a woken retry succeeds.
+func TestFPPConnectRegister5xxAndStorageFullAreRetried(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError, http.StatusInsufficientStorage} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			held, _ := newTestHeldStore(t)
 
-	data := []byte("retry-me")
+			data := []byte("retry-me")
+			wantHash := sha256Hex(data)
+
+			var attempt int32
+			fakeSrv, _ := newFPPConnectRegisterFake(t, func(fppConnectRegisterRequest) (int, string) {
+				if atomic.AddInt32(&attempt, 1) == 1 {
+					return status, ""
+				}
+				return http.StatusOK, assetResponseBody(t, "asset-3", wantHash, false)
+			})
+			defer fakeSrv.Close()
+
+			reg, _, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+			uploadAndBind(t, held, "sequences", "Flaky.fseq", data)
+
+			waitForRegistrationState(t, held, "sequences", "Flaky.fseq", fppConnectRegistrationPending)
+			reg.Wake()
+			waitForRegistrationState(t, held, "sequences", "Flaky.fseq", fppConnectRegistrationRegistered)
+
+			if got := atomic.LoadInt32(&attempt); got != 2 {
+				t.Fatalf("attempts = %d, want 2 (one %d, one success after Wake)", got, status)
+			}
+		})
+	}
+}
+
+// TestFPPConnectRegisterSequenceFieldIsSlugified proves the sent
+// "sequence" field is the slugified stem (review round 1 finding 2), not
+// the raw file name, for a name containing spaces, underscores, and
+// uppercase, and that the same value is visible on the held record.
+func TestFPPConnectRegisterSequenceFieldIsSlugified(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	data := []byte("slug-me")
 	wantHash := sha256Hex(data)
 
-	var attempt int32
-	fakeSrv, _ := newFPPConnectRegisterFake(t, func(fppConnectRegisterRequest) (int, string) {
-		if atomic.AddInt32(&attempt, 1) == 1 {
-			return http.StatusServiceUnavailable, ""
-		}
-		return http.StatusOK, assetResponseBody(t, "asset-3", wantHash, false)
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(fppConnectRegisterRequest) (int, string) {
+		return http.StatusOK, assetResponseBody(t, "asset-slug", wantHash, false)
 	})
 	defer fakeSrv.Close()
 
-	reg, _, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
 
-	uploadAndBind(t, held, "sequences", "Flaky.fseq", data)
+	uploadAndBind(t, held, "sequences", "Halloween Spooky_Scene.fseq", data)
 
-	waitForRegistrationState(t, held, "sequences", "Flaky.fseq", fppConnectRegistrationPending)
-	reg.Wake()
-	waitForRegistrationState(t, held, "sequences", "Flaky.fseq", fppConnectRegistrationRegistered)
+	rec := waitForRegistrationState(t, held, "sequences", "Halloween Spooky_Scene.fseq", fppConnectRegistrationRegistered)
+	if rec.LogicalSequence != "halloween-spooky-scene" {
+		t.Fatalf("held record LogicalSequence = %q, want halloween-spooky-scene", rec.LogicalSequence)
+	}
 
-	if got := atomic.LoadInt32(&attempt); got != 2 {
-		t.Fatalf("attempts = %d, want 2 (one 503, one success after Wake)", got)
+	reqs := requests()
+	if len(reqs) != 1 {
+		t.Fatalf("registration requests = %d, want exactly 1", len(reqs))
+	}
+	if got := reqs[0].fields["sequence"]; got != "halloween-spooky-scene" {
+		t.Fatalf("sequence field = %q, want halloween-spooky-scene", got)
+	}
+}
+
+// TestFPPConnectRegisterEmptySlugFailsWithoutRequest proves a name whose
+// stem slugifies to "" (review round 1 finding 2) is recorded as a failure
+// with no registration request ever sent: no coordinatorBaseUrl or retry
+// would ever make an empty sequence valid.
+func TestFPPConnectRegisterEmptySlugFailsWithoutRequest(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	var requestCount int32
+	fakeSrv, _ := newFPPConnectRegisterFake(t, func(fppConnectRegisterRequest) (int, string) {
+		atomic.AddInt32(&requestCount, 1)
+		return http.StatusOK, "{}"
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	uploadAndBind(t, held, "sequences", "???.fseq", []byte("data"))
+
+	failed := waitForRegistrationState(t, held, "sequences", "???.fseq", fppConnectRegistrationFailed)
+	if !strings.Contains(failed.RegistrationReason, "sequence id") {
+		t.Fatalf("RegistrationReason = %q, want it to mention the missing sequence id", failed.RegistrationReason)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := atomic.LoadInt32(&requestCount); got != 0 {
+		t.Fatalf("registration requests = %d, want 0 for a name with no valid sequence characters", got)
+	}
+}
+
+// TestFPPConnectRegisterDoublePlaylistPostRegistersOnce is review round 1
+// finding 3's own regression test: xLights fires POST
+// /api/playlist/{name} up to twice per target, re-firing FC2's OnHeld for
+// an already-registered (or already in-flight) record. Binding the same
+// file twice must produce exactly one registration request and exactly
+// one inventory trigger, never two concurrent goroutines racing the same
+// key.
+func TestFPPConnectRegisterDoublePlaylistPostRegistersOnce(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	data := []byte("bind-twice")
+	wantHash := sha256Hex(data)
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(fppConnectRegisterRequest) (int, string) {
+		return http.StatusOK, assetResponseBody(t, "asset-twice", wantHash, false)
+	})
+	defer fakeSrv.Close()
+
+	_, _, trigger := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}, shows: []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}}}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+	defer srv.Close()
+
+	if resp, body := patchChunk(t, srv, "sequences", "Twice.fseq", 0, int64(len(data)), data); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	postBody := []byte(`{"mainPlaylist":[{"sequenceName":"Twice.fseq"}]}`)
+	// xLights' own "up to twice per target" playlist POST, fired back to
+	// back with no delay: the second call re-fires OnHeld for a record
+	// the first call's own registerLoop may still be mid-attempt on.
+	for i := 0; i < 2; i++ {
+		if resp, body := postPlaylist(t, srv, "Halloween", postBody); resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST %d: status = %d, body=%s", i, resp.StatusCode, body)
+		}
+	}
+
+	waitForRegistrationState(t, held, "sequences", "Twice.fseq", fppConnectRegistrationRegistered)
+	// Give any wrongly-started second goroutine a chance to also fire its
+	// own request before asserting the count.
+	time.Sleep(150 * time.Millisecond)
+
+	reqs := requests()
+	if len(reqs) != 1 {
+		t.Fatalf("registration requests = %d, want exactly 1", len(reqs))
+	}
+
+	select {
+	case <-trigger:
+	default:
+		t.Fatal("inventory trigger did not fire")
+	}
+	select {
+	case <-trigger:
+		t.Fatal("inventory trigger fired more than once")
+	default:
 	}
 }
 
@@ -595,5 +726,93 @@ func TestFPPConnectRegisterMusicFileIsSkipped(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if got := atomic.LoadInt32(&requestCount); got != 0 {
 		t.Fatalf("registration requests = %d, want 0 for a music upload", got)
+	}
+}
+
+// TestFPPConnectRegistrarWaitJoinsRegisterLoops is review round 1 finding
+// 4's own regression test: agent.go's clean-shutdown path calls
+// fppConnectRegistrar.Wait to join every registerLoop goroutine, matching
+// every other long-lived goroutine there. A retry loop waiting out its
+// backoff (an unreachable coordinator, here a reserved-and-never-served
+// address) must return, and Wait must unblock, promptly once its context
+// is canceled, never left running past shutdown.
+func TestFPPConnectRegistrarWaitJoinsRegisterLoops(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving an address: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("releasing the reserved address: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	state := newFPPConnectState()
+	state.SetCoordinatorBaseURL("http://" + addr)
+	reg := newFPPConnectRegistrar(ctx, held, state, "node-1", "", func() {}, time.Now, discardLogger())
+	held.SetOnHeld(reg.OnHeld)
+
+	uploadAndBind(t, held, "sequences", "NeverUp.fseq", []byte("data"))
+	waitForRegistrationState(t, held, "sequences", "NeverUp.fseq", fppConnectRegistrationPending)
+
+	waitDone := make(chan struct{})
+	go func() {
+		reg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		t.Fatal("Wait returned before the context was canceled, want it still blocked on the running retry loop")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait did not return within 2s of the context being canceled")
+	}
+}
+
+// TestFPPConnectRegisterMalformedBaseURLDoesNotLeakTheWriterGoroutine is
+// review round 1 finding 5's own regression test: when
+// http.NewRequestWithContext fails (here, a coordinatorBaseUrl containing
+// a raw control character), the multipart writer goroutine must never be
+// started at all, rather than left blocked forever on a pipe nothing
+// reads. Uses the identical runtime.NumGoroutine() baseline pattern
+// internal/coordinator/collector's own leak regression test uses.
+func TestFPPConnectRegisterMalformedBaseURLDoesNotLeakTheWriterGoroutine(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	newTestFPPConnectRegistrar(t, held, "http://exa\nmple.com", "")
+
+	baseline := runtime.NumGoroutine()
+
+	uploadAndBind(t, held, "sequences", "Malformed.fseq", []byte("data"))
+
+	pending := waitForRegistrationState(t, held, "sequences", "Malformed.fseq", fppConnectRegistrationPending)
+	if !strings.Contains(pending.RegistrationReason, "building registration request") {
+		t.Fatalf("RegistrationReason = %q, want it to name the request-build failure", pending.RegistrationReason)
+	}
+
+	// baseline was captured before OnHeld started this record's own
+	// long-lived retry loop goroutine (which stays alive, backed off,
+	// until this test's registrar ctx is canceled at cleanup): +1 accounts
+	// for exactly that one expected goroutine. A leaked writer goroutine
+	// would show up as a second, unaccounted-for one.
+	deadline := time.After(2 * time.Second)
+	for {
+		if runtime.NumGoroutine() <= baseline+1 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("goroutine count = %d after a malformed base URL, want close to baseline+1 %d (writer goroutine leak)", runtime.NumGoroutine(), baseline+1)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }

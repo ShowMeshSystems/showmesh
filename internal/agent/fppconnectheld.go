@@ -84,8 +84,18 @@ type fppConnectHeldRecord struct {
 	ContentHash string    `json:"contentHash"`
 	ReceivedAt  time.Time `json:"receivedAt"`
 
-	Bound           bool   `json:"bound"`
-	Show            string `json:"show,omitempty"`
+	Bound bool   `json:"bound"`
+	Show  string `json:"show,omitempty"`
+
+	// ShowID is Show's resolved config object id (FC3, ADR-028 decision
+	// 8), set whenever Bound is true: xLights and FC2's own binding speak
+	// only Show's display name, but POST /api/v1/assets' `show` field
+	// requires the id, which the coordinator's own showExists validates
+	// against, not the name. Resolved once, at bind time, from the
+	// coordinator's pushed "shows" id/name list (fppConnectView.ShowID),
+	// alongside Show rather than computed again by the registrar, so the
+	// two can never drift apart from each other.
+	ShowID          string `json:"showId,omitempty"`
 	LogicalSequence string `json:"logicalSequence,omitempty"`
 	UnboundReason   string `json:"unboundReason,omitempty"`
 
@@ -232,14 +242,26 @@ func capEventEntries(entries []string) (capped []string, truncated int) {
 // without bound from a single POST.
 const fppConnectMaxPending = 500
 
+// fppConnectPendingBinding is one entry of fppConnectHeldStore.pending: the
+// show a POST /api/playlist/{name} named for a file that did not exist
+// yet, resolved to both its display name (what BindShow's own idempotent
+// re-application compares against) and its config object id (FC3, ADR-028
+// decision 8), so a file completing afterwards binds with the same id a
+// same-tick bind would have used, never a name alone that a later
+// registration attempt would have to re-resolve.
+type fppConnectPendingBinding struct {
+	ShowName string `json:"showName"`
+	ShowID   string `json:"showId"`
+}
+
 // fppConnectIndex is the whole of fppConnectHeldStore's durable state, and
 // exactly what persistLocked/load read and write as one JSON document,
 // matching internal/agent/heldcatalog.FileStore's identical "one atomic
 // file holds the one durable record" discipline, generalized here to a
 // small collection rather than a single record.
 type fppConnectIndex struct {
-	Records map[string]fppConnectHeldRecord `json:"records"`
-	Pending map[string]string               `json:"pending"`
+	Records map[string]fppConnectHeldRecord     `json:"records"`
+	Pending map[string]fppConnectPendingBinding `json:"pending"`
 	// PendingOrder is Pending's insertion order, oldest first, so
 	// fppConnectMaxPending's eviction survives a restart correctly rather
 	// than reverting to Go's unspecified map iteration order.
@@ -374,8 +396,8 @@ type fppConnectHeldStore struct {
 	writer   fppConnectChunkWriter
 	logger   *slog.Logger
 
-	records map[string]fppConnectHeldRecord // key: dir + "/" + name
-	pending map[string]string               // file name -> show name
+	records map[string]fppConnectHeldRecord     // key: dir + "/" + name
+	pending map[string]fppConnectPendingBinding // file name -> show name/id
 	// pendingOrder is pending's insertion order, oldest first; see
 	// fppConnectMaxPending.
 	pendingOrder []string
@@ -408,7 +430,7 @@ func newFPPConnectHeldStoreWithWriter(assetDir string, writer fppConnectChunkWri
 		writer:   writer,
 		logger:   logger,
 		records:  map[string]fppConnectHeldRecord{},
-		pending:  map[string]string{},
+		pending:  map[string]fppConnectPendingBinding{},
 		inFlight: map[string]*fppConnectInFlight{},
 	}
 	if err := s.load(); err != nil {
@@ -472,6 +494,20 @@ func (s *fppConnectHeldStore) Events() []fppConnectEvent {
 // store's internal layout.
 func (s *fppConnectHeldStore) HeldFilePath(dir, name string) string {
 	return s.heldFilePath(dir, name)
+}
+
+// RecordFor returns the currently held record for (dir, name), if any.
+// FC3's registerLoop calls this at the top of every iteration to read the
+// record's CURRENT state rather than trust the copy it was started or
+// last retried with, which can be stale by the time it actually runs (a
+// concurrent rebind, or another path already resolving this record's
+// registration state while this goroutine was queued, review round 1
+// finding 3).
+func (s *fppConnectHeldStore) RecordFor(dir, name string) (fppConnectHeldRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.records[dir+"/"+name]
+	return rec, ok
 }
 
 // setRegistrationLocked applies one registration-state transition to
@@ -609,6 +645,43 @@ func (s *fppConnectHeldStore) MainPlaylistFor(showName string) []fppConnectPlayl
 // no extension is its own stem.
 func fppConnectStem(name string) string {
 	return strings.TrimSuffix(name, filepath.Ext(name))
+}
+
+// fppConnectLogicalSequenceSlug derives the value the assets API's
+// identity requires for POST /api/v1/assets' `sequence` field (FC3,
+// ADR-028 decision 8) from name's file name stem: the same slug rule
+// every other Track E object id uses (config.ValidateShowObjectID,
+// 1 to 64 characters of [a-z0-9-], never starting or ending with a
+// hyphen). The stem is lowercased, every run of characters outside
+// [a-z0-9] (spaces, underscores, punctuation, and any hyphen already
+// present) collapses to one hyphen, leading and trailing hyphens are
+// trimmed, and the result is truncated to 64 characters (trimming a
+// trailing hyphen the truncation itself could newly expose). "" when the
+// stem contains no [a-z0-9] character at all, e.g. a name of only
+// punctuation: the caller stores that empty result as-is, and FC3's
+// registrar refuses to register it (a request built from an empty
+// sequence would only 400 forever) rather than silently sending an
+// invalid value.
+func fppConnectLogicalSequenceSlug(name string) string {
+	stem := strings.ToLower(fppConnectStem(name))
+	var b strings.Builder
+	pendingHyphen := false // suppresses a hyphen until a real character has been written, so the result never starts with one
+	for _, r := range stem {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			if pendingHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+			}
+			pendingHyphen = false
+			b.WriteRune(r)
+			continue
+		}
+		pendingHyphen = true
+	}
+	slug := b.String()
+	if len(slug) > 64 {
+		slug = strings.TrimSuffix(slug[:64], "-")
+	}
+	return slug
 }
 
 // stagingDir, stagingFilePath, heldFileDir, heldFilePath and indexPath are
@@ -769,11 +842,12 @@ func (s *fppConnectHeldStore) RecordRefusal(kind, dir, name, reason string, at t
 //
 // dir is assumed already validated against fppConnectAllowedDirs by the
 // caller (fppconnectupload.go's handleFileRoute); name is assumed already
-// validated by fppConnectValidPlaylistName. activeShow is the view's
-// ActiveShow method, threaded through as a function rather than the whole
-// view so this store stays independent of fppConnectView (avoiding an
-// import cycle risk and keeping this file's own test surface small).
-func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+// validated by fppConnectValidPlaylistName. activeShow and resolveShowID
+// are the view's ActiveShow and ShowID methods, threaded through as
+// functions rather than the whole view so this store stays independent of
+// fppConnectView (keeping this file's own test surface small: a test
+// supplies two small closures rather than a whole fake view).
+func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	key := dir + "/" + name
 	stagingPath := s.stagingFilePath(dir, name)
 
@@ -828,7 +902,7 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 	teed := io.TeeReader(body, inf.hash)
 	written, writeErr := s.writer.WriteChunk(stagingPath, offset, teed, n, offset == 0)
 
-	outcome, reason, rec = s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow)
+	outcome, reason, rec = s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow, resolveShowID)
 	finishedNormally = true
 	return outcome, reason, rec
 }
@@ -969,7 +1043,7 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 // upload finalizes the hash and renames into the held area and resolves
 // its binding, and an accepted-but-incomplete chunk just clears the
 // writing flag and updates bytesReceived/lastChunkAt for the next one.
-func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1028,7 +1102,7 @@ func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath stri
 		return fppConnectChunkWriteFailed, fmt.Sprintf("finalizing held file %q: %v", name, err), fppConnectHeldRecord{}
 	}
 
-	rec = s.completeLocked(dir, name, uploadLength, hashSum, at, activeShow)
+	rec = s.completeLocked(dir, name, uploadLength, hashSum, at, activeShow, resolveShowID)
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after completion", "dir", dir, "name", name, "error", err)
 	}
@@ -1044,29 +1118,46 @@ func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath stri
 // show, in ADR-039 decision 5's tri-state (bound if known AND non-empty,
 // else unbound with a reason distinguishing "pushed null," "never
 // pushed," and "pushed known but with an empty name," review round 1
-// finding 8).
-func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, hash string, at time.Time, activeShow func() (name string, known bool, everSet bool)) fppConnectHeldRecord {
+// finding 8). Every bound branch also resolves the show's config object
+// id via resolveShowID (FC3, ADR-028 decision 8): when the display name
+// does not currently resolve to exactly one show (an active show pushed
+// under a name that two shows now share, a genuinely stale edge case),
+// the file is left unbound with its own distinct reason rather than
+// binding with no id at all, which the registrar could never use.
+func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, hash string, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool)) fppConnectHeldRecord {
 	key := dir + "/" + name
 	prev, hadPrev := s.records[key]
 
 	rec := fppConnectHeldRecord{Dir: dir, Name: name, SizeBytes: sizeBytes, ContentHash: hash, ReceivedAt: at}
 
-	if show, ok := s.pending[name]; ok {
+	bindTo := func(showName string) {
+		id, ok := resolveShowID(showName)
+		if !ok {
+			rec.UnboundReason = fmt.Sprintf("show %q does not currently resolve to exactly one show id", showName)
+			return
+		}
 		rec.Bound = true
-		rec.Show = show
-		rec.LogicalSequence = fppConnectStem(name)
+		rec.Show = showName
+		rec.ShowID = id
+		rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+	}
+
+	if binding, ok := s.pending[name]; ok {
+		rec.Bound = true
+		rec.Show = binding.ShowName
+		rec.ShowID = binding.ShowID
+		rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
 		s.deletePendingLocked(name)
 	} else if hadPrev && prev.Bound {
 		rec.Bound = true
 		rec.Show = prev.Show
+		rec.ShowID = prev.ShowID
 		rec.LogicalSequence = prev.LogicalSequence
 	} else {
 		showName, known, everSet := activeShow()
 		switch {
 		case known && showName != "":
-			rec.Bound = true
-			rec.Show = showName
-			rec.LogicalSequence = fppConnectStem(name)
+			bindTo(showName)
 		case known:
 			// known==true with an empty name is not a real show to bind
 			// to (review round 1 finding 8): a prior version of this
@@ -1089,14 +1180,15 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 
 // BindShow applies one POST /api/playlist/{name} whose name resolved to
 // exactly one show (fppconnectupload.go's handlePlaylistPost decides
-// that): every held record, in any directory, whose Name is in fileNames
-// is bound to showName; a name with no held match yet is remembered in
-// s.pending so a file completing afterwards binds on completion (ADR-044
-// decision 8). Idempotent: binding an already-bound record to the same
-// show sets the same fields again, and re-posting the same fileNames a
-// second time produces the same records, not new ones (RES-003 section
-// 10.6's "up to twice per target" requirement).
-func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at time.Time) {
+// that, and resolves showID from the same name at the same time, FC3,
+// ADR-028 decision 8): every held record, in any directory, whose Name is
+// in fileNames is bound to showName/showID; a name with no held match yet
+// is remembered in s.pending so a file completing afterwards binds on
+// completion (ADR-044 decision 8). Idempotent: binding an already-bound
+// record to the same show sets the same fields again, and re-posting the
+// same fileNames a second time produces the same records, not new ones
+// (RES-003 section 10.6's "up to twice per target" requirement).
+func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1111,7 +1203,8 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 			}
 			rec.Bound = true
 			rec.Show = showName
-			rec.LogicalSequence = fppConnectStem(fname)
+			rec.ShowID = showID
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(fname)
 			rec.UnboundReason = ""
 			s.records[key] = rec
 			matched = true
@@ -1122,7 +1215,7 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 		if matched {
 			s.deletePendingLocked(fname)
 		} else {
-			s.addPendingLocked(fname, showName)
+			s.addPendingLocked(fname, showName, showID)
 		}
 	}
 
@@ -1131,14 +1224,15 @@ func (s *fppConnectHeldStore) BindShow(showName string, fileNames []string, at t
 	}
 }
 
-// addPendingLocked records fname -> showName in s.pending, evicting the
-// oldest pending entry first when fppConnectMaxPending would otherwise be
-// exceeded (review round 1 finding 6). Updating an already-pending name's
-// show does not change its position in the eviction order: it is not a
-// fresh entry. s.mu already held.
-func (s *fppConnectHeldStore) addPendingLocked(fname, showName string) {
+// addPendingLocked records fname -> showName/showID in s.pending, evicting
+// the oldest pending entry first when fppConnectMaxPending would otherwise
+// be exceeded (review round 1 finding 6). Updating an already-pending
+// name's show does not change its position in the eviction order: it is
+// not a fresh entry. s.mu already held.
+func (s *fppConnectHeldStore) addPendingLocked(fname, showName, showID string) {
+	binding := fppConnectPendingBinding{ShowName: showName, ShowID: showID}
 	if _, exists := s.pending[fname]; exists {
-		s.pending[fname] = showName
+		s.pending[fname] = binding
 		return
 	}
 	if len(s.pending) >= fppConnectMaxPending {
@@ -1156,7 +1250,7 @@ func (s *fppConnectHeldStore) addPendingLocked(fname, showName string) {
 			}
 		}
 	}
-	s.pending[fname] = showName
+	s.pending[fname] = binding
 	s.pendingOrder = append(s.pendingOrder, fname)
 }
 
