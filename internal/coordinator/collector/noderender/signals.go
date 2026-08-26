@@ -64,6 +64,30 @@ const (
 	// mode is why the same failure looks different on two nights, so the
 	// report has to say which one the operator is looking at.
 	SignalSurfaceOutputFailure observation.SignalID = "surface.output.failure"
+
+	// Four signals minted for the node content-identity build item
+	// (docs/build/IDENTIFIER-REGISTER.md):
+	// the content identity this surface's frame writer actually applied:
+	// the node's own evidence for which FSEQ it is rendering, so a content
+	// swap can be proven from the node's own report rather than inferred
+	// from pipelineState/frame counters alone (which read identically
+	// whether the surface is rendering the right sequence or the wrong
+	// one). One [mqttproto.RenderSurfaceReport] field each.
+	SignalSurfaceContentFSEQFilename    observation.SignalID = "surface.content.fseq_filename"
+	SignalSurfaceContentFSEQContentHash observation.SignalID = "surface.content.fseq_content_hash"
+	// SignalSurfaceContentCueID is only ever emitted (never
+	// [observation.StateNotCollected] alongside a real filename) when the
+	// current assignment was applied by a cue activation; a direct
+	// render.surface.apply with no cue involved reports this one signal as
+	// not collected while still reporting the filename/hash/catalog
+	// revision, mirroring SignalSurfaceOutputIdleMode's identical
+	// conditional pattern.
+	SignalSurfaceContentCueID observation.SignalID = "surface.content.cue_id"
+	// SignalSurfaceContentCatalogRevision is only ever emitted alongside a
+	// real filename when the persisted assignment carries an authorization
+	// tuple (TRACK-H-H3-SPEC.md section 5); absent for a legacy assignment
+	// or one applied before the tuple existed.
+	SignalSurfaceContentCatalogRevision observation.SignalID = "surface.content.catalog_revision"
 )
 
 // Two more signals minted alongside the four above, but under the "node"
@@ -98,6 +122,10 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceOutputMode,
 	SignalSurfaceOutputIdleMode,
 	SignalSurfaceOutputFailure,
+	SignalSurfaceContentFSEQFilename,
+	SignalSurfaceContentFSEQContentHash,
+	SignalSurfaceContentCueID,
+	SignalSurfaceContentCatalogRevision,
 }
 
 // AllNodeSignalIDs is every NODE-resource signal this package emits, in the

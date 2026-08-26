@@ -140,7 +140,7 @@ func (o *renderOperations) activateSurfaceRender(a pipeline.Assignment, act cuea
 	}
 	auth := &pipeline.AssignmentAuth{Show: act.Show, Generation: act.Generation, CatalogRevision: act.CatalogRevision}
 	if err := o.store.Upsert(pipeline.Assignment{
-		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth,
+		SurfaceID: a.SurfaceID, RawParams: rawParams, AppliedAt: now(), Auth: auth, CueID: act.CueID,
 	}); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("%s: surface %q: persisting updated assignment: %w", action, a.SurfaceID, err)

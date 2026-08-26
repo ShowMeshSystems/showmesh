@@ -68,3 +68,6 @@ deploy/.env.*
 
 # Artifacts written by the integration suite's real agent subprocess.
 test/integration/assets/
+
+# Track H chain bench captures (evidence from a local run, never committed)
+bench/track-h-chain/captures/
