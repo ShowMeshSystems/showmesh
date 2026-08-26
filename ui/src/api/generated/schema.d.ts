@@ -5138,7 +5138,7 @@ export interface components {
             cueRevision: number;
             outputs: components["schemas"]["CueCatalogOutputs"];
         };
-        /** @description The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3). */
+        /** @description The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3, plus its read-only acknowledgement projection). acknowledgedStatus is always present: "catalog-unacknowledged" when this node has never acknowledged a cue catalog, "catalog-current" when its last acknowledged revision equals `revision` above, and "catalog-stale" otherwise (including when no active show is configured at all, so there is nothing to be current with). acknowledgedRevision and acknowledgedAt are both absent exactly when acknowledgedStatus is "catalog-unacknowledged" - a caller must read acknowledgedStatus, never infer "never acknowledged" from their absence. */
         CueCatalogResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -5148,6 +5148,11 @@ export interface components {
             generation?: number;
             revision?: string;
             entries: components["schemas"]["CueCatalogEntry"][];
+            /** @enum {string} */
+            acknowledgedStatus: "catalog-current" | "catalog-stale" | "catalog-unacknowledged";
+            acknowledgedRevision?: string;
+            /** Format: date-time */
+            acknowledgedAt?: string;
         };
         /** @description The body of POST /nodes/{nodeId}/cue-catalog/acknowledge. */
         CueCatalogAcknowledgeRequest: {
