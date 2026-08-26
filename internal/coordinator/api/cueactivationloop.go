@@ -13,6 +13,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/cueactivate"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
+	"github.com/showmeshsystems/showmesh/pkg/cueauth"
 )
 
 // This file is Track H seam H4's own activation trigger: the periodic,
@@ -217,14 +218,16 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 
 	switch dec.State {
 	case cueactivate.StateActivated, cueactivate.StateMismatched:
+		var outcomes []cueActivationDispatchOutcome
 		if len(dec.Activations) > 0 {
-			for _, outcome := range h.dispatchCueActivations(ctx, now, dec.Activations, issuer) {
+			outcomes = h.dispatchCueActivations(ctx, now, dec.Activations, issuer)
+			for _, outcome := range outcomes {
 				switch {
 				case outcome.Err != nil:
 					h.logWarn("cue activation loop: dispatch failed", "instanceUuid", obs.InstanceUUID, "nodeId", outcome.NodeID, "error", outcome.Err)
 				case outcome.AuthorizeOutcome != "":
 					h.logWarn("cue activation loop: this coordinator's own authorization refused before dispatch",
-						"instanceUuid", obs.InstanceUUID, "nodeId", outcome.NodeID, "outcome", outcome.AuthorizeOutcome)
+						"instanceUuid", obs.InstanceUUID, "nodeId", outcome.NodeID, "outcome", outcome.AuthorizeOutcome, "reason", outcome.AuthorizeReason)
 				case outcome.Dispatched && !outcome.Confirmed:
 					// The node itself refused it, or no confirmed result
 					// ever arrived — recorded durably either way (see
@@ -239,10 +242,55 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 		if len(dec.ClearNodes) > 0 {
 			h.dispatchBlackAndSilence(ctx, now, dec.ClearNodes, issuer, blackAndSilenceEpisode(obs))
 		}
+		// A genuinely missing asset must never leave a node showing WRONG
+		// content while an operator is not looking at it. In show mode
+		// only — never in setup/program mode, where an operator IS looking
+		// and the refusal must stay loud rather than disappear to black —
+		// fail that one node to black the identical way an H0.2 mismatch
+		// does, reusing the SAME effect.
+		assetMissingNodes := assetMissingNodeIDs(outcomes)
+		if len(assetMissingNodes) > 0 && h.deps.Config != nil {
+			mode, _, _, _, merr := resolveShowMode(ctx, h.deps.Config)
+			if merr != nil {
+				h.logWarn("cue activation loop: resolve show mode for asset-missing fail-to-black failed", "instanceUuid", obs.InstanceUUID, "error", merr)
+			} else if assetMissingFailToBlack(mode.Mode, assetMissingNodes) {
+				h.dispatchBlackAndSilence(ctx, now, assetMissingNodes, issuer, blackAndSilenceEpisode(obs))
+			}
+		}
 	case cueactivate.StateUnbound, cueactivate.StateIdentityUnavailable:
 		// Nothing to dispatch or hold — see [cueactivate.State]'s own doc
 		// comment.
 	}
+}
+
+// assetMissingNodeIDs returns the node ids among outcomes whose own
+// [cueActivationDispatchOutcome.AuthorizeOutcome] is [cueauth.
+// OutcomeAssetMissing] — the fail-to-black target set: every node THIS
+// coordinator's own pre-dispatch [cueactivate.Authorize] refused because
+// the activated Cue's own asset is genuinely missing, never a node
+// refused for an unrelated reason (cross-show, stale generation/catalog/
+// cue) that fail-to-black has no bearing on.
+func assetMissingNodeIDs(outcomes []cueActivationDispatchOutcome) []string {
+	var out []string
+	for _, o := range outcomes {
+		if o.AuthorizeOutcome == cueauth.OutcomeAssetMissing {
+			out = append(out, o.NodeID)
+		}
+	}
+	return out
+}
+
+// assetMissingFailToBlack reports whether the fail-to-black effect should
+// fire for assetMissingNodes under mode: true only in show mode
+// (config.ShowModeShow) and only when there is at least one node to
+// black. In setup/program mode the refusal stays loud — the existing
+// per-node log line and audit entry — rather than disappearing to black,
+// per the owner's own ruling: errors can be caught in programming mode
+// since it is designed to be used while the operator is looking at the
+// show, so a refusal there must stay visible rather than fail silently to
+// black.
+func assetMissingFailToBlack(mode string, assetMissingNodes []string) bool {
+	return mode == config.ShowModeShow && len(assetMissingNodes) > 0
 }
 
 // cueActivationSystemPrincipalID attributes an autonomous tick's own

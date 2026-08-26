@@ -262,7 +262,7 @@ func TestAuthorizeCrossShowRefusesDispatchingNothing(t *testing.T) {
 	putShow(t, st, "show-2", "Show Two")
 	putActiveShow(t, st, "show-2")
 
-	outcome, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
+	outcome, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestAuthorizeStaleGenerationRefused(t *testing.T) {
 	// now older than what the coordinator holds.
 	putActiveShow(t, st, "show-1")
 
-	outcome, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
+	outcome, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act)
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -603,4 +603,114 @@ func TestActivationIDChangesAcrossALoopingEntryOccurrence(t *testing.T) {
 func hash64(label string) string {
 	h := strings.Repeat("0", 64-len(label)) + label
 	return h[len(h)-64:]
+}
+
+// putAudioCue writes a show.cue declaring only an audio output naming
+// sequence — mirrors putLTCCue one field narrower (no LTC), with the
+// sequence id parameterized so a test can name two DIFFERENT sequences for
+// two DIFFERENT cues on the same node.
+func putAudioCue(t *testing.T, st *store.Store, id, showID, sequence string) {
+	t.Helper()
+	payload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: showID, Name: id,
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: sequence}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfig(t, st, config.ShowCueConfigKind, id, payload)
+}
+
+// createAsset mirrors internal/coordinator/assetsync's own test helper of
+// the same name (manifest_test.go), independently reproduced here per this
+// codebase's standing convention for cross-package test fixtures.
+func createAsset(t *testing.T, st *store.Store, showID, sequenceID, targetKind, targetID, contentHash, filename string) store.AssetRecord {
+	t.Helper()
+	rec, _, err := st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: contentHash + "-" + targetKind + "-" + targetID, ShowID: showID, SequenceID: sequenceID,
+		TargetKind: targetKind, TargetID: targetID, MediaType: "audio", ContentHash: contentHash,
+		RuntimeFilename: filename, SizeBytes: 1024, Backend: "volume", StorageKey: contentHash,
+	})
+	if err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	return rec
+}
+
+// TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset proves
+// the per-cue asset gate: node-1 holds two Cues. cue-own's own asset is
+// uploaded AND present in node-1's own reported inventory. cue-other's own
+// asset is a genuinely different, uploaded asset that node-1's report never
+// lists. Gating on node-1's WHOLE asset manifest would let cue-other's
+// missing asset refuse cue-own too, even though cue-own's own asset is
+// present and verified. Authorize instead scopes the asset check to the
+// ACTIVATED cue's own resolved outputs.
+func TestAuthorizePerCueAssetGateOnlyRefusesTheCueWithTheMissingAsset(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+
+	putAudioCue(t, st, "cue-own", "show-1", "own-seq")
+	putAudioCue(t, st, "cue-other", "show-1", "other-seq")
+
+	ownAsset := createAsset(t, st, "show-1", "own-seq", store.AssetTargetKindNode, "node-1", "sha256:own", "Own.wav")
+	createAsset(t, st, "show-1", "other-seq", store.AssetTargetKindNode, "node-1", "sha256:other", "Other.wav")
+
+	// node-1's own inventory report is fresh and complete, and holds ONLY
+	// cue-own's asset — cue-other's own asset is genuinely missing from it.
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "node-1",
+		[]store.NodeAssetInventoryRecord{{NodeID: "node-1", ContentHash: ownAsset.ContentHash, RuntimeFilename: ownAsset.RuntimeFilename, SizeBytes: ownAsset.SizeBytes, VerifiedAt: now}},
+		store.NodeAssetReportRecord{NodeID: "node-1", ReportedAt: now, Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory: %v", err)
+	}
+
+	putPlaylist(t, st, "playlist-own", singleEntryPlaylist("show-1", "inst-own", hash64("a1"), "cue-own", config.ShowPlaylistMismatchPolicyHold, ""))
+	putPlaylist(t, st, "playlist-other", singleEntryPlaylist("show-1", "inst-other", hash64("b2"), "cue-other", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	ownResult := resolvedResult("show-1", "playlist-own", 1, "entry-1", "cue-own", 1)
+	ownDec, err := Decide(context.Background(), st, ownResult, baseObservation("inst-own"), "inst-own")
+	if err != nil {
+		t.Fatalf("Decide(cue-own): %v", err)
+	}
+	ownAct, ok := ownDec.Activations["node-1"]
+	if !ok {
+		t.Fatalf("no activation built for node-1/cue-own")
+	}
+
+	otherResult := resolvedResult("show-1", "playlist-other", 1, "entry-1", "cue-other", 1)
+	otherDec, err := Decide(context.Background(), st, otherResult, baseObservation("inst-other"), "inst-other")
+	if err != nil {
+		t.Fatalf("Decide(cue-other): %v", err)
+	}
+	otherAct, ok := otherDec.Activations["node-1"]
+	if !ok {
+		t.Fatalf("no activation built for node-1/cue-other")
+	}
+
+	outcome, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", ownAct)
+	if err != nil {
+		t.Fatalf("Authorize(cue-own): %v", err)
+	}
+	if !ok {
+		t.Fatalf("Authorize(cue-own) ok = false (outcome %q), want true: cue-own's own asset is present and verified; "+
+			"an unrelated cue's missing asset must never refuse it", outcome)
+	}
+
+	outcome, reason, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", otherAct)
+	if err != nil {
+		t.Fatalf("Authorize(cue-other): %v", err)
+	}
+	if ok {
+		t.Fatal("Authorize(cue-other) ok = true, want false: cue-other's own asset is genuinely missing from node-1's inventory")
+	}
+	if outcome != cueauth.OutcomeAssetMissing {
+		t.Fatalf("outcome = %q, want %q", outcome, cueauth.OutcomeAssetMissing)
+	}
+	if !strings.Contains(reason, "other-seq") || !strings.Contains(reason, "node-1") || !strings.Contains(reason, "cue-other") {
+		t.Fatalf("reason = %q, want it to name the sequence (other-seq), the node (node-1) and the cue (cue-other)", reason)
+	}
 }

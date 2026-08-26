@@ -96,6 +96,12 @@ type cueActivationDispatchOutcome struct {
 	// this node.
 	AuthorizeOutcome cueauth.Outcome
 
+	// AuthorizeReason is [cueactivate.Authorize]'s own detail text,
+	// populated only when AuthorizeOutcome is [cueauth.OutcomeAssetMissing]:
+	// names the sequence and the asset the refusal is actually about,
+	// never just the bare outcome string.
+	AuthorizeReason string
+
 	// NodeOutcome is set once a result was actually received from the
 	// node (or replayed from one previously received): either
 	// [cueActivationNodeOutcomeAuthorized] or one of [cueauth.Outcome]'s
@@ -127,13 +133,13 @@ func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, ac
 
 func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) cueActivationDispatchOutcome {
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
-	refusalOutcome, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act)
+	refusalOutcome, refusalReason, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act)
 	if err != nil {
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("authorize cue activation for node %q: %w", nodeID, err)}
 	}
 	if !ok {
-		h.writeCueActivationRefusalAudit(ctx, now, nodeID, act, issuer, refusalOutcome)
-		return cueActivationDispatchOutcome{NodeID: nodeID, AuthorizeOutcome: refusalOutcome}
+		h.writeCueActivationRefusalAudit(ctx, now, nodeID, act, issuer, refusalOutcome, refusalReason)
+		return cueActivationDispatchOutcome{NodeID: nodeID, AuthorizeOutcome: refusalOutcome, AuthorizeReason: refusalReason}
 	}
 
 	raw, err := json.Marshal(act)
@@ -400,16 +406,28 @@ func (h *handlers) writeCueActivationOutcomeAudit(ctx context.Context, now time.
 // silent skip, per H3 spec section 6. Nothing was ever published for this
 // node when this is called; see writeCueActivationOutcomeAudit for the
 // node's own post-dispatch refusal.
-func (h *handlers) writeCueActivationRefusalAudit(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, outcome cueauth.Outcome) {
+//
+// reason is [cueactivate.Authorize]'s own detail text, non-empty only for
+// an asset-missing refusal: the audit's OutcomeReason carries it in place
+// of the bare outcome string, so an operator reading the audit log sees
+// which sequence and asset are actually missing, never just
+// "asset-missing" naming nothing. Every other refusal outcome carries no
+// extra detail yet, so OutcomeReason falls back to the outcome string
+// itself, exactly as before this fix.
+func (h *handlers) writeCueActivationRefusalAudit(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, outcome cueauth.Outcome, reason string) {
 	if h.deps.Identity == nil {
 		return
+	}
+	outcomeReason := reason
+	if outcomeReason == "" {
+		outcomeReason = string(outcome)
 	}
 	entry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName,
 		Form: issuer.Form, CredentialID: issuer.CredentialID,
 		Action: "cue.activate", Target: "node:" + nodeID,
 		Params: cueActivationAuditParams(act), IdempotencyKey: act.ActivationID,
-		Kind: identity.AuditOutcome, Outcome: "refused", OutcomeReason: string(outcome),
+		Kind: identity.AuditOutcome, Outcome: "refused", OutcomeReason: outcomeReason,
 	}
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("cue activation refusal audit write failed", "nodeId", nodeID, "error", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -120,11 +121,16 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 
 	var gaps []SurfaceGap
 	if len(surfaceIDs) > 0 {
-		knownSequences, err := showSequenceIDs(ctx, st, showID)
+		nodeSequences, err := NodeCueSequenceIDs(ctx, st, showID, nodeID)
 		if err != nil {
 			return ExpectedSet{}, err
 		}
-		for _, seq := range knownSequences {
+		sortedSequences := make([]string, 0, len(nodeSequences))
+		for seq := range nodeSequences {
+			sortedSequences = append(sortedSequences, seq)
+		}
+		sort.Strings(sortedSequences)
+		for _, seq := range sortedSequences {
 			if !coveredSequences[seq] {
 				gaps = append(gaps, SurfaceGap{SequenceID: seq, SurfaceIDs: surfaceIDs})
 			}
@@ -132,6 +138,81 @@ func ExpectedAssetsForNode(ctx context.Context, st *store.Store, showID, nodeID 
 	}
 
 	return ExpectedSet{Assets: assets, Gaps: gaps}, nil
+}
+
+// NodeCueSequenceIDs returns the set of sequence ids referenced by every
+// Cue that actually participates for nodeID in showID's resolved Cue
+// catalog — computed with the IDENTICAL cue-inclusion and per-output
+// node-scoping rules [ResolveCueCatalog] applies (referenced by a Playlist
+// entry or a "safeCue" safeCueRef, or declaring the announcement output;
+// render scoped by show.surface assignment, audio scoped by an audio.node
+// object) — but WITHOUT resolving any asset hash, so [ExpectedAssetsForNode]
+// can call this to scope its own gap detection to nodeID's OWN cues (a
+// render node must never be asked to hold a sequence only an audio-only
+// Cue elsewhere in the show references) rather than recursing into
+// [ResolveCueCatalog], which itself calls ExpectedAssetsForNode for asset
+// hashes.
+//
+// This is the one per-target-node "which sequences does this node's cues
+// resolve to" resolution: nodeID is a plain parameter, not render-specific,
+// so a future audio/LTC/announcement node readiness computation can call
+// the identical function for an audio.node target instead of
+// reimplementing this scoping a second time. LTC and Announcement outputs
+// contribute no sequence of their own — they play the SAME Cue's own audio
+// output (config.ShowCuePayload's "outputs.ltc/announcement requires
+// outputs.audio" authoring-time rule), which this function already
+// collects.
+func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID string) (map[string]bool, error) {
+	referencedCues, err := referencedCueIDs(ctx, st, showID)
+	if err != nil {
+		return nil, err
+	}
+	surfaceIDs, err := surfaceIDsForNode(ctx, st, showID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	nodeHasSurface := len(surfaceIDs) > 0
+	_, nodeHasAudioNode, err := loadAudioNodePayload(ctx, st, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	cueObjs, err := st.ListConfigObjects(ctx, config.ShowCueConfigKind)
+	if err != nil {
+		return nil, fmt.Errorf("assetsync: node cue sequence ids: list show.cue objects: %w", err)
+	}
+
+	seqs := make(map[string]bool)
+	for _, obj := range cueObjs {
+		if obj.CurrentRevision == 0 {
+			continue
+		}
+		rev, err := st.GetConfigRevision(ctx, config.ShowCueConfigKind, obj.ID, obj.CurrentRevision)
+		if err != nil {
+			if errors.Is(err, store.ErrConfigRevisionNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("assetsync: node cue sequence ids: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
+		}
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue)
+		if verr != nil {
+			return nil, fmt.Errorf("assetsync: node cue sequence ids: decode stored show.cue %q: %s", obj.ID, verr.Detail)
+		}
+		if payload.Show != showID {
+			continue
+		}
+		directlyActivatableAnnouncement := payload.Outputs.Announcement != nil
+		if !referencedCues[obj.ID] && !directlyActivatableAnnouncement {
+			continue
+		}
+		if payload.Outputs.Render != nil && nodeHasSurface {
+			seqs[payload.Outputs.Render.Sequence] = true
+		}
+		if payload.Outputs.Audio != nil && nodeHasAudioNode {
+			seqs[payload.Outputs.Audio.Asset] = true
+		}
+	}
+	return seqs, nil
 }
 
 // surfaceIDsForNode returns the id of every show.surface object whose
@@ -155,31 +236,6 @@ func surfaceIDsForNode(ctx context.Context, st *store.Store, showID, nodeID stri
 		}
 		if payload.Show == showID && payload.Node == nodeID {
 			ids = append(ids, obj.ID)
-		}
-	}
-	return ids, nil
-}
-
-// showSequenceIDs returns the distinct sequence ids showID has ANY current
-// asset for, across every target — the show's own known content
-// vocabulary, used to detect a surfaced node with zero coverage for a
-// sequence the rest of the show already has.
-func showSequenceIDs(ctx context.Context, st *store.Store, showID string) ([]string, error) {
-	all, err := st.ListAssets(ctx, store.AssetFilter{ShowID: showID})
-	if err != nil {
-		return nil, fmt.Errorf("assetsync: list assets for show %q: %w", showID, err)
-	}
-	seen := make(map[string]bool)
-	var ids []string
-	for _, rec := range all {
-		// ListAssets returns current AND superseded rows; only a CURRENT
-		// asset is evidence the show still has this sequence.
-		if rec.SupersededAt != nil {
-			continue
-		}
-		if !seen[rec.SequenceID] {
-			seen[rec.SequenceID] = true
-			ids = append(ids, rec.SequenceID)
 		}
 	}
 	return ids, nil

@@ -2,8 +2,6 @@ package assetsync
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,11 +145,12 @@ func TestExpectedAssetsForNodeCombinesNodeAndShowTargets(t *testing.T) {
 }
 
 // TestExpectedAssetsForNodeGapsSurfacedNodeMissingSequence proves §4.1
-// point 3's stated-gap rule as this package implements it (see doc.go's
-// own note on why it is inferred from the show's asset rows rather than a
-// stored surface-to-sequence link, which does not exist in the built
-// schema): a node with a surface and zero coverage for a sequence the
-// show already has elsewhere is named as a gap.
+// point 3's stated-gap rule as this package implements it (see
+// [TestExpectedAssetsForNodeGapsScopedToNodesOwnCues] below for the
+// narrower scoping this rule is limited to): a node with a surface and
+// zero coverage for a sequence its OWN Cue references is named as a gap,
+// even when the show's only current asset for that sequence belongs to a
+// different node entirely.
 func TestExpectedAssetsForNodeGapsSurfacedNodeMissingSequence(t *testing.T) {
 	st := openTestStore(t)
 	putShow(t, st, "halloween-2026", "Halloween 2026")
@@ -159,8 +158,28 @@ func TestExpectedAssetsForNodeGapsSurfacedNodeMissingSequence(t *testing.T) {
 	declareNode(t, st, "render-02")
 	putSurface(t, st, "garage-surface", "halloween-2026", "render-02")
 
+	// render-02's own Cue references "opening" — the sequence this test's
+	// gap must legitimately be about.
+	cuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: "halloween-2026", Name: "opening-cue",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "opening"}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfig(t, st, config.ShowCueConfigKind, "opening-cue", cuePayload)
+	playlistPayload, err := config.EncodeShowPlaylistPayload(config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerShowmeshAudio,
+		Entries: []config.ShowPlaylistEntry{{ID: "e1", Cue: "opening-cue"}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.playlist payload: %v", err)
+	}
+	putConfig(t, st, config.ShowPlaylistConfigKind, "playlist-1", playlistPayload)
+
 	// The show has an "opening" sequence, but only for render-01 — render-02
-	// has a surface and should read a gap for "opening".
+	// has a surface and its own Cue names "opening", so it should read a
+	// gap for it.
 	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-01", "sha256:aaa", "Opening.fseq")
 
 	got, err := ExpectedAssetsForNode(context.Background(), st, "halloween-2026", "render-02")
@@ -181,6 +200,72 @@ func TestExpectedAssetsForNodeGapsSurfacedNodeMissingSequence(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("ExpectedAssetsForNode(render-02) Gaps[0].SurfaceIDs = %v, want it to name %q", got.Gaps[0].SurfaceIDs, "garage-surface")
+	}
+}
+
+// TestExpectedAssetsForNodeGapsScopedToNodesOwnCues proves gap detection
+// is scoped to the surfaced node's OWN cues: render-01 has a surface and
+// its own Cue, referencing sequence "own-seq", whose own asset IS uploaded
+// and covered. The show ALSO has a completely unrelated audio-only
+// sequence, "audio-only-elsewhere", with a current asset uploaded to a
+// DIFFERENT node — no Cue anywhere references it for render-01, and
+// render-01 (no audio.node) could never even use an audio sequence.
+// Scanning every sequence the show has ANY asset for, regardless of which
+// node's cues actually reference it, would flag render-01 with zero
+// coverage of "audio-only-elsewhere" even though nothing render-01 does
+// ever needs it.
+func TestExpectedAssetsForNodeGapsScopedToNodesOwnCues(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putActiveShow(t, st, "halloween-2026")
+	declareNode(t, st, "render-01")
+	declareNode(t, st, "audio-01")
+	putSurface(t, st, "render-01-surface", "halloween-2026", "render-01")
+
+	renderCuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: "halloween-2026", Name: "own",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "own-seq"}},
+	})
+	if err != nil {
+		t.Fatalf("encode render cue: %v", err)
+	}
+	putConfig(t, st, config.ShowCueConfigKind, "cue-own", renderCuePayload)
+
+	audioCuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: "halloween-2026", Name: "elsewhere",
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "audio-only-elsewhere"}},
+	})
+	if err != nil {
+		t.Fatalf("encode audio cue: %v", err)
+	}
+	putConfig(t, st, config.ShowCueConfigKind, "cue-elsewhere", audioCuePayload)
+
+	playlistPayload, err := config.EncodeShowPlaylistPayload(config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerShowmeshAudio,
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "e1", Cue: "cue-own"},
+			{ID: "e2", Cue: "cue-elsewhere"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode playlist: %v", err)
+	}
+	putConfig(t, st, config.ShowPlaylistConfigKind, "playlist-1", playlistPayload)
+
+	createAsset(t, st, "halloween-2026", "own-seq", store.AssetTargetKindNode, "render-01", "sha256:own", "Own.fseq")
+	createAsset(t, st, "halloween-2026", "audio-only-elsewhere", store.AssetTargetKindNode, "audio-01", "sha256:elsewhere", "elsewhere.wav")
+
+	got, err := ExpectedAssetsForNode(context.Background(), st, "halloween-2026", "render-01")
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode() error = %v", err)
+	}
+	for _, gap := range got.Gaps {
+		if gap.SequenceID == "audio-only-elsewhere" {
+			t.Fatalf("Gaps = %+v, want NO gap for %q: render-01 has no Cue referencing an audio-only sequence that belongs to a different node", got.Gaps, "audio-only-elsewhere")
+		}
+	}
+	if len(got.Gaps) != 0 {
+		t.Errorf("Gaps = %+v, want none: render-01's own cue's sequence (own-seq) is covered", got.Gaps)
 	}
 }
 
@@ -371,114 +456,5 @@ func TestSurfaceIDsForNodeFiltersByShowAndNode(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != "this-node-this-show" {
 		t.Fatalf("surfaceIDsForNode(halloween-2026, render-01) = %v, want exactly [this-node-this-show]", got)
-	}
-}
-
-// --- D3: showSequenceIDs's superseded_at filter ---
-
-// seedRawSupersededAsset inserts an assets row directly against the SQLite
-// file, bypassing store.CreateAsset entirely. store.CreateAsset's own
-// supersede-then-insert step always inserts a replacement for the exact
-// tuple it supersedes, in the SAME transaction (assets.go's createAsset doc
-// comment) — there is no delete for an asset (TRACK-E-SESSION-SPEC.md §9),
-// so a (show, sequence, target) tuple CreateAsset has ever touched keeps
-// exactly one current row forever. A sequence can therefore never be
-// reduced to "superseded rows only, nothing current, anywhere" through the
-// public Store API alone. This helper constructs exactly that state
-// directly so showSequenceIDs's superseded_at filter — defensive code for a
-// delete/prune capability this project does not have yet — is actually
-// exercised by a test rather than being untestable dead code.
-func seedRawSupersededAsset(t *testing.T, dbPath string, rec store.AssetRecord, supersededAt time.Time) {
-	t.Helper()
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open raw sqlite connection: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	createdAt := supersededAt.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
-	if _, err := db.Exec(`
-		INSERT INTO assets (
-			id, show_id, sequence_id, target_kind, target_id, media_type, content_hash,
-			runtime_filename, size_bytes, backend, storage_key, created_at,
-			created_by_principal_id, created_by_principal_name, superseded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, rec.ID, rec.ShowID, rec.SequenceID, rec.TargetKind, rec.TargetID, rec.MediaType, rec.ContentHash,
-		rec.RuntimeFilename, rec.SizeBytes, rec.Backend, rec.StorageKey, createdAt,
-		"test-principal", "Test Principal", supersededAt.UTC().Format(time.RFC3339Nano),
-	); err != nil {
-		t.Fatalf("insert raw superseded asset: %v", err)
-	}
-}
-
-// openTestStoreAt is openTestStore plus the temp dir it opened the store
-// in, so D3's test can reach the same SQLite file through a second raw
-// connection.
-func openTestStoreAt(t *testing.T) (*store.Store, string) {
-	t.Helper()
-	dir := t.TempDir()
-	st, err := store.Open(context.Background(), dir, nil)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	return st, dir
-}
-
-// TestShowSequenceIDsExcludesFullySupersededSequence pins D3: dropping
-// showSequenceIDs's "if rec.SupersededAt != nil { continue }" leaves the
-// suite green, because [seen] already dedups a sequence's current-plus-
-// superseded rows to one entry regardless of that filter — the filter only
-// matters for a sequence with NO current row anywhere, which is otherwise
-// unreachable (see seedRawSupersededAsset's doc comment). "retired"'s only
-// row is seeded superseded with nothing replacing it; "opening" is a real
-// current asset via CreateAsset (which itself supersedes an earlier upload
-// for the same tuple), proving the dedup half too. Without the filter,
-// "retired" would manufacture a permanent gap for any node with a surface
-// in this show.
-func TestShowSequenceIDsExcludesFullySupersededSequence(t *testing.T) {
-	st, dir := openTestStoreAt(t)
-	putShow(t, st, "halloween-2026", "Halloween 2026")
-	declareNode(t, st, "render-02")
-	declareNode(t, st, "render-03")
-	putSurface(t, st, "far-surface", "halloween-2026", "render-03")
-
-	dbPath := filepath.Join(dir, "showmesh.db") // store.go's own unexported dbFileName
-	seedRawSupersededAsset(t, dbPath, store.AssetRecord{
-		ID: "retired-1", ShowID: "halloween-2026", SequenceID: "retired",
-		TargetKind: store.AssetTargetKindNode, TargetID: "render-02",
-		MediaType: "fseq", ContentHash: "sha256:old-retired", RuntimeFilename: "Retired.fseq",
-		SizeBytes: 100, Backend: "volume", StorageKey: "sha256:old-retired",
-	}, time.Now())
-
-	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-02", "sha256:old-opening", "Opening.fseq")
-	createAsset(t, st, "halloween-2026", "opening", store.AssetTargetKindNode, "render-02", "sha256:new-opening", "Opening.fseq")
-
-	ids, err := showSequenceIDs(context.Background(), st, "halloween-2026")
-	if err != nil {
-		t.Fatalf("showSequenceIDs() error = %v", err)
-	}
-	count := map[string]int{}
-	for _, id := range ids {
-		count[id]++
-	}
-	if count["retired"] != 0 {
-		t.Errorf("showSequenceIDs() = %v, want NOT to include %q: its only row is superseded with nothing current anywhere", ids, "retired")
-	}
-	if count["opening"] != 1 {
-		t.Errorf("showSequenceIDs() names %q %d times, want exactly once (current AND superseded rows share the sequence)", "opening", count["opening"])
-	}
-
-	// The consequence spec §4.1 point 3 cares about: a fully-superseded
-	// sequence must never manufacture a gap for a surfaced node with zero
-	// coverage of it.
-	expected, err := ExpectedAssetsForNode(context.Background(), st, "halloween-2026", "render-03")
-	if err != nil {
-		t.Fatalf("ExpectedAssetsForNode() error = %v", err)
-	}
-	for _, gap := range expected.Gaps {
-		if gap.SequenceID == "retired" {
-			t.Fatalf("Gaps = %+v, want no gap named %q: a permanent gap must not be manufactured for a sequence whose only asset was superseded", expected.Gaps, "retired")
-		}
 	}
 }
