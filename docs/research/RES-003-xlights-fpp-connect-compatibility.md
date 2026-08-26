@@ -405,7 +405,7 @@ https://github.com/FalconChristmas/fpp/blob/139d7e6ba8c70d5a5f835a9664ddbab36853
 
 ### 10.7 Owner rulings, 2026-08-25
 
-The five questions section 9 and the Track E seam document left open were answered by the owner on 2026-08-25 and are recorded durably in [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md). Summarised here because a reader of this record needs to know which way the facts above were resolved:
+The five questions section 9 and the Track E seam document left open were answered by the owner on 2026-08-25, and one further ruling was made during implementation; all six are recorded durably in [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md). Summarised here because a reader of this record needs to know which way the facts above were resolved:
 
 1. **`typeId` is `0x7F`, provisional**, with the reasoning of section 10.2 and never `0x01`. Upstream registration in both projects is a separate follow-up and gates nothing.
 2. **The listener binds port 80**, granted by `AmbientCapabilities=CAP_NET_BIND_SERVICE` on the node service unit, with `SHOWMESH_FPPCONNECT_LISTEN_ADDR` as a start-time override for dev stacks and tests. Port 80 is not negotiable with the client (section 10.4), so the choice was only ever about how the process obtains it.
