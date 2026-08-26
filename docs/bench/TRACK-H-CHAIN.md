@@ -29,9 +29,12 @@ The wait for FPP to report idle is bounded by `FPP_IDLE_TIMEOUT_SECONDS`
 timeout, instead of waiting indefinitely and starting a playlist the moment a
 real show happens to end.
 
-`ADMIN_TOKEN` is read from the environment throughout, including by the three
-`capture-*.sh` scripts, and is never passed as a command-line argument to any
-process, so it does not appear in `ps` output.
+`ADMIN_TOKEN` is read from the environment throughout, including by the two
+capture scripts that call the coordinator, `capture-observations.sh` and
+`capture-reconciliation.sh` (`capture-node-assignment.sh` reads no token; it
+only reads the node's own persisted assignment off disk). It is never passed
+as a command-line argument to any process, so it does not appear in `ps`
+output.
 
 ## What the chain is
 
