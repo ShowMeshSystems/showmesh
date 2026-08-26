@@ -520,6 +520,10 @@ listed because the last row was minted after the others had shipped:
 | `surface.output.mode` | shipped | Track B review fix, finding 7 |
 | `surface.output.idle_mode` | shipped | Track B review fix, finding 7 |
 | `surface.output.failure` | shipped | Owner ruling: a broken assignment must not look like a healthy idle |
+| `surface.content.fseq_filename` | shipped | Track H (node's own evidence for the FSEQ it is actually rendering) |
+| `surface.content.fseq_content_hash` | shipped | Track H |
+| `surface.content.cue_id` | shipped | Track H |
+| `surface.content.catalog_revision` | shipped | Track H |
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 

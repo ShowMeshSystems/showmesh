@@ -290,3 +290,89 @@ func TestDecodeRenderPayloadRejectsNullSurfacesKey(t *testing.T) {
 		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
 	}
 }
+
+// TestRenderPayloadValidateRejectsMismatchedFSEQFilenameAndHash proves
+// the paired-field rule: fseqFilename and fseqContentHash must be
+// both empty (no assignment held) or both set (a real content identity):
+// never one without the other, which would be evidence the node cannot
+// actually have (a hash with no named file, or a named file with no
+// verified hash).
+func TestRenderPayloadValidateRejectsMismatchedFSEQFilenameAndHash(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:     "surface-1",
+				PipelineState: RenderPipelineStateRunning,
+				FSEQFilename:  "show.fseq",
+				// FSEQContentHash left empty: invalid pairing.
+				ObservedAt: time.Now(),
+			},
+		},
+	}
+	err := p.Validate()
+	if err == nil {
+		t.Fatalf("Validate() returned no error for fseqFilename set with an empty fseqContentHash")
+	}
+	if !errors.Is(err, ErrPayloadMissingField) {
+		t.Fatalf("error = %v, want wrapping ErrPayloadMissingField", err)
+	}
+}
+
+// TestRenderPayloadValidateAcceptsFullContentIdentity proves a surface
+// carrying all four content fields (filename, hash, cue id, catalog
+// revision) round-trips through NewRenderEnvelope/DecodeRenderPayload
+// exactly, and that a surface reporting none of them (no assignment held)
+// is equally valid.
+func TestRenderPayloadValidateAcceptsFullContentIdentity(t *testing.T) {
+	p := RenderPayload{
+		Surfaces: []RenderSurfaceReport{
+			{
+				SurfaceID:       "surface-1",
+				PipelineState:   RenderPipelineStateRunning,
+				FSEQFilename:    "halloween-01.fseq",
+				FSEQContentHash: "sha256:deadbeef",
+				CueID:           "cue-42",
+				CatalogRevision: "rev-7",
+				ObservedAt:      time.Now(),
+			},
+			{
+				SurfaceID:     "surface-2",
+				PipelineState: RenderPipelineStateRunning,
+				ObservedAt:    time.Now(),
+			},
+		},
+	}
+
+	env, err := NewRenderEnvelope(time.Now, "node-1", p)
+	if err != nil {
+		t.Fatalf("NewRenderEnvelope() error = %v", err)
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	decodedEnv, err := DecodeEnvelope(raw)
+	if err != nil {
+		t.Fatalf("DecodeEnvelope() error = %v", err)
+	}
+	got, err := DecodeRenderPayload(decodedEnv)
+	if err != nil {
+		t.Fatalf("DecodeRenderPayload() error = %v", err)
+	}
+
+	if got.Surfaces[0].FSEQFilename != "halloween-01.fseq" {
+		t.Errorf("FSEQFilename = %q, want halloween-01.fseq", got.Surfaces[0].FSEQFilename)
+	}
+	if got.Surfaces[0].FSEQContentHash != "sha256:deadbeef" {
+		t.Errorf("FSEQContentHash = %q, want sha256:deadbeef", got.Surfaces[0].FSEQContentHash)
+	}
+	if got.Surfaces[0].CueID != "cue-42" {
+		t.Errorf("CueID = %q, want cue-42", got.Surfaces[0].CueID)
+	}
+	if got.Surfaces[0].CatalogRevision != "rev-7" {
+		t.Errorf("CatalogRevision = %q, want rev-7", got.Surfaces[0].CatalogRevision)
+	}
+	if got.Surfaces[1].FSEQFilename != "" || got.Surfaces[1].FSEQContentHash != "" || got.Surfaces[1].CueID != "" || got.Surfaces[1].CatalogRevision != "" {
+		t.Errorf("surface-2 (no assignment held) = %+v, want all four content fields empty", got.Surfaces[1])
+	}
+}

@@ -223,6 +223,55 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 	}
 
 	obs = append(obs, surfaceDrawStateObservations(nodeID, res, sf, observedAt, rep)...)
+	obs = append(obs, surfaceContentObservations(nodeID, res, sf, observedAt, rep)...)
+
+	return obs
+}
+
+// surfaceContentObservations renders the four content-identity
+// signals: the FSEQ this surface's frame writer actually applied, plus the
+// cue and catalog revision that authorized it, from the node's own
+// persisted evidence (mqttproto.RenderSurfaceReport.FSEQFilename etc,
+// internal/agent/renderreport.go's applyContentIdentity). sf.FSEQFilename
+// == "" means this surface holds no assignment at all: never a stale
+// filename left over from a previous one, so all four signals are
+// NotCollected together with one reason, mirroring
+// surfaceDrawStateObservations' identical "no active writer" grouping.
+func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
+	if sf.FSEQFilename == "" {
+		reason := "this surface holds no render assignment"
+		return []observation.Observation{
+			notCollected(res, SignalSurfaceContentFSEQFilename, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentFSEQContentHash, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentCueID, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentCatalogRevision, SourceFor(nodeID), reason, rep.receivedAt),
+		}
+	}
+
+	obs := []observation.Observation{
+		buildValue(nodeID, res, SignalSurfaceContentFSEQFilename, sf.FSEQFilename, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceContentFSEQContentHash, sf.FSEQContentHash, observedAt, rep),
+	}
+
+	// CueID is only meaningful when the current assignment was applied by
+	// a cue activation: a direct render.surface.apply assignment has no
+	// cue at all, stated as not applicable rather than fabricated as "".
+	if sf.CueID == "" {
+		obs = append(obs, notCollected(res, SignalSurfaceContentCueID, SourceFor(nodeID),
+			"this surface's current assignment was not applied by a cue activation", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceContentCueID, sf.CueID, observedAt, rep))
+	}
+
+	// CatalogRevision is only meaningful when the persisted assignment
+	// carries an authorization tuple (TRACK-H-H3-SPEC.md section 5),
+	// absent for a legacy assignment persisted before that tuple existed.
+	if sf.CatalogRevision == "" {
+		obs = append(obs, notCollected(res, SignalSurfaceContentCatalogRevision, SourceFor(nodeID),
+			"this surface's current assignment carries no catalog authorization tuple", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceContentCatalogRevision, sf.CatalogRevision, observedAt, rep))
+	}
 
 	return obs
 }
