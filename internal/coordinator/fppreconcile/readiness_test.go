@@ -80,6 +80,22 @@ func putDefinitionAt(t *testing.T, st *store.Store, instanceUUID, playlistHash, 
 	}
 }
 
+// putDefinitionAtTimes is [putDefinitionAt] with CapturedAt and ReceivedAt
+// controlled independently, for tests that need to prove ordering is
+// decided by ReceivedAt (the coordinator's own arrival order) rather than
+// CapturedAt (the plugin's own, less trustworthy, wall-clock claim).
+func putDefinitionAtTimes(t *testing.T, st *store.Store, instanceUUID, playlistHash, playlistName string, capturedAt, receivedAt time.Time) {
+	t.Helper()
+	_, err := st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: instanceUUID, PlaylistHash: playlistHash, PlaylistName: playlistName,
+		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"}],"leadOut":[]}`,
+		CapturedAt:     capturedAt, ReceivedAt: receivedAt,
+	})
+	if err != nil {
+		t.Fatalf("put fpp playlist definition: %v", err)
+	}
+}
+
 func putObservation(t *testing.T, st *store.Store, rec store.FPPPlaylistEntryObservationRecord) {
 	t.Helper()
 	if err := st.PutFPPPlaylistEntryObservation(context.Background(), rec); err != nil {
@@ -369,6 +385,66 @@ func TestPlaylistReadinessDefinitionSupersededIgnoresOlderOrOtherPlaylistName(t 
 	}
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true (failing condition %q: %s); an older same-name definition and a different-name definition must not trip definition-superseded", report.FailingCondition, report.Reason)
+	}
+}
+
+// TestPlaylistReadinessDefinitionSupersededMatchesOnTheDefinitionsOwnName
+// reproduces the defect where definition-superseded silently never fires
+// when the binding's own p.FPP.PlaylistName has drifted from the bound
+// definition's own stored name: matching candidate rows against the
+// binding's copy of the name, instead of against defRec.PlaylistName,
+// excludes every genuinely-newer row before it can ever be compared.
+func TestPlaylistReadinessDefinitionSupersededMatchesOnTheDefinitionsOwnName(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	boundHash := hash64("bound")
+	newHash := hash64("new")
+	// The binding's own copy of the playlist name ("Stale Name") disagrees
+	// with what the bound definition is actually stored under ("Main") —
+	// e.g. an import that predates a rename on the FPP side.
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Stale Name", boundHash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionAt(t, st, "inst-1", boundHash, "Main", time.Unix(1000, 0).UTC())
+	putDefinitionAt(t, st, "inst-1", newHash, "Main", time.Unix(2000, 0).UTC())
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: a newer definition is stored under the bound definition's own name, even though the binding's own playlistName field disagrees with it")
+	}
+	if report.FailingCondition != ReadinessDefinitionSuperseded {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessDefinitionSuperseded)
+	}
+}
+
+// TestPlaylistReadinessDefinitionSupersededComparesReceivedAtNotCapturedAt
+// reproduces the defect where a genuinely newer definition is skipped
+// because its plugin-supplied CapturedAt is equal to (here: a same-tick
+// collision) the bound definition's own CapturedAt. ReceivedAt — the
+// coordinator's own, trustworthy arrival order — says the new row arrived
+// after the bound one, so it must still be reported as superseding.
+func TestPlaylistReadinessDefinitionSupersededComparesReceivedAtNotCapturedAt(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	boundHash := hash64("bound")
+	newHash := hash64("new")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", boundHash, "cue-1", "mainPlaylist", 0, "", "")
+	sameTick := time.Unix(1000, 0).UTC()
+	putDefinitionAtTimes(t, st, "inst-1", boundHash, "Main", sameTick, sameTick)
+	// newHash's CapturedAt ties the bound definition's own (a coarse
+	// plugin timestamp collision); only ReceivedAt shows it arrived later.
+	putDefinitionAtTimes(t, st, "inst-1", newHash, "Main", sameTick, sameTick.Add(time.Second))
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: a definition received after the bound one, under the same playlist name and a different hash, must not be ignored just because its CapturedAt ties the bound one's")
+	}
+	if report.FailingCondition != ReadinessDefinitionSuperseded {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessDefinitionSuperseded)
 	}
 }
 

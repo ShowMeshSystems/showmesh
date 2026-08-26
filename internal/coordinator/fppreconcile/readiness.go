@@ -62,7 +62,30 @@ const (
 	// on its own schedule, not only when a playlist plays — so this
 	// condition can fail readiness with FPP sitting idle and nothing
 	// having been played since the edit, which [ReadinessObservationHashMismatch]
-	// below cannot do.
+	// below cannot do. "Same playlist name" and "newer" are both decided
+	// against the stored definitions themselves, never against the
+	// binding's own copies of that data — see [PlaylistReadiness]'s own
+	// condition-2 comment for why.
+	//
+	// This condition only ever compares the bound definition against
+	// OTHER stored definitions; it says nothing about whether the bound
+	// definition itself is still an accurate read of FPP right now. A
+	// playlist that genuinely has not changed in months, and a playlist
+	// whose plugin has stopped re-posting altogether (a dead or
+	// unreachable plugin), produce the identical row set — no newer row
+	// exists to compare against in either case — so both read as Ready
+	// here. That is a deliberate, narrower boundary than
+	// [ReadinessEvidenceUnavailable]'s, not an oversight: an observation
+	// can be marked Unavailable by the collector itself when it received
+	// something but could not identify it (contracts §1.4), giving this
+	// package a positive "I could not check" signal to fail on. The
+	// definitions table has no equivalent marker for "the plugin went
+	// quiet" — silence here is indistinguishable from "confirmed
+	// unchanged" — so promoting silence itself to a failure would also
+	// fail every playlist that is genuinely unedited. Detecting a plugin
+	// that has stopped reporting at all is a liveness question (see
+	// internal/coordinator/inventory), not a per-playlist readiness
+	// question, and belongs there, not here.
 	ReadinessDefinitionSuperseded ReadinessCondition = "definition-superseded"
 	// ReadinessEntryNotInDefinition: an entry's (section, position) does
 	// not exist in the stored definition.
@@ -224,6 +247,31 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// never against an observation, so it answers the question with FPP
 	// idle and nothing played since the edit (see [ReadinessDefinitionSuperseded]'s
 	// own doc comment for why the observation-based check below cannot).
+	//
+	// "Same playlist" is matched against defRec.PlaylistName — the bound
+	// definition's OWN stored name — never against p.FPP.PlaylistName
+	// (the binding's copy of that name). The two are normally equal, but
+	// nothing keeps them equal, and matching on the binding's copy
+	// instead of the definition's own name means a definition whose name
+	// has drifted from the binding would never surface as superseding:
+	// the loop below would silently exclude every row that could prove
+	// it. defRec is already the definition everything else in this
+	// function is evaluated against, so its own name, not the binding's
+	// possibly-stale copy of it, is the identity to match candidates on.
+	//
+	// "Newer" is decided by ReceivedAt, the coordinator's own insertion
+	// timestamp — fpp_playlist_definitions is insert-only and never
+	// overwrites a row (store/fppplaylistdefinitions.go's own doc
+	// comment), so ReceivedAt reflects the true order the coordinator
+	// learned about each definition. CapturedAt is not used for this
+	// ordering: it is plugin-supplied wall-clock time, and a plugin
+	// restart, host clock skew, or two definitions captured inside the
+	// same coarse timestamp can all give a genuinely newer definition a
+	// CapturedAt equal to or earlier than the bound one's. A candidate is
+	// excluded here only when it is providably received BEFORE the bound
+	// definition; equal-or-later is never treated as "ignore" — it is
+	// still different content under the same playlist name, and is
+	// reported as superseding rather than silently passed over.
 	instanceDefs, err := st.ListFPPPlaylistDefinitionsByInstance(ctx, p.FPP.InstanceUUID)
 	if err != nil {
 		return Report{}, fmt.Errorf("fppreconcile: list playlist definitions for instance: %w", err)
@@ -231,13 +279,13 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	var newest *store.FPPPlaylistDefinitionRecord
 	for i := range instanceDefs {
 		d := &instanceDefs[i]
-		if d.PlaylistName != p.FPP.PlaylistName || d.PlaylistHash == p.FPP.PlaylistHash {
+		if d.PlaylistName != defRec.PlaylistName || d.PlaylistHash == p.FPP.PlaylistHash {
 			continue
 		}
-		if !d.CapturedAt.After(defRec.CapturedAt) {
+		if d.ReceivedAt.Before(defRec.ReceivedAt) {
 			continue
 		}
-		if newest == nil || d.CapturedAt.After(newest.CapturedAt) {
+		if newest == nil || d.ReceivedAt.After(newest.ReceivedAt) {
 			newest = d
 		}
 	}
