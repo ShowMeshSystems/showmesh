@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -27,7 +28,12 @@ import (
 // main.go's run() and every cmd_*.go file's own switch statement — never
 // from a hand-written list that could drift the identical way the
 // Commands: block itself just did — and fails naming every one that
-// printTopLevelUsage's Commands: section does not mention.
+// printTopLevelUsage's Commands: section does not mention. It also fails,
+// separately and by name, on a dispatcher whose own routing shape this
+// walk cannot enumerate at all (dispatchesOnArgsZero) and on a
+// helpCoverageDispatchExtras entry that no longer names a real function
+// (the stale-key loop below) — both cases where children would otherwise
+// go uncollected and be missed by the Commands: comparison entirely.
 
 // helpAliases are switch case values that select help output for the
 // CURRENT command rather than naming a child subcommand; every dispatcher
@@ -41,14 +47,19 @@ var helpAliases = map[string]bool{
 // package that routes on args[0] by some mechanism OTHER than a
 // `switch sub { case "x": ... }` — a map literal or a slice iterated in a
 // loop — so subSwitchChildren's AST walk, which only recognizes the
-// switch shape, does not silently skip the subcommands it dispatches.
-// Every entry names its own source. Mirrors writeparity_test.go's
+// switch shape, still has each one's subcommands to work from. Every
+// entry names its own source. Mirrors writeparity_test.go's
 // dynamicWritePathCoverage for the identical reason stated there: a
-// generic walker cannot follow every possible Go control-flow shape, but
-// an unlisted new one must fail this test loudly rather than be silently
-// skipped — which is exactly how "cuecatalog deploy" went missing in the
-// first place, just one level up (a hand-written help list rather than a
-// hand-written coverage list).
+// generic walker cannot follow every possible Go control-flow shape.
+// Unlike a plain switch dispatcher, this walk cannot enumerate an unlisted
+// entry's own children by itself — so a new one left off this list, or an
+// existing key that stops matching a real function (renamed or removed),
+// is instead caught by dispatchesOnArgsZero below and by the
+// helpCoverageDispatchExtras stale-key check in the test itself: both
+// fail this test loudly, naming the function, rather than let its
+// subcommands silently drop out of the enumeration — which is exactly how
+// "cuecatalog deploy" went missing in the first place, just one level up
+// (a hand-written help list rather than a hand-written coverage list).
 var helpCoverageDispatchExtras = map[string][]string{
 	// cmdFPP (cmd_fpp.go) dispatches its 8 write verbs through the
 	// fppWriteSubcommands map and its 3 read-only families through
@@ -120,9 +131,11 @@ type subDispatchChild struct {
 // run(), cmd_cuecatalog.go's cmdCueCatalog, and so on) — and returns each
 // case's string literal(s) (excluding helpAliases) together with the
 // function called by that case's own `return someFunc(...)`, if any.
-// Returns nil for a function that does not use this shape at all (a leaf
-// command, or a dispatcher covered instead by
-// helpCoverageDispatchExtras).
+// Returns nil for a function that does not use this shape at all — which
+// is true of both a genuine leaf command and a dispatcher this walk
+// cannot read (one covered instead by helpCoverageDispatchExtras, or one
+// covered by neither). Callers must not treat nil as "leaf": use
+// dispatchesOnArgsZero to tell the two apart.
 func subSwitchChildren(fn *ast.FuncDecl) []subDispatchChild {
 	subVar := ""
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -230,6 +243,38 @@ func subSwitchChildren(fn *ast.FuncDecl) []subDispatchChild {
 	return children
 }
 
+// dispatchesOnArgsZero reports whether fn's body reads args[0] anywhere at
+// all, by any means — an assignment (`sub := args[0]`), a map index
+// (`someMap[args[0]]`), a comparison (`args[0] == "x"`), whatever. Every
+// dispatcher in this package reads args[0] to pick which child to hand
+// off to; no genuine leaf command (cmdVersion, cmdNodes, and so on) ever
+// does, since a leaf has no child to pick. subSwitchChildren returning nil
+// is ambiguous between the two; this is the second signal that resolves
+// it — see collectRegisteredCommandPaths.
+func dispatchesOnArgsZero(fn *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		idx, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		base, ok := idx.X.(*ast.Ident)
+		if !ok || base.Name != "args" {
+			return true
+		}
+		lit, ok := idx.Index.(*ast.BasicLit)
+		if !ok || lit.Kind != token.INT || lit.Value != "0" {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
 // collectRegisteredCommandPaths recursively walks every dispatcher
 // reachable from fn (a switch-based one via subSwitchChildren, an
 // otherwise-shaped one via helpCoverageDispatchExtras), appending the
@@ -237,7 +282,15 @@ func subSwitchChildren(fn *ast.FuncDecl) []subDispatchChild {
 // included, e.g. both "audio" is implied and "audio session" and
 // "audio session apply" are all recorded as this program actually
 // registers all three as reachable command words.
-func collectRegisteredCommandPaths(funcs map[string]*ast.FuncDecl, fn *ast.FuncDecl, prefix []string, out *[]string, visiting map[string]bool) {
+//
+// A dispatcher that is neither switch-shaped (subSwitchChildren found
+// children) nor listed in helpCoverageDispatchExtras, but still reads
+// args[0] (dispatchesOnArgsZero), is a dispatcher this walk cannot read —
+// not a leaf, whatever subSwitchChildren returned for it. Its own name is
+// appended to unrecognized instead of being silently treated as childless,
+// so the caller fails the test naming it rather than dropping its
+// subcommands out of the enumeration unnoticed.
+func collectRegisteredCommandPaths(funcs map[string]*ast.FuncDecl, fn *ast.FuncDecl, prefix []string, out, unrecognized *[]string, visiting map[string]bool) {
 	name := fn.Name.Name
 	if visiting[name] {
 		return
@@ -245,24 +298,34 @@ func collectRegisteredCommandPaths(funcs map[string]*ast.FuncDecl, fn *ast.FuncD
 	visiting[name] = true
 	defer delete(visiting, name)
 
-	for _, c := range subSwitchChildren(fn) {
+	children := subSwitchChildren(fn)
+	for _, c := range children {
 		childPath := append(append([]string{}, prefix...), c.name)
 		*out = append(*out, strings.Join(childPath, " "))
 		if c.callee != "" {
 			if next, ok := funcs[c.callee]; ok {
-				collectRegisteredCommandPaths(funcs, next, childPath, out, visiting)
+				collectRegisteredCommandPaths(funcs, next, childPath, out, unrecognized, visiting)
 			}
 		}
 	}
 
-	for _, extraName := range helpCoverageDispatchExtras[name] {
+	extras, isExtra := helpCoverageDispatchExtras[name]
+	for _, extraName := range extras {
 		childPath := append(append([]string{}, prefix...), extraName)
 		*out = append(*out, strings.Join(childPath, " "))
 		if callee, ok := helpCoverageDispatchExtraCallees[extraName]; ok {
 			if next, ok := funcs[callee]; ok {
-				collectRegisteredCommandPaths(funcs, next, childPath, out, visiting)
+				collectRegisteredCommandPaths(funcs, next, childPath, out, unrecognized, visiting)
 			}
 		}
+	}
+
+	if !isExtra && len(children) == 0 && dispatchesOnArgsZero(fn) {
+		where := name
+		if len(prefix) > 0 {
+			where = fmt.Sprintf("%s (reached as %q)", name, strings.Join(prefix, " "))
+		}
+		*unrecognized = append(*unrecognized, where)
 	}
 }
 
@@ -292,7 +355,10 @@ func commandsBlock(t *testing.T, help string) string {
 // regression test for a missing "cuecatalog deploy" entry: every subcommand
 // this program's own dispatch code
 // registers, enumerated from that code rather than from any hand-written
-// list, must be named in "showmeshctl --help"'s Commands: section.
+// list, must be named in "showmeshctl --help"'s Commands: section. It also
+// fails, by name, on a dispatcher whose routing shape this walk cannot
+// read at all (see dispatchesOnArgsZero) and on a helpCoverageDispatchExtras
+// entry that no longer names a real function.
 func TestEveryRegisteredSubcommandIsInTopLevelHelp(t *testing.T) {
 	funcs := parseShowmeshctlFuncs(t)
 	runFn, ok := funcs["run"]
@@ -300,8 +366,34 @@ func TestEveryRegisteredSubcommandIsInTopLevelHelp(t *testing.T) {
 		t.Fatal("could not find run() in main.go; this test's own AST walk is broken, not the command it checks")
 	}
 
-	var paths []string
-	collectRegisteredCommandPaths(funcs, runFn, nil, &paths, map[string]bool{})
+	// A helpCoverageDispatchExtras key is a function name spelled as a
+	// string literal, so renaming or deleting that function does not
+	// produce a compile error — it just makes the key stop matching
+	// anything, and that entry's whole subtree of subcommands silently
+	// stops being collected below. Mirrors writeparity_test.go:438-452's
+	// stale dynamicWritePathCoverage-entry check for the same reason.
+	keys := make([]string, 0, len(helpCoverageDispatchExtras))
+	for key := range helpCoverageDispatchExtras {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, ok := funcs[key]; !ok {
+			t.Errorf("helpCoverageDispatchExtras names %q but no top-level function by that name exists in "+
+				"cmd/showmeshctl — it was renamed or removed; update or delete the stale entry", key)
+		}
+	}
+
+	var paths, unrecognized []string
+	collectRegisteredCommandPaths(funcs, runFn, nil, &paths, &unrecognized, map[string]bool{})
+	if len(unrecognized) > 0 {
+		sort.Strings(unrecognized)
+		t.Fatalf("%d dispatcher(s) route on args[0] (dispatchesOnArgsZero) in a shape subSwitchChildren does not "+
+			"recognize, and are not listed in helpCoverageDispatchExtras, so their own subcommands cannot be "+
+			"enumerated at all and would otherwise be silently missing from this test's coverage rather than "+
+			"from showmeshctl --help: add a helpCoverageDispatchExtras entry naming each one's subcommands:\n  %s",
+			len(unrecognized), strings.Join(unrecognized, "\n  "))
+	}
 	if len(paths) == 0 {
 		t.Fatal("collected zero registered subcommand paths from run()'s own dispatch code; this test's own AST walk is broken, not the command it checks")
 	}

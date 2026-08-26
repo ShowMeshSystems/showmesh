@@ -252,6 +252,7 @@ Commands:
   resolume action set-layer-bypass <id> <bool>   set a layer's bypass and confirm by evidence (write)
   resolume action set-layer-master <id> <value>  set a layer's master (continuous value) and confirm by evidence (write)
   resolume instance list               show the configured resolume.instances configuration
+                                       (requires config:write)
   resolume instance set --id --url     write a new resolume.instances revision naming exactly
                                        one instance (write, requires config:write)
   resolume instance remove             write a new resolume.instances revision naming zero
