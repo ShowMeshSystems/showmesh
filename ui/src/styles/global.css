@@ -117,6 +117,16 @@ input {
     flex-direction: column;
     width: 12rem;
     height: 100vh;
+    /* Operator-reported: at this width the column held more links than
+       100vh of vertical space, so the last group was clipped below the
+       viewport with no way to reach it, and the sidebar's own background
+       stopped at the viewport edge while links kept going underneath it
+       against the page background. Scrolling the nav internally keeps
+       every link reachable and keeps the background covering exactly the
+       column that is actually visible, while the column itself stays
+       pinned (`position: sticky` above) so the main content is what
+       scrolls, not the nav. */
+    overflow-y: auto;
     border-top: none;
     border-right: 1px solid var(--color-border);
     align-items: stretch;
@@ -174,6 +184,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
@@ -207,6 +218,10 @@ input {
   color: var(--color-text);
   font-weight: 700;
   white-space: nowrap;
+  /* The indicator is a link to the mode switch (config/show.mode); it must
+     keep reading as the same badge, not gain the page's default link
+     underline/colour. */
+  text-decoration: none;
 }
 
 .show-mode--show {
@@ -232,6 +247,45 @@ input {
 .show-mode__note {
   font-weight: 400;
   margin-left: var(--space-1);
+}
+
+/* Operator-reported: the signed-in identity/sign-out control used to take
+   a full-width band across the top of every page (SessionPanel's own
+   signed-in state). It now renders in the header instead (Layout.tsx),
+   compact rather than banded -- signed-out/bootstrap keep the band because
+   those need room for the Sign in / Use a token forms a header cannot fit.
+   Selector specificity (two classes) beats status.css's `.session-panel`
+   rules regardless of import order, so this does not depend on the two
+   files loading in a particular sequence. */
+/* CoordinatorBuildNotice folded into the header (Layout.tsx): a bare <p>
+   otherwise carries the browser default block margin, which would reopen
+   the vertical space this fold is meant to remove. */
+.app-header .coordinator-build-notice {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.app-header .session-panel--signed-in {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  flex-wrap: wrap;
+}
+
+.app-header .session-panel--signed-in button {
+  min-height: var(--touch-target-min);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: var(--font-weight-medium);
 }
 
 .icon-button {

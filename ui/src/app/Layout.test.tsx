@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -247,5 +249,55 @@ describe('Layout', () => {
       expect(screen.getByText(/network unreachable/)).toBeInTheDocument()
       expect(screen.queryByText(/^Coordinator 1\.2\.3/)).not.toBeInTheDocument()
     })
+  })
+
+  // Operator-reported: at the sidebar breakpoint (>=768px), .app-nav had
+  // scrollHeight 1228px against a clientHeight of 753px with no
+  // overflow rule, so 475px of links were clipped below the viewport and
+  // unreachable, while the document itself scrolled instead (because
+  // nothing else contained that height) -- and the nav's own background
+  // stopped at the viewport edge while links kept going underneath it
+  // against the page background. jsdom does not run a real layout engine
+  // or load global.css, so scrollHeight/clientHeight/computed overflow are
+  // not observable from a render here -- this reads the actual rule from
+  // the stylesheet instead, which is what this codebase's own
+  // fppCommandCopyGuard.test.ts precedent does for the same reason.
+  it('gives the sidebar its own internal scroll at the sidebar breakpoint, instead of clipping', () => {
+    const css = readFileSync(path.resolve(__dirname, '../styles/global.css'), 'utf-8')
+    const desktopBlock = css.match(/@media \(min-width: 768px\) \{([\s\S]*?)\n\}\n\n\.app-header/)
+    expect(desktopBlock).not.toBeNull()
+    const desktopBlockBody = desktopBlock?.[1] ?? ''
+    const navRule = desktopBlockBody.match(/\.app-nav \{([\s\S]*?)\}/)
+    expect(navRule).not.toBeNull()
+    expect(navRule?.[1] ?? '').toMatch(/overflow-y:\s*auto/)
+    // The phone (unqualified, mobile-first) rule must stay exactly as it
+    // was -- a fixed bottom tab bar with no overflow rule of its own.
+    const phoneRule = css.match(/\.app-nav \{([\s\S]*?)\}/)
+    expect(phoneRule).not.toBeNull()
+    expect(phoneRule?.[1] ?? '').not.toMatch(/overflow-y/)
+  })
+
+  // Operator-reported: the signed-in identity ("Signed in as eric
+  // (admin)") and Sign out used to render as a full-width band in the
+  // main column. It now renders in the header alongside the title, mode
+  // indicator, and coordinator build line.
+  it('renders the signed-in identity and sign-out control in the header, not as a full-width band', () => {
+    const SIGNED_IN_SESSION: SessionResponse = {
+      serverTime: '2026-08-11T12:00:00.000Z',
+      authenticated: true,
+      principal: { id: 'p1', name: 'eric', kind: 'human', role: 'admin' },
+      session: { id: 's1', deviceLabel: 'console', createdAt: '2026-08-11T12:00:00.000Z' },
+      credentialForm: 'session',
+      scopes: [],
+      scopesState: 'current',
+      bootstrapRequired: false,
+    }
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345, SIGNED_IN_SESSION))
+
+    const identity = screen.getByText(/Signed in as eric/)
+    const header = document.querySelector('.app-header')
+    expect(header).not.toBeNull()
+    expect(header!.contains(identity)).toBe(true)
+    expect(screen.getByRole('button', { name: /Sign out/ })).toBeInTheDocument()
   })
 })

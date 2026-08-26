@@ -3,7 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { getServiceDescriptor, type ServiceDescriptor } from '../api'
 import { ConnectionBanner } from '../components/ConnectionBanner'
 import { TokenPrompt } from '../components/TokenPrompt'
-import { SessionPanel } from '../components/SessionPanel'
+import { SessionPanel, SessionIdentity } from '../components/SessionPanel'
 import { ShowModeIndicator } from '../components/ShowModeIndicator'
 import { describeApiError } from './session'
 import { useHighContrast } from './useHighContrast'
@@ -179,12 +179,30 @@ export function Layout({ onSubmitToken }: LayoutProps) {
           <h1 className="app-header__title">ShowMesh Operator</h1>
           {/* ADR-033 decision 3: the installation-wide operating mode is
               visible PERSISTENTLY, on every route, not on a settings page.
-              It sits in this header for the same reason SessionPanel below
-              is not gated on `blockContent`: an operator must be able to
-              see which mode they are in even while the rest of the page is
-              showing "no data yet", because that is exactly the moment
+              It sits in this header for the same reason SessionIdentity
+              below is not gated on `blockContent`: an operator must be able
+              to see which mode they are in even while the rest of the page
+              is showing "no data yet", because that is exactly the moment
               every surface behaves differently and nothing says why. */}
           <ShowModeIndicator />
+          {/* GET / (getServiceDescriptor): "is this the thing I just
+              deployed" has no other answer anywhere in this UI during a
+              fleet upgrade -- showmeshctl version reports it, this did not.
+              Low-noise reference text, never an alert, since an
+              unreachable coordinator already has ConnectionBanner's own
+              alert below. Operator-reported: this used to be its own
+              full-width row below the connection banner, one of three
+              stacked bands consuming vertical space before any page
+              content -- it folds in here instead, next to the other
+              persistent header text, and still states plainly when the
+              descriptor could not be read rather than rendering blank. */}
+          <CoordinatorBuildNotice />
+          {/* Operator-reported: this used to be a full-width band
+              (SessionPanel's signed-in case) below, spent purely on
+              "Signed in as X" and Sign out. It renders here instead, same
+              non-gating on `blockContent` as SessionPanel's other states
+              below -- see SessionIdentity's own header comment. */}
+          <SessionIdentity />
           <button
             type="button"
             className="icon-button"
@@ -195,15 +213,6 @@ export function Layout({ onSubmitToken }: LayoutProps) {
           </button>
         </header>
         <ConnectionBanner connection={model.connection} />
-        {/* GET / (getServiceDescriptor): "is this the thing I just
-            deployed" has no other answer anywhere in this UI during a
-            fleet upgrade -- showmeshctl version reports it, this did not.
-            Placed right next to ConnectionBanner, not on a settings page,
-            because it is about the SAME coordinator this UI is currently
-            talking to; low-noise reference text, never an alert, since an
-            unreachable coordinator already has ConnectionBanner's own
-            alert above it. */}
-        <CoordinatorBuildNotice />
         {model.connection.kind === 'unauthorized' && (
           <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
         )}

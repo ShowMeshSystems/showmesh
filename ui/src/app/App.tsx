@@ -1,4 +1,5 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { BrowserRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom'
 // Seam B's public surface (spec sections 5.4-5.6): the `useModel()` hook
 // and a way to submit an operator-supplied API token. `ui/src/api` does
 // not exist in this working tree yet -- seam B is building it
@@ -72,12 +73,34 @@ import { FPPPlaylistDefinitionDetail } from '../views/FPPPlaylistDefinitionDetai
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
+// Operator-reported: navigating from a long page to another one left the
+// new page scrolled partway down, at wherever the previous page had been
+// scrolled. Keyed on pathname only, not the full location (a search-string
+// or hash change on the SAME page must not yank the reader back to the
+// top), and skipped on a browser back/forward navigation (`POP`) so this
+// does not fight the browser's own scroll restoration for that case.
+function ScrollToTop() {
+  const { pathname, hash } = useLocation()
+  const navigationType = useNavigationType()
+
+  useEffect(() => {
+    if (navigationType === 'POP') return
+    // A link carrying a hash is asking for a specific section, so scrolling
+    // to the top would defeat it. The browser handles the anchor itself.
+    if (hash !== '') return
+    window.scrollTo(0, 0)
+  }, [pathname, hash, navigationType])
+
+  return null
+}
+
 export default function App() {
   const model = useModel()
 
   return (
     <ModelContext.Provider value={model}>
       <BrowserRouter>
+        <ScrollToTop />
         <Routes>
           <Route element={<Layout onSubmitToken={submitToken} />}>
             <Route index element={<Dashboard />} />
