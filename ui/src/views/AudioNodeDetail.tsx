@@ -426,7 +426,7 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
                         <th scope="row">{rev.revision}</th>
                         <td>{rev.active ? 'active' : ''}</td>
                         <td>{formatAbsolute(rev.createdAt)}</td>
-                        <td>{rev.createdByPrincipalName ?? '—'}</td>
+                        <td>{rev.createdByPrincipalName ?? '-'}</td>
                       </tr>
                     ))}
                   </tbody>

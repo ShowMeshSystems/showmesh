@@ -738,7 +738,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
                       <td>{rev.revision}</td>
                       <td>{rev.active ? 'active' : ''}</td>
                       <td>{formatAbsolute(rev.createdAt)}</td>
-                      <td>{rev.createdByPrincipalName ?? '—'}</td>
+                      <td>{rev.createdByPrincipalName ?? '-'}</td>
                       <td>
                         <button type="button" onClick={() => void viewRevision(rev.revision)}>
                           View payload

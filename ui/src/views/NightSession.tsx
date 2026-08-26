@@ -394,7 +394,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                         <td>{cue.phase}</td>
                         <td>{cue.role}</td>
                         <td>{cue.action}</td>
-                        <td>{cue.actionRevision ?? '—'}</td>
+                        <td>{cue.actionRevision ?? '-'}</td>
                         <td>
                           <NightCueStateBadge state={cue.state} />
                         </td>
@@ -404,9 +404,9 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                               unconfirmed cue is neither success nor
                               failure, and NightCueOutcomeBadge gives it its
                               own tone rather than folding it into either. */}
-                          {cue.outcome === undefined ? '—' : <NightCueOutcomeBadge outcome={cue.outcome} />}
+                          {cue.outcome === undefined ? '-' : <NightCueOutcomeBadge outcome={cue.outcome} />}
                         </td>
-                        <td>{cue.reason ?? '—'}</td>
+                        <td>{cue.reason ?? '-'}</td>
                         <td>{cue.dispatchedAt === null ? 'not dispatched' : formatAbsolute(cue.dispatchedAt)}</td>
                         <td>{cue.resolvedAt === null ? 'not resolved' : formatAbsolute(cue.resolvedAt)}</td>
                       </tr>
@@ -478,9 +478,9 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                               tone with its own icon, unconfirmed renders
                               its own distinct icon/label, and neither is
                               ever collapsed into 'confirmed'. */}
-                          {step.outcome === undefined ? '—' : <NightCueOutcomeBadge outcome={step.outcome} />}
+                          {step.outcome === undefined ? '-' : <NightCueOutcomeBadge outcome={step.outcome} />}
                         </td>
-                        <td>{step.reason ?? '—'}</td>
+                        <td>{step.reason ?? '-'}</td>
                         <td>{step.dispatchedAt === null ? 'not dispatched' : formatAbsolute(step.dispatchedAt)}</td>
                         <td>{step.resolvedAt === null ? 'not resolved' : formatAbsolute(step.resolvedAt)}</td>
                       </tr>
@@ -511,7 +511,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                 <dt>Reason</dt>
                 <dd>{session.readiness.reason}</dd>
                 <dt>Completed</dt>
-                <dd>{session.readiness.completedAt !== undefined ? formatAbsolute(session.readiness.completedAt) : '—'}</dd>
+                <dd>{session.readiness.completedAt !== undefined ? formatAbsolute(session.readiness.completedAt) : '-'}</dd>
                 <dt>Same epoch</dt>
                 <dd>{session.readiness.sameEpoch ? 'yes' : 'no'}</dd>
                 <dt>Fresh</dt>
@@ -573,7 +573,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
               <dt>Principal</dt>
               <dd>{session.authorization.principalName ?? session.authorization.principalId ?? 'unknown'}</dd>
               <dt>Command</dt>
-              <dd>{session.authorization.command ?? '—'}</dd>
+              <dd>{session.authorization.command ?? '-'}</dd>
               <dt>Recorded at</dt>
               <dd>{formatAbsolute(session.authorization.recordedAt)}</dd>
             </dl>

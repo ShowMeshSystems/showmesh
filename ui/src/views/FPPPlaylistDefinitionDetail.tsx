@@ -159,9 +159,9 @@ export function FPPPlaylistDefinitionDetail() {
                 <tr key={`${entry.section}-${entry.position}-${index}`}>
                   <th scope="row">{entry.section}</th>
                   <td>{entry.position}</td>
-                  <td>{entry.type || '—'}</td>
-                  <td>{entry.sequenceName || '—'}</td>
-                  <td>{entry.mediaName || '—'}</td>
+                  <td>{entry.type || '-'}</td>
+                  <td>{entry.sequenceName || '-'}</td>
+                  <td>{entry.mediaName || '-'}</td>
                 </tr>
               ))}
             </tbody>

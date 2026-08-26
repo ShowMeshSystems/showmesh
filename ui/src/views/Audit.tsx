@@ -17,7 +17,7 @@ const MAX_LIMIT = 500
 type LoadState = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'loaded'; entries: AuditEntry[] }
 
 function outcomeLabel(entry: AuditEntry): string {
-  if (entry.kind !== 'outcome') return '—'
+  if (entry.kind !== 'outcome') return '-'
   return entry.outcome === '' ? '(no evidence-bearing outcome recorded)' : entry.outcome
 }
 
@@ -125,8 +125,8 @@ export function Audit() {
                       <td>{entry.action}</td>
                       <td>{entry.target}</td>
                       <td>{outcomeLabel(entry)}</td>
-                      <td>{entry.outcomeState === '' ? '—' : entry.outcomeState}</td>
-                      <td>{entry.outcomeReason === '' ? '—' : entry.outcomeReason}</td>
+                      <td>{entry.outcomeState === '' ? '-' : entry.outcomeState}</td>
+                      <td>{entry.outcomeReason === '' ? '-' : entry.outcomeReason}</td>
                     </tr>
                   ))}
                 </tbody>

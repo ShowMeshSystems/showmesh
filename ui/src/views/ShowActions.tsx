@@ -164,7 +164,7 @@ export function ShowActions() {
                           {binding ? (
                             <ActionBindingBadge state={binding.state} reason={binding.reason} />
                           ) : (
-                            <span className="text-muted">—</span>
+                            <span className="text-muted">-</span>
                           )}
                         </td>
                         <td>
