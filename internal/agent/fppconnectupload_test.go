@@ -889,6 +889,43 @@ func TestFPPConnectRebindPendingShowIDsOnLaterPush(t *testing.T) {
 	}
 }
 
+// TestFPPConnectBindPendingShowIDSkipsAlreadyBoundRecord is review round 3
+// finding 5's own regression test: a record already bound with a
+// non-empty ShowID must never be knocked back to unbound by
+// BindPendingShowID, even when a later playlist POST names the identical
+// file for a show whose id this node's current snapshot no longer (or not
+// yet) resolves, e.g. a push that regressed shows back to empty.
+func TestFPPConnectBindPendingShowIDSkipsAlreadyBoundRecord(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	if resp, body := (func() (*http.Response, []byte) {
+		srv := startFPPConnectTestServer(t, fakeFPPConnectView{enabled: true}, "node-1", held)
+		defer srv.Close()
+		return patchChunk(t, srv, "sequences", "AlreadyBound.fseq", 0, 3, []byte("abc"))
+	})(); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	held.BindShow("Halloween", "halloween-2026", []string{"AlreadyBound.fseq"}, time.Now())
+	bound, ok := findHeldRecord(t, held, "sequences", "AlreadyBound.fseq")
+	if !ok || !bound.Bound || bound.ShowID != "halloween-2026" {
+		t.Fatalf("record after BindShow = %+v (found=%v), want bound to halloween-2026", bound, ok)
+	}
+
+	// A stale or regressed playlist POST names the same file for a show
+	// whose id this node cannot currently resolve: the already-bound
+	// record must be left exactly as it was.
+	held.BindPendingShowID("Halloween", []string{"AlreadyBound.fseq"}, time.Now())
+
+	after, ok := findHeldRecord(t, held, "sequences", "AlreadyBound.fseq")
+	if !ok {
+		t.Fatal("no held record after BindPendingShowID")
+	}
+	if after != bound {
+		t.Fatalf("record after BindPendingShowID = %+v, want unchanged from %+v", after, bound)
+	}
+}
+
 // TestFPPConnectUploadBootSweepKeepsHeld proves the boot sweep removes
 // stale partials and keeps held files.
 func TestFPPConnectUploadBootSweepKeepsHeld(t *testing.T) {
@@ -1119,13 +1156,14 @@ func TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit(t *testin
 	held, _ := newTestHeldStore(t)
 	neverActive := func() (string, bool, bool) { return "", false, false }
 	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	const maxDir = int64(150)
 
 	// Upload A declares 100 bytes total, but this call only delivers the
 	// first 10: it is accepted and left in flight, with 90 bytes still
 	// outstanding.
-	outcome, reason, _ := held.WriteChunk("sequences", "A.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID)
+	outcome, reason, _ := held.WriteChunk("sequences", "A.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("upload A chunk 1: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -1135,7 +1173,7 @@ func TestFPPConnectUploadConcurrentReservationsPreventDirCapOvercommit(t *testin
 	// under 150 alongside B's 100 (110 total): the exact shape of the
 	// bug. Correct behavior adds A's outstanding 90-byte remainder to the
 	// check (10 + 90 + 100 = 200 > 150) and refuses B.
-	outcome, reason, _ = held.WriteChunk("sequences", "B.fseq", 0, 100, strings.NewReader(strings.Repeat("B", 100)), 100, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID)
+	outcome, reason, _ = held.WriteChunk("sequences", "B.fseq", 0, 100, strings.NewReader(strings.Repeat("B", 100)), 100, 1<<30, maxDir, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkDirFull {
 		t.Fatalf("upload B: outcome = %v reason = %q, want dir-full (A's in-flight remainder must count against the cap)", outcome, reason)
 	}
@@ -1247,11 +1285,12 @@ func TestFPPConnectWriteChunkReleasesLockDuringCopy(t *testing.T) {
 	held := newFPPConnectHeldStoreWithWriter(dir, w, discardLogger())
 	neverActive := func() (string, bool, bool) { return "", false, false }
 	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		held.WriteChunk("sequences", "Slow.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID)
+		held.WriteChunk("sequences", "Slow.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	}()
 
 	select {
@@ -1294,9 +1333,10 @@ func TestFPPConnectWriteChunkSweepsIdleInFlightReservations(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 	neverActive := func() (string, bool, bool) { return "", false, false }
 	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	start := time.Now()
-	outcome, reason, _ := held.WriteChunk("sequences", "Abandoned.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, start, neverActive, neverResolveShowID)
+	outcome, reason, _ := held.WriteChunk("sequences", "Abandoned.fseq", 0, 100, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, start, neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("setup: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -1313,7 +1353,7 @@ func TestFPPConnectWriteChunkSweepsIdleInFlightReservations(t *testing.T) {
 	// prepareChunkLocked); the abandoned entry is long past the TTL by
 	// the time this one arrives.
 	later := start.Add(fppConnectInFlightTTL + time.Minute)
-	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive, neverResolveShowID); outcome != fppConnectChunkCompleted {
+	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkCompleted {
 		t.Fatalf("fresh upload: outcome = %v reason = %q, want completed", outcome, reason)
 	}
 
@@ -1373,13 +1413,14 @@ func TestFPPConnectReservationClampsAtZero(t *testing.T) {
 	held.mu.Unlock()
 	neverActive := func() (string, bool, bool) { return "", false, false }
 	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	// maxAssetDirBytes is 50. Corrupt.fseq's raw remainder is
 	// 10-50 = -40. A fresh 51-byte upload: with the remainder wrongly
 	// left negative, 0 (nothing really on disk) + (-40) + 51 = 11 <= 50
 	// would be wrongly accepted. Clamped at zero, 0 + 0 + 51 = 51 > 50
 	// must be refused.
-	outcome, reason, _ := held.WriteChunk("sequences", "New.fseq", 0, 51, strings.NewReader(strings.Repeat("N", 10)), 10, 1<<30, 50, time.Now(), neverActive, neverResolveShowID)
+	outcome, reason, _ := held.WriteChunk("sequences", "New.fseq", 0, 51, strings.NewReader(strings.Repeat("N", 10)), 10, 1<<30, 50, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkDirFull {
 		t.Fatalf("outcome = %v reason = %q, want dir-full (a negative reservation must clamp to zero, not manufacture headroom)", outcome, reason)
 	}
@@ -1392,10 +1433,11 @@ func TestFPPConnectReservationClampsAtZero(t *testing.T) {
 func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T) {
 	neverActive := func() (string, bool, bool) { return "", false, false }
 	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	t.Run("completion clears the reservation", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		outcome, reason, _ := held.WriteChunk("sequences", "Done.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID)
+		outcome, reason, _ := held.WriteChunk("sequences", "Done.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 		if outcome != fppConnectChunkCompleted {
 			t.Fatalf("outcome = %v reason = %q, want completed", outcome, reason)
 		}
@@ -1409,10 +1451,10 @@ func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T)
 
 	t.Run("a gap discards the reservation", func(t *testing.T) {
 		held, _ := newTestHeldStore(t)
-		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 0, 30, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID); outcome != fppConnectChunkAccepted {
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 0, 30, strings.NewReader(strings.Repeat("A", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkAccepted {
 			t.Fatal("setup: chunk 1 not accepted")
 		}
-		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 5, 30, strings.NewReader(strings.Repeat("B", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID); outcome != fppConnectChunkGap {
+		if outcome, _, _ := held.WriteChunk("sequences", "Gapped.fseq", 5, 30, strings.NewReader(strings.Repeat("B", 10)), 10, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkGap {
 			t.Fatal("setup: expected a gap")
 		}
 		held.mu.Lock()
@@ -1461,6 +1503,8 @@ func TestFPPConnectWriteChunkClearsWritingFlagOnPanic(t *testing.T) {
 	writer := &panicOnceChunkWriter{inner: osFPPConnectChunkWriter{}}
 	held := newFPPConnectHeldStoreWithWriter(dir, writer, discardLogger())
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	func() {
 		defer func() {
@@ -1468,14 +1512,14 @@ func TestFPPConnectWriteChunkClearsWritingFlagOnPanic(t *testing.T) {
 				t.Fatal("WriteChunk did not panic on the first call; test setup is broken")
 			}
 		}()
-		held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+		held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	}()
 
 	// The deferred reset must have cleared writing before the panic
 	// propagated, so this retry at the same offset is treated as an
 	// ordinary retry, never refused as "another request ... already in
 	// progress."
-	outcome, reason, rec := held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, rec := held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkCompleted {
 		t.Fatalf("outcome = %v reason = %q, want completed (a retry after a panic must succeed normally, not stay refused as still in progress)", outcome, reason)
 	}
@@ -1502,11 +1546,13 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 	writer := &panicOnceChunkWriter{panicOffset: 2, inner: osFPPConnectChunkWriter{}}
 	held := newFPPConnectHeldStoreWithWriter(dir, writer, discardLogger())
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 	const key = "sequences/Panicky2.fseq"
 
 	// First chunk (offset 0, "ab") completes normally: the writer only
 	// panics at offset 2.
-	outcome, reason, _ := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("ab"), 2, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, _ := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("ab"), 2, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkAccepted {
 		t.Fatalf("chunk 1: outcome = %v reason = %q, want accepted", outcome, reason)
 	}
@@ -1518,7 +1564,7 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 				t.Fatal("WriteChunk did not panic on the offset-2 call; test setup is broken")
 			}
 		}()
-		held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+		held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	}()
 
 	held.mu.Lock()
@@ -1534,7 +1580,7 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 	// A retry at the same offset the client still believes is correct
 	// must be refused as a gap, never accepted as a continuation of the
 	// now-discarded (and hash-poisoned) fragment.
-	outcome, reason, _ = held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, _ = held.WriteChunk("sequences", "Panicky2.fseq", 2, 5, strings.NewReader("cde"), 3, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkGap {
 		t.Fatalf("retry at offset 2: outcome = %v reason = %q, want gap (offset-0 restart required)", outcome, reason)
 	}
@@ -1543,7 +1589,7 @@ func TestFPPConnectWriteChunkDiscardsFragmentOnPanicMidUpload(t *testing.T) {
 	// upload, not a hash double-counting the panicked attempt's bytes.
 	sum := sha256.Sum256([]byte("abcde"))
 	wantHash := "sha256:" + hex.EncodeToString(sum[:])
-	outcome, reason, rec := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("abcde"), 5, 1<<30, 1<<30, time.Now(), neverActive)
+	outcome, reason, rec := held.WriteChunk("sequences", "Panicky2.fseq", 0, 5, strings.NewReader("abcde"), 5, 1<<30, 1<<30, time.Now(), neverActive, neverResolveShowID, neverShowNames)
 	if outcome != fppConnectChunkCompleted {
 		t.Fatalf("offset-0 restart: outcome = %v reason = %q, want completed", outcome, reason)
 	}
@@ -1569,6 +1615,8 @@ func TestFPPConnectSweepReclaimsStuckWritingEntry(t *testing.T) {
 	}
 	held.mu.Unlock()
 	neverActive := func() (string, bool, bool) { return "", false, false }
+	neverResolveShowID := func(string) (string, bool) { return "", false }
+	neverShowNames := func() []string { return nil }
 
 	held.mu.Lock()
 	held.sweepIdleInFlightLocked(stuckSince.Add(time.Minute))
@@ -1580,7 +1628,7 @@ func TestFPPConnectSweepReclaimsStuckWritingEntry(t *testing.T) {
 
 	// Past fppConnectStuckWritingTTL: this goroutine is gone, not slow.
 	later := stuckSince.Add(fppConnectStuckWritingTTL + time.Minute)
-	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive); outcome != fppConnectChunkCompleted {
+	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive, neverResolveShowID, neverShowNames); outcome != fppConnectChunkCompleted {
 		t.Fatalf("fresh upload: outcome = %v reason = %q, want completed", outcome, reason)
 	}
 

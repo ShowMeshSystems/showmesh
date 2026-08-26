@@ -133,7 +133,10 @@ func problemBody(t *testing.T, problemType, detail string) string {
 // newTestFPPConnectRegistrar wires a registrar over held whose retry loops
 // share ctx (canceled automatically at test cleanup) and whose inventory
 // trigger signals the returned channel, matching agent.go's own wiring of
-// assetFetchTrigger.
+// assetFetchTrigger. The push callback mirrors agent.go's own composition
+// exactly (RebindPendingShowIDs before Wake), so a test simulating a push
+// via state.Apply/state.notifyPush exercises the identical rebind path a
+// real "fppconnect.configure" push does (review round 3 finding 2).
 func newTestFPPConnectRegistrar(t *testing.T, held *fppConnectHeldStore, coordinatorBaseURL, token string) (*fppConnectRegistrar, *fppConnectState, chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,7 +153,10 @@ func newTestFPPConnectRegistrar(t *testing.T, held *fppConnectHeldStore, coordin
 		}
 	}, time.Now, discardLogger())
 	held.SetOnHeld(reg.OnHeld)
-	state.SetOnPush(reg.Wake)
+	state.SetOnPush(func() {
+		held.RebindPendingShowIDs(state.ShowID)
+		reg.Wake()
+	})
 	return reg, state, trigger
 }
 
@@ -949,5 +955,147 @@ func TestFPPConnectRegisterCollidingSlugsFailTheLaterOne(t *testing.T) {
 	reqs := requests()
 	if len(reqs) != 1 {
 		t.Fatalf("registration requests = %d, want exactly 1 (the colliding file must never even attempt)", len(reqs))
+	}
+}
+
+// TestFPPConnectRegisterLateBindingNeverSupersedesAlreadyRegistered is
+// review round 3 finding 1's own regression test: an unbound file (A) that
+// completed uploading FIRST must not be able to supersede a colliding file
+// (B) that bound and registered LATER but before A was ever bound. Binding
+// order, not upload order, decides when a registration attempt starts, so
+// comparing ReceivedAt alone let A's later binding win the collision check
+// against an already-registered B.
+func TestFPPConnectRegisterLateBindingNeverSupersedesAlreadyRegistered(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		return http.StatusOK, assetResponseBody(t, "asset-"+req.fields["sequence"], hash, false)
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	view := fakeFPPConnectView{
+		enabled:   true,
+		showNames: []string{"Halloween"},
+		shows:     []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}},
+	}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+	defer srv.Close()
+
+	// A uploads FIRST (the earlier ReceivedAt) with no active show known
+	// yet, so it completes unbound and never attempts registration.
+	aData := []byte("a-file")
+	if resp, body := patchChunk(t, srv, "sequences", "Same_Show.fseq", 0, int64(len(aData)), aData); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload A: status = %d, body=%s", resp.StatusCode, body)
+	}
+	recA, ok := findHeldRecord(t, held, "sequences", "Same_Show.fseq")
+	if !ok || recA.Bound {
+		t.Fatalf("A = %+v (ok=%v), want held and unbound", recA, ok)
+	}
+
+	// B uploads and binds SECOND (a strictly later ReceivedAt), to the
+	// same show, with a name that slugifies to the identical sequence id,
+	// and registers successfully before A is ever bound.
+	time.Sleep(5 * time.Millisecond)
+	bData := []byte("b-file-is-longer-than-a")
+	registeredB := uploadAndBind(t, held, "sequences", "Same-Show.fseq", bData)
+	if registeredB.LogicalSequence != "same-show" {
+		t.Fatalf("B LogicalSequence = %q, want same-show", registeredB.LogicalSequence)
+	}
+	registeredB = waitForRegistrationState(t, held, "sequences", "Same-Show.fseq", fppConnectRegistrationRegistered)
+
+	// Only now does a playlist POST bind A, to the identical show: this is
+	// A's own FIRST registration attempt, even though A's upload finished
+	// before B's.
+	postBody := []byte(`{"mainPlaylist":[{"sequenceName":"Same_Show.fseq"}]}`)
+	if resp, body := postPlaylist(t, srv, "Halloween", postBody); resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST playlist: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	failedA := waitForRegistrationState(t, held, "sequences", "Same_Show.fseq", fppConnectRegistrationFailed)
+	if !strings.Contains(failedA.RegistrationReason, "Same-Show.fseq") {
+		t.Fatalf("A's RegistrationReason = %q, want it to name the already-registered file Same-Show.fseq", failedA.RegistrationReason)
+	}
+
+	// B must remain registered, unchanged: A's later attempt must never
+	// have superseded it.
+	finalB, ok := findHeldRecord(t, held, "sequences", "Same-Show.fseq")
+	if !ok || finalB.RegistrationState != fppConnectRegistrationRegistered || finalB.RegistrationAssetID != registeredB.RegistrationAssetID {
+		t.Fatalf("B = %+v (ok=%v), want unchanged, still registered as %q", finalB, ok, registeredB.RegistrationAssetID)
+	}
+
+	reqs := requests()
+	if len(reqs) != 1 {
+		t.Fatalf("registration requests = %d, want exactly 1 (A must never attempt once B already owns the identity)", len(reqs))
+	}
+}
+
+// TestFPPConnectRegisterActiveShowKnownButIDNotPushedRebindsOnLaterPush is
+// review round 3 finding 2's own regression test: an active show whose
+// display name is already known (ShowNames) but whose config object id
+// has not been pushed yet must be held unbound with
+// fppConnectUnboundReasonShowIDNotPushed and Show set to the show's name,
+// not the old generic "does not currently resolve" reason with Show left
+// empty, which RebindPendingShowIDs could never match. A later push that
+// carries the show's id must then rebind the record automatically, and
+// registration must follow with no operator action required.
+func TestFPPConnectRegisterActiveShowKnownButIDNotPushedRebindsOnLaterPush(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		return http.StatusOK, assetResponseBody(t, "asset-late-show-id", hash, false)
+	})
+	defer fakeSrv.Close()
+
+	_, state, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	view := fakeFPPConnectView{
+		enabled: true, activeShowName: "Halloween", activeShowKnown: true, activeShowEver: true,
+		showNames: []string{"Halloween"},
+	}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+	defer srv.Close()
+
+	data := []byte("late-show-id")
+	if resp, body := patchChunk(t, srv, "sequences", "Late.fseq", 0, int64(len(data)), data); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	rec, ok := findHeldRecord(t, held, "sequences", "Late.fseq")
+	if !ok {
+		t.Fatal("no held record")
+	}
+	if rec.Bound {
+		t.Fatalf("record = %+v, want held unbound: the show's id has not been pushed yet", rec)
+	}
+	if rec.Show != "Halloween" {
+		t.Fatalf("Show = %q, want Halloween, so a later push can rebind it", rec.Show)
+	}
+	if rec.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
+		t.Fatalf("UnboundReason = %q, want %q", rec.UnboundReason, fppConnectUnboundReasonShowIDNotPushed)
+	}
+
+	// A later push carries the show's id, exactly as fppconnectops.go's
+	// configure operation applies one: Apply then notifyPush.
+	snap := state.Snapshot()
+	snap.ShowNames = []string{"Halloween"}
+	snap.Shows = []fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}}
+	state.Apply(snap)
+	state.notifyPush()
+
+	registered := waitForRegistrationState(t, held, "sequences", "Late.fseq", fppConnectRegistrationRegistered)
+	if registered.ShowID != "halloween-2026" || registered.LogicalSequence != "late" {
+		t.Fatalf("registered record = %+v, want ShowID halloween-2026 and LogicalSequence late", registered)
+	}
+
+	reqs := requests()
+	if len(reqs) != 1 {
+		t.Fatalf("registration requests = %d, want exactly 1", len(reqs))
+	}
+	if reqs[0].fields["show"] != "halloween-2026" {
+		t.Fatalf("request show field = %q, want halloween-2026", reqs[0].fields["show"])
 	}
 }

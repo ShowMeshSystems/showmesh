@@ -440,10 +440,12 @@ seam, not deferred to FC3: `internal/agent/renderreport.go` reads
 `fcHeld.Held()` and `fcHeld.Events()` on every render report tick and
 publishes them as `fppConnectHeldCount`/`fppConnectHeld` (every currently
 held file, bound or not, with its `unboundReason` when unbound) and
-`fppConnectHeldEvents` (the bounded evidence log: `unknown` and
-`ambiguous` playlist posts, and refused uploads: `too-large`, `dir-full`,
-`disk-full`, `gap`, `length-mismatch`, `bad-name`, `bad-dir`, ADR-044
-decision 4) on the same `showmesh.node.render/v1` payload the listener's
+`fppConnectHeldEvents` (the bounded evidence log: `unknown`, `ambiguous`,
+and `show-id-not-pushed` playlist posts (review round 2 finding D: the
+name matched exactly one show by display name, but that show's config
+object id has not been pushed yet), and refused uploads: `too-large`,
+`dir-full`, `disk-full`, `gap`, `length-mismatch`, `bad-name`, `bad-dir`,
+ADR-044 decision 4) on the same `showmesh.node.render/v1` payload the listener's
 own bind status already travels on. Neither list is required as present
 by `RenderPayload.Validate` (matching `fppConnectListening`'s identical
 additive-compatibility reasoning: both fields are added after

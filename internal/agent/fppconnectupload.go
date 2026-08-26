@@ -145,7 +145,7 @@ func (s *fppConnectServer) handleFilePatch(w http.ResponseWriter, r *http.Reques
 	// bytes, and never buffered whole in this handler's own memory the
 	// way io.ReadAll would (a real 16 MiB xLights chunk reallocating as
 	// it grows, times however many uploads are in flight).
-	outcome, reason, _ := s.held.WriteChunk(dir, name, offset, length, r.Body, r.ContentLength, s.view.MaxFileBytes(), s.view.MaxAssetDirBytes(), s.now(), s.view.ActiveShow, s.view.ShowID)
+	outcome, reason, _ := s.held.WriteChunk(dir, name, offset, length, r.Body, r.ContentLength, s.view.MaxFileBytes(), s.view.MaxAssetDirBytes(), s.now(), s.view.ActiveShow, s.view.ShowID, s.view.ShowNames)
 
 	// Only now, after WriteChunk has fully finished reading the request
 	// body, is it safe to bound the response write (review round 3

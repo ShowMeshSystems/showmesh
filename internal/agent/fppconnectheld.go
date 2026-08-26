@@ -886,7 +886,7 @@ func (s *fppConnectHeldStore) RecordRefusal(kind, dir, name, reason string, at t
 // functions rather than the whole view so this store stays independent of
 // fppConnectView (keeping this file's own test surface small: a test
 // supplies two small closures rather than a whole fake view).
-func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength int64, body io.Reader, n int64, maxFileBytes, maxAssetDirBytes int64, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool), showNames func() []string) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	key := dir + "/" + name
 	stagingPath := s.stagingFilePath(dir, name)
 
@@ -941,7 +941,7 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 	teed := io.TeeReader(body, inf.hash)
 	written, writeErr := s.writer.WriteChunk(stagingPath, offset, teed, n, offset == 0)
 
-	outcome, reason, rec = s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow, resolveShowID)
+	outcome, reason, rec = s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow, resolveShowID, showNames)
 	finishedNormally = true
 	return outcome, reason, rec
 }
@@ -1082,7 +1082,7 @@ func (s *fppConnectHeldStore) prepareChunkLocked(dir, name, key, stagingPath str
 // upload finalizes the hash and renames into the held area and resolves
 // its binding, and an accepted-but-incomplete chunk just clears the
 // writing flag and updates bytesReceived/lastChunkAt for the next one.
-func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool)) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
+func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath string, inf *fppConnectInFlight, bytesReceived, n, uploadLength, written int64, writeErr error, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool), showNames func() []string) (outcome fppConnectChunkOutcome, reason string, rec fppConnectHeldRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1141,7 +1141,7 @@ func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath stri
 		return fppConnectChunkWriteFailed, fmt.Sprintf("finalizing held file %q: %v", name, err), fppConnectHeldRecord{}
 	}
 
-	rec = s.completeLocked(dir, name, uploadLength, hashSum, at, activeShow, resolveShowID)
+	rec = s.completeLocked(dir, name, uploadLength, hashSum, at, activeShow, resolveShowID, showNames)
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after completion", "dir", dir, "name", name, "error", err)
 	}
@@ -1162,8 +1162,16 @@ func (s *fppConnectHeldStore) finishChunkLocked(dir, name, key, stagingPath stri
 // does not currently resolve to exactly one show (an active show pushed
 // under a name that two shows now share, a genuinely stale edge case),
 // the file is left unbound with its own distinct reason rather than
-// binding with no id at all, which the registrar could never use.
-func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, hash string, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool)) fppConnectHeldRecord {
+// binding with no id at all, which the registrar could never use. When
+// the name IS known (showNames) but resolveShowID still fails, the
+// coordinator has simply not pushed that show's id yet: bindTo holds the
+// file unbound with fppConnectUnboundReasonShowIDNotPushed and Show set,
+// mirroring handlePlaylistPost's identical distinction, so
+// RebindPendingShowIDs (which requires that exact reason and a non-empty
+// Show) converges it once a later push carries shows (review round 3
+// finding 2; before this, the generic reason left Show empty and this
+// record could never be rebound automatically).
+func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, hash string, at time.Time, activeShow func() (name string, known bool, everSet bool), resolveShowID func(name string) (id string, ok bool), showNames func() []string) fppConnectHeldRecord {
 	key := dir + "/" + name
 	prev, hadPrev := s.records[key]
 
@@ -1171,14 +1179,19 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 
 	bindTo := func(showName string) {
 		id, ok := resolveShowID(showName)
-		if !ok {
-			rec.UnboundReason = fmt.Sprintf("show %q does not currently resolve to exactly one show id", showName)
+		if ok {
+			rec.Bound = true
+			rec.Show = showName
+			rec.ShowID = id
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
 			return
 		}
-		rec.Bound = true
-		rec.Show = showName
-		rec.ShowID = id
-		rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+		if fppConnectContainsShow(showNames(), showName) {
+			rec.Show = showName
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+			return
+		}
+		rec.UnboundReason = fmt.Sprintf("show %q does not currently resolve to exactly one show id", showName)
 	}
 
 	if binding, ok := s.pending[name]; ok {
@@ -1283,7 +1296,13 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 // empty ShowID for the identical reason, resolved on completion
 // (fppConnectHeldStore.completeLocked) the same way. Mirrors BindShow's
 // own shape one field over, differing only in that nothing here ever sets
-// Bound true.
+// Bound true. A record already bound with a non-empty ShowID is left
+// untouched (review round 3 finding 5): without this, a push that
+// regresses the coordinator's shows list back to not carrying this show's
+// id (or a stale playlist POST arriving after a record has already bound
+// and registered) would knock an already-registered record back to
+// unbound, undoing real progress for no benefit, since the record is
+// already bound to a resolvable show id and needs no rescue.
 func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1297,13 +1316,16 @@ func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []str
 			if rec.Name != fname {
 				continue
 			}
+			matched = true
+			if rec.Bound && rec.ShowID != "" {
+				continue
+			}
 			rec.Bound = false
 			rec.Show = showName
 			rec.ShowID = ""
 			rec.LogicalSequence = ""
 			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
 			s.records[key] = rec
-			matched = true
 			if s.onHeld != nil {
 				s.onHeld(rec)
 			}

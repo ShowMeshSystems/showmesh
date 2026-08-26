@@ -1004,7 +1004,9 @@ type RenderFPPConnectHeldFile struct {
 // (this schema's standing "clients ignore what they don't know"
 // convention, ADR-020), currently one of: "unknown" and "ambiguous" (a
 // POST /api/playlist/{name} whose name matched no show, or matched more
-// than one), and "too-large", "dir-full", "disk-full", "gap",
+// than one), "show-id-not-pushed" (the name matched exactly one show by
+// display name, but that show's config object id has not been pushed
+// yet), and "too-large", "dir-full", "disk-full", "gap",
 // "length-mismatch", "bad-name", and "bad-dir" (a refused upload chunk,
 // ADR-044 decision 4).
 type RenderFPPConnectHeldEvent struct {

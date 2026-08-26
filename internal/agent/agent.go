@@ -461,12 +461,17 @@ func Run() int {
 	// at, often zero, so Wait returns immediately and closes its done
 	// channel during startup; every registration that starts afterward,
 	// which is effectively all of them, is never joined at all). Calling
-	// it here, after fppConnectHTTPDone, is the fix: the HTTP listener
-	// that can still call OnHeld (an in-flight upload finishing, or a
-	// buffered playlist POST) has already stopped by this point, so no
-	// further registerLoop can start, and this blocks until every one
-	// already running (started at boot or at any point up to just now)
-	// has actually returned.
+	// it here, after fppConnectHTTPDone, closes most of that gap: the HTTP
+	// listener that can still call OnHeld (an in-flight upload finishing,
+	// or a buffered playlist POST) has already stopped by this point. The
+	// "fppconnect.configure" push path (fppConnect.SetOnPush, wired above:
+	// RebindPendingShowIDs then Wake) is NOT gated by fppConnectHTTPDone,
+	// so it remains a possible late caller into OnHeld/startLoop even
+	// after sigCtx is canceled; startLoop's own r.ctx.Err() check (review
+	// round 3 finding 4) is what actually closes that race, not this
+	// ordering. This still blocks until every registerLoop already
+	// running (started at boot or at any point up to just now) has
+	// actually returned.
 	fppConnectRegistrar.Wait()
 
 	<-showModeWatchDone

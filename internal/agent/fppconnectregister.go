@@ -103,6 +103,16 @@ type fppConnectRegistrar struct {
 	wake     chan struct{}
 	inFlight map[string]bool // dir/name of every (dir, name) a registerLoop goroutine is currently running for
 
+	// identityOwner records which (dir, name) key currently owns each
+	// assets-API identity (dir + showID + logicalSequence), once decided
+	// (review round 3 finding 1): two distinct file names that slugify to
+	// the same sequence id under the same show must never both register,
+	// and which one wins must not depend on upload arrival order alone,
+	// since binding (the event that actually starts a registration
+	// attempt) can happen long after upload completion. Populated and
+	// read only through claimIdentity, one locked decision at a time.
+	identityOwner map[string]string
+
 	// wg counts every registerLoop goroutine this registrar has ever
 	// started that has not yet returned, so agent.go's clean-shutdown path
 	// can join it like every other long-lived goroutine there (review
@@ -121,8 +131,9 @@ func newFPPConnectRegistrar(ctx context.Context, held *fppConnectHeldStore, stat
 	return &fppConnectRegistrar{
 		ctx: ctx, held: held, state: state, nodeID: nodeID, token: token,
 		triggerInventory: triggerInventory, now: now, logger: logger,
-		wake:     make(chan struct{}),
-		inFlight: map[string]bool{},
+		wake:          make(chan struct{}),
+		inFlight:      map[string]bool{},
+		identityOwner: map[string]string{},
 	}
 }
 
@@ -222,7 +233,21 @@ func (r *fppConnectRegistrar) BootWalk() {
 // explicit "a loop for this key already owns it" guard prevents the
 // resulting double dispatch (two concurrent requests, two inventory
 // triggers).
+//
+// r.ctx.Err() is checked before wg.Add (review round 3 finding 4): a late
+// caller (see agent.go's own doc comment on the shutdown sequence, in
+// particular the "fppconnect.configure" push path, which is not gated by
+// the HTTP listener's own shutdown) can still reach OnHeld/startLoop after
+// Wait has already returned or is currently blocked returning, and Add
+// after Wait observes a zero counter is a documented WaitGroup misuse.
+// Refusing to start once ctx is done closes that race: registerLoop's own
+// per-iteration ctx check would have refused the attempt anyway, so
+// nothing is lost by never starting the goroutine at all.
 func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
+	if r.ctx.Err() != nil {
+		return
+	}
+
 	key := rec.Dir + "/" + rec.Name
 	r.mu.Lock()
 	if r.inFlight[key] {
@@ -349,6 +374,57 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 	}
 }
 
+// fppConnectIdentityKey is the assets API's own identity, as far as this
+// registrar's collision detection is concerned: the directory (which
+// pins mediaType), the show, and the sequence id. Two records sharing all
+// three would register as the identical (show, sequence, targetKind,
+// target) asset.
+func fppConnectIdentityKey(dir, showID, logicalSequence string) string {
+	return dir + "\x00" + showID + "\x00" + logicalSequence
+}
+
+// claimIdentity decides, in one locked step, whether key (dir/name) may
+// proceed to attempt registering identityKey (review round 3 finding 1):
+// deciding via ReceivedAt and separately staking the claim let a colliding
+// record with an EARLIER ReceivedAt win the check even after the OTHER
+// record had already registered under that identity, since binding (the
+// event that starts a registration attempt) can happen long after upload
+// completion and has no relation to arrival order. A collision whose
+// other side is already registered, or whose registerLoop currently owns
+// this registrar's in-flight slot, wins outright regardless of
+// ReceivedAt: the identity is already spoken for by a completed or
+// currently-running attempt. Only when NEITHER side has ever claimed this
+// identity does the earlier ReceivedAt decide, and winning stakes the
+// claim for key in this same locked step, so a concurrent competitor's
+// own call for the identical identityKey sees it already taken rather
+// than reaching its own, possibly different, conclusion moments apart.
+// Once any key claims an identityKey it stays the owner until this
+// process restarts (identityOwner is never cleared): a further collision
+// against the same identityKey always resolves against the recorded
+// owner, never re-litigated by ReceivedAt.
+func (r *fppConnectRegistrar) claimIdentity(key, identityKey string, receivedAt time.Time, otherKnown bool, otherKey string, otherReceivedAt time.Time, otherRegistered bool) (won bool, ownerKey string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if owner, ok := r.identityOwner[identityKey]; ok {
+		return owner == key, owner
+	}
+	if !otherKnown {
+		r.identityOwner[identityKey] = key
+		return true, key
+	}
+	if otherRegistered || r.inFlight[otherKey] {
+		r.identityOwner[identityKey] = otherKey
+		return false, otherKey
+	}
+	if receivedAt.Before(otherReceivedAt) {
+		r.identityOwner[identityKey] = key
+		return true, key
+	}
+	r.identityOwner[identityKey] = otherKey
+	return false, otherKey
+}
+
 // fppConnectRegisterFields is the exact, required order the assets API's
 // POST /assets multipart body must arrive in: every field part before the
 // file part (api/openapi.yaml's uploadAsset operation description). show
@@ -412,21 +488,37 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 		}
 	}
 
-	// Another local, always-true condition independent of the coordinator
-	// (review round 2 finding C): two distinct file names whose stems
-	// slugify to the same sequence id under the same show ("My Show.fseq"
-	// and "my_show.fseq" both slug to "my-show") would register as the
-	// SAME asset identity (show, sequence, targetKind, target) and
-	// silently supersede each other, with both held records claiming
-	// "registered." Whichever of the two was received later never gets to
-	// attempt at all; the earlier one is unaffected. A tie (equal
-	// ReceivedAt) fails both, since neither can safely claim priority.
-	if other, ok := r.held.CollidingRecord(rec.Dir, rec.Name, rec.ShowID, rec.LogicalSequence); ok && !rec.ReceivedAt.Before(other.ReceivedAt) {
+	// Another local condition independent of the coordinator (review
+	// round 2 finding C, refined by review round 3 finding 1): two
+	// distinct file names whose stems slugify to the same sequence id
+	// under the same show ("My Show.fseq" and "my_show.fseq" both slug to
+	// "my-show") would register as the SAME asset identity (show,
+	// sequence, targetKind, target) and silently supersede each other,
+	// with both held records claiming "registered." claimIdentity decides
+	// who wins, in one locked step: a colliding record that is already
+	// registered, or currently mid-attempt, wins regardless of
+	// ReceivedAt (binding, not upload time, is what starts a registration
+	// attempt, and the two are not the same event); only a genuine
+	// simultaneous first attempt by both falls back to ReceivedAt.
+	identityKey := fppConnectIdentityKey(rec.Dir, rec.ShowID, rec.LogicalSequence)
+	myKey := rec.Dir + "/" + rec.Name
+	other, otherKnown := r.held.CollidingRecord(rec.Dir, rec.Name, rec.ShowID, rec.LogicalSequence)
+	otherKey, otherReceivedAt, otherRegistered := "", time.Time{}, false
+	if otherKnown {
+		otherKey = other.Dir + "/" + other.Name
+		otherReceivedAt = other.ReceivedAt
+		otherRegistered = other.RegistrationState == fppConnectRegistrationRegistered
+	}
+	if won, ownerKey := r.claimIdentity(myKey, identityKey, rec.ReceivedAt, otherKnown, otherKey, otherReceivedAt, otherRegistered); !won {
+		ownerName := ownerKey
+		if otherKnown && otherKey == ownerKey {
+			ownerName = other.Name
+		}
 		return fppConnectRegisterOutcome{
 			kind: fppConnectRegistrationFailed,
 			reason: fmt.Sprintf(
 				"sequence id %q under show %q collides with already-held file %q, which slugifies to the same id; rename one of the two files so their sequence ids differ",
-				rec.LogicalSequence, rec.ShowID, other.Name),
+				rec.LogicalSequence, rec.ShowID, ownerName),
 		}
 	}
 
