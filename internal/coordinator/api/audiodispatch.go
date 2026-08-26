@@ -118,10 +118,14 @@ type AudioSessionPublisher interface {
 // [Dependencies.AudioSessions]'s doc comment. GetAudioSession lets a
 // dispatch merge a command's own params onto the session's prior desired
 // state rather than replacing it outright with one command's own
-// (commonly partial) params.
+// (commonly partial) params. GetAudioSession is scoped by node id (store
+// schemaV20): a session id such as the cue or blackAndSilence
+// session is a global constant, not unique per node, so an unscoped
+// lookup could merge onto a DIFFERENT node's desired state for a session
+// sharing the same id.
 type AudioSessionStore interface {
 	PutAudioSession(ctx context.Context, rec store.AudioSessionRecord) error
-	GetAudioSession(ctx context.Context, id string) (store.AudioSessionRecord, error)
+	GetAudioSession(ctx context.Context, nodeID, id string) (store.AudioSessionRecord, error)
 }
 
 // noAudioSessionPublisher is [Dependencies.AudioPublisher]'s no-op
@@ -148,7 +152,7 @@ func (noAudioSessionStore) PutAudioSession(context.Context, store.AudioSessionRe
 	return nil
 }
 
-func (noAudioSessionStore) GetAudioSession(context.Context, string) (store.AudioSessionRecord, error) {
+func (noAudioSessionStore) GetAudioSession(context.Context, string, string) (store.AudioSessionRecord, error) {
 	return store.AudioSessionRecord{}, store.ErrAudioSessionNotFound
 }
 
@@ -536,7 +540,7 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 func (h *handlers) persistAudioSessionDesiredState(parent context.Context, in audioDispatchInput) {
 	ctx, cancel := context.WithTimeout(parent, dbWriteTimeout)
 	defer cancel()
-	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.SessionID)
+	existing, err := h.deps.AudioSessions.GetAudioSession(ctx, in.NodeID, in.SessionID)
 	existingJSON := ""
 	if err == nil {
 		existingJSON = existing.DesiredJSON
