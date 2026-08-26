@@ -73,7 +73,16 @@ import type {
 } from './domain'
 import type { UploadProgress } from './resolumeCompositionUpload'
 import type { components } from './generated/schema'
-import type { ActionBinding, ActionInvocationResult, CueCatalogDeployResult, ResolumeActionResult } from './domain'
+import type {
+  ActionBinding,
+  ActionInvocationResult,
+  AudioNodeConfigResponse,
+  AudioSettingsConfigResponse,
+  ConfigAudioNode,
+  ConfigAudioSettingsPayload,
+  CueCatalogDeployResult,
+  ResolumeActionResult,
+} from './domain'
 
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
@@ -267,6 +276,36 @@ export function putAssetsSettingsConfig(
 
 export function getAssetsSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getAssetsSettingsConfigRevisions()
+}
+
+// ADR-039/ADR-018: the same thin pass-through pattern, for the
+// audio.settings engine-wide singleton and audio.node per-node object.
+// Both are full-replacement kinds - one payload type serves both GET and
+// PUT, unlike ConfigAssetsSettingsPutPayload above.
+export function getAudioSettingsConfig(): Promise<AudioSettingsConfigResponse> {
+  return store.getAudioSettingsConfig()
+}
+
+export function putAudioSettingsConfig(
+  payload: ConfigAudioSettingsPayload,
+): Promise<AudioSettingsConfigResponse> {
+  return store.putAudioSettingsConfig(payload)
+}
+
+export function getAudioSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getAudioSettingsConfigRevisions()
+}
+
+export function getAudioNode(id: string): Promise<AudioNodeConfigResponse> {
+  return store.getAudioNode(id)
+}
+
+export function putAudioNode(id: string, payload: ConfigAudioNode): Promise<AudioNodeConfigResponse> {
+  return store.putAudioNode(id, payload)
+}
+
+export function getAudioNodeConfigRevisions(id: string): Promise<ConfigRevisionsResponse> {
+  return store.getAudioNodeConfigRevisions(id)
 }
 
 // Track D seam D-3a: Arena crash recovery. Same thin pass-through pattern.
@@ -489,7 +528,15 @@ export function deleteNodeDeclaration(nodeId: string): Promise<void> {
 // pass-through pattern as every method above.
 
 export function listConfigObjects(
-  kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'night.session',
+  kind:
+    | 'show.action'
+    | 'show.macro'
+    | 'show'
+    | 'show.surface'
+    | 'show.cue'
+    | 'show.playlist'
+    | 'night.session'
+    | 'audio.node',
   show?: string,
 ): Promise<SchemaConfigObjectsListResponse> {
   return store.listConfigObjects(kind, show)

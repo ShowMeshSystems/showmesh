@@ -110,6 +110,13 @@ type SchemaConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequ
 // Track G seam G-4 (ADR-039).
 type SchemaAssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
 type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
+// The audio.settings engine-wide singleton and audio.node per-node object
+// (ADR-039/ADR-018). Both are full-replacement kinds, unlike
+// assets.settings/fpp.mqtt above: one payload type serves both GET and PUT.
+type SchemaAudioSettingsConfigResponse = components['schemas']['AudioSettingsConfigResponse']
+type SchemaConfigAudioSettingsPayload = components['schemas']['ConfigAudioSettingsPayload']
+type SchemaAudioNodeConfigResponse = components['schemas']['AudioNodeConfigResponse']
+type SchemaConfigAudioNode = components['schemas']['ConfigAudioNode']
 type SchemaResolumeRecoveryResponse = components['schemas']['ResolumeRecoveryResponse']
 type SchemaResolumeRecoveryConfigResponse = components['schemas']['ResolumeRecoveryConfigResponse']
 type SchemaConfigResolumeRecoveryPayload = components['schemas']['ConfigResolumeRecoveryPayload']
@@ -969,6 +976,101 @@ export class ApiStore {
     }
   }
 
+  // -- ADR-039/ADR-018: the audio.settings engine-wide singleton and
+  // audio.node per-node object. Both are FULL REPLACEMENT kinds (every
+  // field required and non-null on every PUT) — unlike assets.settings/
+  // fpp.mqtt just above, one payload type serves both GET and PUT.
+
+  /** `GET /api/v1/config/audio.settings` (ADR-039). Never 404s: a well-defined default answers with revision 0, source "default". */
+  async getAudioSettingsConfig(): Promise<SchemaAudioSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAudioSettingsConfigResponse>('/config/audio.settings', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/audio.settings` (ADR-039). A full replacement:
+   * every field is required and non-null. Validated before activation
+   * server-side (ADR-009); a rejected payload throws and appends no
+   * revision.
+   */
+  async putAudioSettingsConfig(
+    payload: SchemaConfigAudioSettingsPayload,
+  ): Promise<SchemaAudioSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaAudioSettingsConfigResponse>(
+        '/config/audio.settings',
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/audio.settings/revisions` (ADR-039): revision history, newest first, metadata only. */
+  async getAudioSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        '/config/audio.settings/revisions',
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/audio.node/{id}` (ADR-018). Throws (404) when no such object exists. */
+  async getAudioNode(id: string): Promise<SchemaAudioNodeConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaAudioNodeConfigResponse>(
+        `/config/audio.node/${encodeURIComponent(id)}`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /**
+   * `PUT /api/v1/config/audio.node/{id}` (ADR-018). A full replacement:
+   * every field required. `programRoute`/`ltcRoute` are cross-checked,
+   * live, against this node's own most recent capability advertisement —
+   * a route this node has not advertised is refused with `400`, never
+   * accepted on the operator's claim alone.
+   */
+  async putAudioNode(id: string, payload: SchemaConfigAudioNode): Promise<SchemaAudioNodeConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaAudioNodeConfigResponse>(
+        `/config/audio.node/${encodeURIComponent(id)}`,
+        payload,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  /** `GET /api/v1/config/audio.node/{id}/revisions` (ADR-018): revision history, newest first, metadata only. */
+  async getAudioNodeConfigRevisions(id: string): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>(
+        `/config/audio.node/${encodeURIComponent(id)}/revisions`,
+        controller.signal,
+      )
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/config/fpp.endpoints/revisions` (Step 7 seam A): revision history, newest first, metadata only. */
   async getFPPEndpointsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
     const controller = this.beginSideCall()
@@ -1722,7 +1824,17 @@ export class ApiStore {
    * does not accept it on itself.
    */
   async listConfigObjects(
-    kind: 'show.action' | 'show.macro' | 'show' | 'show.surface' | 'show.cue' | 'show.playlist' | 'night.session',
+    kind:
+      | 'show.action'
+      | 'show.macro'
+      | 'show'
+      | 'show.surface'
+      | 'show.cue'
+      | 'show.playlist'
+      | 'night.session'
+      // audio.node carries no show reference (its own list summary reports
+      // programRoute as label instead) - `show` is simply never passed for it.
+      | 'audio.node',
     show?: string,
   ): Promise<SchemaConfigObjectsListResponse> {
     const controller = this.beginSideCall()
