@@ -89,11 +89,18 @@ func (s *Store) NodeAudioObservations(nodeID string) []observation.Observation {
 func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc ClockDomainSource) []observation.Observation {
 	p := rep.payload
 	// discoveredAt is the one-shot startup probe's evidence time and
-	// backs engine/device/outputs/program/ltc-availability; observedAt is
-	// this report tick's own live evidence time and backs the LTC
-	// generator's four signals below. Sharing one timestamp between them
-	// pinned every live signal to the agent's startup probe forever — see
-	// [mqttproto.AudioPayload.ObservedAt]'s doc comment.
+	// backs device/outputs/program/ltc-availability, which the agent
+	// truly never re-checks after boot (see runAudioReport's doc
+	// comment). observedAt is this report tick's own live evidence time
+	// and backs every signal the agent re-derives on every tick: the
+	// engine's own state/reason (applyEngineAvailability calls
+	// engine.Available() fresh on every publish, never cached, so its
+	// verdict is a NOW observation even when engine.Available() reports
+	// unavailable) and the LTC generator's four signals below. Stamping
+	// the engine with discoveredAt instead used to pin it to the agent's
+	// startup probe forever: a node whose engine kept reporting fresh
+	// evidence every tick still aged past DefaultValidFor and read
+	// permanently stale even while the node kept reporting.
 	discoveredAt := p.DiscoveredAt
 	observedAt := p.ObservedAt
 
@@ -106,8 +113,8 @@ func nodeObservations(ctx context.Context, nodeID string, rep report, clockSrc C
 	}
 
 	obs := []observation.Observation{
-		buildValue(nodeID, SignalEngineState, engineState, discoveredAt, rep),
-		buildValue(nodeID, SignalEngineReason, engineReason, discoveredAt, rep),
+		buildValue(nodeID, SignalEngineState, engineState, observedAt, rep),
+		buildValue(nodeID, SignalEngineReason, engineReason, observedAt, rep),
 	}
 
 	// "We could not enumerate" (HardwareEnumerated false) and "we
@@ -461,7 +468,7 @@ func lookupClockDomain(ctx context.Context, src ClockDomainSource, nodeID string
 // buildValue stamps ObservedAt from whichever evidence timestamp the
 // caller passes as observedAt — [mqttproto.AudioPayload.DiscoveredAt] for
 // the one-shot discovery signals, [mqttproto.AudioPayload.ObservedAt] for
-// the per-tick LTC generator signals — never rep.receivedAt, the
+// the engine and per-tick LTC generator signals, never rep.receivedAt, the
 // coordinator's own bookkeeping time, which stays CollectedAt. Matches
 // noderender.buildValue's identical rule (ADR-011, generalized a fourth
 // time in this project). observedAt nil means genuinely unknown, matching
