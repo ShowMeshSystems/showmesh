@@ -333,6 +333,168 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost(t *te
 	}
 }
 
+// TestRunRenderReportStaysUnderEnvelopeLimitWithASingleOversizedEntry is
+// review round 4 finding 1's regression test for its first case: a
+// single ~900 KiB sequenceName in an otherwise tiny playlist body defeats
+// fppConnectMaxEventEntries entirely (that cap bounds how MANY entries an
+// event carries, not how large any one of them is), so before this fix
+// this one outsized entry alone could already carry the resulting event,
+// and so the whole report, past the envelope limit.
+func TestRunRenderReportStaysUnderEnvelopeLimitWithASingleOversizedEntry(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	hugeName := strings.Repeat("N", 900*1024) + ".fseq"
+	body := fmt.Sprintf(`{"mainPlaylist":[{"sequenceName":%q}]}`, hugeName)
+
+	resp, respBody := postPlaylist(t, srv, "DoesNotExist", []byte(body))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	events := held.Events()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if len(events[0].Entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(events[0].Entries))
+	}
+	if got := len(events[0].Entries[0]); got > fppConnectMaxEventStringBytes {
+		t.Fatalf("entry length = %d, want at most %d (review round 4 finding 1's per-string bound)", got, fppConnectMaxEventStringBytes)
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish (an unbounded entry would make NewRenderEnvelope's own Validate call refuse to build the envelope at all)")
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+	if len(report.FPPConnectHeldEvents) == 0 {
+		t.Fatal("no events in the published report")
+	}
+}
+
+// TestRunRenderReportStaysUnderEnvelopeLimitWithManyBadNameRefusals is
+// review round 4 finding 1's regression test for its second case: an
+// Upload-Name header can carry up to fppConnectMaxHeaderBytes (16 KiB),
+// and a bad-name refusal's Reason echoes that name straight back inside a
+// formatted sentence, so before this fix 50 such refusals alone (well
+// under fppConnectMaxEvents, so none of them would ever be evicted by the
+// log's own length cap) could already carry the report past the envelope
+// limit on Name and Reason bulk alone.
+func TestRunRenderReportStaysUnderEnvelopeLimitWithManyBadNameRefusals(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	badName := strings.Repeat("a", 8*1024) + "/" + strings.Repeat("b", 8*1024)
+	for i := 0; i < 50; i++ {
+		req, err := http.NewRequest(http.MethodPatch, srv.URL+"/api/file/sequences", strings.NewReader("x"))
+		if err != nil {
+			t.Fatalf("building request %d: %v", i, err)
+		}
+		req.Header.Set("Upload-Name", badName)
+		req.Header.Set("Upload-Offset", "0")
+		req.Header.Set("Upload-Length", "1")
+		req.ContentLength = 1
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PATCH %d: %v", i, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("PATCH %d: status = %d, want 403", i, resp.StatusCode)
+		}
+	}
+
+	events := held.Events()
+	if len(events) == 0 {
+		t.Fatal("no bad-name events recorded")
+	}
+	for _, ev := range events {
+		if got := len(ev.Name); got > fppConnectMaxEventStringBytes {
+			t.Fatalf("event Name length = %d, want at most %d", got, fppConnectMaxEventStringBytes)
+		}
+		if got := len(ev.Reason); got > fppConnectMaxEventStringBytes {
+			t.Fatalf("event Reason length = %d, want at most %d", got, fppConnectMaxEventStringBytes)
+		}
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish (unbounded Name/Reason fields would make NewRenderEnvelope's own Validate call refuse to build the envelope at all)")
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+	if len(report.FPPConnectHeldEvents) == 0 {
+		t.Fatal("no events in the published report")
+	}
+}
+
 // TestRunRenderReportPublishesOnTrigger proves a signal on triggered
 // produces an immediate publish, out of cadence: the render-state
 // counterpart to runAssetInventory's identical trigger behaviour.

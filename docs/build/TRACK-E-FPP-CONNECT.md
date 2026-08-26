@@ -165,13 +165,39 @@ branch, killing the upload with a 409 it never sent a byte wrong to
 deserve. Fixed by removing the server-wide `WriteTimeout` (now 0) and
 setting a write deadline (`fppConnectWriteDeadline`, 10s) per route via
 `fppConnectSetWriteDeadline`, only once a route is actually about to write
-its response: the discovery, playlist, and no-op file-POST routes set it
-immediately (nothing before them ever reads a body), and the file PATCH
-route sets it only after `WriteChunk` returns, so its window can never
-overlap a chunk transfer still in flight. Proven by
+its response: the four discovery routes and the no-op file-POST route set
+it immediately (nothing before them ever reads a body); the file PATCH
+route sets it only after `WriteChunk` returns; the two playlist routes
+each set it individually right before each of their own writes, not once
+up front, since the POST half reads its own body first (round 4 finding
+4: an earlier version of this fix set it once at the top of the shared
+playlist dispatcher, ahead of that read, exactly the ordering
+`fppConnectSetWriteDeadline`'s own doc comment forbids, even with that
+read already bounded by its own read deadline). The three write paths
+that run ahead of routing altogether (the disabled-listener 404, the
+fixed-routes' oversized-body 404, and the file route's wrong-method 404)
+each set their own write deadline too (round 4 finding 3), since none of
+them passes through any route's own deadline-setting code. Proven by
 `TestFPPConnectUploadDrippedOverTenSeconds`, which drips a body over a
-real, production-configured `http.Server` for longer than the old fixed
-timeout.
+real `http.Server` built through `newFPPConnectProductionServer`, the
+same constructor `runFPPConnectHTTPListener` itself calls (round 4
+finding 6, so a regression that re-adds a server-wide `WriteTimeout`
+fails this test directly rather than only a hand-copied literal), for
+longer than the old fixed timeout.
+
+**The read and write deadlines are not symmetric, and that is accepted,
+not an oversight** (round 4 finding 6). `fppConnectServerReadTimeoutFloor`
+(15 minutes) exists because a `ResponseWriter` whose controller cannot set
+a read deadline would otherwise leave a body read entirely unbounded, and
+a hostile or merely slow client can hold a connection open indefinitely by
+never finishing a send. The write side has no equivalent floor:
+`WriteTimeout` is `0` because a nonzero server-wide write timeout is
+exactly the bug round 3 removed, and this listener never waits on further
+client input to produce a response, so a write has nothing analogous to
+wait on indefinitely. A `SetWriteDeadline` failure is logged the same way
+a read-deadline failure is; after that, a truly dead connection is still
+torn down by the kernel's own TCP retransmission timeout regardless of any
+deadline this listener sets.
 
 - **`PATCH /api/file/{dir}`**: the real chunked-upload transport (RES-003
   section 9.4). Headers `Upload-Offset`, `Upload-Length`, `Upload-Name` are
@@ -271,6 +297,23 @@ bounded evidence log unknown/ambiguous playlist posts use (below), with a
 `dir`/`name`, and the refusal reason text. See "Reporting" below for how
 this reaches an operator.
 
+**Every event's own Name, Reason, and Entries strings are bounded at
+record time too (review round 4 finding 1).** `fppConnectMaxEventEntries`
+(32) bounds how MANY names one event carries, not how large any one of
+them is: an `Upload-Name` header can itself be up to `fppConnectMaxHeaderBytes`
+(16 KiB), a refusal's `Reason` often echoes that name straight back inside
+a formatted sentence, and a single playlist entry has no length limit of
+its own short of `fppConnectMaxPlaylistBodyBytes` (1 MiB): a single
+outsized value in any of those three fields could already carry one event,
+and so the whole render report, past the wire envelope limit. Every event
+Name and Reason, and every surviving `Entries` string, is capped to
+`fppConnectMaxEventStringBytes` (256 bytes, with a trailing truncation
+marker) the moment it is appended (`appendEventLocked`), the one
+checkpoint every event passes through regardless of kind. `load()`
+re-applies the identical bound to whatever a persisted index already
+carries (review round 4 finding 2), matching how it already re-applies the
+pending and event list caps just below.
+
 **Held area layout**, under `<AssetDir>/fppconnect-uploads/`:
 
 ```
@@ -327,7 +370,17 @@ and marks the in-flight entry `writing` before releasing it; the unlocked
 copy runs; `finishChunkLocked` retakes the lock to reconcile. A second
 request for the SAME key while one is `writing` is refused (`gap`) rather
 than allowed to race it; a request for any other key is unaffected the
-whole time.
+whole time. A deferred cleanup resets `writing` back to false even if the
+unlocked copy panics (review round 4 finding 5): net/http recovers a
+handler panic per connection, so without this the owning goroutine would
+never reach `finishChunkLocked`, and the entry would stay refused as
+"already in progress" forever, including against a fresh offset-0 retry.
+As a second, independent safety net, the idle sweep also reclaims an
+entry still marked `writing` once it is older than
+`fppConnectStuckWritingTTL` (three times `fppConnectInFlightTTL`, so 90
+minutes): well beyond how long any legitimate single chunk transfer can
+possibly still be in progress, so it never reclaims one that is merely
+slow.
 
 **Pending bindings are bounded too (review round 1 finding 6).** A single
 `POST /api/playlist/{name}` body can name tens of thousands of files
@@ -402,6 +455,19 @@ collector signal or coordinator API field exists yet to surface this list
 the way the coordinator surfaces other node evidence (matching the
 bind-status gap already noted above); that remains a follow-up, and is
 listed as an acceptance gap on this seam's own pull request.
+
+**A final byte-size check backstops every cap above (review round 4
+finding 1).** Each cap so far bounds one field's own size (how many held
+files, how many events, how many entries one event carries, how long one
+string is), never the report as a whole: a report carrying many events or
+many held records, each individually within its own per-field caps, could
+still exceed the envelope once combined with everything else the report
+carries. `shrinkRenderPayloadToFitEnvelope` measures the payload's actual
+serialized size against `renderReportEnvelopeSizeBudget` (240 KiB, kept
+under `mqttproto`'s own 256 KiB envelope limit for the envelope wrapper's
+own overhead) immediately BEFORE calling `NewRenderEnvelope`, dropping the
+oldest event, then the lowest-priority held record, until it fits, or
+until nothing is left to drop.
 
 **FC3's hook.** `fppConnectHeldStore.SetOnHeld(func(fppConnectHeldRecord))`
 registers a callback invoked whenever a record is created or its binding

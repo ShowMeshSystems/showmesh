@@ -134,14 +134,53 @@ const fppConnectMaxEvents = 50
 // field's own doc comment.
 const fppConnectMaxEventEntries = 32
 
-// capEventEntries truncates entries to fppConnectMaxEventEntries,
-// reporting how many were cut. Pure and side-effect-free so it can be
-// exercised directly in a test independent of the store.
-func capEventEntries(entries []string) (capped []string, truncated int) {
-	if len(entries) <= fppConnectMaxEventEntries {
-		return entries, 0
+// fppConnectMaxEventStringBytes bounds fppConnectEvent.Name, Reason, and
+// each of Entries' own strings (review round 4 finding 1): Name can be an
+// Upload-Name header value bounded only by fppConnectMaxHeaderBytes (16
+// KiB) upstream, Reason often echoes Name straight back inside a
+// formatted sentence, and a single playlist entry has no length limit of
+// its own short of fppConnectMaxPlaylistBodyBytes (1 MiB): any one of
+// those alone could already carry a single event past mqttproto's own
+// envelope limit, independent of fppConnectMaxEventEntries' bound on how
+// MANY entries one event carries.
+const fppConnectMaxEventStringBytes = 256
+
+// fppConnectEventStringTruncatedSuffix marks a string this store bounded
+// at record time, matching mqttproto.RenderStderrTruncatedSuffix's own
+// "truncation is visible, never silent" rule one field over.
+const fppConnectEventStringTruncatedSuffix = "...[truncated]"
+
+// fppConnectBoundEventString truncates s to fppConnectMaxEventStringBytes
+// bytes, appending fppConnectEventStringTruncatedSuffix when truncation
+// actually happens. Pure and side-effect-free so it can be exercised
+// directly in a test.
+func fppConnectBoundEventString(s string) string {
+	if len(s) <= fppConnectMaxEventStringBytes {
+		return s
 	}
-	return entries[:fppConnectMaxEventEntries], len(entries) - fppConnectMaxEventEntries
+	cut := fppConnectMaxEventStringBytes - len(fppConnectEventStringTruncatedSuffix)
+	if cut < 0 {
+		cut = 0
+	}
+	return s[:cut] + fppConnectEventStringTruncatedSuffix
+}
+
+// capEventEntries truncates entries to fppConnectMaxEventEntries,
+// reporting how many were cut, and bounds each surviving entry's own
+// length to fppConnectMaxEventStringBytes (review round 4 finding 1: the
+// count cap alone does nothing against a single, individually oversized
+// entry). Pure and side-effect-free so it can be exercised directly in a
+// test independent of the store.
+func capEventEntries(entries []string) (capped []string, truncated int) {
+	if len(entries) > fppConnectMaxEventEntries {
+		truncated = len(entries) - fppConnectMaxEventEntries
+		entries = entries[:fppConnectMaxEventEntries]
+	}
+	capped = make([]string, len(entries))
+	for i, e := range entries {
+		capped[i] = fppConnectBoundEventString(e)
+	}
+	return capped, truncated
 }
 
 // fppConnectMaxPending bounds fppConnectHeldStore.pending the same way
@@ -472,19 +511,35 @@ func (s *fppConnectHeldStore) indexPath() string {
 // slow, only one that has genuinely stopped.
 const fppConnectInFlightTTL = 3 * fppConnectFileReadDeadline
 
+// fppConnectStuckWritingTTL bounds how long an in-flight entry may stay
+// writing==true before the sweep reclaims it regardless of that flag
+// (review round 4 finding 5's second, independent safety net). WriteChunk's
+// own deferred cleanup already resets writing on every path, ordinary or
+// panicking (see that function's own doc comment), so this only ever
+// fires against some other way a writing entry's owning goroutine could
+// be gone without that deferred reset having run. Set well beyond
+// fppConnectFileReadDeadline (the longest a single legitimate chunk
+// transfer can possibly still be writing==true for), so this never
+// reclaims one that is merely slow.
+const fppConnectStuckWritingTTL = 3 * fppConnectInFlightTTL // 90 minutes
+
 // sweepIdleInFlightLocked discards every in-flight entry whose last chunk
 // arrived more than fppConnectInFlightTTL before now, removing its
 // staging file the same way discardFragment does. Called at the top of
 // WriteChunk, s.mu already held. An entry currently being written
-// (writing true) is never swept, regardless of how old lastChunkAt is:
-// its owning goroutine has the store unlocked and is actively extending
-// it (review round 3 finding 3), so it is not idle by definition.
+// (writing true) is normally left alone regardless of how old
+// lastChunkAt is: its owning goroutine has the store unlocked and is
+// actively extending it (review round 3 finding 3), so it is not idle by
+// definition, but one still writing past fppConnectStuckWritingTTL is
+// reclaimed anyway (review round 4 finding 5): at that age, its owning
+// goroutine is gone, not merely slow.
 func (s *fppConnectHeldStore) sweepIdleInFlightLocked(now time.Time) {
 	for key, inf := range s.inFlight {
 		if inf.writing {
-			continue
-		}
-		if now.Sub(inf.lastChunkAt) <= fppConnectInFlightTTL {
+			if now.Sub(inf.lastChunkAt) <= fppConnectStuckWritingTTL {
+				continue
+			}
+		} else if now.Sub(inf.lastChunkAt) <= fppConnectInFlightTTL {
 			continue
 		}
 		dir, name := fppConnectSplitKey(key)
@@ -564,7 +619,12 @@ func (s *fppConnectHeldStore) RecordRefusal(kind, dir, name, reason string, at t
 // marks the in-flight entry writing=true before releasing the lock, so a
 // second concurrent request for the SAME key is refused outright rather
 // than racing this copy; a request for any OTHER key proceeds normally
-// and independently the whole time.
+// and independently the whole time. A deferred cleanup resets writing
+// back to false even if the unlocked copy panics (review round 4 finding
+// 5): without it, a recovered per-connection panic would leave that
+// entry's writing flag stuck true forever, refusing every future request
+// for the same key, including a fresh offset-0 retry, as still "in
+// progress."
 //
 // body is read directly, never buffered whole in memory (review round 1
 // finding 3): n (the caller's r.ContentLength) bounds exactly how much of
@@ -587,6 +647,30 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 		return prepOutcome, prepReason, fppConnectHeldRecord{}
 	}
 
+	// finishedNormally guards the deferred cleanup below so it only ever
+	// resets inf.writing on the panic path (review round 4 finding 5): the
+	// ordinary path already clears it, and reconciles far more besides,
+	// inside finishChunkLocked.
+	finishedNormally := false
+	defer func() {
+		if finishedNormally {
+			return
+		}
+		// A panic during the unlocked copy below is recovered per
+		// connection by net/http, so the process keeps running, but this
+		// goroutine never reaches finishChunkLocked. Without this,
+		// inf.writing would stay true forever: sweepIdleInFlightLocked's
+		// ordinary path skips a writing entry by design (its owning
+		// goroutine is assumed still active), and every future request
+		// for this exact key would be refused as "already in progress"
+		// (prepareChunkLocked's own guard), including a fresh offset-0
+		// retry, with no path back short of fppConnectStuckWritingTTL
+		// expiring or a process restart.
+		s.mu.Lock()
+		inf.writing = false
+		s.mu.Unlock()
+	}()
+
 	// Unlocked from here through the copy: see this function's own doc
 	// comment. TeeReader hashes exactly the bytes the writer actually
 	// reads from body, whether or not the write ultimately succeeds; a
@@ -595,7 +679,9 @@ func (s *fppConnectHeldStore) WriteChunk(dir, name string, offset, uploadLength 
 	teed := io.TeeReader(body, inf.hash)
 	written, writeErr := s.writer.WriteChunk(stagingPath, offset, teed, n, offset == 0)
 
-	return s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow)
+	outcome, reason, rec = s.finishChunkLocked(dir, name, key, stagingPath, inf, bytesReceived, n, uploadLength, written, writeErr, at, activeShow)
+	finishedNormally = true
+	return outcome, reason, rec
 }
 
 // prepareChunkLocked validates one chunk and, on success, installs (or
@@ -928,10 +1014,33 @@ func (s *fppConnectHeldStore) deletePendingLocked(fname string) {
 	}
 }
 
-// appendEventLocked appends ev to s.events, dropping the oldest entries
-// once fppConnectMaxEvents is exceeded. s.mu already held.
+// fppConnectBoundEvent returns ev with every per-event bound applied: Name
+// and Reason each capped to fppConnectMaxEventStringBytes, and Entries
+// capped both in count (fppConnectMaxEventEntries) and in each surviving
+// entry's own length, via capEventEntries. EntriesTruncated is increased
+// (never reset) by however many entries this call newly cuts, so a value
+// already carried on ev survives. Shared by appendEventLocked (every
+// freshly recorded event) and load (review round 4 finding 2: a persisted
+// index can carry an event that predates this bound, or one edited or
+// corrupted outside this store's own writes).
+func fppConnectBoundEvent(ev fppConnectEvent) fppConnectEvent {
+	ev.Name = fppConnectBoundEventString(ev.Name)
+	ev.Reason = fppConnectBoundEventString(ev.Reason)
+	capped, truncated := capEventEntries(ev.Entries)
+	ev.Entries = capped
+	ev.EntriesTruncated += truncated
+	return ev
+}
+
+// appendEventLocked applies fppConnectBoundEvent to ev, then appends it to
+// s.events, dropping the oldest entry once fppConnectMaxEvents is
+// exceeded. This is the one checkpoint every freshly recorded event passes
+// through regardless of kind (review round 4 finding 1), whether built by
+// refuseLocked/RecordRefusal (Name and Reason, no Entries) or
+// RecordUnknownPlaylist/RecordAmbiguousPlaylist (Name and Entries, no
+// Reason). s.mu already held.
 func (s *fppConnectHeldStore) appendEventLocked(ev fppConnectEvent) {
-	s.events = append(s.events, ev)
+	s.events = append(s.events, fppConnectBoundEvent(ev))
 	if len(s.events) > fppConnectMaxEvents {
 		s.events = s.events[len(s.events)-fppConnectMaxEvents:]
 	}
@@ -943,10 +1052,9 @@ func (s *fppConnectHeldStore) appendEventLocked(ev fppConnectEvent) {
 // the log line xLights will never surface (it never inspects this
 // request's status).
 func (s *fppConnectHeldStore) RecordUnknownPlaylist(name string, entries []string, at time.Time) {
-	capped, truncated := capEventEntries(entries)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendEventLocked(fppConnectEvent{Kind: "unknown", Name: name, Entries: capped, EntriesTruncated: truncated, At: at})
+	s.appendEventLocked(fppConnectEvent{Kind: "unknown", Name: name, Entries: entries, At: at})
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after an unknown playlist post", "name", name, "error", err)
 	}
@@ -959,10 +1067,9 @@ func (s *fppConnectHeldStore) RecordUnknownPlaylist(name string, entries []strin
 // in ShowNames(); this interface carries no show id, so that count is the
 // most specific evidence available for "naming both."
 func (s *fppConnectHeldStore) RecordAmbiguousPlaylist(name string, matchCount int, entries []string, at time.Time) {
-	capped, truncated := capEventEntries(entries)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendEventLocked(fppConnectEvent{Kind: "ambiguous", Name: name, Entries: capped, EntriesTruncated: truncated, MatchCount: matchCount, At: at})
+	s.appendEventLocked(fppConnectEvent{Kind: "ambiguous", Name: name, Entries: entries, MatchCount: matchCount, At: at})
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after an ambiguous playlist post", "name", name, "error", err)
 	}
@@ -1045,6 +1152,16 @@ func (s *fppConnectHeldStore) load() error {
 	s.events = idx.Events
 	if len(s.events) > fppConnectMaxEvents {
 		s.events = s.events[len(s.events)-fppConnectMaxEvents:]
+	}
+	// Re-apply the per-event Name/Reason/Entries bound to each loaded
+	// event too (review round 4 finding 2): appendEventLocked only ever
+	// enforces fppConnectBoundEvent going forward, so a persisted index
+	// predating fppConnectMaxEventStringBytes, or one whose Entries count
+	// cap was lowered since, or one edited or corrupted outside this
+	// store's own writes, must still be trimmed on the way in, the same
+	// way the pending/event LIST caps just above are.
+	for i, ev := range s.events {
+		s.events[i] = fppConnectBoundEvent(ev)
 	}
 	return nil
 }

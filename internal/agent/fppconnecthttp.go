@@ -87,6 +87,21 @@ const (
 	// fppConnectFileReadDeadline, so it is never the deadline that
 	// actually fires in normal operation; it exists only as the backstop
 	// under a mechanism that has already failed once.
+	//
+	// The write side has no equivalent floor (review round 4 finding 6),
+	// an accepted asymmetry, not an oversight. WriteTimeout is 0 (review
+	// round 3 finding 1) because a nonzero server-wide write timeout is
+	// exactly the bug that finding removed, and there is no write-side
+	// failure mode comparable to an unbounded body READ: a hostile or
+	// merely slow client can choose never to finish SENDING, which is
+	// what this floor guards against, but this listener never waits on
+	// further client input to finish producing a response, so a write has
+	// nothing analogous to wait on indefinitely. A write-side
+	// SetWriteDeadline failure is logged by fppConnectSetWriteDeadline the
+	// same way a read-deadline failure is logged here; after that, the
+	// write still bounds itself naturally, since a truly dead connection
+	// is torn down by the kernel's own TCP retransmission timeout
+	// regardless of any deadline this listener sets.
 	fppConnectServerReadTimeoutFloor = 15 * time.Minute
 
 	// fppConnectMaxHeaderBytes bounds the request line plus headers.
@@ -429,7 +444,7 @@ func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHe
 		logger: logger,
 	}
 
-	return fppConnectRequireEnabled(view, http.HandlerFunc(srv.route))
+	return fppConnectRequireEnabled(view, http.HandlerFunc(srv.route), logger)
 }
 
 // route is this listener's entire dispatch table, deliberately not built on
@@ -474,7 +489,7 @@ func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fppConnectLimitBody(http.HandlerFunc(s.routeFixed)).ServeHTTP(w, r)
+	fppConnectLimitBody(http.HandlerFunc(s.routeFixed), s.logger).ServeHTTP(w, r)
 }
 
 // fppConnectSetReadDeadline sets w's underlying connection's read deadline
@@ -615,10 +630,16 @@ func fppConnectValidPlaylistName(name string) bool {
 // ahead of routing: a disabled listener answers exactly like an unmapped
 // path on every one of its own routes, per ADR-044's "enabled false"
 // requirement. The socket itself stays bound either way; only the routes'
-// behavior changes.
-func fppConnectRequireEnabled(view fppConnectView, next http.Handler) http.Handler {
+// behavior changes. This 404 sets its own write deadline before writing
+// (review round 4 finding 3): it runs ahead of every route's own
+// deadline-setting, including the file PATCH route's, so with the
+// server-wide WriteTimeout gone (review round 3 finding 1) this response
+// would otherwise have none at all. Safe to set immediately: nothing above
+// this check has read any part of the request.
+func fppConnectRequireEnabled(view fppConnectView, next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !view.Enabled() {
+			fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, logger)
 			http.NotFound(w, r)
 			return
 		}
@@ -633,10 +654,14 @@ func fppConnectRequireEnabled(view fppConnectView, next http.Handler) http.Handl
 // like: nothing here ever calls r.Body.Read, so a client that declares (or
 // streams) more than the cap would otherwise sit un-rejected until
 // ReadTimeout rather than being turned away outright. Refused the same way
-// an unmapped path is, a plain 404, never by reading first.
-func fppConnectLimitBody(next http.Handler) http.Handler {
+// an unmapped path is, a plain 404, never by reading first, and (review
+// round 4 finding 3) with its own write deadline set first: this refusal
+// runs ahead of routeFixed's own deadline-setting, and nothing above it
+// has read any part of the request either.
+func fppConnectLimitBody(next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength < 0 || r.ContentLength > fppConnectMaxBodyBytes {
+			fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, logger)
 			http.NotFound(w, r)
 			return
 		}
@@ -704,19 +729,23 @@ func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Reques
 // binding write (handlePlaylistPost, fppconnectupload.go). Any other
 // method is this listener's ordinary 404, matching every other route's
 // "wrong method is 404, not 405" rule.
+//
+// The write deadline is set inside each of the three branches below, not
+// once up front here (review round 4 finding 4): an earlier version set
+// it here unconditionally, which for POST ran before handlePlaylistPost
+// had read its own body, exactly the "never before a body read that
+// might still be in flight" ordering fppConnectSetWriteDeadline's own doc
+// comment forbids. GET/HEAD reads no body, so handlePlaylist is free to
+// set it immediately.
 func (s *fppConnectServer) handlePlaylistRoute(w http.ResponseWriter, r *http.Request, name string) {
 	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
-	// Safe to set up front: the playlist body (handlePlaylistPost,
-	// fppconnectupload.go) is capped at fppConnectMaxPlaylistBodyBytes
-	// (1 MiB) and read in one bounded io.ReadAll, nothing like the file
-	// PATCH route's multi-minute chunk transfer.
-	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		s.handlePlaylist(w, r, name)
 	case http.MethodPost:
 		s.handlePlaylistPost(w, r, name)
 	default:
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		http.NotFound(w, r)
 	}
 }
@@ -735,6 +764,7 @@ func (s *fppConnectServer) handlePlaylistRoute(w http.ResponseWriter, r *http.Re
 // client-side merge never re-appends it.
 func (s *fppConnectServer) handlePlaylist(w http.ResponseWriter, r *http.Request, name string) {
 	if !fppConnectValidPlaylistName(name) || !fppConnectContainsShow(s.view.ShowNames(), name) {
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		http.NotFound(w, r)
 		return
 	}
@@ -742,6 +772,7 @@ func (s *fppConnectServer) handlePlaylist(w http.ResponseWriter, r *http.Request
 	if entries == nil {
 		entries = []fppConnectPlaylistEntry{}
 	}
+	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 	fppConnectWriteJSON(w, http.StatusOK, fppConnectPlaylistResponse{
 		Name:         name,
 		MainPlaylist: entries,
@@ -766,23 +797,17 @@ func fppConnectWriteJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// runFPPConnectHTTPListener binds this render node's FPP Connect HTTP
-// compatibility listener and serves it until ctx is done. A bind failure
-// never stops the agent (ADR-044's consequence "a node that cannot bind
-// the listener still renders, still answers MQTT"): it is recorded on
-// status, exactly like runMultiSyncListener's identical bind-failure
-// handling in multisync.go, and this function simply returns.
-func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, held *fppConnectHeldStore, status *fppConnectHTTPStatus, logger *slog.Logger) {
-	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		reason := fmt.Sprintf("failed to bind fppconnect http listener on %s: %v", listenAddr, err)
-		logger.Warn("fppconnect: failed to bind http listener; this node will not appear in xLights' FPP Connect dialog until this is fixed",
-			"listen_addr", listenAddr, "error", err)
-		status.set(false, reason)
-		return
-	}
-
-	srv := &http.Server{
+// newFPPConnectProductionServer builds the *http.Server this listener runs
+// in production, with every deadline and safety field this seam's review
+// rounds have settled on. runFPPConnectHTTPListener and
+// TestFPPConnectUploadDrippedOverTenSeconds (review round 4 finding 6)
+// both call this one constructor, not each their own copy: a future
+// regression that re-adds a server-wide WriteTimeout (review round 3
+// finding 1, the actual bug that test exists to catch) would otherwise
+// only break a hand-copied literal nobody was still keeping in sync,
+// rather than the test itself.
+func newFPPConnectProductionServer(view fppConnectView, nodeID string, held *fppConnectHeldStore, logger *slog.Logger) *http.Server {
+	return &http.Server{
 		Handler:           newFPPConnectHandler(view, nodeID, held, time.Now, logger),
 		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
 		// ReadTimeout is fppConnectServerReadTimeoutFloor (15 minutes),
@@ -794,7 +819,9 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 		// ResponseWriter whose http.ResponseController does not support
 		// SetReadDeadline never leaves a body read entirely unbounded.
 		// ReadHeaderTimeout above still bounds a client that never
-		// finishes sending headers at all.
+		// finishes sending headers at all. See this constant's own doc
+		// comment for why the write side below has no equivalent floor
+		// (review round 4 finding 6).
 		ReadTimeout: fppConnectServerReadTimeoutFloor,
 		// WriteTimeout is 0 (review round 3 finding 1, CONFIRMED and
 		// blocking): net/http arms a nonzero WriteTimeout's deadline on
@@ -829,6 +856,25 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 		// http.ServeMux's own redirect and 405 behavior in review round 1.
 		DisableGeneralOptionsHandler: true,
 	}
+}
+
+// runFPPConnectHTTPListener binds this render node's FPP Connect HTTP
+// compatibility listener and serves it until ctx is done. A bind failure
+// never stops the agent (ADR-044's consequence "a node that cannot bind
+// the listener still renders, still answers MQTT"): it is recorded on
+// status, exactly like runMultiSyncListener's identical bind-failure
+// handling in multisync.go, and this function simply returns.
+func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, held *fppConnectHeldStore, status *fppConnectHTTPStatus, logger *slog.Logger) {
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		reason := fmt.Sprintf("failed to bind fppconnect http listener on %s: %v", listenAddr, err)
+		logger.Warn("fppconnect: failed to bind http listener; this node will not appear in xLights' FPP Connect dialog until this is fixed",
+			"listen_addr", listenAddr, "error", err)
+		status.set(false, reason)
+		return
+	}
+
+	srv := newFPPConnectProductionServer(view, nodeID, held, logger)
 
 	// The first status is a real poll of view.Enabled(), not a blind
 	// "listening, no reason": a node whose fppconnect.settings.enabled is

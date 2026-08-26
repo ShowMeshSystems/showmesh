@@ -1123,15 +1123,112 @@ func TestFPPConnectInFlightReservationClearsOnCompletionAndDiscard(t *testing.T)
 	})
 }
 
+// panicOnceChunkWriter panics on its first call, then delegates to inner
+// for every call after that: TestFPPConnectWriteChunkClearsWritingFlagOnPanic's
+// way of simulating a panic mid-copy (net/http recovers one per
+// connection in production) without leaving every subsequent chunk on the
+// same key unable to ever complete.
+type panicOnceChunkWriter struct {
+	panicked bool
+	inner    fppConnectChunkWriter
+}
+
+func (w *panicOnceChunkWriter) WriteChunk(path string, offset int64, r io.Reader, n int64, truncate bool) (int64, error) {
+	if !w.panicked {
+		w.panicked = true
+		panic("simulated panic mid chunk copy")
+	}
+	return w.inner.WriteChunk(path, offset, r, n, truncate)
+}
+
+// TestFPPConnectWriteChunkClearsWritingFlagOnPanic is review round 4
+// finding 5's regression test: before this fix, a panic during the
+// unlocked chunk copy (recovered per connection by net/http in
+// production, so the process itself survives) left the in-flight entry's
+// writing flag stuck true forever, since finishChunkLocked, the only
+// place that ever cleared it, was never reached. Every later request for
+// the same key, including a fresh offset-0 retry, would then be refused
+// as "already in progress" with no way back short of a process restart.
+func TestFPPConnectWriteChunkClearsWritingFlagOnPanic(t *testing.T) {
+	dir := t.TempDir()
+	writer := &panicOnceChunkWriter{inner: osFPPConnectChunkWriter{}}
+	held := newFPPConnectHeldStoreWithWriter(dir, writer, discardLogger())
+	neverActive := func() (string, bool, bool) { return "", false, false }
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("WriteChunk did not panic on the first call; test setup is broken")
+			}
+		}()
+		held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	}()
+
+	// The deferred reset must have cleared writing before the panic
+	// propagated, so this retry at the same offset is treated as an
+	// ordinary retry, never refused as "another request ... already in
+	// progress."
+	outcome, reason, rec := held.WriteChunk("sequences", "Panicky.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	if outcome != fppConnectChunkCompleted {
+		t.Fatalf("outcome = %v reason = %q, want completed (a retry after a panic must succeed normally, not stay refused as still in progress)", outcome, reason)
+	}
+	if rec.SizeBytes != 3 {
+		t.Fatalf("rec.SizeBytes = %d, want 3", rec.SizeBytes)
+	}
+}
+
+// TestFPPConnectSweepReclaimsStuckWritingEntry is review round 4 finding
+// 5's regression test for its second, independent safety net: an
+// in-flight entry stuck writing==true (its owning goroutine gone some way
+// other than the panic the deferred reset above already covers) must
+// still eventually be reclaimed once it is far older than any legitimate
+// chunk transfer could still be in progress, but never reclaimed while it
+// is merely a normal, still-in-flight write.
+func TestFPPConnectSweepReclaimsStuckWritingEntry(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	stuckSince := time.Now()
+	held.mu.Lock()
+	held.inFlight["sequences/Stuck.fseq"] = &fppConnectInFlight{
+		hash: sha256.New(), uploadLength: 5, bytesReceived: 0,
+		writing: true, lastChunkAt: stuckSince,
+	}
+	held.mu.Unlock()
+	neverActive := func() (string, bool, bool) { return "", false, false }
+
+	held.mu.Lock()
+	held.sweepIdleInFlightLocked(stuckSince.Add(time.Minute))
+	_, stillInFlight := held.inFlight["sequences/Stuck.fseq"]
+	held.mu.Unlock()
+	if !stillInFlight {
+		t.Fatal("a merely slow writing entry was reclaimed too early")
+	}
+
+	// Past fppConnectStuckWritingTTL: this goroutine is gone, not slow.
+	later := stuckSince.Add(fppConnectStuckWritingTTL + time.Minute)
+	if outcome, reason, _ := held.WriteChunk("sequences", "Fresh.fseq", 0, 5, strings.NewReader("hello"), 5, 1<<30, 1<<30, later, neverActive); outcome != fppConnectChunkCompleted {
+		t.Fatalf("fresh upload: outcome = %v reason = %q, want completed", outcome, reason)
+	}
+
+	held.mu.Lock()
+	_, stillInFlight = held.inFlight["sequences/Stuck.fseq"]
+	held.mu.Unlock()
+	if stillInFlight {
+		t.Fatal("a permanently stuck writing entry survived past fppConnectStuckWritingTTL, want it swept")
+	}
+}
+
 // TestFPPConnectUploadDrippedOverTenSeconds is review round 3 finding 1's
 // regression test: a chunk body that arrives slower than the old,
 // removed, server-wide 10s WriteTimeout must still complete successfully
-// against a server built the production way (the real http.Server field
-// set runFPPConnectHTTPListener constructs, not the lighter httptest
-// wrapper startFPPConnectTestServer's other tests use), proving the
-// per-route write deadline (set only after WriteChunk returns) never
-// overlaps, and is never armed early enough to be tripped by, the slow
-// read.
+// against a server built the production way, proving the per-route write
+// deadline (set only after WriteChunk returns) never overlaps, and is
+// never armed early enough to be tripped by, the slow read. Built through
+// newFPPConnectProductionServer, the same constructor
+// runFPPConnectHTTPListener itself calls (review round 4 finding 6), not
+// a hand-copied field set of this test's own that a future change to the
+// real one could silently drift out of sync with: a regression that
+// re-adds a server-wide WriteTimeout to that one constructor fails this
+// test directly.
 func TestFPPConnectUploadDrippedOverTenSeconds(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping an eleven-second drip test in -short mode")
@@ -1144,14 +1241,7 @@ func TestFPPConnectUploadDrippedOverTenSeconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserving a port: %v", err)
 	}
-	srv := &http.Server{
-		Handler:           newFPPConnectHandler(view, "node-1", held, time.Now, discardLogger()),
-		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
-		ReadTimeout:       fppConnectServerReadTimeoutFloor,
-		WriteTimeout:      0,
-		MaxHeaderBytes:    fppConnectMaxHeaderBytes,
-		ConnContext:       fppConnectConnContext,
-	}
+	srv := newFPPConnectProductionServer(view, "node-1", held, discardLogger())
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

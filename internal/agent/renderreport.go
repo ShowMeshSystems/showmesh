@@ -111,7 +111,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 		events = append(events, toRenderFPPConnectHeldEvent(ev))
 	}
 
-	env, err := mqttproto.NewRenderEnvelope(now, nodeID, mqttproto.RenderPayload{
+	renderPayload := mqttproto.RenderPayload{
 		GstLaunchPath:        gstPath,
 		GstLaunchAvailable:   gstOK,
 		Surfaces:             surfaces,
@@ -124,7 +124,10 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 		FPPConnectHeldCount:  heldTotal,
 		FPPConnectHeld:       held,
 		FPPConnectHeldEvents: events,
-	})
+	}
+	renderPayload = shrinkRenderPayloadToFitEnvelope(renderPayload, logger)
+
+	env, err := mqttproto.NewRenderEnvelope(now, nodeID, renderPayload)
 	if err != nil {
 		logger.Error("failed to build render report envelope", "error", err)
 		return
@@ -243,6 +246,59 @@ func truncateHeldFilesForWire(records []fppConnectHeldRecord, maxEntries int) []
 	}
 	combined := append(unbound, bound...)
 	return combined[:maxEntries]
+}
+
+// renderReportEnvelopeSizeBudget mirrors mqttproto's own maxEnvelopeSize
+// (256 KiB, an unexported constant in that package), with headroom kept
+// under it for the envelope wrapper's own fields (schema, messageId,
+// nodeId, sentAt) and this function's own json.Marshal call not being
+// byte-for-byte identical to the one NewRenderEnvelope performs on the
+// final Envelope: the last-resort backstop shrinkRenderPayloadToFitEnvelope
+// applies BEFORE calling NewRenderEnvelope (review round 4 finding 1).
+// Every cap above (renderWireHeldFilesCap, renderWireHeldEventsCap,
+// fppConnectMaxEventEntries, fppConnectMaxEventStringBytes) bounds one
+// field's own size, never the combined report, so a report carrying many
+// events or many held records, each individually within its own per-field
+// caps, could still exceed the envelope once everything else this report
+// carries is added in.
+const renderReportEnvelopeSizeBudget = 240 * 1024
+
+// shrinkRenderPayloadToFitEnvelope drops the oldest event (FPPConnectHeldEvents
+// is oldest-first), then the lowest-priority held record
+// (truncateHeldFilesForWire's own tail, so the unbound-first priority it
+// already established stays intact here too), until p's own serialized
+// size fits under renderReportEnvelopeSizeBudget, or until there is
+// nothing left to drop. mqttproto.NewRenderEnvelope's own Validate call
+// would rather refuse the whole publish outright than accept an
+// over-budget payload. Since Validate runs before marshalling, not after,
+// that refusal would skip every following report too, not just this one,
+// so degrading this field is strictly better than that.
+func shrinkRenderPayloadToFitEnvelope(p mqttproto.RenderPayload, logger *slog.Logger) mqttproto.RenderPayload {
+	dropped := 0
+	for {
+		raw, err := json.Marshal(p)
+		if err == nil && len(raw) <= renderReportEnvelopeSizeBudget {
+			break
+		}
+		switch {
+		case len(p.FPPConnectHeldEvents) > 0:
+			p.FPPConnectHeldEvents = p.FPPConnectHeldEvents[1:]
+		case len(p.FPPConnectHeld) > 0:
+			p.FPPConnectHeld = p.FPPConnectHeld[:len(p.FPPConnectHeld)-1]
+		default:
+			if err != nil {
+				logger.Error("failed to measure render report payload size while shrinking it to fit the envelope", "error", err)
+			} else {
+				logger.Warn("render report payload still exceeds its size budget with no more events or held records left to drop", "size_bytes", len(raw), "budget_bytes", renderReportEnvelopeSizeBudget)
+			}
+			return p
+		}
+		dropped++
+	}
+	if dropped > 0 {
+		logger.Warn("shrank render report payload to fit its size budget", "entries_dropped", dropped)
+	}
+	return p
 }
 
 // renderWireStderrCap mirrors mqttproto's own maxRenderStderrBytes (an

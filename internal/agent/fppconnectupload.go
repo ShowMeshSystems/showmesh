@@ -48,6 +48,10 @@ func (s *fppConnectServer) handleFileRoute(w http.ResponseWriter, r *http.Reques
 	switch r.Method {
 	case http.MethodPatch, http.MethodPost:
 	default:
+		// Safe to set the write deadline immediately: nothing above this
+		// check has read any part of the request (review round 4 finding
+		// 3).
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		http.NotFound(w, r)
 		return
 	}
@@ -228,19 +232,30 @@ func fppConnectCountShowMatches(names []string, want string) int {
 // fppConnectValidPlaylistName here is the same check GET's handlePlaylist
 // applies, refusing a path-shaped name with the same 404 an unknown name
 // would otherwise reach only after a membership check.
+//
+// The write deadline is set immediately before each response below, never
+// up front (review round 4 finding 4): this handler reads its own body
+// (up to fppConnectMaxPlaylistBodyBytes), so setting it any earlier would
+// be exactly the "before a body read that might still be in flight"
+// ordering fppConnectSetWriteDeadline's own doc comment forbids, even
+// though that read is itself already bounded by handlePlaylistRoute's
+// read deadline.
 func (s *fppConnectServer) handlePlaylistPost(w http.ResponseWriter, r *http.Request, name string) {
 	if !fppConnectValidPlaylistName(name) {
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		http.NotFound(w, r)
 		return
 	}
 
 	if r.ContentLength < 0 || r.ContentLength > fppConnectMaxPlaylistBodyBytes {
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		fppConnectWriteErr(w, http.StatusBadRequest, fmt.Sprintf(
 			"playlist body must have a known length within %d bytes", fppConnectMaxPlaylistBodyBytes))
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, fppConnectMaxPlaylistBodyBytes+1))
 	if err != nil || int64(len(raw)) > fppConnectMaxPlaylistBodyBytes {
+		fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 		fppConnectWriteErr(w, http.StatusBadRequest, "failed to read the playlist body")
 		return
 	}
@@ -266,6 +281,7 @@ func (s *fppConnectServer) handlePlaylistPost(w http.ResponseWriter, r *http.Req
 		s.held.BindShow(name, fileNames, now)
 	}
 
+	fppConnectSetWriteDeadline(w, fppConnectWriteDeadline, s.logger)
 	fppConnectWriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
