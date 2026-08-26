@@ -132,6 +132,28 @@ describe('Configuration: FPP MQTT section', () => {
     expect(passwordInput.value).toBe('')
   })
 
+  // Defect follow-up to #116 (controls-before-prose): the broker password
+  // note is safety-relevant, not ordinary explanation -- a blank password
+  // field means "unchanged" only because of this sentence, and an operator
+  // who saves without reading past the button cannot otherwise tell a
+  // blank field apart from a cleared one. It must sit at or above the
+  // password control, not below Save where #116 moved every other note.
+  it('renders the broker password note before the password field, not below Save', async () => {
+    getFPPMQTTConfig.mockResolvedValue(activeFPPMQTTConfig)
+    getFPPMQTTConfigRevisions.mockResolvedValue(emptyFPPMQTTRevisions)
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    const section = await fppMQTTSection()
+    const passwordInput = within(section).getByLabelText(/^password/i)
+    const note = within(section).getByText(/leave the password field blank to keep it unchanged/i)
+    const saveButton = within(section).getByRole('button', { name: /save fpp mqtt configuration/i })
+
+    expect(
+      note.compareDocumentPosition(passwordInput) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(note.compareDocumentPosition(saveButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it("renders the coordinator's own 404 reason with an empty editor, not as an error", async () => {
     getFPPMQTTConfig.mockRejectedValue(
       new ApiError('no fpp.mqtt configuration has been created yet; PUT one to create it', 404,
