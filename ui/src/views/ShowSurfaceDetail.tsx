@@ -10,6 +10,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { ShowSelect } from '../components/ShowSelect'
 import type {
   ConfigShowSurface,
   ShowSurfaceConfigResponse,
@@ -260,7 +261,7 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
       <fieldset disabled={!editable}>
         <label className="form-field">
           Show
-          <input type="text" value={form.show} onChange={(e) => setForm({ ...form, show: e.target.value })} />
+          <ShowSelect value={form.show} onChange={(show) => setForm({ ...form, show })} />
         </label>
         <label className="form-field">
           Name

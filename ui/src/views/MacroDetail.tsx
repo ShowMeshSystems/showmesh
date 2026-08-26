@@ -13,6 +13,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { ShowSelect } from '../components/ShowSelect'
 import { RunMacroButton } from '../components/RunMacroButton'
 import { MacroRunOutcome } from '../components/MacroRunOutcome'
 import type {
@@ -361,7 +362,7 @@ export function MacroDetail({ isNew = false }: MacroDetailProps) {
       <fieldset disabled={!editable}>
         <label className="form-field">
           Show
-          <input type="text" value={form.show} onChange={(e) => setForm({ ...form, show: e.target.value })} />
+          <ShowSelect value={form.show} onChange={(show) => setForm({ ...form, show })} />
         </label>
         <label className="form-field">
           Label

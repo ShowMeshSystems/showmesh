@@ -5,6 +5,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { ShowSelect } from '../components/ShowSelect'
 import type { ConfigShowCue, CueAnnouncementPolicy, ShowCueConfigResponse } from '../app/types'
 
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.cue authoring.
@@ -279,7 +280,7 @@ export function ShowCueDetail({ isNew = false }: ShowCueDetailProps) {
       <fieldset disabled={!editable}>
         <label className="form-field">
           Show
-          <input type="text" value={form.show} onChange={(e) => setForm({ ...form, show: e.target.value })} />
+          <ShowSelect value={form.show} onChange={(show) => setForm({ ...form, show })} />
         </label>
         <label className="form-field">
           Name

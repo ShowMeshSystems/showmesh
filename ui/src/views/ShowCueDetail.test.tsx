@@ -1,22 +1,27 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ShowCueDetail } from './ShowCueDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel } from '../app/test-support/fixtures'
+import { makeModel, makeShowList } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import { ApiError } from '../api/errors'
 import type { Model } from '../app/types'
 
-const { getShowCue, getShowCueRevisions, putShowCue } = vi.hoisted(() => ({
+const { getShowCue, getShowCueRevisions, putShowCue, listConfigObjects } = vi.hoisted(() => ({
   getShowCue: vi.fn(),
   getShowCueRevisions: vi.fn(),
   putShowCue: vi.fn(),
+  listConfigObjects: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getShowCue, getShowCueRevisions, putShowCue }
+  return { ...actual, getShowCue, getShowCueRevisions, putShowCue, listConfigObjects }
+})
+
+beforeEach(() => {
+  listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
 })
 
 afterEach(() => {
@@ -24,6 +29,7 @@ afterEach(() => {
   getShowCue.mockReset()
   getShowCueRevisions.mockReset()
   putShowCue.mockReset()
+  listConfigObjects.mockReset()
 })
 
 const adminSession = makeAuthenticatedSession({
@@ -140,7 +146,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByRole('button', { name: 'Create cue' }))
 
@@ -153,7 +159,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     // The LTC checkbox itself is disabled until audio is enabled, so the
     // real control cannot reach this state: this proves buildPayload's own
@@ -172,7 +178,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Render'))
     await user.type(screen.getByLabelText(/Sequence/), 'opening-sequence')
@@ -194,7 +200,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Audio'))
     await user.type(screen.getByLabelText('Asset'), 'opening-audio')
@@ -226,7 +232,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Audio'))
     await user.type(screen.getByLabelText('Asset'), 'opening-audio')

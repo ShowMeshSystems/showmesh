@@ -20,6 +20,7 @@
 import type {
   Capability,
   CollectorStatus,
+  ConfigObjectSummary,
   ConnectionState,
   Evidence,
   EventSeq,
@@ -40,6 +41,33 @@ import type {
 } from '../types'
 
 export const NOW = '2026-08-11T12:00:00.000Z'
+
+export function makeConfigObjectSummary(overrides: Partial<ConfigObjectSummary> = {}): ConfigObjectSummary {
+  return {
+    id: 'halloween-2026',
+    label: 'halloween-2026',
+    show: '',
+    currentRevision: 1,
+    updatedAt: NOW,
+    ...overrides,
+  }
+}
+
+/**
+ * The shape `listConfigObjects('show')` resolves to (api/store.ts):
+ * enough for `ShowSelect` (components/ShowSelect.tsx) to populate its
+ * dropdown from the same list Shows.tsx itself renders, without every
+ * test that touches a `show` field having to hand-build the response.
+ */
+export function makeShowList(
+  ids: string[] = ['halloween-2026'],
+): { serverTime: string; kind: 'show'; objects: ConfigObjectSummary[] } {
+  return {
+    serverTime: NOW,
+    kind: 'show',
+    objects: ids.map((id) => makeConfigObjectSummary({ id, label: id })),
+  }
+}
 
 export function makeEvidence(overrides: Partial<Evidence> = {}): Evidence {
   return {

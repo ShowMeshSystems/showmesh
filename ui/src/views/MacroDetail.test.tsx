@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MacroDetail } from './MacroDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel } from '../app/test-support/fixtures'
+import { makeModel, makeShowList } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
@@ -29,6 +29,15 @@ vi.mock('../api', async (importOriginal) => {
 // getShowAction(id).then(...) effect never throws on an undefined return.
 beforeEach(() => {
   getShowAction.mockRejectedValue(new Error('getShowAction not mocked in this test'))
+  // Default: the show.action lookup this file already exercises stays
+  // empty unless a test overrides it, and the new show-select's own
+  // GET /config/show resolves to a small, non-empty list: a call this
+  // form now always makes, distinguished from the show.action calls by
+  // its `kind` argument (api/store.ts's own listConfigObjects signature).
+  listConfigObjects.mockImplementation((kind: string) => {
+    if (kind === 'show') return Promise.resolve(makeShowList(['halloween-2026']))
+    return Promise.resolve({ serverTime: '2026-08-14T00:00:00Z', kind, objects: [] })
+  })
 })
 
 afterEach(() => {
@@ -76,7 +85,6 @@ describe('MacroDetail (new macro authoring)', () => {
   // an operator who never sees "reduced" as an option can never author
   // it in the first place.
   it('never offers "reduced" as a local-fallback option, and states why in the operator-visible text', () => {
-    listConfigObjects.mockResolvedValue({ serverTime: '2026-08-14T00:00:00Z', kind: 'show.action', objects: [] })
     renderNewMacro(makeModel({ session: adminSession }))
 
     const options = screen.getAllByRole('option', { name: /none|coordinator-required|silence|reduced/ })
@@ -92,25 +100,23 @@ describe('MacroDetail (new macro authoring)', () => {
   // 400 the dropdown itself steered them into. The picker now narrows to
   // the macro's own show as it is typed.
   it('narrows the action picker to the macro\'s own show as it is typed', async () => {
-    listConfigObjects.mockResolvedValue({ serverTime: '2026-08-18T00:00:00Z', kind: 'show.action', objects: [] })
     const user = userEvent.setup()
     renderNewMacro(makeModel({ session: adminSession }))
 
     expect(listConfigObjects).toHaveBeenCalledWith('show.action', undefined)
     listConfigObjects.mockClear()
 
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(await screen.findByLabelText('Show'), 'halloween-2026')
 
     expect(listConfigObjects).toHaveBeenCalledWith('show.action', 'halloween-2026')
   })
 
   it('requires a non-empty local-fallback reason before submitting, even for class "none"', async () => {
-    listConfigObjects.mockResolvedValue({ serverTime: '2026-08-14T00:00:00Z', kind: 'show.action', objects: [] })
     const user = userEvent.setup()
     renderNewMacro(makeModel({ session: adminSession }))
 
     await user.type(screen.getByLabelText('Macro id'), 'begin-set')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Label'), 'Begin set')
     await user.type(screen.getByLabelText('Step id'), 'start')
     await user.type(screen.getByLabelText('Action'), 'start-main-show')
@@ -122,7 +128,6 @@ describe('MacroDetail (new macro authoring)', () => {
   })
 
   it('submits onFailure/onUnconfirmed at their stated defaults when the operator never touches those selects', async () => {
-    listConfigObjects.mockResolvedValue({ serverTime: '2026-08-14T00:00:00Z', kind: 'show.action', objects: [] })
     putShowMacro.mockResolvedValue({
       serverTime: '2026-08-14T00:00:00Z',
       kind: 'show.macro',
@@ -138,7 +143,7 @@ describe('MacroDetail (new macro authoring)', () => {
     renderNewMacro(makeModel({ session: adminSession }))
 
     await user.type(screen.getByLabelText('Macro id'), 'begin-set')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Label'), 'Begin set')
     await user.type(screen.getByLabelText('Step id'), 'start')
     await user.type(screen.getByLabelText('Action'), 'start-main-show')
@@ -191,7 +196,6 @@ describe('MacroDetail (existing macro, action-integration lookup)', () => {
     })
     getShowMacroRevisions.mockResolvedValue({ revisions: [] })
     listMacroRuns.mockResolvedValue({ runs: [] })
-    listConfigObjects.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', kind: 'show.action', objects: [] })
     getShowAction.mockRejectedValue(new Error('404 not found'))
 
     renderExistingMacro(makeModel({ session: adminSession }), 'begin-set')

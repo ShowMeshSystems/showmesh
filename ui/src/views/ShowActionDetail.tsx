@@ -13,6 +13,7 @@ import {
 } from '../app/resolumeComposition'
 import { resolumeCompositionOrNull, useResolumeComposition } from '../app/useResolumeComposition'
 import { ScopedButton } from '../components/ScopedButton'
+import { ShowSelect } from '../components/ShowSelect'
 import { ActionBindingCheck } from '../components/ActionBindingCheck'
 import { ActionInvokeButton } from '../components/ActionInvokeButton'
 import type { ActionIntegration, ConfigShowAction, SafetyClass, ShowActionConfigResponse } from '../app/types'
@@ -614,7 +615,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
       <fieldset disabled={!editable} className="show-action-form">
         <label className="form-field">
           Show
-          <input type="text" value={form.show} onChange={(e) => setForm({ ...form, show: e.target.value })} />
+          <ShowSelect value={form.show} onChange={(show) => setForm({ ...form, show })} />
         </label>
         <label className="form-field">
           Label
