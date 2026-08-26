@@ -128,13 +128,12 @@ export function CueCatalogPanel({ nodeId }: CueCatalogPanelProps) {
   )
 }
 
-// RequiredCatalog renders exactly what GET /nodes/{nodeId}/cue-catalog
-// carries: the coordinator's OWN live resolution for this node, recomputed
-// on every call — never a persisted acknowledgement (CueCatalogResponse
-// has no such field; TRACK-H-H3-SPEC.md section 4 stores that beside the
-// node's asset report instead, reachable only through the acknowledge and
-// deploy routes). "configured: false" is the honest-absence case the spec
-// names, never a fabricated generation.
+// RequiredCatalog renders what GET /nodes/{nodeId}/cue-catalog carries:
+// the coordinator's OWN live resolution for this node, recomputed on
+// every call, plus (via HeldCatalog below) the persisted acknowledgement
+// it now also reports read-only alongside that resolution.
+// "configured: false" is the honest-absence case the spec names, never a
+// fabricated generation.
 function RequiredCatalog({ response, deploy }: { response: CueCatalogResponse; deploy: DeployState }) {
   if (!response.configured) {
     return (
@@ -161,32 +160,48 @@ function RequiredCatalog({ response, deploy }: { response: CueCatalogResponse; d
 }
 
 // HeldCatalog is the "what does this node actually hold" half of the
-// panel. There is no route that reads a node's persisted acknowledgement
-// on demand (only POST .../acknowledge, which is the node's own report,
-// and POST .../deploy's own result) — so before this panel's own deploy
-// resolves, the honest answer is "not observed from here", stated plainly
-// rather than guessed, matching this codebase's ADR-020 absence-is-stated
-// convention (NodeAssetManifest.observedAt's identical null case).
+// panel. GET /nodes/{nodeId}/cue-catalog now carries this node's
+// persisted acknowledgement directly (response.acknowledgedStatus/
+// acknowledgedRevision/acknowledgedAt), so this reads current or stale on
+// first load, before any deploy runs. A deploy result that just confirmed
+// is preferred once one exists in this session: it is fresher than the
+// GET this panel loaded with, and it also carries the generation the GET
+// response omits.
 function HeldCatalog({ response, deploy }: { response: CueCatalogResponse; deploy: DeployState }) {
-  if (deploy.kind !== 'result' || deploy.result.outcome !== 'confirmed' || deploy.result.acknowledgedRevision === undefined) {
+  if (deploy.kind === 'result' && deploy.result.outcome === 'confirmed' && deploy.result.acknowledgedRevision !== undefined) {
+    const held = deploy.result
+    const current = held.acknowledgedRevision === response.revision && held.generation === response.generation
     return (
-      <p className="text-muted" role="status">
-        Held revision: not observed from this panel yet. Deploy to confirm what this node currently holds.
+      <p className={current ? 'render-surface__confirmed' : 'render-surface__unconfirmed'} role={current ? 'status' : 'alert'}>
+        Held revision <code>{held.acknowledgedRevision}</code> (generation {held.generation}), acknowledged{' '}
+        {formatAbsolute(held.resolvedAt ?? null)}:{' '}
+        {current
+          ? 'current: matches what the active show requires now.'
+          : `stale: the active show now requires revision ${response.revision ?? 'unknown'} (generation ${response.generation ?? 'unknown'}).`}
       </p>
     )
   }
 
-  const held = deploy.result
-  const current =
-    held.acknowledgedRevision === response.revision && held.generation === response.generation
+  // response.acknowledgedStatus is always present and distinguishes
+  // "never acknowledged anything" from "acknowledged something, but it
+  // matches" or "acknowledged something, but it does not" - a caller must
+  // never guess never-acknowledged from a missing revision.
+  if (response.acknowledgedStatus === 'catalog-unacknowledged') {
+    return (
+      <p className="text-muted" role="status">
+        Held revision: never acknowledged by this node. Deploy to confirm what this node currently holds.
+      </p>
+    )
+  }
 
+  const current = response.acknowledgedStatus === 'catalog-current'
   return (
     <p className={current ? 'render-surface__confirmed' : 'render-surface__unconfirmed'} role={current ? 'status' : 'alert'}>
-      Held revision <code>{held.acknowledgedRevision}</code> (generation {held.generation}), acknowledged{' '}
-      {formatAbsolute(held.resolvedAt ?? null)}:{' '}
+      Held revision <code>{response.acknowledgedRevision}</code>, acknowledged{' '}
+      {formatAbsolute(response.acknowledgedAt ?? null)}:{' '}
       {current
         ? 'current: matches what the active show requires now.'
-        : `stale: the active show now requires revision ${response.revision ?? 'unknown'} (generation ${response.generation ?? 'unknown'}).`}
+        : `stale: the active show now requires revision ${response.revision ?? 'unknown'}.`}
     </p>
   )
 }

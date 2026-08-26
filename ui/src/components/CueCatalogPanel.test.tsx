@@ -56,6 +56,7 @@ function catalog(overrides: Partial<CueCatalogResponse> = {}): CueCatalogRespons
     generation: 3,
     revision: 'sha256:current',
     entries: [{ cueId: 'opener', cueRevision: 1, outputs: {} }],
+    acknowledgedStatus: 'catalog-unacknowledged',
     ...overrides,
   }
 }
@@ -107,13 +108,44 @@ function renderPanel(model: Model) {
 }
 
 describe('CueCatalogPanel', () => {
-  it('renders the required revision, generation and show, and the held state as not yet observed', async () => {
-    getNodeCueCatalog.mockResolvedValue(catalog())
+  it('renders the required revision, generation and show, and the held state as never acknowledged', async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ acknowledgedStatus: 'catalog-unacknowledged' }))
     renderPanel(makeModel({ session: signedIn() }))
 
     expect(await screen.findByText(/show halloween · generation 3 · revision/)).toBeInTheDocument()
-    expect(screen.getByText(/Held revision: not observed from this panel yet/)).toBeInTheDocument()
+    expect(screen.getByText(/Held revision: never acknowledged by this node/)).toBeInTheDocument()
     expect(getNodeCueCatalog).toHaveBeenCalledWith('media-01')
+  })
+
+  it('renders a current acknowledgement on first load, before any deploy', async () => {
+    getNodeCueCatalog.mockResolvedValue(
+      catalog({
+        acknowledgedStatus: 'catalog-current',
+        acknowledgedRevision: 'sha256:current',
+        acknowledgedAt: '2026-08-25T18:00:00Z',
+      }),
+    )
+    renderPanel(makeModel({ session: signedIn() }))
+
+    const held = await screen.findByText(/Held revision/)
+    expect(held).toHaveTextContent('sha256:current')
+    expect(held).toHaveTextContent('current: matches what the active show requires now.')
+  })
+
+  it('renders a stale acknowledgement on first load, naming both revisions', async () => {
+    getNodeCueCatalog.mockResolvedValue(
+      catalog({
+        revision: 'sha256:newer',
+        acknowledgedStatus: 'catalog-stale',
+        acknowledgedRevision: 'sha256:older',
+        acknowledgedAt: '2026-08-25T18:00:00Z',
+      }),
+    )
+    renderPanel(makeModel({ session: signedIn() }))
+
+    const held = await screen.findByText(/Held revision/)
+    expect(held).toHaveTextContent('sha256:older')
+    expect(held).toHaveTextContent('stale: the active show now requires revision sha256:newer.')
   })
 
   it('renders a node with no active show as sensible honest absence, not a broken panel', async () => {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,7 +68,14 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 	if h.deps.AssetManifests == nil {
 		jsonWrite(w, v1.CueCatalogResponse{
 			ServerTime: formatTime(now), Node: nodeID, Configured: false, Entries: []v1.CueCatalogEntry{},
+			AcknowledgedStatus: v1.CueCatalogStatusNeverAcknowledged,
 		})
+		return
+	}
+
+	ackStatus, ackRevision, ackAt, err := h.resolveCueCatalogAcknowledgedFields(ctx, nodeID, "")
+	if err != nil {
+		h.writeInternalError(w, now, "get node cue catalog acknowledgement", err)
 		return
 	}
 
@@ -79,6 +87,7 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 	if !active.Configured {
 		jsonWrite(w, v1.CueCatalogResponse{
 			ServerTime: formatTime(now), Node: nodeID, Configured: false, Entries: []v1.CueCatalogEntry{},
+			AcknowledgedStatus: ackStatus, AcknowledgedRevision: ackRevision, AcknowledgedAt: ackAt,
 		})
 		return
 	}
@@ -89,11 +98,57 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	generation := catalog.Generation
+
+	// Recomputed against catalog.Revision now that it is known — the
+	// no-active-show lookup above deliberately never treats a stored
+	// acknowledgement as "current" (mirrors
+	// handlePostNodeCueCatalogAcknowledge's own "no current to match"
+	// rule), so a real active show's revision must be resolved first.
+	ackStatus, ackRevision, ackAt, err = h.resolveCueCatalogAcknowledgedFields(ctx, nodeID, catalog.Revision)
+	if err != nil {
+		h.writeInternalError(w, now, "get node cue catalog acknowledgement", err)
+		return
+	}
+
 	jsonWrite(w, v1.CueCatalogResponse{
 		ServerTime: formatTime(now), Node: catalog.Node, Configured: true,
 		Show: catalog.Show, Generation: &generation, Revision: catalog.Revision,
-		Entries: mapCueCatalogEntries(catalog.Entries),
+		Entries:              mapCueCatalogEntries(catalog.Entries),
+		AcknowledgedStatus:   ackStatus,
+		AcknowledgedRevision: ackRevision,
+		AcknowledgedAt:       ackAt,
 	})
+}
+
+// resolveCueCatalogAcknowledgedFields reads nodeID's persisted cue-catalog
+// acknowledgement ([store.GetNodeCueCatalogAck]) and turns it into
+// CueCatalogResponse's three-way verdict without ever performing a write:
+// [v1.CueCatalogStatusNeverAcknowledged] when nodeID has never
+// acknowledged anything ([store.ErrNodeCueCatalogAckNotFound]),
+// [v1.CueCatalogStatusCurrent] when the acknowledged revision equals
+// currentRevision, and [v1.CueCatalogStatusStale] otherwise — including
+// when currentRevision is "" (no active show resolved), matching
+// handlePostNodeCueCatalogAcknowledge's own rule that there is no
+// "current" for an unconfigured active show to match. The returned
+// revision/timestamp pointers are both nil exactly when the status is
+// never-acknowledged. A non-nil error means a genuine store failure, which
+// the caller must turn into a 500 rather than reporting
+// never-acknowledged.
+func (h *handlers) resolveCueCatalogAcknowledgedFields(ctx context.Context, nodeID, currentRevision string) (status string, revision, acknowledgedAt *string, err error) {
+	ack, err := h.deps.AssetManifests.GetNodeCueCatalogAck(ctx, nodeID)
+	if errors.Is(err, store.ErrNodeCueCatalogAckNotFound) {
+		return v1.CueCatalogStatusNeverAcknowledged, nil, nil, nil
+	}
+	if err != nil {
+		return "", nil, nil, err
+	}
+	status = v1.CueCatalogStatusStale
+	if currentRevision != "" && ack.Revision == currentRevision {
+		status = v1.CueCatalogStatusCurrent
+	}
+	rev := ack.Revision
+	at := formatTime(ack.AcknowledgedAt)
+	return status, &rev, &at, nil
 }
 
 // --- POST /nodes/{nodeId}/cue-catalog/acknowledge ---
