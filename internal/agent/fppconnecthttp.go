@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +52,33 @@ const (
 	// type. ADR-044 decision 10: no served content may claim "Falcon
 	// Player"; this is ShowMesh's own name, not a borrowed one.
 	fppConnectPlatform = "ShowMesh"
+
+	// fppConnectEnabledPollInterval is how often the listener goroutine
+	// re-reads view.Enabled() to keep the render report's disabled-by-
+	// configuration evidence current. The view offers no change hook, so
+	// this is a poll; every route already reads Enabled() fresh per
+	// request (fppConnectRequireEnabled), so this interval only bounds how
+	// promptly the STATUS an operator reads catches up, not how promptly
+	// the routes themselves react.
+	fppConnectEnabledPollInterval = 5 * time.Second
+
+	// fppConnectDisabledReason is the status reason recorded while the
+	// listener is bound but view.Enabled() is false, read by an operator
+	// via the render report's fppConnectReason field.
+	fppConnectDisabledReason = "disabled by configuration"
+
+	// fppConnectPathSystemInfo, fppConnectPathMultiSyncSystems and
+	// fppConnectPathPlaylists are the three fixed routes route() matches by
+	// exact, literal comparison against r.URL.EscapedPath(). See route's
+	// own doc comment for why matching happens this way instead of through
+	// http.ServeMux.
+	fppConnectPathSystemInfo       = "/api/system/info"
+	fppConnectPathMultiSyncSystems = "/api/fppd/multiSyncSystems"
+	fppConnectPathPlaylists        = "/api/playlists"
+
+	// fppConnectPlaylistPrefix is the fourth route's fixed prefix; route()
+	// matches anything after it as the (still escaped) playlist name.
+	fppConnectPlaylistPrefix = "/api/playlist/"
 )
 
 // fppConnectNodeNamespace is a fixed, arbitrary namespace UUID used to
@@ -162,7 +191,7 @@ type fppConnectSystemInfoResponse struct {
 	Mode         string `json:"Mode"`
 	TypeID       int    `json:"typeId"`
 	// ChannelRanges omits the key entirely when empty (omitempty), never
-	// serving "channelRanges":"" — RES-003 section 9.5: an empty
+	// serving "channelRanges":"". RES-003 section 9.5: an empty
 	// channelRanges string, if xLights read one, would fall back to
 	// rendering a full non-sparse FSEQ, so a node with no configured
 	// surface must not advertise the key at all.
@@ -223,8 +252,8 @@ type fppConnectServer struct {
 // seam (the upload and playlist-write routes are FC2's), a request body
 // size cap, and the enabled-flag gate that 404s every route when this
 // node's fppconnect.settings.enabled is false. Anything not matching one of
-// the four registered patterns falls through to http.ServeMux's own 404,
-// which is a short plain-text body, never HTML and never a stack trace.
+// the four routes gets route's own 404: a short plain-text body, never
+// HTML and never a stack trace.
 func newFPPConnectHandler(view fppConnectView, nodeID string) http.Handler {
 	srv := &fppConnectServer{
 		view:   view,
@@ -232,13 +261,98 @@ func newFPPConnectHandler(view fppConnectView, nodeID string) http.Handler {
 		uuid:   fppConnectNodeUUID(nodeID).String(),
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/system/info", srv.handleSystemInfo)
-	mux.HandleFunc("GET /api/fppd/multiSyncSystems", srv.handleMultiSyncSystems)
-	mux.HandleFunc("GET /api/playlists", srv.handlePlaylists)
-	mux.HandleFunc("GET /api/playlist/{name}", srv.handlePlaylist)
+	return fppConnectLimitBody(fppConnectRequireEnabled(view, http.HandlerFunc(srv.route)))
+}
 
-	return fppConnectLimitBody(fppConnectRequireEnabled(view, mux))
+// route is this listener's entire dispatch table, deliberately not built on
+// http.ServeMux. ServeMux 301-redirects, with an HTML body, any request
+// whose path needs cleaning: a "//" anywhere, or a literal ".." segment
+// (verified against this Go version: GET //api/system/info and
+// GET /api/playlist/../system/info both come back as a 301 to the cleaned
+// path with a text/html body), regardless of which patterns are
+// registered, since the cleaning check runs before pattern matching. ADR-044
+// decision 1 permits only 404 for a request outside the four named routes,
+// and this package's own doc comment promises no served content is HTML;
+// a redirect breaks both. Matching r.URL.EscapedPath() by hand, and never
+// handing a request to anything that performs its own path cleaning, makes
+// that redirect path structurally unreachable rather than merely unobserved.
+//
+// Only GET and HEAD are served. net/http's server already strips a HEAD
+// response's body while sending accurate headers (verified: Content-Length
+// reflects the real body size, the body itself is empty), so no handler
+// below needs its own HEAD case. Every other method is a plain 404: ADR-044
+// decision 1 says everything outside the four routes is 404, not the 405 +
+// Allow header http.ServeMux would answer with for a wrong method on a
+// registered path.
+func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.URL.EscapedPath() {
+	case fppConnectPathSystemInfo:
+		s.handleSystemInfo(w, r)
+		return
+	case fppConnectPathMultiSyncSystems:
+		s.handleMultiSyncSystems(w, r)
+		return
+	case fppConnectPathPlaylists:
+		s.handlePlaylists(w, r)
+		return
+	}
+
+	if name, ok := fppConnectMatchPlaylistPath(r.URL.EscapedPath()); ok {
+		s.handlePlaylist(w, r, name)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
+// fppConnectMatchPlaylistPath reports whether escapedPath is
+// fppConnectPlaylistPrefix followed by exactly one further path segment,
+// and if so returns that segment decoded. A literal (still-escaped) "/"
+// anywhere after the prefix means more than one segment reached this
+// listener (the shape GET /api/playlist/../system/info's ".." would take
+// once route() no longer had a mux to clean it away), which is never a
+// valid playlist name and is refused here rather than partially matched.
+// The returned name is NOT yet validated for filesystem safety; see
+// fppConnectValidPlaylistName, applied by the caller.
+func fppConnectMatchPlaylistPath(escapedPath string) (name string, ok bool) {
+	rest, found := strings.CutPrefix(escapedPath, fppConnectPlaylistPrefix)
+	if !found || rest == "" || strings.Contains(rest, "/") {
+		return "", false
+	}
+	decoded, err := url.PathUnescape(rest)
+	if err != nil {
+		return "", false
+	}
+	return decoded, true
+}
+
+// fppConnectValidPlaylistName reports whether a decoded playlist name is
+// safe to compare against the holder's show list, and later to reuse: FC2's
+// upload receiver touches this exact string near the filesystem. Checked on
+// the DECODED name, so a percent-encoded traversal attempt (".." as
+// "%2e%2e", a separator as "%2f") is caught here even when it matched
+// route()'s single-segment shape cleanly.
+func fppConnectValidPlaylistName(name string) bool {
+	if name == "" {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return false
+	}
+	if strings.IndexByte(name, 0) != -1 {
+		return false
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // fppConnectRequireEnabled 404s every request when view.Enabled() is false,
@@ -320,14 +434,17 @@ func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Reques
 	fppConnectWriteJSON(w, http.StatusOK, names)
 }
 
-func (s *fppConnectServer) handlePlaylist(w http.ResponseWriter, r *http.Request) {
-	// PathValue is already percent-decoded segment-by-segment by
-	// http.ServeMux, with '+' left literal rather than treated as a space
-	// (that conversion is query-string-only behavior FPP's own receiver
-	// does not apply either) — verified against this exact pattern, not
-	// assumed.
-	name := r.PathValue("name")
-	if !fppConnectContainsShow(s.view.ShowNames(), name) {
+// handlePlaylist serves a name route() has already matched and decoded
+// (url.PathUnescape, so '+' stays literal rather than becoming a space:
+// that conversion is query-string-only behavior FPP's own receiver does not
+// apply either). name is validated here, before the membership check,
+// against fppConnectValidPlaylistName: a name a filesystem would read as a
+// path (a separator, a NUL byte, or a ".." segment) is refused with the
+// same 404 an unknown name gets, never reaching the membership check that
+// would otherwise tell an attacker whether it happened to collide with a
+// real show name.
+func (s *fppConnectServer) handlePlaylist(w http.ResponseWriter, r *http.Request, name string) {
+	if !fppConnectValidPlaylistName(name) || !fppConnectContainsShow(s.view.ShowNames(), name) {
 		http.NotFound(w, r)
 		return
 	}
@@ -378,34 +495,74 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 		WriteTimeout:      fppConnectWriteTimeout,
 		MaxHeaderBytes:    fppConnectMaxHeaderBytes,
 		ConnContext:       fppConnectConnContext,
+		// net/http already recovers a handler panic per connection and logs
+		// it through this *log.Logger rather than letting it reach the
+		// agent's own structured logger by default; routing it through
+		// logger's handler keeps that recovery visible in the same
+		// structured log every other agent subsystem writes to.
+		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
 
-	status.set(true, "")
+	// The first status is a real poll of view.Enabled(), not a blind
+	// "listening, no reason": a node whose fppconnect.settings.enabled is
+	// already false when this listener binds must report that from its
+	// very first status, not report healthy for one tick.
+	fppConnectPollEnabled(view, status)
 
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- srv.Serve(ln)
 	}()
 
-	select {
-	case <-ctx.Done():
-		// Ordered ahead of the agent's existing clean-shutdown path
-		// (renderOps.Shutdown/sup.Shutdown/shutdownCleanly in agent.go):
-		// this select fires as soon as ctx ends, and agent.go joins this
-		// function's own done-channel before any of those run.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), fppConnectShutdownTimeout)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Warn("fppconnect: http listener did not shut down cleanly", "error", err)
-		}
-		<-serveErr
-	case err := <-serveErr:
-		// Serve returns http.ErrServerClosed on an ordinary Shutdown; a
-		// different error here is a genuine mid-session listener failure,
-		// the same degradation as never having bound at all.
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Warn("fppconnect: http listener stopped unexpectedly", "error", err)
-			status.set(false, fmt.Sprintf("fppconnect http listener stopped unexpectedly: %v", err))
+	// enabledPoll re-reads view.Enabled() on a short interval so the
+	// render report's disabled-by-configuration evidence (finding 3) stays
+	// current: the view offers no change hook, and every route already
+	// reads Enabled() fresh per request regardless of this ticker, so this
+	// only bounds how promptly the STATUS an operator reads catches up.
+	enabledPoll := time.NewTicker(fppConnectEnabledPollInterval)
+	defer enabledPoll.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Ordered ahead of the agent's existing clean-shutdown path
+			// (renderOps.Shutdown/sup.Shutdown/shutdownCleanly in
+			// agent.go): this fires as soon as ctx ends, and agent.go
+			// joins this function's own done-channel before any of those
+			// run.
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), fppConnectShutdownTimeout)
+			defer cancel()
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("fppconnect: http listener did not shut down cleanly", "error", err)
+			}
+			<-serveErr
+			return
+		case err := <-serveErr:
+			// Serve returns http.ErrServerClosed on an ordinary Shutdown; a
+			// different error here is a genuine mid-session listener
+			// failure, the same degradation as never having bound at all.
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Warn("fppconnect: http listener stopped unexpectedly", "error", err)
+				status.set(false, fmt.Sprintf("fppconnect http listener stopped unexpectedly: %v", err))
+			}
+			return
+		case <-enabledPoll.C:
+			fppConnectPollEnabled(view, status)
 		}
 	}
+}
+
+// fppConnectPollEnabled records view's current Enabled() value on status:
+// listening stays true either way (the socket is bound in both cases), and
+// reason is fppConnectDisabledReason when disabled or "" when enabled,
+// matching fppConnectHTTPStatus's own doc comment on what "listening but
+// disabled" means. Factored out of runFPPConnectHTTPListener so a test can
+// exercise the transition in both directions without depending on a real
+// ticker tick.
+func fppConnectPollEnabled(view fppConnectView, status *fppConnectHTTPStatus) {
+	if view.Enabled() {
+		status.set(true, "")
+		return
+	}
+	status.set(true, fppConnectDisabledReason)
 }

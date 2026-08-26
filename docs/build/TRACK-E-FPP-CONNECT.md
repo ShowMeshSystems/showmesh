@@ -66,9 +66,18 @@ Every item below was an open owner decision when this document was written on 20
 FC1's build, as specified and tested (ADR-044 decision 2: this section, not
 `api/openapi.yaml`, is this listener's specification). The listener binds
 `SHOWMESH_FPPCONNECT_LISTEN_ADDR` (default `:80`; ADR-044 decision 5) and
-serves exactly four `GET` routes. Anything else, including a known path with
-the wrong method, is 404 (405 on a wrong method is also acceptable and is
-what `net/http`'s `ServeMux` does by default; nothing here overrides it).
+serves exactly four `GET` routes (`HEAD` is also served, with no body, per
+`net/http`'s own handling). Anything else, including a known path with the
+wrong method, is 404: ADR-044 decision 1 makes everything outside the four
+routes 404, so a wrong method never gets `http.ServeMux`'s own 405-plus-
+`Allow`-header answer. Routing does not use `http.ServeMux` at all, because
+its automatic path cleaning would 301-redirect a dirty path (a doubled
+slash, a literal `..` segment) with an HTML body before any pattern is even
+considered; this listener matches the escaped path itself so that path is
+structurally unreachable. The fourth route's `{name}` is additionally
+refused, before the show-name check, if it contains `/`, `\`, a NUL byte, or
+is exactly `..`: FC2's upload receiver reuses this same string near the
+filesystem.
 
 - **`GET /api/system/info`**: a JSON object with `uuid` (UUIDv5 of the node
   id under a fixed ShowMesh namespace UUID, stable across restarts and
@@ -105,11 +114,15 @@ enable takes effect with no restart.
 **Bind-failure behaviour.** A bind failure (most commonly a node without
 `CAP_NET_BIND_SERVICE` trying to bind `:80`) never stops the agent. It is
 recorded the way `multiSyncStatus` records a MultiSync bind failure, with
-the reason text naming the address, and reaches the same render report
-MultiSync's own bind status reaches (`fppConnectListening`/
-`fppConnectReason`/`fppConnectObservedAt` alongside `multiSyncListening`/
-`multiSyncReason`/`multiSyncObservedAt`). A bind failure never falls back to
-a different port: xLights only ever contacts port 80.
+the reason text naming the address, and carried on the same
+`showmesh.node.render/v1` payload MultiSync's own bind status is carried
+on: `fppConnectListening`/`fppConnectReason`/`fppConnectObservedAt` sit
+alongside `multiSyncListening`/`multiSyncReason`/`multiSyncObservedAt` in
+the render report. No `node.fppconnect.*` collector signal or API field
+exists yet to surface this to an operator the way the coordinator surfaces
+other node evidence; that is a follow-up, not this seam's scope. A bind
+failure never falls back to a different port: xLights only ever contacts
+port 80.
 
 **Environment.** `SHOWMESH_FPPCONNECT_LISTEN_ADDR` is the only environment
 variable this feature adds (ADR-044 decision 5), allow-listed under ADR-039

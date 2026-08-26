@@ -325,7 +325,7 @@ func TestFPPConnectDisabledServesEvery404(t *testing.T) {
 
 // TestFPPConnectUUIDStableAndDistinct proves the derived uuid is stable
 // across separately constructed handlers for the same node id, and
-// distinct for a different node id — ADR-044's requirement that the
+// distinct for a different node id, per ADR-044's requirement that the
 // advertised uuid be stable across restarts and identical on every node
 // sharing a node id.
 func TestFPPConnectUUIDStableAndDistinct(t *testing.T) {
@@ -399,7 +399,7 @@ func TestFPPConnectNoProductIdentityLeak(t *testing.T) {
 
 // TestRunFPPConnectHTTPListenerBindFailure proves a bind failure is
 // recorded on status with a reason naming the address, and that the
-// function returns without panicking or blocking — ADR-044's "a bind
+// function returns without panicking or blocking, per ADR-044's "a bind
 // failure never stops the agent" rule, exercised the same way
 // multisyncstatus_test.go exercises runMultiSyncListener's identical
 // contract.
@@ -428,5 +428,156 @@ func TestRunFPPConnectHTTPListenerBindFailure(t *testing.T) {
 	}
 	if observedAt.IsZero() {
 		t.Fatal("observedAt is zero, want it stamped at the failed bind attempt")
+	}
+}
+
+// TestFPPConnectDirtyPathsNeverRedirect is the regression test for review
+// finding 1: http.ServeMux 301-redirects, with a text/html body, any
+// request whose path needs cleaning, regardless of which patterns are
+// registered. route() must never hand such a request to anything that
+// would do that: every case here must come back as this listener's own
+// plain-text 404, never a redirect and never HTML.
+func TestFPPConnectDirtyPathsNeverRedirect(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv.Client().CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	for _, path := range []string{
+		"//api/system/info",
+		"/api/playlist/../system/info",
+		"/api/playlist/My%2FShow", // legitimate percent-encoding; still an invalid name (contains "/" once decoded, finding 7), so still 404, but must not be a redirect either
+	} {
+		resp, body := getBody(t, srv.URL+path)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404", path, resp.StatusCode)
+		}
+		if loc := resp.Header.Get("Location"); loc != "" {
+			t.Errorf("%s: Location header = %q, want none", path, loc)
+		}
+		if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "html") {
+			t.Errorf("%s: Content-Type = %q, want no HTML", path, ct)
+		}
+		if strings.Contains(string(body), "<") {
+			t.Errorf("%s: body looks like HTML: %s", path, body)
+		}
+	}
+}
+
+// TestFPPConnectNonGETIs404NotAllowed is the regression test for review
+// finding 2: ADR-044 decision 1 says everything outside the four routes is
+// 404, not http.ServeMux's own 405-plus-Allow-header answer for a wrong
+// method on a registered path.
+func TestFPPConnectNonGETIs404NotAllowed(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1")
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		req, err := http.NewRequest(method, srv.URL+"/api/system/info", nil)
+		if err != nil {
+			t.Fatalf("building %s request: %v", method, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404", method, resp.StatusCode)
+		}
+		if allow := resp.Header.Get("Allow"); allow != "" {
+			t.Errorf("%s: Allow header = %q, want none", method, allow)
+		}
+	}
+}
+
+// TestFPPConnectHeadRequestHasNoBody proves HEAD is served (allowed
+// alongside GET) with the same headers a GET would carry and an empty
+// body, relying on net/http's own HEAD handling rather than a bespoke
+// per-handler case.
+func TestFPPConnectHeadRequestHasNoBody(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1")
+
+	req, err := http.NewRequest(http.MethodHead, srv.URL+"/api/system/info", nil)
+	if err != nil {
+		t.Fatalf("building HEAD request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading HEAD body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(body) != 0 {
+		t.Fatalf("HEAD body = %q, want empty", body)
+	}
+}
+
+// TestFPPConnectPlaylistRejectsTraversalName is the regression test for
+// review finding 7: a percent-encoded name that decodes to a path
+// containing "/" must never reach the show-name membership check.
+func TestFPPConnectPlaylistRejectsTraversalName(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	srv := startFPPConnectTestServer(t, view, "node-1")
+
+	resp, _ := getBody(t, srv.URL+"/api/playlist/..%2f..%2fetc")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for a traversal-shaped decoded name", resp.StatusCode)
+	}
+}
+
+// TestFPPConnectValidPlaylistName unit-tests the validation review finding
+// 7 requires directly, independent of routing.
+func TestFPPConnectValidPlaylistName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"ordinary name", "Halloween", true},
+		{"forward slash", "a/b", false},
+		{"backslash", `a\b`, false},
+		{"embedded NUL", "a\x00b", false},
+		{"exactly dot-dot", "..", false},
+		{"starts with dot-dot but is not one", "..foo", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fppConnectValidPlaylistName(tt.in); got != tt.want {
+				t.Errorf("fppConnectValidPlaylistName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFPPConnectPollEnabledTransitionsBothWays is the regression test for
+// review finding 3: the status must reflect view.Enabled() going false
+// (listening stays true; reason becomes fppConnectDisabledReason) and going
+// back true (reason clears), independent of any real ticker tick.
+func TestFPPConnectPollEnabledTransitionsBothWays(t *testing.T) {
+	status := newFPPConnectHTTPStatus()
+
+	fppConnectPollEnabled(fakeFPPConnectView{enabled: true}, status)
+	if listening, reason, _ := status.get(); !listening || reason != "" {
+		t.Fatalf("enabled: listening=%v reason=%q, want true/empty", listening, reason)
+	}
+
+	fppConnectPollEnabled(fakeFPPConnectView{enabled: false}, status)
+	if listening, reason, _ := status.get(); !listening || reason != fppConnectDisabledReason {
+		t.Fatalf("disabled: listening=%v reason=%q, want true/%q", listening, reason, fppConnectDisabledReason)
+	}
+
+	fppConnectPollEnabled(fakeFPPConnectView{enabled: true}, status)
+	if listening, reason, _ := status.get(); !listening || reason != "" {
+		t.Fatalf("re-enabled: listening=%v reason=%q, want true/empty", listening, reason)
 	}
 }

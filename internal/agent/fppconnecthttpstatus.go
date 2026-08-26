@@ -35,7 +35,7 @@ func newFPPConnectHTTPStatus() *fppConnectHTTPStatus {
 
 // set records the listener's current outcome, stamping observedAt from the
 // real wall clock at the moment of this actual bind attempt, failure, or
-// disabled-state transition — see multiSyncStatus.set's identical doc
+// disabled-state transition: see multiSyncStatus.set's identical doc
 // comment for why this is evidence time, not collection time.
 func (s *fppConnectHTTPStatus) set(listening bool, reason string) {
 	s.mu.Lock()
