@@ -524,8 +524,12 @@ listed because the last row was minted after the others had shipped:
 | `surface.content.fseq_content_hash` | shipped | Track H |
 | `surface.content.cue_id` | shipped | Track H |
 | `surface.content.catalog_revision` | shipped | Track H |
+| `surface.content.show` | reserved | Lane 16, SM-289 (the show that authorized the held render) |
+| `surface.content.generation` | reserved | Lane 16, SM-289 |
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
+| `node.fppconnect.channel_range.state` | reserved | Lane 16, SM-294 (node-level; one push per node) |
+| `node.fppconnect.channel_range.reason` | reserved | Lane 16, SM-294 |
 
 **Track C's `audio_session.*` signals, as shipped by seams C6/C7 on
 2026-08-18.** They were reserved before C3 and C4 were written; the table
@@ -688,6 +692,19 @@ this signal says which fallback that failure actually put on the wire:
 `alert` in Program Mode, `black` in Show Mode. It is `not_collected` with a
 stated reason for every other drawing state.
 
+**`surface.pipeline.state` gains a `superseded` member, and that is a
+value not a signal.** ADR-043's H0.7 transition policy says a render held
+across a show switch "is never reported as current or healthy". SM-289 adds
+`superseded` to the existing state vocabulary rather than minting a parallel
+signal, and adds the two `surface.content.*` rows above so the report names
+the show and generation that authorized what is still on the wall.
+`surface.content.catalog_revision` already exists and is not duplicated.
+
+**The two `node.fppconnect.channel_range.*` rows are node-level on the
+`node.multisync.*` precedent.** One `fppconnect.configure` push carries one
+channel-range string per node, so attributing a dropped range to a surface
+would report the same fact once per surface and imply that many faults.
+
 **`surface.frames.rate` is what ADR-040 costs.** That record makes matrix
 size a performance parameter rather than an architectural boundary, so
 nothing refuses a large surface; the achieved frame rate at the configured
@@ -696,6 +713,53 @@ authors a matrix the hardware cannot sustain finds out from the wall rather
 than from the dashboard. It is a measured rate: where no measurement exists
 it is `not_collected` with a stated reason, never a plausible-looking zero
 and never the configured target rate echoed back.
+
+## Playlist readiness conditions
+
+`ReadinessCondition` in `internal/coordinator/fppreconcile/readiness.go`,
+returned as `failingCondition` on the playlist readiness route and rendered
+as a badge in the Operator UI. TRACK-H-H2-SPEC.md section 6 fixed the first
+five as a closed vocabulary; Lane 16 opens it, so it needs a register.
+
+An operator and a script both branch on these strings, so a reused or
+renamed value is a wrong branch taken silently, exactly like an exit code.
+
+| Condition | Status | Owner |
+|---|---|---|
+| `definition-missing` | shipped | Track H seam H2 |
+| `entry-not-in-definition` | shipped | Track H seam H2 |
+| `entry-filename-mismatch` | shipped | Track H seam H2 |
+| `cue-not-ready` | shipped | Track H seam H2 |
+| `observation-hash-mismatch` | shipped | Track H seam H2 |
+| `definition-superseded` | reserved | Lane 16, SM-290 |
+| `evidence-unavailable` | reserved | Lane 16, SM-290 |
+| `node-render-unassigned` | reserved | Lane 16, SM-281 |
+| `assets-missing` | reserved | Lane 16, SM-285 |
+| `node-catalog-stale` | reserved | Lane 16, SM-285 |
+| `output-policy-unsupported` | reserved | Lane 16, SM-285 |
+| `exclusive-claim-conflict` | reserved | Lane 16, SM-285 |
+| `plugin-capability-ungated` | reserved | Lane 16, SM-285 |
+
+**`definition-superseded` and `observation-hash-mismatch` answer different
+questions and must not be merged.** The shipped condition compares the
+binding's hash against the latest accepted observation, which requires FPP
+to have played the playlist. SM-290's condition compares the binding's hash
+against the newest stored playlist definition for the same instance and
+playlist name, which needs no playback at all and is therefore the one that
+works in the afternoon.
+
+**`evidence-unavailable` exists because `ready: true` with a warning is the
+wrong shape.** SM-290's own words: "if the check cannot run, readiness does
+not know, and 'I could not check' should not read the same as 'I checked and
+it is fine'." This condition is how readiness says it could not evaluate a
+required check, and it is a failing condition rather than a warning.
+
+**Four of SM-285's five are reserved, not promised.** SM-285's acceptance
+lets a condition be recorded as explicitly out of scope for this season
+instead of built. A reservation costs nothing and keeps the name from being
+minted differently by Lane 20's SM-314, which shares the per-node readiness
+resolution. `plugin-capability-ungated` is the one most likely to be
+recorded out of scope rather than built.
 
 ## MQTT topics
 
