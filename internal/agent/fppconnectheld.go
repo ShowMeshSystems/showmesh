@@ -88,6 +88,46 @@ type fppConnectHeldRecord struct {
 	Show            string `json:"show,omitempty"`
 	LogicalSequence string `json:"logicalSequence,omitempty"`
 	UnboundReason   string `json:"unboundReason,omitempty"`
+
+	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
+	// bound file this lane has not yet attempted to register, one of
+	// [fppConnectRegistrationSkipped] (a music/videos file: this lane
+	// registers FSEQ content only), [fppConnectRegistrationPending] (an
+	// attempt failed retryably and another is scheduled),
+	// [fppConnectRegistrationRegistered] (the coordinator accepted it), or
+	// [fppConnectRegistrationFailed] (a non-retryable coordinator refusal,
+	// or a local content-hash mismatch against the coordinator's
+	// response). Always "" for an unbound record: ADR-030 decision 5's
+	// "interrupted upload registers nothing" extends to "unresolvable
+	// binding registers nothing," and this state must never read as
+	// "pending" for a file that was never a registration candidate at all.
+	RegistrationState string `json:"registrationState,omitempty"`
+
+	// RegistrationAssetID is the coordinator-assigned asset id, set only
+	// when RegistrationState is "registered".
+	RegistrationAssetID string `json:"registrationAssetId,omitempty"`
+
+	// RegistrationRolledBack mirrors the coordinator's own rolledBack flag
+	// (ADR-028 decision 10) from the registration that produced
+	// RegistrationAssetID.
+	RegistrationRolledBack bool `json:"registrationRolledBack,omitempty"`
+
+	// RegistrationReason is human-readable evidence for the current
+	// RegistrationState: why registration is skipped, the retry reason
+	// while pending, or the failure detail. Empty when RegistrationState
+	// is "" or "registered".
+	RegistrationReason string `json:"registrationReason,omitempty"`
+
+	// RegistrationProblemType is the coordinator's RFC 9457 problem `type`
+	// for a non-retryable refusal, set only when RegistrationState is
+	// "failed" and the failure came from the coordinator's own response
+	// (empty for a locally-detected failure, e.g. a content-hash
+	// mismatch).
+	RegistrationProblemType string `json:"registrationProblemType,omitempty"`
+
+	// RegistrationNextRetryAt is when the retry loop will next attempt
+	// registration, set only when RegistrationState is "pending".
+	RegistrationNextRetryAt time.Time `json:"registrationNextRetryAt,omitempty"`
 }
 
 // fppConnectEvent is evidence not (necessarily) tied to any one held
@@ -422,6 +462,101 @@ func (s *fppConnectHeldStore) Events() []fppConnectEvent {
 	out := make([]fppConnectEvent, len(s.events))
 	copy(out, s.events)
 	return out
+}
+
+// HeldFilePath returns the on-disk path of the completed, held file for
+// (dir, name), for FC3's registrar to open and stream as the registration
+// request's file part. Exported (unlike the identical unexported
+// heldFilePath below) because the registrar lives in a different file
+// within this same package but has no other need to reach into this
+// store's internal layout.
+func (s *fppConnectHeldStore) HeldFilePath(dir, name string) string {
+	return s.heldFilePath(dir, name)
+}
+
+// setRegistrationLocked applies one registration-state transition to
+// key's (dir, name) record and persists it, s.mu already held. A no-op
+// (returns false) when the record no longer exists, or its content hash no
+// longer matches wantHash: either means a fresh upload has since replaced
+// what this call was about to report on, and that fresh upload's own
+// registration attempt owns this record's state now.
+func (s *fppConnectHeldStore) setRegistrationLocked(dir, name, wantHash string, apply func(*fppConnectHeldRecord)) bool {
+	key := dir + "/" + name
+	rec, exists := s.records[key]
+	if !exists || rec.ContentHash != wantHash {
+		return false
+	}
+	apply(&rec)
+	s.records[key] = rec
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a registration state change", "dir", dir, "name", name, "error", err)
+	}
+	return true
+}
+
+// SetRegistrationSkipped records that (dir, name), whose content hash must
+// still equal wantHash, is held but will never be registered in this lane
+// (a music or videos upload: FC3 registers FSEQ content only). reason
+// names why, for the render report's evidence. Returns false (a no-op)
+// when wantHash no longer matches the current record.
+func (s *fppConnectHeldStore) SetRegistrationSkipped(dir, name, wantHash, reason string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationSkipped
+		rec.RegistrationReason = reason
+		rec.RegistrationProblemType = ""
+		rec.RegistrationNextRetryAt = time.Time{}
+	})
+}
+
+// SetRegistrationPending records that a registration attempt for (dir,
+// name) failed retryably: reason is the transport error, the coordinator's
+// problem detail, or "coordinator base URL not configured"; nextRetryAt is
+// when the retry loop will try again. Returns false (a no-op) when
+// wantHash no longer matches the current record.
+func (s *fppConnectHeldStore) SetRegistrationPending(dir, name, wantHash, reason string, nextRetryAt time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationPending
+		rec.RegistrationReason = reason
+		rec.RegistrationProblemType = ""
+		rec.RegistrationNextRetryAt = nextRetryAt
+	})
+}
+
+// SetRegistrationFailed records a non-retryable registration failure for
+// (dir, name): problemType is the coordinator's RFC 9457 problem `type`
+// (empty for a locally-detected failure, e.g. a content-hash mismatch),
+// and reason is its detail, verbatim. Returns false (a no-op) when
+// wantHash no longer matches the current record.
+func (s *fppConnectHeldStore) SetRegistrationFailed(dir, name, wantHash, problemType, reason string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationFailed
+		rec.RegistrationReason = reason
+		rec.RegistrationProblemType = problemType
+		rec.RegistrationNextRetryAt = time.Time{}
+	})
+}
+
+// SetRegistrationRegistered records that (dir, name) is now registered
+// with the coordinator's asset store: assetID and rolledBack are the
+// coordinator's own response fields (ADR-028 decision 10). Returns false
+// (a no-op) when wantHash no longer matches the current record.
+func (s *fppConnectHeldStore) SetRegistrationRegistered(dir, name, wantHash, assetID string, rolledBack bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+		rec.RegistrationState = fppConnectRegistrationRegistered
+		rec.RegistrationAssetID = assetID
+		rec.RegistrationRolledBack = rolledBack
+		rec.RegistrationReason = ""
+		rec.RegistrationProblemType = ""
+		rec.RegistrationNextRetryAt = time.Time{}
+	})
 }
 
 // MainPlaylistFor returns one fppConnectPlaylistEntry per held record

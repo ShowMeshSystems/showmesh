@@ -195,15 +195,21 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 // few records left to drop.
 func toRenderFPPConnectHeldFile(rec fppConnectHeldRecord) mqttproto.RenderFPPConnectHeldFile {
 	return mqttproto.RenderFPPConnectHeldFile{
-		Dir:             rec.Dir,
-		Name:            fppConnectBoundEventString(rec.Name),
-		SizeBytes:       rec.SizeBytes,
-		ContentHash:     rec.ContentHash,
-		ReceivedAt:      rec.ReceivedAt,
-		Bound:           rec.Bound,
-		Show:            rec.Show,
-		LogicalSequence: rec.LogicalSequence,
-		UnboundReason:   rec.UnboundReason,
+		Dir:                     rec.Dir,
+		Name:                    fppConnectBoundEventString(rec.Name),
+		SizeBytes:               rec.SizeBytes,
+		ContentHash:             rec.ContentHash,
+		ReceivedAt:              rec.ReceivedAt,
+		Bound:                   rec.Bound,
+		Show:                    rec.Show,
+		LogicalSequence:         rec.LogicalSequence,
+		UnboundReason:           rec.UnboundReason,
+		RegistrationState:       rec.RegistrationState,
+		RegistrationAssetID:     rec.RegistrationAssetID,
+		RegistrationRolledBack:  rec.RegistrationRolledBack,
+		RegistrationReason:      rec.RegistrationReason,
+		RegistrationProblemType: rec.RegistrationProblemType,
+		RegistrationNextRetryAt: rec.RegistrationNextRetryAt,
 	}
 }
 

@@ -487,6 +487,65 @@ paragraph above: it is how FC3 learns a file is ready to register with the
 coordinator's asset store, not how an operator learns a file exists. Both
 are internal to `internal/agent`; FC3 wires the callback from `agent.go`.
 
+**FC3, as built.** `internal/agent/fppconnectregister.go`'s registrar wires
+`SetOnHeld` and walks `Held()` once at startup, after FC2's own sweep: a
+registered record is left alone, a bound-but-unregistered one enters the
+retry loop, and an unbound one stays unbound (never even considered).
+
+Only `sequences` uploads register: `mediaType` `fseq`, `show` the bound
+show, `sequence` the file name stem, `targetKind` `node`, `target` this
+node id, `file` streamed last from the held file, never buffered whole. A
+`music` or `videos` upload is held and bound exactly as FC2 already does,
+but its record's `registrationState` is `skipped` and says so; nothing
+from those two directories ever reaches `POST /api/v1/assets`. A `200` is
+verified against FC2's own content hash before it is trusted: a mismatch
+is recorded as a failure, never as a registration. `400` and `403` are
+recorded as failures and never retried (their cause will not change on its
+own); every other 4xx, every 5xx, and every transport error retries with
+capped exponential backoff (10s, doubling, capped at 5 minutes), and a
+fresh `fppconnect.configure` push wakes every retry loop immediately,
+since the operator may have just fixed the coordinator base URL or the
+coordinator's reachability. A successful registration signals the asset
+inventory to republish out of cadence, reusing `command.go`'s
+`assetFetchTrigger`.
+
+**`coordinatorBaseUrl`.** The agent has no configured coordinator base URL
+of its own (ADR-044 decision 5 allows exactly one environment variable,
+already spent by `SHOWMESH_FPPCONNECT_LISTEN_ADDR`). Instead
+`internal/coordinator/fppconnectpush`'s `fppconnect.configure` push carries
+one additive field, `coordinatorBaseUrl`, resolved from
+`assets.settings.contentBaseUrl` the same way
+`internal/coordinator/assetsync.Service.fetchURL` resolves it, including
+its own default (`""`, unconfigured) and its own revision tuple in the
+push's idempotency fingerprint, so an operator setting or changing it
+alone (with no other of the four watched kinds touched) still produces a
+fresh push next time one of those four fires or the node reconnects — this
+package does not yet treat `assets.settings` itself as a fifth kind that
+triggers an immediate fleet-wide push on its own write, which is a real
+propagation-latency gap, called out below. `showmesh.node.fppconnect.
+config/v1` is unchanged: an added optional field is wire-compatible, and
+the agent decodes its absence as `""`, identical to an explicit empty
+push. An empty `coordinatorBaseUrl`, whether never pushed or pushed empty,
+leaves every bound `sequences` record pending with the reason "coordinator
+base URL not configured" and sends no request at all: a visible operator
+problem, never a silent stall.
+
+**Reporting.** `registrationState` (`""`, `skipped`, `pending`,
+`registered`, or `failed`), `registrationAssetId`, `registrationRolledBack`,
+`registrationReason`, `registrationProblemType`, and
+`registrationNextRetryAt` extend `fppConnectHeldRecord` and the render
+report's existing `fppConnectHeld` entries directly, rather than a second
+block: an unbound record's `registrationState` is always `""`, never
+`pending`, matching ADR-030 decision 5's "an interrupted upload registers
+nothing" extended to an unresolved binding.
+
+**Known gap.** A write to `assets.settings` alone does not yet trigger an
+immediate push to every node the way a write to `show`, `show.surface`,
+`show.active`, or `fppconnect.settings` does; a node whose coordinator base
+URL just changed converges on its own next hello, its own retry backoff,
+or the next push any of those four kinds happens to trigger, not
+immediately. Listed as an acceptance gap on this seam's own pull request.
+
 ## Acceptance criteria
 
 1. From an unmodified, shipping xLights on the owner's machine: a ShowMesh render node is discovered and listed in FPP Connect alongside real FPP targets, with no ShowMesh-side content claiming to be Falcon Player.

@@ -37,11 +37,21 @@ type fppConnectConfigureParams struct {
 	ActiveShow    *string            `json:"activeShow"`
 	ShowNames     []string           `json:"showNames"`
 	Settings      fppConnectSettings `json:"settings"`
+
+	// CoordinatorBaseURL is FC3's additive field (internal/coordinator/
+	// fppconnectpush): the coordinator's assets.settings.contentBaseUrl,
+	// or "" when the coordinator has none configured. Deliberately NOT in
+	// the required-fields loop below: the wire schema string stays
+	// unchanged (showmesh.node.fppconnect.config/v1), and an added
+	// optional field must not reject a push from a moment this field did
+	// not exist, matching every other additive field this codebase's
+	// command payloads have grown after their schema first shipped.
+	CoordinatorBaseURL string `json:"coordinatorBaseUrl"`
 }
 
 var fppConnectConfigureKnownKeys = map[string]bool{
 	"schema": true, "channelRanges": true, "activeShow": true,
-	"showNames": true, "settings": true,
+	"showNames": true, "settings": true, "coordinatorBaseUrl": true,
 }
 
 // decodeFPPConnectConfigureParams validates params' shape against
@@ -153,13 +163,14 @@ func (o *fppConnectConfigureOperation) configure(_ context.Context, params map[s
 	}
 
 	snap := fppConnectSnapshot{
-		ChannelRanges:     channelRanges,
-		ActiveShowEverSet: true,
-		ActiveShowKnown:   p.ActiveShow != nil,
-		ActiveShowName:    derefOrEmpty(p.ActiveShow),
-		ShowNames:         p.ShowNames,
-		SettingsEverSet:   true,
-		Settings:          p.Settings,
+		ChannelRanges:      channelRanges,
+		ActiveShowEverSet:  true,
+		ActiveShowKnown:    p.ActiveShow != nil,
+		ActiveShowName:     derefOrEmpty(p.ActiveShow),
+		ShowNames:          p.ShowNames,
+		SettingsEverSet:    true,
+		Settings:           p.Settings,
+		CoordinatorBaseURL: p.CoordinatorBaseURL,
 	}
 
 	executedAt := now()
@@ -168,6 +179,12 @@ func (o *fppConnectConfigureOperation) configure(_ context.Context, params map[s
 	}
 	o.state.Apply(snap)
 	observedAt := now()
+
+	// FC3's registrar may be waiting out a backoff against a coordinator it
+	// could not reach, or against an empty coordinatorBaseUrl; either way,
+	// the operator may have just fixed it with this very push, so wake it
+	// rather than make it wait out whatever backoff it last computed.
+	o.state.notifyPush()
 
 	gotRanges := o.state.ChannelRanges()
 	return OperationResult{

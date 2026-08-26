@@ -109,6 +109,17 @@ func putSettings(f *fakeConfigStore, p config.FPPConnectSettingsPayload) {
 	f.put(config.FPPConnectSettingsConfigKind, config.FPPConnectSettingsConfigObjectID, 1, raw)
 }
 
+// putAssetSettings seeds "assets.settings" (FC3's own dependency, on top
+// of the four kinds this package already watches): contentBaseUrl is the
+// only field this package reads out of it.
+func putAssetSettings(f *fakeConfigStore, s config.AssetSettings) {
+	raw, err := config.EncodeAssetSettingsPayload(s)
+	if err != nil {
+		panic(err)
+	}
+	f.put(config.AssetSettingsConfigKind, config.AssetSettingsConfigObjectID, 1, raw)
+}
+
 // fakePublisher records every publish, keyed by decoded action.
 type fakePublisher struct {
 	published []mqttproto.CmdPayload
@@ -277,6 +288,66 @@ func TestToNodePushesConfiguredSettings(t *testing.T) {
 	settings := cmd.Params["settings"].(map[string]any)
 	if settings["enabled"] != false {
 		t.Errorf("settings.enabled = %v, want false", settings["enabled"])
+	}
+}
+
+// TestToNodePushesEmptyCoordinatorBaseURLWhenUnconfigured proves a
+// coordinator whose assets.settings has never been written pushes ""
+// for coordinatorBaseUrl, not an omitted key: FC3's registrar on the
+// agent side reads absence and "" identically, but this coordinator-side
+// resolution must still match assetsync.Service.ContentBaseURL's own
+// "empty is a real, deliberate state" default (config.DefaultAssetSettings).
+func TestToNodePushesEmptyCoordinatorBaseURLWhenUnconfigured(t *testing.T) {
+	cs := newFakeConfigStore()
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	cmd, _ := pub.last()
+	if cmd.Params["coordinatorBaseUrl"] != "" {
+		t.Errorf("coordinatorBaseUrl = %v, want empty string when assets.settings has never been written", cmd.Params["coordinatorBaseUrl"])
+	}
+}
+
+// TestToNodePushesConfiguredCoordinatorBaseURL proves an operator-set
+// assets.settings.contentBaseUrl reaches the push verbatim, resolved the
+// same way assetsync.Service.fetchURL resolves it.
+func TestToNodePushesConfiguredCoordinatorBaseURL(t *testing.T) {
+	cs := newFakeConfigStore()
+	putAssetSettings(cs, config.AssetSettings{ContentBaseURL: "http://coordinator.example:8080"})
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	cmd, _ := pub.last()
+	if cmd.Params["coordinatorBaseUrl"] != "http://coordinator.example:8080" {
+		t.Errorf("coordinatorBaseUrl = %v, want http://coordinator.example:8080", cmd.Params["coordinatorBaseUrl"])
+	}
+}
+
+// TestIdempotencyKeyChangesWhenCoordinatorBaseURLChanges proves a
+// contentBaseUrl change alone (no other of the four watched kinds
+// touched) still changes the idempotency key, since currentCoordinatorBaseURL
+// contributes its own revision tuple to the fingerprint.
+func TestIdempotencyKeyChangesWhenCoordinatorBaseURLChanges(t *testing.T) {
+	cs := newFakeConfigStore()
+	putAssetSettings(cs, config.AssetSettings{ContentBaseURL: "http://coordinator.example:8080"})
+
+	resolved1, err := resolveForNode(context.Background(), cs, "node-1", nil)
+	if err != nil {
+		t.Fatalf("resolveForNode: %v", err)
+	}
+	key1 := idempotencyKeyFor("node-1", resolved1)
+
+	putAssetSettings(cs, config.AssetSettings{ContentBaseURL: "http://coordinator.example:9090"})
+	resolved2, err := resolveForNode(context.Background(), cs, "node-1", nil)
+	if err != nil {
+		t.Fatalf("resolveForNode: %v", err)
+	}
+	key2 := idempotencyKeyFor("node-1", resolved2)
+
+	if key1 == key2 {
+		t.Fatalf("idempotency key did not change when coordinatorBaseUrl changed: both %q", key1)
 	}
 }
 

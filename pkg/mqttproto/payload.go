@@ -956,6 +956,41 @@ type RenderFPPConnectHeldFile struct {
 	// show, pushed an explicit "no active show," or an active show
 	// pushed with an empty name. Empty whenever Bound is true.
 	UnboundReason string `json:"unboundReason,omitempty"`
+
+	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
+	// bound file not yet attempted, "skipped" for a music/videos file
+	// (this lane registers FSEQ content only), "pending" while a
+	// retryable attempt is scheduled, "registered" once the coordinator
+	// has accepted it, or "failed" for a non-retryable refusal or a
+	// content-hash mismatch against the coordinator's response. Always ""
+	// when Bound is false: an unresolved binding is reported as unbound,
+	// never as pending registration.
+	RegistrationState string `json:"registrationState,omitempty"`
+
+	// RegistrationAssetID is the coordinator-assigned asset id, set only
+	// when RegistrationState is "registered".
+	RegistrationAssetID string `json:"registrationAssetId,omitempty"`
+
+	// RegistrationRolledBack mirrors the coordinator's own rolledBack
+	// flag (ADR-028 decision 10) from the registration that produced
+	// RegistrationAssetID.
+	RegistrationRolledBack bool `json:"registrationRolledBack,omitempty"`
+
+	// RegistrationReason is evidence for the current RegistrationState:
+	// why registration is skipped, the retry reason while pending, or the
+	// failure detail. Empty when RegistrationState is "" or "registered".
+	RegistrationReason string `json:"registrationReason,omitempty"`
+
+	// RegistrationProblemType is the coordinator's RFC 9457 problem
+	// `type` for a non-retryable refusal, set only when RegistrationState
+	// is "failed" and the failure came from the coordinator's own
+	// response (empty for a locally-detected failure, e.g. a
+	// content-hash mismatch).
+	RegistrationProblemType string `json:"registrationProblemType,omitempty"`
+
+	// RegistrationNextRetryAt is when the retry loop will next attempt
+	// registration, set only when RegistrationState is "pending".
+	RegistrationNextRetryAt time.Time `json:"registrationNextRetryAt,omitempty"`
 }
 
 // RenderFPPConnectHeldEvent is one entry in FC2's bounded evidence log,

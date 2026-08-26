@@ -206,6 +206,30 @@ func Run() int {
 	// held before it went down.
 	fppConnectHeld := newFPPConnectHeldStore(cfg.AssetDir, logger)
 
+	// fppConnectRegistrar is FC3: it registers a held, bound file through
+	// the coordinator's existing asset store, making it dispatchable
+	// (fppconnectregister.go). Constructed here, before either hook it
+	// wires can fire, and sharing sigCtx like every other long-lived
+	// goroutine in this function so an in-flight registration attempt is
+	// abandoned, never left running, once shutdown begins. Its trigger
+	// reuses assetFetchTrigger rather than a second channel: a successful
+	// registration and a completed asset.fetch are the identical event
+	// from the inventory's point of view, "republish now, something this
+	// node holds just became evidence-worthy."
+	fppConnectRegistrar := newFPPConnectRegistrar(sigCtx, fppConnectHeld, fppConnect, cfg.NodeID, cfg.AgentAPIToken, func() {
+		select {
+		case assetFetchTrigger <- struct{}{}:
+		default:
+		}
+	}, time.Now, logger)
+	fppConnectHeld.SetOnHeld(fppConnectRegistrar.OnHeld)
+	fppConnect.SetOnPush(fppConnectRegistrar.Wake)
+	// Walk the backlog after FC2's own staging sweep and this store's own
+	// disk load (both already done above): a bound-but-unregistered record
+	// left over from a previous run re-enters the retry loop; a registered
+	// one is left alone; an unbound one stays unbound.
+	fppConnectRegistrar.BootWalk()
+
 	fppConnectHTTPDone := make(chan struct{})
 	go func() {
 		defer close(fppConnectHTTPDone)

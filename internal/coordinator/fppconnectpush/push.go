@@ -65,10 +65,11 @@ const schemaVersion = "showmesh.node.fppconnect.config/v1"
 // everything "fppconnect.configure" pushes, plus revisions, the raw
 // ingredient [idempotencyKeyFor] hashes.
 type resolvedFPPConnectState struct {
-	ChannelRanges string
-	ActiveShow    *string
-	ShowNames     []string
-	Settings      config.FPPConnectSettingsPayload
+	ChannelRanges      string
+	ActiveShow         *string
+	ShowNames          []string
+	Settings           config.FPPConnectSettingsPayload
+	CoordinatorBaseURL string
 
 	// revisions is every show.surface object's own "kind/id@rev" tuple
 	// (unconditionally, not filtered to surfaces currently on this node;
@@ -119,6 +120,7 @@ func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.
 			"maxFileBytes":     resolved.Settings.MaxFileBytes,
 			"maxAssetDirBytes": resolved.Settings.MaxAssetDirBytes,
 		},
+		"coordinatorBaseUrl": resolved.CoordinatorBaseURL,
 	}
 	idempotencyKey := idempotencyKeyFor(nodeID, resolved)
 	return publish(ctx, pub, now, nodeID, "fppconnect.configure", idempotencyKey, params)
@@ -188,12 +190,19 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 	}
 	revisions = append(revisions, settingsRevision)
 
+	coordinatorBaseURL, assetSettingsRevision, err := currentCoordinatorBaseURL(ctx, cs)
+	if err != nil {
+		return resolvedFPPConnectState{}, fmt.Errorf("resolve assets.settings: %w", err)
+	}
+	revisions = append(revisions, assetSettingsRevision)
+
 	return resolvedFPPConnectState{
-		ChannelRanges: channelRanges,
-		ActiveShow:    activeShow,
-		ShowNames:     showNames,
-		Settings:      settings,
-		revisions:     revisions,
+		ChannelRanges:      channelRanges,
+		ActiveShow:         activeShow,
+		ShowNames:          showNames,
+		Settings:           settings,
+		CoordinatorBaseURL: coordinatorBaseURL,
+		revisions:          revisions,
 	}, nil
 }
 
@@ -354,6 +363,40 @@ func currentFPPConnectSettings(ctx context.Context, cs ConfigStore) (config.FPPC
 	return payload, fmt.Sprintf("fppconnect.settings/%s@%d", config.FPPConnectSettingsConfigObjectID, obj.CurrentRevision), nil
 }
 
+// currentCoordinatorBaseURL reads "assets.settings" and returns its
+// contentBaseUrl (FC3, ADR-028 decision 8), mirroring
+// currentFPPConnectSettings's identical "default when nothing has ever been
+// written" shape one field over: [config.DefaultAssetSettings]'s
+// ContentBaseURL is already "", so a coordinator whose operator has never
+// touched this surface resolves the same empty value assetsync.Service.
+// ContentBaseURL itself would report. Also returns the object's own
+// revision tuple for [idempotencyKeyFor], so a later operator write that
+// sets or changes contentBaseUrl is picked up by this package's own
+// four-kind write hook the next time it fires for this node (its next
+// hello, or a write to one of the four kinds fppconnectpush already
+// watches), even though "assets.settings" itself is not one of those four.
+func currentCoordinatorBaseURL(ctx context.Context, cs ConfigStore) (string, string, error) {
+	obj, err := cs.GetConfigObject(ctx, config.AssetSettingsConfigKind, config.AssetSettingsConfigObjectID)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+		return config.DefaultAssetSettings().ContentBaseURL, "assets.settings/default@0", nil
+	case err != nil:
+		return "", "", err
+	case obj.CurrentRevision == 0:
+		return config.DefaultAssetSettings().ContentBaseURL, "assets.settings/default@0", nil
+	}
+
+	rev, err := cs.GetConfigRevision(ctx, config.AssetSettingsConfigKind, config.AssetSettingsConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return "", "", err
+	}
+	payload, decodeErr := config.DecodeAssetSettingsPayload(rev.PayloadJSON)
+	if decodeErr != nil {
+		return "", "", fmt.Errorf("decode stored assets.settings payload: %w", decodeErr)
+	}
+	return payload.ContentBaseURL, fmt.Sprintf("assets.settings/%s@%d", config.AssetSettingsConfigObjectID, obj.CurrentRevision), nil
+}
+
 // idempotencyKeyFor changes whenever any contributing config object's own
 // revision changes, or the resolved content differs, and stays stable
 // when nothing changed: a hash of BOTH the revision fingerprint (sorted,
@@ -394,6 +437,7 @@ func idempotencyKeyFor(nodeID string, resolved resolvedFPPConnectState) string {
 		_, _ = fmt.Fprintf(h, "showName:%s\x00", name)
 	}
 	_, _ = fmt.Fprintf(h, "settings:%v\x00%d\x00%d", resolved.Settings.Enabled, resolved.Settings.MaxFileBytes, resolved.Settings.MaxAssetDirBytes)
+	_, _ = fmt.Fprintf(h, "coordinatorBaseUrl:%s\x00", resolved.CoordinatorBaseURL)
 
 	return fmt.Sprintf("fppconnect.configure/%s/%s", nodeID, hex.EncodeToString(h.Sum(nil))[:16])
 }

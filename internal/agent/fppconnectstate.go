@@ -56,6 +56,23 @@ type fppConnectState struct {
 
 	settingsEverSet bool
 	settings        fppConnectSettings
+
+	// coordinatorBaseURL is FC3's addition: the coordinator's
+	// assets.settings.contentBaseUrl, pushed as the additive
+	// "coordinatorBaseUrl" field (internal/coordinator/fppconnectpush) so
+	// this node can build its own POST /api/v1/assets URL the same way
+	// assetsync.Service.fetchURL does on the coordinator side. Empty
+	// before any push, or when the coordinator has none configured: both
+	// mean "registration cannot proceed," which fppconnectregister.go
+	// reports as a visible pending reason, never a silent no-op.
+	coordinatorBaseURL string
+
+	// onPush is invoked, unlocked, after every applied "fppconnect.configure"
+	// push (fppconnectops.go), including one that carries an unchanged
+	// coordinatorBaseUrl. FC3's registrar uses this to retry immediately
+	// rather than wait out its backoff: the operator may have just fixed
+	// the coordinator base URL. nil (the default) means no callback runs.
+	onPush func()
 }
 
 // fppConnectSettings mirrors internal/coordinator/config.
@@ -74,13 +91,14 @@ type fppConnectSettings struct {
 // [fppConnectState.Apply]), and the exact shape [fppConnectState.Save]
 // persists and [fppConnectState.Load] restores.
 type fppConnectSnapshot struct {
-	ChannelRanges     string             `json:"channelRanges"`
-	ActiveShowEverSet bool               `json:"activeShowEverSet"`
-	ActiveShowKnown   bool               `json:"activeShowKnown"`
-	ActiveShowName    string             `json:"activeShowName"`
-	ShowNames         []string           `json:"showNames"`
-	SettingsEverSet   bool               `json:"settingsEverSet"`
-	Settings          fppConnectSettings `json:"settings"`
+	ChannelRanges      string             `json:"channelRanges"`
+	ActiveShowEverSet  bool               `json:"activeShowEverSet"`
+	ActiveShowKnown    bool               `json:"activeShowKnown"`
+	ActiveShowName     string             `json:"activeShowName"`
+	ShowNames          []string           `json:"showNames"`
+	SettingsEverSet    bool               `json:"settingsEverSet"`
+	Settings           fppConnectSettings `json:"settings"`
+	CoordinatorBaseURL string             `json:"coordinatorBaseUrl"`
 }
 
 // newFPPConnectState returns an empty holder: no channel ranges, no
@@ -195,6 +213,45 @@ func (s *fppConnectState) SetSettings(v fppConnectSettings) {
 	s.mu.Unlock()
 }
 
+// CoordinatorBaseURL returns the currently held coordinator base URL, ""
+// both before any push has ever landed and when the coordinator has no
+// assets.settings.contentBaseUrl configured (ADR-028's "empty is a real,
+// deliberate state" applied to this holder's own copy of it).
+func (s *fppConnectState) CoordinatorBaseURL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.coordinatorBaseURL
+}
+
+// SetCoordinatorBaseURL replaces the held coordinator base URL.
+func (s *fppConnectState) SetCoordinatorBaseURL(v string) {
+	s.mu.Lock()
+	s.coordinatorBaseURL = v
+	s.mu.Unlock()
+}
+
+// SetOnPush registers the callback invoked after every applied
+// "fppconnect.configure" push; see onPush's own doc comment. Because this
+// runs unlocked, an implementation must not call back into s from within
+// it without care for reentrant locking (it is called after Apply has
+// already released s.mu, so a call into any other exported method here is
+// safe).
+func (s *fppConnectState) SetOnPush(fn func()) {
+	s.mu.Lock()
+	s.onPush = fn
+	s.mu.Unlock()
+}
+
+// notifyPush invokes the registered onPush callback, if any.
+func (s *fppConnectState) notifyPush() {
+	s.mu.RLock()
+	fn := s.onPush
+	s.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // Snapshot copies every field of s into one value, used by
 // [fppConnectState.Save] and by any caller (a future evidence report,
 // tests) that needs a consistent, whole-state read rather than several
@@ -205,13 +262,14 @@ func (s *fppConnectState) Snapshot() fppConnectSnapshot {
 	names := make([]string, len(s.showNames))
 	copy(names, s.showNames)
 	return fppConnectSnapshot{
-		ChannelRanges:     s.channelRanges,
-		ActiveShowEverSet: s.activeShowEverSet,
-		ActiveShowKnown:   s.activeShowKnown,
-		ActiveShowName:    s.activeShowName,
-		ShowNames:         names,
-		SettingsEverSet:   s.settingsEverSet,
-		Settings:          s.settings,
+		ChannelRanges:      s.channelRanges,
+		ActiveShowEverSet:  s.activeShowEverSet,
+		ActiveShowKnown:    s.activeShowKnown,
+		ActiveShowName:     s.activeShowName,
+		ShowNames:          names,
+		SettingsEverSet:    s.settingsEverSet,
+		Settings:           s.settings,
+		CoordinatorBaseURL: s.coordinatorBaseURL,
 	}
 }
 
@@ -233,6 +291,7 @@ func (s *fppConnectState) Apply(snap fppConnectSnapshot) {
 	s.showNames = snap.ShowNames
 	s.settingsEverSet = snap.SettingsEverSet
 	s.settings = snap.Settings
+	s.coordinatorBaseURL = snap.CoordinatorBaseURL
 	s.mu.Unlock()
 }
 
