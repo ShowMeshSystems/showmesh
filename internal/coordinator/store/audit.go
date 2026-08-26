@@ -304,6 +304,68 @@ func (s *Store) ListAuditEntries(ctx context.Context, since int64, limit int) ([
 	return out, nil
 }
 
+// ListAuditEntriesNewestFirst returns audit entries with id < before,
+// ordered DESCENDING, capped at limit (the same defaulting and clamping
+// [Store.ListAuditEntries] applies). before <= 0 means "start at the
+// newest retained entry", which is the point of this method: an operator
+// opening the audit log wants the most recent activity in one query, not
+// after walking every retained row from the oldest one.
+//
+// The exact mirror of [Store.ListAuditEntries]: that one takes an
+// exclusive LOWER bound and walks forward, this one takes an exclusive
+// UPPER bound and walks backward, and both bounds are the same append-only
+// row id (AUTOINCREMENT, never reused). A caller walking backward has
+// reached the true beginning of retained history when its last returned id
+// equals [Store.OldestAuditID]; a short page alone does not prove it,
+// because retention can trim below the cursor between two pages.
+//
+// Read-only, like every other read here: see this file's header rule
+// against a second write or mutate path against audit_log.
+func (s *Store) ListAuditEntriesNewestFirst(ctx context.Context, before int64, limit int) ([]AuditRecord, error) {
+	guardNotInTx(ctx, "Store.ListAuditEntriesNewestFirst")
+	if before < 0 {
+		return nil, fmt.Errorf("store: list audit entries newest first: before must be >= 0, got %d", before)
+	}
+	switch {
+	case limit <= 0:
+		limit = DefaultAuditPageSize
+	case limit > MaxAuditPageSize:
+		limit = MaxAuditPageSize
+	}
+
+	query := `
+		SELECT` + auditColumns + `
+		FROM audit_log ORDER BY id DESC LIMIT ?
+	`
+	args := []any{limit}
+	if before > 0 {
+		query = `
+			SELECT` + auditColumns + `
+			FROM audit_log WHERE id < ? ORDER BY id DESC LIMIT ?
+		`
+		args = []any{before, limit}
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list audit entries newest first: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []AuditRecord
+	for rows.Next() {
+		rec, err := scanAudit(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: list audit entries newest first: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list audit entries newest first: %w", err)
+	}
+	return out, nil
+}
+
 // OldestAuditID returns the lowest id currently retained in audit_log, and
 // true — or (0, false, nil) if the table currently retains no row.
 // Mirrors [Store.OldestEventSeq] exactly; see that method's doc comment.

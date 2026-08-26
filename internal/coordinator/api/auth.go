@@ -153,6 +153,16 @@ func (noIdentityService) ListAudit(context.Context, int64, int) ([]identity.Audi
 	return nil, nil
 }
 
+func (noIdentityService) ListAuditNewestFirst(context.Context, int64, int) ([]identity.AuditEntry, error) {
+	return nil, nil
+}
+
+// OldestAuditID reports "nothing retained" rather than an error, matching
+// ListAudit's own empty-but-successful default above.
+func (noIdentityService) OldestAuditID(context.Context) (int64, bool, error) {
+	return 0, false, nil
+}
+
 // sessionCookieName is the HttpOnly cookie ADR-024 decision 5 mints.
 const sessionCookieName = "showmesh_session"
 

@@ -2560,11 +2560,18 @@ export class ApiStore {
    * always — this is not one of the four pre-existing open-by-default
    * reads (api/openapi.yaml's own description of this route).
    */
-  async listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
+  async listAudit(filter?: {
+    order?: 'asc' | 'desc'
+    since?: number
+    before?: number
+    limit?: number
+  }): Promise<SchemaAuditResponse> {
     const controller = this.beginSideCall()
     try {
       const params = new URLSearchParams()
+      if (filter?.order !== undefined) params.set('order', filter.order)
       if (filter?.since !== undefined) params.set('since', String(filter.since))
+      if (filter?.before !== undefined) params.set('before', String(filter.before))
       if (filter?.limit !== undefined) params.set('limit', String(filter.limit))
       const query = params.toString()
       return await this.client.getJson<SchemaAuditResponse>(

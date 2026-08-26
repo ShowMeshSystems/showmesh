@@ -21,42 +21,44 @@ const (
 	maxAuditLimit     = 500
 )
 
+// auditOrderAsc/auditOrderDesc are GET /api/v1/audit's own `order` values.
+const (
+	auditOrderAsc  = "asc"
+	auditOrderDesc = "desc"
+)
+
 // cmdAudit implements `showmeshctl audit` (GET /api/v1/audit, ADR-024
 // decision 11), which requires the audit:read scope regardless of whether
 // reads are otherwise open (only the admin role holds it).
 //
-// Known, reported contract limitation this command works around rather
-// than hides: an [auditEntry] carries no row id on the wire (see that
-// type's doc comment and api/openapi.yaml's AuditResponse description —
-// "unlike EventsResponse, this carries no gap/oldestRetainedSeq-shaped
-// fields"). GET /api/v1/audit's own `since` parameter IS a row-id cursor
-// server-side (internal/coordinator/store/audit.go: "entries with id >
-// since"), but nothing in the response tells a client what id the last
-// entry it received actually has, so this CLI cannot compute the next
-// page's --since value from a page of results the way cmdEvents can
-// chase `latestSeq`. This command therefore does not attempt
-// auto-pagination or a --follow mode: it fetches exactly one page per
-// invocation and, when that page is full enough that more entries might
-// exist, says so honestly on stderr instead of silently stopping and
-// leaving an operator to believe they saw the whole log.
+// Pages in both directions, at parity with the endpoint: --order asc
+// walks forward from --since (oldest first, the default), --order desc
+// walks backward from --before (newest first), and --order desc with no
+// --before opens on the most recent activity in one request. Every entry
+// carries its id, so this command prints the exact next-page invocation
+// instead of telling an operator it cannot compute one, and it uses the
+// response's oldestRetainedId to say when a backward walk has genuinely
+// reached the beginning of retained history rather than merely a short
+// page.
 func cmdAudit(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 	fs, g := newFlagSet("showmeshctl audit", stderr)
-	var since, limit string
-	fs.StringVar(&since, "since", "", "opaque row cursor: return entries after this value (default: from the beginning of retained history)")
+	var order, since, before, limit string
+	fs.StringVar(&order, "order", "", "asc (oldest first, paged with --since) or desc (newest first, paged with --before); default asc")
+	fs.StringVar(&since, "since", "", "with --order asc: return entries with an id greater than this (default: from the beginning of retained history)")
+	fs.StringVar(&before, "before", "", "with --order desc: return entries with an id less than this (default: from the newest retained entry)")
 	fs.StringVar(&limit, "limit", "", "maximum number of entries to return (default 100, coordinator clamps above 500)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audit [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nShow the audit log (GET /api/v1/audit, ADR-024 decision 11).")
 		_, _ = fmt.Fprintln(stderr, "Requires the audit:read scope (the admin role) regardless of whether")
-		_, _ = fmt.Fprintln(stderr, "reads are otherwise open — this is not one of the four resources the")
+		_, _ = fmt.Fprintln(stderr, "reads are otherwise open: this is not one of the four resources the")
 		_, _ = fmt.Fprintln(stderr, "open-reads posture covers.")
-		_, _ = fmt.Fprintln(stderr, "\nKNOWN LIMITATION: an audit entry carries no row id on the wire.")
-		_, _ = fmt.Fprintln(stderr, "--since is the coordinator's own opaque cursor, but this CLI cannot")
-		_, _ = fmt.Fprintln(stderr, "compute the NEXT page's --since value from a page of entries it")
-		_, _ = fmt.Fprintln(stderr, "already has, because nothing in the entry it decodes carries that")
-		_, _ = fmt.Fprintln(stderr, "cursor. This command fetches exactly one page; it does not")
-		_, _ = fmt.Fprintln(stderr, "auto-paginate, and says so on stderr when a page might not be the")
-		_, _ = fmt.Fprintln(stderr, "last one rather than silently presenting a partial log as complete.")
+		_, _ = fmt.Fprintln(stderr, "\nTo see what just happened, use --order desc: it returns the most")
+		_, _ = fmt.Fprintln(stderr, "recent page directly. Every entry carries its id, so this command")
+		_, _ = fmt.Fprintln(stderr, "prints the next page's exact invocation when more entries remain,")
+		_, _ = fmt.Fprintln(stderr, "and says so when the log's beginning has been reached. An id is a")
+		_, _ = fmt.Fprintln(stderr, "cursor, never a count: retention prunes from the oldest end and ids")
+		_, _ = fmt.Fprintln(stderr, "are never reused.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -70,17 +72,47 @@ func cmdAudit(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return exitUsage
 	}
 
-	query := url.Values{}
-	if since != "" {
-		// since is an int64 row-id cursor server-side (store.audit.go);
-		// parsed as signed here to match exactly what the coordinator
-		// itself accepts (parseAuditQuery: strconv.ParseInt, base 10, 64
-		// bits, rejecting negative), rather than uint64 as cmdEvents does
-		// for seq — audit's own cursor type is not the same as events'.
-		if _, err := strconv.ParseInt(since, 10, 64); err != nil {
-			return reportError(stderr, "audit", newCLIError(exitUsage, "invalid --since value %q: %v", since, err))
+	effectiveOrder := auditOrderAsc
+	if order != "" {
+		if order != auditOrderAsc && order != auditOrderDesc {
+			return reportError(stderr, "audit", newCLIError(exitUsage, "invalid --order value %q: want %q or %q", order, auditOrderAsc, auditOrderDesc))
 		}
-		query.Set("since", since)
+		effectiveOrder = order
+	}
+
+	// The two cursors are one cursor read in two directions, so an
+	// operator who names both, or names the one the chosen order does not
+	// use, is told here rather than having one silently ignored (the
+	// coordinator refuses the same combinations with a 400).
+	if since != "" && before != "" {
+		return reportError(stderr, "audit", newCLIError(exitUsage, "--since and --before are the two directions of one cursor and cannot be combined"))
+	}
+	if since != "" && effectiveOrder == auditOrderDesc {
+		return reportError(stderr, "audit", newCLIError(exitUsage, "--since pages forward and is not valid with --order desc; use --before"))
+	}
+	if before != "" && effectiveOrder == auditOrderAsc {
+		return reportError(stderr, "audit", newCLIError(exitUsage, "--before pages backward and requires --order desc"))
+	}
+
+	query := url.Values{}
+	if order != "" {
+		query.Set("order", order)
+	}
+	// Both cursors are int64 row ids server-side (store/audit.go); parsed
+	// as signed here to match exactly what the coordinator itself accepts
+	// (parseAuditQuery: strconv.ParseInt, base 10, 64 bits, rejecting
+	// negative), rather than uint64 as cmdEvents does for seq.
+	for _, c := range []struct {
+		name  string
+		value string
+	}{{"since", since}, {"before", before}} {
+		if c.value == "" {
+			continue
+		}
+		if _, err := strconv.ParseInt(c.value, 10, 64); err != nil {
+			return reportError(stderr, "audit", newCLIError(exitUsage, "invalid --%s value %q: %v", c.name, c.value, err))
+		}
+		query.Set(c.name, c.value)
 	}
 	requestedLimit := 0
 	if limit != "" {
@@ -114,11 +146,8 @@ func cmdAudit(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 		return exitOK
 	}
 	printAuditTable(stdout, resp)
-	if auditPageMayBeIncomplete(len(resp.Entries), requestedLimit) {
-		_, _ = fmt.Fprintln(stderr, "showmeshctl audit: this page returned as many entries as were requested; "+
-			"more may exist, but an audit entry carries no row id on the wire, so this CLI cannot compute the "+
-			"next page's --since value from what it has (known contract limitation — see api/openapi.yaml's "+
-			"AuditResponse and ADR-024 decision 11). Widen --limit (up to 500) or narrow --since to page through it.")
+	if note := auditPagingNote(resp, requestedLimit); note != "" {
+		_, _ = fmt.Fprintln(stderr, note)
 	}
 	return exitOK
 }
@@ -126,9 +155,7 @@ func cmdAudit(args []string, stdout, stderr io.Writer, clock func() time.Time) i
 // effectiveAuditLimit mirrors the coordinator's own clamp
 // (parseAuditQuery in internal/coordinator/api/audit.go) so this CLI can
 // tell, without asking the server a second time, whether the page it just
-// received is exactly as large as what was actually requested — the only
-// signal available (see this file's doc comment) for "there might be
-// more."
+// received is exactly as large as what was actually requested.
 func effectiveAuditLimit(requested int) int {
 	switch {
 	case requested <= 0:
@@ -140,10 +167,27 @@ func effectiveAuditLimit(requested int) int {
 	}
 }
 
-// auditPageMayBeIncomplete reports whether the page this command just
-// printed filled its entire requested (or default) limit, which is the
-// only evidence available that more entries might exist beyond it — see
-// this file's doc comment on why this CLI cannot know for certain.
-func auditPageMayBeIncomplete(got, requestedLimit int) bool {
-	return got > 0 && got >= effectiveAuditLimit(requestedLimit)
+// auditPagingNote returns the stderr line describing where this page sits
+// in the log, or "" when there is nothing honest to add. A descending page
+// whose last entry is the oldest retained one has reached the beginning of
+// retained history and says so; every other full page names the exact next
+// invocation, computed from a real entry id rather than from a count.
+func auditPagingNote(resp auditResponse, requestedLimit int) string {
+	if len(resp.Entries) == 0 {
+		return ""
+	}
+	last := resp.Entries[len(resp.Entries)-1]
+	if resp.Order == auditOrderDesc && resp.OldestRetainedID != nil && last.ID <= *resp.OldestRetainedID {
+		return "showmeshctl audit: this page ends at the oldest entry the coordinator still retains (id " +
+			strconv.FormatInt(*resp.OldestRetainedID, 10) + "); there is no older history to page to."
+	}
+	if len(resp.Entries) < effectiveAuditLimit(requestedLimit) {
+		return ""
+	}
+	if resp.Order == auditOrderDesc {
+		return fmt.Sprintf("showmeshctl audit: more entries may exist before this page; continue with "+
+			"'showmeshctl audit --order desc --before %d'.", last.ID)
+	}
+	return fmt.Sprintf("showmeshctl audit: more entries may exist after this page; continue with "+
+		"'showmeshctl audit --since %d'.", last.ID)
 }
