@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { getShowModeConfig, type ShowModeConfigResponse } from '../api'
 import { describeApiError } from '../app/session'
 
@@ -21,6 +22,24 @@ import { describeApiError } from '../app/session'
 // collapsed into another. "Loading" is not "program". A failed read is not
 // "program" either: it says the mode could not be read, because inventing
 // a mode here would be the UI asserting a system state from no evidence.
+//
+// Operator-reported: this reads as a clickable affordance but was a plain
+// <span>, so clicking it did nothing. It is now a link to /config, the
+// route holding ShowModePanel -- the config:write-gated control that
+// actually changes the mode. It stays a link to that page, never the
+// switch itself: changing the installation-wide operating mode from a
+// persistent header element, with no context and no confirmation, is the
+// wrong place for the control, only for the way to reach it.
+//
+// Operator-reported (round two): making it a <Link> while keeping
+// `role="status"` on the same element overrode the anchor's implicit
+// `link` role, so it stopped showing up when a screen-reader user
+// navigates by link -- the only route to the mode control. `role="status"`
+// and `link` cannot both apply to one element, so the two jobs are split:
+// the anchor keeps its native link role and semantics (and carries the
+// visible text as its accessible name), and a second, visually hidden
+// element next to it carries `role="status"` to announce mode changes as
+// a live region, matching this component's mode text one to one.
 
 // SHOWMESH CHOICE, NOT MEASURED. The mode is not carried on the change
 // stream (it is configuration, not a resource ADR-020 models), so this
@@ -62,39 +81,56 @@ export function ShowModeIndicator() {
 
   if (state.kind === 'loading') {
     return (
-      <span className="show-mode show-mode--unknown" role="status" aria-label="Show mode">
-        Mode: loading…
-      </span>
+      <>
+        <Link to="/config#show-mode" className="show-mode show-mode--unknown" aria-label="Show mode">
+          Mode: loading…
+        </Link>
+        <span role="status" className="visually-hidden">
+          Show mode: loading
+        </span>
+      </>
     )
   }
 
   if (state.kind === 'error') {
     return (
-      <span
-        className="show-mode show-mode--unknown"
-        role="status"
-        aria-label="Show mode"
-        title={state.message}
-      >
-        Mode: cannot be read
-      </span>
+      <>
+        <Link
+          to="/config#show-mode"
+          className="show-mode show-mode--unknown"
+          aria-label="Show mode"
+          title={state.message}
+        >
+          Mode: cannot be read
+        </Link>
+        <span role="status" className="visually-hidden">
+          Show mode: cannot be read
+        </span>
+      </>
     )
   }
 
   const mode = state.config.payload.mode
   const never = state.config.revision === 0
+  const modeLabel = mode === 'show' ? 'Show' : 'Program'
   return (
-    <span
-      className={`show-mode show-mode--${mode}`}
-      role="status"
-      aria-label="Show mode"
-      // ADR-033 decision 3: a behaviour caused by the mode states the mode
-      // as its reason, and this is where an operator hovering the badge
-      // reads it.
-      title={state.config.resolumeWebSocketEffect}
-    >
-      Mode: {mode === 'show' ? 'Show' : 'Program'}
-      {never && <span className="show-mode__note"> (default)</span>}
-    </span>
+    <>
+      <Link
+        to="/config#show-mode"
+        className={`show-mode show-mode--${mode}`}
+        aria-label="Show mode"
+        // ADR-033 decision 3: a behaviour caused by the mode states the mode
+        // as its reason, and this is where an operator hovering the badge
+        // reads it.
+        title={state.config.resolumeWebSocketEffect}
+      >
+        Mode: {modeLabel}
+        {never && <span className="show-mode__note"> (default)</span>}
+      </Link>
+      <span role="status" className="visually-hidden">
+        Show mode: {modeLabel}
+        {never && ' (default)'}
+      </span>
+    </>
   )
 }

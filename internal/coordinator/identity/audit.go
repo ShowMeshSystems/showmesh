@@ -130,22 +130,53 @@ func (s *svc) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx 
 	})
 }
 
-// ListAudit returns audit entries after since (an opaque cursor —
-// store.AuditRecord.ID under the hood, but callers should treat it as
-// opaque exactly the way the events API treats its since cursor), capped
-// at limit (store.Store.ListAuditEntries's own defaulting/clamping
-// applies — see [store.DefaultAuditPageSize]/[store.MaxAuditPageSize]).
-// This is what backs `/api/v1/audit`, behind audit:read (ADR-024 decision
-// 4) — a scope this package does not itself enforce; see [Role.Has] and
-// the API layer's own boundary check.
+// ListAudit returns audit entries after since (the id [AuditEntry.ID]
+// carries; the API reports it per entry so a caller can advance this
+// cursor from a page it already holds), ordered oldest first, capped at
+// limit (store.Store.ListAuditEntries's own defaulting/clamping applies,
+// see [store.DefaultAuditPageSize]/[store.MaxAuditPageSize]). This is what
+// backs `/api/v1/audit`, behind audit:read (ADR-024 decision 4), a scope
+// this package does not itself enforce; see [Role.Has] and the API layer's
+// own boundary check.
 func (s *svc) ListAudit(ctx context.Context, since int64, limit int) ([]AuditEntry, error) {
 	recs, err := s.st.ListAuditEntries(ctx, since, limit)
 	if err != nil {
 		return nil, fmt.Errorf("identity: list audit: %w", err)
 	}
+	return auditEntriesFromRecords(recs)
+}
+
+// ListAuditNewestFirst returns audit entries before before, ordered newest
+// first, capped the same way [svc.ListAudit] is. before <= 0 starts at the
+// newest retained entry, so an operator surface opens on the most recent
+// activity in one request instead of walking retained history forward.
+func (s *svc) ListAuditNewestFirst(ctx context.Context, before int64, limit int) ([]AuditEntry, error) {
+	recs, err := s.st.ListAuditEntriesNewestFirst(ctx, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("identity: list audit newest first: %w", err)
+	}
+	return auditEntriesFromRecords(recs)
+}
+
+// OldestAuditID reports the lowest audit id still retained, and false when
+// nothing is retained at all. A backward-paging caller needs it to tell
+// "this is the beginning of the log" from "retention trimmed what I was
+// about to read"; see [store.Store.OldestAuditID].
+func (s *svc) OldestAuditID(ctx context.Context) (int64, bool, error) {
+	oldest, ok, err := s.st.OldestAuditID(ctx)
+	if err != nil {
+		return 0, false, fmt.Errorf("identity: oldest audit id: %w", err)
+	}
+	return oldest, ok, nil
+}
+
+// auditEntriesFromRecords converts store rows to domain entries in the
+// order given, preserving whichever ordering the query chose.
+func auditEntriesFromRecords(recs []store.AuditRecord) ([]AuditEntry, error) {
 	out := make([]AuditEntry, len(recs))
 	for i, rec := range recs {
 		entry := AuditEntry{
+			ID:             rec.ID,
 			Timestamp:      rec.RecordedAt,
 			PrincipalID:    rec.PrincipalID,
 			PrincipalName:  rec.PrincipalName,

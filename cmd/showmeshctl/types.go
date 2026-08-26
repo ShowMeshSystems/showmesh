@@ -458,6 +458,11 @@ type sessionResponse struct {
 // known contract limitation this CLI works around rather than papers
 // over.
 type auditEntry struct {
+	// ID is this entry's append-only row id, and the value both audit
+	// cursors are expressed in (--since forward, --before backward). It
+	// is not a position: ids are never reused and retention prunes from
+	// the oldest end, so counting entries is not a cursor.
+	ID             int64          `json:"id"`
 	Timestamp      time.Time      `json:"timestamp"`
 	PrincipalID    string         `json:"principalId"`
 	PrincipalName  string         `json:"principalName"`
@@ -475,14 +480,18 @@ type auditEntry struct {
 	OutcomeReason  string         `json:"outcomeReason"`
 }
 
-// auditResponse is the body of GET /api/v1/audit. Unlike eventsResponse,
-// this carries no gap/oldestRetainedSeq-shaped fields on the wire — see
-// openapi.yaml's AuditResponse description: "the coordinator's audit
-// service currently exposes no oldest-retained cursor for this endpoint
-// to report one honestly."
+// auditResponse is the body of GET /api/v1/audit. Order is the ordering
+// the entries are actually in ("asc" or "desc"), echoed by the server
+// rather than assumed here. OldestRetainedID is the lowest id still
+// retained, or nil when nothing is retained; it is what tells a backward
+// walk that it has reached the beginning of retained history rather than
+// a page boundary. There is still no gap flag on this endpoint; see
+// openapi.yaml's AuditResponse description.
 type auditResponse struct {
-	ServerTime time.Time    `json:"serverTime"`
-	Entries    []auditEntry `json:"entries"`
+	ServerTime       time.Time    `json:"serverTime"`
+	Order            string       `json:"order"`
+	OldestRetainedID *int64       `json:"oldestRetainedId"`
+	Entries          []auditEntry `json:"entries"`
 }
 
 // configFPPEndpoint is one element of configFPPEndpointsPayload.endpoints

@@ -801,7 +801,12 @@ export function getNodeAssetManifest(nodeId: string): Promise<SchemaNodeAssetMan
   return store.getNodeAssetManifest(nodeId)
 }
 
-export function listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
+export function listAudit(filter?: {
+  order?: 'asc' | 'desc'
+  since?: number
+  before?: number
+  limit?: number
+}): Promise<SchemaAuditResponse> {
   return store.listAudit(filter)
 }
 

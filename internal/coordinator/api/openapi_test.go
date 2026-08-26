@@ -338,6 +338,12 @@ func TestOpenAPIAuthenticatedResponsesMatchRealResponses(t *testing.T) {
 	token := mustIssueToken(t, svc, admin.ID)
 	_, auditBody := doRequest(t, api.Handler, "GET", "/api/v1/audit", map[string]string{"Authorization": "Bearer " + token})
 	assertMatchesSchema(t, c, "AuditResponse", auditBody)
+
+	// The newest-first page is a second real response shape (order echoed
+	// "desc", the same required id per entry), so it is validated rather
+	// than assumed to match the ascending one.
+	_, descBody := doRequest(t, api.Handler, "GET", "/api/v1/audit?order=desc&limit=2", map[string]string{"Authorization": "Bearer " + token})
+	assertMatchesSchema(t, c, "AuditResponse", descBody)
 }
 
 // TestOpenAPIConfigResponsesMatchRealResponses is Step 7 seam A's own

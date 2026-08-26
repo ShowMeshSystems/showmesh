@@ -1,4 +1,5 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { BrowserRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom'
 // Seam B's public surface (spec sections 5.4-5.6): the `useModel()` hook
 // and a way to submit an operator-supplied API token. `ui/src/api` does
 // not exist in this working tree yet -- seam B is building it
@@ -72,12 +73,72 @@ import { FPPPlaylistDefinitionDetail } from '../views/FPPPlaylistDefinitionDetai
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
 
+// Operator-reported: navigating from a long page to another one left the
+// new page scrolled partway down, at wherever the previous page had been
+// scrolled. Keyed on pathname only, not the full location (a search-string
+// or hash change on the SAME page must not yank the reader back to the
+// top), and skipped on a browser back/forward navigation (`POP`) so this
+// does not fight the browser's own scroll restoration for that case.
+//
+// A link carrying a hash is asking for a specific section rather than the
+// top of the page. Under `<BrowserRouter>` (a non-data router) there is no
+// `ScrollRestoration`/`useScrollRestoration` mounted anywhere in this app,
+// and `history.pushState` neither scrolls the page nor fires `hashchange`
+// on its own, so the browser does NOT handle the anchor itself here. This
+// has to scroll to the target element by hand, including when only the
+// hash changes and the pathname does not (e.g. a link on `/config` to
+// `#show-mode`), and the target may not exist yet on the effect's first
+// run if it renders as part of the same navigation, so this retries with
+// `requestAnimationFrame` for a bounded number of frames rather than a
+// fixed timeout guessing at render latency.
+export function ScrollToTop() {
+  const { pathname, hash } = useLocation()
+  const navigationType = useNavigationType()
+
+  useEffect(() => {
+    if (navigationType === 'POP') return
+
+    if (hash === '') {
+      window.scrollTo(0, 0)
+      return
+    }
+
+    const id = hash.slice(1)
+    let frame = 0
+    let cancelled = false
+    const maxAttempts = 20 // ~a third of a second at 60fps; the target
+    // renders as part of the same navigation, not from a network fetch, so
+    // this is a generous bound rather than a tuned wait.
+
+    const tryScroll = (attempt: number) => {
+      if (cancelled) return
+      const target = document.getElementById(id)
+      if (target) {
+        target.scrollIntoView()
+        return
+      }
+      if (attempt >= maxAttempts) return
+      frame = requestAnimationFrame(() => tryScroll(attempt + 1))
+    }
+
+    tryScroll(0)
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+    }
+  }, [pathname, hash, navigationType])
+
+  return null
+}
+
 export default function App() {
   const model = useModel()
 
   return (
     <ModelContext.Provider value={model}>
       <BrowserRouter>
+        <ScrollToTop />
         <Routes>
           <Route element={<Layout onSubmitToken={submitToken} />}>
             <Route index element={<Dashboard />} />

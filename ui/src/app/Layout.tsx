@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { getServiceDescriptor, type ServiceDescriptor } from '../api'
 import { ConnectionBanner } from '../components/ConnectionBanner'
 import { TokenPrompt } from '../components/TokenPrompt'
-import { SessionPanel } from '../components/SessionPanel'
+import { SessionPanel, SessionIdentity } from '../components/SessionPanel'
 import { ShowModeIndicator } from '../components/ShowModeIndicator'
 import { describeApiError } from './session'
 import { useHighContrast } from './useHighContrast'
+import { useNavGroupOpenState } from './useNavGroupState'
 import { useModelContext } from './ModelContext'
 
 export interface LayoutProps {
@@ -135,9 +136,18 @@ const NAV_GROUPS: Array<{
   },
 ]
 
+// A stable DOM id for each group's link list (aria-controls target), not
+// used for anything else -- lowercased/hyphenated so it stays a valid id
+// across every current and future heading in NAV_GROUPS.
+function slugifyHeading(heading: string): string {
+  return heading.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+}
+
 export function Layout({ onSubmitToken }: LayoutProps) {
   const model = useModelContext()
   const [highContrast, toggleHighContrast] = useHighContrast()
+  const location = useLocation()
+  const { isOpen, toggle } = useNavGroupOpenState(NAV_GROUPS, location.pathname)
 
   // Acceptance criterion 5 (spec section 7 / OPERATOR-UI section 5.1): an
   // incompatible coordinator "produces the explicit error, not a partial
@@ -156,35 +166,73 @@ export function Layout({ onSubmitToken }: LayoutProps) {
   return (
     <div className="app-shell">
       <nav className="app-nav" aria-label="Primary">
-        {NAV_GROUPS.map((group) => (
-          // The group wrapper is `display: contents` at phone width, so the
-          // links stay direct flex children of the bottom tab bar and that
-          // layout is unchanged by this grouping. It becomes a real column
-          // only at the sidebar breakpoint.
-          <div key={group.heading} className="app-nav__group">
-            <h2 className="app-nav__group-heading">{group.heading}</h2>
-            {group.items.map((item) => (
-              <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
-                {/* react-router-dom's NavLink sets aria-current="page" on the active
-                    link automatically; styles/global.css's [aria-current='page']
-                    rule uses that rather than a className toggle. */}
-                {item.label}
-              </NavLink>
-            ))}
-          </div>
-        ))}
+        {NAV_GROUPS.map((group) => {
+          const open = isOpen(group.heading)
+          const linksId = `app-nav__group-links-${slugifyHeading(group.heading)}`
+          return (
+            // The group wrapper AND its links list are both `display:
+            // contents` at phone width (styles/global.css), so every link
+            // stays a direct flex child of the bottom tab bar and that
+            // layout is unaffected by collapsing -- collapsing only takes
+            // effect at the sidebar breakpoint. `data-open` drives that
+            // breakpoint's show/hide rule.
+            <div key={group.heading} className="app-nav__group" data-open={open}>
+              <button
+                type="button"
+                className="app-nav__group-heading"
+                aria-expanded={open}
+                aria-controls={linksId}
+                onClick={() => toggle(group.heading)}
+              >
+                <span>{group.heading}</span>
+                {/* A collapsed group still shows how many links it holds,
+                    so an operator can see there is something in there
+                    rather than reading it as an empty label. */}
+                {!open && <span className="app-nav__group-count">{group.items.length}</span>}
+              </button>
+              <div id={linksId} className="app-nav__group-links">
+                {group.items.map((item) => (
+                  <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
+                    {/* react-router-dom's NavLink sets aria-current="page" on the active
+                        link automatically; styles/global.css's [aria-current='page']
+                        rule uses that rather than a className toggle. */}
+                    {item.label}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          )
+        })}
       </nav>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header className="app-header">
           <h1 className="app-header__title">ShowMesh Operator</h1>
           {/* ADR-033 decision 3: the installation-wide operating mode is
               visible PERSISTENTLY, on every route, not on a settings page.
-              It sits in this header for the same reason SessionPanel below
-              is not gated on `blockContent`: an operator must be able to
-              see which mode they are in even while the rest of the page is
-              showing "no data yet", because that is exactly the moment
+              It sits in this header for the same reason SessionIdentity
+              below is not gated on `blockContent`: an operator must be able
+              to see which mode they are in even while the rest of the page
+              is showing "no data yet", because that is exactly the moment
               every surface behaves differently and nothing says why. */}
           <ShowModeIndicator />
+          {/* GET / (getServiceDescriptor): "is this the thing I just
+              deployed" has no other answer anywhere in this UI during a
+              fleet upgrade -- showmeshctl version reports it, this did not.
+              Low-noise reference text, never an alert, since an
+              unreachable coordinator already has ConnectionBanner's own
+              alert below. Operator-reported: this used to be its own
+              full-width row below the connection banner, one of three
+              stacked bands consuming vertical space before any page
+              content -- it folds in here instead, next to the other
+              persistent header text, and still states plainly when the
+              descriptor could not be read rather than rendering blank. */}
+          <CoordinatorBuildNotice />
+          {/* Operator-reported: this used to be a full-width band
+              (SessionPanel's signed-in case) below, spent purely on
+              "Signed in as X" and Sign out. It renders here instead, same
+              non-gating on `blockContent` as SessionPanel's other states
+              below -- see SessionIdentity's own header comment. */}
+          <SessionIdentity />
           <button
             type="button"
             className="icon-button"
@@ -195,15 +243,6 @@ export function Layout({ onSubmitToken }: LayoutProps) {
           </button>
         </header>
         <ConnectionBanner connection={model.connection} />
-        {/* GET / (getServiceDescriptor): "is this the thing I just
-            deployed" has no other answer anywhere in this UI during a
-            fleet upgrade -- showmeshctl version reports it, this did not.
-            Placed right next to ConnectionBanner, not on a settings page,
-            because it is about the SAME coordinator this UI is currently
-            talking to; low-noise reference text, never an alert, since an
-            unreachable coordinator already has ConnectionBanner's own
-            alert above it. */}
-        <CoordinatorBuildNotice />
         {model.connection.kind === 'unauthorized' && (
           <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
         )}

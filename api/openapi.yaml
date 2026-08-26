@@ -2218,7 +2218,46 @@ paths:
         reads are otherwise open - this is not one of the four
         pre-existing read resources the open-reads posture covers. Not
         carried on the SSE change stream.
+
+        Pages in both directions, over ONE cursor: every entry carries its
+        own `id` (`AuditEntry.id`), and both `since` and `before` are
+        expressed in that id. `order=asc` (the default) walks forward from
+        `since`, oldest first. `order=desc` walks backward from `before`,
+        newest first, and `before` omitted means "start at the newest
+        retained entry" - which is how a client opens on the most recent
+        activity in one request instead of walking up to the whole
+        retained log to reach the end of it.
+
+        An id is NOT a position in the result. Retention prunes from the
+        oldest end and ids are never reused, so the lowest retained id is
+        normally greater than zero; a client that advanced a cursor by
+        counting the entries it received would re-read the same page
+        indefinitely. Advance `since` to the LAST entry's id of an
+        ascending page, and `before` to the LAST entry's id of a
+        descending page.
+
+        `AuditResponse.oldestRetainedId` is what makes the backward walk
+        honest at its far end: a descending client has reached the true
+        beginning of retained history when it has returned that id, not
+        merely when a page comes back short - retention can trim below the
+        cursor between two pages. This endpoint still reports no `gap`
+        flag: ADR-024 promises no "no gap and no duplicate" guarantee
+        across a prune the way ADR-020's events contract does, and
+        `oldestRetainedId` reports what the audit service can actually
+        establish rather than a guarantee it cannot.
       parameters:
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+          description: >-
+            `asc` (the default, and the behaviour before this parameter
+            existed) returns entries oldest first and pages with `since`.
+            `desc` returns entries newest first and pages with `before`.
+            The ordering actually used is echoed as `AuditResponse.order`.
         - name: since
           in: query
           required: false
@@ -2227,8 +2266,23 @@ paths:
             minimum: 0
             default: 0
           description: >-
-            An opaque cursor: return entries after this value. 0 (the
-            default) means "from the beginning of retained history".
+            Exclusive lower bound: return entries whose `id` is strictly
+            greater than this value, oldest first. 0 (the default) means
+            "from the beginning of retained history". Valid only with
+            `order=asc`; sending it with `order=desc`, or alongside
+            `before`, is a `400` rather than a silently ignored parameter.
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: >-
+            Exclusive upper bound: return entries whose `id` is strictly
+            less than this value, newest first. 0 (the default) means
+            "from the newest retained entry". Requires `order=desc`;
+            sending it with `order=asc`, or alongside `since`, is a `400`.
         - name: limit
           in: query
           required: false
@@ -8825,10 +8879,18 @@ components:
         One element of GET /audit (ADR-024 decision 11). params is never
         null (an entry with none still reports an empty object).
       required:
-        [timestamp, principalId, principalName, form, credentialId,
+        [id, timestamp, principalId, principalName, form, credentialId,
          clientAddr, action, target, params, idempotencyKey, kind,
          commandId, outcome, outcomeState, outcomeReason]
       properties:
+        id:
+          type: integer
+          description: >-
+            This entry's append-only row id: strictly increasing, never
+            reused, and the value BOTH of this endpoint's cursors are
+            expressed in (`since` forward, `before` backward). Not a
+            position in the result - see this operation's own description
+            for why counting entries is not a cursor.
         timestamp:
           type: string
           format: date-time
@@ -8889,15 +8951,24 @@ components:
     AuditResponse:
       type: object
       description: >-
-        The body of GET /audit. Unlike EventsResponse, this carries no
-        gap/oldestRetainedSeq-shaped fields: the coordinator's audit
-        service currently exposes no oldest-retained cursor for this
-        endpoint to report one honestly.
-      required: [serverTime, entries]
+        The body of GET /audit. `order` is the ordering the entries are
+        actually in, echoed rather than inferred. `oldestRetainedId` is
+        the lowest id still retained, or null when the log retains nothing
+        at all; it mirrors EventsResponse.oldestRetainedSeq and is what
+        lets a client paging backward tell the beginning of retained
+        history from a page boundary. Unlike EventsResponse there is still
+        no `gap` flag, and that absence is deliberate rather than
+        unreported - see this operation's description.
+      required: [serverTime, order, oldestRetainedId, entries]
       properties:
         serverTime:
           type: string
           format: date-time
+        order:
+          type: string
+          enum: [asc, desc]
+        oldestRetainedId:
+          type: [integer, "null"]
         entries:
           type: array
           items:

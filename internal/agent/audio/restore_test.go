@@ -940,3 +940,179 @@ func TestDeferredRestoreSetsADeliberateFault(t *testing.T) {
 		t.Fatalf("in-memory fault reason after a deferred restore is empty, want a deliberate explanation")
 	}
 }
+
+// TestDeferredRestoreSurvivesAnEngineThatRefusesToBuild reproduces a
+// node-reboot defect: the retained audio.node binding can be
+// redelivered before discovery has published probe evidence for that
+// route, so the newly bound engine correctly refuses to build (a real
+// error, never [ErrNoEngineBinding]). Before the fix, restoreOne's
+// prepareLocked-failure branch went straight to Failed regardless of
+// retry, so that refusal permanently consumed the pending restore, and
+// a later binding, one discovery had actually run against, could never
+// resume the session. The restore must be triggered by an engine
+// actually becoming available, not merely by a binding arriving.
+func TestDeferredRestoreSurvivesAnEngineThatRefusesToBuild(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("refused-build-session")
+
+	a := writeTestAsset(t, dir, "refused-build.wav", "asset-refused-build", []byte("content-refused-build"))
+	playlist := pkgaudio.PlaylistRef{
+		OwnerKind: "show", OwnerID: string(id), OwnerRevision: 1,
+		Repeat: pkgaudio.RepeatNone, Resume: pkgaudio.ResumePolicyResume,
+		RequestedTransition: pkgaudio.ItemTransitionSequential,
+		Items:               []pkgaudio.PlaylistItem{{ItemID: "item-a", Index: 0, Media: a}},
+	}
+
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Playlist: pkgaudio.SetField(playlist)})
+	if r := m1.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start: unexpectedly refused: %+v", r)
+	}
+	c.advance(3 * time.Second)
+
+	// "Reboot": a fresh Manager, an unbound SwitchableEngine, no
+	// audio.node binding has arrived yet.
+	switchable := NewSwitchableEngine()
+	m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	m2.mu.Lock()
+	_, pendingBeforeBind := m2.pendingEngineRestore[id]
+	m2.mu.Unlock()
+	if !pendingBeforeBind {
+		t.Fatalf("session %s not queued for deferred restore before any binding, want it pending", id)
+	}
+
+	// The retained audio.node binding is redelivered before discovery
+	// has published probe evidence: the newly bound engine correctly
+	// refuses to build.
+	handle := EngineHandle(string(id) + "/item-a")
+	unavailable := NewFakeEngine(c.now)
+	unavailable.InjectFailure(handle, fmt.Errorf("gstengine: engine is not available: this node has no advertised probe evidence"))
+	m2.RebindEngine(ctx, switchable, unavailable, "audio.node binding delivered before probe evidence")
+
+	rec, ok, err := store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("persisted record missing after the refused bind: ok=%v err=%v", ok, err)
+	}
+	if rec.SessionState == pkgaudio.StateFailed {
+		t.Fatalf("persisted state after an engine that refuses to build = Failed, want the session left pending for a later binding")
+	}
+	m2.mu.Lock()
+	_, pendingAfterRefusal := m2.pendingEngineRestore[id]
+	m2.mu.Unlock()
+	if !pendingAfterRefusal {
+		t.Fatalf("session %s not queued for deferred restore after the engine refused to build, want it still pending: a binding that fails to build must not consume the pending restore", id)
+	}
+
+	// A later audio.node push, once discovery has actually run: the
+	// engine builds successfully.
+	available := NewFakeEngine(c.now)
+	m2.RebindEngine(ctx, switchable, available, "audio.node binding delivered after probe evidence")
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing after the successful bind", id)
+	}
+	s2.mu.Lock()
+	state, handleLoaded, gotHandle := s2.state, s2.handleLoaded, s2.handle
+	s2.mu.Unlock()
+	if state != pkgaudio.StatePlaying {
+		t.Fatalf("in-memory state after an engine finally became available = %q, want Playing", state)
+	}
+	if !handleLoaded {
+		t.Fatalf("session has no loaded engine handle after the deferred restore should have fired")
+	}
+	if _, err := available.Observe(ctx, gotHandle); err != nil {
+		t.Fatalf("Observe on the resumed handle: %v (a session playing before a reboot must end up playing once an engine actually becomes available)", err)
+	}
+}
+
+// TestDeferredRestoreOfAPausedSessionSurvivesAnEngineThatRefusesToBuild
+// is the Paused branch's own copy of
+// TestDeferredRestoreSurvivesAnEngineThatRefusesToBuild: restoreOne's
+// Paused branch has its own, separate prepareLocked call and its own
+// retry-vs-fail decision on a build refusal, so a build refusal there
+// must equally re-queue the pending restore rather than consume it.
+func TestDeferredRestoreOfAPausedSessionSurvivesAnEngineThatRefusesToBuild(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("refused-build-paused-session")
+
+	playlist := twoItemPlaylist(t, dir)
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Playlist: pkgaudio.SetField(playlist)})
+	m1.Start(ctx, id, "inv-start", 2)
+	c.advance(3 * time.Second)
+	if r := m1.Pause(ctx, id, "inv-pause", 3); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("pause unexpectedly refused: %+v", r)
+	}
+
+	rec, ok, err := store.Load(id)
+	if err != nil || !ok || rec.SessionState != pkgaudio.StatePaused {
+		t.Fatalf("precondition: persisted state = %q ok=%v err=%v, want Paused", rec.SessionState, ok, err)
+	}
+
+	// "Reboot": a fresh Manager, an unbound SwitchableEngine.
+	switchable := NewSwitchableEngine()
+	m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	m2.mu.Lock()
+	_, pendingBeforeBind := m2.pendingEngineRestore[id]
+	m2.mu.Unlock()
+	if !pendingBeforeBind {
+		t.Fatalf("session %s not queued for deferred restore before any binding, want it pending", id)
+	}
+
+	// The retained audio.node binding is redelivered before discovery
+	// has published probe evidence: the newly bound engine correctly
+	// refuses to build.
+	handle := EngineHandle(string(id) + "/item-a")
+	unavailable := NewFakeEngine(c.now)
+	unavailable.InjectFailure(handle, fmt.Errorf("gstengine: engine is not available: this node has no advertised probe evidence"))
+	m2.RebindEngine(ctx, switchable, unavailable, "audio.node binding delivered before probe evidence")
+
+	rec2, ok, err := store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("persisted record missing after the refused bind: ok=%v err=%v", ok, err)
+	}
+	if rec2.SessionState == pkgaudio.StateFailed {
+		t.Fatalf("persisted state after an engine that refuses to build = Failed, want the session left pending for a later binding")
+	}
+	m2.mu.Lock()
+	_, pendingAfterRefusal := m2.pendingEngineRestore[id]
+	m2.mu.Unlock()
+	if !pendingAfterRefusal {
+		t.Fatalf("session %s not queued for deferred restore after the engine refused to build, want it still pending: a binding that fails to build must not consume the pending restore", id)
+	}
+
+	// A later audio.node push, once discovery has actually run: the
+	// engine builds successfully.
+	available := NewFakeEngine(c.now)
+	m2.RebindEngine(ctx, switchable, available, "audio.node binding delivered after probe evidence")
+
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing after the successful bind", id)
+	}
+	s2.mu.Lock()
+	state, handleLoaded, gotHandle := s2.state, s2.handleLoaded, s2.handle
+	s2.mu.Unlock()
+	if state != pkgaudio.StatePaused {
+		t.Fatalf("in-memory state after an engine finally became available = %q, want Paused", state)
+	}
+	if !handleLoaded {
+		t.Fatalf("session has no loaded engine handle after the deferred restore should have fired")
+	}
+	if _, err := available.Observe(ctx, gotHandle); err != nil {
+		t.Fatalf("Observe on the resumed handle: %v (a paused session must end up resumed on the engine once one actually becomes available)", err)
+	}
+}

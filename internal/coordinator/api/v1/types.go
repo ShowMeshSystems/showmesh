@@ -869,13 +869,17 @@ type SessionResponse struct {
 
 // AuditEntry is one element of GET /api/v1/audit (ADR-024 decision 11).
 // Params is never null (an entry with none still reports an empty
-// object), matching Event.Details' identical convention. There is
-// deliberately no numeric id/cursor field here:
-// internal/coordinator/identity.Service.ListAudit (a package this task
-// does not own) exposes since/limit paging but no per-entry identifier a
-// client could echo back — see [AuditResponse]'s doc comment for the
-// resulting narrowing against [EventsResponse]'s richer cursor contract.
+// object), matching Event.Details' identical convention.
+//
+// ID is this entry's append-only row id: strictly increasing, never
+// reused, and the value BOTH of this endpoint's cursors are expressed in
+// (`since` walking forward, `before` walking backward). It is not a
+// position in the result: retention prunes from the oldest end, so the
+// lowest retained id is normally greater than zero, and a client that
+// advanced a cursor by counting entries would re-read the same page
+// forever.
 type AuditEntry struct {
+	ID             int64          `json:"id"`
 	Timestamp      string         `json:"timestamp"`
 	PrincipalID    string         `json:"principalId"`
 	PrincipalName  string         `json:"principalName"`
@@ -893,14 +897,25 @@ type AuditEntry struct {
 	OutcomeReason  string         `json:"outcomeReason"`
 }
 
-// AuditResponse is the body of GET /api/v1/audit. Unlike
-// [EventsResponse], it carries no gap/oldestRetainedSeq-shaped fields:
-// internal/coordinator/identity.Service.ListAudit — a package this task
-// does not own — exposes no oldest-retained cursor for this package to
-// report one honestly. See this package's report for that narrowing.
+// AuditResponse is the body of GET /api/v1/audit.
+//
+// Order is the ordering the entries in this body are actually in, echoed
+// rather than inferred: "asc" (oldest first, paged with `since`) or "desc"
+// (newest first, paged with `before`). OldestRetainedID is the lowest id
+// still retained, or nil when the log retains nothing at all. It mirrors
+// [EventsResponse.OldestRetainedSeq] and is what lets a client paging
+// backward tell the beginning of retained history from a page boundary.
+//
+// There is deliberately still no gap flag: unlike ADR-020's events
+// contract, ADR-024 promises no "no gap and no duplicate" across a prune
+// for this endpoint (see store.Store.ListAuditEntries' doc comment), and
+// OldestRetainedID reports what this service can actually establish
+// rather than a guarantee it cannot.
 type AuditResponse struct {
-	ServerTime string       `json:"serverTime"`
-	Entries    []AuditEntry `json:"entries"`
+	ServerTime       string       `json:"serverTime"`
+	Order            string       `json:"order"`
+	OldestRetainedID *int64       `json:"oldestRetainedId"`
+	Entries          []AuditEntry `json:"entries"`
 }
 
 // ConfigFPPEndpoint is one element of [ConfigFPPEndpointsPayload.Endpoints]:
