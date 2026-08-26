@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   advanceAudioSession,
+  applyAudioSession,
   clearAudioSession,
   fadeAudioSessionGain,
   muteAudioSessionOutput,
@@ -27,10 +28,14 @@ import { ScopedButton } from './ScopedButton'
 // This second slice adds prepare/start/advance/clear (no operator
 // parameters) and seek/gain/gain.fade (each carrying the parameters
 // openapi.yaml's own operation descriptions name -- positionMs, gain,
-// targetGain/durationMs). apply is left out: its own params are a full
+// targetGain/durationMs), plus apply. apply's own params are a full
 // session definition (sourceRole/media/playlist/outputs/mixPolicy) with
-// no per-field schema in openapi.yaml, so this panel does not offer a
-// JSON textarea as a stand-in for a form nobody has actually designed.
+// no per-field schema in openapi.yaml -- but showmeshctl (cmd_audio_
+// session.go) takes that same params body as a raw JSON positional
+// argument it never validates either, so a JSON textarea here is exact
+// parity with the CLI, not a degraded stand-in for a form nobody has
+// designed. This panel validates that the JSON parses before dispatch,
+// which the CLI does not.
 const AUDIO_COMMAND_SCOPE = 'audio:command'
 
 // Node.audio (api/openapi.yaml) is a flat ObservationEntry[] spanning
@@ -402,6 +407,10 @@ function AudioSessionControls({
           <h4 className="panel__title">Gain fade</h4>
           <GainFadeControl nodeId={nodeId} sessionId={sessionId} entries={entries} />
         </div>
+        <div className="command-group">
+          <h4 className="panel__title">Apply</h4>
+          <ApplyControl nodeId={nodeId} sessionId={sessionId} entries={entries} />
+        </div>
       </div>
     </div>
   )
@@ -695,6 +704,155 @@ function GainFadeControl({
         <p role="alert" className="audio-session__error">
           {state.message}
         </p>
+      )}
+    </div>
+  )
+}
+
+// ApplyControl is the only audio verb whose params are a full session
+// definition rather than a few named fields -- openapi.yaml gives it no
+// per-field schema (sourceRole/media/playlist/outputs/mixPolicy are
+// named only in prose), and showmeshctl itself (cmd_audio_session.go)
+// takes that same body as a raw JSON positional argument it passes
+// through verbatim without validating it. A JSON textarea here is
+// therefore exact parity with the CLI, not a degraded stand-in for a
+// form nobody has designed -- and it does better than the CLI by
+// refusing text that does not even parse as JSON before anything is
+// sent. An empty field sends no params at all, matching what the CLI
+// does when its own positional argument is omitted.
+//
+// Apply gets the same arm-then-confirm treatment as stop and clear:
+// unlike seek/gain/gain.fade, which only adjust an already-running
+// session's position or level, apply can replace what the session is
+// playing (its source, media, playlist, outputs, and mix policy) in one
+// call, so a single click is not enough to submit it.
+function ApplyControl({
+  nodeId,
+  sessionId,
+  entries,
+}: {
+  nodeId: string
+  sessionId: string
+  entries: ObservationEntry[]
+}) {
+  const [raw, setRaw] = useState('')
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const [armed, setArmed] = useState(false)
+  const [armedParams, setArmedParams] = useState<Record<string, unknown> | undefined>(undefined)
+  const [applying, setApplying] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const [applyResult, setApplyResult] = useState<AudioSessionCommandResult | null>(null)
+
+  function parseParams(): { params?: Record<string, unknown> } | null {
+    const trimmed = raw.trim()
+    if (trimmed === '') {
+      setValidationError(null)
+      return {}
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch {
+      setValidationError(
+        'This is not valid JSON. Enter the same params body "showmeshctl audio session apply" takes, or leave this empty to apply with no params.',
+      )
+      return null
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      setValidationError('Params must be a JSON object (the same shape "showmeshctl audio session apply" takes).')
+      return null
+    }
+    setValidationError(null)
+    return { params: parsed as Record<string, unknown> }
+  }
+
+  function armApply(): void {
+    setApplyError(null)
+    const parsed = parseParams()
+    if (parsed === null) return
+    setArmedParams(parsed.params)
+    setArmed(true)
+  }
+
+  function cancelApply(): void {
+    setArmed(false)
+    setApplyError(null)
+  }
+
+  async function confirmApply(): Promise<void> {
+    if (applying) return
+    setApplying(true)
+    setApplyError(null)
+    try {
+      const result = await applyAudioSession(nodeId, sessionId, nextRevision(entries), armedParams)
+      setApplyResult(result)
+      setArmed(false)
+    } catch (err) {
+      setApplyError(describeApiError(err))
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <div>
+      <label>
+        Params (JSON, same body "showmeshctl audio session apply" takes){' '}
+        <textarea
+          rows={4}
+          value={raw}
+          disabled={armed || applying}
+          onChange={(e) => setRaw(e.target.value)}
+        />
+      </label>
+      <p className="text-muted">
+        Fields apply accepts: sourceRole, media, playlist, outputs, mixPolicy. The coordinator and node
+        validate this shape, not this screen. Leave this empty to send no params at all, the same as
+        leaving the CLI's own params-json argument off.
+      </p>
+      {validationError !== null && (
+        <p role="alert" className="audio-session__error">
+          {validationError}
+        </p>
+      )}
+      {!armed && (
+        <div>
+          <button type="button" onClick={armApply} disabled={applying}>
+            Apply…
+          </button>
+        </div>
+      )}
+      {applyResult !== null && <AudioCommandOutcome result={applyResult} />}
+
+      {armed && (
+        <div className="panel panel--warning" role="alertdialog" aria-label="Confirm audio session apply">
+          <p>
+            <strong>About to apply to session &ldquo;{sessionId}&rdquo;.</strong>
+          </p>
+          <p>
+            {armedParams === undefined
+              ? 'No params were entered; this dispatches apply with no params.'
+              : "This merges the entered params onto this session's desired state, creating it if it does not already exist."}
+          </p>
+          {applyError !== null && (
+            <p role="alert" className="audio-session__error">
+              {applyError}
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <ScopedButton
+              requiredScope={AUDIO_COMMAND_SCOPE}
+              onClick={() => void confirmApply()}
+              busy={applying}
+              busyReason="Applying…"
+            >
+              {applying ? 'Applying…' : `Confirm: apply to "${sessionId}"`}
+            </ScopedButton>
+            <button type="button" onClick={cancelApply} disabled={applying}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
