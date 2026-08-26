@@ -421,6 +421,15 @@ export function setAudioSessionGain(
   return store.setAudioSessionGain(nodeId, sessionId, revision, gain)
 }
 
+export function applyAudioSession(
+  nodeId: string,
+  sessionId: string,
+  revision: number,
+  params?: Record<string, unknown>,
+): Promise<AudioSessionCommandResult> {
+  return store.applyAudioSession(nodeId, sessionId, revision, params)
+}
+
 export function fadeAudioSessionGain(
   nodeId: string,
   sessionId: string,

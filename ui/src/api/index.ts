@@ -261,6 +261,7 @@ export {
   seekAudioSession,
   setAudioSessionGain,
   fadeAudioSessionGain,
+  applyAudioSession,
   probeRenderTransport,
   runDiscovery,
   declareNode,

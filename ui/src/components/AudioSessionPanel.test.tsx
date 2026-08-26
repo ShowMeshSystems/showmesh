@@ -24,6 +24,7 @@ const {
   seekAudioSession,
   setAudioSessionGain,
   fadeAudioSessionGain,
+  applyAudioSession,
 } = vi.hoisted(() => ({
   pauseAudioSession: vi.fn(),
   resumeAudioSession: vi.fn(),
@@ -37,6 +38,7 @@ const {
   seekAudioSession: vi.fn(),
   setAudioSessionGain: vi.fn(),
   fadeAudioSessionGain: vi.fn(),
+  applyAudioSession: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -54,6 +56,7 @@ vi.mock('../api', async (importOriginal) => {
     seekAudioSession,
     setAudioSessionGain,
     fadeAudioSessionGain,
+    applyAudioSession,
   }
 })
 
@@ -71,6 +74,7 @@ afterEach(() => {
   seekAudioSession.mockReset()
   setAudioSessionGain.mockReset()
   fadeAudioSessionGain.mockReset()
+  applyAudioSession.mockReset()
 })
 
 const NOW = '2026-08-25T00:00:00.000Z'
@@ -159,6 +163,10 @@ describe('AudioSessionPanel', () => {
     expect(screen.getByRole('button', { name: /Confirm: stop/ })).toBeDisabled()
     await userEvent.click(screen.getByRole('button', { name: 'Clear…' }))
     expect(screen.getByRole('button', { name: /Confirm: clear/ })).toBeDisabled()
+    // Apply's own arm button is likewise plain (only its confirm step is
+    // scope-gated), so arm it too and check the confirm control it reveals.
+    await userEvent.click(screen.getByRole('button', { name: 'Apply…' }))
+    expect(screen.getByRole('button', { name: /Confirm: apply/ })).toBeDisabled()
   })
 
   it('dispatches pause and renders a confirmed outcome honestly', async () => {
@@ -339,6 +347,76 @@ describe('AudioSessionPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Fade' }))
 
     expect(fadeAudioSessionGain).toHaveBeenCalledWith('media-01', 'session-1', 10, 0.5, 2000)
+    expect(await screen.findByText('Unconfirmed: no pipeline backend')).toBeInTheDocument()
+  })
+
+  it('apply refuses text that does not parse as JSON before dispatching anything', async () => {
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.type(screen.getByLabelText(/Params \(JSON/), '{{not valid json')
+    await userEvent.click(screen.getByRole('button', { name: 'Apply…' }))
+
+    expect(applyAudioSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('not valid JSON')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('apply requires a second, distinct click, and dispatches the parsed object as params with the computed next revision', async () => {
+    applyAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.apply', outcome: 'started' }))
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 6 })])
+
+    await userEvent.type(screen.getByLabelText(/Params \(JSON/), '{{"sourceRole":"primary","media":"track-1"}')
+    await userEvent.click(screen.getByRole('button', { name: 'Apply…' }))
+    expect(applyAudioSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('alertdialog', { name: 'Confirm audio session apply' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /Confirm: apply/ }))
+
+    expect(applyAudioSession).toHaveBeenCalledWith('media-01', 'session-1', 7, {
+      sourceRole: 'primary',
+      media: 'track-1',
+    })
+    expect(await screen.findByText('Confirmed: started')).toBeInTheDocument()
+  })
+
+  it('apply sends no params key at all when the field is left empty', async () => {
+    applyAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.apply', outcome: 'started' }))
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply…' }))
+    await userEvent.click(screen.getByRole('button', { name: /Confirm: apply/ }))
+
+    expect(applyAudioSession).toHaveBeenCalledWith('media-01', 'session-1', 1, undefined)
+  })
+
+  it('cancelling the armed apply dispatches nothing', async () => {
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply…' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(applyAudioSession).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('renders an apply unconfirmable outcome as unconfirmed with its stated reason, never as success', async () => {
+    applyAudioSession.mockResolvedValue(
+      commandResult({
+        action: 'audio.session.apply',
+        outcome: 'unconfirmable',
+        reason: 'no pipeline backend',
+      }),
+    )
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Apply…' }))
+    await userEvent.click(screen.getByRole('button', { name: /Confirm: apply/ }))
+
     expect(await screen.findByText('Unconfirmed: no pipeline backend')).toBeInTheDocument()
   })
 })

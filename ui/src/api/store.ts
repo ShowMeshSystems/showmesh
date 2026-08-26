@@ -1141,10 +1141,10 @@ export class ApiStore {
   // -- Second slice: prepare/start/advance/clear (no params) plus
   // seek/gain/gain.fade (each carrying operation-specific params the
   // node itself validates -- AudioSessionCommandRequest.params is opaque
-  // to this coordinator by design). apply is deliberately not exposed
-  // here: its own params are a full session definition (sourceRole,
-  // media, playlist, outputs, mixPolicy) with no per-field schema in
-  // openapi.yaml for a form to render responsibly.
+  // to this coordinator by design). apply is the same shape as
+  // seek/gain: this coordinator passes params through verbatim without
+  // validating it, exactly as showmeshctl's own "params-json is passed
+  // through verbatim" positional argument does (cmd_audio_session.go).
 
   private async dispatchAudioSessionCommand(
     nodeId: string,
@@ -1234,6 +1234,16 @@ export class ApiStore {
     gain: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gain })
+  }
+
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/apply`. Requires audio:command. params is the same opaque, node-validated session definition (sourceRole/media/playlist/outputs/mixPolicy) `showmeshctl audio session apply` takes as its params-json argument; omitted entirely (not sent as `{}`) when the caller supplies none, matching that CLI's own optional positional argument. */
+  async applyAudioSession(
+    nodeId: string,
+    sessionId: string,
+    revision: number,
+    params?: Record<string, unknown>,
+  ): Promise<AudioSessionCommandResult> {
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'apply', revision, params)
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade`. Requires audio:command. params.targetGain is linear, not dB; params.durationMs is the fade duration in milliseconds; params.curve is fixed to "linear", the only curve the node ships. */
