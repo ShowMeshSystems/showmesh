@@ -181,35 +181,41 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 }
 
 // toRenderFPPConnectHeldFile converts one fppConnectHeldRecord
-// (fppconnectheld.go) to its wire type, field for field. Name alone is
-// bounded (review round 5 finding 6), reusing fppConnectBoundEventString's
-// same cap and truncation marker: it is copied straight from the
-// Upload-Name header, itself bounded only by fppConnectMaxHeaderBytes (16
-// KiB), with no bound of its own on fppConnectHeldRecord. Up to
-// renderWireHeldFilesCap (256) of those, each up to 16 KiB, would make
+// (fppconnectheld.go) to its wire type, field for field. Every string field
+// except ContentHash (a fixed-format computed hash, never attacker- or
+// coordinator-influenced length) is bounded with fppConnectBoundEventString,
+// its same cap and truncation marker (review round 5 finding 6 bounded Name
+// alone; review round 6 finding 5 extends this to the rest, since
+// RegistrationReason can embed a colliding competitor's own raw Name, up to
+// the identical Upload-Name-header-derived 16 KiB, and RegistrationAssetID
+// is coordinator-supplied with no local bound of its own). Name is copied
+// straight from the Upload-Name header, itself bounded only by
+// fppConnectMaxHeaderBytes (16 KiB), with no bound of its own on
+// fppConnectHeldRecord. Up to renderWireHeldFilesCap (256) of these, each
+// otherwise up to 16 KiB per string field, would make
 // shrinkRenderPayloadToFitEnvelope's one-record-at-a-time drop loop
 // re-marshal a multi-megabyte payload on every iteration it took to shrink
 // back under budget: quadratic in the number of entries dropped. Bounding
-// Name here keeps the whole payload within a small multiple of the size
-// budget even at the count cap, so the shrink loop never has more than a
-// few records left to drop.
+// every string here keeps the whole payload within a small multiple of the
+// size budget even at the count cap, so the shrink loop never has more than
+// a few records left to drop.
 func toRenderFPPConnectHeldFile(rec fppConnectHeldRecord) mqttproto.RenderFPPConnectHeldFile {
 	return mqttproto.RenderFPPConnectHeldFile{
-		Dir:                     rec.Dir,
+		Dir:                     fppConnectBoundEventString(rec.Dir),
 		Name:                    fppConnectBoundEventString(rec.Name),
 		SizeBytes:               rec.SizeBytes,
 		ContentHash:             rec.ContentHash,
 		ReceivedAt:              rec.ReceivedAt,
 		Bound:                   rec.Bound,
-		Show:                    rec.Show,
-		ShowID:                  rec.ShowID,
-		LogicalSequence:         rec.LogicalSequence,
-		UnboundReason:           rec.UnboundReason,
-		RegistrationState:       rec.RegistrationState,
-		RegistrationAssetID:     rec.RegistrationAssetID,
+		Show:                    fppConnectBoundEventString(rec.Show),
+		ShowID:                  fppConnectBoundEventString(rec.ShowID),
+		LogicalSequence:         fppConnectBoundEventString(rec.LogicalSequence),
+		UnboundReason:           fppConnectBoundEventString(rec.UnboundReason),
+		RegistrationState:       fppConnectBoundEventString(rec.RegistrationState),
+		RegistrationAssetID:     fppConnectBoundEventString(rec.RegistrationAssetID),
 		RegistrationRolledBack:  rec.RegistrationRolledBack,
-		RegistrationReason:      rec.RegistrationReason,
-		RegistrationProblemType: rec.RegistrationProblemType,
+		RegistrationReason:      fppConnectBoundEventString(rec.RegistrationReason),
+		RegistrationProblemType: fppConnectBoundEventString(rec.RegistrationProblemType),
 		RegistrationNextRetryAt: rec.RegistrationNextRetryAt,
 	}
 }

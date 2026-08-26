@@ -901,6 +901,47 @@ func TestFPPConnectRegistrarStartLoopRefusesAfterWaitStarted(t *testing.T) {
 	}
 }
 
+// TestFPPConnectRegistrarWaitBeforeRetryPausesOnSupersession is review
+// round 6 finding 4's own regression test: every "superseded" continue
+// path in registerLoop used to reset backoff and loop straight back to
+// the top with no wait at all, so a record superseded in a tight loop
+// (offset-0 re-uploads of a file this lane never registers, which
+// supersede and skip without ever doing any I/O) would spin the retry
+// goroutine hot, pegging a CPU core for as long as the superseding kept
+// happening. waitBeforeRetry now pauses first: this proves a real pause
+// elapses before it returns true, and that Wake() lets a caller skip the
+// rest of that pause early, exactly like the normal backoff wait already
+// does.
+func TestFPPConnectRegistrarWaitBeforeRetryPausesOnSupersession(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	reg, _, _ := newTestFPPConnectRegistrar(t, held, "", "")
+
+	start := time.Now()
+	if !reg.waitBeforeRetry(reg.wakeChan()) {
+		t.Fatal("waitBeforeRetry returned false with ctx still alive")
+	}
+	if elapsed := time.Since(start); elapsed < fppConnectSupersededPause {
+		t.Fatalf("waitBeforeRetry returned after %v, want at least %v (no hot spin on the superseded continue path)", elapsed, fppConnectSupersededPause)
+	}
+
+	wakeStart := time.Now()
+	done := make(chan bool, 1)
+	go func() { done <- reg.waitBeforeRetry(reg.wakeChan()) }()
+	time.Sleep(10 * time.Millisecond)
+	reg.Wake()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("waitBeforeRetry returned false after a Wake(), want true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitBeforeRetry did not return after Wake()")
+	}
+	if woke := time.Since(wakeStart); woke >= fppConnectSupersededPause {
+		t.Fatalf("waitBeforeRetry took %v after Wake(), want well under fppConnectSupersededPause (%v)", woke, fppConnectSupersededPause)
+	}
+}
+
 // TestFPPConnectRegisterMalformedBaseURLDoesNotLeakTheWriterGoroutine is
 // review round 1 finding 5's own regression test: when
 // http.NewRequestWithContext fails (here, a coordinatorBaseUrl containing
@@ -1001,6 +1042,62 @@ func TestFPPConnectRegisterSupersedingUploadDuringInFlightAttemptStillRegisters(
 	reqs := requests()
 	if len(reqs) != 2 {
 		t.Fatalf("registration requests = %d, want exactly 2 (v1's superseded attempt, then v2's)", len(reqs))
+	}
+}
+
+// TestFPPConnectRegisterRebindDuringInFlightAttemptRegistersUnderNewIdentity
+// is review round 6 finding 1's own regression test: a rebind (BindShow)
+// that lands while a registration attempt is already in flight used to be
+// lost. setRegistrationLocked guarded only on ContentHash, which a rebind
+// never changes, so the in-flight attempt's own stale write would stamp
+// "registered" on a record that had already moved to a different show,
+// and no loop was left running to register it for real under the new
+// identity. The fix carries the attempt's own (ShowID, LogicalSequence)
+// into the setters, so that stale write is refused exactly like a
+// content-hash mismatch already is, and registerLoop's own continue path
+// re-attempts fresh under the new identity.
+func TestFPPConnectRegisterRebindDuringInFlightAttemptRegistersUnderNewIdentity(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	aRequestReceived := make(chan struct{})
+	rebindDone := make(chan struct{})
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		if req.fields["show"] == "halloween-2026" {
+			close(aRequestReceived)
+			<-rebindDone // hold this response until the rebind has landed
+		}
+		return http.StatusOK, assetResponseBody(t, "asset-"+req.fields["show"], hash, false)
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	uploadAndBind(t, held, "sequences", "Rebind.fseq", []byte("rebind-me")) // binds to Halloween/halloween-2026
+
+	select {
+	case <-aRequestReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the in-flight request for show A never reached the fake coordinator")
+	}
+
+	// A rebind to a different show lands while the attempt above is still
+	// in flight, waiting on the fake coordinator's response.
+	held.BindShow("Christmas", "christmas-2026", []string{"Rebind.fseq"}, time.Now())
+	close(rebindDone)
+
+	registered := waitForRegistrationState(t, held, "sequences", "Rebind.fseq", fppConnectRegistrationRegistered)
+	if registered.ShowID != "christmas-2026" || registered.RegistrationAssetID != "asset-christmas-2026" {
+		t.Fatalf("record = %+v, want registered under christmas-2026", registered)
+	}
+
+	reqs := requests()
+	if len(reqs) != 2 {
+		t.Fatalf("registration requests = %d, want exactly 2 (the in-flight attempt for A, then B's)", len(reqs))
+	}
+	if reqs[0].fields["show"] != "halloween-2026" || reqs[1].fields["show"] != "christmas-2026" {
+		t.Fatalf("request shows = %q, %q, want halloween-2026 then christmas-2026", reqs[0].fields["show"], reqs[1].fields["show"])
 	}
 }
 
@@ -1173,6 +1270,81 @@ func TestFPPConnectRegisterLoserRetriesAfterWinnerFailsTerminally(t *testing.T) 
 	}
 }
 
+// TestFPPConnectRegisterReadyFileStaysPendingBehindAwaitingCompetitor is
+// review round 6 finding 3's own regression test: a ready, bound file that
+// loses a slug collision to a competitor that is only awaiting its own
+// show id used to be marked terminally failed; if that competitor never
+// actually bound, nobody would ever register the sequence at all. It must
+// instead stay pending, naming the competitor, and be retried on the
+// normal wake/backoff cycle, winning once the competitor's show id is
+// confirmed resolvable but it still has not bound.
+func TestFPPConnectRegisterReadyFileStaysPendingBehindAwaitingCompetitor(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		return http.StatusOK, assetResponseBody(t, "asset-ready", hash, false)
+	})
+	defer fakeSrv.Close()
+
+	reg, state, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+	reg.initialBackoff = fppConnectTestBackoff
+	reg.maxBackoff = fppConnectTestMaxBackoff
+
+	// The competitor uploads (an EARLIER ReceivedAt than the ready file
+	// below) and lands held, then is put directly into the awaiting-id
+	// state BindPendingShowID itself produces, with the show's id not yet
+	// resolvable through state at all.
+	competitorSrv := startFPPConnectTestServer(t, fakeFPPConnectView{enabled: true}, "node-1", held)
+	if resp, body := patchChunk(t, competitorSrv, "sequences", "My Show.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+		competitorSrv.Close()
+		t.Fatalf("upload competitor: status = %d, body=%s", resp.StatusCode, body)
+	}
+	competitorSrv.Close()
+	held.BindPendingShowID("Halloween", []string{"My Show.fseq"}, time.Now())
+	competitor, ok := findHeldRecord(t, held, "sequences", "My Show.fseq")
+	if !ok || competitor.Bound || competitor.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
+		t.Fatalf("competitor = %+v (ok=%v), want held, unbound, awaiting the show id", competitor, ok)
+	}
+
+	// The ready file is bound directly, to the identical show (a manually
+	// supplied ShowID, decoupled from state, which has not resolved
+	// "Halloween" at all yet) and a colliding slug, uploaded after the
+	// competitor so it would lose any ReceivedAt tie-break.
+	time.Sleep(5 * time.Millisecond)
+	readySrv := startFPPConnectTestServer(t, fakeFPPConnectView{enabled: true}, "node-1", held)
+	if resp, body := patchChunk(t, readySrv, "sequences", "my_show.fseq", 0, 4, []byte("late")); resp.StatusCode != http.StatusOK {
+		readySrv.Close()
+		t.Fatalf("upload ready file: status = %d, body=%s", resp.StatusCode, body)
+	}
+	readySrv.Close()
+	held.BindShow("Halloween", "halloween-2026", []string{"my_show.fseq"}, time.Now())
+
+	pending := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationPending)
+	if !strings.Contains(pending.RegistrationReason, "My Show.fseq") {
+		t.Fatalf("RegistrationReason = %q, want it to name the still-awaiting competitor My Show.fseq", pending.RegistrationReason)
+	}
+	if got := len(requests()); got != 0 {
+		t.Fatalf("registration requests = %d, want 0 while genuinely blocked on an unresolvable competitor", got)
+	}
+
+	// The show's id becomes resolvable, but nothing walks the
+	// competitor's own record to actually bind it (notifyPush, the only
+	// thing that would trigger RebindPendingShowIDs, is never called):
+	// the ready file must win outright rather than wait on it forever.
+	state.SetShows([]fppConnectShowIDName{{ID: "halloween-2026", Name: "Halloween"}})
+	reg.Wake()
+
+	registered := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationRegistered)
+	if registered.RegistrationAssetID != "asset-ready" {
+		t.Fatalf("record = %+v, want it registered once the competitor's id was confirmed resolvable but still unbound", registered)
+	}
+
+	if got := len(requests()); got != 1 {
+		t.Fatalf("registration requests = %d, want exactly 1", got)
+	}
+}
+
 // TestFPPConnectRegisterActiveShowKnownButIDNotPushedRebindsOnLaterPush is
 // review round 3 finding 2's own regression test: an active show whose
 // display name is already known (ShowNames) but whose config object id
@@ -1247,16 +1419,22 @@ func TestFPPConnectRegisterActiveShowKnownButIDNotPushedRebindsOnLaterPush(t *te
 // (fppConnectUnboundReasonShowIDNotPushed), and CollidingRecord used to
 // skip every unbound record outright, making that record invisible to a
 // colliding file's own collision check for as long as the wait lasted.
-// Which of two colliding files won the identity then depended on push
-// timing (whichever one happened to attempt while the other was mid-wait
-// won uncontested) rather than claimIdentity's own ReceivedAt fairness
-// rule. The fix keeps LogicalSequence on a record awaiting its show id and
-// has CollidingRecord match it by intended show name, so a competitor
-// attempting while the other waits still finds it and the identity is
-// still decided by ReceivedAt, exactly as if neither side were waiting on
-// anything. This drives the interleaving both ways: the awaiting file can
-// have EITHER the earlier or the later ReceivedAt, and either way the
-// correct file (by ReceivedAt) is the one that ends up registered.
+// The fix keeps LogicalSequence on a record awaiting its show id and has
+// CollidingRecord match it by intended show name, so a competitor
+// attempting while the other waits still finds it. Review round 6 finding
+// 3 refined what happens next: a competitor merely awaiting its own show
+// id must never permanently block a ready file, since if that competitor
+// never actually binds, nobody would ever register the sequence at all.
+// Here the show's id is always independently confirmed resolvable
+// (state.SetShows, below) before the attempting file's own bind can ever
+// succeed at all, since both files share the identical show name; the
+// awaiting file's own record is deliberately never rebound (notifyPush,
+// the only thing that would trigger RebindPendingShowIDs, is never
+// called), so the attempting file always finds a competitor whose id is
+// confirmed resolvable but who still has not bound, and must win outright
+// rather than wait on it forever. This drives the interleaving both ways:
+// the awaiting file can have EITHER the earlier or the later ReceivedAt,
+// and either way the attempting file ends up registered.
 func TestFPPConnectRegisterCollidingAwaitingShowIDCompetesFairly(t *testing.T) {
 	// run uploads earlierFile then laterFile (in that order, so
 	// earlierFile always has the earlier ReceivedAt), binds awaitingFile's
@@ -1328,34 +1506,26 @@ func TestFPPConnectRegisterCollidingAwaitingShowIDCompetesFairly(t *testing.T) {
 			t.Fatalf("POST playlist (attempting): status = %d, body=%s", resp.StatusCode, body)
 		}
 
-		wantWinner := attemptingFile
-		if earlierFile == awaitingFile {
-			wantWinner = awaitingFile
+		// Review round 6 finding 3: the awaiting competitor's own show id
+		// is already confirmed resolvable (proven above, and required for
+		// attemptingFile's own bind to have succeeded at all, since both
+		// share the identical show name), yet it still has not bound.
+		// attemptingFile must not wait on it forever, regardless of
+		// ReceivedAt: it wins outright.
+		registered := waitForRegistrationState(t, held, "sequences", attemptingFile, fppConnectRegistrationRegistered)
+		if registered.LogicalSequence != "my-show" {
+			t.Fatalf("%s registered = %+v, want LogicalSequence my-show", attemptingFile, registered)
 		}
 
-		wantRequests := 1
-		if wantWinner != attemptingFile {
-			wantRequests = 0
-			failed := waitForRegistrationState(t, held, "sequences", attemptingFile, fppConnectRegistrationFailed)
-			if !strings.Contains(failed.RegistrationReason, awaitingFile) {
-				t.Fatalf("%s's RegistrationReason = %q, want it to name the earlier-received, still-awaiting file %s", attemptingFile, failed.RegistrationReason, awaitingFile)
-			}
-		} else {
-			registered := waitForRegistrationState(t, held, "sequences", attemptingFile, fppConnectRegistrationRegistered)
-			if registered.LogicalSequence != "my-show" {
-				t.Fatalf("%s registered = %+v, want LogicalSequence my-show", attemptingFile, registered)
-			}
-		}
-
-		if got := len(requests()); got != wantRequests {
-			t.Fatalf("registration requests = %d, want %d", got, wantRequests)
+		if got := len(requests()); got != 1 {
+			t.Fatalf("registration requests = %d, want exactly 1", got)
 		}
 	}
 
-	t.Run("awaiting file received earlier wins the identity", func(t *testing.T) {
+	t.Run("awaiting file received earlier does not block the attempting file forever", func(t *testing.T) {
 		run(t, "My Show.fseq", "my_show.fseq", "My Show.fseq")
 	})
-	t.Run("awaiting file received later loses the identity", func(t *testing.T) {
+	t.Run("awaiting file received later loses the identity outright", func(t *testing.T) {
 		run(t, "My Show.fseq", "my_show.fseq", "my_show.fseq")
 	})
 }

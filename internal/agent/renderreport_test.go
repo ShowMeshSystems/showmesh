@@ -26,6 +26,106 @@ func decodeRenderReport(t *testing.T, payload []byte) mqttproto.RenderPayload {
 	return p
 }
 
+// TestToRenderFPPConnectHeldFileBoundsEveryStringField is review round 6
+// finding 5's own regression test: only Name was bounded (review round 5
+// finding 6), but RegistrationReason can embed a colliding competitor's
+// own raw Name verbatim (fppconnectregister.go's attemptRegister), up to
+// the identical 16 KiB Upload-Name-header bound, and RegistrationAssetID
+// is coordinator-supplied with no local bound of its own; neither was
+// capped before reaching the wire. This proves every string field is now
+// bounded to fppConnectMaxEventStringBytes, truncation marked, not silent.
+func TestToRenderFPPConnectHeldFileBoundsEveryStringField(t *testing.T) {
+	long := strings.Repeat("x", fppConnectMaxEventStringBytes*2)
+	rec := fppConnectHeldRecord{
+		Dir:                     long,
+		Name:                    long,
+		ContentHash:             "sha256:deadbeef",
+		Show:                    long,
+		ShowID:                  long,
+		LogicalSequence:         long,
+		UnboundReason:           long,
+		RegistrationState:       long,
+		RegistrationAssetID:     long,
+		RegistrationReason:      long,
+		RegistrationProblemType: long,
+	}
+
+	wire := toRenderFPPConnectHeldFile(rec)
+
+	checks := map[string]string{
+		"Dir":                     wire.Dir,
+		"Name":                    wire.Name,
+		"Show":                    wire.Show,
+		"ShowID":                  wire.ShowID,
+		"LogicalSequence":         wire.LogicalSequence,
+		"UnboundReason":           wire.UnboundReason,
+		"RegistrationState":       wire.RegistrationState,
+		"RegistrationAssetID":     wire.RegistrationAssetID,
+		"RegistrationReason":      wire.RegistrationReason,
+		"RegistrationProblemType": wire.RegistrationProblemType,
+	}
+	for field, got := range checks {
+		if len(got) > fppConnectMaxEventStringBytes {
+			t.Errorf("%s length = %d, want at most %d", field, len(got), fppConnectMaxEventStringBytes)
+		}
+		if !strings.HasSuffix(got, fppConnectEventStringTruncatedSuffix) {
+			t.Errorf("%s = %q, want it to end with the truncation marker %q", field, got, fppConnectEventStringTruncatedSuffix)
+		}
+	}
+	if wire.ContentHash != rec.ContentHash {
+		t.Fatalf("ContentHash = %q, want it passed through unbounded: %q", wire.ContentHash, rec.ContentHash)
+	}
+}
+
+// TestFPPConnectRegisterCollidingSlugsBoundsOwnerNameInReason is review
+// round 6 finding 5's own regression test for attemptRegister's own side:
+// the competitor's raw Name is bounded (fppConnectBoundEventString)
+// before it is ever written into RegistrationReason, not only where a
+// held record is later read for the wire, since RegistrationReason is
+// also persisted to disk and must never carry an unbounded competitor
+// name into that file either. The winning competitor's record is seeded
+// directly (bypassing a real upload, which a real filesystem's own
+// filename-length limit would refuse long before Upload-Name's own much
+// larger 16 KiB bound is ever reached): CollidingRecord only ever reads
+// this held record from memory, never its bytes on disk, so this is a
+// faithful stand-in for a Name this long, however it got there.
+func TestFPPConnectRegisterCollidingSlugsBoundsOwnerNameInReason(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		return http.StatusOK, assetResponseBody(t, "asset-owner", hash, false)
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	longName := "My Show" + strings.Repeat("Z", fppConnectMaxEventStringBytes*4) + ".fseq"
+	held.mu.Lock()
+	held.records["sequences/"+longName] = fppConnectHeldRecord{
+		Dir: "sequences", Name: longName, ContentHash: "sha256:seeded",
+		ReceivedAt: time.Now(), Bound: true, Show: "Halloween", ShowID: "halloween-2026",
+		LogicalSequence: "my-show",
+	}
+	held.mu.Unlock()
+
+	colliding := "my_show.fseq" // slugifies to the identical "my-show"
+	secondData := []byte("second-file-is-longer")
+	uploadAndBind(t, held, "sequences", colliding, secondData)
+
+	failed := waitForRegistrationState(t, held, "sequences", colliding, fppConnectRegistrationFailed)
+	if len(failed.RegistrationReason) > fppConnectMaxEventStringBytes+256 {
+		t.Fatalf("RegistrationReason length = %d, want the embedded competitor name bounded to roughly %d, not the full %d-byte name", len(failed.RegistrationReason), fppConnectMaxEventStringBytes, len(longName))
+	}
+	if !strings.Contains(failed.RegistrationReason, fppConnectEventStringTruncatedSuffix) {
+		t.Fatalf("RegistrationReason = %q, want it to show the competitor's name was truncated", failed.RegistrationReason)
+	}
+
+	if got := len(requests()); got != 0 {
+		t.Fatalf("registration requests = %d, want 0: the colliding file must never even attempt", got)
+	}
+}
+
 // TestTruncateHeldFilesForWirePartitionsUnboundFirstEvenUnderCap is review
 // round 5 finding 4's regression test: before this fix,
 // truncateHeldFilesForWire only partitioned records unbound-first inside

@@ -570,14 +570,21 @@ func (s *fppConnectHeldStore) CollidingRecord(dir, name, showID, showName, logic
 
 // setRegistrationLocked applies one registration-state transition to
 // key's (dir, name) record and persists it, s.mu already held. A no-op
-// (returns false) when the record no longer exists, or its content hash no
-// longer matches wantHash: either means a fresh upload has since replaced
-// what this call was about to report on, and that fresh upload's own
-// registration attempt owns this record's state now.
-func (s *fppConnectHeldStore) setRegistrationLocked(dir, name, wantHash string, apply func(*fppConnectHeldRecord)) bool {
+// (returns false) when the record no longer exists, its content hash no
+// longer matches wantHash, or its resolved identity (ShowID,
+// LogicalSequence) no longer matches wantShowID/wantLogicalSequence:
+// either the first means a fresh upload has since replaced what this call
+// was about to report on, or the second means a rebind (BindShow) landed
+// while this attempt was in flight (review round 6 finding 1) and the
+// record now belongs to a different show or sequence than the attempt
+// this call reports on ever ran against. Either way, whatever process
+// owns the record now (a fresh upload's own registerLoop, or the same
+// loop's next iteration re-reading the rebound record) owns its state,
+// never this stale call.
+func (s *fppConnectHeldStore) setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence string, apply func(*fppConnectHeldRecord)) bool {
 	key := dir + "/" + name
 	rec, exists := s.records[key]
-	if !exists || rec.ContentHash != wantHash {
+	if !exists || rec.ContentHash != wantHash || rec.ShowID != wantShowID || rec.LogicalSequence != wantLogicalSequence {
 		return false
 	}
 	apply(&rec)
@@ -588,15 +595,17 @@ func (s *fppConnectHeldStore) setRegistrationLocked(dir, name, wantHash string, 
 	return true
 }
 
-// SetRegistrationSkipped records that (dir, name), whose content hash must
-// still equal wantHash, is held but will never be registered in this lane
+// SetRegistrationSkipped records that (dir, name), whose content hash and
+// resolved identity must still equal wantHash/wantShowID/
+// wantLogicalSequence, is held but will never be registered in this lane
 // (a music or videos upload: FC3 registers FSEQ content only). reason
 // names why, for the render report's evidence. Returns false (a no-op)
-// when wantHash no longer matches the current record.
-func (s *fppConnectHeldStore) SetRegistrationSkipped(dir, name, wantHash, reason string) bool {
+// when wantHash, wantShowID, or wantLogicalSequence no longer matches the
+// current record.
+func (s *fppConnectHeldStore) SetRegistrationSkipped(dir, name, wantHash, wantShowID, wantLogicalSequence, reason string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
 		rec.RegistrationState = fppConnectRegistrationSkipped
 		rec.RegistrationReason = reason
 		rec.RegistrationProblemType = ""
@@ -608,11 +617,12 @@ func (s *fppConnectHeldStore) SetRegistrationSkipped(dir, name, wantHash, reason
 // name) failed retryably: reason is the transport error, the coordinator's
 // problem detail, or "coordinator base URL not configured"; nextRetryAt is
 // when the retry loop will try again. Returns false (a no-op) when
-// wantHash no longer matches the current record.
-func (s *fppConnectHeldStore) SetRegistrationPending(dir, name, wantHash, reason string, nextRetryAt time.Time) bool {
+// wantHash, wantShowID, or wantLogicalSequence no longer matches the
+// current record.
+func (s *fppConnectHeldStore) SetRegistrationPending(dir, name, wantHash, wantShowID, wantLogicalSequence, reason string, nextRetryAt time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
 		rec.RegistrationState = fppConnectRegistrationPending
 		rec.RegistrationReason = reason
 		rec.RegistrationProblemType = ""
@@ -624,11 +634,12 @@ func (s *fppConnectHeldStore) SetRegistrationPending(dir, name, wantHash, reason
 // (dir, name): problemType is the coordinator's RFC 9457 problem `type`
 // (empty for a locally-detected failure, e.g. a content-hash mismatch),
 // and reason is its detail, verbatim. Returns false (a no-op) when
-// wantHash no longer matches the current record.
-func (s *fppConnectHeldStore) SetRegistrationFailed(dir, name, wantHash, problemType, reason string) bool {
+// wantHash, wantShowID, or wantLogicalSequence no longer matches the
+// current record.
+func (s *fppConnectHeldStore) SetRegistrationFailed(dir, name, wantHash, wantShowID, wantLogicalSequence, problemType, reason string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
 		rec.RegistrationState = fppConnectRegistrationFailed
 		rec.RegistrationReason = reason
 		rec.RegistrationProblemType = problemType
@@ -639,11 +650,12 @@ func (s *fppConnectHeldStore) SetRegistrationFailed(dir, name, wantHash, problem
 // SetRegistrationRegistered records that (dir, name) is now registered
 // with the coordinator's asset store: assetID and rolledBack are the
 // coordinator's own response fields (ADR-028 decision 10). Returns false
-// (a no-op) when wantHash no longer matches the current record.
-func (s *fppConnectHeldStore) SetRegistrationRegistered(dir, name, wantHash, assetID string, rolledBack bool) bool {
+// (a no-op) when wantHash, wantShowID, or wantLogicalSequence no longer
+// matches the current record.
+func (s *fppConnectHeldStore) SetRegistrationRegistered(dir, name, wantHash, wantShowID, wantLogicalSequence, assetID string, rolledBack bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.setRegistrationLocked(dir, name, wantHash, func(rec *fppConnectHeldRecord) {
+	return s.setRegistrationLocked(dir, name, wantHash, wantShowID, wantLogicalSequence, func(rec *fppConnectHeldRecord) {
 		rec.RegistrationState = fppConnectRegistrationRegistered
 		rec.RegistrationAssetID = assetID
 		rec.RegistrationRolledBack = rolledBack
@@ -1683,6 +1695,30 @@ func (s *fppConnectHeldStore) load() error {
 	}
 	if idx.Records != nil {
 		s.records = idx.Records
+		for key, rec := range s.records {
+			if !rec.Bound || rec.ShowID != "" {
+				continue
+			}
+			// A pre-FC3 index predates ShowID entirely (ADR-028 decision
+			// 8, review round 6 finding 2): every record it wrote decoded
+			// as Bound true with ShowID's zero value, "". Left alone,
+			// attemptRegister would send an empty show field forever, a
+			// request the coordinator can only ever refuse terminally,
+			// with nothing left to retry it: RebindPendingShowIDs only
+			// ever walks a record whose UnboundReason already names it as
+			// awaiting an id, and nothing rebinds an already-bound record
+			// on its own. Repaired into that exact awaiting-id shape
+			// instead, the same one BindPendingShowID produces: unbound,
+			// UnboundReason fppConnectUnboundReasonShowIDNotPushed, Show
+			// (a pre-FC3 field, already correct) kept, LogicalSequence
+			// recomputed since a pre-FC3 record predates it too, so
+			// RebindPendingShowIDs converges it the next time any push
+			// resolves the show it already names.
+			rec.Bound = false
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(rec.Name)
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+			s.records[key] = rec
+		}
 	}
 	if pending != nil {
 		s.pending = pending

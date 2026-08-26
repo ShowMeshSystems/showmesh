@@ -332,15 +332,17 @@ func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
 // (dir, name) replacing these bytes entirely, is picked up before the next
 // attempt rather than acted on with what this loop last knew. The
 // fresher-upload case is also independently guarded by
-// fppConnectHeldStore.setRegistrationLocked's own content-hash check on
-// every write back: even a rec this loop is mid-attempt with, if it has
-// since been superseded, never overwrites the newer upload's own state.
-// When that guard refuses a write (review round 2 finding B), this loop
-// continues rather than returns: this record's own key is the only
-// registerLoop startLoop's in-flight guard will ever allow to run, so if
-// this instance exits without picking up the superseding record, nothing
-// ever registers it. Continuing lets the next iteration's RecordFor read
-// the new record and register it instead.
+// fppConnectHeldStore.setRegistrationLocked's own content-hash and
+// identity check on every write back: even a rec this loop is mid-attempt
+// with, if it has since been superseded with different bytes (review
+// round 2 finding B) or rebound to a different show or sequence (review
+// round 6 finding 1), never overwrites the newer state. When that guard
+// refuses a write, this loop continues rather than returns: this record's
+// own key is the only registerLoop startLoop's in-flight guard will ever
+// allow to run, so if this instance exits without picking up the
+// superseding record, nothing ever registers it. Continuing lets the next
+// iteration's RecordFor read the new record and register it instead,
+// under whichever identity it now carries.
 func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 	backoff := r.initialBackoff
 	for {
@@ -369,43 +371,61 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 
 		// Every branch below treats a false return from its setter as
 		// "superseded": a fresher upload of this same (dir, name)
-		// completed while this attempt was in flight, and
-		// setRegistrationLocked's own content-hash guard refused to let
-		// this stale outcome overwrite it (review round 2 finding B).
-		// Before this fix every branch returned unconditionally on a
-		// false setter result, which meant the record this loop was
-		// started for is bound and content-hash-current from the newer
-		// upload's own completeLocked call, but NO registerLoop is left
-		// running for it: startLoop's in-flight guard already refused a
-		// second goroutine for this key while this one owned it, so once
-		// this one exits without registering anything, the newer bytes
-		// are never registered at all. continue instead: the loop's own
-		// top-of-iteration RecordFor picks up the new record fresh, and
-		// backoff resets since this is a new attempt cycle against new
-		// content, not a retry of the same failure.
+		// completed, or a rebind changed its identity, while this attempt
+		// was in flight, and setRegistrationLocked's own content-hash and
+		// identity guard refused to let this stale outcome overwrite it
+		// (review round 2 finding B, review round 6 finding 1). Before
+		// this fix every branch returned unconditionally on a false
+		// setter result, which meant the record this loop was started for
+		// is current from the newer upload's or rebind's own write, but
+		// NO registerLoop is left running for it: startLoop's in-flight
+		// guard already refused a second goroutine for this key while
+		// this one owned it, so once this one exits without registering
+		// anything, the newer state is never acted on at all. continue
+		// instead: the loop's own top-of-iteration RecordFor picks up the
+		// new record fresh, and backoff resets since this is a new
+		// attempt cycle against new content or a new identity, not a
+		// retry of the same failure. waitBeforeRetry pauses first (review
+		// round 6 finding 4): a tight loop of supersessions with no I/O
+		// between them (e.g. offset-0 re-uploads of a file this lane
+		// never registers, which supersede and skip without ever doing
+		// any I/O) would otherwise spin this goroutine hot, with no wait
+		// at all between iterations.
 		switch outcome.kind {
 		case fppConnectRegistrationSkipped:
-			if !r.held.SetRegistrationSkipped(rec.Dir, rec.Name, rec.ContentHash, outcome.reason) {
+			if !r.held.SetRegistrationSkipped(rec.Dir, rec.Name, rec.ContentHash, rec.ShowID, rec.LogicalSequence, outcome.reason) {
+				if !r.waitBeforeRetry(wake) {
+					return
+				}
 				backoff = r.initialBackoff
 				continue
 			}
 			return
 		case fppConnectRegistrationRegistered:
-			if !r.held.SetRegistrationRegistered(rec.Dir, rec.Name, rec.ContentHash, outcome.assetID, outcome.rolledBack) {
+			if !r.held.SetRegistrationRegistered(rec.Dir, rec.Name, rec.ContentHash, rec.ShowID, rec.LogicalSequence, outcome.assetID, outcome.rolledBack) {
+				if !r.waitBeforeRetry(wake) {
+					return
+				}
 				backoff = r.initialBackoff
 				continue
 			}
 			r.triggerInventory()
 			return
 		case fppConnectRegistrationFailed:
-			if !r.held.SetRegistrationFailed(rec.Dir, rec.Name, rec.ContentHash, outcome.problemType, outcome.reason) {
+			if !r.held.SetRegistrationFailed(rec.Dir, rec.Name, rec.ContentHash, rec.ShowID, rec.LogicalSequence, outcome.problemType, outcome.reason) {
+				if !r.waitBeforeRetry(wake) {
+					return
+				}
 				backoff = r.initialBackoff
 				continue
 			}
 			return
 		default: // fppConnectRegistrationPending: retryable
 			nextRetryAt := r.now().Add(backoff)
-			if !r.held.SetRegistrationPending(rec.Dir, rec.Name, rec.ContentHash, outcome.reason, nextRetryAt) {
+			if !r.held.SetRegistrationPending(rec.Dir, rec.Name, rec.ContentHash, rec.ShowID, rec.LogicalSequence, outcome.reason, nextRetryAt) {
+				if !r.waitBeforeRetry(wake) {
+					return
+				}
 				backoff = r.initialBackoff
 				continue
 			}
@@ -420,6 +440,29 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 				backoff = r.maxBackoff
 			}
 		}
+	}
+}
+
+// fppConnectSupersededPause is how long waitBeforeRetry pauses on the
+// "superseded" continue path (review round 6 finding 4): a short, fixed
+// pause independent of the registrar's own backoff schedule, since that
+// schedule can be a millisecond-scale test override, and this pause exists
+// only to stop a tight supersession loop from spinning hot, not to back
+// off a real coordinator failure.
+const fppConnectSupersededPause = 250 * time.Millisecond
+
+// waitBeforeRetry pauses for fppConnectSupersededPause, or until r.ctx is
+// done or a Wake() call lands, whichever comes first. Returns false when
+// r.ctx ended first, so the caller can return immediately rather than loop
+// back into a canceled context.
+func (r *fppConnectRegistrar) waitBeforeRetry(wake <-chan struct{}) bool {
+	select {
+	case <-r.ctx.Done():
+		return false
+	case <-time.After(fppConnectSupersededPause):
+		return true
+	case <-wake:
+		return true
 	}
 }
 
@@ -529,9 +572,11 @@ var fppConnectRegisterTerminalStatuses = map[int]bool{
 
 // attemptRegister makes at most one registration attempt for rec (or none
 // at all, for a coordinator base URL that is not configured, a mediaType
-// this lane does not register, or a name whose slug is empty), and
-// classifies the result exactly as this seam's spec requires: 200
-// verified against rec's own content hash is "registered";
+// this lane does not register, a name whose slug is empty, a bound record
+// with no resolved show id (review round 6 finding 2), or a collision
+// against a competitor still awaiting its own show id (review round 6
+// finding 3)), and classifies the result exactly as this seam's spec
+// requires: 200 verified against rec's own content hash is "registered";
 // fppConnectRegisterTerminalStatuses are "failed" and never retried;
 // every other 4xx, 5xx, and transport error is "pending" (retry).
 func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConnectRegisterOutcome {
@@ -552,6 +597,22 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 		return fppConnectRegisterOutcome{
 			kind:   fppConnectRegistrationFailed,
 			reason: fmt.Sprintf("file name %q has no [a-z0-9] character to derive a sequence id from", rec.Name),
+		}
+	}
+
+	// A bound record with no resolved show id is not this seam's normal
+	// shape (every live binding path resolves ShowID and LogicalSequence
+	// together), but load()'s own record repair is not the only way one
+	// could reach here (review round 6 finding 2): unlike an empty
+	// LogicalSequence, an empty ShowID is not permanent, so this is
+	// "pending," retryable, never "failed." Sending show="" would only
+	// ever earn a terminal refusal from the coordinator with nothing left
+	// to retry it, since RebindPendingShowIDs never walks an already-bound
+	// record.
+	if rec.ShowID == "" {
+		return fppConnectRegisterOutcome{
+			kind:   fppConnectRegistrationPending,
+			reason: fmt.Sprintf("bound record for %q has no resolved show id", rec.Name),
 		}
 	}
 
@@ -577,6 +638,25 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 		// never found in the first place would not.
 		otherKnown = false
 	}
+	// A competitor still awaiting its own show id (review round 5 finding
+	// 4's own case) is not a settled loss (review round 6 finding 3): if
+	// it never binds at all, nobody would ever register this sequence.
+	// Once its show id is independently confirmed resolvable right now
+	// but it still has not bound, treat it the same as a competitor
+	// CollidingRecord never found: whatever is stopping RebindPendingShowIDs
+	// from converging it is this attempt's problem to stop waiting on,
+	// not a reason to fail forever. While its id genuinely is not
+	// resolvable yet, it still counts as a competitor, so this attempt can
+	// still lose to it (fairly, by ReceivedAt, exactly as any other
+	// collision does) rather than race ahead of a competitor that is
+	// legitimately about to bind.
+	otherAwaitingShowID := otherKnown && !other.Bound
+	if otherAwaitingShowID {
+		if _, ok := r.state.ShowID(other.Show); ok {
+			otherKnown = false
+			otherAwaitingShowID = false
+		}
+	}
 	otherKey, otherReceivedAt, otherRegistered := "", time.Time{}, false
 	if otherKnown {
 		otherKey = other.Dir + "/" + other.Name
@@ -586,7 +666,24 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 	if won, ownerKey := r.claimIdentity(myKey, identityKey, rec.ReceivedAt, otherKnown, otherKey, otherReceivedAt, otherRegistered); !won {
 		ownerName := ownerKey
 		if otherKnown && otherKey == ownerKey {
-			ownerName = other.Name
+			// other.Name is copied straight from the Upload-Name header,
+			// bounded only by fppConnectMaxHeaderBytes (16 KiB, review
+			// round 6 finding 5): bounded here, before it is ever written
+			// into RegistrationReason, not only where that record is
+			// later read for the wire (renderreport.go's
+			// toRenderFPPConnectHeldFile), since RegistrationReason is
+			// also persisted to disk by setRegistrationLocked and must
+			// never carry an unbounded competitor name into that file
+			// either.
+			ownerName = fppConnectBoundEventString(other.Name)
+		}
+		if otherAwaitingShowID {
+			return fppConnectRegisterOutcome{
+				kind: fppConnectRegistrationPending,
+				reason: fmt.Sprintf(
+					"sequence id %q under show %q may collide with held file %q, which is still awaiting its own show id; will re-check",
+					rec.LogicalSequence, rec.ShowID, ownerName),
+			}
 		}
 		return fppConnectRegisterOutcome{
 			kind: fppConnectRegistrationFailed,

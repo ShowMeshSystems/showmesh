@@ -953,7 +953,7 @@ func TestFPPConnectBindShowToNewIdentityResetsRegistration(t *testing.T) {
 	if !ok || !bound.Bound || bound.ShowID != "halloween-2026" {
 		t.Fatalf("record after initial BindShow = %+v (found=%v), want bound to halloween-2026", bound, ok)
 	}
-	if !held.SetRegistrationRegistered("sequences", "Rebound.fseq", bound.ContentHash, "asset-halloween", false) {
+	if !held.SetRegistrationRegistered("sequences", "Rebound.fseq", bound.ContentHash, bound.ShowID, bound.LogicalSequence, "asset-halloween", false) {
 		t.Fatal("SetRegistrationRegistered was a no-op, want it to apply")
 	}
 
@@ -1154,6 +1154,79 @@ func TestFPPConnectLoadToleratesOldShapePendingValues(t *testing.T) {
 	}
 	if binding.ShowName != "SomeOldShow" || binding.ShowID != "" {
 		t.Fatalf("pending binding = %+v, want ShowName=SomeOldShow ShowID=\"\"", binding)
+	}
+}
+
+// TestFPPConnectLoadRepairsPreFC3BoundRecordWithNoShowID is review round 6
+// finding 2's own regression test: a held index a pre-FC3 build persisted
+// predates ShowID and LogicalSequence entirely (ADR-028 decision 8), so a
+// bound record it wrote decodes with both at their zero value, "". Left
+// alone, attemptRegister would send an empty show field forever, a
+// request the coordinator can only ever refuse terminally, with nothing
+// left to retry it: RebindPendingShowIDs only ever walks a record whose
+// UnboundReason already names it as awaiting an id, and nothing rebinds an
+// already-bound record on its own. load must repair such a record into
+// that exact awaiting-id shape instead: unbound,
+// fppConnectUnboundReasonShowIDNotPushed, Show (a pre-FC3 field, already
+// correct) kept, LogicalSequence recomputed from the file name.
+func TestFPPConnectLoadRepairsPreFC3BoundRecordWithNoShowID(t *testing.T) {
+	dir := t.TempDir()
+
+	preFC3Index := `{
+		"records": {
+			"sequences/PreFC3.fseq": {
+				"dir": "sequences",
+				"name": "PreFC3.fseq",
+				"sizeBytes": 3,
+				"contentHash": "sha256:deadbeef",
+				"receivedAt": "2026-08-01T00:00:00Z",
+				"bound": true,
+				"show": "Halloween"
+			}
+		},
+		"pending": {},
+		"pendingOrder": [],
+		"events": []
+	}`
+
+	indexDir := filepath.Join(dir, fppConnectUploadStateSubdir)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, fppConnectIndexFileName), []byte(preFC3Index), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	held := newFPPConnectHeldStore(dir, discardLogger())
+
+	rec, ok := findHeldRecord(t, held, "sequences", "PreFC3.fseq")
+	if !ok {
+		t.Fatal("no held record for sequences/PreFC3.fseq after loading a pre-FC3 index")
+	}
+	if rec.Bound {
+		t.Fatalf("record = %+v, want unbound: a pre-FC3 record with no ShowID must never register with an empty show field", rec)
+	}
+	if rec.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
+		t.Fatalf("UnboundReason = %q, want %q", rec.UnboundReason, fppConnectUnboundReasonShowIDNotPushed)
+	}
+	if rec.Show != "Halloween" {
+		t.Fatalf("Show = %q, want Halloween preserved so a later push can rebind it", rec.Show)
+	}
+	if rec.LogicalSequence != "prefc3" {
+		t.Fatalf("LogicalSequence = %q, want prefc3 recomputed from the file name", rec.LogicalSequence)
+	}
+
+	// A later push carrying the show's id converges it automatically, the
+	// same as any other awaiting-id record.
+	held.RebindPendingShowIDs(func(name string) (string, bool) {
+		if name == "Halloween" {
+			return "halloween-2026", true
+		}
+		return "", false
+	})
+	registered, ok := findHeldRecord(t, held, "sequences", "PreFC3.fseq")
+	if !ok || !registered.Bound || registered.ShowID != "halloween-2026" {
+		t.Fatalf("record after RebindPendingShowIDs = %+v (found=%v), want bound to halloween-2026", registered, ok)
 	}
 }
 
