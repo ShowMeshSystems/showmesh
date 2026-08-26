@@ -18,8 +18,7 @@ import (
 // own node-catalog-stale readiness condition and that HTTP route compute
 // the identical answer rather than each resolving it a second way. Any
 // later per-node readiness resolution reuses it too (see
-// docs/build/IDENTIFIER-REGISTER.md's "Playlist readiness conditions"
-// section).
+// docs/build/TRACK-H-cues-and-playlists.md section H6).
 
 // NodeCatalogAckStatus resolves nodeID's persisted cue-catalog
 // acknowledgement ([store.Store.GetNodeCueCatalogAck]) against

@@ -1,7 +1,9 @@
 package fppreconcile
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -256,6 +258,75 @@ func TestPlaylistReadinessExclusiveClaimConflictExemptedWithinOnePlaylist(t *tes
 	}
 	if report.FailingCondition == ReadinessExclusiveClaimConflict {
 		t.Fatalf("exclusive-claim-conflict must not fire between two entries of the SAME Playlist (never concurrently active): reason %q", report.Reason)
+	}
+}
+
+// TestPlaylistReadinessUndecodableCueDoesNotFailUnrelatedPlaylist is
+// DEFECT 1's regression coverage (PR #163 review): exclusiveClaimReadiness
+// used to propagate assetsync.ResolveCueCatalog's decode error straight
+// out of PlaylistReadiness as a caller-visible error (an HTTP 500 at the
+// read route) whenever ANY show.cue anywhere in the store failed to
+// decode -- including a cue belonging to a completely different Show than
+// the one being asked about. Readiness must degrade, not explode: a
+// corrupted cue this Playlist's Show has nothing to do with must not stop
+// this Playlist's readiness from answering at all.
+func TestPlaylistReadinessUndecodableCueDoesNotFailUnrelatedPlaylist(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	putShow(t, st, "show-2", "Show Two")
+	// show-1 is deliberately left NOT the active show: exclusiveClaimReadiness
+	// is evaluated against p.Show directly regardless of show.active, but
+	// leaving show.active unconfigured keeps nodeCatalogReadiness (which
+	// DOES depend on the real active show, and does not carry this same
+	// fix) out of this test entirely, so this test exercises exactly the
+	// one condition DEFECT 1 is about.
+	declareNode(t, st, "node-1")
+
+	hash := hash64("a1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	putPlaylist(t, st, "playlist-1", p)
+
+	// A Cue belonging to an ENTIRELY DIFFERENT Show, corrupted the same
+	// "an interrupted write could really leave this behind" way
+	// TestPlaylistReadinessCorruptedCueRevisionLogsWarnAndStillReportsCueNotReady
+	// (readiness_test.go) uses. assetsync.ResolveCueCatalog decodes every
+	// stored show.cue in the WHOLE store before it ever filters by show,
+	// so this cue -- which playlist-1 does not reference and whose Show is
+	// not even p.Show -- still trips the SAME decode failure every node's
+	// catalog resolution hits.
+	ctx := context.Background()
+	putCue(t, st, "cue-corrupt", "show-2")
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.ShowCueConfigKind, ObjectID: "cue-corrupt", Revision: 2,
+		PayloadJSON: `{"show":"show-2","name":"Corrupted","outputs":{`, Source: "api",
+	}); err != nil {
+		t.Fatalf("create corrupted cue revision: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.ShowCueConfigKind, "cue-corrupt", 2); err != nil {
+		t.Fatalf("activate corrupted cue revision: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	report, err := PlaylistReadiness(ctx, st, logger, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v, want no error -- one corrupted cue in an unrelated Show must not fail every OTHER playlist's readiness", err)
+	}
+	if report.FailingCondition == ReadinessExclusiveClaimConflict {
+		t.Fatalf("FailingCondition = %q, want anything but a false-positive conflict report: a corrupted cue proves nothing about a real collision", report.FailingCondition)
+	}
+	if !containsAll(report.Warning, "cue-corrupt", "could not be decoded") {
+		t.Fatalf("Warning = %q, want it to name the offending cue cue-corrupt and explain it could not be decoded", report.Warning)
+	}
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "level=WARN") {
+		t.Errorf("log output = %q, want a WARN-level entry", logged)
+	}
+	if !strings.Contains(logged, "cue-corrupt") {
+		t.Errorf("log output = %q, want it to name cue id %q", logged, "cue-corrupt")
 	}
 }
 
