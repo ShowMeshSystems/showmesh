@@ -27,7 +27,7 @@ const renderReportPublishTimeout = 5 * time.Second
 // runRenderReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runHeartbeat's and
 // runAssetInventory's identical contract.
-func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
+func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "render")
 	if err != nil {
 		// nodeID is validated at config load, matching runHeartbeat's and
@@ -45,26 +45,28 @@ func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pip
 			if !ok {
 				return
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, now, logger)
 		case _, ok := <-triggered:
 			if !ok {
 				triggered = nil
 				continue
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, now, logger)
 		}
 	}
 }
 
 // publishOneRenderReport snapshots every surface sup currently supervises,
-// plus msStatus's current MultiSync bind evidence (finding 7), and publishes
-// a single render report.
-func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, now func() time.Time, logger *slog.Logger) {
+// plus msStatus's current MultiSync bind evidence (finding 7) and fcStatus's
+// current FPP Connect HTTP listener evidence (ADR-044), and publishes a
+// single render report.
+func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, now func() time.Time, logger *slog.Logger) {
 	pubCtx, cancel := context.WithTimeout(ctx, renderReportPublishTimeout)
 	defer cancel()
 
 	gstPath, gstOK, _ := pipeline.ResolveGstLaunch()
 	msListening, msReason, msObservedAt := msStatus.get()
+	fcListening, fcReason, fcObservedAt := fcStatus.get()
 
 	snapshots := sup.SnapshotAll()
 	// Surfaces is built as a non-nil, possibly-empty slice regardless of
@@ -77,12 +79,15 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	}
 
 	env, err := mqttproto.NewRenderEnvelope(now, nodeID, mqttproto.RenderPayload{
-		GstLaunchPath:       gstPath,
-		GstLaunchAvailable:  gstOK,
-		Surfaces:            surfaces,
-		MultiSyncListening:  msListening,
-		MultiSyncReason:     msReason,
-		MultiSyncObservedAt: msObservedAt,
+		GstLaunchPath:        gstPath,
+		GstLaunchAvailable:   gstOK,
+		Surfaces:             surfaces,
+		MultiSyncListening:   msListening,
+		MultiSyncReason:      msReason,
+		MultiSyncObservedAt:  msObservedAt,
+		FPPConnectListening:  fcListening,
+		FPPConnectReason:     fcReason,
+		FPPConnectObservedAt: fcObservedAt,
 	})
 	if err != nil {
 		logger.Error("failed to build render report envelope", "error", err)

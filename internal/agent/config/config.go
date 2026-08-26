@@ -114,6 +114,16 @@ type Config struct {
 	// interface (pkg/multisync.NewListener's own default).
 	MultiSyncInterface string
 
+	// FPPConnectListenAddr is the local "host:port" this node's FPP Connect
+	// HTTP compatibility listener binds. xLights contacts port 80 with the
+	// port hardcoded in both the discovery and upload URLs (RES-003 section
+	// 10.4), so the production default is ":80"; this override exists for
+	// dev stacks and tests that cannot bind a privileged port. It is the
+	// only environment variable ADR-044 decision 5 adds, allow-listed under
+	// ADR-039 decision 9 for the same reason as MultiSyncListenAddr: a bind
+	// address must be known before the process starts.
+	FPPConnectListenAddr string
+
 	// DiagnosticSurface is this node's own locally configured diagnostic
 	// idle surface. See [DiagnosticSurface].
 	DiagnosticSurface DiagnosticSurface
@@ -170,6 +180,7 @@ const (
 	envAudioReportInterval    = "SHOWMESH_AUDIO_REPORT_INTERVAL"
 	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
 	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
+	envFPPConnectListenAddr   = "SHOWMESH_FPPCONNECT_LISTEN_ADDR"
 
 	envDiagnosticSurface       = "SHOWMESH_RENDER_DIAGNOSTIC_SURFACE"
 	envDiagnosticWidth         = "SHOWMESH_RENDER_DIAGNOSTIC_WIDTH"
@@ -183,6 +194,11 @@ const (
 	defaultAssetInventoryInterval = 2 * time.Minute
 	defaultRenderReportInterval   = 15 * time.Second
 	defaultAudioReportInterval    = 15 * time.Second
+
+	// defaultFPPConnectListenAddr is port 80, hardcoded because xLights
+	// builds its discovery and upload URLs with no port at all (RES-003
+	// section 10.4, ADR-044 decision 5).
+	defaultFPPConnectListenAddr = ":80"
 
 	// The diagnostic surface's defaults are an ordinary 1080p projector
 	// output at the reference profile's own frame rate (RES-004/the Track B
@@ -310,6 +326,7 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		AudioReportInterval:    audioReportInterval,
 		MultiSyncListenAddr:    getEnvDefault(lookup, envMultiSyncListenAddr, ""),
 		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
+		FPPConnectListenAddr:   getEnvDefault(lookup, envFPPConnectListenAddr, defaultFPPConnectListenAddr),
 		DiagnosticSurface:      diagnostic,
 	}
 
@@ -494,6 +511,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%s must be positive", envAudioReportInterval)
 	}
 
+	if c.FPPConnectListenAddr == "" {
+		return fmt.Errorf("%s must not be empty", envFPPConnectListenAddr)
+	}
+
 	if c.DiagnosticSurface.Enabled() {
 		if c.DiagnosticSurface.Width <= 0 || c.DiagnosticSurface.Height <= 0 {
 			return fmt.Errorf("%s and %s must be positive", envDiagnosticWidth, envDiagnosticHeight)
@@ -549,6 +570,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("audio_report_interval", c.AudioReportInterval),
 		slog.String("multisync_listen_addr", c.MultiSyncListenAddr),
 		slog.String("multisync_interface", c.MultiSyncInterface),
+		slog.String("fppconnect_listen_addr", c.FPPConnectListenAddr),
 		slog.String("diagnostic_surface_id", c.DiagnosticSurface.SurfaceID),
 	)
 }

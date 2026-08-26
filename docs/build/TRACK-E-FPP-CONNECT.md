@@ -61,6 +61,77 @@ Every item below was an open owner decision when this document was written on 20
 - **Universe-output endpoints and the models dropdown** (§9.6): per-target dropdowns defaulting to "None", serving FPP-as-pixel-controller deployments. A render node is not one. **The playlist endpoints are no longer deferred**: RES-003 §10.6 found that the playlist dropdown is the only binding signal xLights' existing UI can carry, so FC1 and FC2 serve them deliberately.
 - **The `GET /` HTML-sniffing fallback**: unexamined upstream behaviour, avoided entirely by serving `multiSyncSystems` correctly.
 
+## Listener surface
+
+FC1's build, as specified and tested (ADR-044 decision 2: this section, not
+`api/openapi.yaml`, is this listener's specification). The listener binds
+`SHOWMESH_FPPCONNECT_LISTEN_ADDR` (default `:80`; ADR-044 decision 5) and
+serves exactly four `GET` routes (`HEAD` is also served, with no body, per
+`net/http`'s own handling). Anything else, including a known path with the
+wrong method, is 404: ADR-044 decision 1 makes everything outside the four
+routes 404, so a wrong method never gets `http.ServeMux`'s own 405-plus-
+`Allow`-header answer. Routing does not use `http.ServeMux` at all, because
+its automatic path cleaning would 301-redirect a dirty path (a doubled
+slash, a literal `..` segment) with an HTML body before any pattern is even
+considered; this listener matches the escaped path itself so that path is
+structurally unreachable. The fourth route's `{name}` is additionally
+refused, before the show-name check, if it contains `/`, `\`, a NUL byte, or
+is exactly `..`: FC2's upload receiver reuses this same string near the
+filesystem.
+
+- **`GET /api/system/info`**: a JSON object with `uuid` (UUIDv5 of the node
+  id under a fixed ShowMesh namespace UUID, stable across restarts and
+  identical on every node sharing a node id), `HostName` (the node id),
+  `Version`/`majorVersion`/`minorVersion` (`internal/fppconnect`'s
+  `AdvertisedVersion`/`AdvertisedVersionMajor`/`AdvertisedVersionMinor`),
+  `Mode` (`AdvertisedMode`, `"player"`), `typeId` (`127`, i.e.
+  `multisync.SystemTypeShowMesh`), `channelRanges` (the holder's advertised
+  string, key omitted entirely when it is empty, never `""`), and
+  `Platform`/`Variant` (`"ShowMesh"`).
+- **`GET /api/fppd/multiSyncSystems`**: `{"systems":[<one self-entry>]}`. The
+  entry carries `address` (the local IP of the connection the request
+  arrived on, never a wildcard bind address and never `127.0.0.1` unless
+  that is genuinely what it arrived on), `hostname`, `fppMode`/
+  `fppModeString` (`multisync.PingModePlayer` / `"player"`), `version`/
+  `majorVersion`/`minorVersion`, `type`/`typeId` (`"ShowMesh"` / `127`),
+  `uuid`, `channelRanges` (same omission rule as system info), and `local:
+  true`.
+- **`GET /api/playlists`**: a bare JSON array of the holder's show names,
+  `200`, `[]` when there are none. Never an object.
+- **`GET /api/playlist/{name}`**: `{name}` is percent-decoded the way FPP
+  decodes it (segment-by-segment percent-decoding; a literal `+` is never
+  treated as a space). A name on the holder's show list gets `{"name":
+  <name>, "mainPlaylist": [], "leadIn": [], "leadOut": [], "playlistInfo":
+  {"total_duration": 0, "total_items": 0}}`; FC2's upload receiver is what
+  populates `mainPlaylist`. Any other name is 404.
+- **Everything else**: 404, a short plain-text body, never HTML.
+
+**Disabled behaviour.** While the pushed `fppconnect.settings.enabled` flag
+is false, every route above answers 404 and the listener's status reports
+"disabled by configuration." The socket stays bound throughout, so the next
+enable takes effect with no restart. `fppConnectStateView.Enabled` reads this
+flag from the holder the coordinator's `fppconnect.configure` push
+(`internal/agent/fppconnectops.go`) applies, and reports `true` (enabled)
+before the coordinator has ever pushed settings, matching the coordinator's
+own `resolveFPPConnectSettings` default.
+
+**Bind-failure behaviour.** A bind failure (most commonly a node without
+`CAP_NET_BIND_SERVICE` trying to bind `:80`) never stops the agent. It is
+recorded the way `multiSyncStatus` records a MultiSync bind failure, with
+the reason text naming the address, and carried on the same
+`showmesh.node.render/v1` payload MultiSync's own bind status is carried
+on: `fppConnectListening`/`fppConnectReason`/`fppConnectObservedAt` sit
+alongside `multiSyncListening`/`multiSyncReason`/`multiSyncObservedAt` in
+the render report. No `node.fppconnect.*` collector signal or API field
+exists yet to surface this to an operator the way the coordinator surfaces
+other node evidence; that is a follow-up, not this seam's scope. A bind
+failure never falls back to a different port: xLights only ever contacts
+port 80.
+
+**Environment.** `SHOWMESH_FPPCONNECT_LISTEN_ADDR` is the only environment
+variable this feature adds (ADR-044 decision 5), allow-listed under ADR-039
+decision 9 because a bind address must be known before the process starts.
+
 ## Acceptance criteria
 
 1. From an unmodified, shipping xLights on the owner's machine: a ShowMesh render node is discovered and listed in FPP Connect alongside real FPP targets, with no ShowMesh-side content claiming to be Falcon Player.

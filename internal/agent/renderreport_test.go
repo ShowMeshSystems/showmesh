@@ -107,7 +107,7 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -175,7 +175,7 @@ func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), time.Now, nil, triggered, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, nil, triggered, discardLogger())
 	}()
 
 	select {
@@ -232,7 +232,7 @@ func TestRunRenderReportStartingStateDecodes(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {

@@ -827,6 +827,27 @@ type RenderPayload struct {
 	// healthy value) — not enforced as required by Validate, for the
 	// identical additive-compatibility reason MultiSyncReason is not.
 	MultiSyncObservedAt time.Time `json:"multiSyncObservedAt"`
+
+	// FPPConnectListening is true once this node's FPP Connect HTTP
+	// compatibility listener (ADR-044) has successfully bound and is
+	// serving, false otherwise. It stays true while the listener is bound
+	// but administratively disabled: the socket stays open (so the next
+	// enable takes effect with no restart) and only the routes' behavior
+	// changes, which FPPConnectReason states. Not enforced as required by
+	// Validate, matching MultiSyncReason's identical additive-compatibility
+	// reasoning: this field is added after SchemaNodeRenderV1 first shipped.
+	FPPConnectListening bool `json:"fppConnectListening"`
+
+	// FPPConnectReason is the bind error, the "not yet attempted" starting
+	// value, or the disabled-by-configuration explanation, whenever
+	// FPPConnectListening is false or the listener is bound but disabled.
+	// See MultiSyncReason's identical rule one field up.
+	FPPConnectReason string `json:"fppConnectReason"`
+
+	// FPPConnectObservedAt is the node's own clock at the moment the FPP
+	// Connect HTTP listener's status was last determined, mirroring
+	// MultiSyncObservedAt's identical evidence-time reasoning one field up.
+	FPPConnectObservedAt time.Time `json:"fppConnectObservedAt"`
 }
 
 // Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
