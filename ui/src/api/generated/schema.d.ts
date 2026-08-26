@@ -4323,12 +4323,12 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6, plus Lane 16's `node-render-unassigned` addition): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set only for the non-fatal form of the observation-hash check (no observation received yet, "the normal afternoon state, not a fault"), never alongside a non-empty `failingCondition`. */
+        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6, opened by Lane 16 -- see docs/build/TRACK-H-cues-and-playlists.md section H6 for the full account of what Lane 16 added and why): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set when a condition did not fail readiness outright but is still worth surfacing: either the non-fatal form of the observation-hash check (no observation received yet, "the normal afternoon state, not a fault"), or `exclusive-claim-conflict`'s own inconclusive form (a stored Cue elsewhere could not be decoded, so the check could not be verified). `warning` is never set alongside a non-empty `failingCondition` equal to `observation-hash-mismatch`. `node-render-unassigned`, `node-catalog-stale`, and `exclusive-claim-conflict` are evaluated against every node participating in this Playlist's own Show's resolved Cue catalog, reusing the same resolution `GET /nodes/{nodeId}/cue-catalog` and the cue-catalog deploy path already use -- never a second one. */
         FPPPlaylistReadinessResponse: {
             playlistId: string;
             ready: boolean;
             /** @enum {string} */
-            failingCondition?: "definition-missing" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "observation-hash-mismatch" | "node-render-unassigned";
+            failingCondition?: "definition-missing" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "observation-hash-mismatch" | "node-render-unassigned" | "exclusive-claim-conflict" | "node-catalog-stale";
             reason?: string;
             warning?: string;
             /** Format: date-time */
