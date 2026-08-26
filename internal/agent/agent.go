@@ -128,6 +128,14 @@ func Run() int {
 		logger.Warn("failed to sweep asset staging directory at startup", "asset_dir", cfg.AssetDir, "error", err)
 	}
 
+	// FC2's own staging area (chunked xLights uploads in progress) gets the
+	// identical sweep, for the identical reason: a partial upload left
+	// behind by a previous, interrupted process run is never a partially-
+	// usable asset. See fppconnectheld.go's sweepFPPConnectUploadStaging.
+	if err := sweepFPPConnectUploadStaging(cfg.AssetDir); err != nil {
+		logger.Warn("failed to sweep fppconnect upload staging directory at startup", "asset_dir", cfg.AssetDir, "error", err)
+	}
+
 	// assetFetchTrigger is buffered for the same non-blocking-send reason as
 	// heartbeatConnected: command.go signals it after a completed
 	// asset.fetch, and the inventory goroutine below may not have started
@@ -185,14 +193,23 @@ func Run() int {
 	// fppConnectStatus carries this listener's bind outcome into the
 	// render report the same way multiSyncStatus does (ADR-044): a bind
 	// failure degrades this node's FPP Connect eligibility without
-	// stopping the agent. fppConnectStateView adapts the held fppConnect
-	// state (fppconnectstate.go, FC1a) to the listener's fppConnectView;
-	// see that type's own doc comment in fppconnecthttp.go.
+	// stopping the agent. newFPPConnectStateView adapts the held
+	// fppConnect state (fppconnectstate.go, FC1a) to the listener's
+	// fppConnectView; see that constructor's own doc comment in
+	// fppconnecthttp.go.
 	fppConnectStatus := newFPPConnectHTTPStatus()
+
+	// fppConnectHeld is FC2's upload/binding state (fppconnectheld.go):
+	// constructed here, outside newMQTTConn, for the same "must survive a
+	// broker reconnect" reason sup and cmdHandler are, and loaded from disk
+	// immediately so a restart resumes reporting whatever this node already
+	// held before it went down.
+	fppConnectHeld := newFPPConnectHeldStore(cfg.AssetDir, logger)
+
 	fppConnectHTTPDone := make(chan struct{})
 	go func() {
 		defer close(fppConnectHTTPDone)
-		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, fppConnectStateView{state: fppConnect}, cfg.NodeID, fppConnectStatus, logger)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect), cfg.NodeID, fppConnectHeld, fppConnectStatus, logger)
 	}()
 
 	// showMode is ADR-033's installation-wide operating mode as this node
@@ -356,7 +373,7 @@ func Run() int {
 		defer close(renderReportDone)
 		ticker := time.NewTicker(cfg.RenderReportInterval)
 		defer ticker.Stop()
-		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, fppConnectStatus, time.Now, ticker.C, renderTrigger, logger)
+		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, fppConnectStatus, fppConnectHeld, time.Now, ticker.C, renderTrigger, logger)
 	}()
 
 	// Audio report: hardware discovery evidence (cached) plus a fresh

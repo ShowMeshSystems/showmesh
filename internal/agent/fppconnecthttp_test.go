@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/fppconnect"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
@@ -20,15 +21,20 @@ import (
 // promises: every handler test in this file is built against this
 // interface, never against fppConnectState, so these tests do not depend on
 // that holder's own construction. See TestFPPConnectStateViewDisabledEndToEnd
-// (fppconnectstate_test.go) for a test built against the real holder and
+// below, in this same file, for a test built against the real holder and
 // its fppConnectStateView adapter instead.
 type fakeFPPConnectView struct {
-	channelRanges   string
-	enabled         bool
+	channelRanges string
+	enabled       bool
+
 	activeShowName  string
 	activeShowKnown bool
 	activeShowEver  bool
-	showNames       []string
+
+	showNames []string
+
+	maxFileBytes     int64
+	maxAssetDirBytes int64
 }
 
 func (f fakeFPPConnectView) ChannelRanges() string { return f.channelRanges }
@@ -37,6 +43,27 @@ func (f fakeFPPConnectView) ActiveShow() (name string, known bool, ever bool) {
 	return f.activeShowName, f.activeShowKnown, f.activeShowEver
 }
 func (f fakeFPPConnectView) ShowNames() []string { return f.showNames }
+func (f fakeFPPConnectView) MaxFileBytes() int64 {
+	if f.maxFileBytes != 0 {
+		return f.maxFileBytes
+	}
+	return fppConnectDefaultMaxFileBytes
+}
+func (f fakeFPPConnectView) MaxAssetDirBytes() int64 {
+	if f.maxAssetDirBytes != 0 {
+		return f.maxAssetDirBytes
+	}
+	return fppConnectDefaultMaxAssetDirBytes
+}
+
+// newTestFPPConnectHeldStore builds an fppConnectHeldStore rooted at a
+// fresh t.TempDir(), for tests that do not care about its upload/binding
+// behavior in particular (routing and discovery tests) but still need a
+// non-nil store to construct a handler.
+func newTestFPPConnectHeldStore(t *testing.T) *fppConnectHeldStore {
+	t.Helper()
+	return newFPPConnectHeldStore(t.TempDir(), discardLogger())
+}
 
 // startFPPConnectTestServer serves the real handler newFPPConnectHandler
 // builds over a real loopback listener (httptest.Server, an OS-assigned
@@ -45,10 +72,14 @@ func (f fakeFPPConnectView) ShowNames() []string { return f.showNames }
 // in production: the former so a self-entry's address field reflects the
 // real connection it arrived on, the latter so a test here actually
 // exercises route()'s own OPTIONS handling rather than net/http's built-in
-// one, which httptest.Server would otherwise leave enabled by default.
-func startFPPConnectTestServer(t *testing.T, view fppConnectView, nodeID string) *httptest.Server {
+// one, which httptest.Server would otherwise leave enabled by default. held
+// defaults to a fresh, empty store (newTestFPPConnectHeldStore) when nil.
+func startFPPConnectTestServer(t *testing.T, view fppConnectView, nodeID string, held *fppConnectHeldStore) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewUnstartedServer(newFPPConnectHandler(view, nodeID))
+	if held == nil {
+		held = newTestFPPConnectHeldStore(t)
+	}
+	srv := httptest.NewUnstartedServer(newFPPConnectHandler(view, nodeID, held, time.Now, discardLogger()))
 	srv.Config.ConnContext = fppConnectConnContext
 	srv.Config.DisableGeneralOptionsHandler = true
 	srv.Start()
@@ -72,7 +103,7 @@ func getBody(t *testing.T, url string) (*http.Response, []byte) {
 
 func TestFPPConnectSystemInfoRoute(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true, channelRanges: "0-9"}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	resp, body := getBody(t, srv.URL+"/api/system/info")
 	if resp.StatusCode != http.StatusOK {
@@ -112,7 +143,7 @@ func TestFPPConnectSystemInfoRoute(t *testing.T) {
 
 func TestFPPConnectSystemInfoOmitsEmptyChannelRanges(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	_, body := getBody(t, srv.URL+"/api/system/info")
 	var raw map[string]json.RawMessage
@@ -126,7 +157,7 @@ func TestFPPConnectSystemInfoOmitsEmptyChannelRanges(t *testing.T) {
 
 func TestFPPConnectMultiSyncSystemsRoute(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true, channelRanges: "10-19"}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	resp, body := getBody(t, srv.URL+"/api/fppd/multiSyncSystems")
 	if resp.StatusCode != http.StatusOK {
@@ -177,7 +208,7 @@ func TestFPPConnectMultiSyncSystemsRoute(t *testing.T) {
 
 func TestFPPConnectMultiSyncSystemsOmitsEmptyChannelRanges(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	_, body := getBody(t, srv.URL+"/api/fppd/multiSyncSystems")
 	var raw struct {
@@ -197,7 +228,7 @@ func TestFPPConnectMultiSyncSystemsOmitsEmptyChannelRanges(t *testing.T) {
 func TestFPPConnectPlaylistsRoute(t *testing.T) {
 	t.Run("with shows returns a bare array", func(t *testing.T) {
 		view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween", "Christmas"}}
-		srv := startFPPConnectTestServer(t, view, "node-1")
+		srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 		resp, body := getBody(t, srv.URL+"/api/playlists")
 		if resp.StatusCode != http.StatusOK {
@@ -217,7 +248,7 @@ func TestFPPConnectPlaylistsRoute(t *testing.T) {
 
 	t.Run("with no shows returns an empty array, not null", func(t *testing.T) {
 		view := fakeFPPConnectView{enabled: true}
-		srv := startFPPConnectTestServer(t, view, "node-1")
+		srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 		resp, body := getBody(t, srv.URL+"/api/playlists")
 		if resp.StatusCode != http.StatusOK {
@@ -232,7 +263,7 @@ func TestFPPConnectPlaylistsRoute(t *testing.T) {
 func TestFPPConnectPlaylistRoute(t *testing.T) {
 	t.Run("known name", func(t *testing.T) {
 		view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
-		srv := startFPPConnectTestServer(t, view, "node-1")
+		srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 		resp, body := getBody(t, srv.URL+"/api/playlist/Halloween")
 		if resp.StatusCode != http.StatusOK {
@@ -258,7 +289,7 @@ func TestFPPConnectPlaylistRoute(t *testing.T) {
 
 	t.Run("unknown name is 404", func(t *testing.T) {
 		view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
-		srv := startFPPConnectTestServer(t, view, "node-1")
+		srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 		resp, _ := getBody(t, srv.URL+"/api/playlist/DoesNotExist")
 		if resp.StatusCode != http.StatusNotFound {
@@ -268,7 +299,7 @@ func TestFPPConnectPlaylistRoute(t *testing.T) {
 
 	t.Run("percent-encoded name with a space decodes", func(t *testing.T) {
 		view := fakeFPPConnectView{enabled: true, showNames: []string{"My Show"}}
-		srv := startFPPConnectTestServer(t, view, "node-1")
+		srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 		resp, body := getBody(t, srv.URL+"/api/playlist/My%20Show")
 		if resp.StatusCode != http.StatusOK {
@@ -285,7 +316,7 @@ func TestFPPConnectPlaylistRoute(t *testing.T) {
 
 	t.Run("a literal plus is not decoded as a space", func(t *testing.T) {
 		view := fakeFPPConnectView{enabled: true, showNames: []string{"My+Show"}}
-		srv := startFPPConnectTestServer(t, view, "node-1")
+		srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 		resp, body := getBody(t, srv.URL+"/api/playlist/My+Show")
 		if resp.StatusCode != http.StatusOK {
@@ -309,7 +340,7 @@ func TestFPPConnectPlaylistRoute(t *testing.T) {
 // refused outright rather than left to sit until ReadTimeout.
 func TestFPPConnectRejectsOversizedOrChunkedBody(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	t.Run("declared Content-Length over the cap", func(t *testing.T) {
 		body := strings.NewReader(strings.Repeat("a", fppConnectMaxBodyBytes+1))
@@ -354,7 +385,7 @@ func TestFPPConnectRejectsOversizedOrChunkedBody(t *testing.T) {
 
 func TestFPPConnectUnmappedPathIs404(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	resp, body := getBody(t, srv.URL+"/api/does-not-exist")
 	if resp.StatusCode != http.StatusNotFound {
@@ -370,7 +401,7 @@ func TestFPPConnectUnmappedPathIs404(t *testing.T) {
 
 func TestFPPConnectDisabledServesEvery404(t *testing.T) {
 	view := fakeFPPConnectView{enabled: false, showNames: []string{"Halloween"}}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	for _, path := range []string{
 		"/api/system/info",
@@ -393,9 +424,9 @@ func TestFPPConnectDisabledServesEvery404(t *testing.T) {
 func TestFPPConnectUUIDStableAndDistinct(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
 
-	srvA := startFPPConnectTestServer(t, view, "node-alpha")
-	srvB := startFPPConnectTestServer(t, view, "node-alpha")
-	srvC := startFPPConnectTestServer(t, view, "node-beta")
+	srvA := startFPPConnectTestServer(t, view, "node-alpha", nil)
+	srvB := startFPPConnectTestServer(t, view, "node-alpha", nil)
+	srvC := startFPPConnectTestServer(t, view, "node-beta", nil)
 
 	fetchUUID := func(url string) string {
 		_, body := getBody(t, url+"/api/system/info")
@@ -425,7 +456,7 @@ func TestFPPConnectUUIDStableAndDistinct(t *testing.T) {
 // check is case-sensitive on purpose so that value never trips it.
 func TestFPPConnectNoProductIdentityLeak(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true, channelRanges: "0-9", showNames: []string{"Halloween"}}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	forbidden := []string{"Falcon", "Player", "FPP"}
 	routes := []string{
@@ -475,8 +506,9 @@ func TestRunFPPConnectHTTPListenerBindFailure(t *testing.T) {
 
 	status := newFPPConnectHTTPStatus()
 	view := fakeFPPConnectView{enabled: true}
+	held := newTestFPPConnectHeldStore(t)
 
-	runFPPConnectHTTPListener(context.Background(), addr, view, "node-1", status, discardLogger())
+	runFPPConnectHTTPListener(context.Background(), addr, view, "node-1", held, status, discardLogger())
 
 	listening, reason, observedAt := status.get()
 	if listening {
@@ -501,7 +533,7 @@ func TestRunFPPConnectHTTPListenerBindFailure(t *testing.T) {
 // plain-text 404, never a redirect and never HTML.
 func TestFPPConnectDirtyPathsNeverRedirect(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 	srv.Client().CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -533,7 +565,7 @@ func TestFPPConnectDirtyPathsNeverRedirect(t *testing.T) {
 // method on a registered path.
 func TestFPPConnectNonGETIs404NotAllowed(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		req, err := http.NewRequest(method, srv.URL+"/api/system/info", nil)
@@ -585,7 +617,7 @@ func TestFPPConnectNonGETIs404NotAllowed(t *testing.T) {
 // per-handler case.
 func TestFPPConnectHeadRequestHasNoBody(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	req, err := http.NewRequest(http.MethodHead, srv.URL+"/api/system/info", nil)
 	if err != nil {
@@ -613,7 +645,7 @@ func TestFPPConnectHeadRequestHasNoBody(t *testing.T) {
 // containing "/" must never reach the show-name membership check.
 func TestFPPConnectPlaylistRejectsTraversalName(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
-	srv := startFPPConnectTestServer(t, view, "node-1")
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
 
 	resp, _ := getBody(t, srv.URL+"/api/playlist/..%2f..%2fetc")
 	if resp.StatusCode != http.StatusNotFound {
@@ -636,6 +668,12 @@ func TestFPPConnectValidPlaylistName(t *testing.T) {
 		{"embedded NUL", "a\x00b", false},
 		{"exactly dot-dot", "..", false},
 		{"starts with dot-dot but is not one", "..foo", true},
+		// Review round 1 finding 9: "." passed every check above (it is
+		// not "..", contains no separator) and then failed FC2's rename
+		// into the held area with a 500 instead of being refused up
+		// front.
+		{"exactly a single dot", ".", false},
+		{"a dot with an extension is fine", ".hidden", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -688,24 +726,42 @@ func TestFPPConnectStateViewEnabledDefaultsTrueBeforePush(t *testing.T) {
 // through fppConnectState.Apply (the same call fppconnectops.go's
 // "fppconnect.configure" operation makes) must make fppConnectStateView's
 // Enabled() report false, which must make every route on a listener built
-// over that view answer 404, and must make fppConnectPollEnabled record the
-// listener as disabled on fppConnectHTTPStatus.
+// over that view answer 404 (review round 2 finding 3: the same route list
+// TestFPPConnectDisabledServesEvery404 checks, plus FC2's own upload
+// routes, not just /api/system/info), and must make fppConnectPollEnabled
+// record the listener as disabled on fppConnectHTTPStatus.
 func TestFPPConnectStateViewDisabledEndToEnd(t *testing.T) {
 	state := newFPPConnectState()
 	state.Apply(fppConnectSnapshot{
 		SettingsEverSet: true,
 		Settings:        fppConnectSettings{Enabled: false},
 	})
-	view := fppConnectStateView{state: state}
+	view := newFPPConnectStateView(state)
 
 	if view.Enabled() {
 		t.Fatal("view.Enabled() = true after Apply pushed enabled=false")
 	}
 
-	srv := startFPPConnectTestServer(t, view, "node-1")
-	resp, body := getBody(t, srv.URL+"/api/system/info")
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 while disabled; body=%s", resp.StatusCode, body)
+	held := newTestFPPConnectHeldStore(t)
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	for _, path := range []string{
+		"/api/system/info",
+		"/api/fppd/multiSyncSystems",
+		"/api/playlists",
+		"/api/playlist/Halloween",
+	} {
+		resp, body := getBody(t, srv.URL+path)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404 while disabled; body=%s", path, resp.StatusCode, body)
+		}
+	}
+
+	if resp, body := patchChunk(t, srv, "sequences", "Disabled.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("PATCH /api/file/sequences: status = %d, want 404 while disabled; body=%s", resp.StatusCode, body)
+	}
+	if resp, body := postPlaylist(t, srv, "Halloween", []byte(`{"mainPlaylist":[]}`)); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("POST /api/playlist/Halloween: status = %d, want 404 while disabled; body=%s", resp.StatusCode, body)
 	}
 
 	status := newFPPConnectHTTPStatus()

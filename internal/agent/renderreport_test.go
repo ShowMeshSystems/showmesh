@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +24,37 @@ func decodeRenderReport(t *testing.T, payload []byte) mqttproto.RenderPayload {
 		t.Fatalf("DecodeRenderPayload() error = %v", err)
 	}
 	return p
+}
+
+// TestTruncateHeldFilesForWirePartitionsUnboundFirstEvenUnderCap is review
+// round 5 finding 4's regression test: before this fix,
+// truncateHeldFilesForWire only partitioned records unbound-first inside
+// its len(records) > maxEntries branch, so a records slice at or under the
+// count cap came back in its original dir-then-name order, untouched.
+// shrinkRenderPayloadToFitEnvelope's own tail-drop assumes unbound-first
+// ordering to drop bound records before unbound ones once the byte budget,
+// not the count cap, is what forces a cut, so a report under the count cap
+// but still over budget could drop an unbound (operator-actionable) record
+// before a bound (already-resolved) one. This proves the reordering
+// happens regardless of whether the count cap ever fires.
+func TestTruncateHeldFilesForWirePartitionsUnboundFirstEvenUnderCap(t *testing.T) {
+	records := []fppConnectHeldRecord{
+		{Dir: "sequences", Name: "A.fseq", Bound: true},
+		{Dir: "sequences", Name: "B.fseq", Bound: false},
+		{Dir: "sequences", Name: "C.fseq", Bound: true},
+		{Dir: "sequences", Name: "D.fseq", Bound: false},
+	}
+
+	got := truncateHeldFilesForWire(records, len(records)+10)
+	if len(got) != len(records) {
+		t.Fatalf("got %d records, want %d (well under the cap, nothing should be dropped)", len(got), len(records))
+	}
+	want := []string{"B.fseq", "D.fseq", "A.fseq", "C.fseq"}
+	for i, w := range want {
+		if got[i].Name != w {
+			t.Fatalf("got[%d].Name = %q, want %q; got order = %+v", i, got[i].Name, w, got)
+		}
+	}
 }
 
 // TestToRenderSurfaceReportCarriesRealFrameCounters is a direct regression
@@ -107,7 +141,7 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -154,8 +188,349 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	}
 }
 
+// TestRunRenderReportIncludesHeldFilesAndEvents is review round 1 finding
+// 1's regression test: before this fix, fppConnectHeldStore's Held() and
+// Events() had no non-test caller at all, so ADR-044 decision 8's
+// "reported as an unbound held file the operator can claim" had no place
+// to actually reach an operator, since xLights never inspects the
+// playlist POST's status. A completed-but-unbound held file and an
+// unknown-playlist evidence event must both appear in a published report.
+func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	neverActive := func() (string, bool, bool) { return "", false, false }
+	outcome, reason, rec := held.WriteChunk("sequences", "Unbound.fseq", 0, 3, strings.NewReader("abc"), 3, 1<<30, 1<<30, time.Now(), neverActive)
+	if outcome != fppConnectChunkCompleted {
+		t.Fatalf("setup: outcome = %v reason = %q, want completed", outcome, reason)
+	}
+	if rec.Bound {
+		t.Fatalf("setup: record unexpectedly bound: %+v", rec)
+	}
+	held.RecordUnknownPlaylist("Mystery", []string{"Foo.fseq"}, time.Now())
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runRenderReport to return")
+	}
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+
+	if report.FPPConnectHeldCount != 1 {
+		t.Fatalf("FPPConnectHeldCount = %d, want 1", report.FPPConnectHeldCount)
+	}
+	if len(report.FPPConnectHeld) != 1 {
+		t.Fatalf("got %d held files, want 1: %+v", len(report.FPPConnectHeld), report.FPPConnectHeld)
+	}
+	f := report.FPPConnectHeld[0]
+	if f.Name != "Unbound.fseq" || f.Dir != "sequences" {
+		t.Fatalf("held file = %+v, want sequences/Unbound.fseq", f)
+	}
+	if f.Bound {
+		t.Fatalf("held file = %+v, want unbound", f)
+	}
+	if f.UnboundReason == "" {
+		t.Fatal("UnboundReason is empty, want it to name why this file is unbound")
+	}
+
+	var foundEvent bool
+	for _, ev := range report.FPPConnectHeldEvents {
+		if ev.Kind == "unknown" && ev.Name == "Mystery" {
+			foundEvent = true
+		}
+	}
+	if !foundEvent {
+		t.Fatalf("no unknown-playlist event in the published report; events = %+v", report.FPPConnectHeldEvents)
+	}
+}
+
+// TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost is
+// review round 3 finding 2's regression test: one unauthenticated
+// POST /api/playlist/{name} can name tens of thousands of distinct
+// sequenceName/mediaName values in a single 1 MiB body. Before this fix,
+// every one of them rode the resulting event onto every subsequent render
+// report, with no cap anywhere between the store and this report's own
+// size budget. NewRenderEnvelope's Validate call would not have caught
+// this: it never checks the payload's total serialized size, only field
+// counts (review round 5 finding 3). Left unbounded, this would have
+// built and published successfully, then been rejected by the
+// coordinator's DecodeEnvelope once the oversized bytes actually arrived,
+// a report skipped forever, not degraded once, for as long as the event
+// kept riding every publish. This proves the publish still succeeds and
+// the resulting bytes still decode under the wire envelope limit.
+func TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	// Build a playlist body naming as many distinct sequenceName entries
+	// as fit under fppConnectMaxPlaylistBodyBytes (1 MiB), against an
+	// unknown show name so every one lands in a single "unknown" event.
+	var sb strings.Builder
+	sb.WriteString(`{"mainPlaylist":[`)
+	for i := 0; sb.Len() < fppConnectMaxPlaylistBodyBytes-256; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"sequenceName":"S%08d.fseq"}`, i)
+	}
+	sb.WriteString(`]}`)
+
+	resp, body := postPlaylist(t, srv, "DoesNotExist", []byte(sb.String()))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	events := held.Events()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if len(events[0].Entries) > fppConnectMaxEventEntries {
+		t.Fatalf("event carries %d entries, want at most %d", len(events[0].Entries), fppConnectMaxEventEntries)
+	}
+	if events[0].EntriesTruncated == 0 {
+		t.Fatal("EntriesTruncated = 0, want a positive count given how oversized the posted body was")
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish (an unbounded field would push the published bytes over DecodeEnvelope's size limit on the receiving end)")
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+	if len(report.FPPConnectHeldEvents) == 0 {
+		t.Fatal("no events in the published report")
+	}
+}
+
+// TestRunRenderReportStaysUnderEnvelopeLimitWithASingleOversizedEntry is
+// review round 4 finding 1's regression test for its first case: a
+// single ~900 KiB sequenceName in an otherwise tiny playlist body defeats
+// fppConnectMaxEventEntries entirely (that cap bounds how MANY entries an
+// event carries, not how large any one of them is), so before this fix
+// this one outsized entry alone could already carry the resulting event,
+// and so the whole report, past the envelope limit.
+func TestRunRenderReportStaysUnderEnvelopeLimitWithASingleOversizedEntry(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	hugeName := strings.Repeat("N", 900*1024) + ".fseq"
+	body := fmt.Sprintf(`{"mainPlaylist":[{"sequenceName":%q}]}`, hugeName)
+
+	resp, respBody := postPlaylist(t, srv, "DoesNotExist", []byte(body))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, respBody)
+	}
+
+	events := held.Events()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if len(events[0].Entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(events[0].Entries))
+	}
+	if got := len(events[0].Entries[0]); got > fppConnectMaxEventStringBytes {
+		t.Fatalf("entry length = %d, want at most %d (review round 4 finding 1's per-string bound)", got, fppConnectMaxEventStringBytes)
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish (an unbounded entry would push the published bytes over DecodeEnvelope's size limit on the receiving end)")
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+	if len(report.FPPConnectHeldEvents) == 0 {
+		t.Fatal("no events in the published report")
+	}
+}
+
+// TestRunRenderReportStaysUnderEnvelopeLimitWithManyBadNameRefusals is
+// review round 4 finding 1's regression test for its second case: an
+// Upload-Name header can carry up to fppConnectMaxHeaderBytes (16 KiB),
+// and a bad-name refusal's Reason echoes that name straight back inside a
+// formatted sentence, so before this fix 50 such refusals alone (well
+// under fppConnectMaxEvents, so none of them would ever be evicted by the
+// log's own length cap) could already carry the report past the envelope
+// limit on Name and Reason bulk alone.
+func TestRunRenderReportStaysUnderEnvelopeLimitWithManyBadNameRefusals(t *testing.T) {
+	clock := newTestClock()
+	sup := pipeline.NewSupervisor(clock.now, nil, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	held := newTestFPPConnectHeldStore(t)
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	badName := strings.Repeat("a", 8*1024) + "/" + strings.Repeat("b", 8*1024)
+	for i := 0; i < 50; i++ {
+		req, err := http.NewRequest(http.MethodPatch, srv.URL+"/api/file/sequences", strings.NewReader("x"))
+		if err != nil {
+			t.Fatalf("building request %d: %v", i, err)
+		}
+		req.Header.Set("Upload-Name", badName)
+		req.Header.Set("Upload-Offset", "0")
+		req.Header.Set("Upload-Length", "1")
+		req.ContentLength = 1
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PATCH %d: %v", i, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("PATCH %d: status = %d, want 403", i, resp.StatusCode)
+		}
+	}
+
+	events := held.Events()
+	if len(events) == 0 {
+		t.Fatal("no bad-name events recorded")
+	}
+	for _, ev := range events {
+		if got := len(ev.Name); got > fppConnectMaxEventStringBytes {
+			t.Fatalf("event Name length = %d, want at most %d", got, fppConnectMaxEventStringBytes)
+		}
+		if got := len(ev.Reason); got > fppConnectMaxEventStringBytes {
+			t.Fatalf("event Reason length = %d, want at most %d", got, fppConnectMaxEventStringBytes)
+		}
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for publish (unbounded Name/Reason fields would push the published bytes over DecodeEnvelope's size limit on the receiving end)")
+	}
+	cancel()
+	<-done
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+	if len(report.FPPConnectHeldEvents) == 0 {
+		t.Fatal("no events in the published report")
+	}
+}
+
 // TestRunRenderReportPublishesOnTrigger proves a signal on triggered
-// produces an immediate publish, out of cadence — the render-state
+// produces an immediate publish, out of cadence: the render-state
 // counterpart to runAssetInventory's identical trigger behaviour.
 func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	clock := newTestClock()
@@ -175,7 +550,7 @@ func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, nil, triggered, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, nil, triggered, discardLogger())
 	}()
 
 	select {
@@ -232,7 +607,7 @@ func TestRunRenderReportStartingStateDecodes(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
