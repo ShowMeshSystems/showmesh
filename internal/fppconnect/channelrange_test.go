@@ -61,7 +61,7 @@ func TestFormatChannelRangesRefusesCountBelowOne(t *testing.T) {
 }
 
 func TestFormatChannelRangesRefusesTooLong(t *testing.T) {
-	// Each range formats to roughly 10 bytes ("1000-1149,") — 20 ranges push
+	// Each range formats to roughly 10 bytes ("1000-1149,"), 20 ranges push
 	// well past the 120-byte ping field.
 	ranges := make([]ChannelRange, 0, 20)
 	for i := 0; i < 20; i++ {
@@ -74,20 +74,16 @@ func TestFormatChannelRangesRefusesTooLong(t *testing.T) {
 	}
 }
 
-// TestFormatChannelRangesSingleChannelSurfaceFormatsToZeroZero documents a
-// genuinely legal edge case: a one-channel surface starting at channel 1
-// (1-based) converts to the literal string "0-0" — the same string RES-003
-// section 10.1 records xLights silently discarding as an empty
-// advertisement. That collision is real and is not this formatter's to
-// resolve (it has no narrower way to say "exactly channel 0"); refusing a
-// count of exactly 1 would be refusing a valid surface for a problem that
-// belongs to xLights' own parser.
-func TestFormatChannelRangesSingleChannelSurfaceFormatsToZeroZero(t *testing.T) {
-	got, err := FormatChannelRanges([]ChannelRange{{StartChannel: 1, ChannelCount: 1}})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "0-0" {
-		t.Fatalf("got %q, want %q", got, "0-0")
+// TestFormatChannelRangesRefusesSingleChannelSurfaceAtChannelOne proves the
+// formatter refuses to produce the literal string "0-0": a one-channel
+// surface starting at channel 1 (1-based) is the one input that converts
+// to it, and RES-003 section 10.1 records xLights silently discarding
+// exactly that literal as an empty advertisement (falling back to a full,
+// non-sparse FSEQ) rather than treating it as a genuine one-channel
+// window.
+func TestFormatChannelRangesRefusesSingleChannelSurfaceAtChannelOne(t *testing.T) {
+	_, err := FormatChannelRanges([]ChannelRange{{StartChannel: 1, ChannelCount: 1}})
+	if !errors.Is(err, ErrSingleChannelSurfaceAtChannelOne) {
+		t.Fatalf("err = %v, want ErrSingleChannelSurfaceAtChannelOne", err)
 	}
 }

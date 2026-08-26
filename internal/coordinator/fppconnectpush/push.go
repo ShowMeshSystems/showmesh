@@ -9,7 +9,7 @@
 // (internal/agent) is the only way an agent ever learns its channel
 // ranges, its active show, its show name list, and its byte caps. This
 // mirrors internal/coordinator/audioconfigpush's shape exactly, one
-// configuration surface over — see that package's own doc comment.
+// configuration surface over, see that package's own doc comment.
 package fppconnectpush
 
 import (
@@ -31,12 +31,12 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
-// ConfigStore is this package's read dependency — [store.Store] already
+// ConfigStore is this package's read dependency, [store.Store] already
 // satisfies it with no adapter, matching audioconfigpush.ConfigStore's
 // identical property one file over. ListConfigObjects is the one addition
 // audioconfigpush's own ConfigStore does not need: resolving one node's
 // push means enumerating every "show.surface" object to find the ones
-// pointing at it, and every "show" object to build the show name list —
+// pointing at it, and every "show" object to build the show name list;
 // neither is keyed by node id the way "audio.node" is.
 type ConfigStore interface {
 	GetConfigObject(ctx context.Context, kind, id string) (store.ConfigObjectRecord, error)
@@ -44,7 +44,7 @@ type ConfigStore interface {
 	ListConfigObjects(ctx context.Context, kind string) ([]store.ConfigObjectRecord, error)
 }
 
-// Publisher is this package's MQTT publish dependency — *broker.
+// Publisher is this package's MQTT publish dependency, *broker.
 // BrokerManager already satisfies it with no adapter, matching
 // audioconfigpush.Publisher's identical shape.
 type Publisher interface {
@@ -52,7 +52,7 @@ type Publisher interface {
 }
 
 // pushIssuer names this package's own commands in every audit trail and
-// log line a node's CommandHandler produces for them — never a real
+// log line a node's CommandHandler produces for them, never a real
 // operator principal, since nothing here was issued by one. Matches
 // audioconfigpush.pushIssuer's identical string.
 const pushIssuer = "showmesh-coordinator-config-push"
@@ -70,22 +70,24 @@ type resolvedFPPConnectState struct {
 	ShowNames     []string
 	Settings      config.FPPConnectSettingsPayload
 
-	// revisions is every contributing config object's own "kind/id@rev"
-	// tuple (show.surface per surface on this node, show per show,
-	// show.active, fppconnect.settings), unsorted as gathered.
-	// [idempotencyKeyFor] hashes THIS, not the resolved content above: a
+	// revisions is every show.surface object's own "kind/id@rev" tuple
+	// (unconditionally, not filtered to surfaces currently on this node;
+	// see nodeChannelRanges' own doc comment on why filtering here would
+	// reintroduce the exact bug this field exists to prevent), plus show,
+	// show.active, and fppconnect.settings, unsorted as gathered.
+	// [idempotencyKeyFor] hashes this AND the resolved content above: a
 	// write that reverts content to an earlier value (show.active set to
 	// A, then B, then back to A) still produces a fresh, never-before-seen
 	// key here, because ADR-009 revisions are immutable and monotonically
 	// numbered, so two DIFFERENT revisions can never collide even when
-	// they happen to carry identical payloads. Hashing the resolved
-	// content instead would make the third (A-again) push reuse the
-	// FIRST push's key, which the agent's capacity-bounded idempotency
-	// cache (internal/agent/command.go) would then treat as an exact
-	// replay and silently refuse to re-apply — the node would keep
-	// advertising B's ranges forever, while the coordinator's push
-	// reports success because IT never re-checks what the node did with
-	// a "duplicate" it never actually executed a second time.
+	// they happen to carry identical payloads. Relying on content alone
+	// would make the third (A-again) push reuse the FIRST push's key,
+	// which the agent's capacity-bounded idempotency cache
+	// (internal/agent/command.go) would then treat as an exact replay and
+	// silently refuse to re-apply, the node would keep advertising B's
+	// ranges forever, while the coordinator's push reports success
+	// because IT never re-checks what the node did with a "duplicate" it
+	// never actually executed a second time.
 	revisions []string
 }
 
@@ -95,11 +97,11 @@ type resolvedFPPConnectState struct {
 // pushes an empty channelRanges string, never an error and never "0-0"
 // (RES-003 section 10.1). If ANY show.surface on this node fails to
 // format (including because the combined string would exceed the ping's
-// 120-byte ranges field — see pkg/multisync's own wire-layout doc
+// 120-byte ranges field, see pkg/multisync's own wire-layout doc
 // comment), the WHOLE channelRanges string is dropped to "" and logged
 // through logger (never nil-checked away: every caller of this package
 // passes one, matching BestEffort's own contract) rather than failing the
-// whole push — this node's active show, show names, and byte caps are
+// whole push, this node's active show, show names, and byte caps are
 // still good pushes even when its channel ranges are not.
 func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.Time, nodeID string, logger *slog.Logger) error {
 	resolved, err := resolveForNode(ctx, cs, nodeID, logger)
@@ -118,14 +120,14 @@ func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.
 			"maxAssetDirBytes": resolved.Settings.MaxAssetDirBytes,
 		},
 	}
-	idempotencyKey := idempotencyKeyFor(nodeID, resolved.revisions)
+	idempotencyKey := idempotencyKeyFor(nodeID, resolved)
 	return publish(ctx, pub, now, nodeID, "fppconnect.configure", idempotencyKey, params)
 }
 
 // BestEffort calls [ToNode] and logs any failure rather than propagating
 // it: a push that cannot reach a node right now is not a reason to fail
 // the write or the hello that triggered it. The node converges on its
-// next successful push — its next hello, or the next write to any of the
+// next successful push, its next hello, or the next write to any of the
 // four kinds this package watches. Matches audioconfigpush.BestEffort
 // exactly.
 func BestEffort(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.Time, nodeID string, logger *slog.Logger) {
@@ -151,7 +153,7 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 		if ferr != nil {
 			// Never a "0-0" and never a fatal push failure: this drops the
 			// WHOLE channelRanges string to "", not just the offending
-			// surface's own contribution — there is no way to publish a
+			// surface's own contribution, there is no way to publish a
 			// partial sparse window without risking gaps a real xLights
 			// render would silently skip. This node's active show, show
 			// names, and byte caps are still good pushes.
@@ -196,12 +198,30 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 }
 
 // nodeChannelRanges collects every "show.surface" object whose "node"
-// field equals nodeID, out of its currently active revision, plus each
-// contributing object's own "show.surface/{id}@{revision}" tuple for
-// [idempotencyKeyFor]. Decode failures propagate (a stored payload this
-// store already validated at write time that fails to decode is a
-// store-integrity condition, not an expected state — matching
-// listShowSurfaceSummaries' identical choice one package over).
+// field equals nodeID, out of its currently active revision, for the
+// RANGES it returns. The REVISIONS it returns are deliberately
+// unfiltered, every show.surface object's own "show.surface/{id}@
+// {revision}" tuple, whether or not it currently names nodeID.
+//
+// This asymmetry is load-bearing, not an oversight: a surface moved OFF
+// nodeID changes nodeID's resolved ranges (it loses that surface's
+// contribution) without changing nodeID's set of CONTRIBUTING revisions
+// at all, the moved surface's new revision now names a different node,
+// so a revision list filtered to "surfaces currently on nodeID" is
+// EXACTLY as empty after the move as it was before the surface ever
+// existed. [idempotencyKeyFor] would then mint the identical key for
+// both states, and the agent's capacity-bounded idempotency cache
+// (internal/agent/command.go) would treat the vacating push as a replay
+// of the original hello and silently refuse to re-apply it, leaving the
+// node advertising a range it no longer owns. Including every
+// show.surface object's revision regardless of ownership means a move
+// always changes at least one entry in the fingerprint, on both the
+// gaining and the losing node's push.
+//
+// Decode failures propagate (a stored payload this store already
+// validated at write time that fails to decode is a store-integrity
+// condition, not an expected state, matching listShowSurfaceSummaries'
+// identical choice one package over).
 func nodeChannelRanges(ctx context.Context, cs ConfigStore, nodeID string) ([]fppconnect.ChannelRange, []string, error) {
 	objs, err := cs.ListConfigObjects(ctx, config.ShowSurfaceConfigKind)
 	if err != nil {
@@ -221,6 +241,10 @@ func nodeChannelRanges(ctx context.Context, cs ConfigStore, nodeID string) ([]fp
 		if err := json.Unmarshal([]byte(rev.PayloadJSON), &payload); err != nil {
 			return nil, nil, fmt.Errorf("decode show.surface config payload for %q: %w", obj.ID, err)
 		}
+		// Unconditional: see this function's own doc comment on why the
+		// fingerprint must include every show.surface object, not only
+		// the ones currently naming nodeID.
+		revisions = append(revisions, fmt.Sprintf("show.surface/%s@%d", obj.ID, obj.CurrentRevision))
 		if payload.Node != nodeID {
 			continue
 		}
@@ -228,7 +252,6 @@ func nodeChannelRanges(ctx context.Context, cs ConfigStore, nodeID string) ([]fp
 			StartChannel: payload.ChannelRange.StartChannel,
 			ChannelCount: payload.ChannelRange.ChannelCount,
 		})
-		revisions = append(revisions, fmt.Sprintf("show.surface/%s@%d", obj.ID, obj.CurrentRevision))
 	}
 	return out, revisions, nil
 }
@@ -268,7 +291,7 @@ func allShowNames(ctx context.Context, cs ConfigStore) (map[string]string, []str
 // when nothing has ever been written, since there is no revision number to
 // report). Absent, null and empty stay three different things (ADR-039
 // decision 5): nothing ever written, or an object with no active
-// revision, is nil — never omitted from the push and never "". A
+// revision, is nil, never omitted from the push and never "". A
 // show.active pointer that names a show id with no active "show" revision
 // (a stale pointer left behind by a store inconsistency elsewhere) is ALSO
 // reported as nil rather than as the raw, unresolvable id: a wrong silent
@@ -332,25 +355,46 @@ func currentFPPConnectSettings(ctx context.Context, cs ConfigStore) (config.FPPC
 }
 
 // idempotencyKeyFor changes whenever any contributing config object's own
-// revision changes and stays stable when nothing changed: a hash of
-// revisions, sorted for stability against ListConfigObjects' unspecified
-// order, never of resolved content. ADR-009 revisions are immutable and
+// revision changes, or the resolved content differs, and stays stable
+// when nothing changed: a hash of BOTH the revision fingerprint (sorted,
+// for stability against ListConfigObjects' unspecified order) and the
+// resolved content (channelRanges, activeShow, showNames, settings).
+// Revisions are the primary signal, ADR-009 revisions are immutable and
 // monotonically numbered per object, so two DIFFERENT revisions can never
-// collide even when they happen to carry identical payloads (a show.active
-// write of A, then B, then back to A) — see resolvedFPPConnectState.
-// revisions' own doc comment for why hashing content instead would let the
-// agent's idempotency cache silently refuse to re-apply a genuine, new
-// push.
-func idempotencyKeyFor(nodeID string, revisions []string) string {
-	sorted := make([]string, len(revisions))
-	copy(sorted, revisions)
-	sort.Strings(sorted)
+// collide even when they happen to carry identical payloads (a
+// show.active write of A, then B, then back to A), and
+// nodeChannelRanges' own doc comment explains why the revision list must
+// be unfiltered for a moved surface to register at all. Content is hashed
+// too as a second, independent signal: belt-and-suspenders against any
+// future path that resolves a revision fingerprint without a
+// corresponding content change, which content hashing alone would still
+// catch.
+func idempotencyKeyFor(nodeID string, resolved resolvedFPPConnectState) string {
+	sortedRevisions := make([]string, len(resolved.revisions))
+	copy(sortedRevisions, resolved.revisions)
+	sort.Strings(sortedRevisions)
+
+	sortedShowNames := make([]string, len(resolved.ShowNames))
+	copy(sortedShowNames, resolved.ShowNames)
+	sort.Strings(sortedShowNames)
+
+	activeShow := "\x00null"
+	if resolved.ActiveShow != nil {
+		activeShow = *resolved.ActiveShow
+	}
 
 	h := sha256.New()
 	_, _ = fmt.Fprintf(h, "%s\x00", nodeID)
-	for _, r := range sorted {
-		_, _ = fmt.Fprintf(h, "%s\x00", r)
+	for _, r := range sortedRevisions {
+		_, _ = fmt.Fprintf(h, "rev:%s\x00", r)
 	}
+	_, _ = fmt.Fprintf(h, "channelRanges:%s\x00", resolved.ChannelRanges)
+	_, _ = fmt.Fprintf(h, "activeShow:%s\x00", activeShow)
+	for _, name := range sortedShowNames {
+		_, _ = fmt.Fprintf(h, "showName:%s\x00", name)
+	}
+	_, _ = fmt.Fprintf(h, "settings:%v\x00%d\x00%d", resolved.Settings.Enabled, resolved.Settings.MaxFileBytes, resolved.Settings.MaxAssetDirBytes)
+
 	return fmt.Sprintf("fppconnect.configure/%s/%s", nodeID, hex.EncodeToString(h.Sum(nil))[:16])
 }
 

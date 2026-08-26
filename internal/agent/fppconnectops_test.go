@@ -2,8 +2,13 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
 func fppConnectConfigureParamsMap(schema, channelRanges string, activeShow any, showNames []string, settings map[string]any) map[string]any {
@@ -145,7 +150,7 @@ func TestFPPConnectConfigureRefusesMissingField(t *testing.T) {
 
 // TestFPPConnectConfigureRefusesInvalidSettings proves the agent
 // re-validates settings itself rather than trusting the coordinator's
-// push blindly — the review finding this closes: a null settings object,
+// push blindly, the review finding this closes: a null settings object,
 // or a negative/zero byte cap, must be refused and must never reach
 // state.Settings().
 func TestFPPConnectConfigureRefusesInvalidSettings(t *testing.T) {
@@ -178,15 +183,97 @@ func TestFPPConnectConfigureRefusesInvalidSettings(t *testing.T) {
 
 func TestFPPConnectOperationsRegisteredInAllowlist(t *testing.T) {
 	state := newFPPConnectState()
-	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, state)
+	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, state, discardLogger())
 	if _, ok := ops["fppconnect.configure"]; !ok {
 		t.Fatal(`newOperationRegistry() does not contain "fppconnect.configure"`)
 	}
 }
 
 func TestFPPConnectOperationsNilStateRegistersNothing(t *testing.T) {
-	ops := fppConnectOperations(nil, t.TempDir())
+	ops := fppConnectOperations(nil, t.TempDir(), discardLogger())
 	if ops != nil {
 		t.Errorf("fppConnectOperations(nil, ...) = %v, want nil", ops)
+	}
+}
+
+// TestFPPConnectConfigureClampsOverlongChannelRangesButAppliesTheRest
+// proves the review-round-2 fix: an over-long channelRanges is clamped to
+// "" rather than rejecting the whole command, and activeShow, showNames,
+// and settings still apply and persist, the coordinator's own equivalent
+// degrade shape (internal/coordinator/fppconnectpush drops only the
+// range), mirrored on the agent's decode boundary.
+func TestFPPConnectConfigureClampsOverlongChannelRangesButAppliesTheRest(t *testing.T) {
+	dir := t.TempDir()
+	state := newFPPConnectState()
+	op := &fppConnectConfigureOperation{state: state, assetDir: dir, logger: discardLogger()}
+
+	overlong := strings.Repeat("9", multisync.MaxPingRangesLength+1)
+	params := fppConnectConfigureParamsMap(fppConnectConfigureSchema, overlong, "Front Yard", []string{"Front Yard", "Back Yard"}, validFPPConnectSettingsMap())
+
+	result, err := op.configure(context.Background(), params, time.Now)
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	if !result.Confirmed {
+		t.Errorf("Confirmed = false, want true (the clamp itself is the confirmed outcome)")
+	}
+	if result.Value != "" {
+		t.Errorf("Value = %v, want empty (clamped)", result.Value)
+	}
+	if got := state.ChannelRanges(); got != "" {
+		t.Errorf("state.ChannelRanges() = %q, want empty (clamped)", got)
+	}
+
+	name, known, ever := state.ActiveShow()
+	if !ever || !known || name != "Front Yard" {
+		t.Errorf("state.ActiveShow() = (%q, %v, %v), want (Front Yard, true, true), the rest of the push must still apply", name, known, ever)
+	}
+	if names := state.ShowNames(); len(names) != 2 {
+		t.Errorf("state.ShowNames() = %v, want 2 entries, the rest of the push must still apply", names)
+	}
+	if _, ok := state.Settings(); !ok {
+		t.Error("state.Settings() ok = false, want true, the rest of the push must still apply")
+	}
+
+	restarted := newFPPConnectState()
+	loaded, err := restarted.Load(dir)
+	if err != nil || !loaded {
+		t.Fatalf("Load after configure: loaded=%v err=%v", loaded, err)
+	}
+	if got := restarted.ChannelRanges(); got != "" {
+		t.Errorf("restarted.ChannelRanges() = %q, want empty (the clamped value must be what was persisted)", got)
+	}
+}
+
+// TestFPPConnectConfigureSaveFailureLeavesStateUnchanged proves the
+// review-round-2 fix: when persisting fails, the live in-memory holder is
+// never updated, a restart must never silently revert state a failed
+// Save never actually wrote.
+func TestFPPConnectConfigureSaveFailureLeavesStateUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	// Occupy the state subdirectory's own path with a file, so MkdirAll
+	// inside saveFPPConnectSnapshot fails.
+	blocker := filepath.Join(dir, fppConnectStateSubdir)
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	state := newFPPConnectState()
+	op := &fppConnectConfigureOperation{state: state, assetDir: dir, logger: discardLogger()}
+
+	params := fppConnectConfigureParamsMap(fppConnectConfigureSchema, "0-149", "Front Yard", []string{"Front Yard"}, validFPPConnectSettingsMap())
+	if _, err := op.configure(context.Background(), params, time.Now); err == nil {
+		t.Fatal("configure() err = nil despite an unwritable state directory, want an error")
+	}
+
+	if got := state.ChannelRanges(); got != "" {
+		t.Errorf("state.ChannelRanges() = %q after a failed Save, want unchanged (empty), Apply must not run before a successful Save", got)
+	}
+	name, known, ever := state.ActiveShow()
+	if ever || known || name != "" {
+		t.Errorf("state.ActiveShow() = (%q, %v, %v) after a failed Save, want (\"\", false, false), unchanged", name, known, ever)
+	}
+	if _, ok := state.Settings(); ok {
+		t.Error("state.Settings() ok = true after a failed Save, want false, unchanged")
 	}
 }

@@ -8,7 +8,7 @@ import (
 // This file is the "fppconnect.settings" singleton (ADR-039, ADR-044
 // decision 5, IDENTIFIER-REGISTER.md): the enable flag and the two byte
 // caps that bound the node's unauthenticated xLights ingestion listener
-// (ADR-044 decision 4's three bounds — the directory allowlist is the
+// (ADR-044 decision 4's three bounds, the directory allowlist is the
 // listener's own code, not configuration). Singleton, mirroring
 // audiosettings.go's shape exactly: one config object id, a well-defined
 // default so GET never 404s, PUT is a full replacement.
@@ -20,7 +20,7 @@ const (
 	FPPConnectSettingsConfigKind = "fppconnect.settings"
 
 	// FPPConnectSettingsConfigObjectID is the single config_objects.id
-	// this kind ever uses — one settings object per coordinator.
+	// this kind ever uses, one settings object per coordinator.
 	FPPConnectSettingsConfigObjectID = "default"
 
 	// FPPConnectSettingsSourceAPI is this kind's only config_revisions.
@@ -35,7 +35,7 @@ const bytesPerGiB = 1 << 30
 
 // fppConnectSettingsDefaultMaxFileBytes and
 // fppConnectSettingsDefaultMaxAssetDirBytes are IDENTIFIER-REGISTER.md's
-// stated defaults (2 GiB, 20 GiB) — sanity starting points, not measured
+// stated defaults (2 GiB, 20 GiB), sanity starting points, not measured
 // against any real xLights upload.
 const (
 	fppConnectSettingsDefaultMaxFileBytes     = 2 * bytesPerGiB
@@ -46,7 +46,7 @@ const (
 // VALIDATED shape for [FPPConnectSettingsConfigKind].
 type FPPConnectSettingsPayload struct {
 	// Enabled gates the node's xLights ingestion listener. BUILDER
-	// DEFAULT: true (see FPPConnectSettingsDefaultPayload) — ADR-044 rules
+	// DEFAULT: true (see FPPConnectSettingsDefaultPayload), ADR-044 rules
 	// on the byte caps and the enable flag's existence, not on which way
 	// it defaults; flagged here for review rather than decided silently.
 	Enabled bool `json:"enabled"`
@@ -65,7 +65,7 @@ type FPPConnectSettingsPayload struct {
 
 // FPPConnectSettingsDefaultPayload is the value reported when nothing has
 // ever been written. enabled:true is a BUILDER DEFAULT, not an owner
-// ruling — ADR-044 decision 5 requires the kind to exist and carry these
+// ruling, ADR-044 decision 5 requires the kind to exist and carry these
 // three fields; it does not rule on which way "enabled" defaults.
 var FPPConnectSettingsDefaultPayload = FPPConnectSettingsPayload{
 	Enabled:          true,

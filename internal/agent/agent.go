@@ -163,7 +163,7 @@ func Run() int {
 	multiSyncStatus := newMultiSyncStatus()
 
 	// fppConnectState is this node's held FPP Connect configuration
-	// (Track E phase 2 seam FC1a, ADR-044 decision 5) — constructed here,
+	// (Track E phase 2 seam FC1a, ADR-044 decision 5), constructed here,
 	// outside newMQTTConn, so the discover-ping responder reads it fresh
 	// at reply time rather than a value fixed at startup (see
 	// fppconnectstate.go and multisync.go), and so it survives a broker

@@ -5,17 +5,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-)
 
-// maxChannelRangesBytes bounds the formatted string: the v3 ping's Ranges
-// field is a fixed 121-byte, null-terminated buffer (120 bytes of content
-// plus the terminator) — see pkg/multisync's own wire-layout doc comment,
-// which cites ControlProtocol.txt's "Ping type 3" field directly.
-const maxChannelRangesBytes = 120
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
+)
 
 // ChannelRange is one show.surface's channel window, 1-based exactly as
 // show.surface.channelRange stores it (startChannel >= 1, channelCount >=
-// 1 — internal/coordinator/config.ShowSurfaceChannelRange already refuses
+// 1, internal/coordinator/config.ShowSurfaceChannelRange already refuses
 // anything else at write time).
 type ChannelRange struct {
 	StartChannel int
@@ -23,8 +19,8 @@ type ChannelRange struct {
 }
 
 // ErrNoChannelRanges is refused by [FormatChannelRanges] when ranges is
-// empty. A node with no configured surface never reaches this function —
-// it advertises nothing per RES-003 section 10.1 — so this refusal is for
+// empty. A node with no configured surface never reaches this function:
+// it advertises nothing per RES-003 section 10.1, so this refusal is for
 // a caller that meant to pass at least one range and did not.
 var ErrNoChannelRanges = errors.New("fppconnect: no channel ranges to format")
 
@@ -35,19 +31,22 @@ var ErrChannelRangeStartBelowOne = errors.New("fppconnect: channel range start m
 
 // ErrChannelRangeCountBelowOne is refused when a range's ChannelCount is
 // below 1: a zero-length range converts to a decreasing (start > end) or
-// otherwise nonsensical pair, not a real window. This is a distinct
-// failure from RES-003 section 10.1's own "0-0" fact (xLights discards a
-// zero-length ADVERTISED STRING and silently renders a full, non-sparse
-// FSEQ) — this format can still legitimately EMIT the literal "0-0" for a
-// genuinely valid one-channel surface at channel 1 (StartChannel: 1,
-// ChannelCount: 1), which is not a defect here; see
-// TestFormatChannelRangesSingleChannelSurfaceFormatsToZeroZero.
+// otherwise nonsensical pair, not a real window.
 var ErrChannelRangeCountBelowOne = errors.New("fppconnect: channel range count must be at least 1")
 
 // ErrChannelRangesTooLong is refused when the fully formatted, comma-joined
-// string would exceed [maxChannelRangesBytes] — the ping's fixed-size
-// ranges field cannot carry it.
-var ErrChannelRangesTooLong = errors.New("fppconnect: formatted channel ranges string exceeds the 120-byte ping field")
+// string would exceed [multisync.MaxPingRangesLength], the ping's
+// fixed-size ranges field cannot carry it.
+var ErrChannelRangesTooLong = fmt.Errorf("fppconnect: formatted channel ranges string exceeds the %d-byte ping field", multisync.MaxPingRangesLength)
+
+// ErrSingleChannelSurfaceAtChannelOne is refused when the formatted output
+// would be the literal string "0-0", the one input (a single range,
+// StartChannel: 1, ChannelCount: 1) that produces it. RES-003 section
+// 10.1 records that xLights' ping parser discards exactly that literal
+// and silently falls back to rendering a full, non-sparse FSEQ, so this
+// formatter refuses to produce it rather than advertising a range xLights
+// would treat as no range at all.
+var ErrSingleChannelSurfaceAtChannelOne = errors.New("fppconnect: a single-channel surface at channel 1 cannot be advertised: xLights discards 0-0")
 
 // FormatChannelRanges converts ranges (1-based, inclusive count, as
 // show.surface stores them) into the comma-joined, 0-based, inclusive-end
@@ -55,7 +54,8 @@ var ErrChannelRangesTooLong = errors.New("fppconnect: formatted channel ranges s
 // range's start-1 becomes the emitted start, and start+count-2 becomes the
 // emitted, inclusive end. Ranges are sorted by StartChannel before joining,
 // regardless of the order ranges arrives in, so the emitted string is
-// stable across calls with the same set in a different order.
+// stable across calls with the same set in a different order. Never
+// returns the literal "0-0", see [ErrSingleChannelSurfaceAtChannelOne].
 func FormatChannelRanges(ranges []ChannelRange) (string, error) {
 	if len(ranges) == 0 {
 		return "", ErrNoChannelRanges
@@ -77,8 +77,11 @@ func FormatChannelRanges(ranges []ChannelRange) (string, error) {
 	}
 
 	joined := strings.Join(parts, ",")
-	if len(joined) > maxChannelRangesBytes {
+	if len(joined) > multisync.MaxPingRangesLength {
 		return "", fmt.Errorf("%w: %d bytes", ErrChannelRangesTooLong, len(joined))
+	}
+	if joined == "0-0" {
+		return "", ErrSingleChannelSurfaceAtChannelOne
 	}
 	return joined, nil
 }

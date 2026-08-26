@@ -6,7 +6,7 @@ package v1
 
 // ConfigFPPConnectSettingsPayload is the "fppconnect.settings"
 // configuration kind's decoded payload: the body PUT
-// /config/fppconnect.settings accepts (a full replacement — every field
+// /config/fppconnect.settings accepts (a full replacement, every field
 // required), and the "payload" member of GET /config/fppconnect.settings'
 // response.
 type ConfigFPPConnectSettingsPayload struct {
@@ -17,7 +17,7 @@ type ConfigFPPConnectSettingsPayload struct {
 
 // FPPConnectSettingsConfigResponse is the body of GET and PUT
 // /config/fppconnect.settings. revision 0 / source "default" means nothing
-// has ever been written and payload carries the built-in default —
+// has ever been written and payload carries the built-in default;
 // mirrors AudioSettingsConfigResponse's identical "no 404, a stated
 // default" posture.
 type FPPConnectSettingsConfigResponse struct {

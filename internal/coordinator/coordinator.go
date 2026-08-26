@@ -263,7 +263,7 @@ func Run() int {
 		}
 		go audioconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
 		// Track E phase 2 seam FC1a (ADR-044 decision 5): the identical
-		// hello-triggered convergence, one config surface over — see
+		// hello-triggered convergence, one config surface over; see
 		// internal/coordinator/fppconnectpush.
 		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
 	}

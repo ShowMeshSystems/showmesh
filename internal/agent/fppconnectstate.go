@@ -13,7 +13,7 @@ import (
 
 // This file is this node's held FPP Connect state: what the coordinator's
 // "fppconnect.configure" push (internal/coordinator/fppconnectpush) most
-// recently told it — channel ranges, active show, show name list, and the
+// recently told it, channel ranges, active show, show name list, and the
 // byte-cap settings (ADR-044 decision 5). fppconnectops.go's operation
 // writes it; the UDP responder (multisync.go) and HTTP listener a later
 // seam builds read it. Persisted under AssetDir (see [fppConnectState.
@@ -59,7 +59,7 @@ type fppConnectState struct {
 }
 
 // fppConnectSettings mirrors internal/coordinator/config.
-// FPPConnectSettingsPayload's JSON tags exactly — independently
+// FPPConnectSettingsPayload's JSON tags exactly, independently
 // reproduced, not imported: this package has no coordinator dependency,
 // matching every other wire boundary in this codebase (see
 // audionodeops.go's identical audioSettingsConfig).
@@ -92,7 +92,7 @@ func newFPPConnectState() *fppConnectState {
 	return &fppConnectState{}
 }
 
-// ChannelRanges returns the currently held channel ranges string — "" both
+// ChannelRanges returns the currently held channel ranges string, "" both
 // before anything has ever been pushed and after a push that legitimately
 // carries no ranges (a node with no configured show.surface).
 func (s *fppConnectState) ChannelRanges() string {
@@ -118,7 +118,7 @@ func (s *fppConnectState) SetChannelRanges(v string) error {
 }
 
 // ActiveShow reports the currently held active show. ever is false only
-// before this node has ever been told an active show at all — in that
+// before this node has ever been told an active show at all; in that
 // case known and name are meaningless. Once ever is true, known
 // distinguishes an explicit "no active show" (known false) from a named
 // active show (known true, name is its display name).
@@ -144,12 +144,20 @@ func (s *fppConnectState) SetActiveShow(name *string) {
 	s.mu.Unlock()
 }
 
-// ShowNames returns the currently held show name list — nil before
-// anything has ever been pushed.
+// ShowNames returns a copy of the currently held show name list, nil
+// before anything has ever been pushed. A copy, not the internal slice
+// itself, so a caller mutating the returned slice (or a later SetShowNames
+// call reslicing s.showNames under the lock) can never race or corrupt
+// the other's view, matching Snapshot's identical copy-out discipline.
 func (s *fppConnectState) ShowNames() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.showNames
+	if s.showNames == nil {
+		return nil
+	}
+	out := make([]string, len(s.showNames))
+	copy(out, s.showNames)
+	return out
 }
 
 // SetShowNames replaces the held show name list.
@@ -160,7 +168,7 @@ func (s *fppConnectState) SetShowNames(names []string) {
 }
 
 // Settings returns the currently held fppconnect.settings and whether it
-// has ever been pushed at all — before the first push there is no
+// has ever been pushed at all; before the first push there is no
 // well-defined "held" value to return, unlike the coordinator's own
 // resolveFPPConnectSettings, which always has a built-in default to fall
 // back to.
@@ -178,7 +186,7 @@ func (s *fppConnectState) SetSettings(v fppConnectSettings) {
 	s.mu.Unlock()
 }
 
-// Snapshot copies every field of s into one value — used by
+// Snapshot copies every field of s into one value, used by
 // [fppConnectState.Save] and by any caller (a future evidence report,
 // tests) that needs a consistent, whole-state read rather than several
 // separate locked reads that could interleave with a concurrent Apply.
@@ -198,7 +206,7 @@ func (s *fppConnectState) Snapshot() fppConnectSnapshot {
 	}
 }
 
-// Apply replaces every field of s with snap's, in one lock — the shape
+// Apply replaces every field of s with snap's, in one lock: the shape
 // "fppconnect.configure" (fppconnectops.go) uses to accept one push
 // atomically, so a reader can never observe channel ranges from one push
 // paired with an active show from another. Unlike SetChannelRanges, Apply
@@ -220,7 +228,7 @@ func (s *fppConnectState) Apply(snap fppConnectSnapshot) {
 }
 
 // fppConnectStateSubdir is where this node's FPP Connect state file lives,
-// rooted at the agent's asset directory — matching internal/agent/
+// rooted at the agent's asset directory, matching internal/agent/
 // heldcatalog.stateSubdir's identical convention of rooting local durable
 // state under AssetDir rather than adding a second configured directory.
 // enumerateAssets (assets.go) walks AssetDir non-recursively and skips
@@ -242,17 +250,26 @@ func fppConnectStatePath(assetDir string) string {
 // uniquely-named temp file in the same directory: "fppconnect.configure"
 // is handled in its own goroutine per inbound MQTT message
 // (mqtt.go's "go cmdHandler.HandleMessage(...)"), so two pushes reaching
-// this node close together (an ordinary occurrence — e.g. a "show" write
+// this node close together (an ordinary occurrence, e.g. a "show" write
 // and a "show.active" write both trigger their own push) call Save
 // concurrently. A shared fixed tmp path under plain os.WriteFile (which
 // truncates and writes, with no exclusivity between two writers) lets one
 // goroutine's write interleave with another's rename, risking a truncated
 // or mixed-content file landing at target; a private tmp file per call
-// removes that interleaving entirely — the only remaining race is which
+// removes that interleaving entirely: the only remaining race is which
 // completed Save's rename lands last, which is the ordinary "last write
 // wins" outcome any concurrent write to one record has, not corruption.
 func (s *fppConnectState) Save(assetDir string) error {
-	snap := s.Snapshot()
+	return saveFPPConnectSnapshot(assetDir, s.Snapshot())
+}
+
+// saveFPPConnectSnapshot is [fppConnectState.Save]'s actual disk write,
+// factored out to take an explicit snapshot rather than reading s's own
+// current in-memory state, see [fppConnectConfigureOperation.configure]
+// (fppconnectops.go), which persists a pushed snapshot to disk BEFORE
+// applying it to the live holder, so a failed write never leaves
+// in-memory state ahead of what a restart would actually recover.
+func saveFPPConnectSnapshot(assetDir string, snap fppConnectSnapshot) error {
 	dir := filepath.Join(assetDir, fppConnectStateSubdir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("fppconnect state: create state directory: %w", err)
@@ -288,7 +305,7 @@ func (s *fppConnectState) Save(assetDir string) error {
 
 // Load restores s from the file persisted under assetDir, replacing
 // whatever s currently holds. ok is false when no state has ever been
-// persisted (a fresh node) — s is left unchanged in that case. A corrupt
+// persisted (a fresh node); s is left unchanged in that case. A corrupt
 // file (unreadable, or present but not decodable JSON) is reported as an
 // error, never silently treated as "no state held", matching
 // internal/agent/heldcatalog.FileStore.Load's identical "corrupt state is

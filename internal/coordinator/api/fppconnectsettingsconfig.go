@@ -55,7 +55,7 @@ func resolveFPPConnectSettings(ctx context.Context, cs ConfigStore) (payload con
 
 // handleGetFPPConnectSettingsConfig serves GET
 // /api/v1/config/fppconnect.settings. "Nothing has ever been written" is
-// never a 404 here — the payload has a well-defined default — so this
+// never a 404 here, the payload has a well-defined default, so this
 // always answers 200.
 func (h *handlers) handleGetFPPConnectSettingsConfig(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
@@ -189,7 +189,7 @@ func (h *handlers) handlePutFPPConnectSettingsConfig(w http.ResponseWriter, r *h
 
 	// ADR-039/ADR-036: fppconnect.settings applies to every node's
 	// listener, so every node in inventory is pushed the new revision
-	// without waiting for its next hello — best-effort per node, matching
+	// without waiting for its next hello, best-effort per node, matching
 	// pushAudioSettingsToAllNodes.
 	h.pushFPPConnectToAllNodes(ctx, now)
 
@@ -205,7 +205,7 @@ func (h *handlers) handlePutFPPConnectSettingsConfig(w http.ResponseWriter, r *h
 // per node, detached context, individually bounded) one kind over. Shared
 // by every write hook in this package whose kind affects every node
 // (fppconnect.settings, show, show.active) rather than one node in
-// particular (show.surface's own write pushes only the affected node(s) —
+// particular (show.surface's own write pushes only the affected node(s);
 // see showobjects.go).
 func (h *handlers) pushFPPConnectToAllNodes(ctx context.Context, now time.Time) {
 	if h.deps.Nodes == nil {
@@ -229,7 +229,7 @@ func (h *handlers) pushFPPConnectToAllNodes(ctx context.Context, now time.Time) 
 
 // pushFPPConnectToNode best-effort pushes the current fppconnect.configure
 // state to a single node, detached from the request context and on its
-// own bounded timeout — matching handlePutAudioNode's identical
+// own bounded timeout, matching handlePutAudioNode's identical
 // single-node push one kind over. Used by show.surface's write hook
 // (showobjects.go) for the one or two nodes a surface write actually
 // affects.

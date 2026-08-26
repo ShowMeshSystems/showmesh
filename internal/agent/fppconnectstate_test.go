@@ -237,7 +237,7 @@ func TestFPPConnectStateSaveDoesNotAppearInAssetInventory(t *testing.T) {
 }
 
 // TestFPPConnectStateConcurrentSaveNeverCorrupts proves N concurrent Save
-// calls (the real shape "fppconnect.configure" runs under — HandleMessage
+// calls (the real shape "fppconnect.configure" runs under: HandleMessage
 // dispatches each inbound command to its own goroutine) never leave a
 // truncated or mixed-content file behind: every Save must either succeed
 // with a file Load can decode, or fail outright, never commit a corrupt

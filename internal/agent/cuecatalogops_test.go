@@ -155,14 +155,14 @@ func TestCatalogDeployRequiresShowGenerationRevision(t *testing.T) {
 
 func TestCuecatalogDeployIsRegisteredWhenCatalogStoreProvided(t *testing.T) {
 	store := heldcatalog.NewFileStore(t.TempDir())
-	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, store, nil)
+	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, store, nil, discardLogger())
 	if _, ok := ops["cuecatalog.deploy"]; !ok {
 		t.Fatalf(`newOperationRegistry() does not contain "cuecatalog.deploy" when a catalog store is provided`)
 	}
 }
 
 func TestCuecatalogDeployIsAbsentWhenNoCatalogStore(t *testing.T) {
-	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil)
+	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, discardLogger())
 	if _, ok := ops["cuecatalog.deploy"]; ok {
 		t.Fatalf(`newOperationRegistry() contains "cuecatalog.deploy" with a nil catalog store`)
 	}

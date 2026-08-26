@@ -322,7 +322,7 @@ func TestIdempotencyKeyStableWhenNothingChangedButChangesWhenSomethingDoes(t *te
 // A key that repeated here would collide with the agent's own
 // capacity-bounded idempotency cache (internal/agent/command.go), which
 // would then silently refuse to re-apply the third push as an exact
-// replay of the first — the node would keep advertising B's active show
+// replay of the first, the node would keep advertising B's active show
 // forever.
 func TestIdempotencyKeyNeverRepeatsAcrossARevertToAnEarlierValue(t *testing.T) {
 	cs := newFakeConfigStore()
@@ -357,7 +357,7 @@ func TestIdempotencyKeyNeverRepeatsAcrossARevertToAnEarlierValue(t *testing.T) {
 	}
 	cmd2, _ := pub2.last()
 
-	// Revision 3: back to Halloween — identical resolved content to
+	// Revision 3: back to Halloween, identical resolved content to
 	// revision 1's push, but a genuinely new, later revision.
 	cs.put(config.ShowActiveConfigKind, config.ShowActiveObjectID, 3, rawHalloween)
 	pub3 := &fakePublisher{}
@@ -376,15 +376,120 @@ func TestIdempotencyKeyNeverRepeatsAcrossARevertToAnEarlierValue(t *testing.T) {
 		t.Error("push 2 and push 3 share an idempotency key")
 	}
 	if cmd1.IdempotencyKey == cmd3.IdempotencyKey {
-		t.Error("push 1 (Halloween) and push 3 (Halloween again, a later revision) share an idempotency key — " +
+		t.Error("push 1 (Halloween) and push 3 (Halloween again, a later revision) share an idempotency key, " +
 			"a revert to an earlier value must still mint a fresh key")
 	}
+}
+
+// TestIdempotencyKeyNeverRepeatsWhenASurfaceIsMovedOffANode proves the
+// blocking regression this seam's second review round caught: node-1's
+// revision fingerprint used to be filtered to "surfaces currently on
+// node-1", so a surface added to node-1 and then moved to node-2 left
+// node-1 with the SAME (empty) contributing-revision set it had before
+// the surface ever existed, and the SAME (empty) resolved content, a key
+// collision with node-1's very first, surface-less push. The agent's
+// capacity-bounded idempotency cache (internal/agent/command.go) would
+// then treat the vacating push as a replay of that first push and never
+// re-apply it, leaving node-1 advertising a range it no longer owns.
+func TestIdempotencyKeyNeverRepeatsWhenASurfaceIsMovedOffANode(t *testing.T) {
+	cs := newFakeConfigStore()
+	putShow(cs, "halloween", "Halloween")
+
+	// Baseline: node-1 has never had a surface.
+	baselinePub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, baselinePub, time.Now, "node-1", nil); err != nil {
+		t.Fatalf("ToNode (baseline): %v", err)
+	}
+	baselineCmd, _ := baselinePub.last()
+	if baselineCmd.Params["channelRanges"] != "" {
+		t.Fatalf("baseline channelRanges = %v, want empty", baselineCmd.Params["channelRanges"])
+	}
+
+	// Revision 1: the surface is created on node-1.
+	putSurface(cs, "garage-door", "halloween", "node-1", 1, 150)
+	addedPub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, addedPub, time.Now, "node-1", nil); err != nil {
+		t.Fatalf("ToNode (added): %v", err)
+	}
+	addedCmd, _ := addedPub.last()
+	if addedCmd.Params["channelRanges"] != "0-149" {
+		t.Fatalf("added channelRanges = %v, want 0-149", addedCmd.Params["channelRanges"])
+	}
+
+	// Revision 2: the surface moves to node-2, node-1's push (the
+	// vacated node) is the one under test.
+	movedSurface := config.ShowSurfacePayload{
+		Show: "halloween", Name: "garage-door", Node: "node-2",
+		ChannelRange: config.ShowSurfaceChannelRange{StartChannel: 1, ChannelCount: 150},
+		Geometry:     config.ShowSurfaceGeometry{Width: 1, Height: 50, PixelFormat: config.ShowSurfacePixelFormatRGB},
+		FrameRate:    40,
+		Output:       config.ShowSurfaceOutput{Transport: config.ShowSurfaceTransportNDI, NDI: &config.ShowSurfaceNDIOutput{SourceName: "garage-door"}},
+	}
+	movedRaw, err := config.EncodeShowSurfacePayload(movedSurface)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	cs.put(config.ShowSurfaceConfigKind, "garage-door", 2, movedRaw)
+	vacatedPub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, vacatedPub, time.Now, "node-1", nil); err != nil {
+		t.Fatalf("ToNode (vacated): %v", err)
+	}
+	vacatedCmd, _ := vacatedPub.last()
+	if vacatedCmd.Params["channelRanges"] != "" {
+		t.Fatalf("vacated channelRanges = %v, want empty", vacatedCmd.Params["channelRanges"])
+	}
+
+	if baselineCmd.IdempotencyKey == vacatedCmd.IdempotencyKey {
+		t.Error("baseline (never had a surface) and vacated (surface added then moved away) push share an " +
+			"idempotency key, the agent's idempotency cache would treat the vacating push as an already-seen " +
+			"replay and never re-apply it")
+	}
+	if addedCmd.IdempotencyKey == vacatedCmd.IdempotencyKey {
+		t.Error("added and vacated pushes share an idempotency key")
+	}
+
+	// Revision 3: the surface moves back onto node-1, the revert case.
+	cs.put(config.ShowSurfaceConfigKind, "garage-door", 3, addedSurfaceRaw(t))
+	revertPub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, revertPub, time.Now, "node-1", nil); err != nil {
+		t.Fatalf("ToNode (revert): %v", err)
+	}
+	revertCmd, _ := revertPub.last()
+	if revertCmd.Params["channelRanges"] != "0-149" {
+		t.Fatalf("revert channelRanges = %v, want 0-149", revertCmd.Params["channelRanges"])
+	}
+	if revertCmd.IdempotencyKey == addedCmd.IdempotencyKey {
+		t.Error("added and revert (a later revision, back on node-1) pushes share an idempotency key, " +
+			"a revert to an earlier value must still mint a fresh key")
+	}
+	if revertCmd.IdempotencyKey == baselineCmd.IdempotencyKey || revertCmd.IdempotencyKey == vacatedCmd.IdempotencyKey {
+		t.Error("revert push collides with an earlier no-surface push")
+	}
+}
+
+// addedSurfaceRaw returns garage-door's original (node-1) payload, JSON
+// encoded, for TestIdempotencyKeyNeverRepeatsWhenASurfaceIsMovedOffANode's
+// revert step.
+func addedSurfaceRaw(t *testing.T) string {
+	t.Helper()
+	payload := config.ShowSurfacePayload{
+		Show: "halloween", Name: "garage-door", Node: "node-1",
+		ChannelRange: config.ShowSurfaceChannelRange{StartChannel: 1, ChannelCount: 150},
+		Geometry:     config.ShowSurfaceGeometry{Width: 1, Height: 50, PixelFormat: config.ShowSurfacePixelFormatRGB},
+		FrameRate:    40,
+		Output:       config.ShowSurfaceOutput{Transport: config.ShowSurfaceTransportNDI, NDI: &config.ShowSurfaceNDIOutput{SourceName: "garage-door"}},
+	}
+	raw, err := config.EncodeShowSurfacePayload(payload)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return raw
 }
 
 // TestActiveShowUnresolvableReferenceReportsNilNotRawID proves that when
 // show.active names a show id with no active "show" revision (a stale
 // pointer left behind by a store inconsistency elsewhere), the pushed
-// activeShow is nil, never the raw, unresolvable id — a value that would
+// activeShow is nil, never the raw, unresolvable id, a value that would
 // appear in no showNames entry and could never be selected in FPP
 // Connect's playlist dropdown (ADR-044 decision 8: a wrong silent guess is
 // worse than an honest "cannot resolve").
@@ -405,7 +510,7 @@ func TestActiveShowUnresolvableReferenceReportsNilNotRawID(t *testing.T) {
 }
 
 // TestBestEffortNeverPanicsOnPublishFailure proves BestEffort swallows a
-// publish failure rather than propagating or panicking — the write or
+// publish failure rather than propagating or panicking, the write or
 // hello that triggered it must never fail because of this push.
 func TestBestEffortNeverPanicsOnPublishFailure(t *testing.T) {
 	cs := newFakeConfigStore()
@@ -414,7 +519,7 @@ func TestBestEffortNeverPanicsOnPublishFailure(t *testing.T) {
 }
 
 // TestEachWriteProducesExactlyOnePushPerAffectedNode proves ToNode itself
-// publishes exactly one "fppconnect.configure" command per call — a
+// publishes exactly one "fppconnect.configure" command per call, a
 // caller pushing to N affected nodes (a coordinator write hook) gets
 // exactly N publishes, one per ToNode call, never more.
 func TestEachWriteProducesExactlyOnePushPerAffectedNode(t *testing.T) {

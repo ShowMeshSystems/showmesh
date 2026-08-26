@@ -96,7 +96,7 @@ func TestProbeAudioDeviceUnavailableIsNotConfirmedButNotAnError(t *testing.T) {
 // key in the agent's command allowlist, not merely a function that exists
 // — Step 6's own lesson (a capability with no caller is not a capability).
 func TestProbeAudioDeviceIsAllowlisted(t *testing.T) {
-	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil)
+	ops := newOperationRegistry(testNodeID, t.TempDir(), "", nil, nil, nil, nil, nil, discardLogger())
 	if _, ok := ops["audio.device.probe"]; !ok {
 		t.Fatal(`newOperationRegistry() does not contain "audio.device.probe"`)
 	}

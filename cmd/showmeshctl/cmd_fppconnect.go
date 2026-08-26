@@ -100,11 +100,11 @@ func printFPPConnectSettingsUsage(w io.Writer) {
 Read or write the coordinator's fppconnect.settings configuration
 (ADR-044 decision 5): enabled (gates the node's xLights ingestion
 listener), maxFileBytes (the per-file byte cap on one ingested upload),
-and maxAssetDirBytes (the total byte cap on the node's asset directory —
+and maxAssetDirBytes (the total byte cap on the node's asset directory;
 must be at least maxFileBytes). Defaults: enabled true, maxFileBytes
-2147483648 (2 GiB), maxAssetDirBytes 21474836480 (20 GiB) — enabled
+2147483648 (2 GiB), maxAssetDirBytes 21474836480 (20 GiB). Enabled
 defaulting true is a builder default, not an owner ruling.
-Every subcommand requires the config:write scope (admin only) — there is
+Every subcommand requires the config:write scope (admin only); there is
 no config:read scope.
 
 This never 404s: nothing ever written reports the built-in default with
@@ -112,7 +112,7 @@ revision 0 and source "default".
 
 Subcommands:
   get         show the active configuration (or the built-in default)
-  set         write a new configuration revision — a FULL REPLACEMENT
+  set         write a new configuration revision, a FULL REPLACEMENT
               (reads a payload from --file, or from stdin if --file is
               not given); every field is required
   revisions   list revision history, newest first
@@ -164,10 +164,10 @@ func cmdFPPConnectSettingsGet(args []string, stdout, stderr io.Writer, clock fun
 }
 
 // cmdFPPConnectSettingsSet implements `fppconnect settings set`: a FULL
-// REPLACEMENT — every field of the payload is required. The payload is
+// REPLACEMENT, every field of the payload is required. The payload is
 // read from --file, or from stdin when --file is not given, and sent to
 // the coordinator verbatim as json.RawMessage after only a shape check (a
-// JSON object) — this command never decodes it into
+// JSON object), this command never decodes it into
 // configFPPConnectSettingsPayload and re-encodes, because that would
 // silently turn an operator's omitted field into an explicit zero value
 // the server would then accept, making the server's own
@@ -181,7 +181,7 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fppconnect settings set [flags]")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new fppconnect.settings configuration revision (requires")
-		_, _ = fmt.Fprintln(stderr, "config:write, admin only). A FULL REPLACEMENT: every field is required —")
+		_, _ = fmt.Fprintln(stderr, "config:write, admin only). A FULL REPLACEMENT: every field is required;")
 		_, _ = fmt.Fprintln(stderr, "an absent field is refused by name, never silently defaulted or carried")
 		_, _ = fmt.Fprintln(stderr, "forward from the previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")

@@ -254,7 +254,7 @@ Commands:
                                         advertised both routes, requires config:write)
   audio node revisions <nodeId>        list audio.node revision history, newest first
   fppconnect settings get              show the active fppconnect.settings configuration
-                                        (ADR-044; never 404s — reports the built-in default)
+                                        (ADR-044; never 404s, reports the built-in default)
   fppconnect settings set              write a new fppconnect.settings revision (write,
                                         full replacement, requires config:write)
   fppconnect settings revisions        list fppconnect.settings revision history, newest first

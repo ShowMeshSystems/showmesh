@@ -14,14 +14,14 @@ import (
 // fppconnect.settings triggers exactly one fppconnect.configure push per
 // affected node. pushFPPConnectToNode/pushFPPConnectToAllNodes
 // (fppconnectsettingsconfig.go) fire their pushes in a detached goroutine
-// — matching pushAudioSettingsToAllNodes' identical fire-and-forget shape
-// one kind over — so this file uses fakeRenderPublisher's onPublish hook
+//, matching pushAudioSettingsToAllNodes' identical fire-and-forget shape
+// one kind over, so this file uses fakeRenderPublisher's onPublish hook
 // (renderdispatch_test.go) to synchronize on the exact moment a publish
 // lands, rather than a fixed sleep.
 
 // waitForPublishCount blocks until pub has recorded at least n publishes
 // whose decoded action equals action, or fails the test after a bounded
-// wait — long enough for a detached goroutine to run on a loaded CI
+// wait, long enough for a detached goroutine to run on a loaded CI
 // machine, short enough that a genuine defect (a push that never happens)
 // fails the test instead of hanging it.
 func waitForPublishCount(t *testing.T, pub *fakeRenderPublisher, action string, n int) {
@@ -129,7 +129,7 @@ func TestPutShowActivePushesEveryInventoryNode(t *testing.T) {
 	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
 
 	// Created with no inventory nodes yet, so the "show" write's own
-	// all-nodes push (handlePutShow) contributes nothing here — populate
+	// all-nodes push (handlePutShow) contributes nothing here, populate
 	// inventory only after, so every publish this test counts comes from
 	// the show.active write under test.
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
