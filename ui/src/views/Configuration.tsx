@@ -123,14 +123,49 @@ export function Configuration() {
 
       {scopeGate.allowed && (
         <>
+          {/* A jump list to every top-level section below, so reaching one
+              does not require scrolling past the others - the readability
+              defect report's own "unrelated kinds stacked on one page"
+              complaint. Plain links, not a tab component. Render settings
+              and Show mode are included alongside the four configuration
+              kinds because they are sections of this same page too; the
+              show-mode indicator in the app header links straight to
+              #show-mode, so that id is load-bearing beyond this list. */}
+          <nav aria-label="Configuration sections" className="config-index">
+            <ul className="config-index__list">
+              <li>
+                <a href="#fpp-endpoints">FPP endpoints</a>
+              </li>
+              <li>
+                <a href="#resolume-instances">Resolume</a>
+              </li>
+              <li>
+                <a href="#fpp-mqtt">FPP MQTT</a>
+              </li>
+              <li>
+                <a href="#assets-settings">Asset store settings</a>
+              </li>
+              <li>
+                <a href="#render-settings">Render settings</a>
+              </li>
+              <li>
+                <a href="#show-mode">Show mode</a>
+              </li>
+            </ul>
+          </nav>
+
           <FPPEndpointsSection />
           <ResolumeInstancesSection />
           <FPPMQTTSection />
           <AssetsSettingsSection />
           <hr style={{ margin: '2rem 0' }} />
-          <RenderSettingsPanel />
+          <div id="render-settings" className="panel config-section">
+            <RenderSettingsPanel />
+          </div>
           <hr style={{ margin: '2rem 0' }} />
-          <ShowModePanel />
+          <div id="show-mode" className="panel config-section">
+            <ShowModePanel />
+          </div>
         </>
       )}
     </div>
@@ -243,12 +278,8 @@ function FPPEndpointsSection() {
   }
 
   return (
-    <section>
+    <section id="fpp-endpoints" className="panel config-section">
       <h3 className="panel__title">FPP endpoints</h3>
-      <p className="text-muted">
-        The list of FPP instances this coordinator polls, moved out of{' '}
-        <code>SHOWMESH_FPP_ENDPOINTS</code> into this coordinator&rsquo;s own store.
-      </p>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
       {state.kind === 'error' && (
@@ -265,11 +296,15 @@ function FPPEndpointsSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <p className="panel" role="status">
-              Active revision {state.config.revision} (source {state.config.source}
-              {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).{' '}
-              <strong>{state.config.restartRequiredReason}</strong>
-            </p>
+            <div className="config-status" role="status">
+              <p>
+                Active revision {state.config.revision} (source {state.config.source}
+                {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
+              </p>
+              <p>
+                <strong>{state.config.restartRequiredReason}</strong>
+              </p>
+            </div>
           )}
 
           <table className="config-table">
@@ -332,6 +367,11 @@ function FPPEndpointsSection() {
               {saving ? 'Saving…' : 'Save configuration'}
             </ScopedButton>
           </div>
+
+          <p className="text-muted">
+            The list of FPP instances this coordinator polls, moved out of{' '}
+            <code>SHOWMESH_FPP_ENDPOINTS</code> into this coordinator&rsquo;s own store.
+          </p>
 
           {/* Revision history: a long, rarely-consulted list, kept apart
               from the status line above and the editor above that,
@@ -423,13 +463,8 @@ function ResolumeInstancesSection() {
   }
 
   return (
-    <section style={{ marginTop: '2rem' }}>
+    <section id="resolume-instances" className="panel config-section" style={{ marginTop: '2rem' }}>
       <h3 className="panel__title">Resolume</h3>
-      <p className="text-muted">
-        The Resolume Arena instance this coordinator connects to, moved out of{' '}
-        <code>SHOWMESH_RESOLUME_URL</code>/<code>SHOWMESH_RESOLUME_ID</code> into this
-        coordinator&rsquo;s own store. At most one instance is supported today.
-      </p>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
       {state.kind === 'error' && (
@@ -446,11 +481,15 @@ function ResolumeInstancesSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <p className="panel" role="status">
-              Active revision {state.config.revision} (source {state.config.source}
-              {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).{' '}
-              <strong>{state.config.restartRequiredReason}</strong>
-            </p>
+            <div className="config-status" role="status">
+              <p>
+                Active revision {state.config.revision} (source {state.config.source}
+                {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
+              </p>
+              <p>
+                <strong>{state.config.restartRequiredReason}</strong>
+              </p>
+            </div>
           )}
 
           <table className="config-table">
@@ -498,6 +537,12 @@ function ResolumeInstancesSection() {
               {saving ? 'Saving…' : 'Save Resolume instance'}
             </ScopedButton>
           </div>
+
+          <p className="text-muted">
+            The Resolume Arena instance this coordinator connects to, moved out of{' '}
+            <code>SHOWMESH_RESOLUME_URL</code>/<code>SHOWMESH_RESOLUME_ID</code> into this
+            coordinator&rsquo;s own store. At most one instance is supported today.
+          </p>
 
           {/* Revision history: same rationale as FPPEndpointsSection's own
               identical comment above. */}
@@ -649,13 +694,8 @@ function FPPMQTTSection() {
   }
 
   return (
-    <section style={{ marginTop: '2rem' }}>
+    <section id="fpp-mqtt" className="panel config-section" style={{ marginTop: '2rem' }}>
       <h3 className="panel__title">FPP MQTT</h3>
-      <p className="text-muted">
-        The Step 5 FPP MQTT collector&rsquo;s broker, credentials, topic prefix, and host map, moved
-        out of <code>SHOWMESH_FPP_MQTT_*</code> into this coordinator&rsquo;s own store. The broker
-        password is never shown once set: leave the password field blank to keep it unchanged.
-      </p>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
       {state.kind === 'error' && (
@@ -672,11 +712,15 @@ function FPPMQTTSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <p className="panel" role="status">
-              Active revision {state.config.revision} (source {state.config.source}
-              {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).{' '}
-              <strong>{state.config.restartRequiredReason}</strong>
-            </p>
+            <div className="config-status" role="status">
+              <p>
+                Active revision {state.config.revision} (source {state.config.source}
+                {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
+              </p>
+              <p>
+                <strong>{state.config.restartRequiredReason}</strong>
+              </p>
+            </div>
           )}
 
           <div className="form-field">
@@ -790,6 +834,12 @@ function FPPMQTTSection() {
             </ScopedButton>
           </div>
 
+          <p className="text-muted">
+            The Step 5 FPP MQTT collector&rsquo;s broker, credentials, topic prefix, and host map, moved
+            out of <code>SHOWMESH_FPP_MQTT_*</code> into this coordinator&rsquo;s own store. The broker
+            password is never shown once set: leave the password field blank to keep it unchanged.
+          </p>
+
           {/* Revision history: same rationale as FPPEndpointsSection's own
               identical comment above. */}
           {state.kind === 'loaded' && state.revisions.length > 0 && (
@@ -891,20 +941,8 @@ function AssetsSettingsSection() {
   }
 
   return (
-    <section style={{ marginTop: '2rem' }}>
+    <section id="assets-settings" className="panel config-section" style={{ marginTop: '2rem' }}>
       <h3 className="panel__title">Asset store settings</h3>
-      <p className="text-muted">
-        The asset store&rsquo;s operator-facing settings, moved out of{' '}
-        <code>SHOWMESH_ASSET_CONTENT_BASE_URL</code>/<code>SHOWMESH_ASSET_MAX_UPLOAD_BYTES</code>/
-        <code>SHOWMESH_ASSET_SYNC_INTERVAL</code>/<code>SHOWMESH_ASSET_INVENTORY_INTERVAL</code> into
-        this coordinator&rsquo;s own store. <code>SHOWMESH_ASSET_DIR</code> is unaffected; it stays
-        environment-only.
-      </p>
-      <p className="text-muted">
-        Content base URL must be an address every render node can reach, not this coordinator&rsquo;s
-        own loopback or localhost address. A node fetching asset bytes from loopback fetches from
-        itself, not from this coordinator.
-      </p>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
       {state.kind === 'error' && (
@@ -921,11 +959,15 @@ function AssetsSettingsSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <p className="panel" role="status">
-              Active revision {state.config.revision} (source {state.config.source}
-              {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).{' '}
-              <strong>{state.config.restartRequiredReason}</strong>
-            </p>
+            <div className="config-status" role="status">
+              <p>
+                Active revision {state.config.revision} (source {state.config.source}
+                {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
+              </p>
+              <p>
+                <strong>{state.config.restartRequiredReason}</strong>
+              </p>
+            </div>
           )}
 
           <table className="config-table">
@@ -991,6 +1033,19 @@ function AssetsSettingsSection() {
               {saving ? 'Saving…' : 'Save asset settings'}
             </ScopedButton>
           </div>
+
+          <p className="text-muted">
+            The asset store&rsquo;s operator-facing settings, moved out of{' '}
+            <code>SHOWMESH_ASSET_CONTENT_BASE_URL</code>/<code>SHOWMESH_ASSET_MAX_UPLOAD_BYTES</code>/
+            <code>SHOWMESH_ASSET_SYNC_INTERVAL</code>/<code>SHOWMESH_ASSET_INVENTORY_INTERVAL</code> into
+            this coordinator&rsquo;s own store. <code>SHOWMESH_ASSET_DIR</code> is unaffected; it stays
+            environment-only.
+          </p>
+          <p className="text-muted">
+            Content base URL must be an address every render node can reach, not this coordinator&rsquo;s
+            own loopback or localhost address. A node fetching asset bytes from loopback fetches from
+            itself, not from this coordinator.
+          </p>
 
           {/* Revision history: same rationale as FPPEndpointsSection's own
               identical comment above. */}

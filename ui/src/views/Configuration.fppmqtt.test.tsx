@@ -84,7 +84,9 @@ function renderConfiguration(model: Model) {
 }
 
 async function fppMQTTSection() {
-  const heading = await screen.findByText('FPP MQTT')
+  // Queried as a heading, not plain text: the section index at the top of
+  // the page also links to a "FPP MQTT" text node.
+  const heading = await screen.findByRole('heading', { name: 'FPP MQTT' })
   return heading.closest('section')!
 }
 
