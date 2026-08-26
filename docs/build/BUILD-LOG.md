@@ -54,6 +54,80 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-08-26 (Installing a prebuilt node agent no longer needs a compiler; first arm64 install, on a Raspberry Pi 3B+)
+
+**Goal:** install the native node agent on a Raspberry Pi from a prebuilt
+tarball, which is the first time the agent has been installed on anything
+other than x86_64 Debian 13, and fix what that path got wrong.
+
+**Two defects, both found on the Pi and both fixed here.**
+
+- **`install.sh` demanded a build toolchain to install an already-built
+  binary.** It called `"$SCRIPT_DIR/preflight.sh"` with no arguments, so
+  the build-time branch ran: a prebuilt-tarball install refused to
+  proceed without `gcc`, `pkg-config`, `libgstreamer1.0-dev`,
+  `libgstreamer-plugins-base1.0-dev` and `libltc-dev`, none of which the
+  agent needs in order to run. Observed on the Pi as three `MISSING`
+  lines for the `-dev` packages. `install.sh` only ever installs a binary
+  it is handed, so it now calls `preflight.sh --runtime-only`. The
+  build-time checks are unchanged and still reachable: `./preflight.sh`
+  with no arguments runs them for anyone building on the host.
+- **`preflight.sh --runtime-only` reported `libltc.so.11` missing when it
+  was present.** The runtime branch resolved `ldconfig` through
+  `command -v`, but on Debian 13 `ldconfig` exists only at
+  `/usr/sbin/ldconfig` and an unprivileged user's PATH is
+  `/usr/local/bin:/usr/bin:/bin:/usr/games`. Root's PATH does include
+  `/usr/sbin`, so `install.sh` never hit it; anyone running preflight by
+  hand as a normal user was told to install a package that was already
+  installed. It now falls back to `/usr/sbin/ldconfig` and
+  `/sbin/ldconfig`.
+
+The Debian 13 floor is untouched in both scripts. No `raspbian` case was
+added: this Pi OS Lite 64-bit image reports `ID=debian` and
+`VERSION_ID="13"`, so the existing check passes as-is and the
+`ID=raspbian` problem SM-307 anticipated does not occur on it.
+
+**Hardware this was observed on.** A Raspberry Pi 3 Model B Plus Rev 1.3,
+Raspberry Pi OS Lite 64-bit on the Debian 13 trixie base
+(`DEBIAN_VERSION_FULL=13.5`), kernel `6.18.34+rpt-rpi-v8`, aarch64,
+905 MB RAM, wired Ethernet. Runtime packages installed from
+`deploy/node/README.md` section 3 only, with no compiler and no `-dev`
+packages beyond what the image already carried. `libltc11` 1.3.2-1+b2
+and GStreamer 1.26.2 are both available for arm64 on trixie, which
+SM-307 listed as expected but unverified.
+
+**Evidence, all post-dating the change.** `preflight.sh --runtime-only`
+passes on the Pi as an unprivileged user, all checks OK. `sudo
+./install.sh ./showmesh-agent-native` from an unpacked tarball completes
+with exit 0, asking for no compiler, and correctly declines to start the
+service until `SHOWMESH_NODE_ID` is set. After configuration the service
+came up `active (running)` under systemd, which is **the first time this
+unit has been started by systemd anywhere** (`bench/node-install` proves
+the file and permission behaviour in a container, where systemd is not
+PID 1 and activation is skipped by design). The agent advertised
+platform `linux-arm64` and appeared in the coordinator's node list as
+online, having discovered both of the Pi's output routes by itself.
+
+**One thing found and not fixed.** `install.sh` printed `user showmesh
+already exists`. That was not idempotency: this Pi's interactive login
+account happens to be named `showmesh`, so the installer adopted a human
+login account as the service account instead of creating the system user
+it intends. It works here and that account was already in the `audio`
+group, but on any host where a human account shares the service name the
+agent silently runs as that account, with its groups and home directory.
+Left as-is and reported rather than changed.
+
+**Gates.** `make check` in the foreground. No integration target was run:
+this change touches two shell scripts and a README and no Go code, no
+generated output and no API contract.
+
+**Not verified.** Nothing here was exercised against a deployed fleet.
+The installer's upgrade-in-place path was not re-run on the Pi; only the
+fresh install was. Playing audio and measuring it is SM-181 and is
+recorded separately.
+
+---
+
 ## 2026-08-26 (Track C audio node: four defects from the 2026-08-25 node run fixed, operator gain moves to decibels, `main` from `747ba9d` to `7276c9c`)
 
 **Goal:** clear the audio-node defects the 2026-08-25 real-M4 session left open, and settle the operator-facing gain unit before any further audio screen is built on top of the wrong one.

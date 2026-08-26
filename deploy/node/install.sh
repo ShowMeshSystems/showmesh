@@ -54,8 +54,12 @@ else
   echo "install.sh: WARNING: /etc/os-release not found; cannot verify the Debian 13 floor. Proceeding, but this platform is unverified." >&2
 fi
 
-echo "install.sh: running preflight checks..."
-if ! "$SCRIPT_DIR/preflight.sh"; then
+# install.sh always installs an already-built binary, so it checks only
+# what the agent needs to RUN. A host that will build the agent itself
+# runs ./preflight.sh with no arguments to get the build-time checks
+# (C compiler, -dev packages, pkg-config) as well.
+echo "install.sh: running runtime preflight checks..."
+if ! "$SCRIPT_DIR/preflight.sh" --runtime-only; then
   echo "install.sh: preflight failed; refusing to install until the checks above pass." >&2
   exit 1
 fi
