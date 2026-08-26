@@ -279,12 +279,93 @@ func TestAudioSessionDispatchConfirmsFromNodeEvidence(t *testing.T) {
 		t.Fatalf("outcome = %q, want stopped (from node evidence, not the transport-level mqttproto outcome)", decoded.Command.Outcome)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession: %v", err)
 	}
 	if rec.NodeID != "node-a" || rec.Revision != 1 {
 		t.Fatalf("persisted record = %+v", rec)
+	}
+}
+
+// TestAudioSessionDispatchSameSessionIDDifferentNodesAreIndependent is
+// this seam's own end-to-end acceptance proof: "night-session" (like the
+// real cue and blackAndSilence session ids) is not unique to one node,
+// and two nodes dispatching a command against that SAME session id must
+// each keep their own durable desired-state record and their own
+// revision counter - neither node's write may drop or be dropped by the
+// other's, which is exactly what audio_sessions' pre-schemaV20 `id`-only
+// primary key allowed to happen.
+func TestAudioSessionDispatchSameSessionIDDifferentNodesAreIndependent(t *testing.T) {
+	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "stopped", "reason": ""},
+		},
+	}
+	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
+	token := mustIssueToken(t, setup.svc, op.ID)
+	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	reqA := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqA); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-a dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+	reqB := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-b/audio/sessions/night-session/stop", `{"revision":1}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqB); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-b dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	recA, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-a: %v", err)
+	}
+	recB, err := setup.st.GetAudioSession(context.Background(), "node-b", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-b: %v", err)
+	}
+	if recA.NodeID != "node-a" || recA.Revision != 1 {
+		t.Fatalf("node-a record = %+v", recA)
+	}
+	if recB.NodeID != "node-b" || recB.Revision != 1 {
+		t.Fatalf("node-b record = %+v", recB)
+	}
+
+	// Advance node-a to revision 2; node-b's own row, still at revision 1,
+	// must be untouched and must not block a later node-b write at a
+	// revision that would be a rewind only if the two nodes shared a
+	// counter.
+	reqA2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/stop", `{"revision":2}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqA2); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-a second dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+
+	recA, err = setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-a after advance: %v", err)
+	}
+	if recA.Revision != 2 {
+		t.Fatalf("node-a revision = %d, want 2", recA.Revision)
+	}
+	recB, err = setup.st.GetAudioSession(context.Background(), "node-b", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-b after node-a advanced: %v", err)
+	}
+	if recB.Revision != 1 {
+		t.Fatalf("node-b revision = %d, want still 1 (node-a's advance must not touch node-b's row)", recB.Revision)
+	}
+
+	reqB2 := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-b/audio/sessions/night-session/stop", `{"revision":2}`, token)
+	if resp, body := doRawRequest(t, api.Handler, reqB2); resp.StatusCode != http.StatusOK {
+		t.Fatalf("node-b second dispatch status = %d; body: %s", resp.StatusCode, body)
+	}
+	recB, err = setup.st.GetAudioSession(context.Background(), "node-b", "night-session")
+	if err != nil {
+		t.Fatalf("GetAudioSession node-b after advance: %v", err)
+	}
+	if recB.Revision != 2 {
+		t.Fatalf("node-b revision = %d, want 2 (node-b's own write must not have been dropped)", recB.Revision)
 	}
 }
 
@@ -500,7 +581,7 @@ func TestAudioSessionDispatchRefusedResultDoesNotPersistDesiredState(t *testing.
 		t.Fatalf("second apply status = %d; body: %s", resp2.StatusCode, body2)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession: %v", err)
 	}
@@ -541,7 +622,7 @@ func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.
 		t.Fatalf("pause status = %d; body: %s", resp.StatusCode, body)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession: %v", err)
 	}
@@ -729,7 +810,7 @@ func TestAudioSessionDispatchUnconfirmablePersistsDesiredState(t *testing.T) {
 		t.Fatalf("outcome = %q, want unconfirmable", decoded1.Command.Outcome)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession after unconfirmable dispatch: %v", err)
 	}
@@ -758,7 +839,7 @@ func TestAudioSessionDispatchUnconfirmablePersistsDesiredState(t *testing.T) {
 		t.Fatalf("second apply status = %d; body: %s", resp2.StatusCode, body2)
 	}
 
-	rec2, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec2, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession after stale-revision dispatch: %v", err)
 	}
@@ -808,7 +889,7 @@ func TestAudioSessionDispatchDeadlineExceededPersistsDesiredState(t *testing.T) 
 		t.Fatalf("outcome = %q, want unconfirmable", decoded.Command.Outcome)
 	}
 
-	rec, err := setup.st.GetAudioSession(context.Background(), "night-session")
+	rec, err := setup.st.GetAudioSession(context.Background(), "node-a", "night-session")
 	if err != nil {
 		t.Fatalf("GetAudioSession after deadline-exceeded dispatch: %v", err)
 	}

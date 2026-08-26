@@ -756,7 +756,8 @@ The store schema version, bumped by migrations in
 | v17 | shipped | Track H seam H3: per-node cue-catalog acknowledgement storage (TRACK-H-H3-SPEC.md §4) |
 | v18 | shipped | Track H seam H4 defect fix: `entry_occurrence_sequence` on `fpp_playlist_entry_observations`, the entry-start identity a looping FPP playlist needs to re-activate its Cues |
 | v19 | shipped | operator-facing audio gain moves to decibels: every stored `audio.settings` revision's `defaultMaxBackgroundGain`/`duckTargetGain` is rewritten to `defaultMaxBackgroundGainDb`/`duckTargetGainDb` so an existing revision reads back at the same audible level |
-| v20+ | unallocated | free |
+| v20 | shipped | SM-312: re-key `audio_sessions` from `id TEXT PRIMARY KEY` to a composite `(node_id, id)` primary key, so two nodes dispatching the same session id no longer share one row and one node's revision guard silently drop the other's write |
+| v21+ | unallocated | free |
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are
