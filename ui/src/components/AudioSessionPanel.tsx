@@ -891,6 +891,12 @@ function AudioCommandOutcome({ result }: { result: AudioSessionCommandResult }) 
         </p>
       )}
       {result.outcome === '' && <p className="text-muted">Pending: this command has not yet resolved.</p>}
+      {result.attributionDegraded && (
+        <p className="text-muted">
+          Note: the coordinator could not record this command in its audit log; it ran
+          anyway.
+        </p>
+      )}
     </div>
   )
 }
