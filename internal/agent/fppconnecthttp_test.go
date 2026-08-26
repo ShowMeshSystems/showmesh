@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -33,13 +35,17 @@ func (f fakeFPPConnectView) ShowNames() []string        { return f.showNames }
 
 // startFPPConnectTestServer serves the real handler newFPPConnectHandler
 // builds over a real loopback listener (httptest.Server, an OS-assigned
-// port, never real port 80), with the same ConnContext hook
-// runFPPConnectHTTPListener installs in production so a self-entry's
-// address field reflects the real connection it arrived on.
+// port, never real port 80), with the same ConnContext hook and
+// DisableGeneralOptionsHandler setting runFPPConnectHTTPListener installs
+// in production: the former so a self-entry's address field reflects the
+// real connection it arrived on, the latter so a test here actually
+// exercises route()'s own OPTIONS handling rather than net/http's built-in
+// one, which httptest.Server would otherwise leave enabled by default.
 func startFPPConnectTestServer(t *testing.T, view fppConnectView, nodeID string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(newFPPConnectHandler(view, nodeID))
 	srv.Config.ConnContext = fppConnectConnContext
+	srv.Config.DisableGeneralOptionsHandler = true
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
@@ -290,6 +296,57 @@ func TestFPPConnectPlaylistRoute(t *testing.T) {
 	})
 }
 
+// TestFPPConnectRejectsOversizedOrChunkedBody is the regression test for
+// review round 2 finding C: none of this listener's routes read the
+// request body, so http.MaxBytesReader alone never rejects anything, since
+// nothing ever calls Read. A declared Content-Length over the cap, and a
+// chunked request (Content-Length unknown, reported as -1), must both be
+// refused outright rather than left to sit until ReadTimeout.
+func TestFPPConnectRejectsOversizedOrChunkedBody(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1")
+
+	t.Run("declared Content-Length over the cap", func(t *testing.T) {
+		body := strings.NewReader(strings.Repeat("a", fppConnectMaxBodyBytes+1))
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/system/info", body)
+		if err != nil {
+			t.Fatalf("building request: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404 for a body over the %d byte cap", resp.StatusCode, fppConnectMaxBodyBytes)
+		}
+	})
+
+	t.Run("chunked body with no declared length", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/system/info", io.NopCloser(strings.NewReader("x")))
+		if err != nil {
+			t.Fatalf("building request: %v", err)
+		}
+		req.ContentLength = -1
+		req.TransferEncoding = []string{"chunked"}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404 for a chunked (unbounded) body", resp.StatusCode)
+		}
+	})
+
+	t.Run("no body at all still serves normally", func(t *testing.T) {
+		resp, _ := getBody(t, srv.URL+"/api/system/info")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for an ordinary bodyless GET", resp.StatusCode)
+		}
+	})
+}
+
 func TestFPPConnectUnmappedPathIs404(t *testing.T) {
 	view := fakeFPPConnectView{enabled: true}
 	srv := startFPPConnectTestServer(t, view, "node-1")
@@ -490,6 +547,31 @@ func TestFPPConnectNonGETIs404NotAllowed(t *testing.T) {
 			t.Errorf("%s: Allow header = %q, want none", method, allow)
 		}
 	}
+
+	// "OPTIONS * HTTP/1.1" is the one request net/http answers itself,
+	// with a 200 and no body, before the registered Handler ever runs,
+	// unless DisableGeneralOptionsHandler is set (review round 2 finding
+	// A). "*" is not a URL http.NewRequest can build, so this probes the
+	// raw request line over a socket instead.
+	t.Run("OPTIONS * is 404, not net/http's built-in 200", func(t *testing.T) {
+		host := strings.TrimPrefix(srv.URL, "http://")
+		conn, err := net.Dial("tcp", host)
+		if err != nil {
+			t.Fatalf("dial %s: %v", host, err)
+		}
+		defer func() { _ = conn.Close() }()
+
+		if _, err := fmt.Fprintf(conn, "OPTIONS * HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host); err != nil {
+			t.Fatalf("write request line: %v", err)
+		}
+		statusLine, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			t.Fatalf("read status line: %v", err)
+		}
+		if !strings.Contains(statusLine, " 404 ") {
+			t.Fatalf("status line = %q, want it to contain 404", statusLine)
+		}
+	})
 }
 
 // TestFPPConnectHeadRequestHasNoBody proves HEAD is served (allowed

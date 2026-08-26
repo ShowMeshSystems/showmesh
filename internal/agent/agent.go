@@ -182,18 +182,18 @@ func Run() int {
 		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, fppConnect, logger)
 	}()
 
-	// fppConnectHTTPStatus carries this listener's bind outcome into the
+	// fppConnectStatus carries this listener's bind outcome into the
 	// render report the same way multiSyncStatus does (ADR-044): a bind
 	// failure degrades this node's FPP Connect eligibility without
 	// stopping the agent. fppConnectStatePlaceholderView stands in for
 	// FC1a's Enabled/ActiveShow/ShowNames until that seam extends
 	// fppConnect with them; see fppconnecthttp.go's fppConnectView doc
 	// comment.
-	fppConnectHTTPStatus := newFPPConnectHTTPStatus()
+	fppConnectStatus := newFPPConnectHTTPStatus()
 	fppConnectHTTPDone := make(chan struct{})
 	go func() {
 		defer close(fppConnectHTTPDone)
-		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, fppConnectStatePlaceholderView{state: fppConnect}, cfg.NodeID, fppConnectHTTPStatus, logger)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, fppConnectStatePlaceholderView{state: fppConnect}, cfg.NodeID, fppConnectStatus, logger)
 	}()
 
 	// showMode is ADR-033's installation-wide operating mode as this node
@@ -357,7 +357,7 @@ func Run() int {
 		defer close(renderReportDone)
 		ticker := time.NewTicker(cfg.RenderReportInterval)
 		defer ticker.Stop()
-		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, fppConnectHTTPStatus, time.Now, ticker.C, renderTrigger, logger)
+		runRenderReport(sigCtx, conn, cfg.NodeID, sup, multiSyncStatus, fppConnectStatus, time.Now, ticker.C, renderTrigger, logger)
 	}()
 
 	// Audio report: hardware discovery evidence (cached) plus a fresh

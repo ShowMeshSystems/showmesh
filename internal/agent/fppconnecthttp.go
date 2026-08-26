@@ -371,10 +371,19 @@ func fppConnectRequireEnabled(view fppConnectView, next http.Handler) http.Handl
 }
 
 // fppConnectLimitBody refuses a request body larger than
-// fppConnectMaxBodyBytes. None of this listener's routes have a body; this
-// is a defensive bound against a client that sends one anyway.
+// fppConnectMaxBodyBytes, or one whose size cannot be bounded upfront at
+// all (a chunked request, ContentLength == -1). None of this listener's
+// routes read the body, so MaxBytesReader alone is not the bound it looks
+// like: nothing here ever calls r.Body.Read, so a client that declares (or
+// streams) more than the cap would otherwise sit un-rejected until
+// ReadTimeout rather than being turned away outright. Refused the same way
+// an unmapped path is, a plain 404, never by reading first.
 func fppConnectLimitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength < 0 || r.ContentLength > fppConnectMaxBodyBytes {
+			http.NotFound(w, r)
+			return
+		}
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, fppConnectMaxBodyBytes)
 		}
@@ -501,6 +510,14 @@ func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppC
 		// logger's handler keeps that recovery visible in the same
 		// structured log every other agent subsystem writes to.
 		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		// Without this, net/http answers "OPTIONS * HTTP/1.1" itself, with a
+		// 200 and no body, before route() ever runs: its own general
+		// handler for that one specific request line, unconditional on
+		// which patterns are registered. ADR-044 decision 1 makes
+		// everything outside the four named routes 404, so that built-in
+		// answer is disabled here the same way route() replaced
+		// http.ServeMux's own redirect and 405 behavior in review round 1.
+		DisableGeneralOptionsHandler: true,
 	}
 
 	// The first status is a real poll of view.Enabled(), not a blind
