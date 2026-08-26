@@ -160,6 +160,67 @@ describe('Audit: paging backward', () => {
   })
 })
 
+describe('Audit: order is confirmed, never trusted', () => {
+  // AuditResponse.order is required by the generated types, but a
+  // coordinator older than PR #129 does not know order/id/oldestRetainedId
+  // and will not send any of them: this view must never present that
+  // response's oldest entries as recent activity.
+  it('opens normally once the coordinator confirms desc order', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-17T00:00:00Z',
+      order: 'desc',
+      oldestRetainedId: 9001,
+      entries: descendingPage(3, 9001),
+    })
+    renderAudit(makeModel({ session: auditSession }))
+
+    expect(await screen.findByText('config/kind-9003')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('refuses to render entries as recent activity when order is not echoed', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-17T00:00:00Z',
+      entries: [
+        { ...makeAuditEntry(), id: undefined as unknown as number },
+        { ...makeAuditEntry(), id: undefined as unknown as number },
+      ],
+    })
+    renderAudit(makeModel({ session: auditSession }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/did not echo an order/i)
+    expect(screen.queryByText('config/kind-9100')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /show older entries/i })).not.toBeInTheDocument()
+  })
+
+  it('refuses to render entries as recent activity when order is echoed as asc', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-17T00:00:00Z',
+      order: 'asc',
+      oldestRetainedId: null,
+      entries: descendingPage(3, 9001),
+    })
+    renderAudit(makeModel({ session: auditSession }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/echoed order "asc"/i)
+    expect(screen.queryByText('config/kind-9003')).not.toBeInTheDocument()
+  })
+
+  it('does not offer another page when the last entry has no usable id', async () => {
+    listAudit.mockResolvedValue({
+      serverTime: '2026-08-17T00:00:00Z',
+      order: 'desc',
+      oldestRetainedId: 1,
+      entries: [{ ...makeAuditEntry(), id: undefined as unknown as number }],
+    })
+    renderAudit(makeModel({ session: auditSession }))
+
+    await screen.findByText(/most recent retained/i)
+    expect(screen.queryByRole('button', { name: /show older entries/i })).not.toBeInTheDocument()
+    expect(listAudit).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('Audit: failure is not emptiness', () => {
   it('reports a failed fetch as an error, not as an empty log', async () => {
     listAudit.mockRejectedValue(new Error('network is down'))
