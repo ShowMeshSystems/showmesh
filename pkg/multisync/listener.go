@@ -393,7 +393,12 @@ func NewListener(cfg ListenerConfig) (*Listener, error) {
 		closed:            make(chan struct{}),
 	}
 
-	if cfg.RespondToDiscoverPings {
+	// Skipped entirely when DiscoverResponseFunc is set: that path builds
+	// its own PingPacket fresh on every reply (see sendDiscoverResponse) and
+	// never reads l.discoverResponse, so defaulting it here, including the
+	// os.Hostname() call, would be dead work that the func path silently
+	// discards.
+	if cfg.RespondToDiscoverPings && cfg.DiscoverResponseFunc == nil {
 		resp := cfg.DiscoverResponse
 		if resp.Hostname == "" {
 			if h, hErr := os.Hostname(); hErr == nil {

@@ -609,6 +609,13 @@ const (
 	pingRangesFieldLen   = 121
 )
 
+// MaxPingRangesLength is the most content bytes (not counting the
+// terminator) a Ping packet's Ranges field can hold. EncodePing already
+// rejects a longer string with ErrFieldTooLong; this constant lets a caller
+// assembling a ranges string check the limit itself before encoding, rather
+// than discovering it only when encoding fails.
+const MaxPingRangesLength = pingRangesFieldLen - 1
+
 // pingV3BodyLen is the total body length CreatePingPacket in FPP's own
 // source allocates for a version 3 ping (280 bytes of defined fields plus
 // 14 bytes of trailing zero padding it never fills). EncodePing reproduces

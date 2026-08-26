@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
@@ -60,7 +61,7 @@ func TestDiscoverResponseWireValues(t *testing.T) {
 		t.Errorf("body[%d:%d] (VersionMinor) = %d, want 5", wireOffVersionMinor, wireOffVersionMinor+2, got)
 	}
 	if got := body[wireOffMode]; got != 0x08 {
-		t.Errorf("body[%d] (Mode) = 0x%02x, want 0x08 (PingModeRemote) — this byte must stay Remote, per ADR-044 owner ruling 2026-08-25", wireOffMode, got)
+		t.Errorf("body[%d] (Mode) = 0x%02x, want 0x08 (PingModeRemote): this byte must stay Remote, per ADR-044 decision 7", wireOffMode, got)
 	}
 	if got := readWireCString(t, body, wireOffVersionString); got != "9.5.0" {
 		t.Errorf("VersionString at body[%d] = %q, want %q", wireOffVersionString, got, "9.5.0")
@@ -98,5 +99,36 @@ func TestDiscoverResponseNilRanges(t *testing.T) {
 	p := discoverResponse("render-node-1", nil)
 	if p.Ranges != "" {
 		t.Fatalf("Ranges = %q, want \"\" for a nil ranges func", p.Ranges)
+	}
+}
+
+// TestDiscoverResponseOverlongRangesStillEncodes is the regression test for
+// the silent-discovery-death bug: if the held ranges string somehow exceeds
+// multisync.MaxPingRangesLength (fppConnectState.SetChannelRanges refuses
+// this at the source, but discoverResponse must not trust that as its only
+// guard), a reply must still be produced, with an empty Ranges field,
+// rather than EncodePing rejecting the whole packet and the node going
+// silent to every discover ping thereafter.
+func TestDiscoverResponseOverlongRangesStillEncodes(t *testing.T) {
+	overlong := strings.Repeat("9", multisync.MaxPingRangesLength+1)
+
+	p := discoverResponse("render-node-1", func() string { return overlong })
+	if p.Ranges != "" {
+		t.Fatalf("Ranges = %q, want \"\" for an overlong held value", p.Ranges)
+	}
+
+	if _, err := multisync.EncodePing(p); err != nil {
+		t.Fatalf("EncodePing() unexpected error: %v", err)
+	}
+}
+
+// TestRangesFuncNilFPPConnectStateReturnsEmpty is item 4's regression test:
+// a nil *fppConnectState must never reach fppConnect.ChannelRanges as a
+// bare method value, since calling it would panic inside the per-ping
+// discover-response goroutine and crash the whole agent. See rangesFunc's
+// doc comment.
+func TestRangesFuncNilFPPConnectStateReturnsEmpty(t *testing.T) {
+	if got := rangesFunc(nil)(); got != "" {
+		t.Fatalf("rangesFunc(nil)() = %q, want \"\"", got)
 	}
 }
