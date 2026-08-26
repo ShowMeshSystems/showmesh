@@ -127,11 +127,17 @@ func newFPPConnectRegistrar(ctx context.Context, held *fppConnectHeldStore, stat
 }
 
 // Wait blocks until every registerLoop goroutine this registrar has ever
-// started has returned. Called from agent.go's clean-shutdown path,
-// joined alongside every other long-lived goroutine there, after sigCtx
-// has already been canceled: every registerLoop observes that via r.ctx
-// (the same context) and returns promptly, either from its own ctx.Err()
-// check or because the canceled context aborts its in-flight HTTP request.
+// started, at any point in this process's life, has returned. Called
+// inline from agent.go's clean-shutdown path, after the FPP Connect HTTP
+// listener has already stopped (so no further call to OnHeld can start a
+// new one) and after sigCtx has already been canceled: every registerLoop
+// observes that via r.ctx (the same context) and returns promptly, either
+// from its own ctx.Err() check or because the canceled context aborts its
+// in-flight HTTP request. Must be called directly in the shutdown
+// sequence, never from a goroutine started earlier in the process's life:
+// a goroutine that calls Wait before every registration has even started
+// can observe the WaitGroup's counter at zero and return immediately,
+// joining nothing (review round 2 finding A).
 func (r *fppConnectRegistrar) Wait() {
 	r.wg.Wait()
 }
@@ -255,6 +261,12 @@ func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
 // fppConnectHeldStore.setRegistrationLocked's own content-hash check on
 // every write back: even a rec this loop is mid-attempt with, if it has
 // since been superseded, never overwrites the newer upload's own state.
+// When that guard refuses a write (review round 2 finding B), this loop
+// continues rather than returns: this record's own key is the only
+// registerLoop startLoop's in-flight guard will ever allow to run, so if
+// this instance exits without picking up the superseding record, nothing
+// ever registers it. Continuing lets the next iteration's RecordFor read
+// the new record and register it instead.
 func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 	backoff := fppConnectRegisterInitialBackoff
 	for {
@@ -281,22 +293,47 @@ func (r *fppConnectRegistrar) registerLoop(rec fppConnectHeldRecord) {
 
 		outcome := r.attemptRegister(rec)
 
+		// Every branch below treats a false return from its setter as
+		// "superseded": a fresher upload of this same (dir, name)
+		// completed while this attempt was in flight, and
+		// setRegistrationLocked's own content-hash guard refused to let
+		// this stale outcome overwrite it (review round 2 finding B).
+		// Before this fix every branch returned unconditionally on a
+		// false setter result, which meant the record this loop was
+		// started for is bound and content-hash-current from the newer
+		// upload's own completeLocked call, but NO registerLoop is left
+		// running for it: startLoop's in-flight guard already refused a
+		// second goroutine for this key while this one owned it, so once
+		// this one exits without registering anything, the newer bytes
+		// are never registered at all. continue instead: the loop's own
+		// top-of-iteration RecordFor picks up the new record fresh, and
+		// backoff resets since this is a new attempt cycle against new
+		// content, not a retry of the same failure.
 		switch outcome.kind {
 		case fppConnectRegistrationSkipped:
-			r.held.SetRegistrationSkipped(rec.Dir, rec.Name, rec.ContentHash, outcome.reason)
-			return
-		case fppConnectRegistrationRegistered:
-			if r.held.SetRegistrationRegistered(rec.Dir, rec.Name, rec.ContentHash, outcome.assetID, outcome.rolledBack) {
-				r.triggerInventory()
+			if !r.held.SetRegistrationSkipped(rec.Dir, rec.Name, rec.ContentHash, outcome.reason) {
+				backoff = fppConnectRegisterInitialBackoff
+				continue
 			}
 			return
+		case fppConnectRegistrationRegistered:
+			if !r.held.SetRegistrationRegistered(rec.Dir, rec.Name, rec.ContentHash, outcome.assetID, outcome.rolledBack) {
+				backoff = fppConnectRegisterInitialBackoff
+				continue
+			}
+			r.triggerInventory()
+			return
 		case fppConnectRegistrationFailed:
-			r.held.SetRegistrationFailed(rec.Dir, rec.Name, rec.ContentHash, outcome.problemType, outcome.reason)
+			if !r.held.SetRegistrationFailed(rec.Dir, rec.Name, rec.ContentHash, outcome.problemType, outcome.reason) {
+				backoff = fppConnectRegisterInitialBackoff
+				continue
+			}
 			return
 		default: // fppConnectRegistrationPending: retryable
 			nextRetryAt := r.now().Add(backoff)
 			if !r.held.SetRegistrationPending(rec.Dir, rec.Name, rec.ContentHash, outcome.reason, nextRetryAt) {
-				return
+				backoff = fppConnectRegisterInitialBackoff
+				continue
 			}
 			select {
 			case <-r.ctx.Done():
@@ -372,6 +409,24 @@ func (r *fppConnectRegistrar) attemptRegister(rec fppConnectHeldRecord) fppConne
 		return fppConnectRegisterOutcome{
 			kind:   fppConnectRegistrationFailed,
 			reason: fmt.Sprintf("file name %q has no [a-z0-9] character to derive a sequence id from", rec.Name),
+		}
+	}
+
+	// Another local, always-true condition independent of the coordinator
+	// (review round 2 finding C): two distinct file names whose stems
+	// slugify to the same sequence id under the same show ("My Show.fseq"
+	// and "my_show.fseq" both slug to "my-show") would register as the
+	// SAME asset identity (show, sequence, targetKind, target) and
+	// silently supersede each other, with both held records claiming
+	// "registered." Whichever of the two was received later never gets to
+	// attempt at all; the earlier one is unaffected. A tie (equal
+	// ReceivedAt) fails both, since neither can safely claim priority.
+	if other, ok := r.held.CollidingRecord(rec.Dir, rec.Name, rec.ShowID, rec.LogicalSequence); ok && !rec.ReceivedAt.Before(other.ReceivedAt) {
+		return fppConnectRegisterOutcome{
+			kind: fppConnectRegistrationFailed,
+			reason: fmt.Sprintf(
+				"sequence id %q under show %q collides with already-held file %q, which slugifies to the same id; rename one of the two files so their sequence ids differ",
+				rec.LogicalSequence, rec.ShowID, other.Name),
 		}
 	}
 

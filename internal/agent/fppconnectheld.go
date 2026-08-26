@@ -248,11 +248,25 @@ const fppConnectMaxPending = 500
 // re-application compares against) and its config object id (FC3, ADR-028
 // decision 8), so a file completing afterwards binds with the same id a
 // same-tick bind would have used, never a name alone that a later
-// registration attempt would have to re-resolve.
+// registration attempt would have to re-resolve. ShowID is empty exactly
+// when the display name resolved but its id has not been pushed yet
+// (review round 2 finding D, BindPendingShowID): the entry survives in
+// this same map either way, and RebindPendingShowIDs is what fills in
+// ShowID once a later push can.
 type fppConnectPendingBinding struct {
 	ShowName string `json:"showName"`
 	ShowID   string `json:"showId"`
 }
+
+// fppConnectUnboundReasonShowIDNotPushed is fppConnectHeldRecord.
+// UnboundReason's value for review round 2 finding D: a POST
+// /api/playlist/{name} (or the active-show pending fallback) named a
+// show this node's ShowNames() lists exactly once, but whose config
+// object id has not been pushed yet (a node snapshot, or the pushing
+// coordinator, that predates the additive "shows" field). Distinct from
+// genuine ambiguity (two shows sharing the display name): the fix is a
+// later push resolving automatically, not an operator renaming a show.
+const fppConnectUnboundReasonShowIDNotPushed = "show id not yet pushed"
 
 // fppConnectIndex is the whole of fppConnectHeldStore's durable state, and
 // exactly what persistLocked/load read and write as one JSON document,
@@ -508,6 +522,31 @@ func (s *fppConnectHeldStore) RecordFor(dir, name string) (fppConnectHeldRecord,
 	defer s.mu.Unlock()
 	rec, ok := s.records[dir+"/"+name]
 	return rec, ok
+}
+
+// CollidingRecord returns another currently bound record in dir that
+// shares showID and logicalSequence with (dir, name) but has a different
+// Name, if one exists (review round 2 finding C): two distinct file name
+// stems can slugify to the identical sequence id ("My Show.fseq" and
+// "my_show.fseq" both slug to "my-show"), and the assets API's identity is
+// (show, sequence, targetKind, target), never the filename, so registering
+// both under the same show would silently supersede one with the other.
+// Scoped to dir so a music/videos file, which this lane never registers
+// at all, is never flagged against a sequences file it could never
+// actually collide with at the API. ok is false when no such collision
+// exists.
+func (s *fppConnectHeldStore) CollidingRecord(dir, name, showID, logicalSequence string) (fppConnectHeldRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rec := range s.records {
+		if rec.Dir != dir || rec.Name == name || !rec.Bound {
+			continue
+		}
+		if rec.ShowID == showID && rec.LogicalSequence == logicalSequence {
+			return rec, true
+		}
+	}
+	return fppConnectHeldRecord{}, false
 }
 
 // setRegistrationLocked applies one registration-state transition to
@@ -1143,10 +1182,20 @@ func (s *fppConnectHeldStore) completeLocked(dir, name string, sizeBytes int64, 
 	}
 
 	if binding, ok := s.pending[name]; ok {
-		rec.Bound = true
-		rec.Show = binding.ShowName
-		rec.ShowID = binding.ShowID
-		rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+		if binding.ShowID == "" {
+			// A POST /api/playlist/{name} named this file's show by
+			// display name before the coordinator ever pushed that
+			// show's id (review round 2 finding D): held unbound, not
+			// guessed, with a reason RebindPendingShowIDs specifically
+			// looks for once a later push carries shows.
+			rec.Show = binding.ShowName
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+		} else {
+			rec.Bound = true
+			rec.Show = binding.ShowName
+			rec.ShowID = binding.ShowID
+			rec.LogicalSequence = fppConnectLogicalSequenceSlug(name)
+		}
 		s.deletePendingLocked(name)
 	} else if hadPrev && prev.Bound {
 		rec.Bound = true
@@ -1221,6 +1270,107 @@ func (s *fppConnectHeldStore) BindShow(showName, showID string, fileNames []stri
 
 	if err := s.persistLocked(); err != nil {
 		s.logger.Warn("fppconnect: failed to persist held upload index after a playlist bind", "show", showName, "error", err)
+	}
+}
+
+// BindPendingShowID applies one POST /api/playlist/{name} whose name
+// resolved to exactly one show by display name, but whose config object
+// id has not been pushed yet (review round 2 finding D,
+// fppConnectUnboundReasonShowIDNotPushed): every already-held record
+// among fileNames is marked unbound with that reason, carrying showName
+// so RebindPendingShowIDs can resolve it once a later push provides
+// shows; a name with no held match yet is remembered in s.pending with an
+// empty ShowID for the identical reason, resolved on completion
+// (fppConnectHeldStore.completeLocked) the same way. Mirrors BindShow's
+// own shape one field over, differing only in that nothing here ever sets
+// Bound true.
+func (s *fppConnectHeldStore) BindPendingShowID(showName string, fileNames []string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, fname := range fileNames {
+		if fname == "" {
+			continue
+		}
+		matched := false
+		for key, rec := range s.records {
+			if rec.Name != fname {
+				continue
+			}
+			rec.Bound = false
+			rec.Show = showName
+			rec.ShowID = ""
+			rec.LogicalSequence = ""
+			rec.UnboundReason = fppConnectUnboundReasonShowIDNotPushed
+			s.records[key] = rec
+			matched = true
+			if s.onHeld != nil {
+				s.onHeld(rec)
+			}
+		}
+		if matched {
+			s.deletePendingLocked(fname)
+		} else {
+			s.addPendingLocked(fname, showName, "")
+		}
+	}
+
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a pending-show-id playlist bind", "show", showName, "error", err)
+	}
+}
+
+// RebindPendingShowIDs re-resolves every held record whose UnboundReason
+// is fppConnectUnboundReasonShowIDNotPushed, and every pending binding
+// with an empty ShowID, against resolveShowID (review round 2 finding D):
+// a node whose held store predates the coordinator's shows field, or that
+// bound a playlist post before a push ever carried it, converges
+// automatically the next time any push resolves the show name it already
+// knew, with no operator action required. Called after every applied
+// "fppconnect.configure" push (agent.go), whether or not this particular
+// push actually changed shows: a push carrying the identical list as
+// before just walks and finds nothing left to resolve.
+func (s *fppConnectHeldStore) RebindPendingShowIDs(resolveShowID func(name string) (id string, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	changed := false
+	for key, rec := range s.records {
+		if rec.UnboundReason != fppConnectUnboundReasonShowIDNotPushed || rec.Show == "" {
+			continue
+		}
+		id, ok := resolveShowID(rec.Show)
+		if !ok {
+			continue
+		}
+		rec.Bound = true
+		rec.ShowID = id
+		rec.LogicalSequence = fppConnectLogicalSequenceSlug(rec.Name)
+		rec.UnboundReason = ""
+		s.records[key] = rec
+		changed = true
+		if s.onHeld != nil {
+			s.onHeld(rec)
+		}
+	}
+
+	for fname, binding := range s.pending {
+		if binding.ShowID != "" {
+			continue
+		}
+		id, ok := resolveShowID(binding.ShowName)
+		if !ok {
+			continue
+		}
+		s.pending[fname] = fppConnectPendingBinding{ShowName: binding.ShowName, ShowID: id}
+		changed = true
+	}
+
+	if !changed {
+		return
+	}
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after rebinding pending show ids", "error", err)
 	}
 }
 
@@ -1334,6 +1484,27 @@ func (s *fppConnectHeldStore) RecordAmbiguousPlaylist(name string, matchCount in
 	}
 }
 
+// RecordShowIDNotPushed records that a POST /api/playlist/{name} named a
+// show this node's ShowNames() lists exactly once, but whose config
+// object id ShowID cannot resolve (review round 2 finding D): a node
+// whose held snapshot, or the coordinator push that reached it, predates
+// the additive "shows" id/name list. Distinct from "ambiguous" (two shows
+// sharing this display name): reporting this case as ambiguous with a
+// matchCount of 1 would misname a temporary propagation gap as a genuine
+// naming collision. BindPendingShowID is this event's usual companion
+// call: it is what actually holds the named files pending, and
+// RebindPendingShowIDs is what resolves them once a later push carries
+// shows.
+func (s *fppConnectHeldStore) RecordShowIDNotPushed(name string, entries []string, at time.Time) {
+	capped, truncated := capEventEntries(entries)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendEventLocked(fppConnectEvent{Kind: "show-id-not-pushed", Name: name, Entries: capped, EntriesTruncated: truncated, At: at})
+	if err := s.persistLocked(); err != nil {
+		s.logger.Warn("fppconnect: failed to persist held upload index after a show-id-not-pushed playlist post", "name", name, "error", err)
+	}
+}
+
 // persistLocked writes the whole index as one file, temp-then-rename, s.mu
 // already held. Matches internal/agent/heldcatalog.FileStore.Save's exact
 // discipline.
@@ -1358,6 +1529,52 @@ func (s *fppConnectHeldStore) persistLocked() error {
 	return nil
 }
 
+// fppConnectIndexOnDisk mirrors fppConnectIndex's shape exactly, except
+// Pending is left as raw JSON: load decodes it tolerantly against either
+// shape (review round 2 finding E). An index the pre-FC3 build wrote has
+// Pending as map[string]string (a bare show display name); the current
+// build writes map[string]fppConnectPendingBinding. Unmarshaling the
+// WHOLE document strictly against the new shape fails outright on an
+// old-shape Pending value, which previously discarded Records too, even
+// though only Pending's own shape had changed underneath it: the node's
+// entire held-file memory was lost while the files themselves stayed on
+// disk, untracked. persistLocked still always writes the current shape;
+// only decoding needs to tolerate the old one.
+type fppConnectIndexOnDisk struct {
+	Records      map[string]fppConnectHeldRecord `json:"records"`
+	Pending      json.RawMessage                 `json:"pending"`
+	PendingOrder []string                        `json:"pendingOrder"`
+	Events       []fppConnectEvent               `json:"events"`
+}
+
+// decodePendingTolerant decodes raw as the current
+// map[string]fppConnectPendingBinding shape, falling back to the pre-FC3
+// map[string]string shape (a bare show display name, no id) on failure
+// and converting its entries to the current shape with an empty ShowID:
+// exactly fppConnectUnboundReasonShowIDNotPushed's own "not resolved yet"
+// state, which RebindPendingShowIDs (or simply a fresh playlist POST for
+// the same show) heals automatically rather than requiring a distinct
+// migration step. Returns (nil, nil) for an absent or null Pending key,
+// matching encoding/json's own treatment of an omitted map.
+func decodePendingTolerant(raw json.RawMessage) (map[string]fppConnectPendingBinding, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var current map[string]fppConnectPendingBinding
+	if err := json.Unmarshal(raw, &current); err == nil {
+		return current, nil
+	}
+	var legacy map[string]string
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return nil, err
+	}
+	out := make(map[string]fppConnectPendingBinding, len(legacy))
+	for fname, showName := range legacy {
+		out[fname] = fppConnectPendingBinding{ShowName: showName}
+	}
+	return out, nil
+}
+
 // load reads a previously persisted index, if any, matching
 // internal/agent/heldcatalog.FileStore.Load's identical "missing is fine,
 // corrupt is an error" contract. Called only from the constructor, before
@@ -1370,15 +1587,19 @@ func (s *fppConnectHeldStore) load() error {
 		}
 		return fmt.Errorf("fppconnect: read held upload index: %w", err)
 	}
-	var idx fppConnectIndex
+	var idx fppConnectIndexOnDisk
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return fmt.Errorf("fppconnect: decode held upload index: %w", err)
+	}
+	pending, err := decodePendingTolerant(idx.Pending)
+	if err != nil {
+		return fmt.Errorf("fppconnect: decode held upload index pending bindings: %w", err)
 	}
 	if idx.Records != nil {
 		s.records = idx.Records
 	}
-	if idx.Pending != nil {
-		s.pending = idx.Pending
+	if pending != nil {
+		s.pending = pending
 	}
 	if idx.PendingOrder != nil {
 		s.pendingOrder = idx.PendingOrder

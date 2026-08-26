@@ -763,6 +763,132 @@ func TestFPPConnectPlaylistPostAmbiguousName(t *testing.T) {
 	}
 }
 
+// TestFPPConnectPlaylistPostShowIDNotPushedYet is review round 2 finding
+// D's own regression test: a name that resolves to exactly one show by
+// display name, but whose config object id has not been pushed yet
+// (ShowNames has it, Shows does not), must record its own "show-id-not-
+// pushed" evidence and its own distinct unbound reason, never the
+// "ambiguous" event a genuine two-shows-share-a-name collision produces.
+func TestFPPConnectPlaylistPostShowIDNotPushedYet(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	// showNames carries "Halloween" (an unambiguous match), but shows is
+	// empty: this node's snapshot (or the coordinator push that reached
+	// it) predates the additive shows id/name list.
+	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	if resp, body := patchChunk(t, srv, "sequences", "NoID.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	postBody := []byte(`{"mainPlaylist":[{"sequenceName":"NoID.fseq"}]}`)
+	resp, body := postPlaylist(t, srv, "Halloween", postBody)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+
+	rec, ok := findHeldRecord(t, held, "sequences", "NoID.fseq")
+	if !ok {
+		t.Fatal("no held record")
+	}
+	if rec.Bound {
+		t.Fatalf("record = %+v, want unbound (show id not yet pushed)", rec)
+	}
+	if rec.UnboundReason != fppConnectUnboundReasonShowIDNotPushed {
+		t.Fatalf("UnboundReason = %q, want %q", rec.UnboundReason, fppConnectUnboundReasonShowIDNotPushed)
+	}
+	if rec.Show != "Halloween" {
+		t.Fatalf("Show = %q, want Halloween (remembered so a later push can rebind it)", rec.Show)
+	}
+
+	var found, sawAmbiguous bool
+	for _, ev := range held.Events() {
+		if ev.Kind == "show-id-not-pushed" && ev.Name == "Halloween" {
+			found = true
+		}
+		if ev.Kind == "ambiguous" {
+			sawAmbiguous = true
+		}
+	}
+	if !found {
+		t.Fatalf("no show-id-not-pushed evidence recorded; events = %+v", held.Events())
+	}
+	if sawAmbiguous {
+		t.Fatalf("an ambiguous event was recorded, want show-id-not-pushed only; events = %+v", held.Events())
+	}
+}
+
+// TestFPPConnectRebindPendingShowIDsOnLaterPush is review round 2 finding
+// D's second regression test: once a later push resolves the show name a
+// node already knew, every record held pending only for that reason binds
+// automatically, whether it was already a completed held record, already
+// a pending (not-yet-uploaded) binding, or still pending when the file
+// finally completes after the rebind.
+func TestFPPConnectRebindPendingShowIDsOnLaterPush(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+	view := fakeFPPConnectView{enabled: true, showNames: []string{"Halloween"}}
+	srv := startFPPConnectTestServer(t, view, "node-1", held)
+
+	// "Existing.fseq" is already held when the playlist POST arrives;
+	// "Later.fseq" completes afterward but before the rebind; "Pending.fseq"
+	// is still a bare pending binding when the rebind itself runs.
+	if resp, body := patchChunk(t, srv, "sequences", "Existing.fseq", 0, 3, []byte("abc")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload Existing.fseq: status = %d, body=%s", resp.StatusCode, body)
+	}
+	postBody := []byte(`{"mainPlaylist":[
+		{"sequenceName":"Existing.fseq"},
+		{"sequenceName":"Later.fseq"},
+		{"sequenceName":"Pending.fseq"}
+	]}`)
+	if resp, body := postPlaylist(t, srv, "Halloween", postBody); resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST: status = %d, body=%s", resp.StatusCode, body)
+	}
+	if resp, body := patchChunk(t, srv, "sequences", "Later.fseq", 0, 4, []byte("late")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload Later.fseq: status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	for _, name := range []string{"Existing.fseq", "Later.fseq"} {
+		rec, ok := findHeldRecord(t, held, "sequences", name)
+		if !ok || rec.Bound {
+			t.Fatalf("%s: record = %+v (found=%v), want held and unbound before the rebind", name, rec, ok)
+		}
+	}
+
+	// A later "fppconnect.configure" push resolves "Halloween" to an id
+	// (agent.go wires this exact call to fppConnect.ShowID after every
+	// applied push).
+	held.RebindPendingShowIDs(func(name string) (string, bool) {
+		if name == "Halloween" {
+			return "halloween-2026", true
+		}
+		return "", false
+	})
+
+	for _, name := range []string{"Existing.fseq", "Later.fseq"} {
+		rec, ok := findHeldRecord(t, held, "sequences", name)
+		if !ok {
+			t.Fatalf("%s: no held record after rebind", name)
+		}
+		if !rec.Bound || rec.Show != "Halloween" || rec.ShowID != "halloween-2026" {
+			t.Fatalf("%s: record = %+v, want bound to Halloween (id halloween-2026)", name, rec)
+		}
+		if rec.UnboundReason != "" {
+			t.Fatalf("%s: UnboundReason = %q, want empty after rebind", name, rec.UnboundReason)
+		}
+	}
+
+	// Pending.fseq had no held record at rebind time; its pending entry's
+	// ShowID should now be resolved, so completing it afterward binds
+	// immediately with no further playlist POST needed.
+	if resp, body := patchChunk(t, srv, "sequences", "Pending.fseq", 0, 7, []byte("pending")); resp.StatusCode != http.StatusOK {
+		t.Fatalf("upload Pending.fseq: status = %d, body=%s", resp.StatusCode, body)
+	}
+	rec, ok := findHeldRecord(t, held, "sequences", "Pending.fseq")
+	if !ok || !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("Pending.fseq record = %+v (found=%v), want bound with id halloween-2026 after its pending entry was rebound", rec, ok)
+	}
+}
+
 // TestFPPConnectUploadBootSweepKeepsHeld proves the boot sweep removes
 // stale partials and keeps held files.
 func TestFPPConnectUploadBootSweepKeepsHeld(t *testing.T) {
@@ -861,6 +987,71 @@ func TestFPPConnectLoadTrimsOversizedPendingAndEvents(t *testing.T) {
 	}
 	if gotEvents != fppConnectMaxEvents {
 		t.Fatalf("len(events) = %d, want %d", gotEvents, fppConnectMaxEvents)
+	}
+}
+
+// TestFPPConnectLoadToleratesOldShapePendingValues is review round 2
+// finding E's own regression test: an index.json written by the pre-FC3
+// build has "pending" as map[string]string (a bare show display name, no
+// id); this build's own Pending type is map[string]fppConnectPendingBinding.
+// Decoding the whole document strictly against the current shape used to
+// fail the ENTIRE unmarshal on that one field, which meant Records was
+// discarded too and the node started reporting as if it held nothing,
+// while the actual files stayed on disk, orphaned from this store's own
+// memory of them. Loading the old shape must keep Records intact and
+// convert the legacy pending entries to the current shape with an empty
+// ShowID (the same "not resolved yet" state a fresh show-id-not-pushed
+// pending entry has).
+func TestFPPConnectLoadToleratesOldShapePendingValues(t *testing.T) {
+	dir := t.TempDir()
+
+	oldShapeIndex := `{
+		"records": {
+			"sequences/Kept.fseq": {
+				"dir": "sequences",
+				"name": "Kept.fseq",
+				"sizeBytes": 3,
+				"contentHash": "sha256:deadbeef",
+				"receivedAt": "2026-08-01T00:00:00Z",
+				"bound": true,
+				"show": "Halloween",
+				"showId": "halloween-2026",
+				"logicalSequence": "kept"
+			}
+		},
+		"pending": {
+			"Legacy.fseq": "SomeOldShow"
+		},
+		"pendingOrder": ["Legacy.fseq"],
+		"events": []
+	}`
+
+	indexDir := filepath.Join(dir, fppConnectUploadStateSubdir)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(indexDir, fppConnectIndexFileName), []byte(oldShapeIndex), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	held := newFPPConnectHeldStore(dir, discardLogger())
+
+	rec, ok := findHeldRecord(t, held, "sequences", "Kept.fseq")
+	if !ok {
+		t.Fatal("Records was discarded: no held record for sequences/Kept.fseq after loading an old-shape index")
+	}
+	if !rec.Bound || rec.ShowID != "halloween-2026" {
+		t.Fatalf("record = %+v, want the pre-existing bound record intact", rec)
+	}
+
+	held.mu.Lock()
+	binding, exists := held.pending["Legacy.fseq"]
+	held.mu.Unlock()
+	if !exists {
+		t.Fatal("the legacy pending entry did not survive loading")
+	}
+	if binding.ShowName != "SomeOldShow" || binding.ShowID != "" {
+		t.Fatalf("pending binding = %+v, want ShowName=SomeOldShow ShowID=\"\"", binding)
 	}
 }
 

@@ -223,24 +223,21 @@ func Run() int {
 		}
 	}, time.Now, logger)
 	fppConnectHeld.SetOnHeld(fppConnectRegistrar.OnHeld)
-	fppConnect.SetOnPush(fppConnectRegistrar.Wake)
+	// Every applied "fppconnect.configure" push both wakes the registrar's
+	// retry loops (the operator may have just fixed the coordinator base
+	// URL) and re-resolves any record still held pending only because
+	// this node had never been pushed a shows id/name list yet (review
+	// round 2 finding D): a harmless no-op walk when shows has not
+	// actually changed.
+	fppConnect.SetOnPush(func() {
+		fppConnectHeld.RebindPendingShowIDs(fppConnect.ShowID)
+		fppConnectRegistrar.Wake()
+	})
 	// Walk the backlog after FC2's own staging sweep and this store's own
 	// disk load (both already done above): a bound-but-unregistered record
 	// left over from a previous run re-enters the retry loop; a registered
 	// one is left alone; an unbound one stays unbound.
 	fppConnectRegistrar.BootWalk()
-
-	// fppConnectRegisterDone is joined below like every other long-lived
-	// goroutine's own done channel: fppConnectRegistrar.Wait blocks until
-	// every registerLoop it has ever started has returned, which happens
-	// promptly once sigCtx (r.ctx) is canceled (review round 1 finding 4;
-	// before this existed, an in-flight registration attempt was simply
-	// abandoned with nothing downstream ever waiting on it).
-	fppConnectRegisterDone := make(chan struct{})
-	go func() {
-		defer close(fppConnectRegisterDone)
-		fppConnectRegistrar.Wait()
-	}()
 
 	fppConnectHTTPDone := make(chan struct{})
 	go func() {
@@ -445,10 +442,10 @@ func Run() int {
 	stopSignal()
 
 	// The heartbeat, asset inventory, render report, audio report, audio
-	// session watcher, MultiSync listener, FPP Connect HTTP listener, FPP
-	// Connect registrar, and show mode watch loops also select on
-	// sigCtx.Done() and exit on their own; wait for all nine so none can
-	// race the final offline publish below with a publish still in flight.
+	// session watcher, MultiSync listener, FPP Connect HTTP listener, and
+	// show mode watch loops also select on sigCtx.Done() and exit on their
+	// own; wait for all eight so none can race the final offline publish
+	// below with a publish still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
@@ -456,7 +453,22 @@ func Run() int {
 	<-audioWatchDone
 	<-multiSyncDone
 	<-fppConnectHTTPDone
-	<-fppConnectRegisterDone
+
+	// fppConnectRegistrar.Wait is called inline here, not joined through
+	// its own done channel started earlier (review round 2 finding A: a
+	// goroutine spawned right after BootWalk calls Wait while the
+	// WaitGroup's counter is still whatever BootWalk happened to leave it
+	// at, often zero, so Wait returns immediately and closes its done
+	// channel during startup; every registration that starts afterward,
+	// which is effectively all of them, is never joined at all). Calling
+	// it here, after fppConnectHTTPDone, is the fix: the HTTP listener
+	// that can still call OnHeld (an in-flight upload finishing, or a
+	// buffered playlist POST) has already stopped by this point, so no
+	// further registerLoop can start, and this blocks until every one
+	// already running (started at boot or at any point up to just now)
+	// has actually returned.
+	fppConnectRegistrar.Wait()
+
 	<-showModeWatchDone
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)

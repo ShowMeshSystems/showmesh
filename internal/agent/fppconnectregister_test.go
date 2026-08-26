@@ -730,12 +730,20 @@ func TestFPPConnectRegisterMusicFileIsSkipped(t *testing.T) {
 }
 
 // TestFPPConnectRegistrarWaitJoinsRegisterLoops is review round 1 finding
-// 4's own regression test: agent.go's clean-shutdown path calls
-// fppConnectRegistrar.Wait to join every registerLoop goroutine, matching
-// every other long-lived goroutine there. A retry loop waiting out its
-// backoff (an unreachable coordinator, here a reserved-and-never-served
-// address) must return, and Wait must unblock, promptly once its context
-// is canceled, never left running past shutdown.
+// 4's own regression test, driving the real shutdown ordering review
+// round 2 finding A fixed: agent.go used to spawn a goroutine that called
+// fppConnectRegistrar.Wait right after BootWalk and joined that goroutine
+// through its own done channel; since BootWalk found nothing to register
+// on a fresh store, the WaitGroup's counter was already zero, so that
+// early Wait returned immediately and its done channel closed during
+// startup, before any upload ever completed, meaning shutdown never
+// actually joined a single real registration. This test reproduces that
+// exact sequence: call Wait once while nothing is registered (proving it
+// returns immediately, the harmless case that hid the bug), THEN bind a
+// file (starting a real registerLoop against an unreachable coordinator),
+// and call Wait a second time, the way agent.go's shutdown path now does
+// it inline, proving THAT call actually blocks on the running loop and
+// unblocks only once its context is canceled.
 func TestFPPConnectRegistrarWaitJoinsRegisterLoops(t *testing.T) {
 	held, _ := newTestHeldStore(t)
 
@@ -754,9 +762,28 @@ func TestFPPConnectRegistrarWaitJoinsRegisterLoops(t *testing.T) {
 	reg := newFPPConnectRegistrar(ctx, held, state, "node-1", "", func() {}, time.Now, discardLogger())
 	held.SetOnHeld(reg.OnHeld)
 
+	// Nothing has ever been bound yet: an early Wait (the bug's own call
+	// site) returns immediately, exactly the behavior that made the bug
+	// invisible.
+	earlyDone := make(chan struct{})
+	go func() {
+		reg.Wait()
+		close(earlyDone)
+	}()
+	select {
+	case <-earlyDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("an early Wait with nothing registered did not return promptly")
+	}
+
+	// Now a real upload binds and starts a real registerLoop, the event
+	// the early Wait above could never have joined.
 	uploadAndBind(t, held, "sequences", "NeverUp.fseq", []byte("data"))
 	waitForRegistrationState(t, held, "sequences", "NeverUp.fseq", fppConnectRegistrationPending)
 
+	// This is agent.go's own shutdown-path call, made after the loop
+	// above has already started: it must block on that loop, not return
+	// immediately the way the buggy early goroutine's call did.
 	waitDone := make(chan struct{})
 	go func() {
 		reg.Wait()
@@ -814,5 +841,113 @@ func TestFPPConnectRegisterMalformedBaseURLDoesNotLeakTheWriterGoroutine(t *test
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+}
+
+// TestFPPConnectRegisterSupersedingUploadDuringInFlightAttemptStillRegisters
+// is review round 2 finding B's own regression test: a second upload of
+// the same (dir, name) that completes WHILE the first upload's own
+// registration attempt is already in flight must still end up registered.
+// startLoop's in-flight guard refuses to start a second registerLoop for
+// the same key while the first one owns it, so the ONLY way the second
+// upload's bytes ever get registered is the first loop's own terminal
+// branch treating its setter's false return (a content-hash mismatch
+// against the now-superseding record) as "pick up the new record and
+// keep going" rather than "give up."
+func TestFPPConnectRegisterSupersedingUploadDuringInFlightAttemptStillRegisters(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	v1Data := []byte("version-one")
+	v2Data := []byte("version-two-is-longer")
+	v1Hash := sha256Hex(v1Data)
+	v2Hash := sha256Hex(v2Data)
+
+	v1RequestReceived := make(chan struct{})
+	v2Bound := make(chan struct{})
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		gotHash := sha256Hex(req.fileBytes)
+		switch gotHash {
+		case v1Hash:
+			close(v1RequestReceived)
+			<-v2Bound // hold this response until v2 has already superseded the record
+			return http.StatusOK, assetResponseBody(t, "asset-v1", v1Hash, false)
+		case v2Hash:
+			return http.StatusOK, assetResponseBody(t, "asset-v2", v2Hash, false)
+		default:
+			t.Errorf("unexpected file bytes hash %q in a registration request", gotHash)
+			return http.StatusInternalServerError, ""
+		}
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	uploadAndBind(t, held, "sequences", "Race.fseq", v1Data)
+	select {
+	case <-v1RequestReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("v1's registration request never reached the fake coordinator")
+	}
+
+	// v2 completes (and binds) while v1's own request is still blocked
+	// server-side. startLoop's in-flight guard means this does NOT start
+	// a second registerLoop for "sequences/Race.fseq": v1's own loop is
+	// the only thing that can ever register these bytes now.
+	uploadAndBind(t, held, "sequences", "Race.fseq", v2Data)
+	close(v2Bound)
+
+	rec := waitForRegistrationState(t, held, "sequences", "Race.fseq", fppConnectRegistrationRegistered)
+	if rec.ContentHash != v2Hash || rec.RegistrationAssetID != "asset-v2" {
+		t.Fatalf("record = %+v, want it registered as v2 (hash %q, asset asset-v2)", rec, v2Hash)
+	}
+
+	reqs := requests()
+	if len(reqs) != 2 {
+		t.Fatalf("registration requests = %d, want exactly 2 (v1's superseded attempt, then v2's)", len(reqs))
+	}
+}
+
+// TestFPPConnectRegisterCollidingSlugsFailTheLaterOne is review round 2
+// finding C's own regression test: two distinct file name stems that
+// slugify to the identical sequence id under the same show ("My Show.fseq"
+// and "my_show.fseq" both slug to "my-show") must never both register:
+// the earlier-received one registers normally, and the later one fails
+// with a reason naming the earlier file, without ever sending a request.
+func TestFPPConnectRegisterCollidingSlugsFailTheLaterOne(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		hash := sha256Hex(req.fileBytes)
+		return http.StatusOK, assetResponseBody(t, "asset-"+req.fields["sequence"], hash, false)
+	})
+	defer fakeSrv.Close()
+
+	newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
+
+	firstData := []byte("first-file")
+	uploadAndBind(t, held, "sequences", "My Show.fseq", firstData)
+
+	// A later, distinct ReceivedAt for the second (colliding) file.
+	time.Sleep(5 * time.Millisecond)
+	secondData := []byte("second-file-is-longer")
+	uploadAndBind(t, held, "sequences", "my_show.fseq", secondData)
+
+	registered := waitForRegistrationState(t, held, "sequences", "My Show.fseq", fppConnectRegistrationRegistered)
+	failed := waitForRegistrationState(t, held, "sequences", "my_show.fseq", fppConnectRegistrationFailed)
+
+	if registered.LogicalSequence != "my-show" || failed.LogicalSequence != "my-show" {
+		t.Fatalf("LogicalSequence = %q / %q, want both my-show", registered.LogicalSequence, failed.LogicalSequence)
+	}
+	if !strings.Contains(failed.RegistrationReason, "My Show.fseq") {
+		t.Fatalf("RegistrationReason = %q, want it to name the colliding file My Show.fseq", failed.RegistrationReason)
+	}
+	if failed.RegistrationProblemType != "" {
+		t.Fatalf("RegistrationProblemType = %q, want empty for a locally-detected collision", failed.RegistrationProblemType)
+	}
+
+	reqs := requests()
+	if len(reqs) != 1 {
+		t.Fatalf("registration requests = %d, want exactly 1 (the colliding file must never even attempt)", len(reqs))
 	}
 }

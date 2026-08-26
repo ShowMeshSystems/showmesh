@@ -280,12 +280,18 @@ func (s *fppConnectServer) handlePlaylistPost(w http.ResponseWriter, r *http.Req
 	default:
 		showID, ok := s.view.ShowID(name)
 		if !ok {
-			// matches == 1 against ShowNames() should always resolve
-			// through ShowID too: both read the same pushed shows list.
-			// Treat a disagreement defensively as the identical evidence
-			// an ambiguous name already produces, rather than bind with
-			// no id the registrar could never use.
-			s.held.RecordAmbiguousPlaylist(name, matches, fileNames, now)
+			// matches == 1 against ShowNames() but ShowID cannot resolve
+			// it: a node snapshot, or the coordinator push that reached
+			// it, predates the additive "shows" id/name list (review
+			// round 2 finding D). Distinct from genuine ambiguity (two
+			// shows sharing this name): reporting this as "ambiguous"
+			// with a matchCount of 1 would misname a temporary
+			// propagation gap as a naming collision an operator would
+			// have to fix by hand. Held unbound with its own reason
+			// instead; RebindPendingShowIDs resolves it automatically the
+			// next time any push carries shows.
+			s.held.RecordShowIDNotPushed(name, fileNames, now)
+			s.held.BindPendingShowID(name, fileNames, now)
 			break
 		}
 		s.held.BindShow(name, showID, fileNames, now)
