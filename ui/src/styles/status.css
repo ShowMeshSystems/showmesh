@@ -76,7 +76,7 @@
 }
 
 .evidence__reason {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
 }
 
@@ -90,14 +90,21 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* Non-"current" freshness line (ADR-011: nothing that is not "current" is
+   ever quieted relative to the "current" case). Must stay at least as
+   large as .evidence__age--inline below -- never demoted back to
+   --font-size-xs, which would render a stale/failed/unsupported reading's
+   freshness text smaller than a healthy one's. */
 .evidence__age {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
 }
 
 /* Compact "current" case only (ADR-011): the freshness text moves onto
    the badge row instead of its own line, but stays the exact same text,
-   small and muted -- never dropped or hidden. */
+   small and muted -- never dropped or hidden. Same font-size as
+   .evidence__age above; the non-"current" case must never render smaller
+   than this one. */
 .evidence__age--inline {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
