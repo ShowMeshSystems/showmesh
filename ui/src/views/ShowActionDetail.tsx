@@ -613,10 +613,9 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
       )}
 
       <fieldset disabled={!editable} className="show-action-form">
-        <label className="form-field">
-          Show
-          <ShowSelect value={form.show} onChange={(show) => setForm({ ...form, show })} />
-        </label>
+        <div className="form-field">
+          <ShowSelect label="Show" value={form.show} onChange={(show) => setForm({ ...form, show })} />
+        </div>
         <label className="form-field">
           Label
           <input type="text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />

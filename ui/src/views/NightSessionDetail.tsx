@@ -462,10 +462,9 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
       )}
 
       <fieldset disabled={!editable}>
-        <label className="form-field">
-          Show
-          <ShowSelect value={form.show} onChange={(show) => setForm({ ...form, show })} />
-        </label>
+        <div className="form-field">
+          <ShowSelect label="Show" value={form.show} onChange={(show) => setForm({ ...form, show })} />
+        </div>
         <label className="form-field">
           Label
           <input type="text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
@@ -521,13 +520,13 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         </label>
 
         <h4 className="panel__title">Resting timeline asset</h4>
-        <label className="form-field">
-          Show
+        <div className="form-field">
           <ShowSelect
+            label="Show"
             value={form.restingTimelineShow}
             onChange={(restingTimelineShow) => setForm({ ...form, restingTimelineShow })}
           />
-        </label>
+        </div>
         <label className="form-field">
           Sequence
           <input

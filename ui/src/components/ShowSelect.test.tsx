@@ -132,4 +132,56 @@ describe('ShowSelect', () => {
     expect(textbox).toHaveValue('halloween-2026')
     expect(screen.getByText(/No shows are currently configured/)).toBeVisible()
   })
+
+  // Defect: a `label` given to a caller-visible "Show" field must name
+  // the control, without the not-in-list / load-failed explanation
+  // folding into that name (it previously announced as "Show This value
+  // is not in the current show list..." because callers nested the
+  // explanation's <p> inside the same <label> that named the control).
+  it('names the control from `label` alone, not from the explanation text, when the value is not in the list', async () => {
+    listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
+    render(
+      <MemoryRouter>
+        <ShowSelect label="Show" value="not-a-real-show" onChange={vi.fn()} />
+      </MemoryRouter>,
+    )
+
+    const select = await screen.findByRole('combobox', { name: 'Show' })
+    expect(select).toHaveAccessibleDescription(/not in the current show list/)
+  })
+
+  it('names the text-input fallback from `label` alone when the list fails to load', async () => {
+    listConfigObjects.mockRejectedValue(new Error('network unreachable'))
+    render(
+      <MemoryRouter>
+        <ShowSelect label="Show" value="" onChange={vi.fn()} />
+      </MemoryRouter>,
+    )
+
+    const textbox = await screen.findByRole('textbox', { name: 'Show' })
+    expect(textbox).toHaveAccessibleDescription(/Could not load the show list/)
+  })
+
+  // Defect: every mounted ShowSelect independently issued GET
+  // /config/show. NightSessionDetail alone can mount a dozen at once
+  // (its own show, the resting timeline, and one per background-audio
+  // item), so this proves two simultaneously mounted instances share one
+  // fetch and agree on the result, rather than racing to two independent
+  // loading/error states for the same list.
+  it('shares one GET /config/show fetch across simultaneously mounted instances', async () => {
+    listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
+    render(
+      <MemoryRouter>
+        <ShowSelect value="" onChange={vi.fn()} />
+        <ShowSelect value="" onChange={vi.fn()} />
+      </MemoryRouter>,
+    )
+
+    const selects = await screen.findAllByRole('combobox')
+    expect(selects).toHaveLength(2)
+    await waitFor(() => {
+      expect(screen.getAllByRole('option', { name: 'halloween-2026' })).toHaveLength(2)
+    })
+    expect(listConfigObjects).toHaveBeenCalledTimes(1)
+  })
 })

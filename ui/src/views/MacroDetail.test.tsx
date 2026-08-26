@@ -106,7 +106,7 @@ describe('MacroDetail (new macro authoring)', () => {
     expect(listConfigObjects).toHaveBeenCalledWith('show.action', undefined)
     listConfigObjects.mockClear()
 
-    await user.selectOptions(await screen.findByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Show' }), 'halloween-2026')
 
     expect(listConfigObjects).toHaveBeenCalledWith('show.action', 'halloween-2026')
   })

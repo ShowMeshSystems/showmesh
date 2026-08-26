@@ -200,7 +200,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Audio'))
     await user.type(screen.getByLabelText('Asset'), 'opening-audio')
@@ -216,7 +216,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Audio'))
     await user.type(screen.getByLabelText('Asset'), 'opening-audio')
@@ -234,7 +234,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Audio'))
     await user.type(screen.getByLabelText('Asset'), 'opening-audio')
