@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { FPPDetail } from './FPPDetail'
 import { ModelContext } from '../app/ModelContext'
+import { formatAbsolute } from '../app/time'
 import { makeEvidence, makeFPPInstance, makeModel } from '../app/test-support/fixtures'
 import {
   makeGhostFpp01Instance,
@@ -552,5 +553,84 @@ describe("FPPDetail's current playback panel", () => {
     renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not check')
+  })
+
+  it('renders the verdict\'s own serverTime as the fetch time, so a stale verdict is dated', async () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-fpp-1',
+      outcome: 'unbound',
+      reason: 'no binding is configured for this instance',
+      definitionAvailable: false,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
+
+    expect(await screen.findByText(formatAbsolute('2026-08-25T18:40:00Z'))).toBeInTheDocument()
+  })
+
+  // The defect this task closes: the effect's deps were
+  // [instanceUuid, snapshotReceivedAt] only, so a fresh
+  // fppPlaylistEntry.changed observation for this instance never
+  // retriggered the fetch -- only a reconnect did. Asserting the fetch
+  // COUNT, not just that a fetch happened, so a broken fix that
+  // refetches on every render (or on an object identity that changes
+  // every snapshot) cannot pass this by accident.
+  it('refetches when this instance\'s latest observation sequence advances, with no reconnect', async () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-fpp-1',
+      outcome: 'unbound',
+      reason: 'no binding is configured for this instance',
+      definitionAvailable: false,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    const observation: SchemaObservation = {
+      instanceUuid: 'uuid-fpp-1',
+      endpointId: 'fpp-1',
+      schemaVersion: 1,
+      sequence: 1,
+      action: 'playing',
+      observedAt: '2026-08-25T18:39:00Z',
+      coalescedSincePreviousAcknowledged: 0,
+      receivedAt: '2026-08-25T18:39:00Z',
+    }
+    const { rerender } = renderFPPDetail(
+      'fpp-1',
+      makeModel({ fpp: [instance], fppPlaylistEntryObservations: [observation] }),
+    )
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(1))
+
+    // Same snapshot, same instance, re-rendering with an unchanged model:
+    // must NOT refetch merely from rendering again.
+    rerender(
+      <ModelContext.Provider
+        value={makeModel({ fpp: [instance], fppPlaylistEntryObservations: [observation] })}
+      >
+        <MemoryRouter initialEntries={['/fpp/fpp-1']}>
+          <Routes>
+            <Route path="/fpp/:instanceId" element={<FPPDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(1)
+
+    // FPP reports a new entry: sequence advances, snapshot is unchanged.
+    rerender(
+      <ModelContext.Provider
+        value={makeModel({
+          fpp: [instance],
+          fppPlaylistEntryObservations: [{ ...observation, sequence: 2 }],
+        })}
+      >
+        <MemoryRouter initialEntries={['/fpp/fpp-1']}>
+          <Routes>
+            <Route path="/fpp/:instanceId" element={<FPPDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(2))
   })
 })
