@@ -206,6 +206,18 @@ type ListenerConfig struct {
 	// (SystemTypeUnknown).
 	DiscoverResponse PingPacket
 
+	// DiscoverResponseFunc, if non-nil, is called fresh on every discover
+	// ping to build the response, instead of using the DiscoverResponse
+	// template captured once at NewListener time. This is for fields whose
+	// current value is not known until reply time (for example a channel
+	// range string sourced from a holder another goroutine updates); a
+	// caller with only static fields should keep using DiscoverResponse
+	// instead. SubType is always overwritten to PingSubTypePing on the
+	// result, the same as for DiscoverResponse, and this func's own
+	// Hostname/SystemType are used as returned, without DiscoverResponse's
+	// zero-value defaulting.
+	DiscoverResponseFunc func() PingPacket
+
 	// DiscoverResponseDelay returns how long to wait before answering a
 	// discover ping. Defaults to a random 0-5ms delay, mirroring FPP's own
 	// MultiSync.cpp (~line 3088 as of the version read for RES-002), which
@@ -642,6 +654,10 @@ func (l *Listener) sendDiscoverResponse(src *net.UDPAddr) {
 	dst := &net.UDPAddr{IP: src.IP, Port: l.discoverReplyPort}
 
 	resp := l.discoverResponse
+	if l.cfg.DiscoverResponseFunc != nil {
+		resp = l.cfg.DiscoverResponseFunc()
+		resp.SubType = PingSubTypePing
+	}
 	if resp.IP == ([4]byte{}) {
 		if ip, ok := localIPToward(src.IP); ok {
 			resp.IP = ip

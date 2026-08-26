@@ -162,10 +162,16 @@ func Run() int {
 	// log line — finding 7's second half; see multisyncstatus.go.
 	multiSyncStatus := newMultiSyncStatus()
 
+	// fppConnectState carries this node's FPP Connect compatibility state
+	// (currently just the advertised channel range string) so the
+	// discover-ping responder reads it fresh at reply time rather than a
+	// value fixed at startup. See fppconnectstate.go.
+	fppConnect := newFPPConnectState()
+
 	multiSyncDone := make(chan struct{})
 	go func() {
 		defer close(multiSyncDone)
-		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, logger)
+		runMultiSyncListener(sigCtx, cfg.NodeID, cfg.MultiSyncListenAddr, cfg.MultiSyncInterface, timeline, multiSyncStatus, fppConnect, logger)
 	}()
 
 	// showMode is ADR-033's installation-wide operating mode as this node
