@@ -50,16 +50,17 @@ type FPPPlaylistEntryReconciliationResponse struct {
 
 // FPPPlaylistReadinessResponse is GET
 // /integrations/fpp/playlists/{playlistId}/readiness's body,
-// TRACK-H-H2-SPEC.md §6: whether one FPP-backed Playlist is ready, and
-// which of the five ordered conditions fails first when it is not. A
-// read-only projection of internal/coordinator/fppreconcile.Report.
-// FailingCondition is one of "definition-missing",
-// "entry-not-in-definition", "entry-filename-mismatch",
-// "cue-not-ready", or "observation-hash-mismatch"
-// (fppreconcile.ReadinessCondition's wire spellings), empty when Ready.
-// Warning is set only for the non-fatal form of the fifth condition
-// (§6's own "the normal afternoon state, not a fault" case), never
-// alongside a non-empty FailingCondition.
+// TRACK-H-H2-SPEC.md §6 plus Lane 16's open extension of the same
+// vocabulary (docs/build/IDENTIFIER-REGISTER.md's "Playlist readiness
+// conditions"): whether one FPP-backed Playlist is ready, and which
+// condition fails first when it is not. A read-only projection of
+// internal/coordinator/fppreconcile.Report. FailingCondition is one of
+// "definition-missing", "entry-not-in-definition",
+// "entry-filename-mismatch", "cue-not-ready", "observation-hash-mismatch",
+// or "node-render-unassigned" (fppreconcile.ReadinessCondition's wire
+// spellings), empty when Ready. Warning is set only for the non-fatal
+// form of the observation-hash condition (§6's own "the normal afternoon
+// state, not a fault" case), never alongside a non-empty FailingCondition.
 type FPPPlaylistReadinessResponse struct {
 	PlaylistID       string `json:"playlistId"`
 	Ready            bool   `json:"ready"`

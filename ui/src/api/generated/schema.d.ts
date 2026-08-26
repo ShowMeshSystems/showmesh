@@ -2291,7 +2291,7 @@ export interface paths {
         };
         /**
          * Report whether one FPP-backed Playlist is ready (TRACK-H-H2-SPEC.md §6)
-         * @description Open under `observation:read`, matching the reconciliation route above. Reports whether every one of §6's five ordered conditions holds (a definition is stored for the binding's (instanceUuid, playlistHash), every entry's (section, position) exists in that definition with matching filenames, every referenced Cue exists and belongs to the same Show, and the latest accepted observation (when one exists) carries the same playlistHash), and the exact failing one when it does not. Refuses with `400` for a playlist whose runner is not `fpp`: §6 readiness is an FPP-specific concept. Read-only: this route never activates anything.
+         * @description Open under `observation:read`, matching the reconciliation route above. Reports whether every one of §6's five ordered conditions holds (a definition is stored for the binding's (instanceUuid, playlistHash), every entry's (section, position) exists in that definition with matching filenames, every referenced Cue exists and belongs to the same Show, and the latest accepted observation (when one exists) carries the same playlistHash), plus one Lane 16 addition: when a referenced Cue declares a render output, every node holding a show.surface object for this Playlist's Show must currently hold a render assignment for it. Reports the exact failing one when any does not. Refuses with `400` for a playlist whose runner is not `fpp`: §6 readiness is an FPP-specific concept. Read-only: this route never activates anything.
          */
         get: operations["getFPPPlaylistReadiness"];
         put?: never;
@@ -4317,12 +4317,12 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set only for the non-fatal form of the observation-hash check (no observation received yet, "the normal afternoon state, not a fault"), never alongside a non-empty `failingCondition`. */
+        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6, plus Lane 16's `node-render-unassigned` addition): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set only for the non-fatal form of the observation-hash check (no observation received yet, "the normal afternoon state, not a fault"), never alongside a non-empty `failingCondition`. */
         FPPPlaylistReadinessResponse: {
             playlistId: string;
             ready: boolean;
             /** @enum {string} */
-            failingCondition?: "definition-missing" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "observation-hash-mismatch";
+            failingCondition?: "definition-missing" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "observation-hash-mismatch" | "node-render-unassigned";
             reason?: string;
             warning?: string;
             /** Format: date-time */

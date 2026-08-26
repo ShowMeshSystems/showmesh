@@ -361,13 +361,15 @@ const FPP_PLAYLIST_READINESS_FAILING_CONDITION: Record<
   'entry-filename-mismatch': { tone: 'bad', icon: '✕', label: 'entry filename mismatch' },
   'cue-not-ready': { tone: 'bad', icon: '✕', label: 'cue not ready' },
   'observation-hash-mismatch': { tone: 'bad', icon: '✕', label: 'observation hash mismatch' },
+  'node-render-unassigned': { tone: 'bad', icon: '✕', label: 'node render unassigned' },
 }
 
 // Only rendered once `ready` is false: every one of §6's five failing
-// conditions is its own distinguishable label, never collapsed into one
-// generic "not ready" (task instruction: "a stale import, a missing
-// asset, an unresolved reference and an unbound playlist must be
-// distinguishable from each other").
+// conditions (plus Lane 16's `node-render-unassigned` addition) is its
+// own distinguishable label, never collapsed into one generic "not
+// ready" (task instruction: "a stale import, a missing asset, an
+// unresolved reference and an unbound playlist must be distinguishable
+// from each other").
 export function FPPPlaylistReadinessFailingConditionBadge({
   condition,
 }: {
