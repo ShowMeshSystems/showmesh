@@ -162,7 +162,7 @@ func (h *handlers) handlePutShowCue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, verr := config.DecodeShowCuePayload(string(raw), h.showExists(r.Context()))
+	payload, verr := config.DecodeShowCuePayload(string(raw), h.showExists(r.Context()), h.audioNodeExists(r.Context()))
 	if verr != nil {
 		writeProblem(w, h.logger, now, mapValidationError(verr))
 		return
@@ -204,14 +204,15 @@ func mapConfigShowCueOutputs(o config.ShowCueOutputs) v1.ConfigShowCueOutputs {
 		out.Render = &v1.ConfigShowCueRenderOutput{Sequence: o.Render.Sequence}
 	}
 	if o.Audio != nil {
-		out.Audio = &v1.ConfigShowCueAudioOutput{Asset: o.Audio.Asset, StartOffsetMillis: o.Audio.StartOffsetMillis}
+		out.Audio = &v1.ConfigShowCueAudioOutput{Asset: o.Audio.Asset, StartOffsetMillis: o.Audio.StartOffsetMillis, Target: o.Audio.Target}
 	}
 	if o.LTC != nil {
-		out.LTC = &v1.ConfigShowCueLTCOutput{StartOffsetMillis: o.LTC.StartOffsetMillis}
+		out.LTC = &v1.ConfigShowCueLTCOutput{StartOffsetMillis: o.LTC.StartOffsetMillis, Target: o.LTC.Target}
 	}
 	if o.Announcement != nil {
 		out.Announcement = &v1.ConfigShowCueAnnouncementOutput{
 			Policy: o.Announcement.Policy, DuckGainDb: o.Announcement.DuckGainDb, FadeMillis: o.Announcement.FadeMillis,
+			Target: o.Announcement.Target,
 		}
 	}
 	return out

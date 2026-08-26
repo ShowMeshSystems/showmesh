@@ -124,7 +124,7 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		if err != nil {
 			return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
 		}
-		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue)
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
 		if verr != nil {
 			return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: decode stored show.cue %q: %s", obj.ID, verr.Detail)
 		}
