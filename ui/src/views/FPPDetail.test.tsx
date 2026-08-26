@@ -27,7 +27,7 @@ type SchemaObservation = components['schemas']['FPPPlaylistEntryObservation']
 // inside FPPDetail directly) is mocked here for the identical reason: this
 // view's own job is rendering the pending change and the observed
 // post-acknowledge state, not exercising the real network path.
-// SM-284's own "Current playback" panel fetches through
+// The "Current playback" panel fetches through
 // getFPPPlaylistEntryReconciliation the same way PlaylistReadiness.test.tsx
 // mocks it, for the identical reason: isolating this view's own rendering
 // from store.ts's real network behavior. Given a default resolved value
@@ -483,7 +483,7 @@ describe("FPPDetail's pending instance uuid change notice", () => {
   })
 })
 
-// SM-284: the resolved answer previously only reachable from
+// The resolved answer previously only reachable from
 // views/PlaylistReadiness.tsx, now placed on this page too, outside the
 // Recovery panel (FPPResetObservationSequenceControl.tsx's own section).
 describe("FPPDetail's current playback panel", () => {

@@ -84,7 +84,7 @@ export function FPPDetail() {
             </section>
           </PanelErrorBoundary>
 
-          {/* SM-284: the resolved answer to "what is this instance actually
+          {/* The resolved answer to "what is this instance actually
               playing, and which ShowMesh cue does that resolve to" was
               previously only reachable from the Playlist readiness page
               (views/PlaylistReadiness.tsx), keyed separately by
@@ -299,10 +299,9 @@ type CurrentEntryState =
   | { kind: 'no-observation'; detail: string }
   | { kind: 'error'; message: string }
 
-// SM-284: same fetch, generation-guard, and reconnect-refetch discipline
-// as PlaylistReadiness.tsx's own useReconciliation -- this view has no
-// live model field to key off yet (that would be SM-283's own seam), so
-// like that hook before SM-283, refresh here is reconnect-triggered
+// Same fetch, generation-guard, and reconnect-refetch discipline as
+// PlaylistReadiness.tsx's own useReconciliation -- this view has no live
+// model field to key off yet, so refresh here is reconnect-triggered
 // only, not an added polling interval.
 function useCurrentEntryReconciliation(
   instanceUuid: string | null,
@@ -334,7 +333,7 @@ function useCurrentEntryReconciliation(
   return state
 }
 
-// SM-284: what this instance is actually playing, and which ShowMesh cue
+// What this instance is actually playing, and which ShowMesh cue
 // that resolves to -- previously only visible from
 // views/PlaylistReadiness.tsx, keyed by instanceUuid there too. Renders
 // nothing distinctive for an instance that has never reported a uuid,
