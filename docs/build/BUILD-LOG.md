@@ -126,6 +126,78 @@ The installer's upgrade-in-place path was not re-run on the Pi; only the
 fresh install was. Playing audio and measuring it is SM-181 and is
 recorded separately.
 
+## 2026-08-26 (`package-node-agent` names the tarball for the platform it actually built; first arm64 cgo build of the agent)
+
+**Goal:** package the native node agent for a Raspberry Pi, which is the
+first arm64 build of the cgo agent anywhere in this project, and stop the
+target from mislabelling the result.
+
+**The defect.** `package-node-agent` hardcoded `linux_amd64` in the
+tarball name and in the SHA256SUMS entry regardless of the host it ran
+on. Running it on an arm64 host produced an arm64 binary inside a file
+called `showmesh-node-agent_<VERSION>_linux_amd64.tar.gz`, with a
+checksums file that agreed. The target now derives `NODE_AGENT_PLATFORM`
+from `go env GOOS` and `go env GOARCH`. That is the correct source for
+this one target: `build-agent-native` is `CGO_ENABLED=1` and links host C
+libraries (go-gst, libltc), so unlike the CGO-free FPP plugin it cannot
+cross-compile and can only ever target the platform it is built on.
+
+The deterministic tar and gzip discipline is untouched
+(`--sort=name --owner=0 --group=0 --numeric-owner --mtime='@0'`,
+`gzip -n -9`), and so is the `sha256sum -c` self-verification. Both were
+exercised by the arm64 run below: the tarball's entries came out with
+mtime `Jan 1 1970` and owner 0/0, and the self-check reported OK. The
+artifact contract comment at the head of the target now reads
+`showmesh-node-agent_<VERSION>_<GOOS>_<GOARCH>.tar.gz`.
+
+**`deploy/node/README.md` section 2 corrected while here.** It offered
+`apt-get install golang-go` as the primary way to get Go. Debian 13's
+`golang-go` is older than the `go 1.25.0` line in `go.mod`, so that
+instruction does not work today; installing Go by hand is the only path
+that does, and the README now says so rather than listing it as an
+alternative. The README also states that the tarball is named for its
+build platform and that packaging for a Pi means running the target on
+an arm64 host or in an arm64 container.
+
+**The build, and it is a container build.** An arm64 `debian:13`
+container on an arm64 host, resolved digest
+`sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1`,
+`docker image inspect` reporting `Architecture: arm64` (native, not
+emulated), `uname -m` = `aarch64`. Build packages from
+`deploy/node/README.md` section 2. Toolchain inside the container:
+gcc 14.2.0, GStreamer 1.26.2, GLib 2.84.4 (over the 2.80 floor),
+libltc 1.3.2, Go 1.25.0 linux/arm64.
+
+`make package-node-agent` with `CGO_ENABLED=1` completed in **113 s**
+wall clock including module downloads, with no cgo warnings and no link
+errors. **go-gst and libltc compile and link on arm64 on the first
+attempt**, which was genuinely unknown before this: CI's arm64 leg is a
+`CGO_ENABLED=0` cross-build and has never exercised the cgo backend on
+that architecture. The binary is 15,662,032 bytes unstripped; the tarball
+is 7,575,764 bytes and is named `..._linux_arm64.tar.gz`.
+
+**The container-built binary loads and runs on Raspberry Pi OS.** This
+was the open question and the answer is yes. On a Raspberry Pi 3 Model B
+Plus Rev 1.3 running Pi OS Lite 64-bit on the Debian 13 trixie base,
+`sha256sum -c` verified the tarball on the Pi, `ldd` on the unpacked
+binary resolved every dependency with no `not found` line, and the binary
+ran and printed its version. Debian 13 in a container and Pi OS Trixie do
+share a compatible glibc, GStreamer 1.26 and libltc 11 ABI, which SM-307
+predicted but nothing had confirmed. One caveat this does not cover: the
+Raspberry Pi archive ships `+rpt`-patched GStreamer (1.26.2-1+rpt3) while
+the container had plain Debian 1.26.2. Soname-level compatibility is what
+was proven, and nothing wider.
+
+**Gates.** `make check` in the foreground. No integration target was run:
+this change touches the packaging target's file naming and a README, and
+no Go code, no generated output and no API contract.
+
+**Not verified.** The amd64 leg of this target was not re-run, so the
+change is proven to produce the right name on arm64 and is unexercised on
+amd64 since the edit. Byte-for-byte reproducibility across two runs was
+not re-measured; only the deterministic flags and the self-check were
+observed to work. Nothing was published as a release.
+
 ---
 
 ## 2026-08-26 (Track C audio node: four defects from the 2026-08-25 node run fixed, operator gain moves to decibels, `main` from `747ba9d` to `7276c9c`)
