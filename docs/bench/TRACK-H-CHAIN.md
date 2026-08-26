@@ -12,6 +12,30 @@ ran together.
 Read the bench README first. It lists the preconditions, and most of the time
 this path appears broken it is one of those rather than a defect.
 
+## Safety: this bench can start a playlist on whatever FPP it is pointed at
+
+`run-chain.sh` deploys a cue catalog to a node and sends `Start Playlist` to
+`$FPP`. Both `COORD` and `FPP` must resolve to loopback (`localhost`,
+`127.0.0.0/8`, or `::1`); the script checks the resolved host, not the URL
+string, and refuses before any write if either does not. The refusal names
+the interlock, the variable that failed, and the value it resolved to.
+
+The only override is `SHOWMESH_BENCH_ALLOW_NON_LOOPBACK=1`, for pointing the
+bench at a deliberately non-loopback DEV target. It is never for the live
+fleet.
+
+The wait for FPP to report idle is bounded by `FPP_IDLE_TIMEOUT_SECONDS`
+(default 120). On timeout the script exits non-zero with a message naming the
+timeout, instead of waiting indefinitely and starting a playlist the moment a
+real show happens to end.
+
+`ADMIN_TOKEN` is read from the environment throughout, including by the two
+capture scripts that call the coordinator, `capture-observations.sh` and
+`capture-reconciliation.sh` (`capture-node-assignment.sh` reads no token; it
+only reads the node's own persisted assignment off disk). It is never passed
+as a command-line argument to any process, so it does not appear in `ps`
+output.
+
 ## What the chain is
 
 ```

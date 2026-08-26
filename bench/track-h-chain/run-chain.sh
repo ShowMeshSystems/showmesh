@@ -17,6 +17,14 @@
 #   FPP            default http://localhost:8090
 #   ASSET_DIR      default $HOME/showmesh-dev-node/assets
 #   OUT_DIR        default ./captures
+#   FPP_IDLE_TIMEOUT_SECONDS  default 120, how long to wait for FPP to report
+#                             idle before this script fails loudly
+#
+# COORD and FPP must both resolve to loopback (localhost, 127.0.0.0/8, or
+# ::1). This script deploys a cue catalog and starts a playlist on whatever
+# FPP it is pointed at, so a non-loopback target is refused before any write.
+# The only override is SHOWMESH_BENCH_ALLOW_NON_LOOPBACK=1, for pointing this
+# bench at a deliberately non-loopback DEV target. It is never for the fleet.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,9 +39,68 @@ FPP="${FPP:-http://localhost:8090}"
 ASSET_DIR="${ASSET_DIR:-$HOME/showmesh-dev-node/assets}"
 OUT_DIR="${OUT_DIR:-$HERE/captures}"
 RUN_SECONDS="${RUN_SECONDS:-90}"
+FPP_IDLE_TIMEOUT_SECONDS="${FPP_IDLE_TIMEOUT_SECONDS:-120}"
+
+# Prints "LOOPBACK <host>", "NON-LOOPBACK <host>" or "UNRESOLVED <host>" for
+# the hostname in the given URL. Never fails: an unresolvable host is treated
+# as non-loopback by the caller, not silently allowed through.
+resolveHost() {
+  python3 - "$1" <<'PY'
+import ipaddress
+import socket
+import sys
+from urllib.parse import urlsplit
+
+host = urlsplit(sys.argv[1]).hostname
+if host is None:
+    print("UNRESOLVED", sys.argv[1])
+    sys.exit(0)
+
+h = host.rstrip(".")
+if h.lower() == "localhost":
+    print("LOOPBACK", host)
+    sys.exit(0)
+
+try:
+    addrs = [ipaddress.ip_address(h)]
+except ValueError:
+    try:
+        addrs = [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(h, None)]
+    except socket.gaierror:
+        print("UNRESOLVED", host)
+        sys.exit(0)
+
+if addrs and all(a.is_loopback for a in addrs):
+    print("LOOPBACK", host)
+else:
+    print("NON-LOOPBACK", host)
+PY
+}
+
+requireLoopback() {
+  local varname="$1" url="$2" verdict host
+  read -r verdict host <<<"$(resolveHost "$url")"
+  if [ "$verdict" = "LOOPBACK" ]; then
+    return 0
+  fi
+  if [ -n "${SHOWMESH_BENCH_ALLOW_NON_LOOPBACK:-}" ]; then
+    printf 'loopback interlock: %s=%s resolved to %s (%s); proceeding because SHOWMESH_BENCH_ALLOW_NON_LOOPBACK is set\n' \
+      "$varname" "$url" "$host" "$verdict" >&2
+    return 0
+  fi
+  printf 'loopback interlock: refusing to run because %s=%s resolved to %s (%s).\nSet SHOWMESH_BENCH_ALLOW_NON_LOOPBACK=1 only to point this bench at a deliberately non-loopback DEV target. Never set it against the live fleet.\n' \
+    "$varname" "$url" "$host" "$verdict" >&2
+  exit 1
+}
+
+requireLoopback COORD "$COORD"
+requireLoopback FPP "$FPP"
 
 mkdir -p "$OUT_DIR"
-api() { curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
+# Reads the bearer header from a curl config file passed via process
+# substitution rather than -H, so the token never appears in this process's
+# argv and is not visible to `ps`.
+api() { curl -fsS -K <(printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_TOKEN") "$@"; }
 step() { printf '\n=== %s ===\n' "$1"; }
 fppIdle() {
   curl -fsS "$FPP/api/system/status" \
@@ -65,11 +132,19 @@ print("outcome:", c["outcome"], "| acknowledgedRevision:", c.get("acknowledgedRe
       "| show:", c.get("show"), "| generation:", c.get("generation"))'
 
 step "4. wait for FPP to be idle, then run the playlist and capture everything"
-while [ "$(fppIdle)" != "idle" ]; do sleep 3; done
+idleDeadline=$(( $(date +%s) + FPP_IDLE_TIMEOUT_SECONDS ))
+while [ "$(fppIdle)" != "idle" ]; do
+  if [ "$(date +%s)" -ge "$idleDeadline" ]; then
+    printf 'timed out after %ss waiting for FPP to report idle (FPP_IDLE_TIMEOUT_SECONDS)\n' \
+      "$FPP_IDLE_TIMEOUT_SECONDS" >&2
+    exit 1
+  fi
+  sleep 3
+done
 
-"$HERE/capture-observations.sh"     "$ADMIN_TOKEN" "$OUT_DIR/observations.jsonl"  "$RUN_SECONDS" "$COORD" &
+ADMIN_TOKEN="$ADMIN_TOKEN" "$HERE/capture-observations.sh"     "$OUT_DIR/observations.jsonl"  "$RUN_SECONDS" "$COORD" &
 obs=$!
-"$HERE/capture-reconciliation.sh"   "$ADMIN_TOKEN" "$OUT_DIR/reconciliation.txt"  "$RUN_SECONDS" "$INSTANCE_UUID" "$COORD" &
+ADMIN_TOKEN="$ADMIN_TOKEN" "$HERE/capture-reconciliation.sh"   "$OUT_DIR/reconciliation.txt"  "$RUN_SECONDS" "$INSTANCE_UUID" "$COORD" &
 rec=$!
 "$HERE/capture-node-assignment.sh"  "$OUT_DIR/node-assignment.txt"                "$RUN_SECONDS" "$ASSET_DIR" &
 asg=$!
