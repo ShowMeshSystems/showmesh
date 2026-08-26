@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ResolumeView } from './ResolumeView'
@@ -307,6 +307,136 @@ describe('ResolumeView', () => {
     const text = document.body.textContent ?? ''
     expect(text).not.toMatch(/\bid 2000000000002\b/)
     expect(text).toContain('Deck 2')
+  })
+
+  // Operator report: 66 stacked observation blocks for 33 clips read as
+  // one big block of text. These clips (two signals each) must render as
+  // one aligned table row per clip, and nothing observed may be dropped.
+  describe('clip observations table', () => {
+    it('renders one row per clip with both signals in their own columns', async () => {
+      getResolumeComposition.mockResolvedValue(
+        makeResolumeCompositionResponse({
+          decks: [makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main' })],
+          clips: [makeResolumeCompositionClip({ id: 'clip-1', name: 'Snowfall', deckId: 'deck-1' })],
+        }),
+      )
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1', {
+        composition: { name: 'Christmas 25' },
+        observations: [
+          makeEvidence({
+            signal: 'resolume.clip.clip-1.connected',
+            state: 'stale',
+            reason: 'no update since last observed',
+          }),
+          makeEvidence({
+            signal: 'resolume.clip.clip-1.transporttype',
+            value: 'Loop',
+            state: 'stale',
+            reason: 'no update since last observed',
+          }),
+        ],
+      })
+      renderView(makeModel({ resolume: [instance] }))
+
+      await screen.findByRole('table', { name: 'Clip observations' })
+      const row = screen.getByRole('rowheader', { name: 'clip "Snowfall"' }).closest('tr') as HTMLTableRowElement
+      const cells = within(row).getAllByRole('cell')
+      expect(cells).toHaveLength(2)
+      expect(within(row).getByText('true')).toBeInTheDocument()
+      expect(within(row).getByText('Loop')).toBeInTheDocument()
+    })
+
+    it('still renders a row for a clip with only one of its two signals, with the other cell absent', async () => {
+      getResolumeComposition.mockResolvedValue(
+        makeResolumeCompositionResponse({
+          decks: [makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main' })],
+          clips: [makeResolumeCompositionClip({ id: 'clip-1', name: 'Snowfall', deckId: 'deck-1' })],
+        }),
+      )
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1', {
+        composition: { name: 'Christmas 25' },
+        observations: [
+          makeEvidence({
+            signal: 'resolume.clip.clip-1.connected',
+            state: 'stale',
+            reason: 'no update since last observed',
+          }),
+        ],
+      })
+      renderView(makeModel({ resolume: [instance] }))
+
+      await screen.findByRole('table', { name: 'Clip observations' })
+      const row = screen.getByRole('rowheader', { name: 'clip "Snowfall"' }).closest('tr') as HTMLTableRowElement
+      const cells = within(row).getAllByRole('cell')
+      expect(cells).toHaveLength(2)
+      expect(cells[1]?.textContent).toBe('—')
+    })
+
+    it('still renders a non-clip observation like resolume.reachable, never swallowed into the clip table', async () => {
+      getResolumeComposition.mockResolvedValue(
+        makeResolumeCompositionResponse({
+          decks: [makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main' })],
+          clips: [makeResolumeCompositionClip({ id: 'clip-1', name: 'Snowfall', deckId: 'deck-1' })],
+        }),
+      )
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1', {
+        composition: { name: 'Christmas 25' },
+        observations: [
+          makeEvidence({ signal: 'resolume.reachable', value: true }),
+          makeEvidence({
+            signal: 'resolume.clip.clip-1.connected',
+            state: 'stale',
+            reason: 'no update since last observed',
+          }),
+        ],
+      })
+      renderView(makeModel({ resolume: [instance] }))
+
+      await screen.findByRole('table', { name: 'Clip observations' })
+      // resolumeObservationLabel has no per-object id to resolve for this
+      // signal, so it falls back to the bare signal name -- this test only
+      // asserts the observation still renders outside the clip table, not
+      // swallowed by the grouping.
+      expect(screen.getByText('resolume.reachable')).toBeInTheDocument()
+      expect(screen.queryByRole('rowheader', { name: /reachable/i })).not.toBeInTheDocument()
+    })
+
+    it('still renders a stale clip signal loudly inside its table cell, never hidden', async () => {
+      getResolumeComposition.mockResolvedValue(
+        makeResolumeCompositionResponse({
+          decks: [makeResolumeCompositionDeck({ id: 'deck-1', name: 'Main' })],
+          clips: [makeResolumeCompositionClip({ id: 'clip-1', name: 'Snowfall', deckId: 'deck-1' })],
+        }),
+      )
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1', {
+        composition: { name: 'Christmas 25' },
+        observations: [
+          makeEvidence({
+            signal: 'resolume.clip.clip-1.connected',
+            state: 'stale',
+            reason: 'no update since last observed',
+          }),
+        ],
+      })
+      renderView(makeModel({ resolume: [instance] }))
+
+      await screen.findByRole('table', { name: 'Clip observations' })
+      const row = screen.getByRole('rowheader', { name: 'clip "Snowfall"' }).closest('tr') as HTMLTableRowElement
+      expect(within(row).getByText('no update since last observed')).toBeInTheDocument()
+      expect(row.querySelector('.evidence--attention')).not.toBeNull()
+    })
   })
 
   it('renders the controller once actions load, listing every registered action', async () => {
