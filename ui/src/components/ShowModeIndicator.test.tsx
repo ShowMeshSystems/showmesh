@@ -114,4 +114,29 @@ describe('ShowModeIndicator', () => {
     expect(badge.tagName).toBe('A')
     expect(badge).toHaveAttribute('href', '/config#show-mode')
   })
+
+  // Operator-reported (round two): the badge became a link but kept
+  // `role="status"` on the SAME element, which overrides the anchor's
+  // implicit `link` role. A screen-reader user navigating by link can no
+  // longer find it -- the only route to the mode control. It must be
+  // discoverable by its link role, and mode changes must still be
+  // announced by a live region somewhere in the component.
+  it('is discoverable as a link, not just as a status region', async () => {
+    getShowModeConfig.mockResolvedValue(showConfigured)
+    renderIndicator()
+
+    const link = await screen.findByRole('link', { name: 'Show mode' })
+    expect(link).toHaveAttribute('href', '/config#show-mode')
+  })
+
+  it('still announces the mode as a live region, separate from the link', async () => {
+    getShowModeConfig.mockResolvedValue(showConfigured)
+    renderIndicator()
+
+    const status = await screen.findByRole('status')
+    expect(status.textContent).toMatch(/Show/)
+    // The status element itself must not be the link (that would put us
+    // back in the bug this test guards against).
+    expect(status.tagName).not.toBe('A')
+  })
 })

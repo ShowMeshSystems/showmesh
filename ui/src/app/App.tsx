@@ -79,16 +79,54 @@ import '../styles/index.css'
 // or hash change on the SAME page must not yank the reader back to the
 // top), and skipped on a browser back/forward navigation (`POP`) so this
 // does not fight the browser's own scroll restoration for that case.
-function ScrollToTop() {
+//
+// A link carrying a hash is asking for a specific section rather than the
+// top of the page. Under `<BrowserRouter>` (a non-data router) there is no
+// `ScrollRestoration`/`useScrollRestoration` mounted anywhere in this app,
+// and `history.pushState` neither scrolls the page nor fires `hashchange`
+// on its own, so the browser does NOT handle the anchor itself here. This
+// has to scroll to the target element by hand, including when only the
+// hash changes and the pathname does not (e.g. a link on `/config` to
+// `#show-mode`), and the target may not exist yet on the effect's first
+// run if it renders as part of the same navigation, so this retries with
+// `requestAnimationFrame` for a bounded number of frames rather than a
+// fixed timeout guessing at render latency.
+export function ScrollToTop() {
   const { pathname, hash } = useLocation()
   const navigationType = useNavigationType()
 
   useEffect(() => {
     if (navigationType === 'POP') return
-    // A link carrying a hash is asking for a specific section, so scrolling
-    // to the top would defeat it. The browser handles the anchor itself.
-    if (hash !== '') return
-    window.scrollTo(0, 0)
+
+    if (hash === '') {
+      window.scrollTo(0, 0)
+      return
+    }
+
+    const id = hash.slice(1)
+    let frame = 0
+    let cancelled = false
+    const maxAttempts = 20 // ~a third of a second at 60fps; the target
+    // renders as part of the same navigation, not from a network fetch, so
+    // this is a generous bound rather than a tuned wait.
+
+    const tryScroll = (attempt: number) => {
+      if (cancelled) return
+      const target = document.getElementById(id)
+      if (target) {
+        target.scrollIntoView()
+        return
+      }
+      if (attempt >= maxAttempts) return
+      frame = requestAnimationFrame(() => tryScroll(attempt + 1))
+    }
+
+    tryScroll(0)
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+    }
   }, [pathname, hash, navigationType])
 
   return null
