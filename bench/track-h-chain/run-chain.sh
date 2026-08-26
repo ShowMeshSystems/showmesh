@@ -193,10 +193,11 @@ cat "$OUT_DIR/node-assignment.txt"
 
 step "read this before believing the result"
 cat <<'NOTE'
-Step 8 is the only node-side statement of which file was rendered, and it is
-read off the node's own disk rather than any coordinator route, because the
-render report carries no filename and no content hash. Every appliedAt there
-should post-date the dispatch in step 7 that caused it.
+Step 8 reads which file was rendered off the node's own disk. The render
+report now also carries the filename and content hash as the four
+surface.content.* signals, so this is corroborating evidence from a second
+independent path rather than the only statement available. Every appliedAt
+here should post-date the dispatch in step 7 that caused it.
 
 A container closes software behavior only. Real FPP hardware, a real render
 node, real NDI output and a real wall are separate evidence and none of them

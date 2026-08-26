@@ -3,11 +3,11 @@
 # Records the node's OWN persisted render assignment as it changes: the FSEQ
 # filename it opened, that file's content hash, and when it applied it.
 #
-# This is the only place a node states which file it is rendering. The
-# periodic render report carries no filename and no content hash, so until
-# that changes this file is the node-side evidence a content swap actually
-# happened, and its appliedAt is what makes that evidence post-date the
-# activation that caused it.
+# The periodic render report now also carries the filename and content hash,
+# as the four surface.content.* signals, so this is no longer the only place a
+# node states which file it is rendering. It stays because it is read from the
+# node's own disk by a different path, and its appliedAt is what makes that
+# evidence post-date the activation that caused it.
 #
 # usage: capture-node-assignment.sh <output.txt> [seconds] [agent-asset-dir]
 set -uo pipefail

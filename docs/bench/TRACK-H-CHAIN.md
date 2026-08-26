@@ -198,6 +198,10 @@ and nothing displayed them. The NDI transport was tried first and could not be
 used, because `ndisink` resolves on a machine with the GStreamer plugin present
 but no NDI runtime behind it, and fails to preroll.
 
-The node-side evidence for a content swap is read off the node's own disk,
-because the render report carries no filename and no content hash. Until that
-changes, no coordinator route can answer "what is this node rendering".
+The node-side evidence for a content swap is read off the node's own disk.
+This is no longer the ONLY such evidence: the render report now carries the
+FSEQ filename and its content hash, as the four `surface.content.*` signals
+(`e2d6274`, PR #137), so a coordinator route can answer "what is this node
+rendering". The node's own persisted assignment is still captured here,
+because it is independent evidence read from a different place by a different
+path, which is what makes agreement between the two worth anything.
