@@ -33,6 +33,15 @@ StateDirectoryMode=0750
 Restart=on-failure
 RestartSec=2s
 
+# Grants the one privilege the agent's FPP Connect HTTP compatibility
+# listener needs to bind port 80 (ADR-044 decision 5): xLights hardcodes
+# port 80 in both the discovery and upload URLs it builds, so moving the
+# bind elsewhere would make the node unreachable rather than solve
+# anything. A node running without this capability fails to bind and
+# reports the bind failure as evidence; it never falls back to a port
+# xLights will never contact.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
 # Conservative process-level hardening that does not touch device access.
 NoNewPrivileges=true
 ProtectSystem=strict

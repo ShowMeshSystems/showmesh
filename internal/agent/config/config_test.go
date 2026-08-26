@@ -392,6 +392,50 @@ func TestConfigLogValueEmptyPassword(t *testing.T) {
 	}
 }
 
+// TestLoadConfigFPPConnectListenAddrDefault proves the default is ":80":
+// xLights hardcodes port 80 in both the discovery and upload URLs it
+// builds (RES-003 section 10.4), so an unset override must still bind the
+// port xLights will actually contact.
+func TestLoadConfigFPPConnectListenAddrDefault(t *testing.T) {
+	env := map[string]string{envNodeID: "media-03"}
+	cfg, err := LoadConfigFrom(lookupFrom(env), unreachableHostname(t))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.FPPConnectListenAddr != ":80" {
+		t.Errorf("FPPConnectListenAddr = %q, want %q", cfg.FPPConnectListenAddr, ":80")
+	}
+}
+
+// TestLoadConfigFPPConnectListenAddrOverride proves
+// SHOWMESH_FPPCONNECT_LISTEN_ADDR overrides the default, the escape hatch
+// ADR-044 decision 5 grants dev stacks and tests that cannot bind :80.
+func TestLoadConfigFPPConnectListenAddrOverride(t *testing.T) {
+	env := map[string]string{envNodeID: "media-03", envFPPConnectListenAddr: "127.0.0.1:8080"}
+	cfg, err := LoadConfigFrom(lookupFrom(env), unreachableHostname(t))
+	if err != nil {
+		t.Fatalf("LoadConfigFrom() error = %v, want nil", err)
+	}
+	if cfg.FPPConnectListenAddr != "127.0.0.1:8080" {
+		t.Errorf("FPPConnectListenAddr = %q, want %q", cfg.FPPConnectListenAddr, "127.0.0.1:8080")
+	}
+}
+
+// TestLoadConfigFPPConnectListenAddrEmptyIsRejected proves an explicitly
+// empty override is refused rather than silently accepted: a bind address
+// must be known before the process starts (ADR-039 decision 9), and an
+// empty string is not one.
+func TestLoadConfigFPPConnectListenAddrEmptyIsRejected(t *testing.T) {
+	env := map[string]string{envNodeID: "media-03", envFPPConnectListenAddr: ""}
+	_, err := LoadConfigFrom(lookupFrom(env), unreachableHostname(t))
+	if err == nil {
+		t.Fatal("LoadConfigFrom() error = nil, want an error for an empty SHOWMESH_FPPCONNECT_LISTEN_ADDR")
+	}
+	if !strings.Contains(err.Error(), envFPPConnectListenAddr) {
+		t.Errorf("error = %q, want it to mention %s", err.Error(), envFPPConnectListenAddr)
+	}
+}
+
 func renderLogValue(t *testing.T, cfg Config) string {
 	t.Helper()
 

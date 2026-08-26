@@ -1,0 +1,411 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/showmeshsystems/showmesh/internal/fppconnect"
+	"github.com/showmeshsystems/showmesh/pkg/multisync"
+)
+
+// This file implements the agent's one and only inbound HTTP listener,
+// ADR-044's compatibility shim for xLights' FPP Connect dialog. It is not a
+// ShowMesh API: it stays out of api/openapi.yaml and gains no operator
+// endpoint (ADR-044 decision 2), and its specification lives in
+// docs/build/TRACK-E-FPP-CONNECT.md's "Listener surface" section, not here.
+
+const (
+	// fppConnectReadHeaderTimeout and fppConnectReadTimeout bound how long a
+	// slow or hostile client can hold this listener's goroutines open; none
+	// of these routes ever wait on anything slower than reading the
+	// holder's in-memory state, so both are short.
+	fppConnectReadHeaderTimeout = 5 * time.Second
+	fppConnectReadTimeout       = 10 * time.Second
+	fppConnectWriteTimeout      = 10 * time.Second
+
+	// fppConnectMaxHeaderBytes bounds the request line plus headers.
+	fppConnectMaxHeaderBytes = 16 * 1024
+
+	// fppConnectMaxBodyBytes bounds a request body. None of this listener's
+	// routes have a body, so this exists only to refuse one a client sends
+	// anyway rather than to serve any real payload.
+	fppConnectMaxBodyBytes = 4 * 1024
+
+	// fppConnectShutdownTimeout bounds Shutdown when the agent's context
+	// ends, so a hung in-flight request cannot delay the rest of the
+	// agent's own clean-shutdown path.
+	fppConnectShutdownTimeout = 5 * time.Second
+
+	// fppConnectPlatform is the value served wherever RES-003 records
+	// xLights (or a human) reading a platform/vendor-type string: system
+	// info's Platform and Variant, and the multiSyncSystems self-entry's
+	// type. ADR-044 decision 10: no served content may claim "Falcon
+	// Player"; this is ShowMesh's own name, not a borrowed one.
+	fppConnectPlatform = "ShowMesh"
+)
+
+// fppConnectNodeNamespace is a fixed, arbitrary namespace UUID used to
+// derive every node's advertised uuid (UUIDv5, RFC 4122) from its ShowMesh
+// node id. Declared once, as a constant fact, so the derived uuid is stable
+// across restarts and identical on every node that shares a node id. Never
+// regenerate this value: doing so changes every node's advertised uuid at
+// once, which xLights (and anything else keying history on it) would see as
+// an entirely new fleet of devices.
+var fppConnectNodeNamespace = uuid.MustParse("e696afff-9455-447b-af78-4b4662644d35")
+
+// fppConnectNodeUUID derives nodeID's stable advertised uuid.
+func fppConnectNodeUUID(nodeID string) uuid.UUID {
+	return uuid.NewSHA1(fppConnectNodeNamespace, []byte(nodeID))
+}
+
+// fppConnectView is the read-only view of this node's FPP Connect
+// compatibility state that this listener's handlers need. It is defined
+// here, against a small interface, rather than against fppConnectState
+// directly: on this branch fppConnectState (fppconnectstate.go) carries
+// only ChannelRanges, and the active show, the show name list, and the
+// fppconnect.settings enabled flag are FC1a's addition, in a seam that
+// merges after this one. Building against this interface, plus a test fake,
+// means this seam's tests do not depend on fppConnectState's eventual
+// shape. After rebasing onto FC1a, wire the real (by-then-extended) holder
+// directly against this interface in place of
+// fppConnectStatePlaceholderView below; if a method name differs there,
+// adapt this interface, not the holder.
+type fppConnectView interface {
+	// ChannelRanges returns the advertised channel range string, or "" for
+	// a node with no configured surface.
+	ChannelRanges() string
+
+	// Enabled reports the fppconnect.settings enabled flag's current value.
+	// False means every route on this listener answers 404 while the
+	// socket stays bound, so the operator's next push takes effect with no
+	// restart.
+	Enabled() bool
+
+	// ActiveShow returns the coordinator-pushed active show's name and
+	// true, or ("", false) when this node holds no active show. Not read
+	// by any route this seam serves; it exists on this interface because
+	// FC2's upload binding (ADR-044 decision 8) needs it from the same
+	// holder.
+	ActiveShow() (string, bool)
+
+	// ShowNames returns the ShowMesh show names this node currently knows.
+	// GET /api/playlists serves exactly this list, as a bare array.
+	ShowNames() []string
+}
+
+// fppConnectStatePlaceholderView adapts the current *fppConnectState, which
+// only carries ChannelRanges on this branch, to fppConnectView. It stands
+// in for FC1a's Enabled/ActiveShow/ShowNames until that seam lands:
+// Enabled defaults true (a node with a bound listener should be
+// discoverable; there is no fppconnect.settings row yet to read a real
+// value from), and ActiveShow/ShowNames report empty (no show binding
+// exists on this branch yet). See fppConnectView's own doc comment for the
+// rebase instruction that replaces this type with the real holder.
+type fppConnectStatePlaceholderView struct {
+	state *fppConnectState
+}
+
+func (v fppConnectStatePlaceholderView) ChannelRanges() string      { return v.state.ChannelRanges() }
+func (v fppConnectStatePlaceholderView) Enabled() bool              { return true }
+func (v fppConnectStatePlaceholderView) ActiveShow() (string, bool) { return "", false }
+func (v fppConnectStatePlaceholderView) ShowNames() []string        { return nil }
+
+// fppConnectLocalAddrKey is the context key runFPPConnectHTTPListener's
+// ConnContext hook stores each accepted connection's real local address
+// under. This is deliberately NOT http.LocalAddrContextKey: net/http's own
+// Server.Serve populates that key from the *listener's* address (l.Addr()),
+// which for a listener bound to ":80" or "0.0.0.0:80" is the wildcard, not
+// the specific interface a given request actually arrived on. RES-003's
+// multiSyncSystems self-entry needs the latter.
+type fppConnectLocalAddrKey struct{}
+
+// fppConnectConnContext is the http.Server.ConnContext hook that makes
+// fppConnectLocalAddrKey available to every handler on this listener.
+func fppConnectConnContext(ctx context.Context, c net.Conn) context.Context {
+	return context.WithValue(ctx, fppConnectLocalAddrKey{}, c.LocalAddr())
+}
+
+// fppConnectRequestLocalIP returns the bare IP (no port) of the connection r
+// arrived on, or "" when fppConnectConnContext never ran (a request built
+// with no real net.Conn behind it, e.g. httptest.NewRecorder).
+func fppConnectRequestLocalIP(r *http.Request) string {
+	addr, _ := r.Context().Value(fppConnectLocalAddrKey{}).(net.Addr)
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		// addr.String() had no port to split off; it is already bare.
+		return addr.String()
+	}
+	return host
+}
+
+// fppConnectSystemInfoResponse is GET /api/system/info's body. Field names
+// and casing match what RES-003 section 9.3 and ADR-044 record xLights
+// reading; the mix of PascalCase and camelCase keys is FPP's own, not a
+// ShowMesh choice, and must not be normalized.
+type fppConnectSystemInfoResponse struct {
+	UUID         string `json:"uuid"`
+	HostName     string `json:"HostName"`
+	Version      string `json:"Version"`
+	MajorVersion int    `json:"majorVersion"`
+	MinorVersion int    `json:"minorVersion"`
+	Mode         string `json:"Mode"`
+	TypeID       int    `json:"typeId"`
+	// ChannelRanges omits the key entirely when empty (omitempty), never
+	// serving "channelRanges":"" — RES-003 section 9.5: an empty
+	// channelRanges string, if xLights read one, would fall back to
+	// rendering a full non-sparse FSEQ, so a node with no configured
+	// surface must not advertise the key at all.
+	ChannelRanges string `json:"channelRanges,omitempty"`
+	Platform      string `json:"Platform"`
+	Variant       string `json:"Variant"`
+}
+
+// fppConnectMultiSyncEntry is the one self-entry GET /api/fppd/multiSyncSystems
+// serves. Field names and casing match RES-003 sections 9.2 and 9.7.
+type fppConnectMultiSyncEntry struct {
+	Address       string `json:"address"`
+	HostName      string `json:"hostname"`
+	FPPMode       int    `json:"fppMode"`
+	FPPModeString string `json:"fppModeString"`
+	Version       string `json:"version"`
+	MajorVersion  int    `json:"majorVersion"`
+	MinorVersion  int    `json:"minorVersion"`
+	Type          string `json:"type"`
+	TypeID        int    `json:"typeId"`
+	UUID          string `json:"uuid"`
+	ChannelRanges string `json:"channelRanges,omitempty"`
+	Local         bool   `json:"local"`
+}
+
+type fppConnectMultiSyncSystemsResponse struct {
+	Systems []fppConnectMultiSyncEntry `json:"systems"`
+}
+
+// fppConnectPlaylistInfo is GET /api/playlist/{name}'s playlistInfo object.
+// The snake_case keys are FPP's own wire shape, not a ShowMesh choice.
+type fppConnectPlaylistInfo struct {
+	TotalDuration int `json:"total_duration"`
+	TotalItems    int `json:"total_items"`
+}
+
+// fppConnectPlaylistResponse is GET /api/playlist/{name}'s body for a name
+// on the holder's show list. mainPlaylist is always empty here: FC2's
+// upload receiver is what populates it, later.
+type fppConnectPlaylistResponse struct {
+	Name         string                 `json:"name"`
+	MainPlaylist []any                  `json:"mainPlaylist"`
+	LeadIn       []any                  `json:"leadIn"`
+	LeadOut      []any                  `json:"leadOut"`
+	PlaylistInfo fppConnectPlaylistInfo `json:"playlistInfo"`
+}
+
+// fppConnectServer holds the fixed, per-node values this listener's
+// handlers serve, computed once at construction rather than per request.
+type fppConnectServer struct {
+	view   fppConnectView
+	nodeID string
+	uuid   string
+}
+
+// newFPPConnectHandler builds the complete handler for this node's FPP
+// Connect HTTP listener: the four routes ADR-044 decision 1 names for this
+// seam (the upload and playlist-write routes are FC2's), a request body
+// size cap, and the enabled-flag gate that 404s every route when this
+// node's fppconnect.settings.enabled is false. Anything not matching one of
+// the four registered patterns falls through to http.ServeMux's own 404,
+// which is a short plain-text body, never HTML and never a stack trace.
+func newFPPConnectHandler(view fppConnectView, nodeID string) http.Handler {
+	srv := &fppConnectServer{
+		view:   view,
+		nodeID: nodeID,
+		uuid:   fppConnectNodeUUID(nodeID).String(),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/system/info", srv.handleSystemInfo)
+	mux.HandleFunc("GET /api/fppd/multiSyncSystems", srv.handleMultiSyncSystems)
+	mux.HandleFunc("GET /api/playlists", srv.handlePlaylists)
+	mux.HandleFunc("GET /api/playlist/{name}", srv.handlePlaylist)
+
+	return fppConnectLimitBody(fppConnectRequireEnabled(view, mux))
+}
+
+// fppConnectRequireEnabled 404s every request when view.Enabled() is false,
+// ahead of routing: a disabled listener answers exactly like an unmapped
+// path on every one of its own routes, per ADR-044's "enabled false"
+// requirement. The socket itself stays bound either way; only the routes'
+// behavior changes.
+func fppConnectRequireEnabled(view fppConnectView, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !view.Enabled() {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// fppConnectLimitBody refuses a request body larger than
+// fppConnectMaxBodyBytes. None of this listener's routes have a body; this
+// is a defensive bound against a client that sends one anyway.
+func fppConnectLimitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, fppConnectMaxBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *fppConnectServer) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+	fppConnectWriteJSON(w, http.StatusOK, fppConnectSystemInfoResponse{
+		UUID:          s.uuid,
+		HostName:      s.nodeID,
+		Version:       fppconnect.AdvertisedVersion,
+		MajorVersion:  fppconnect.AdvertisedVersionMajor,
+		MinorVersion:  fppconnect.AdvertisedVersionMinor,
+		Mode:          fppconnect.AdvertisedMode,
+		TypeID:        int(multisync.SystemTypeShowMesh),
+		ChannelRanges: s.view.ChannelRanges(),
+		Platform:      fppConnectPlatform,
+		Variant:       fppConnectPlatform,
+	})
+}
+
+func (s *fppConnectServer) handleMultiSyncSystems(w http.ResponseWriter, r *http.Request) {
+	entry := fppConnectMultiSyncEntry{
+		Address: fppConnectRequestLocalIP(r),
+		// FPPModeString is fppconnect.AdvertisedMode ("player"), not this
+		// listener's own copy of the mode string: both must always name
+		// the same protocol value (RES-003 section 10.6), and inlining a
+		// second "player" literal here is exactly the kind of copy ADR-044
+		// decision 7 and this file's own package doc comment warn against.
+		HostName:      s.nodeID,
+		FPPMode:       int(multisync.PingModePlayer),
+		FPPModeString: fppconnect.AdvertisedMode,
+		Version:       fppconnect.AdvertisedVersion,
+		MajorVersion:  fppconnect.AdvertisedVersionMajor,
+		MinorVersion:  fppconnect.AdvertisedVersionMinor,
+		Type:          fppConnectPlatform,
+		TypeID:        int(multisync.SystemTypeShowMesh),
+		UUID:          s.uuid,
+		ChannelRanges: s.view.ChannelRanges(),
+		Local:         true,
+	}
+	fppConnectWriteJSON(w, http.StatusOK, fppConnectMultiSyncSystemsResponse{
+		Systems: []fppConnectMultiSyncEntry{entry},
+	})
+}
+
+func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Request) {
+	names := s.view.ShowNames()
+	if names == nil {
+		// A bare "[]", never "null": RES-003 section 10.6 records that
+		// xLights parses this as a list of plain strings and keeps it only
+		// on an exact 200, so encoding/json's nil-slice-marshals-to-null
+		// default would be read as a parse failure rather than "no shows".
+		names = []string{}
+	}
+	fppConnectWriteJSON(w, http.StatusOK, names)
+}
+
+func (s *fppConnectServer) handlePlaylist(w http.ResponseWriter, r *http.Request) {
+	// PathValue is already percent-decoded segment-by-segment by
+	// http.ServeMux, with '+' left literal rather than treated as a space
+	// (that conversion is query-string-only behavior FPP's own receiver
+	// does not apply either) — verified against this exact pattern, not
+	// assumed.
+	name := r.PathValue("name")
+	if !fppConnectContainsShow(s.view.ShowNames(), name) {
+		http.NotFound(w, r)
+		return
+	}
+	fppConnectWriteJSON(w, http.StatusOK, fppConnectPlaylistResponse{
+		Name:         name,
+		MainPlaylist: []any{},
+		LeadIn:       []any{},
+		LeadOut:      []any{},
+		PlaylistInfo: fppConnectPlaylistInfo{TotalDuration: 0, TotalItems: 0},
+	})
+}
+
+func fppConnectContainsShow(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+func fppConnectWriteJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// runFPPConnectHTTPListener binds this render node's FPP Connect HTTP
+// compatibility listener and serves it until ctx is done. A bind failure
+// never stops the agent (ADR-044's consequence "a node that cannot bind
+// the listener still renders, still answers MQTT"): it is recorded on
+// status, exactly like runMultiSyncListener's identical bind-failure
+// handling in multisync.go, and this function simply returns.
+func runFPPConnectHTTPListener(ctx context.Context, listenAddr string, view fppConnectView, nodeID string, status *fppConnectHTTPStatus, logger *slog.Logger) {
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		reason := fmt.Sprintf("failed to bind fppconnect http listener on %s: %v", listenAddr, err)
+		logger.Warn("fppconnect: failed to bind http listener; this node will not appear in xLights' FPP Connect dialog until this is fixed",
+			"listen_addr", listenAddr, "error", err)
+		status.set(false, reason)
+		return
+	}
+
+	srv := &http.Server{
+		Handler:           newFPPConnectHandler(view, nodeID),
+		ReadHeaderTimeout: fppConnectReadHeaderTimeout,
+		ReadTimeout:       fppConnectReadTimeout,
+		WriteTimeout:      fppConnectWriteTimeout,
+		MaxHeaderBytes:    fppConnectMaxHeaderBytes,
+		ConnContext:       fppConnectConnContext,
+	}
+
+	status.set(true, "")
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- srv.Serve(ln)
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Ordered ahead of the agent's existing clean-shutdown path
+		// (renderOps.Shutdown/sup.Shutdown/shutdownCleanly in agent.go):
+		// this select fires as soon as ctx ends, and agent.go joins this
+		// function's own done-channel before any of those run.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), fppConnectShutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("fppconnect: http listener did not shut down cleanly", "error", err)
+		}
+		<-serveErr
+	case err := <-serveErr:
+		// Serve returns http.ErrServerClosed on an ordinary Shutdown; a
+		// different error here is a genuine mid-session listener failure,
+		// the same degradation as never having bound at all.
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Warn("fppconnect: http listener stopped unexpectedly", "error", err)
+			status.set(false, fmt.Sprintf("fppconnect http listener stopped unexpectedly: %v", err))
+		}
+	}
+}
