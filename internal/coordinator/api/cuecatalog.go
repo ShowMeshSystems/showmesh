@@ -99,7 +99,7 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 	}
 	generation := catalog.Generation
 
-	// Recomputed against catalog.Revision now that it is known — the
+	// Recomputed against catalog.Revision now that it is known. The
 	// no-active-show lookup above deliberately never treats a stored
 	// acknowledgement as "current" (mirrors
 	// handlePostNodeCueCatalogAcknowledge's own "no current to match"
@@ -126,7 +126,7 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 // [v1.CueCatalogStatusNeverAcknowledged] when nodeID has never
 // acknowledged anything ([store.ErrNodeCueCatalogAckNotFound]),
 // [v1.CueCatalogStatusCurrent] when the acknowledged revision equals
-// currentRevision, and [v1.CueCatalogStatusStale] otherwise — including
+// currentRevision, and [v1.CueCatalogStatusStale] otherwise, including
 // when currentRevision is "" (no active show resolved), matching
 // handlePostNodeCueCatalogAcknowledge's own rule that there is no
 // "current" for an unconfigured active show to match. The returned
