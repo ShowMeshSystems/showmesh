@@ -109,13 +109,13 @@ platform `linux-arm64` and appeared in the coordinator's node list as
 online, having discovered both of the Pi's output routes by itself.
 
 **One thing found and not fixed.** `install.sh` printed `user showmesh
-already exists`. That was not idempotency: this Pi's interactive login
-account happens to be named `showmesh`, so the installer adopted a human
-login account as the service account instead of creating the system user
-it intends. It works here and that account was already in the `audio`
-group, but on any host where a human account shares the service name the
-agent silently runs as that account, with its groups and home directory.
-Left as-is and reported rather than changed.
+already exists`. That was not idempotency. On a host whose interactive
+login account is already named `showmesh`, the installer adopts that
+account as the service account instead of creating the system user it
+intends, and the agent then runs as that account with its groups and
+home directory. It worked in this case because the account was already
+in the `audio` group, which is luck rather than design. Left as-is and
+reported rather than changed.
 
 **Gates.** `make check` in the foreground. No integration target was run:
 this change touches two shell scripts and a README and no Go code, no
