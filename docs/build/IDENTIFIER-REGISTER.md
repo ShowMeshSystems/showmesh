@@ -520,6 +520,8 @@ listed because the last row was minted after the others had shipped:
 | `surface.output.failure` | shipped | Owner ruling: a broken assignment must not look like a healthy idle |
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
+| `node.fppconnect.channel_range.state` | shipped | Lane 16, SM-294 (node-level; one push per node) |
+| `node.fppconnect.channel_range.reason` | shipped | Lane 16, SM-294 |
 
 **Track C's `audio_session.*` signals, as shipped by seams C6/C7 on
 2026-08-18.** They were reserved before C3 and C4 were written; the table

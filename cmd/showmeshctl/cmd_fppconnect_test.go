@@ -132,6 +132,88 @@ func TestCmdFPPConnectSettingsRevisionsListsRevisions(t *testing.T) {
 	}
 }
 
+// TestCmdFPPConnectStatusPrintsDroppedState proves a node whose most
+// recently pushed channel range was DROPPED (a surface exists but could
+// not be formatted) is visible from this CLI, with the reason, not only
+// from the coordinator's log.
+func TestCmdFPPConnectStatusPrintsDroppedState(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/nodes/render-01" {
+			t.Errorf("request = %s %s, want GET /api/v1/nodes/render-01", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-26T00:00:00Z","node":{"nodeId":"render-01","label":null,"platform":null,`+
+			`"agentVersion":null,"bootId":null,"startedAt":null,"firstSeenAt":"2026-08-26T00:00:00Z","updatedAt":"2026-08-26T00:00:00Z",`+
+			`"capabilities":[],"controlPlane":{"state":"unknown","reason":"x"},`+
+			`"evidence":{"hello":`+validEvidenceJSONForFPPConnectTest+`,"lastWill":`+validEvidenceJSONForFPPConnectTest+`,"heartbeat":`+validEvidenceJSONForFPPConnectTest+`},`+
+			`"declaration":`+validDeclarationJSONForFPPConnectTest+`,"render":[],"audio":[],`+
+			`"fppConnect":[`+
+			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.state","value":"dropped","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null},`+
+			`{"resource":{"kind":"node","id":"render-01"},"signal":"node.fppconnect.channel_range.reason","value":"fppconnect: formatted channel ranges string exceeds the 120-byte ping field: 187 bytes","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T00:00:00Z","collectedAt":"2026-08-26T00:00:00Z","source":"fppconnect-push","quality":"direct","validForSeconds":null}`+
+			`]}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPPConnect([]string{"status", "--server", ts.URL, "--token", "t", "render-01"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"node.fppconnect.channel_range.state", "dropped",
+		"node.fppconnect.channel_range.reason", "120-byte ping field",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestCmdFPPConnectStatusPrintsNeverPushed proves a node with no
+// fppConnect entries at all (never had a push resolved) prints a plain
+// statement rather than an empty or misleading block.
+func TestCmdFPPConnectStatusPrintsNeverPushed(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-26T00:00:00Z","node":{"nodeId":"quiet-01","label":null,"platform":null,`+
+			`"agentVersion":null,"bootId":null,"startedAt":null,"firstSeenAt":"2026-08-26T00:00:00Z","updatedAt":"2026-08-26T00:00:00Z",`+
+			`"capabilities":[],"controlPlane":{"state":"unknown","reason":"x"},`+
+			`"evidence":{"hello":`+validEvidenceJSONForFPPConnectTest+`,"lastWill":`+validEvidenceJSONForFPPConnectTest+`,"heartbeat":`+validEvidenceJSONForFPPConnectTest+`},`+
+			`"declaration":`+validDeclarationJSONForFPPConnectTest+`,"render":[],"audio":[],"fppConnect":[]}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdFPPConnect([]string{"status", "--server", ts.URL, "--token", "t", "quiet-01"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "no fppconnect.configure push has been resolved yet") {
+		t.Errorf("output = %q, want a plain never-pushed statement", stdout.String())
+	}
+}
+
+func TestCmdFPPConnectStatusRequiresExactlyOneArg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cmdFPPConnect([]string{"status"}, &stdout, &stderr, time.Now)
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want exitUsage", code)
+	}
+}
+
+// validEvidenceJSONForFPPConnectTest/validDeclarationJSONForFPPConnectTest
+// are this file's own minimal, schema-shaped literals for the Node
+// fields this test's fixtures do not otherwise exercise — this package
+// cannot share unexported test literals across files that were not
+// already written to be reused, so these are local, not a reference to
+// the api package's own openapi_test.go fixtures of the same shape.
+const validEvidenceJSONForFPPConnectTest = `{"signal":"node.hello","value":null,"unit":null,"state":"not_collected","reason":"no hello observed yet","observedAt":null,"collectedAt":null,"source":"mqtt-inventory","quality":"direct","validForSeconds":null}`
+
+const validDeclarationJSONForFPPConnectTest = `{"declared":false,"label":null,"notes":null,"declaredAt":null,"declaredByPrincipalId":null,"declaredByPrincipalName":null,"discoveryState":"not_applicable","discoveryReason":null,"lastDiscoveryRunId":null,"lastDiscoveredAt":null,"notSeenAsOfRunId":null,"notSeenAsOfRunFinishedAt":null}`
+
 func TestCmdFPPConnectUnknownSubcommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdFPPConnect([]string{"bogus"}, &stdout, &stderr, time.Now)

@@ -119,6 +119,17 @@ type node struct {
 	// "render status" (cmd_render.go) reports [exitRenderUnavailable] when
 	// no SURFACE entry is present, regardless of node.multisync.*.
 	Render []observationEntry `json:"render"`
+
+	// FPPConnect is an addition, additive per contract §6.2: whatever
+	// node.fppconnect.channel_range.* observations this coordinator
+	// currently holds for this node's most recently resolved
+	// fppconnect.configure push, one [observationEntry] per signal. Never
+	// null — an empty slice means this node has never had a
+	// fppconnect.configure push resolved for it. Resource is this node
+	// itself, the node.multisync.* precedent (one push carries one
+	// channel-range string per node). "fppconnect status" (cmd_fppconnect.go)
+	// prints these.
+	FPPConnect []observationEntry `json:"fppConnect"`
 }
 
 // observationEntry mirrors internal/coordinator/api/v1.ObservationEntry:

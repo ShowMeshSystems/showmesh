@@ -170,6 +170,19 @@ type Node struct {
 	// Never null — an empty array means this node has never published an
 	// audio discovery report.
 	Audio []ObservationEntry `json:"audio"`
+
+	// FPPConnect is an addition, additive per ADR-020 decision 8:
+	// whatever node.fppconnect.channel_range.* observations this
+	// coordinator currently holds for this node's most recently resolved
+	// fppconnect.configure push — whether the pushed channel range was
+	// formatted, legitimately empty (no configured surface), or dropped
+	// (a surface existed but could not be formatted, e.g. a refused range
+	// or a string too long for the ping's 120-byte field), and why. Never
+	// null — an empty array means this node has never had a
+	// fppconnect.configure push resolved for it. Resource names this node
+	// directly, the node.multisync.* precedent (one push carries one
+	// channel-range string per node).
+	FPPConnect []ObservationEntry `json:"fppConnect"`
 }
 
 // NodeDeclaration is a node's declaration state: an operator's durable

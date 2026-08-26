@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 )
 
@@ -46,6 +47,8 @@ func cmdFPPConnect(args []string, stdout, stderr io.Writer, clock func() time.Ti
 		return exitOK
 	case "settings":
 		return cmdFPPConnectSettings(rest, stdout, stderr, clock)
+	case "status":
+		return cmdFPPConnectStatus(rest, stdout, stderr, clock)
 	default:
 		_, _ = fmt.Fprintf(stderr, "showmeshctl fppconnect: unknown subcommand %q\n\n", sub)
 		printFPPConnectUsage(stderr)
@@ -59,14 +62,97 @@ func printFPPConnectUsage(w io.Writer) {
 The node's xLights FPP Connect ingestion listener (ADR-044). "settings" is
 the fppconnect.settings singleton: whether the listener is enabled, the
 per-file byte cap, and the total asset-directory byte cap it enforces.
+"status" shows one node's most recently pushed channel-range outcome:
+formatted, empty because no surface is configured, or dropped (and why) -
+visible here instead of only in the coordinator's log.
 
 Subcommands:
   settings get|set|revisions   fppconnect.settings configuration (see
                                 "showmeshctl fppconnect settings --help")
+  status <node-id>             show one node's most recently pushed
+                                channel-range outcome (GET
+                                /api/v1/nodes/{nodeId}'s "fppConnect"
+                                field)
 
 Run "showmeshctl fppconnect settings --help" for flags specific to one
 subcommand.
 `)
+}
+
+// cmdFPPConnectStatus implements "fppconnect status <node-id>": whether
+// this node's most recently pushed FPP Connect channel range was
+// formatted, is legitimately empty because no show.surface is configured
+// for it, or was DROPPED (a surface exists but
+// fppconnect.FormatChannelRanges refused it - a refused range, or a
+// combined string too long for the ping's 120-byte field) and why. Before
+// this command existed, a dropped range's only trace was a coordinator log
+// line; GET /api/v1/nodes/{nodeId}'s "fppConnect" field (this command's
+// data source) is now the operator-visible record instead.
+func cmdFPPConnectStatus(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
+	fs, g := newFlagSet("showmeshctl fppconnect status", stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl fppconnect status [flags] <node-id>")
+		_, _ = fmt.Fprintln(stderr, "\nShow whether this node's most recently pushed FPP Connect channel range")
+		_, _ = fmt.Fprintln(stderr, "was formatted, is empty because no surface is configured, or was dropped")
+		_, _ = fmt.Fprintln(stderr, "(and why) - GET /api/v1/nodes/{nodeId}'s \"fppConnect\" field.")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return flagParseExit(err)
+	}
+	if err := validateOutput(g); err != nil {
+		return reportError(stderr, "fppconnect status", err)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fs.Usage()
+		return exitUsage
+	}
+	nodeID := rest[0]
+
+	c, err := newRequestClient(g)
+	if err != nil {
+		return reportError(stderr, "fppconnect status", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+
+	body, err := c.getRaw(ctx, "/api/v1/nodes/"+url.PathEscape(nodeID), nil)
+	if err != nil {
+		return reportError(stderr, "fppconnect status", err)
+	}
+	n, serverTime, err := decodeSingleNode(body)
+	if err != nil {
+		return reportError(stderr, "fppconnect status", err)
+	}
+	printClockSkew(stderr, serverTime, clock())
+
+	if g.output == outputJSON {
+		if err := printJSON(stdout, n.FPPConnect); err != nil {
+			return reportError(stderr, "fppconnect status", err)
+		}
+		return exitOK
+	}
+	if len(n.FPPConnect) == 0 {
+		_, _ = fmt.Fprintf(stdout, "fppconnect status %s: no fppconnect.configure push has been resolved yet for this node\n", nodeID)
+		return exitOK
+	}
+	printFPPConnectStatus(stdout, nodeID, n.FPPConnect)
+	return exitOK
+}
+
+// printFPPConnectStatus renders n.FPPConnect (always this node's own two
+// node.fppconnect.channel_range.* entries, never a surface's) as
+// human-readable text.
+func printFPPConnectStatus(w io.Writer, nodeID string, entries []observationEntry) {
+	_, _ = fmt.Fprintf(w, "fppconnect channel-range status for node %s:\n", nodeID)
+	for _, e := range entries {
+		reason := ""
+		if e.Reason != nil {
+			reason = " - " + *e.Reason
+		}
+		_, _ = fmt.Fprintf(w, "  %-32s %v (%s, via %s)%s\n", e.Signal, e.Value, e.State, e.Source, reason)
+	}
 }
 
 // --- fppconnect settings ---

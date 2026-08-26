@@ -249,6 +249,15 @@ func Run() int {
 	// operator-declared audio.node configuration, read live on every poll).
 	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
 
+	// fppconnectpush's own push cache, the identical "record at
+	// push time, read back on demand" shape as renderStore/audioStore
+	// above, except recording this package's OWN resolved channel-range
+	// outcome rather than a report relayed from a node — see
+	// fppconnectpush.StatusStore's doc comment. Constructed here,
+	// unconditionally, matching renderStore's identical "costs nothing
+	// when nothing ever pushes to it" reasoning.
+	fppConnectStatus := fppconnectpush.NewStatusStore()
+
 	// bm is assigned below, once broker.NewBrokerManager has built it —
 	// the identical "capture by reference in a closure" shape hub/notifyHub
 	// use just above, for the identical reason: onHello can fire the
@@ -265,7 +274,7 @@ func Run() int {
 		// Track E phase 2 seam FC1a (ADR-044 decision 5): the identical
 		// hello-triggered convergence, one config surface over; see
 		// internal/coordinator/fppconnectpush.
-		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
+		go fppconnectpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger, fppConnectStatus)
 	}
 
 	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
@@ -542,6 +551,14 @@ func Run() int {
 		// api.NodeAudioLister's NodeAudioObservations method directly, no
 		// adapter needed, matching renderStore's identical wiring above.
 		Audio: audioStore,
+		// fppConnectStatus is the SAME instance onHello's
+		// fppconnectpush.BestEffort call above records into and
+		// pushFPPConnectToAllNodes/pushFPPConnectToNode
+		// (fppconnectsettingsconfig.go) record into on every write-driven
+		// push — see api.Dependencies.FPPConnectStatus's own doc comment
+		// for why this is a concrete field rather than a package-local
+		// interface like Render/Audio.
+		FPPConnectStatus: fppConnectStatus,
 		// RenderPublisher is Track B seam B2b-front's own dependency: the
 		// SAME *broker.BrokerManager (bm) assetSync's own Publisher was
 		// built from above already satisfies api.RenderPublisher with no

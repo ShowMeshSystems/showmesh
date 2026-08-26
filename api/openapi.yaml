@@ -7488,7 +7488,7 @@ components:
       required:
         [nodeId, label, platform, agentVersion, bootId, startedAt,
          firstSeenAt, updatedAt, capabilities, controlPlane, evidence,
-         declaration, render, audio]
+         declaration, render, audio, fppConnect]
       properties:
         nodeId:
           type: string
@@ -7541,6 +7541,22 @@ components:
             holds for this node, one entry per signal. Never omitted; an
             empty array means this node has never published an audio
             discovery report.
+          items:
+            $ref: "#/components/schemas/ObservationEntry"
+        fppConnect:
+          type: array
+          description: >-
+            Whatever node.fppconnect.channel_range.* observations
+            this coordinator currently holds for this node's most recently
+            resolved fppconnect.configure push - whether the pushed
+            channel range was formatted, legitimately empty (no configured
+            surface), or dropped (a surface existed but could not be
+            formatted, e.g. a refused range or a string too long for the
+            ping's 120-byte field), and why. Never omitted; an empty array
+            means this node has never had a fppconnect.configure push
+            resolved for it. Resource names this node directly, the
+            `node.multisync.*` precedent (one push carries one
+            channel-range string per node).
           items:
             $ref: "#/components/schemas/ObservationEntry"
     NodeDeclaration:
