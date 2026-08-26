@@ -84,7 +84,7 @@ generous for every legitimate observation.
 | `instanceUuid` | string | yes | Persistent FPP UUID, from FPP's `SystemUUID` setting. |
 | `playlistName` | string | when available | FPP playlist name. |
 | `playlistHash` | string | when available | SHA-256, lowercase hex. See §1.3. |
-| `section` | string | when available | FPP playlist section. May be empty. |
+| `section` | string | when available | Canonical section: the playlist definition's member name (`leadIn`, `mainPlaylist`, `leadOut`) for those three, or FPP's own runtime string unchanged for any other value. May be empty. See below. |
 | `position` | integer | when available | Zero-based position within the section. |
 | `entryKey` | string | when available | SHA-256, lowercase hex. See §1.3. |
 | `sequenceFilename` | string | no | Absent when the entry has none. |
@@ -118,13 +118,16 @@ present on the wire is validated whether or not `unavailable` is set.
 
 **The canonical spelling of `section`.** The wire value of `section` is the
 playlist definition's own section member name — `leadIn`, `mainPlaylist`, or
-`leadOut` — never FPP's runtime playlist-section string. FPP's playlist
-callback reports its own runtime spelling, which is not the same text; the
-plugin maps it **before** placing it in this field or hashing it into
-`entryKey` (§1.3). This was previously left implicit, and the two sides read
-it two different, individually defensible ways, which is the failure
-[TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md) records. FPP 10.0's runtime
-strings, and what each maps to on the wire:
+`leadOut` — for any of the three sections FPP's playlist callback has a
+known runtime spelling for, and is FPP's own runtime string, passed through
+**unchanged**, for any other value FPP might report. It is never FPP's
+runtime spelling for those three known sections specifically: the plugin
+maps it **before** placing it in this field or hashing it into `entryKey`
+(§1.3), and only for a runtime string it does not recognize does the runtime
+spelling itself reach the wire. This was previously left implicit, and the
+two sides read it two different, individually defensible ways, which is the
+failure [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md) records. FPP 10.0's
+runtime strings, and what each maps to on the wire:
 
 | FPP runtime section string | Canonical wire value |
 |---|---|

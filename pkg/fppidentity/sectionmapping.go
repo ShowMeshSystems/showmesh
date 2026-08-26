@@ -21,6 +21,16 @@ var RuntimeSectionMap = map[string]string{
 // a new value or an §1.4 unavailable reason: it will not match any entry
 // in the playlist definition's leadIn/mainPlaylist/leadOut arrays, and the
 // coordinator's existing unknown-entry outcome is the visible failure.
+//
+// This is the reference implementation the plugin's C++ mirrors, kept here
+// so the shared fixtures (test/fixtures/fpp/section-mapping.json) have a Go
+// implementation to check against; it has no caller elsewhere in this
+// repository and that is deliberate. The mapping belongs on the sending
+// side, before the wire. Calling it on an inbound observation in
+// fppobservations.go would silently repair a plugin that sent the wrong
+// spelling, which re-hides the exact failure class this mapping exists to
+// expose rather than surface it as the coordinator's existing
+// unknown-entry outcome. Do not wire it into ingestion.
 func CanonicalSection(runtimeSection string) string {
 	if canonical, ok := RuntimeSectionMap[runtimeSection]; ok {
 		return canonical
