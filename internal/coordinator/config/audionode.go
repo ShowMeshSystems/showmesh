@@ -17,6 +17,31 @@ import (
 // an audio.node object.
 const AudioNodeConfigKind = "audio.node"
 
+// The three members of audio.node.role (ADR-045 decision c): "program"
+// plays program audio only; "program+ltc" plays program audio and is this
+// installation's sole LTC emitter (ADR-018's one clock domain, enforced by
+// [ValidateAudioNodeRoleUniqueness]); "zone" plays an independent local
+// speaker zone, never program or LTC.
+const (
+	AudioNodeRoleProgram    = "program"
+	AudioNodeRoleProgramLTC = "program+ltc"
+	AudioNodeRoleZone       = "zone"
+
+	// AudioNodeRoleDefault is used whenever a payload omits "role" —
+	// ADR-045 is additive, so a pre-ADR-045 audio.node object (there was
+	// only ever one per installation, and it always carried both program
+	// and LTC) decodes to the role that describes what it already was,
+	// rather than requiring every existing installation to be re-written
+	// the day this ships.
+	AudioNodeRoleDefault = AudioNodeRoleProgramLTC
+)
+
+var audioNodeRoles = map[string]bool{
+	AudioNodeRoleProgram:    true,
+	AudioNodeRoleProgramLTC: true,
+	AudioNodeRoleZone:       true,
+}
+
 // ValidateAudioNodeObjectID validates an audio.node object id against the
 // same syntax a node id must satisfy — reusing [ValidateShowObjectID]'s own
 // reuse of [mqttproto.ValidateNodeID] rather than a second copy of the
@@ -30,6 +55,7 @@ var audioNodeTopLevelKeys = map[string]bool{
 	"programRoute": true, "ltcRoute": true,
 	"programChannels": true, "ltcChannel": true,
 	"clockDomain": true, "clockDomainProvenance": true,
+	"role": true, "zone": true,
 }
 
 // AudioNodePayload is config_revisions.payload_json's decoded, VALIDATED
@@ -73,6 +99,29 @@ type AudioNodePayload struct {
 	// for the identical reason ClockDomain itself is required: a
 	// declaration with no stated basis is indistinguishable from a guess.
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
+
+	// Role is ADR-045's audio.node role: one of [AudioNodeRoleProgram],
+	// [AudioNodeRoleProgramLTC], or [AudioNodeRoleZone]. Optional on the
+	// wire; absent decodes to [AudioNodeRoleDefault]
+	// ("program+ltc") so every pre-ADR-045 payload keeps decoding
+	// unchanged. At most one audio.node across the installation may carry
+	// "program+ltc" — ADR-018's one clock domain means one LTC emitter —
+	// enforced by [ValidateAudioNodeRoleUniqueness], not by this decode
+	// step, because it is a cross-object rule and this package has no
+	// store access. omitempty: many callers across this codebase construct
+	// an AudioNodePayload literal directly (test fixtures, mostly) without
+	// setting Role at all — encoding that zero value must produce the same
+	// wire shape as a payload that genuinely never mentioned "role", so it
+	// decodes back to [AudioNodeRoleDefault] rather than to a rejected
+	// present-but-empty string.
+	Role string `json:"role,omitempty"`
+
+	// Zone is the operator's own name for the independent speaker zone
+	// this node drives, meaningful only when Role is
+	// [AudioNodeRoleZone]. nil for every other role — refused otherwise
+	// at decode time, matching show.cue's outputs.announcement.duckGainDb
+	// precedent: an ignored field would read as an applied one.
+	Zone *string `json:"zone,omitempty"`
 }
 
 // EncodeAudioNodePayload marshals p into config_revisions.payload_json's
@@ -136,10 +185,37 @@ func DecodeAudioNodePayload(raw string) (AudioNodePayload, *ValidationError) {
 		}
 	}
 
+	role, verr := decodeDefaultedEnum(top, "role", "role", AudioNodeRoleDefault, audioNodeRoles)
+	if verr != nil {
+		return AudioNodePayload{}, verr
+	}
+
+	var zone *string
+	if raw, present := top["zone"]; present {
+		if role != AudioNodeRoleZone {
+			return AudioNodePayload{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: "zone",
+				Detail: fmt.Sprintf("zone must be absent unless role is %q: an ignored field would read as an applied one", AudioNodeRoleZone),
+			}
+		}
+		if isJSONNull(raw) {
+			return AudioNodePayload{}, &ValidationError{Code: ValidationCodeFieldNull, Field: "zone", Detail: "zone must not be null; omit it to leave it unset"}
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return AudioNodePayload{}, &ValidationError{Code: ValidationCodeFieldInvalid, Field: "zone", Detail: "zone must be a string"}
+		}
+		if s == "" {
+			return AudioNodePayload{}, &ValidationError{Code: ValidationCodeFieldEmpty, Field: "zone", Detail: "zone must not be an empty string"}
+		}
+		zone = &s
+	}
+
 	return AudioNodePayload{
 		ProgramRoute: programRoute, LTCRoute: ltcRoute,
 		ProgramChannels: programChannels, LTCChannel: ltcChannel,
 		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
+		Role: role, Zone: zone,
 	}, nil
 }
 
@@ -260,6 +336,32 @@ func ValidateAudioNodePlacement(p AudioNodePayload, programRoutes, ltcRoutes []s
 		return fmt.Errorf("audio.node: ltcRoute %q is not among this node's advertised discrete LTC-capable routes %v "+
 			"(a route needs at least a third channel beyond the program pair to carry LTC per ADR-018)",
 			p.LTCRoute, ltcRoutes)
+	}
+	return nil
+}
+
+// ValidateAudioNodeRoleUniqueness refuses id's write when p.Role is
+// "program+ltc" and a DIFFERENT existing audio.node object already carries
+// that role (ADR-045 decision b/ADR-018: exactly one LTC emitter per
+// installation). existingRoles is every OTHER currently-configured
+// audio.node id mapped to its own stored role — caller-supplied (this
+// package has no store access), and MUST already exclude id itself so a
+// no-op re-write of the sole program+ltc node does not refuse against its
+// own prior revision. The error names BOTH node ids so the operator knows
+// which one to change.
+func ValidateAudioNodeRoleUniqueness(id string, p AudioNodePayload, existingRoles map[string]string) error {
+	if p.Role != AudioNodeRoleProgramLTC {
+		return nil
+	}
+	for otherID, otherRole := range existingRoles {
+		if otherID == id {
+			continue
+		}
+		if otherRole == AudioNodeRoleProgramLTC {
+			return fmt.Errorf(
+				"audio.node: %q and %q would both carry role %q; exactly one audio.node may be the installation's program+ltc node (ADR-018's one clock domain, ADR-045)",
+				id, otherID, AudioNodeRoleProgramLTC)
+		}
 	}
 	return nil
 }

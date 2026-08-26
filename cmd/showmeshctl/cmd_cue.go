@@ -191,6 +191,9 @@ func cmdCueSet(args []string, stdout, stderr io.Writer, clock func() time.Time) 
 		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: this command never reads the cue's current")
 		_, _ = fmt.Fprintln(stderr, "definition first. --outputs-json is the whole outputs object, e.g.:")
 		_, _ = fmt.Fprintln(stderr, `  '{"render":{"sequence":"thriller"},"audio":{"asset":"thriller-audience","startOffsetMillis":0}}'`)
+		_, _ = fmt.Fprintln(stderr, "\nEach of outputs.audio/ltc/announcement also accepts an optional \"target\"")
+		_, _ = fmt.Fprintln(stderr, "naming an audio.node id (ADR-045); omitted, it resolves later to the")
+		_, _ = fmt.Fprintln(stderr, "installation's single program+ltc audio.node.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

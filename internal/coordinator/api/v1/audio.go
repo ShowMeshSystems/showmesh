@@ -51,6 +51,15 @@ type ConfigAudioNode struct {
 	LTCChannel            int    `json:"ltcChannel"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
+
+	// Role is ADR-045's audio.node role: "program", "program+ltc", or
+	// "zone". Optional on the wire; absent decodes to "program+ltc" so a
+	// pre-ADR-045 payload keeps working unchanged.
+	Role string `json:"role,omitempty"`
+
+	// Zone is the operator's own name for the independent speaker zone
+	// this node drives, present only when Role is "zone".
+	Zone *string `json:"zone,omitempty"`
 }
 
 // AudioNodeConfigResponse is the body of GET and PUT

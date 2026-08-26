@@ -59,6 +59,20 @@ func (h *handlers) nodeDeclared(ctx context.Context) func(nodeID string) bool {
 	}
 }
 
+// audioNodeExists reports whether id names an "audio.node" config object
+// with an active revision — the audioNodeExists callback
+// DecodeShowCuePayload takes (ADR-045). Mirrors showExists exactly, one
+// kind over.
+func (h *handlers) audioNodeExists(ctx context.Context) func(id string) bool {
+	return func(id string) bool {
+		obj, err := h.deps.Config.GetConfigObject(ctx, config.AudioNodeConfigKind, id)
+		if err != nil {
+			return false
+		}
+		return obj.CurrentRevision > 0
+	}
+}
+
 // --- kind "show" ---
 
 // listShowSummaries lists every "show" config object with an active

@@ -3730,7 +3730,7 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
-        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. */
+        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. `role` (ADR-045) is one of `program`, `program+ltc`, or `zone`; optional on the wire, and absent decodes to `program+ltc` - the role every pre-ADR-045 audio.node object already implicitly held, since an installation had exactly one and it always carried both program and LTC. At most one audio.node across the installation may carry `program+ltc` at a time (ADR-018's one clock domain, one LTC emitter); a second is refused, naming both node ids. `zone` is the operator's own name for the independent speaker zone this node drives, present only when `role` is `zone` - refused on any other role, since an ignored field would read as an applied one. */
         ConfigAudioNode: {
             programRoute: string;
             ltcRoute: string;
@@ -3738,6 +3738,13 @@ export interface components {
             ltcChannel: number;
             clockDomain: string;
             clockDomainProvenance: string;
+            /**
+             * @description Optional; absent decodes to "program+ltc" (ADR-045).
+             * @enum {string}
+             */
+            role?: "program" | "program+ltc" | "zone";
+            /** @description The operator's own name for this node's independent speaker zone. Present only when role is "zone". */
+            zone?: string;
         };
         /** @description The body of GET and PUT /config/audio.node/{id}. */
         AudioNodeConfigResponse: {
@@ -4485,21 +4492,24 @@ export interface components {
         ConfigShowCueRenderOutput: {
             sequence: string;
         };
-        /** @description show.cue.outputs.audio (Track H seam H1). */
+        /** @description show.cue.outputs.audio (Track H seam H1). target (ADR-045) is an optional target node id, mirroring show.surface.node; absent resolves later to the installation's single program+ltc audio.node. Present, it must name an existing audio.node object — enforced server-side. */
         ConfigShowCueAudioOutput: {
             asset: string;
             startOffsetMillis: number;
+            target?: string;
         };
-        /** @description show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours; requires outputs.audio to also be present (ADR-018's one clock domain) — enforced server-side. */
+        /** @description show.cue.outputs.ltc (Track H seam H1, H0.3). Bounded at 24 hours; requires outputs.audio to also be present (ADR-018's one clock domain) — enforced server-side. target (ADR-045) is the same optional target node as outputs.audio.target. */
         ConfigShowCueLTCOutput: {
             startOffsetMillis: number;
+            target?: string;
         };
-        /** @description show.cue.outputs.announcement (Track H seam H1, H0.4). Requires outputs.audio to also be present. duckGainDb is required when policy is "duck" and refused otherwise — enforced server-side. */
+        /** @description show.cue.outputs.announcement (Track H seam H1, H0.4). Requires outputs.audio to also be present. duckGainDb is required when policy is "duck" and refused otherwise — enforced server-side. target (ADR-045) is the same optional target node as outputs.audio.target. */
         ConfigShowCueAnnouncementOutput: {
             /** @enum {string} */
             policy: "duck" | "mix" | "interrupt";
             duckGainDb?: number;
             fadeMillis: number;
+            target?: string;
         };
         /** @description show.cue.outputs (Track H seam H1). At least one member is required — enforced server-side, since an empty object cannot be distinguished from "absent" by a plain JSON schema. */
         ConfigShowCueOutputs: {

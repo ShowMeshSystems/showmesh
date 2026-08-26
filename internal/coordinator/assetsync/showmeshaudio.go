@@ -162,7 +162,7 @@ func loadShowCuePayload(ctx context.Context, st *store.Store, cueID string) (con
 	if err != nil {
 		return config.ShowCuePayload{}, fmt.Errorf("read cue %q revision %d: %w", cueID, obj.CurrentRevision, err)
 	}
-	payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue)
+	payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
 	if verr != nil {
 		return config.ShowCuePayload{}, fmt.Errorf("decode cue %q: %s", cueID, verr.Detail)
 	}
