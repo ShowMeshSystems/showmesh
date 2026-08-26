@@ -47,6 +47,12 @@ const (
 	// typo guard every operator-facing gain shares.
 	maxDefaultMaxBackgroundGainDb = audio.MaxOperatorGainDb
 
+	// minDefaultMaxBackgroundGainDb is audio.SilenceFloorDb, the same
+	// floor duckTargetGainDb already bounds against: without it an
+	// operator reaching for the same number as the duck field gets a
+	// ceiling low enough that every background bed goes inaudible.
+	minDefaultMaxBackgroundGainDb = audio.SilenceFloorDb
+
 	// maxDuckTargetGainDb is exclusive: a duck lowers a session, so unity
 	// (0 dB) or louder is not a duck at all. The silence floor remains
 	// expressible and means the bed goes fully silent under an
@@ -223,6 +229,12 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		return AudioSettingsPayload{}, &ValidationError{
 			Code: ValidationCodeFieldInvalid, Field: "defaultMaxBackgroundGainDb",
 			Detail: fmt.Sprintf("defaultMaxBackgroundGainDb is in decibels (0 dB is unity) and must not exceed %v dB", maxDefaultMaxBackgroundGainDb),
+		}
+	}
+	if maxGainDb < minDefaultMaxBackgroundGainDb {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "defaultMaxBackgroundGainDb",
+			Detail: fmt.Sprintf("defaultMaxBackgroundGainDb is in decibels (0 dB is unity) and must not be below %v dB", minDefaultMaxBackgroundGainDb),
 		}
 	}
 

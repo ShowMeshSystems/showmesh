@@ -189,7 +189,13 @@ describe('AudioSettings', () => {
     await user.type(ceiling, '20')
     await user.click(screen.getByRole('button', { name: /save/i }))
     expect(putAudioSettingsConfig).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert')).toHaveTextContent(/must not exceed 12 dB/i)
+    expect(screen.getByRole('alert')).toHaveTextContent(/must be between -60 and 12 dB/i)
+
+    await user.clear(ceiling)
+    await user.type(ceiling, '-61')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+    expect(putAudioSettingsConfig).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/must be between -60 and 12 dB/i)
   })
 
   it('is unavailable, with a stated reason, without the config:write scope', () => {

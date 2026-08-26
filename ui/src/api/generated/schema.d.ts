@@ -3708,7 +3708,7 @@ export interface components {
             /** @enum {string} */
             defaultFadeCurve: "linear";
             defaultFadeDurationMs: number;
-            /** @description Decibels. 0 dB is unity gain; +12 dB is the typo guard, not a tuned headroom figure. */
+            /** @description Decibels. 0 dB is unity gain; +12 dB is the typo guard, not a tuned headroom figure. -60 dB is the same silence floor duckTargetGainDb bounds against. */
             defaultMaxBackgroundGainDb: number;
             /** @description Decibels a ducked session is driven to. Must be negative; -60 dB is silence. Provisional value, not measured. */
             duckTargetGainDb: number;
