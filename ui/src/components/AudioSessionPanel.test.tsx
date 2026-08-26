@@ -180,6 +180,31 @@ describe('AudioSessionPanel', () => {
     expect(await screen.findByText('Confirmed: position')).toBeInTheDocument()
   })
 
+  it('surfaces attributionDegraded as its own note, even on a confirmed outcome', async () => {
+    pauseAudioSession.mockResolvedValue(
+      commandResult({ action: 'audio.session.pause', outcome: 'position', attributionDegraded: true }),
+    )
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 4 })])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause' }))
+
+    expect(await screen.findByText(/could not record this command in its audit log/)).toBeInTheDocument()
+  })
+
+  it('does not render the attribution note when attributionDegraded is false', async () => {
+    resumeAudioSession.mockResolvedValue(
+      commandResult({ action: 'audio.session.resume', outcome: 'started', attributionDegraded: false }),
+    )
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.state', value: 'paused' })])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Resume' }))
+
+    await screen.findByText('Confirmed: started')
+    expect(screen.queryByText(/could not record this command in its audit log/)).not.toBeInTheDocument()
+  })
+
   it('defaults the revision to 1 when no desired-revision evidence has ever been observed', async () => {
     resumeAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.resume', outcome: 'started' }))
     const model = makeModel({ session: signedIn() })
