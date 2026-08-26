@@ -300,13 +300,11 @@ type CurrentEntryState =
   | { kind: 'error'; message: string }
 
 // Same fetch, generation-guard, and reconnect-refetch discipline as
-// PlaylistReadiness.tsx's own useReconciliation, plus that same hook's
-// third trigger: a fresh fppPlaylistEntry.changed observation for THIS
-// instance also retriggers the fetch, keyed by `sequence` (a plain
-// monotonically increasing integer) rather than by the observation
-// object itself, which is a new identity every snapshot, or by
-// `receivedAt`, a string this task's own instruction says to prefer
-// `sequence` over.
+// PlaylistReadiness.tsx's own useReconciliation, plus that hook's third
+// trigger: a fresh observation for THIS instance also retriggers the
+// fetch. Keyed on `sequence`, a monotonically increasing integer and
+// therefore a stable effect dependency, not on the observation object
+// itself, which is a new identity every snapshot.
 function useCurrentEntryReconciliation(
   instanceUuid: string | null,
   snapshotReceivedAt: number | null,
