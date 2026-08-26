@@ -162,11 +162,19 @@ func Run() int {
 	// log line — finding 7's second half; see multisyncstatus.go.
 	multiSyncStatus := newMultiSyncStatus()
 
-	// fppConnectState carries this node's FPP Connect compatibility state
-	// (currently just the advertised channel range string) so the
-	// discover-ping responder reads it fresh at reply time rather than a
-	// value fixed at startup. See fppconnectstate.go.
+	// fppConnectState is this node's held FPP Connect configuration
+	// (Track E phase 2 seam FC1a, ADR-044 decision 5), constructed here,
+	// outside newMQTTConn, so the discover-ping responder reads it fresh
+	// at reply time rather than a value fixed at startup (see
+	// fppconnectstate.go and multisync.go), and so it survives a broker
+	// reconnect the same way cmdHandler does. Loaded from disk BEFORE the
+	// command handler starts, so a restart with no coordinator reachable
+	// still answers from what it was last pushed rather than from nothing
+	// (matching catalogStore's identical load-before-use ordering below).
 	fppConnect := newFPPConnectState()
+	if _, err := fppConnect.Load(cfg.AssetDir); err != nil {
+		logger.Warn("failed to load persisted fppconnect state at startup; starting with none", "error", err)
+	}
 
 	multiSyncDone := make(chan struct{})
 	go func() {
@@ -306,7 +314,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, fppConnect, time.Now, logger)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
 	if err != nil {
