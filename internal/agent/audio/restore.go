@@ -56,15 +56,23 @@ func (m *Manager) RestoreAll(ctx context.Context) error {
 // timingKnown starts false until a fresh observation resolves it.
 //
 // retry is true only when [Manager.retryDeferredRestores] is the
-// caller — a session already deferred once, now being retried right
-// after RebindEngine set a real engine. It changes exactly one thing:
-// a Start/Pause failure that is NOT [ErrNoEngineBinding] re-queues the
-// session for the next binding (see queueForRetryLocked) instead of
-// persisting Failed. This is deliberately conservative: rebindMu
-// already rules out the confirmed engine-mismatch race, but a session
-// resuming in the same call that just bound a brand new engine is not
-// a place to make a single failed attempt permanent — the next binding
-// gets another try before this session is reported Failed.
+// caller, a session already deferred once, now being retried right
+// after RebindEngine set a real engine. It changes what a genuine
+// (non-[ErrNoEngineBinding]) failure from prepareLocked's Load or from
+// Start/Pause does: instead of persisting Failed, it re-queues the
+// session for the next binding (see queueForRetryLocked), unboundedly,
+// so a binding that arrives before discovery has probe evidence for its
+// route and is correctly refused does not cost the session its only
+// chance to resume. This is deliberately conservative: rebindMu already
+// rules out the confirmed engine-mismatch race, but a session resuming
+// in the same call that just bound a brand new engine is not a place to
+// make a single failed attempt permanent; the next binding gets another
+// try before this session is reported Failed. This engine only ever
+// becomes available from inside a rebuild triggered by a binding
+// delivery (see [audioEngineRebuilder.rebuild] in
+// internal/agent/audioengine.go), so retrying on every binding arrival,
+// without letting a failed one consume the retry, is equivalent to
+// retrying when the engine becomes available.
 func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry bool) error {
 	rec, ok, err := m.store.Load(id)
 	if err != nil {
@@ -184,6 +192,12 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 				m.deferRestoreLocked(ctx, s, id)
 				return nil
 			}
+			if retry {
+				// A build refusal (not ErrNoEngineBinding) must not
+				// consume the pending restore; see restoreOne's doc comment.
+				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Load failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
+				return nil
+			}
 			s.state = pkgaudio.StateFailed
 			m.stopLTCLocked(ctx, s)
 			s.persistBestEffortLocked("state change")
@@ -227,6 +241,11 @@ func (m *Manager) restoreOne(ctx context.Context, id pkgaudio.SessionID, retry b
 		if _, err := s.prepareLocked(ctx, item); err != nil {
 			if errors.Is(err, ErrNoEngineBinding) {
 				m.deferRestoreLocked(ctx, s, id)
+				return nil
+			}
+			if retry {
+				// Same reasoning as the Playing/Preparing branch above.
+				m.queueForRetryLocked(ctx, s, id, fmt.Sprintf("Load failed while retrying a deferred restore (%v); re-queued for the next audio.node binding rather than persisted as failed", err))
 				return nil
 			}
 			s.state = pkgaudio.StateFailed
