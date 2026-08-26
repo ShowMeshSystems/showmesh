@@ -250,6 +250,23 @@ docker-build:
 docker-run:
 	$(DOCKER) run --rm -p 8080:8080 $(IMAGE):$(VERSION)
 
+# deploy-build/deploy-up build the deploy/ Compose bundle's coordinator
+# image with the same VERSION/COMMIT/BUILD_DATE this file already computes
+# for `build`/`docker-build`, instead of the "dev"/"none"/"unknown"
+# fallbacks deploy/docker-compose.yml's build args default to when nobody
+# sets SHOWMESH_VERSION/SHOWMESH_COMMIT/SHOWMESH_BUILD_DATE by hand. See
+# SM-291: a coordinator brought up via a bare `docker compose up -d
+# --build` could not say which commit it was running.
+.PHONY: deploy-build
+deploy-build:
+	SHOWMESH_VERSION=$(VERSION) SHOWMESH_COMMIT=$(COMMIT) SHOWMESH_BUILD_DATE=$(BUILD_DATE) \
+		$(DOCKER) compose -f deploy/docker-compose.yml build
+
+.PHONY: deploy-up
+deploy-up:
+	SHOWMESH_VERSION=$(VERSION) SHOWMESH_COMMIT=$(COMMIT) SHOWMESH_BUILD_DATE=$(BUILD_DATE) \
+		$(DOCKER) compose -f deploy/docker-compose.yml up -d --build
+
 # --- FPP plugin release artifacts (Step 9) ---
 #
 # The deployed fleet spans both ARM word sizes (a Raspberry Pi 3 B+, a
