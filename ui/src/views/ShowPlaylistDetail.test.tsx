@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ShowPlaylistDetail } from './ShowPlaylistDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel } from '../app/test-support/fixtures'
+import { makeModel, makeShowList } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import { ApiError } from '../api/errors'
 import type { Model } from '../app/types'
@@ -83,11 +83,24 @@ const storedPlaylist = {
 const emptyRevisions = { serverTime: '2026-08-25T00:00:00Z', revisions: [] }
 const emptyCueList = { serverTime: '2026-08-25T00:00:00Z', kind: 'show.cue' as const, objects: [] }
 
+/**
+ * Discriminates by `kind` (api/store.ts's own listConfigObjects
+ * signature): the pre-existing cue-label lookup (`show.cue`) stays
+ * empty, matching every test below that never cared about it, while the
+ * show-select's own `GET /config/show` now resolves to a small, non-empty
+ * list containing the one show these fixtures already use throughout.
+ */
+function mockShowAndCueLists(): void {
+  listConfigObjects.mockImplementation((kind: string) =>
+    kind === 'show' ? Promise.resolve(makeShowList(['halloween-2026'])) : Promise.resolve(emptyCueList),
+  )
+}
+
 describe('ShowPlaylistDetail (viewing an existing playlist)', () => {
   it('renders the current payload including its ordered entries in order', async () => {
     getShowPlaylist.mockResolvedValue(storedPlaylist)
     getShowPlaylistRevisions.mockResolvedValue(emptyRevisions)
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     renderExisting('main-run')
 
     await waitFor(() => expect(screen.getByDisplayValue('halloween-2026')).toBeVisible())
@@ -114,7 +127,7 @@ describe('ShowPlaylistDetail (viewing an existing playlist)', () => {
         { revision: 2, active: false, createdAt: '2026-08-20T00:00:00Z', createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1' },
       ],
     })
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     renderExisting('main-run')
 
     await waitFor(() => expect(screen.getByText('Revision history')).toBeVisible())
@@ -127,7 +140,7 @@ describe('ShowPlaylistDetail (viewing an existing playlist)', () => {
   it('reordering an entry changes what is submitted', async () => {
     getShowPlaylist.mockResolvedValue(storedPlaylist)
     getShowPlaylistRevisions.mockResolvedValue(emptyRevisions)
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     putShowPlaylist.mockResolvedValue({ ...storedPlaylist, revision: 4 })
     const user = userEvent.setup()
     renderExisting('main-run')
@@ -153,7 +166,7 @@ describe('ShowPlaylistDetail (viewing an existing playlist)', () => {
   it('renders the coordinator’s refusal reason on a rejected save, without reading as saved', async () => {
     getShowPlaylist.mockResolvedValue(storedPlaylist)
     getShowPlaylistRevisions.mockResolvedValue(emptyRevisions)
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     putShowPlaylist.mockRejectedValue(
       new ApiError(
         'show "another-show" does not match the existing object\'s show "halloween-2026"; show is immutable',
@@ -179,12 +192,12 @@ describe('ShowPlaylistDetail (viewing an existing playlist)', () => {
 
 describe('ShowPlaylistDetail (new playlist authoring)', () => {
   it('refuses to submit with no runner chosen', async () => {
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     const user = userEvent.setup()
     renderNew()
 
     await user.type(screen.getByLabelText('Playlist id'), 'main-run')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(await screen.findByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Main run')
     await user.type(screen.getByLabelText('Entry 1 id'), 'e1')
     await user.type(screen.getByLabelText('Entry 1 cue'), 'opening-number')
@@ -195,12 +208,12 @@ describe('ShowPlaylistDetail (new playlist authoring)', () => {
   })
 
   it('refuses an FPP-run playlist missing its playlist hash, client-side, before dispatch', async () => {
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     const user = userEvent.setup()
     renderNew()
 
     await user.type(screen.getByLabelText('Playlist id'), 'main-run')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(await screen.findByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Main run')
     await user.selectOptions(screen.getByLabelText('Runner'), 'fpp')
     await user.type(screen.getByLabelText('FPP instance UUID'), 'fpp-uuid-1')
@@ -215,7 +228,7 @@ describe('ShowPlaylistDetail (new playlist authoring)', () => {
   })
 
   it('submits a valid showmesh-audio-run playlist', async () => {
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     putShowPlaylist.mockResolvedValue({
       ...storedPlaylist,
       revision: 1,
@@ -230,7 +243,7 @@ describe('ShowPlaylistDetail (new playlist authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Playlist id'), 'main-run')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(await screen.findByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Main run')
     await user.selectOptions(screen.getByLabelText('Runner'), 'showmesh-audio')
     await user.type(screen.getByLabelText('Entry 1 id'), 'e1')
@@ -261,7 +274,7 @@ describe('ShowPlaylistDetail (scope gating)', () => {
   it('renders view-only, with editing disabled, for a reader without config:write on an existing playlist', async () => {
     getShowPlaylist.mockResolvedValue(storedPlaylist)
     getShowPlaylistRevisions.mockResolvedValue(emptyRevisions)
-    listConfigObjects.mockResolvedValue(emptyCueList)
+    mockShowAndCueLists()
     renderExisting('main-run', makeModel({ session: makeAuthenticatedSession({ scopes: ['show:macro:run'] }) }))
 
     await waitFor(() => expect(screen.getByDisplayValue('halloween-2026')).toBeVisible())
