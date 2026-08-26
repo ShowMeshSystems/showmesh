@@ -160,7 +160,6 @@ func (s *fppConnectState) ShowNames() []string {
 	return out
 }
 
-// SetShowNames replaces the held show name list.
 // SetShowNames copies names into the held show name list rather than
 // retaining the caller's own slice, matching ShowNames' and Snapshot's
 // identical copy discipline: a caller that mutates names after this call

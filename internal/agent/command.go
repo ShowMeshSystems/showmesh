@@ -327,17 +327,21 @@ func newIdempotencyCache(capacity int) *idempotencyCache {
 }
 
 // claimOrAwait is this cache's one entry point for the idempotency
-// decision. It returns (result, true) when key was already resolved —
+// decision. It returns (result, true) when key was already resolved,
 // either found in the completed cache immediately, or found in-flight and
-// waited for — meaning the caller must NOT execute and should republish
+// waited for, meaning the caller must NOT execute and should republish
 // result verbatim. It returns (zero value, false) when THIS call is the
 // one that must execute: it atomically claims key as in-flight, under the
 // same lock as the "is it already known" check, so no concurrent caller
 // can also receive false for the same key. A caller that receives false
-// MUST call [idempotencyCache.complete] for key exactly once afterward, on
-// every code path (including a refusal or a failure) — that call is what
-// releases any concurrent waiters and is the only way this key's in-flight
-// claim is ever cleared.
+// MUST call exactly one of [idempotencyCache.complete] or
+// [idempotencyCache.release] for key afterward, on every code path
+// (including a refusal or a failure): complete for an ordinary outcome,
+// or release when the operation marked its error with
+// [markDoNotCacheFailure]. Either call is what releases any concurrent
+// waiters and is the only way this key's in-flight claim is ever cleared;
+// calling neither leaves every concurrent waiter, and any later delivery
+// of the same key, blocked forever.
 func (c *idempotencyCache) claimOrAwait(key string) (mqttproto.ResultPayload, bool) {
 	c.mu.Lock()
 	if el, ok := c.entries[key]; ok {
@@ -498,8 +502,10 @@ func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger
 //     its original, since HandleMessage runs in its own goroutine per
 //     inbound PUBLISH — see mqtt.go) execute exactly once rather than
 //     merely "usually once." Otherwise, this call now exclusively owns
-//     the key and MUST call h.cache.complete on every remaining path
-//     below, including a refusal or a failure.
+//     the key and MUST call exactly one of h.cache.complete or
+//     h.cache.release on every remaining path below, including a
+//     refusal or a failure; release applies only when the operation
+//     marked its error with markDoNotCacheFailure.
 //  8. Deadline already elapsed at receipt: refused, completed (so a
 //     concurrent or later redelivery does not re-evaluate against a
 //     possibly different now()).
@@ -581,7 +587,9 @@ func (h *CommandHandler) HandleMessage(ctx context.Context, publisher Publisher,
 	// call. resolved == true means someone else (a prior delivery, or a
 	// concurrent one this call waited on) already owns this key's outcome;
 	// resolved == false means THIS call now exclusively owns it and must
-	// call h.cache.complete on every remaining path below.
+	// call exactly one of h.cache.complete or h.cache.release on every
+	// remaining path below; release applies only when the operation
+	// marked its error with markDoNotCacheFailure.
 	resolved, found := h.cache.claimOrAwait(cmd.IdempotencyKey)
 	if found {
 		h.logger.Info("redelivered command matched an already-resolved idempotency key; republishing that result without re-executing",

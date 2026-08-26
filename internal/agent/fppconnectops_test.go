@@ -333,6 +333,9 @@ func TestHandleMessageFPPConnectConfigureSaveFailureDoesNotStrandTheIdempotencyK
 	if result1.Outcome != mqttproto.OutcomeFailed {
 		t.Fatalf("first delivery outcome = %q, want %q", result1.Outcome, mqttproto.OutcomeFailed)
 	}
+	if !strings.Contains(result1.Reason, "persist state") {
+		t.Errorf("first delivery reason = %q, want it to name the persist failure", result1.Reason)
+	}
 	if got := state.ChannelRanges(); got != "" {
 		t.Fatalf("state.ChannelRanges() after the failed first delivery = %q, want empty", got)
 	}
