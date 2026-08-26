@@ -96,6 +96,17 @@ func TestLTCStartReachesRunningWithAdvancingTimecode(t *testing.T) {
 	t.Fatalf("LTC timecode never advanced past the first observed value %q", first.Timecode)
 }
 
+// TestLTCStopReturnsToStoppedAndHalts covers StopLTC's own returned
+// observation and the state ObserveLTC eventually settles to. It does not
+// require either to claim LTCStopped immediately: StopLTC does not flush
+// the appsrc (see ltcAppSrcLeadDuration's doc comment), so up to that much
+// of the outgoing run's audio is genuinely still on the wire right after
+// this call returns, and claiming stopped with an unknown timecode during
+// that window is the defect, not the fix. See
+// TestLTCStopDoesNotClaimStoppedWhileAudible for the appsink-level proof.
+// This test only requires the eventual settle: LTC must reach LTCStopped,
+// with no known timecode, well within the transition guard plus
+// scheduling margin, and never report LTCRunning again afterward.
 func TestLTCStopReturnsToStoppedAndHalts(t *testing.T) {
 	e := newLTCTestEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
@@ -107,21 +118,31 @@ func TestLTCStopReturnsToStoppedAndHalts(t *testing.T) {
 	}
 	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
 
-	obs, err := e.StopLTC(ctx)
-	if err != nil {
+	if _, err := e.StopLTC(ctx); err != nil {
 		t.Fatalf("StopLTC: %v", err)
 	}
-	if obs.State != agentaudio.LTCStopped || obs.Reason == "" {
-		t.Fatalf("StopLTC observation = %+v, want stopped with a reason", obs)
+
+	settleWindow := ltcTransitionGuardDuration + 500*time.Millisecond
+	deadline := time.Now().Add(settleWindow)
+	var last agentaudio.LTCObservation
+	for time.Now().Before(deadline) {
+		last = e.ObserveLTC(context.Background())
+		if last.State == agentaudio.LTCStopped {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if obs.TimecodeKnown {
-		t.Fatalf("stopped observation still claims a known timecode: %+v", obs)
+	if last.State != agentaudio.LTCStopped {
+		t.Fatalf("LTC never settled to stopped within %s of Stop: %+v", settleWindow, last)
+	}
+	if last.TimecodeKnown {
+		t.Fatalf("settled stopped observation still claims a known timecode: %+v", last)
 	}
 
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline = time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if o := e.ObserveLTC(context.Background()); o.State == agentaudio.LTCRunning {
-			t.Fatalf("LTC resumed running after Stop: %+v", o)
+			t.Fatalf("LTC resumed running after settling to stopped: %+v", o)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -156,6 +177,39 @@ func TestLTCRestartReanchorsTimecode(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("restart never produced a timecode anchored at %q", restartAt)
+}
+
+// TestLTCRestartDoesNotClaimNewTimecodeWhileOldRunWasConfirmed covers the
+// same transition guard as TestLTCStopDoesNotClaimStoppedWhileAudible, but
+// for StartLTC's own realignment path (a seek or resume swaps encoders
+// the same way): the very first observation taken right after a restart
+// must not already report the new run's evidence, because that evidence
+// has not been confirmed on the wire yet, and it must not report the
+// incoming placeholder either while the outgoing run was itself confirmed
+// running, because that run's own audio is still genuinely on the wire.
+func TestLTCRestartDoesNotClaimNewTimecodeWhileOldRunWasConfirmed(t *testing.T) {
+	e := newLTCTestEngine(t)
+	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
+	defer cancel()
+
+	first := agentaudio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate25, StartTimecode: "01:00:00:00"}
+	if _, err := e.StartLTC(ctx, first); err != nil {
+		t.Fatalf("StartLTC (first run): %v", err)
+	}
+	waitForLTCState(t, e, agentaudio.LTCRunning, ltcOpTimeout)
+
+	restartAt := pkgaudio.LTCTimecode("02:00:00:00")
+	if _, err := e.StartLTC(ctx, agentaudio.LTCSpec{FrameRate: pkgaudio.LTCFrameRate25, StartTimecode: restartAt}); err != nil {
+		t.Fatalf("StartLTC (restart): %v", err)
+	}
+
+	obs := e.ObserveLTC(context.Background())
+	if obs.State != agentaudio.LTCRunning {
+		t.Fatalf("observation immediately after restart = %+v, want it to keep reporting the outgoing run as running, not the incoming placeholder", obs)
+	}
+	if !obs.TimecodeKnown || obs.Timecode >= restartAt {
+		t.Fatalf("observation immediately after restart = %+v, want a timecode still anchored to the first run (%q), not the unconfirmed restart value", obs, first.StartTimecode)
+	}
 }
 
 func TestLTCRunsAlongsideProgramPlayback(t *testing.T) {
