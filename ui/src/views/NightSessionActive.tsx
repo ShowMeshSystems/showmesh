@@ -157,8 +157,16 @@ export function NightSessionActive() {
   }
 
   return (
-    <div>
-      <h2 className="panel__title">Active night session</h2>
+    <div className="operator-page">
+      <header className="operator-page__header">
+        <div>
+          <h1 className="operator-page__title">Active Show Night</h1>
+          <p className="operator-page__lede text-muted">
+            Choose which authored Show Night is active. The live lifecycle remains on the Show Night page.
+          </p>
+        </div>
+        <Link className="button" to="/night">View live Show Night</Link>
+      </header>
       <p className="text-muted">
         The night session the coordinator is currently running. Activating a different session, or
         clearing the pointer, is revisioned and audited like every other configuration write here.
@@ -203,6 +211,13 @@ export function NightSessionActive() {
               {formatAbsolute(state.config.updatedAt)}
             </dd>
           </dl>
+          {state.config.payload.session !== '' && (
+            <p>
+              <Link className="button" to={`/config/night.session/${encodeURIComponent(state.config.payload.session)}`}>
+                Edit Show Night
+              </Link>
+            </p>
+          )}
         </div>
       )}
 

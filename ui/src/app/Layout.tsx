@@ -83,7 +83,7 @@ const NAV_GROUPS: Array<{
   },
   {
     heading: 'Control',
-    items: [{ to: '/macros', label: 'Macros', end: false }],
+    items: [{ to: '/control', label: 'Live Control', end: false }],
   },
   {
     heading: 'Configure',
@@ -146,7 +146,7 @@ const PRIMARY_NAV = [
     items: [
       { to: '/', label: 'Dashboard', end: true },
       { to: '/night', label: 'Show Night', end: false },
-      { to: '/macros', label: 'Live Control', end: false },
+      { to: '/control', label: 'Live Control', end: false },
     ],
   },
   {

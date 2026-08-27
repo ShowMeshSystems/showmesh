@@ -164,8 +164,20 @@ export function NightSession() {
   }
 
   return (
-    <div>
-      <h2 className="panel__title">Night session</h2>
+    <div className="operator-page">
+      <header className="operator-page__header">
+        <div>
+          <h1 className="operator-page__title">Show Night</h1>
+          <p className="operator-page__lede text-muted">
+            Live lifecycle status and the coordinator&rsquo;s current Run of Show. FPP retains scheduling and playback authority.
+          </p>
+        </div>
+        {state.kind === 'loaded' && state.session.configObjectId !== '' && (
+          <a className="button" href={`/config/night.session/${encodeURIComponent(state.session.configObjectId)}`}>
+            Edit Show Night
+          </a>
+        )}
+      </header>
       <p className="text-muted">
         The RESTING-MODE lifecycle controller&rsquo;s own state: a dedicated closed state
         machine, never observed evidence. See <code>night.session</code> configuration for the
@@ -332,12 +344,12 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
         </section>
       </PanelErrorBoundary>
 
-      <h3 className="section-title">Next cue</h3>
-      <PanelErrorBoundary panelLabel="Next cue">
+      <h3 className="section-title">Next Transition Step</h3>
+      <PanelErrorBoundary panelLabel="Next Transition Step">
         <section className="panel" role="status">
           {session.cues.state !== 'recorded' && <p className="text-muted">{session.cues.reason}</p>}
           {session.cues.state === 'recorded' && nextCue === null && (
-            <p className="text-muted">No pending cue in the current cycle&rsquo;s outbox.</p>
+            <p className="text-muted">No pending Transition Step in the current cycle&rsquo;s outbox.</p>
           )}
           {session.cues.state === 'recorded' && nextCue !== null && (
             <dl className="field-list">
@@ -354,14 +366,28 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
         </section>
       </PanelErrorBoundary>
 
-      <h3 className="section-title">Cues</h3>
+      <h3 className="section-title">Run of Show</h3>
       {/* Review finding 6: this list is every cue in the current cycle's
           outbox across all three phases, not scoped to any one of them —
           the heading no longer claims a filter this table does not apply.
           Each row's own Phase column (below) still says which phase it
           belongs to. */}
-      <PanelErrorBoundary panelLabel="Cue evidence">
+      <PanelErrorBoundary panelLabel="Transition Step evidence">
         <section className="panel">
+          {session.cues.state === 'recorded' && session.cues.cues.length > 0 && (
+            <ol className="show-night__timeline" aria-label="Run of Show Transition Steps">
+              {session.cues.cues.map((cue, i) => (
+                <li className="show-night__step" key={`run-of-show-${cue.phase}-${cue.name}-${i}`}>
+                  <span className="show-night__step-time">Step {i + 1}</span>
+                  <span>
+                    <strong>Transition Step {i + 1}</strong>
+                    <span className="show-night__step-detail">{cue.name} · {cue.phase} · {cue.role} · {cue.action}</span>
+                  </span>
+                  <NightCueStateBadge state={cue.state} />
+                </li>
+              ))}
+            </ol>
+          )}
           {session.cues.state !== 'recorded' && (
             <p className="text-muted" role="status">
               {session.cues.reason}
@@ -369,7 +395,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
           )}
           {session.cues.state === 'recorded' &&
             (session.cues.cues.length === 0 ? (
-              <p className="text-muted">No cues recorded for this cycle yet.</p>
+              <p className="text-muted">No Transition Steps recorded for this cycle yet.</p>
             ) : (
               <div className="table-scroll">
                 <table className="config-table">
@@ -401,7 +427,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                         <td>
                           {/* ADR-031 decision 3: completed and confirmed must
                               be visually distinct — a resolved-but-
-                              unconfirmed cue is neither success nor
+                              unconfirmed Transition Step is neither success nor
                               failure, and NightCueOutcomeBadge gives it its
                               own tone rather than folding it into either. */}
                           {cue.outcome === undefined ? '-' : <NightCueOutcomeBadge outcome={cue.outcome} />}
@@ -450,7 +476,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                   <thead>
                     <tr>
                       <th>Sequence</th>
-                      <th>Cue</th>
+                      <th>Transition Step</th>
                       <th>Kind</th>
                       <th>Pinned revision</th>
                       <th>State</th>

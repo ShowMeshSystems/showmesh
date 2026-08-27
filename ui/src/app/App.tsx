@@ -30,6 +30,7 @@ import { AudioNodeDetail } from '../views/AudioNodeDetail'
 import { Macros } from '../views/Macros'
 import { MacroDetail } from '../views/MacroDetail'
 import { MacroRunView } from '../views/MacroRunView'
+import { LiveControl } from '../views/LiveControl'
 import { ShowActions } from '../views/ShowActions'
 import { ShowActionDetail } from '../views/ShowActionDetail'
 import { ResolumeView } from '../views/ResolumeView'
@@ -135,7 +136,8 @@ export function ScrollToTop() {
 const ROUTE_TITLES: Array<[string, string]> = [
   ['/', 'Dashboard'],
   ['/night', 'Show Night'],
-  ['/macros', 'Live Control'],
+  ['/control', 'Live Control'],
+  ['/macros', 'Macros'],
   ['/config/show', 'Shows'],
   ['/assets', 'Assets'],
   ['/nodes', 'Monitor'],
@@ -182,6 +184,7 @@ export default function App() {
                 routes by specificity regardless of declaration order, so
                 this ordering is not load-bearing, only easier to read. */}
             <Route path="macros" element={<Macros />} />
+            <Route path="control" element={<LiveControl />} />
             <Route path="macros/new" element={<MacroDetail isNew />} />
             <Route path="macros/:id" element={<MacroDetail />} />
             <Route path="macros/:id/runs/:runId" element={<MacroRunView />} />

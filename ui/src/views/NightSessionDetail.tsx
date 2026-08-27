@@ -438,8 +438,16 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
   const editable = writeGate.allowed
 
   return (
-    <div>
-      <h2 className="panel__title">{isNew ? 'New night session' : form.label || existingId}</h2>
+    <div className="operator-page">
+      <header className="operator-page__header">
+        <div>
+          <h1 className="operator-page__title">{isNew ? 'New Show Night' : form.label || existingId}</h1>
+          <p className="operator-page__lede text-muted">
+            Edit the authored Show Night definition. Changes create a revision; the live controller pins one revision for its run.
+          </p>
+        </div>
+        <Link className="button" to="/night">View live Show Night</Link>
+      </header>
       <p className="text-muted">
         The authored definition a night session pins. FPP alone authorizes and
         schedules a night session; this form never accepts a calendar field or a rest-duration
@@ -653,7 +661,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         )}
 
         <CueListEditor
-          heading="Enter-show cues"
+          heading="Enter-show Transition Steps"
           cues={form.enterShowCues}
           onUpdate={(i, patch) => updateCue('enterShowCues', i, patch)}
           onAdd={() => addCue('enterShowCues')}
@@ -669,7 +677,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         </label>
 
         <CueListEditor
-          heading="Enter-resting cues"
+          heading="Enter-resting Transition Steps"
           cues={form.enterRestingCues}
           onUpdate={(i, patch) => updateCue('enterRestingCues', i, patch)}
           onAdd={() => addCue('enterRestingCues')}
@@ -764,7 +772,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
       )}
 
       <p className="text-muted">
-        See <Link to="/config/night.session.active">the active night session</Link> to change which
+      See <Link to="/config/night.session.active">the active Show Night</Link> to change which
         session the coordinator is currently running.
       </p>
     </div>
@@ -787,7 +795,7 @@ function CueListEditor({
   return (
     <div>
       <h3 className="panel__title">{heading}</h3>
-      {cues.length === 0 && <p className="text-muted">No cues yet.</p>}
+      {cues.length === 0 && <p className="text-muted">No Transition Steps yet.</p>}
       {cues.map((cue, i) => (
         <div key={i} className="panel" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
           <input type="text" placeholder="name" value={cue.name} onChange={(e) => onUpdate(i, { name: e.target.value })} />
@@ -832,7 +840,7 @@ function CueListEditor({
         </div>
       ))}
       <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={onAdd}>
-        Add cue
+        Add Transition Step
       </ScopedButton>
     </div>
   )

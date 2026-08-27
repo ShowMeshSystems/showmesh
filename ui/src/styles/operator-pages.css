@@ -1,0 +1,202 @@
+/* Page-local layout for the first operator-facing page wave.  The shell owns
+ * the app frame and tokens; these rules only arrange page content. */
+.operator-page {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.operator-page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.operator-page__title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-tight);
+}
+
+.operator-page__lede {
+  max-width: 62rem;
+  margin: var(--space-2) 0 0;
+}
+
+.operator-status-strip,
+.operator-control-grid,
+.operator-summary-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.operator-status-card,
+.operator-control-card,
+.operator-summary-card {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.operator-status-card__label,
+.operator-summary-card__label {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.operator-status-card__value,
+.operator-summary-card__value {
+  display: block;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.operator-status-card__detail,
+.operator-summary-card__detail {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.operator-page__columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.operator-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.operator-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.operator-list__item:last-child {
+  border-bottom: 0;
+}
+
+.operator-list__meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.operator-control-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.operator-control-card {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.operator-control-card h3,
+.operator-control-card h4 {
+  margin: 0;
+}
+
+.operator-control-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.operator-control-card--wide {
+  grid-column: 1 / -1;
+}
+
+.show-night__hero {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.show-night__state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.show-night__timeline {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.show-night__step {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.show-night__step:last-child {
+  border-bottom: 0;
+}
+
+.show-night__step-time {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.show-night__step-detail {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (max-width: 900px) {
+  .operator-status-strip,
+  .operator-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operator-page__columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .operator-status-strip,
+  .operator-control-grid,
+  .operator-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .operator-control-card--wide {
+    grid-column: auto;
+  }
+
+  .show-night__hero {
+    grid-template-columns: 1fr;
+  }
+
+  .show-night__step {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+}

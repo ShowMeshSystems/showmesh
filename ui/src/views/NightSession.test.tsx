@@ -297,7 +297,7 @@ describe('NightSession', () => {
     // renders twice (the "Next cue" panel and the full cue table below
     // it) — this asserts it is present at all, not that it is unique.
     expect(screen.getAllByText('enter-resting-cue').length).toBeGreaterThan(0)
-    expect(screen.getByRole('heading', { name: 'Cues' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Run of Show' })).toBeVisible()
     expect(screen.getByRole('columnheader', { name: 'Phase' })).toBeVisible()
 
     // Review finding 8: a null dispatchedAt/resolvedAt is a KNOWN

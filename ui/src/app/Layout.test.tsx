@@ -132,7 +132,7 @@ describe('Layout', () => {
     expect(primary).toHaveTextContent('Author')
     expect(primary).toHaveTextContent('System')
     expect(primary?.querySelector('a[href="/night"]')).toHaveTextContent('Show Night')
-    expect(primary?.querySelector('a[href="/macros"]')).toHaveTextContent('Live Control')
+    expect(primary?.querySelector('a[href="/control"]')).toHaveTextContent('Live Control')
     expect(primary?.querySelector('a[href="/config/show"]')).toHaveTextContent('Shows')
     expect(primary?.querySelector('a[href="/assets"]')).toHaveTextContent('Assets')
     expect(primary?.querySelector('a[href="/nodes"]')).toHaveTextContent('Monitor')
@@ -353,7 +353,7 @@ const ALL_NAV_HREFS = [
   '/assets/manifest',
   '/audit',
   // Control
-  '/macros',
+  '/control',
   // Configure
   '/config',
   '/actions',
@@ -392,9 +392,9 @@ describe('collapsible nav groups', () => {
       'showmesh-ui-nav-groups',
       JSON.stringify({ 'Show night': false, Diagnostics: true }),
     )
-    // /macros is Control's own route, so Control is the active group here
+    // /control is Control's own route, so Control is the active group here
     // and Show night/Diagnostics are free to reflect their stored values.
-    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/macros')
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/control')
 
     expect(screen.getByRole('button', { name: /Show night/ })).toHaveAttribute(
       'aria-expanded',
@@ -407,9 +407,9 @@ describe('collapsible nav groups', () => {
   })
 
   it('opens Show night by default on a first visit, with no stored preference at all', () => {
-    // /macros keeps Show night out of the active group so its default,
+    // /control keeps Show night out of the active group so its default,
     // not the active-route override, is what this observes.
-    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/macros')
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/control')
 
     expect(screen.getByRole('button', { name: /Show night/ })).toHaveAttribute(
       'aria-expanded',
@@ -422,7 +422,7 @@ describe('collapsible nav groups', () => {
   })
 
   it('shows a link count on a collapsed group', () => {
-    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/macros')
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/control')
 
     // Monitor is collapsed by default on this route (Control is active).
     const monitorHeading = screen.getByRole('button', { name: /Monitor/ })
@@ -444,7 +444,7 @@ describe('collapsible nav groups', () => {
     // (its group holds the active '/' route here too, so it is open
     // either way) and every link is still reachable.
     expect(document.querySelector('a.app-nav__link[href="/"]')).toBeInTheDocument()
-    expect(document.querySelector('a.app-nav__link[href="/macros"]')).toBeInTheDocument()
+    expect(document.querySelector('a.app-nav__link[href="/control"]')).toBeInTheDocument()
 
     getItemSpy.mockRestore()
     setItemSpy.mockRestore()

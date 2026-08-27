@@ -12,6 +12,7 @@ import { summarizeFleetPorts, summarizeFleetWarnings } from '../app/fppDashboard
 import { STATE_ICON, STATE_TONE } from '../app/evidenceState'
 import { EvidenceValue } from '../components/EvidenceValue'
 import type { FPPInstance, Node, ResolumeInstance } from '../app/types'
+import '../styles/operator-pages.css'
 
 // The default view (spec section 6.4). OBSERVABILITY section 6.2's last
 // line: "the default view prioritizes active critical conditions, then
@@ -156,6 +157,82 @@ function sortByTone(items: AttentionItem[]): AttentionItem[] {
   return [...items].sort((a, b) => order[a.tone] - order[b.tone])
 }
 
+function readiness(model: ReturnType<typeof useModelContext>): { label: string; detail: string; tone: StatusTone; icon: string } {
+  if (model.snapshotReceivedAt === null || model.connection.kind === 'connecting') {
+    return { label: 'Unknown', detail: 'Waiting for coordinator data.', tone: 'unknown', icon: '?' }
+  }
+  if (model.connection.kind !== 'live') {
+    return { label: 'Stale', detail: 'Last known data is shown while disconnected.', tone: 'unknown', icon: '!' }
+  }
+  if (model.fpp.length === 0 && model.nodes.length === 0) {
+    return { label: 'Unknown', detail: 'No playback or node evidence is configured.', tone: 'unknown', icon: '?' }
+  }
+  if (model.fpp.some((instance) => instance.health === 'failed')) {
+    return { label: 'Not ready', detail: 'An FPP instance has failed.', tone: 'bad', icon: '✕' }
+  }
+  if (model.fpp.some((instance) => instance.health === 'degraded' || instance.health === 'unknown') || model.nodes.some((node) => node.controlPlane.state !== 'online')) {
+    return { label: 'Needs attention', detail: 'One or more resources are degraded or unobserved.', tone: 'warn', icon: '⚠' }
+  }
+  return { label: 'Ready', detail: 'Current resource evidence is healthy.', tone: 'good', icon: '✓' }
+}
+
+function Overview({ model, attention }: { model: ReturnType<typeof useModelContext>; attention: AttentionItem[] }) {
+  const currentRuns = model.macroRuns.filter((run) => run.state === 'running')
+  const ready = readiness(model)
+  const presentation = [
+    ...model.fpp.map((instance) => `FPP: ${instance.instanceId}`),
+    ...model.nodes.map((node) => `Node: ${node.label ?? node.nodeId}`),
+    ...model.resolume.map((instance) => `Resolume: ${instance.instanceId}`),
+  ]
+  return (
+    <section className="operator-page" aria-labelledby="dashboard-title">
+      <header className="operator-page__header">
+        <div>
+          <h1 id="dashboard-title" className="operator-page__title">Dashboard</h1>
+          <p className="operator-page__lede text-muted">A shallow operator overview of readiness, the current run, and the presentation path.</p>
+        </div>
+        <Link className="button" to="/control">Open Live Control</Link>
+      </header>
+      <div className="operator-status-strip" aria-label="Dashboard status">
+        <div className="operator-status-card">
+          <span className="operator-status-card__label">Readiness</span>
+          <StatusBadge tone={ready.tone} icon={ready.icon} label={ready.label} />
+          <span className="operator-status-card__detail">{ready.detail}</span>
+        </div>
+        <div className="operator-status-card">
+          <span className="operator-status-card__label">Current run</span>
+          <span className="operator-status-card__value">{currentRuns.length === 0 ? 'None observed' : `${currentRuns.length} running`}</span>
+          <span className="operator-status-card__detail">{currentRuns.length === 0 ? 'No macro run is currently reported.' : currentRuns.map((run) => run.show).join(', ')}</span>
+        </div>
+        <div className="operator-status-card">
+          <span className="operator-status-card__label">Connection</span>
+          <span className="operator-status-card__value">{model.connection.kind === 'live' ? 'Live' : model.connection.kind}</span>
+          <span className="operator-status-card__detail">{attention.length === 0 ? 'No attention items are reported.' : `${attention.length} attention item${attention.length === 1 ? '' : 's'} reported.`}</span>
+        </div>
+        <div className="operator-status-card">
+          <span className="operator-status-card__label">Presentation path</span>
+          <span className="operator-status-card__value">{presentation.length}</span>
+          <span className="operator-status-card__detail">{presentation.length === 0 ? 'No presentation endpoints observed.' : presentation.join(' · ')}</span>
+        </div>
+      </div>
+      <div className="operator-page__columns">
+        <section className="panel" aria-labelledby="dashboard-current-run">
+          <h2 id="dashboard-current-run" className="panel__title">Current run</h2>
+          {currentRuns.length === 0 ? <p className="text-muted">No current run is observed. This is not a claim that no external process is running.</p> : (
+            <ul className="operator-list">
+              {currentRuns.map((run) => <li className="operator-list__item" key={run.id}><span><strong>{run.show}</strong><span className="operator-list__meta">{run.macroObjectId}</span></span><StatusBadge tone="good" icon="▶" label="Running" /></li>)}
+            </ul>
+          )}
+        </section>
+        <section className="panel" aria-labelledby="dashboard-presentation">
+          <h2 id="dashboard-presentation" className="panel__title">Presentation path</h2>
+          {presentation.length === 0 ? <p className="text-muted">No presentation endpoint is observed.</p> : <ul className="operator-list">{presentation.map((item) => <li className="operator-list__item" key={item}><span>{item}</span><span className="operator-list__meta">Observed</span></li>)}</ul>}
+        </section>
+      </div>
+    </section>
+  )
+}
+
 export function Dashboard() {
   const model = useModelContext()
 
@@ -187,6 +264,7 @@ export function Dashboard() {
 
   return (
     <div>
+      <Overview model={model} attention={attention} />
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
       <ClockSkewWarning clockSkewMs={model.clockSkewMs} />
 
@@ -513,9 +591,9 @@ export function Dashboard() {
           </section>
         </PanelErrorBoundary>
 
-        <PanelErrorBoundary panelLabel="Recent events">
+        <PanelErrorBoundary panelLabel="Recent activity">
           <section className="panel">
-            <h2 className="panel__title">Recent events</h2>
+            <h2 className="panel__title">Recent activity</h2>
             {model.eventsGap && (
               <p className="evidence__reason" role="status">
                 Some event history has been permanently lost to retention; this list does
