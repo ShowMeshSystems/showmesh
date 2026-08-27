@@ -65,17 +65,30 @@ func nodeRenderView(ctx context.Context, render NodeRenderLister, assetManifests
 	return applySupersededVerdict(ctx, assetManifests, nodeID, obs, now)
 }
 
-// applySupersededVerdict compares each surface's reported catalog revision
-// and Cue (SignalSurfaceContentCatalogRevision/CueID) against
-// [assetsync.ResolveCueCatalog]'s current answer for nodeID, and — only for
-// a surface currently reporting [mqttproto.RenderPipelineStateRunning] —
-// swaps that value for [mqttproto.RenderPipelineStateSuperseded] when
-// either no longer matches. A revision mismatch alone already implies a
-// Show, generation, Cue set, or asset change (the revision hashes all of
-// them — pkg/cuecatalog.RevisionInput's own doc comment); the Cue check is
-// a second, independent path for a legacy assignment that carries a Cue but
-// no catalog revision (one persisted before TRACK-H-H3-SPEC.md section 5
-// existed).
+// applySupersededVerdict compares each surface's reported (Show,
+// generation) — the exact tuple ADR-043's H0.7 names as what a superseded
+// verdict must be authorized against — plus its Cue
+// (SignalSurfaceContentCueID) against [assetsync.ResolveActiveShow] and
+// [assetsync.ResolveCueCatalog]'s current answers for nodeID, and — only
+// for a surface currently reporting [mqttproto.RenderPipelineStateRunning]
+// — swaps that value for [mqttproto.RenderPipelineStateSuperseded] when
+// either no longer matches.
+//
+// The catalog REVISION is deliberately NOT part of this decision: it
+// hashes every Cue and asset in the Show (pkg/cuecatalog.RevisionInput's
+// own doc comment), so it changes whenever anyone authors a Cue, even one
+// that authorizes nothing new for this surface and changes neither the
+// active Show nor its generation. Deciding the verdict from the revision
+// made authoring a second Cue in the SAME still-active Show, at the SAME
+// generation, falsely report every surface holding a current render as
+// superseded — indistinguishable, from the operator's seat, from the real
+// case this file exists to catch, which trains an operator to ignore the
+// state. The revision is still carried in the rendered reason string below
+// as supporting evidence, never as what decides the verdict.
+//
+// The Cue check is a second, independent path for a legacy assignment that
+// carries a Cue but no Show/generation at all (one persisted before
+// TRACK-H-H3-SPEC.md section 5 existed).
 //
 // Every other field on the overridden observation — ObservedAt, ValidFor,
 // CollectedAt, Source — is left exactly as the node reported it: this
@@ -111,11 +124,12 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 	copy(out, obs)
 
 	type surfaceContent struct {
-		pipelineIdx             int
-		revision, cueID         string
-		haveRevision, haveCueID bool
-		show                    string
-		generation              int64
+		pipelineIdx              int
+		revision, cueID          string
+		haveRevision, haveCueID  bool
+		show                     string
+		generation               int64
+		haveShow, haveGeneration bool
 	}
 	bySurface := map[string]*surfaceContent{}
 	surfaceFor := func(id string) *surfaceContent {
@@ -145,11 +159,11 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 			}
 		case signalSurfaceContentShowForSupersede:
 			if v, ok := o.Value.(string); ok {
-				sc.show = v
+				sc.show, sc.haveShow = v, true
 			}
 		case signalSurfaceContentGenerationForSupersede:
 			if v, ok := o.Value.(int64); ok {
-				sc.generation = v
+				sc.generation, sc.haveGeneration = v, true
 			}
 		}
 	}
@@ -163,9 +177,10 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 			continue
 		}
 
-		supersededByRevision := sc.haveRevision && sc.revision != catalog.Revision
+		supersededByShowGeneration := sc.haveShow && sc.haveGeneration &&
+			(sc.show != active.ShowID || sc.generation != active.Generation)
 		supersededByCue := sc.haveCueID && !catalogCueIDs[sc.cueID]
-		if !supersededByRevision && !supersededByCue {
+		if !supersededByShowGeneration && !supersededByCue {
 			continue
 		}
 
@@ -173,9 +188,12 @@ func applySupersededVerdict(ctx context.Context, st *store.Store, nodeID string,
 		// package's own copy-guard test) — the policy this implements is
 		// documented on [mqttproto.RenderPipelineStateSuperseded] instead.
 		reason := fmt.Sprintf(
-			"this surface is holding a render authorized by show %q generation %d; the coordinator's currently active show is %q generation %d, and this render's authorization no longer matches its resolved cue catalog",
+			"this surface is holding a render authorized by show %q generation %d; the coordinator's currently active show is %q generation %d",
 			sc.show, sc.generation, active.ShowID, active.Generation,
 		)
+		if sc.haveRevision && sc.revision != catalog.Revision {
+			reason += fmt.Sprintf("; the held catalog revision %q no longer matches the active resolution %q (evidence only — a Show/generation match alone is what decides this verdict)", sc.revision, catalog.Revision)
+		}
 		superseded := out[sc.pipelineIdx]
 		superseded.Value = mqttproto.RenderPipelineStateSuperseded
 		superseded.Quality = observation.QualityDerived

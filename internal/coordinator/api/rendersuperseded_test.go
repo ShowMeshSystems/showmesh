@@ -198,6 +198,75 @@ func TestApplySupersededVerdictOverridesOnRevisionMismatch(t *testing.T) {
 	}
 }
 
+// TestApplySupersededVerdictAuthoringSecondCueSameShowStaysRunning is a
+// false-positive regression test: an operator authoring a SECOND Cue in
+// the SAME still-active Show, at the SAME generation (show.active itself
+// was never re-issued), must never
+// make an already-running surface report superseded. Before this fix, the
+// verdict was decided from the catalog REVISION, which hashes every Cue in
+// the Show (pkg/cuecatalog.RevisionInput) and so changes the instant
+// anyone authors anything — even a Cue that authorizes nothing new for
+// this surface. This test proves the catalog revision changes (confirming
+// it is a real trigger for the old bug) while the verdict still reads
+// running, because ADR-043's H0.7 tuple — Show and generation — is what
+// decides it now.
+func TestApplySupersededVerdictAuthoringSecondCueSameShowStaysRunning(t *testing.T) {
+	api, st, auth := assetManifestAdminAPI(t)
+	token := auth["Authorization"][len("Bearer "):]
+	mustPutShowActive(t, api, token, "halloween-2026")
+	ctx := context.Background()
+
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil || !active.Configured {
+		t.Fatalf("ResolveActiveShow: %v, configured=%v", err, active.Configured)
+	}
+	beforeCatalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "render-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog (before authoring): %v", err)
+	}
+
+	obs := []observation.Observation{
+		mustSupersedeTestObs(t, "garage", observation.SignalID(renderSignalPipelineState), mqttproto.RenderPipelineStateRunning, testNow),
+		mustSupersedeTestObs(t, "garage", signalSurfaceContentCatalogRevisionForSupersede, beforeCatalog.Revision, testNow),
+		mustSupersedeTestObs(t, "garage", signalSurfaceContentShowForSupersede, active.ShowID, testNow),
+		mustSupersedeTestObs(t, "garage", signalSurfaceContentGenerationForSupersede, active.Generation, testNow),
+	}
+
+	// The operator authors a second Cue during setup — a directly
+	// activatable announcement Cue, so it lands in the resolved catalog
+	// (and its revision hash) with no show.playlist reference required.
+	// show.active is never touched, so this Show's generation is unchanged.
+	putReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.cue/second-cue", `{
+		"show": "halloween-2026",
+		"name": "Second Cue",
+		"outputs": {
+			"audio": {"asset": "second-cue-audio"},
+			"announcement": {"policy": "mix", "fadeMillis": 0}
+		}
+	}`, auth)
+	if resp, body := doRawRequest(t, api.Handler, putReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.cue/second-cue: status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	afterCatalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "render-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog (after authoring): %v", err)
+	}
+	if afterCatalog.Revision == beforeCatalog.Revision {
+		t.Fatalf("authoring a second cue left the catalog revision %q unchanged; this test needs it to change to reproduce the false-fire this issue fixes", beforeCatalog.Revision)
+	}
+	stillActive, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil || !stillActive.Configured || stillActive.ShowID != active.ShowID || stillActive.Generation != active.Generation {
+		t.Fatalf("ResolveActiveShow (after authoring): %v, %+v, want unchanged %+v", err, stillActive, active)
+	}
+
+	out := applySupersededVerdict(ctx, st, "render-01", obs, testNow)
+	got := findSupersedeTestObs(t, out, observation.SignalID(renderSignalPipelineState))
+	if got.Value != mqttproto.RenderPipelineStateRunning {
+		t.Fatalf("Value = %v, want %q (same show, same generation — a mere authoring-time catalog revision change must never supersede a current render)", got.Value, mqttproto.RenderPipelineStateRunning)
+	}
+}
+
 // TestApplySupersededVerdictOverridesOnCueMismatchWithNoCatalogRevision
 // proves the second, independent comparison path: a legacy assignment that
 // carries a Cue but no catalog revision at all (one persisted before

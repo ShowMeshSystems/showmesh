@@ -344,6 +344,33 @@ func TestEvidenceReasonForStaleDoesNotEmbedAComputedAge(t *testing.T) {
 	}
 }
 
+// TestMapEvidenceDeliversAuthoredReasonEvenWhenStateIsCurrent is a
+// regression test: mapEvidence used to deliver Reason ONLY when state was
+// not "current", which silently dropped
+// every authored o.Reason on an observation whose freshness state IS
+// current — exactly rendersuperseded.go's applySupersededVerdict, which
+// overrides Value to "superseded" and sets Reason, but deliberately never
+// touches ObservedAt/ValidFor (its own doc comment), so state keeps
+// reading "current" (the node's own evidence really is fresh; only what
+// the coordinator says the VALUE means changed). Before this fix, an
+// operator's GET /api/v1/nodes/{id} carried the superseded verdict with no
+// explanation at all.
+func TestMapEvidenceDeliversAuthoredReasonEvenWhenStateIsCurrent(t *testing.T) {
+	observedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	o := healthMustObs(observation.Measured(healthRes, "surface.pipeline.state", "superseded", observedAt,
+		observation.WithSource("node-render:render-01"), observation.WithValidFor(45*time.Second)))
+	o.Reason = "this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"lane14-other\" generation 2"
+	o.Quality = observation.QualityDerived
+
+	ev := mapEvidence(o, observedAt)
+	if ev.State != "current" {
+		t.Fatalf("State = %q, want %q for this test to prove anything (a superseded verdict's freshness state stays current)", ev.State, "current")
+	}
+	if ev.Reason == nil || *ev.Reason != o.Reason {
+		t.Errorf("Reason = %v, want %q delivered on the wire even though State is \"current\"", ev.Reason, o.Reason)
+	}
+}
+
 // TestMapFPPInstanceResolvesMultiSourceObservations is Step 5 review
 // finding 1's most direct wiring-layer gap: deleting `resolved :=
 // ResolveObservations(fv.Observations)` from [mapFPPInstance] left the

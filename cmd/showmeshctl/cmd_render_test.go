@@ -178,6 +178,24 @@ func TestCmdRenderSettingsRevisionsListsNewestFirst(t *testing.T) {
 // it to show a superseded verdict or the new surface.content.show/
 // surface.content.generation signals — this pins that down, rather than
 // leaving it as an unverified architectural claim.
+//
+// The fixture below is rebuilt from a response the coordinator can
+// actually emit, not hand-invented: pairing "state":"current" with a
+// non-null "reason" on surface.pipeline.state used to be a combination
+// internal/coordinator/api's own mapEvidence (mapping.go) could never
+// produce — it dropped Reason outright whenever state was "current", so a
+// fixture pairing them proved nothing about the real wire shape. mapEvidence
+// now delivers an authored o.Reason regardless of freshness state, since a
+// superseded verdict's freshness reads "current" — the node's own evidence
+// is fresh — even though what the VALUE means changed at read time (see
+// rendersuperseded.go's applySupersededVerdict). This reason string is
+// exactly what that code emits for a surface whose held (show, generation)
+// no longer matches the coordinator's active resolution (confirmed against
+// internal/coordinator/api's own TestNodeRenderObservationsReachRealAPISuperseded,
+// run by hand against this exact scenario). It deliberately carries no
+// surface.content.catalog_revision signal, so the emitted reason has no
+// revision-mismatch clause appended either — one real, reproducible shape,
+// not two ORed possibilities spliced by hand.
 func TestCmdRenderStatusRendersSupersededVerdictAndAuthTuple(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/nodes/render-01" {
@@ -193,7 +211,7 @@ func TestCmdRenderStatusRendersSupersededVerdictAndAuthTuple(t *testing.T) {
 			  "heartbeat":{"signal":"node.heartbeat","value":null,"unit":null,"state":"not_collected","reason":"none","observedAt":null,"collectedAt":"2026-08-26T21:00:00Z","source":"s","quality":"direct"}
 			},
 			"render":[
-			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.pipeline.state","value":"superseded","unit":null,"state":"current","reason":"this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"lane14-other\" generation 2, and this render's authorization no longer matches its resolved cue catalog","observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"derived","validForSeconds":45},
+			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.pipeline.state","value":"superseded","unit":null,"state":"current","reason":"this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"lane14-other\" generation 2","observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"derived","validForSeconds":45},
 			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.content.show","value":"halloween-2026","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"direct","validForSeconds":45},
 			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.content.generation","value":1,"unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"direct","validForSeconds":45}
 			],"audio":[]}}`)
