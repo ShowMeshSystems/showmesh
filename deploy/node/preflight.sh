@@ -154,7 +154,7 @@ if command -v gst-inspect-1.0 >/dev/null 2>&1; then
 
   # NDI output element: informational only. A render node needs it; an
   # audio-only node does not, and this repo never builds or ships it (the
-  # gst-plugins-rs NDI element is SM-9's separately owned build recipe;
+  # gst-plugins-rs NDI element has its own separately owned build recipe;
   # see deploy/node/README.md).
   if gst-inspect-1.0 ndisink >/dev/null 2>&1; then
     info "ndisink resolves: this host can drive NDI output. (Not verified against real hardware or a real NDI receiver by this script.)"
