@@ -29,18 +29,9 @@ import (
 // ruling 4's own "accepted and persisted, not yet all consumed" posture,
 // reused here rather than invented.
 //
-// ACCEPTANCE GAP, stated plainly rather than implied: this test restarts
-// the AGENT PROCESS (a real OS process, SIGKILL'd and re-exec'd against the
-// same on-disk asset/state directory) to stand in for a node reboot. It
-// does not reboot real hardware — this environment has none to reboot.
-// Process-level restart already exercises ADR-043 H0.7's own boot-clearing
-// decision (decideBootResume, internal/agent/bootresume.go), which does not
-// distinguish a process restart from a hardware one; only real hardware
-// power-cycle timing (firmware, kernel boot, disk remount) is left
-// unverified.
-//
-// A second, narrower gap: this test does not drive a real cue activation
-// through FPP (no bench fppd is started here, and no existing integration
+// ACCEPTANCE GAP, stated plainly rather than implied: this test does not
+// drive a real cue activation through FPP (no bench fppd is started here,
+// and no existing integration
 // harness in this package drives FPP-triggered cue.activate end-to-end
 // yet — activateSurfaceRender's own path is unchanged by this PR). What it
 // proves at the binary level is that the surface holds a CONFIRMED render
@@ -64,7 +55,7 @@ func TestCueCatalogDeployEstablishesRenderAssignmentEndToEnd(t *testing.T) {
 
 	mustCtl(t, coord, token, []string{"declare", "--label", "catalog establish node"}, nodeID)
 	agentDir := writeTempDirHelper(t)
-	agent := startAgent(t, agentConfig{nodeID: nodeID, assetDir: agentDir})
+	startAgent(t, agentConfig{nodeID: nodeID, assetDir: agentDir})
 
 	mustCtl(t, coord, token, []string{"show", "set", "--name", "Catalog Establish E2E"}, showID)
 	mustCtl(t, coord, token, []string{"show", "activate"}, showID)
@@ -104,35 +95,63 @@ func TestCueCatalogDeployEstablishesRenderAssignmentEndToEnd(t *testing.T) {
 		return statusCode == 0 && strings.Contains(statusOut, surfaceID) && strings.Contains(statusOut, "running")
 	}, "surface to be established (running, no sequence) by the catalog deploy alone, with no manual render apply ever issued")
 
-	// --- simulate a node reboot: kill the real agent process and start a
-	// fresh one against the SAME on-disk node id and asset directory,
-	// exactly as a real reboot would resume with the same persisted
-	// on-disk state (see this file's own doc comment for what this does
-	// and does not prove). ---
-	agent.sigkill(t)
-	agent = startAgent(t, agentConfig{nodeID: nodeID, assetDir: agentDir})
-	t.Cleanup(func() { agent.stopIfRunning() })
-	waitOnline(t, coord, nodeID)
+	// --- THE ACTUAL RECOVERY CLAIM: a node that holds an unchanged catalog
+	// but has LOST its render assignment gets it back from a catalog-only
+	// redeploy, no manual render apply ever issued. A restart of the real
+	// agent process is deliberately NOT how this is reproduced: an
+	// unchanged catalog's own H3 authorization tuple still matches what a
+	// restarted agent's persisted assignment already carries, so
+	// decideBootResume (internal/agent/bootresume.go) resumes it entirely
+	// on its own, with NO coordinator round trip at all — proving only
+	// boot resume, never establishment, no matter what a redeploy issued
+	// afterward does or does not do (this is exactly the gap the
+	// reviewer's own probe found in this file's first version: the surface
+	// was already "running" again before the post-restart redeploy ever
+	// ran). "render clear" is what actually removes the node's own
+	// assignment while the SAME live agent process (and the SAME
+	// unchanged catalog) stays in place, so nothing but a genuine
+	// establishment can bring it back. ---
+	clearOut := mustCtl(t, coord, token, []string{"render", "clear"}, nodeID, surfaceID)
+	if !strings.Contains(clearOut, "confirmed:") || !strings.Contains(clearOut, `"stopped"`) {
+		t.Fatalf("render clear stdout = %q, want a confirmed stopped outcome", clearOut)
+	}
 
-	// --- redeploy ONLY the catalog. Still no manual render apply anywhere
-	// in this test. This is the literal acceptance scenario: a node that
-	// has been restarted, holds the current catalog and every asset (none
-	// are even needed here), and has had NO manual render apply,
-	// re-establishes its own render assignment. ---
+	// --- confirm the node cannot render: a cleared surface carries no
+	// value-bearing surface.pipeline.state evidence any more — Supervisor.
+	// SnapshotAll (internal/agent/pipeline/supervisor.go) excludes a
+	// cleared surface entirely rather than reporting it Stopped, so this
+	// node's GET goes back to reporting NO surface evidence at all, the
+	// exact same exitRenderUnavailable=22 state as "before any deploy". ---
+	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
+		statusCode, _, _ := runCtl(t, coord, token, []string{"render", "status"}, nodeID)
+		return statusCode == 22
+	}, "surface to report no render evidence after render clear")
+	clearedCode, clearedStatusOut, _ := runCtl(t, coord, token, []string{"render", "status"}, nodeID)
+	if clearedCode != 22 {
+		t.Fatalf("render status after clear: exit = %d, want 22 (exitRenderUnavailable) — the node must hold no assignment before the recovery redeploy\nstdout=%s", clearedCode, clearedStatusOut)
+	}
+
+	// --- redeploy ONLY the catalog — same generation and revision as the
+	// first deploy above, still no manual render apply anywhere in this
+	// test. This is the literal acceptance scenario: a node that holds the
+	// current catalog and every asset (none are even needed here) but has
+	// lost its render assignment re-establishes it on its own from a
+	// catalog-only redeploy. ---
 	redeployOut := mustCtl(t, coord, token, []string{"cuecatalog", "deploy"}, nodeID)
 	if !strings.Contains(redeployOut, ": confirmed ") {
-		t.Fatalf("cuecatalog deploy (after restart) stdout = %q, want a confirmed outcome", redeployOut)
+		t.Fatalf("cuecatalog deploy (after clear) stdout = %q, want a confirmed outcome", redeployOut)
 	}
 
 	waitFor(t, 15*time.Second, 200*time.Millisecond, func() bool {
 		statusCode, statusOut, _ := runCtl(t, coord, token, []string{"render", "status"}, nodeID)
 		return statusCode == 0 && strings.Contains(statusOut, surfaceID) && strings.Contains(statusOut, "running")
-	}, "surface to be re-established after a restart by a catalog-only redeploy, with no manual render apply ever issued")
+	}, "surface to be re-established after render clear by a catalog-only redeploy, with no manual render apply ever issued")
 
 	// The CLI's own "render status" (non-JSON) surface too, exactly as an
-	// operator with no UI would see it.
+	// operator with no UI would see it: the node holds an assignment it
+	// did not have a moment ago, and got it from nothing but the redeploy.
 	statusOut := mustCtl(t, coord, token, []string{"render", "status"}, nodeID)
 	if !strings.Contains(statusOut, surfaceID) || !strings.Contains(statusOut, "running") {
-		t.Fatalf("render status after restart+redeploy = %q, want it to report surface %q running", statusOut, surfaceID)
+		t.Fatalf("render status after clear+redeploy = %q, want it to report surface %q running", statusOut, surfaceID)
 	}
 }

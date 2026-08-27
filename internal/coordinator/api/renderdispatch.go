@@ -474,38 +474,120 @@ func (h *handlers) resolveRenderEstablishParams(ctx context.Context, nodeID, sur
 	return params, nil, nil
 }
 
-// renderSurfaceCurrentlyAssigned reports whether nodeID's own
-// surface.pipeline.state evidence for surfaceID is current — i.e. whether
-// [nodeHoldsRenderAssignment] (internal/coordinator/fppreconcile/
-// readiness.go) would already report this node as holding a render
-// assignment for it. establishRenderAssignment (cuecatalogdeploy.go) skips
-// dispatching to any surface this reports true for: a catalog CAN be
-// redeployed to a node with a surface already rendering real, cue-
-// activated content — an operator adding a Cue mid-show, not only a
-// post-reboot recovery — and unconditionally re-dispatching
+// renderSurfaceAssignmentEvidence reports whether nodeID's own
+// surface.pipeline.state evidence for surfaceID is CURRENT evidence of an
+// actual assignment — i.e. whether [nodeHoldsRenderAssignment] (internal/
+// coordinator/fppreconcile/readiness.go) would already report this node as
+// holding a render assignment for it — plus, when it is not, a witness
+// string identifying the SPECIFIC evidence (or absence of it) behind that
+// verdict: see [renderEstablishIdempotencyKey]'s own doc comment for why a
+// caller that must re-establish needs more than a bare bool.
+// establishRenderAssignment (cuecatalogdeploy.go) skips dispatching a
+// no-sequence apply to any surface this reports assigned for real content:
+// a catalog CAN be redeployed to a node with a surface already rendering
+// real, cue-activated content — an operator adding a Cue mid-show, not
+// only a post-reboot recovery — and unconditionally re-dispatching
 // render.surface.apply with no sequence would blow that surface's real
 // assignment away and replace it with an idle test pattern. Establishment
 // exists only to fill the gap [ReadinessNodeRenderUnassigned] reports,
 // never to touch a surface that is not in that gap.
 //
+// Freshness of evidence is NOT the same question as presence of an
+// assignment: [mqttproto.RenderPipelineStateFailed] evidence is exactly as
+// CURRENT as a real "running" reading (agent.go's boot-resume loop calls
+// [pipeline.Supervisor.MarkResumeFailed] the moment a persisted assignment
+// is discarded as unauthorized, or fails to resume — both stamp a FRESH
+// StateFailed observation), but it is evidence of the OPPOSITE: this node
+// holds no working assignment for this surface right now. Treating it as
+// "already assigned" is precisely what let a reboot-then-immediate-
+// redeploy establish nothing, recovering only once that evidence aged past
+// [noderender.DefaultValidFor] and stopped satisfying StateAt's own
+// currency check — a 45-second window that happened to save the original
+// implementation from being caught by anything short of the exact
+// reboot-then-immediate-redeploy sequence a real recovery test has to run.
+//
 // Reimplements nodeHoldsRenderAssignment's own value-bearing-evidence
 // check rather than importing fppreconcile (this package already mirrors
 // that package's renderSignalPipelineState/renderNodeSourceFor
 // independently — evaluateRenderSurfaceState's own doc comment states the
-// same each-side-of-a-layering-boundary convention). Narrowed to the one
-// question establishment needs: current, non-absent evidence exists at
-// all, regardless of which pipeline state it names — an idle test-pattern
-// "running" counts exactly the same as a real one.
-func (h *handlers) renderSurfaceCurrentlyAssigned(ctx context.Context, nodeID, surfaceID string) (bool, error) {
+// same each-side-of-a-layering-boundary convention).
+func (h *handlers) renderSurfaceAssignmentEvidence(ctx context.Context, nodeID, surfaceID string) (assigned bool, witness string, err error) {
 	if h.deps.Observations == nil {
-		return false, nil
+		return false, "no-observations-store", nil
 	}
 	kind := observation.ResourceSurface
 	sig := observation.SignalID(renderSignalPipelineState)
 	wantSource := renderNodeSourceFor(nodeID)
 	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
 	if err != nil {
-		return false, fmt.Errorf("read surface.pipeline.state for surface %q: %w", surfaceID, err)
+		return false, "", fmt.Errorf("read surface.pipeline.state for surface %q: %w", surfaceID, err)
+	}
+	for _, o := range obs {
+		if o.Resource.Kind != kind || o.Resource.ID != surfaceID || o.Signal != sig || o.Source != wantSource {
+			continue
+		}
+		if o.Absence != "" {
+			return false, "absent:" + string(o.Absence) + "@" + renderEvidenceWitnessTimestamp(o), nil
+		}
+		if o.StateAt(h.now()) != observation.StateCurrent {
+			return false, "stale@" + renderEvidenceWitnessTimestamp(o), nil
+		}
+		if value, _ := o.Value.(string); value == mqttproto.RenderPipelineStateFailed {
+			return false, "failed@" + renderEvidenceWitnessTimestamp(o), nil
+		}
+		return true, "", nil
+	}
+	return false, "no-evidence", nil
+}
+
+// renderEvidenceWitnessTimestamp is the best available instant identifying
+// WHEN o's evidence was produced — ObservedAt when the observation carries
+// one (a real state transition or a stated absence reason), CollectedAt
+// otherwise — formatted so two evidence readings from two genuinely
+// different events (e.g. two separate reboots' own boot-clear) almost
+// never collide, which is the only property [renderEstablishIdempotencyKey]
+// needs from it.
+func renderEvidenceWitnessTimestamp(o observation.Observation) string {
+	if o.ObservedAt != nil {
+		return o.ObservedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return o.CollectedAt.UTC().Format(time.RFC3339Nano)
+}
+
+// renderSignalContentFSEQFilename mirrors internal/coordinator/collector/
+// noderender.SignalSurfaceContentFSEQFilename's exact wire spelling,
+// reimplemented here rather than imported for the identical each-side-of-a-
+// layering-boundary reason renderSignalPipelineState's own doc comment
+// gives one section above.
+const renderSignalContentFSEQFilename = "surface.content.fseq_filename"
+
+// renderSurfaceHasRealContent reports whether nodeID's own
+// surface.content.fseq_filename evidence for surfaceID names an actual
+// FSEQ right now — i.e. whether the CURRENT assignment
+// [handlers.renderSurfaceAssignmentEvidence] reports as assigned is real,
+// cue-activated (or manually applied) content, or merely
+// establishRenderAssignment's own earlier no-sequence placeholder.
+//
+// establishRenderAssignment uses this to decide whether an
+// already-assigned surface is safe to re-establish: internal/agent/
+// renderreport.go's applyContentIdentity leaves this signal
+// [observation.StateNotCollected] (never simply omitted) whenever the
+// persisted assignment carries no fseqFilename, so "no current,
+// value-bearing row" and "no real content" are the same question here. A
+// no-sequence placeholder is not "real, cue-activated content" by
+// [handlers.renderSurfaceAssignmentEvidence]'s own doc comment, so
+// refreshing it (see renderEstablishIdempotencyKey) never risks the
+// operator-adding-a-Cue-mid-show case that guard exists to protect.
+func (h *handlers) renderSurfaceHasRealContent(ctx context.Context, nodeID, surfaceID string) (bool, error) {
+	if h.deps.Observations == nil {
+		return false, nil
+	}
+	kind := observation.ResourceSurface
+	sig := observation.SignalID(renderSignalContentFSEQFilename)
+	wantSource := renderNodeSourceFor(nodeID)
+	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
+	if err != nil {
+		return false, fmt.Errorf("read surface.content.fseq_filename for surface %q: %w", surfaceID, err)
 	}
 	for _, o := range obs {
 		if o.Resource.Kind != kind || o.Resource.ID != surfaceID || o.Signal != sig || o.Source != wantSource {

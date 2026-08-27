@@ -534,19 +534,58 @@ func (h *handlers) establishRenderAssignments(ctx context.Context, now time.Time
 }
 
 // establishRenderAssignment establishes exactly one surface, skipping it
-// outright when the node already holds SOME current render assignment for
-// it — see [handlers.renderSurfaceCurrentlyAssigned]'s own doc comment for
-// why that guard exists: this call must only ever fill the gap
-// [ReadinessNodeRenderUnassigned] reports, never disturb a surface that is
-// already rendering real content.
+// outright when the node already holds a current render assignment for it
+// AND that assignment is real content — see
+// [handlers.renderSurfaceAssignmentEvidence]'s own doc comment for why that
+// guard exists: this call must only ever fill the gap
+// [ReadinessNodeRenderUnassigned] reports, or refresh its own earlier
+// no-sequence placeholder's H3 authorization tuple, never disturb a
+// surface that is already rendering real content.
+//
+// A surface reported assigned but holding NO real content (
+// [handlers.renderSurfaceHasRealContent] false — this call's own prior
+// no-sequence establishment, never touched by a cue activation since) is
+// re-established on every redeploy whose catalog identity differs from the
+// one last stamped onto it: skipping it forever, the way the earlier
+// "assigned means skip" guard did, left every established-but-never-
+// activated surface's H3 authorization tuple pinned to whatever generation
+// established it first — stale at the very next generation bump, and
+// therefore guaranteed to boot-clear at the node's next reboot regardless
+// of how current its catalog actually was. renderEstablishIdempotencyKey's
+// own catalog-identity component already makes this a no-op replay when
+// the catalog is redeployed unchanged, so this never spams a redundant
+// dispatch (and its accompanying brief pipeline restart) on an idle
+// surface that does not need one.
 func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time, nodeID, surfaceID string, catalog assetsync.Catalog) {
-	assigned, err := h.renderSurfaceCurrentlyAssigned(ctx, nodeID, surfaceID)
+	assigned, witness, err := h.renderSurfaceAssignmentEvidence(ctx, nodeID, surfaceID)
 	if err != nil {
 		h.logWarn("render assignment establishment: check current assignment failed", "node", nodeID, "surface", surfaceID, "error", err)
 		return
 	}
+	idempotencyWitness := ""
 	if assigned {
-		return
+		hasContent, err := h.renderSurfaceHasRealContent(ctx, nodeID, surfaceID)
+		if err != nil {
+			h.logWarn("render assignment establishment: check current content failed", "node", nodeID, "surface", surfaceID, "error", err)
+			return
+		}
+		if hasContent {
+			return
+		}
+		// Assigned, but only ever this call's own no-sequence placeholder:
+		// fall through and re-establish so a stale H3 tuple gets refreshed.
+	} else {
+		// Not assigned at all right now — including a node that just
+		// boot-cleared and reported StateFailed, or genuinely lost the
+		// assignment (re-imaged hardware, a corrupt held-catalog file, an
+		// operator clear). A plain catalog-identity key would collide with
+		// whatever CONFIRMED establishment command this exact (node,
+		// surface, show, generation, revision) tuple produced the FIRST
+		// time it succeeded, even though the node no longer holds it —
+		// see renderEstablishIdempotencyKey's own doc comment for the
+		// defect that produces. Folding in a witness of the CURRENT loss
+		// evidence keys this attempt distinctly from that earlier one.
+		idempotencyWitness = witness
 	}
 
 	params, problem, err := h.resolveRenderEstablishParams(ctx, nodeID, surfaceID, catalog.Generation, catalog.Revision)
@@ -561,7 +600,7 @@ func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time,
 
 	in := renderDispatchInput{
 		Action: "render.surface.apply", NodeID: nodeID, SurfaceID: surfaceID,
-		IdempotencyKey: renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision),
+		IdempotencyKey: renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision, idempotencyWitness),
 		DesiredState:   "running",
 		IssuerID:       renderEstablishIssuerPrincipalID, IssuerName: "cuecatalog.deploy",
 		Params: params,
@@ -577,13 +616,37 @@ func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time,
 }
 
 // renderEstablishIdempotencyKey derives one surface's establishment
-// idempotency key from nodeID, surfaceID, and the deployed catalog's own
-// (show, generation, revision) identity — mirrors
-// showmeshAudioIdempotencyKey's identical "keyed on content, not a bare
-// counter" reasoning one file over (showmeshaudiodispatch.go): a repeated
-// deploy of the SAME catalog must replay the same establishment (no
-// second, redundant MQTT publish), but a genuinely new generation or
-// revision must be free to establish again.
-func renderEstablishIdempotencyKey(nodeID, surfaceID, show string, generation int64, revision string) string {
-	return fmt.Sprintf("render-establish-%s-%s-%s-%d-%s", nodeID, surfaceID, show, generation, revision)
+// idempotency key from nodeID, surfaceID, the deployed catalog's own
+// (show, generation, revision) identity, and — ONLY when
+// establishRenderAssignment is establishing a surface it currently holds
+// NO assignment for — witness, a value identifying the specific loss
+// evidence behind that (see [handlers.renderSurfaceAssignmentEvidence]).
+// Empty witness mirrors showmeshAudioIdempotencyKey's identical "keyed on
+// content, not a bare counter" reasoning one file over
+// (showmeshaudiodispatch.go): a repeated deploy of the SAME catalog
+// against a surface that is still holding its own prior no-sequence
+// placeholder must replay the same establishment (no second, redundant
+// MQTT publish and its accompanying pipeline restart), while a genuinely
+// new generation or revision is still free to establish again because it
+// changes this key on its own.
+//
+// Content ALONE is not enough once a node can go from holding an
+// assignment to holding none WITHOUT any catalog identity changing at all
+// — a reboot's boot-clear, a re-imaged node, a corrupt held-catalog file,
+// or an operator's own render.surface.clear. Without witness, redeploying
+// that exact unchanged catalog reproduces the SAME key a PRIOR, already-
+// CONFIRMED establishment used, so InsertCommand's own idempotency
+// dedup (store.DuplicateCommandError) silently replays that stale
+// confirmation and never re-dispatches — proven by unit probe
+// (TestEstablishRenderAssignmentReestablishesAfterAssignmentIsLost). A
+// non-empty witness — sourced from the CURRENT loss evidence, not a random
+// value, so the SAME still-unresolved loss does not spam a fresh dispatch
+// every redeploy either — keys this attempt distinctly from that earlier
+// success and lets a genuine re-establishment actually happen.
+func renderEstablishIdempotencyKey(nodeID, surfaceID, show string, generation int64, revision, witness string) string {
+	key := fmt.Sprintf("render-establish-%s-%s-%s-%d-%s", nodeID, surfaceID, show, generation, revision)
+	if witness != "" {
+		key += "-" + witness
+	}
+	return key
 }

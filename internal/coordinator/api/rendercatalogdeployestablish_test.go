@@ -129,9 +129,11 @@ func TestCueCatalogDeployEstablishesUnassignedSurfaceWithNoSequence(t *testing.T
 }
 
 // TestCueCatalogDeploySkipsEstablishingAnAlreadyAssignedSurface proves
-// establishRenderAssignments' own safety guard: a surface the node
-// already holds a CURRENT render assignment for (a real, cue-activated
-// one, or a previously established one) is never touched by a redeploy —
+// establishRenderAssignments' own safety guard: a surface the node already
+// holds a CURRENT render assignment for REAL content (a real, cue-
+// activated one, or a manually applied one — evidenced here by
+// surface.content.fseq_filename, exactly as internal/agent/renderreport.go's
+// applyContentIdentity reports one) is never touched by a redeploy —
 // re-dispatching render.surface.apply with no sequence would blow that
 // assignment away and replace it with an idle test pattern, which a
 // catalog redeployed mid-show (adding a Cue, not recovering from a
@@ -141,12 +143,162 @@ func TestCueCatalogDeploySkipsEstablishingAnAlreadyAssignedSurface(t *testing.T)
 	renderPutSurface(t, st, "wall-1", "halloween-2026", "render-01")
 	renderPutActiveShow(t, st, "halloween-2026")
 
-	obs.setObs([]observation.Observation{surfacePipelineStateObs("render-01", "wall-1", "running", testNow, testNow)})
+	obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("render-01", "wall-1", "running", testNow, testNow),
+		surfaceContentFSEQFilenameObs("render-01", "wall-1", "halloween-2026/wall-1.fseq", testNow, testNow),
+	})
 
 	deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
 
 	if got := renderPub.count(); got != 0 {
-		t.Fatalf("render.surface.apply publish count = %d, want 0 — an already-assigned surface must never be re-established", got)
+		t.Fatalf("render.surface.apply publish count = %d, want 0 — an already-assigned surface holding real content must never be re-established", got)
+	}
+}
+
+// TestCueCatalogDeployReestablishesIdlePlaceholderToRefreshStaleAuthTuple
+// is defect 3's own regression: a surface establishRenderAssignment
+// already established once (no sequence, an idle placeholder — reported
+// "running" but with NO surface.content.fseq_filename evidence, since no
+// cue has ever activated onto it) must still be re-established on a LATER
+// redeploy under a NEW catalog generation, so its persisted H3
+// authorization tuple (generation, catalogRevision) is refreshed to match
+// what the node now holds. Skipping it forever — the old "assigned means
+// skip, unconditionally" guard — pins that tuple to the FIRST generation
+// that ever established it: stale at the very next generation bump, and
+// therefore guaranteed to fail decideBootResume's own tuple comparison
+// (internal/agent/bootresume.go) at the node's next reboot regardless of
+// how current its held catalog actually is.
+func TestCueCatalogDeployReestablishesIdlePlaceholderToRefreshStaleAuthTuple(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 5 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	api, st, deployPub, renderPub, obs, token := establishTestFixture(t)
+	renderPutSurface(t, st, "wall-1", "halloween-2026", "render-01")
+	renderPutActiveShow(t, st, "halloween-2026")
+
+	// An idle placeholder: "running" evidence, but no real content — the
+	// exact shape establishRenderAssignment's own earlier no-sequence
+	// apply leaves behind.
+	obs.setObs([]observation.Observation{surfacePipelineStateObs("render-01", "wall-1", "running", testNow, testNow)})
+
+	firstRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if got := renderPub.count(); got != 1 {
+		t.Fatalf("after the first deploy, render.surface.apply publish count = %d, want 1 (the initial establishment)", got)
+	}
+
+	// A repeat deploy of the SAME (unchanged) catalog must NOT re-dispatch
+	// — nothing to refresh, and re-dispatching would restart the pipeline
+	// for no reason.
+	secondRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if secondRevision != firstRevision {
+		t.Fatalf("redeployed the same unchanged catalog but got a different revision (%q vs %q); this test needs an unchanged catalog to prove the no-op case", secondRevision, firstRevision)
+	}
+	if got := renderPub.count(); got != 1 {
+		t.Fatalf("after redeploying an UNCHANGED catalog, render.surface.apply publish count = %d, want still 1 (no redundant dispatch)", got)
+	}
+
+	// Bump the active show's own generation (show.active's config revision
+	// — assetsync.ActiveShow.Generation) so the next deploy resolves a
+	// genuinely new catalog generation/revision — this must now
+	// re-establish wall-1 to refresh its stale tuple.
+	renderPutActiveShow(t, st, "halloween-2026")
+
+	thirdRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if thirdRevision == firstRevision {
+		t.Fatalf("expected the bumped show.surface generation to produce a new catalog revision, got the same one (%q) — test setup did not actually bump anything", thirdRevision)
+	}
+	if got := renderPub.count(); got != 2 {
+		t.Fatalf("after the generation bump, render.surface.apply publish count = %d, want 2 — the stale idle placeholder must be re-established", got)
+	}
+	env := renderPub.payload[1]
+	if got := env.Payload.Params["generation"]; got != float64(2) {
+		t.Fatalf("re-established generation = %v, want 2 (the new catalog's own identity, re-stamped)", got)
+	}
+	if got := env.Payload.Params["catalogRevision"]; got != thirdRevision {
+		t.Fatalf("re-established catalogRevision = %v, want the new catalog's own revision %q", got, thirdRevision)
+	}
+}
+
+// TestCueCatalogDeployReestablishesAfterAssignmentIsLost is defect 1 and 2's
+// own regression, run together exactly as the reviewer's own sequence
+// does: a node that ALREADY holds a confirmed establishment reboots (its
+// pipeline-state evidence flips to FRESH StateFailed evidence, exactly as
+// agent.go's boot-resume loop reports a discarded or unresumeable
+// assignment via pipeline.Supervisor.MarkResumeFailed — never an absence),
+// and the SAME unchanged catalog is redeployed immediately afterward, not
+// 45 seconds later once that evidence would have aged into StateStale on
+// its own. Before defect 1's fix, StateFailed's own freshness satisfied
+// the old "is evidence current" guard and establishment was skipped as
+// "already assigned," establishing nothing. Before defect 2's fix, even
+// once the guard correctly said "not assigned," the establishment
+// idempotency key — keyed on catalog content alone — collided with the
+// FIRST, already-CONFIRMED establishment command for this exact (node,
+// surface, show, generation, revision) tuple and silently replayed it
+// instead of dispatching again.
+//
+// The reboot evidence deliberately ALSO carries a real
+// surface.content.fseq_filename reading (MarkResumeFailed's "held a
+// persisted assignment at boot but could not resume it" sub-case leaves
+// the assignment file itself in place — only the DISCARDED-as-unauthorized
+// sub-case removes it — so a real filename can genuinely still be on
+// record even though the pipeline state is Failed). This is deliberate,
+// not incidental: it is what stops defect 3's independent "no real
+// content, safe to refresh" fallback from masking a regression of defect
+// 1's own fix. If the guard ever reverts to a bare freshness check
+// (StateFailed miscounted as "assigned"), THIS test still fails even
+// though defect 3's fix alone would have re-established a plain idle
+// placeholder anyway — see renderSurfaceHasRealContent's own doc comment:
+// with real content evidence present, establishRenderAssignment only ever
+// reaches the re-establish path via defect 1's OWN "not assigned" verdict,
+// never via defect 3's idle-refresh fallback.
+func TestCueCatalogDeployReestablishesAfterAssignmentIsLost(t *testing.T) {
+	renderCommandConfirmDeadline = 50 * time.Millisecond
+	renderCommandPollInterval = 5 * time.Millisecond
+	defer func() {
+		renderCommandConfirmDeadline = 15 * time.Second
+		renderCommandPollInterval = 250 * time.Millisecond
+	}()
+
+	api, st, deployPub, renderPub, obs, token := establishTestFixture(t)
+	renderPutSurface(t, st, "wall-1", "halloween-2026", "render-01")
+	renderPutActiveShow(t, st, "halloween-2026")
+
+	firstRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if got := renderPub.count(); got != 1 {
+		t.Fatalf("after the first deploy, render.surface.apply publish count = %d, want 1 (the initial establishment)", got)
+	}
+
+	// The node reboots: its persisted assignment fails to resume (FSEQ
+	// missing, content-hash mismatch, ...) and it reports FRESH StateFailed
+	// evidence for wall-1 — never an absence — while the render report
+	// STILL names the real FSEQ that assignment held (see this test's own
+	// doc comment on why that combination is deliberate).
+	rebootObservedAt := testNow.Add(time.Minute)
+	obs.setObs([]observation.Observation{
+		surfacePipelineStateObs("render-01", "wall-1", "failed", rebootObservedAt, rebootObservedAt),
+		surfaceContentFSEQFilenameObs("render-01", "wall-1", "halloween-2026/wall-1.fseq", rebootObservedAt, rebootObservedAt),
+	})
+
+	// Redeploy the SAME unchanged catalog IMMEDIATELY — not after the
+	// evidence has aged into StateStale on its own, which is the only
+	// thing that let the old skip-on-freshness guard ever recover.
+	secondRevision := deployConfirmedCatalog(t, api, st, deployPub, "render-01", token)
+	if secondRevision != firstRevision {
+		t.Fatalf("redeployed the same unchanged catalog but got a different revision (%q vs %q); this test needs an unchanged catalog to prove the loss-recovery case", secondRevision, firstRevision)
+	}
+	if got := renderPub.count(); got != 2 {
+		t.Fatalf("after the reboot and immediate redeploy, render.surface.apply publish count = %d, want 2 — the node holds no working assignment and must be re-established", got)
+	}
+	env := renderPub.payload[1]
+	if got := env.Payload.Params["surfaceId"]; got != "wall-1" {
+		t.Fatalf("re-established surfaceId = %v, want wall-1", got)
+	}
+	if got := env.Payload.Params["catalogRevision"]; got != secondRevision {
+		t.Fatalf("re-established catalogRevision = %v, want the redeployed catalog's own revision %q", got, secondRevision)
 	}
 }
 
