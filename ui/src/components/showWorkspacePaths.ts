@@ -13,4 +13,3 @@ export function showWorkspacePath(showId: string, section: ShowWorkspaceSection 
   const encoded = encodeURIComponent(showId)
   return section === 'overview' ? `/config/show/${encoded}/workspace` : `/config/show/${encoded}/workspace/${section}`
 }
-
