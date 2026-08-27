@@ -70,9 +70,9 @@ services:
       context: ..
       dockerfile: Dockerfile
       args:
-        # SM-291: these used to default to dev/none/unknown, so a bare
-        # `docker compose up -d --build` produced a coordinator that could
-        # not say which commit it was running. The :? form makes Compose
+        # These have no defaults on purpose: a bare `docker compose up -d
+        # --build` would otherwise produce a coordinator that could not say
+        # which commit it was running. The :? form makes Compose
         # itself refuse when the variable is unset rather than silently
         # supplying that fallback; `make deploy-up`/`make deploy-build`
         # always set all three (see the Makefile), so this only fires for

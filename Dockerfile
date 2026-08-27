@@ -44,9 +44,9 @@ ARG VERSION
 ARG COMMIT
 ARG BUILD_DATE
 
-# SM-291: these three build args used to default to dev/none/unknown, so a
-# build that supplied nothing produced a binary that claimed a version it
-# did not have. There is no legitimate build path that needs a default:
+# These three build args have no defaults on purpose: a build that supplied
+# nothing would otherwise produce a binary claiming a version it does not
+# have. There is no legitimate build path that needs a default:
 # CI's docker job, `make docker-build`, and `make deploy-build`/`deploy-up`
 # all pass real values (see their own definitions), so refuse instead of
 # silently stamping an empty ldflag, which would read as absent rather
