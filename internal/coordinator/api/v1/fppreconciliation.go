@@ -50,7 +50,7 @@ type FPPPlaylistEntryReconciliationResponse struct {
 
 // FPPPlaylistReadinessResponse is GET
 // /integrations/fpp/playlists/{playlistId}/readiness's body,
-// TRACK-H-H2-SPEC.md §6 plus Lane 16's open extension of the same
+// TRACK-H-H2-SPEC.md §6 plus the later extensions of the same
 // vocabulary (docs/build/IDENTIFIER-REGISTER.md's "Playlist readiness
 // conditions"): whether one FPP-backed Playlist is ready, and which
 // condition fails first when it is not. A read-only projection of

@@ -6493,11 +6493,9 @@ paths:
         Open under `observation:read`, matching the reconciliation route
         above. Reports whether every one of §6's ordered conditions holds,
         and the exact failing one when it does not. §6 originally specified
-        five, closed; Lane 16 opened the vocabulary and this route
-        currently checks eight -- see
-        internal/coordinator/fppreconcile/readiness.go's own doc comment
-        for the current, authoritative list, since further lanes are
-        already adding to it. The original five: a definition is stored
+        five and closed the vocabulary; it has since been opened, and the
+        `failingCondition` enum below is the authoritative list of what
+        this route currently checks. The original five: a definition is stored
         for the binding's (instanceUuid, playlistHash), every entry's
         (section, position) exists in that definition with matching
         filenames, every referenced Cue exists and belongs to the same
@@ -12208,9 +12206,9 @@ components:
       type: object
       description: >-
         The body of GET /integrations/fpp/playlists/{playlistId}/readiness
-        (TRACK-H-H2-SPEC.md §6, opened by Lane 16 -- see
-        docs/build/TRACK-H-cues-and-playlists.md section H6 for the full
-        account of what Lane 16 added and why): whether one FPP-backed
+        (TRACK-H-H2-SPEC.md §6, whose vocabulary has since been opened --
+        see docs/build/TRACK-H-cues-and-playlists.md section H6 for the
+        full account of what was added and why): whether one FPP-backed
         Playlist is ready, and which condition fails first when it is not.
         `warning` is set when a condition did not fail readiness outright
         but is still worth surfacing: either the non-fatal form of the

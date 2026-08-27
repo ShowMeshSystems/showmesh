@@ -23,16 +23,14 @@ import (
 // five-member vocabulary for why an FPP-backed Playlist is not ready,
 // checked in order and stopped at the first failing one — "an FPP-backed
 // Playlist is ready when all of these hold, and reports the exact failing
-// one when not." Lane 16 opens this vocabulary — see docs/build/
-// TRACK-H-cues-and-playlists.md section H6 for the full account of Lane
-// 16's reserved conditions, including which remain out of scope this
-// season and why. [ReadinessNodeRenderUnassigned] is a prior addition;
-// [ReadinessNodeCatalogStale] and [ReadinessExclusiveClaimConflict] are
-// Lane 16's next two, built by reusing existing resolvers rather than
-// inventing a second one. This type's own const list below is the
-// current, authoritative member count; nothing else in this codebase
-// should restate a fixed number, since further lanes are already adding
-// to it.
+// one when not." That vocabulary is now open: see docs/build/
+// TRACK-H-cues-and-playlists.md section H6 for the full account of the
+// added conditions, including which remain out of scope this season and
+// why. [ReadinessNodeCatalogStale] and [ReadinessExclusiveClaimConflict]
+// reuse the existing resolvers rather than deriving a second one. This
+// type's own const list below is the current, authoritative member
+// count; nothing else in this codebase should restate a fixed number,
+// since the list is still growing.
 type ReadinessCondition string
 
 const (
@@ -292,8 +290,8 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return report, nil
 	}
 
-	// Condition 7 (Lane 16): no two Cues this Show's Playlists
-	// could concurrently run hold a colliding H0.5 exclusive claim.
+	// Condition 7: no two Cues this Show's Playlists could
+	// concurrently run hold a colliding H0.5 exclusive claim.
 	if cond, reason, warning, err := exclusiveClaimReadiness(ctx, st, logger, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
@@ -305,9 +303,8 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.Warning = appendWarning(report.Warning, warning)
 	}
 
-	// Condition 8 (Lane 16): every node participating in this
-	// Show's catalog has acknowledged the active show's currently
-	// required catalog revision.
+	// Condition 8: every node participating in this Show's catalog has
+	// acknowledged the active show's currently required catalog revision.
 	if cond, reason, err := nodeCatalogReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
