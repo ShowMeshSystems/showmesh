@@ -347,6 +347,20 @@ export type NightCommandName =
   | 'power-down-presentation'
   | 'end-session'
 
+// Runner-neutral current playback projection. Unlike macroRuns, these are
+// the coordinator's authoritative FPP and showmesh-audio runs, including the
+// per-run playback, freshness, reconciliation, activation, and next-item
+// answers supplied by each runner.
+export type CurrentRunsResponse = components['schemas']['CurrentRunsResponse']
+export type CurrentShowContext = components['schemas']['CurrentShowContext']
+export type CurrentRun = components['schemas']['CurrentRun']
+export type CurrentPlayback = components['schemas']['CurrentPlayback']
+export type CurrentRunFreshness = components['schemas']['CurrentRunFreshness']
+export type CurrentReconciliation = components['schemas']['CurrentReconciliation']
+export type CurrentRunActivation = components['schemas']['CurrentRunActivation']
+export type CurrentRunTarget = components['schemas']['CurrentRunTarget']
+export type CurrentRunNext = components['schemas']['CurrentRunNext']
+
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only FPP playlist show-night
 // verdicts, aliased for the identical reason as every type above
 // (ADR-015). Neither is part of `Model`: plain on-demand side calls,
@@ -453,6 +467,17 @@ export interface Model {
    */
   macroRuns: MacroRunSummary[]
   /**
+   * The authoritative runner-neutral projection from GET /current-runs.
+   * It is replaced by reconnect fetches and full-frame currentRuns.changed
+   * events. It is deliberately separate from macroRuns: a current run is
+   * playback state, not proof that the coordinator executed a macro.
+   */
+  currentRuns: CurrentRunsResponse | null
+  /** Browser receipt time of the current-runs response or event. */
+  currentRunsReceivedAt: number | null
+  /** True when the latest authoritative current-runs fetch failed. */
+  currentRunsFetchFailed: boolean
+  /**
    * Track D seam D-4: every configured Resolume instance, exactly as
    * `Snapshot.resolume` carries them — an empty array on a coordinator
    * with none configured, never null. Replaced wholesale on every
@@ -550,6 +575,9 @@ export function initialModel(): Model {
     fpp: [],
     collectors: [],
     macroRuns: [],
+    currentRuns: null,
+    currentRunsReceivedAt: null,
+    currentRunsFetchFailed: false,
     resolume: [],
     nightSession: null,
     fppPlaylistEntryObservations: [],

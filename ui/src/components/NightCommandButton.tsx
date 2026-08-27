@@ -19,7 +19,7 @@ export interface NightCommandButtonProps {
   /** Shown on the button while idle. */
   label: string
   /** Called with the resulting session once the command is accepted (applied or idempotent_no_op). */
-  onApplied: (session: NightSessionState) => void
+  onApplied?: (session: NightSessionState) => void
   /** Honored only by `prepare-site` — every other command ignores it (api/openapi.yaml). */
   idempotencyKey?: string
 }
@@ -27,6 +27,7 @@ export interface NightCommandButtonProps {
 type DispatchState =
   | { kind: 'idle' }
   | { kind: 'dispatching' }
+  | { kind: 'applied'; outcome: 'applied' | 'idempotent_no_op' }
   | { kind: 'not_ready'; message: string }
   | { kind: 'state_rejected'; message: string }
   | { kind: 'ambiguous'; message: string }
@@ -48,8 +49,8 @@ export function NightCommandButton({
     setState({ kind: 'dispatching' })
     try {
       const resp = await dispatchNightCommand(command, idempotencyKey)
-      setState({ kind: 'idle' })
-      onApplied(resp.session)
+      setState({ kind: 'applied', outcome: resp.command.outcome })
+      onApplied?.(resp.session)
     } catch (err) {
       const message = describeApiError(err)
       if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightNotReady) {
@@ -78,6 +79,13 @@ export function NightCommandButton({
       >
         {label}
       </ScopedButton>
+      {state.kind === 'applied' && (
+        <p role="status" className="night-command-button__success">
+          {state.outcome === 'applied'
+            ? `${label} accepted and applied.`
+            : `${label} was already applied; no duplicate dispatch was made.`}
+        </p>
+      )}
       {state.kind === 'not_ready' && (
         <p role="alert" className="fpp-command-control__error">
           Not ready yet: {messageOr(state.message)}

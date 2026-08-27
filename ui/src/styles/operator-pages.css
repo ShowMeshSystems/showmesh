@@ -99,6 +99,56 @@
   font-size: var(--font-size-sm);
 }
 
+.current-run {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.current-run:last-child {
+  border-bottom: 0;
+}
+
+.current-run__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.current-run__facts {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, auto) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.current-run__facts dt {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.current-run__facts dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.current-run__reason,
+.current-run__targets {
+  display: block;
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.night-command-button__success {
+  margin: var(--space-2) 0 0;
+  color: var(--status-good-fg);
+  font-size: var(--font-size-sm);
+}
+
 .operator-control-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -198,5 +248,14 @@
   .show-night__step {
     grid-template-columns: 1fr;
     gap: var(--space-1);
+  }
+
+  .current-run__facts {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+
+  .current-run__facts dd {
+    margin-bottom: var(--space-2);
   }
 }

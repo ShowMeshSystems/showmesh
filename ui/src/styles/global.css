@@ -911,7 +911,11 @@ button:disabled {
 
 @media (max-width: 767px) {
   .app-shell {
-    padding-bottom: 6.5rem;
+    /* The compact chooser wraps its Operate links into two rows at 360px.
+       Leave room for the full fixed chooser plus the safe-area inset so the
+       last page action cannot sit underneath it. The chooser scrolls within
+       this bound on shorter phones, keeping every route reachable. */
+    padding-bottom: calc(22rem + env(safe-area-inset-bottom, 0px));
   }
 
   .app-sidebar {
@@ -919,6 +923,8 @@ button:disabled {
     right: 0;
     bottom: 0;
     left: 0;
+    max-height: min(50vh, 22rem);
+    overflow-y: auto;
     background: var(--color-surface-raised);
     border-top: 1px solid var(--color-border);
   }
@@ -1101,5 +1107,6 @@ button:disabled {
 
   .app-main {
     max-width: none;
+    padding-bottom: calc(22rem + env(safe-area-inset-bottom, 0px));
   }
 }

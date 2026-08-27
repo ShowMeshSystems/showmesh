@@ -22,6 +22,8 @@ import type {
   CollectorStatus,
   ConfigObjectSummary,
   ConnectionState,
+  CurrentRun,
+  CurrentRunsResponse,
   Evidence,
   EventSeq,
   FPPInstance,
@@ -169,6 +171,54 @@ export function makeResolumeInstance(instanceId: string, overrides: Partial<Reso
     health: 'healthy',
     observations: [],
     composition: null,
+    ...overrides,
+  }
+}
+
+export function makeCurrentRun(overrides: Partial<CurrentRun> = {}): CurrentRun {
+  return {
+    id: 'run-fpp-1',
+    runner: 'fpp',
+    show: 'halloween-2026',
+    generation: 7,
+    playlistId: 'main-playlist',
+    playlistRevision: 3,
+    status: 'playing',
+    statusReason: 'FPP reports the playlist is playing',
+    playback: {
+      state: 'playing',
+      reason: 'current item is playing',
+      itemId: 'cue-1',
+      itemIndex: 2,
+      positionMs: 1200,
+      media: 'main.fseq',
+      evidence: [makeEvidence({ signal: 'fpp.status' })],
+    },
+    freshness: {
+      state: 'current',
+      reason: 'reported by FPP recently',
+      observedAt: NOW,
+      collectedAt: NOW,
+    },
+    reconciliation: { state: 'converged', reason: 'active playlist revision matches' },
+    activation: {
+      show: 'halloween-2026',
+      generation: 7,
+      playlistId: 'main-playlist',
+      revision: 3,
+      runner: 'fpp',
+    },
+    targets: [{ kind: 'fpp', id: 'fpp-main', evidence: [makeEvidence({ signal: 'fpp.status' })] }],
+    next: { itemId: 'cue-2', itemIndex: 3, media: 'next.fseq', source: 'fpp' },
+    ...overrides,
+  }
+}
+
+export function makeCurrentRuns(overrides: Partial<CurrentRunsResponse> = {}): CurrentRunsResponse {
+  return {
+    serverTime: NOW,
+    activeShow: { configured: true, show: 'halloween-2026', generation: 7 },
+    runs: [makeCurrentRun()],
     ...overrides,
   }
 }
@@ -356,6 +406,9 @@ export function makeModel(overrides: Partial<Model> = {}): Model {
     // Step 9 (STEP-9-SPEC.md section 6.6, ADR-020 decision 3): required
     // on Model — a test that cares about macro runs overrides this.
     macroRuns: [],
+    currentRuns: null,
+    currentRunsReceivedAt: null,
+    currentRunsFetchFailed: false,
     // Track D seam D-4: required on Model — a test that cares about
     // Resolume overrides this.
     resolume: [],

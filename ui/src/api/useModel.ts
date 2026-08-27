@@ -42,6 +42,7 @@ import type {
   ConfigShowPlaylist,
   ConfigShowWrite,
   CreatePrincipalRequest,
+  CurrentRunsResponse,
   FPPCommandResult,
   FPPEndpointsConfigResponse,
   FPPMQTTConfigResponse,
@@ -827,6 +828,10 @@ export function deployNodeCueCatalog(nodeId: string): Promise<CueCatalogDeployRe
 
 export function getCurrentNightSession(): Promise<NightSessionResponse> {
   return store.getCurrentNightSession()
+}
+
+export function getCurrentRuns(): Promise<CurrentRunsResponse> {
+  return store.getCurrentRuns()
 }
 
 export function getNightSessionById(id: string): Promise<NightSessionResponse> {

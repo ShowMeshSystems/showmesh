@@ -13,6 +13,8 @@ import {
 } from './test-support/test-server'
 import {
   makeAuthenticatedSession,
+  makeCurrentRuns,
+  makeCurrentRunsChangedEvent,
   makeEvent,
   makeEventsResponse,
   makeFPPInstance,
@@ -3148,6 +3150,74 @@ describe('FPPCommandRequest params (type-level only, Step 8/ADR-015)', () => {
       params: { paylist: 'showmesh-test', repeat: false, ifBusy: 'refuse' },
     }
     expect(misspelled.action).toBe('startPlaylist')
+  })
+})
+
+describe('ApiStore: current runner playback', () => {
+  it('fetches GET /current-runs after the baseline and applies concurrent runners', async () => {
+    let stream: import('node:http').ServerResponse | null = null
+    const current = makeCurrentRuns({
+      runs: [
+        makeCurrentRuns().runs[0]!,
+        { ...makeCurrentRuns().runs[0]!, id: 'run-audio-1', runner: 'showmesh-audio' },
+      ],
+    })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        stream = res
+        writeSSEFrame(res, 'stream.start', { streamId: 's1', apiVersion: 1, serverTime: '2026-08-11T12:00:00.000Z', snapshotRequired: true })
+      } else if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+      } else if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+      } else if (req.url === '/current-runs') {
+        respondJson(res, 200, current)
+      } else if (req.url === '/session') {
+        respondJson(res, 200, makeSessionResponse())
+      } else {
+        res.writeHead(404).end()
+      }
+    })
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().currentRuns?.runs.length === 2)
+
+    expect(s.requestsFor('/current-runs')).toHaveLength(1)
+    expect(store.getSnapshot().currentRuns?.runs.map((run) => run.runner)).toEqual(['fpp', 'showmesh-audio'])
+    expect(stream).not.toBeNull()
+  })
+
+  it('replaces current playback from a currentRuns.changed full frame', async () => {
+    let stream: import('node:http').ServerResponse | null = null
+    const initial = makeCurrentRuns()
+    const changed = makeCurrentRunsChangedEvent({ runs: [], activeShow: { configured: false, show: null, generation: null } })
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        stream = res
+        writeSSEFrame(res, 'stream.start', { streamId: 's1', apiVersion: 1, serverTime: '2026-08-11T12:00:00.000Z', snapshotRequired: true })
+      } else if (req.url === '/snapshot') {
+        respondJson(res, 200, makeSnapshot())
+      } else if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+      } else if (req.url === '/current-runs') {
+        respondJson(res, 200, initial)
+      } else if (req.url === '/session') {
+        respondJson(res, 200, makeSessionResponse())
+      } else {
+        res.writeHead(404).end()
+      }
+    })
+    const store = makeStore(s.baseUrl)
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    await waitFor(() => store.getSnapshot().currentRuns !== null)
+    if (stream === null) throw new Error('stream was not opened')
+    writeSSEFrame(stream, 'currentRuns.changed', changed)
+    await waitFor(() => store.getSnapshot().currentRuns?.runs.length === 0)
+    expect(store.getSnapshot().currentRuns?.activeShow.configured).toBe(false)
   })
 })
 

@@ -12,6 +12,15 @@ export type {
   ConfigRevisionMeta,
   ConfigRevisionsResponse,
   ConnectionState,
+  CurrentRunsResponse,
+  CurrentShowContext,
+  CurrentRun,
+  CurrentPlayback,
+  CurrentRunFreshness,
+  CurrentReconciliation,
+  CurrentRunActivation,
+  CurrentRunTarget,
+  CurrentRunNext,
   ControlPlane,
   DiscoveryProposal,
   DiscoveryRun,
@@ -368,6 +377,7 @@ export {
   // Track F seam F2/F1: the night-session lifecycle controller and the
   // night.session/night.session.active configuration kinds.
   getCurrentNightSession,
+  getCurrentRuns,
   getNightSessionById,
   dispatchNightCommand,
   getNightSessionConfig,

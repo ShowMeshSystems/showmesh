@@ -5,6 +5,8 @@ import { Dashboard } from './Dashboard'
 import { ModelContext } from '../app/ModelContext'
 import {
   makeCollectorStatus,
+  makeCurrentRun,
+  makeCurrentRuns,
   makeEvidence,
   makeFPPInstance,
   makeModel,
@@ -33,6 +35,34 @@ function attentionBadgeLabels(): string[] {
 }
 
 describe('Dashboard', () => {
+  it('renders authoritative concurrent runner playback and keeps playback separate from macro runs', () => {
+    renderDashboard(makeModel({
+      macroRuns: [],
+      currentRuns: makeCurrentRuns({
+        runs: [
+          makeCurrentRun({ runner: 'fpp', id: 'fpp-run' }),
+          makeCurrentRun({ runner: 'showmesh-audio', id: 'audio-run', status: 'running', next: null }),
+        ],
+      }),
+    }))
+
+    expect(screen.getByText('2 reported')).toBeInTheDocument()
+    expect(screen.getByText('fpp', { selector: '.operator-list__meta' })).toBeInTheDocument()
+    expect(screen.getByText('showmesh-audio', { selector: '.operator-list__meta' })).toBeInTheDocument()
+    expect(screen.getAllByText(/Playback/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Freshness/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Reconciliation/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Activation/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/No authoritative next item reported/)).toBeInTheDocument()
+    expect(screen.getByText(/cue-2: next\.fseq/)).toBeInTheDocument()
+    expect(screen.queryByText(/No macro run is currently reported/)).not.toBeInTheDocument()
+  })
+
+  it('states when the authoritative current-runs projection is unavailable', () => {
+    renderDashboard(makeModel({ currentRunsFetchFailed: true }))
+    expect(screen.getAllByText(/Authoritative current playback is unavailable/).length).toBeGreaterThan(0)
+  })
+
   // D2 / OBSERVABILITY section 6.2's ordering rule and ADR-011: critical
   // first, then warning, and an 'unknown' health must produce its own
   // attention item rather than reading as healthy. Before this fix, every

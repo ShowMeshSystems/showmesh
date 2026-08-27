@@ -134,13 +134,13 @@ export function LiveControl() {
         <div className="operator-control-card operator-control-card--wide">
           <p className="text-muted">Lifecycle controls are always visible. They are disabled with a reason when permission or current evidence is insufficient.</p>
           <div className="operator-control-card__actions">
-            <NightCommandButton command="prepare-site" label="Prepare site" onApplied={() => undefined} />
-            <NightCommandButton command="run-readiness" label="Run readiness" onApplied={() => undefined} />
-            <NightCommandButton command="start-preshow" label="Start preshow" onApplied={() => undefined} />
-            <NightCommandButton command="start-night" label="Start night" onApplied={() => undefined} />
-            <NightCommandButton command="request-final-show" label="Request final show" onApplied={() => undefined} />
-            <NightCommandButton command="fade-out-night" label="Fade out night" onApplied={() => undefined} />
-            <NightCommandButton command="power-down-presentation" label="Power down presentation" onApplied={() => undefined} />
+            <NightCommandButton command="prepare-site" label="Prepare site" />
+            <NightCommandButton command="run-readiness" label="Run readiness" />
+            <NightCommandButton command="start-preshow" label="Start preshow" />
+            <NightCommandButton command="start-night" label="Start night" />
+            <NightCommandButton command="request-final-show" label="Request final show" />
+            <NightCommandButton command="fade-out-night" label="Fade out night" />
+            <NightCommandButton command="power-down-presentation" label="Power down presentation" />
           </div>
         </div>
       </section>

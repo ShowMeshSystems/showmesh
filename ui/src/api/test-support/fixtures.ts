@@ -27,6 +27,9 @@ type MacroRunStepCommand = components['schemas']['MacroRunStepCommand']
 // Track F seam F2.
 type NightSessionState = components['schemas']['NightSessionState']
 type NightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
+type CurrentRun = components['schemas']['CurrentRun']
+type CurrentRunsResponse = components['schemas']['CurrentRunsResponse']
+type CurrentRunsChangedEvent = components['schemas']['CurrentRunsChangedEvent']
 // TRACK-H-H2-SPEC.md §5.1.
 type FPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 
@@ -294,6 +297,51 @@ export function makeNightSessionChangedEvent(
     seq: 1,
     serverTime: NOW,
     session: makeNightSessionState(),
+    ...overrides,
+  }
+}
+
+export function makeCurrentRun(overrides: Partial<CurrentRun> = {}): CurrentRun {
+  return {
+    id: 'run-fpp-1',
+    runner: 'fpp',
+    show: 'halloween-2026',
+    generation: 7,
+    playlistId: 'main-playlist',
+    playlistRevision: 3,
+    status: 'playing',
+    statusReason: 'FPP reports the playlist is playing',
+    playback: {
+      state: 'playing', reason: 'current item is playing', itemId: 'cue-1', itemIndex: 2,
+      positionMs: 1200, media: 'main.fseq', evidence: [makeEvidence({ signal: 'fpp.status' })],
+    },
+    freshness: { state: 'current', reason: 'reported by FPP recently', observedAt: NOW, collectedAt: NOW },
+    reconciliation: { state: 'converged', reason: 'active playlist revision matches' },
+    activation: { show: 'halloween-2026', generation: 7, playlistId: 'main-playlist', revision: 3, runner: 'fpp' },
+    targets: [{ kind: 'fpp', id: 'fpp-main', evidence: [makeEvidence({ signal: 'fpp.status' })] }],
+    next: { itemId: 'cue-2', itemIndex: 3, media: 'next.fseq', source: 'fpp' },
+    ...overrides,
+  }
+}
+
+export function makeCurrentRuns(overrides: Partial<CurrentRunsResponse> = {}): CurrentRunsResponse {
+  return {
+    serverTime: NOW,
+    activeShow: { configured: true, show: 'halloween-2026', generation: 7 },
+    runs: [makeCurrentRun()],
+    ...overrides,
+  }
+}
+
+export function makeCurrentRunsChangedEvent(
+  overrides: Partial<CurrentRunsChangedEvent> = {},
+): CurrentRunsChangedEvent {
+  const current = makeCurrentRuns()
+  return {
+    seq: 1,
+    serverTime: current.serverTime,
+    activeShow: current.activeShow,
+    runs: current.runs,
     ...overrides,
   }
 }

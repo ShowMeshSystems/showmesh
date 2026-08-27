@@ -74,6 +74,7 @@ import {
   initialModel,
   type AudioSessionCommandResult,
   type ConnectionState,
+  type CurrentRunsResponse,
   type CueCatalogDeployResult,
   type Evidence,
   type Event as ModelEvent,
@@ -233,6 +234,8 @@ type SchemaConfigNightSessionWrite = components['schemas']['ConfigNightSessionWr
 type SchemaNightSessionConfigResponse = components['schemas']['NightSessionConfigResponse']
 type SchemaConfigNightSessionActive = components['schemas']['ConfigNightSessionActive']
 type SchemaNightSessionActiveConfigResponse = components['schemas']['NightSessionActiveConfigResponse']
+type SchemaCurrentRunsResponse = components['schemas']['CurrentRunsResponse']
+type SchemaCurrentRunsChangedEvent = components['schemas']['CurrentRunsChangedEvent']
 
 /**
  * `Omit<Union, K>` is NOT distributive in TypeScript — `Omit` is defined
@@ -354,6 +357,7 @@ export class ApiStore {
   private attempt = 0
   private lastError: string | null = null
   private loopAbort: AbortController | null = null
+  private currentRunsUpdateCounter = 0
 
   /**
    * ADR-024: independent, short-lived requests this store makes outside
@@ -2297,6 +2301,16 @@ export class ApiStore {
     }
   }
 
+  /** `GET /api/v1/current-runs`: authoritative runner playback for the Dashboard. */
+  async getCurrentRuns(): Promise<SchemaCurrentRunsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaCurrentRunsResponse>('/current-runs', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
   /** `GET /api/v1/night/sessions/{id}` (Track F seam F2). Throws (404) when no session with this id has ever existed. */
   async getNightSessionById(id: string): Promise<SchemaNightSessionResponse> {
     const controller = this.beginSideCall()
@@ -3276,6 +3290,19 @@ export class ApiStore {
         this.applyFppPlaylistEntryChanged(payload.observation, payload.serverTime)
         return
       }
+      case 'currentRuns.changed': {
+        // This is a complete replacement, not a cursor or delta. A client
+        // already connected can apply it immediately; reconnects fetch the
+        // REST authority in reloadSnapshot below.
+        const payload = tryParse<SchemaCurrentRunsChangedEvent>(frame.data)
+        if (payload === null || gen !== this.generation) return
+        this.applyCurrentRuns({
+          serverTime: payload.serverTime,
+          activeShow: payload.activeShow,
+          runs: payload.runs,
+        })
+        return
+      }
       default:
         // Unknown event: name — ignored, not an error. v1 is
         // additive-only (api/openapi.yaml's /stream description).
@@ -3314,6 +3341,17 @@ export class ApiStore {
     if (gen !== this.generation) return
     this.applyInitialEvents(events)
 
+    // GET /current-runs is the reconnect authority for playback. Keep a
+    // failed read visible as unknown while allowing the inventory stream to
+    // remain live; a transient current-runs failure must not reconnect the
+    // entire shell or make stale macro-run data masquerade as playback.
+    // Do not hold the inventory stream's live transition on this auxiliary
+    // projection. Older coordinators and a temporarily unavailable runner
+    // may leave this read pending, while the stream itself still provides a
+    // valid inventory baseline. The request remains tied to the connection
+    // signal and its result is applied only for this generation.
+    void this.fetchCurrentRuns(gen, signal)
+
     // ADR-024 decision 12: a reconnect is exactly the moment the coordinator
     // may have closed the PREVIOUS connection over a generation bump (decision
     // 5's "closes open streams and forces a re-fetch, so the stale window is
@@ -3349,6 +3387,7 @@ export class ApiStore {
 
   private applySnapshot(snapshot: SchemaSnapshot): void {
     const receivedAt = this.now()
+    this.currentRunsUpdateCounter += 1
     this.setModel({
       ...this.model,
       serverTime: snapshot.serverTime,
@@ -3368,6 +3407,9 @@ export class ApiStore {
       // bounded recently-finished tail), not a delta this store needs to
       // merge.
       macroRuns: snapshot.macroRuns,
+      currentRuns: null,
+      currentRunsReceivedAt: null,
+      currentRunsFetchFailed: false,
       // Track D seam D-4 (build contract §1.7): a plain wholesale replace,
       // exactly like `fpp` above — `Snapshot.resolume` is this
       // coordinator's own authoritative current list, never a delta this
@@ -3397,6 +3439,35 @@ export class ApiStore {
       // connection cannot vouch for.
       fppPlaylistEntryObservations: [],
     })
+  }
+
+  private applyCurrentRuns(currentRuns: CurrentRunsResponse): void {
+    this.currentRunsUpdateCounter += 1
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      currentRuns,
+      currentRunsReceivedAt: receivedAt,
+      currentRunsFetchFailed: false,
+      serverTime: currentRuns.serverTime,
+      clockSkewMs: this.computeClockSkewMs(currentRuns.serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+    })
+  }
+
+  private async fetchCurrentRuns(gen: number, signal: AbortSignal): Promise<void> {
+    const updateCounter = this.currentRunsUpdateCounter
+    try {
+      const currentRuns = await this.client.getJson<SchemaCurrentRunsResponse>('/current-runs', signal)
+      // A full-frame SSE update received while this REST read was pending is
+      // newer than the request's starting point. Never let the older REST
+      // response roll the model back over that event.
+      if (gen !== this.generation || updateCounter !== this.currentRunsUpdateCounter) return
+      this.applyCurrentRuns(currentRuns)
+    } catch (err) {
+      if (isAbortError(err) || gen !== this.generation || updateCounter !== this.currentRunsUpdateCounter) return
+      this.setModel({ ...this.model, currentRunsFetchFailed: true })
+    }
   }
 
   /**

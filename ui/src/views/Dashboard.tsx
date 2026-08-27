@@ -11,7 +11,7 @@ import { findObservation } from '../app/fppSignals'
 import { summarizeFleetPorts, summarizeFleetWarnings } from '../app/fppDashboard'
 import { STATE_ICON, STATE_TONE } from '../app/evidenceState'
 import { EvidenceValue } from '../components/EvidenceValue'
-import type { FPPInstance, Node, ResolumeInstance } from '../app/types'
+import type { CurrentRun, FPPInstance, Node, ResolumeInstance } from '../app/types'
 import '../styles/operator-pages.css'
 
 // The default view (spec section 6.4). OBSERVABILITY section 6.2's last
@@ -176,8 +176,57 @@ function readiness(model: ReturnType<typeof useModelContext>): { label: string; 
   return { label: 'Ready', detail: 'Current resource evidence is healthy.', tone: 'good', icon: '✓' }
 }
 
+function currentRunStatusTone(run: CurrentRun): StatusTone {
+  if (run.freshness.state !== 'current') return 'unknown'
+  if (run.status === 'failed' || run.playback.state === 'failed') return 'bad'
+  if (run.reconciliation.state === 'degraded' || run.reconciliation.state === 'conflicted') return 'warn'
+  return 'good'
+}
+
+function CurrentRunRow({ run }: { run: CurrentRun }) {
+  return (
+    <li className="current-run" data-runner={run.runner}>
+      <div className="current-run__header">
+        <div>
+          <strong>{run.show}</strong>
+          <span className="operator-list__meta"> {run.runner}</span>
+        </div>
+        <StatusBadge tone={currentRunStatusTone(run)} icon={run.status === 'playing' ? '▶' : '•'} label={run.status} />
+      </div>
+      <dl className="current-run__facts">
+        <dt>Playback</dt>
+        <dd>
+          {run.playback.state}: {run.playback.media} ({run.playback.itemId})
+          {run.playback.positionMs === null ? '' : ` at ${run.playback.positionMs} ms`}
+          <span className="current-run__reason">{run.playback.reason}</span>
+        </dd>
+        <dt>Freshness</dt>
+        <dd>{run.freshness.state}: {run.freshness.reason}</dd>
+        <dt>Reconciliation</dt>
+        <dd>{run.reconciliation.state}: {run.reconciliation.reason}</dd>
+        <dt>Activation</dt>
+        <dd>
+          {run.activation.show} generation {run.activation.generation}, playlist {run.activation.playlistId}{' '}
+          revision {run.activation.revision} ({run.activation.runner})
+        </dd>
+        <dt>Next</dt>
+        <dd>
+          {run.next === null
+            ? 'No authoritative next item reported.'
+            : `${run.next.itemId}: ${run.next.media} (item ${run.next.itemIndex}, source ${run.next.source})`}
+        </dd>
+      </dl>
+      {run.targets.length > 0 && (
+        <p className="current-run__targets">
+          Targets: {run.targets.map((target) => `${target.kind} ${target.id}`).join(', ')}
+        </p>
+      )}
+    </li>
+  )
+}
+
 function Overview({ model, attention }: { model: ReturnType<typeof useModelContext>; attention: AttentionItem[] }) {
-  const currentRuns = model.macroRuns.filter((run) => run.state === 'running')
+  const currentRuns = model.currentRuns?.runs ?? []
   const ready = readiness(model)
   const presentation = [
     ...model.fpp.map((instance) => `FPP: ${instance.instanceId}`),
@@ -201,8 +250,8 @@ function Overview({ model, attention }: { model: ReturnType<typeof useModelConte
         </div>
         <div className="operator-status-card">
           <span className="operator-status-card__label">Current run</span>
-          <span className="operator-status-card__value">{currentRuns.length === 0 ? 'None observed' : `${currentRuns.length} running`}</span>
-          <span className="operator-status-card__detail">{currentRuns.length === 0 ? 'No macro run is currently reported.' : currentRuns.map((run) => run.show).join(', ')}</span>
+          <span className="operator-status-card__value">{model.currentRuns === null ? 'Unknown' : currentRuns.length === 0 ? 'None observed' : `${currentRuns.length} reported`}</span>
+          <span className="operator-status-card__detail">{model.currentRuns === null ? 'Authoritative current playback is not available.' : currentRuns.length === 0 ? 'No runner currently reports a run.' : currentRuns.map((run) => `${run.runner}: ${run.show}`).join(', ')}</span>
         </div>
         <div className="operator-status-card">
           <span className="operator-status-card__label">Connection</span>
@@ -218,9 +267,13 @@ function Overview({ model, attention }: { model: ReturnType<typeof useModelConte
       <div className="operator-page__columns">
         <section className="panel" aria-labelledby="dashboard-current-run">
           <h2 id="dashboard-current-run" className="panel__title">Current run</h2>
-          {currentRuns.length === 0 ? <p className="text-muted">No current run is observed. This is not a claim that no external process is running.</p> : (
+          {model.currentRuns === null ? (
+            <p className="text-muted" role="status">Authoritative current playback is unavailable{model.currentRunsFetchFailed ? ': the coordinator could not be read.' : ' while the coordinator response is pending.'}</p>
+          ) : currentRuns.length === 0 ? (
+            <p className="text-muted">No runner currently reports a run. This is not a claim that no external process is running.</p>
+          ) : (
             <ul className="operator-list">
-              {currentRuns.map((run) => <li className="operator-list__item" key={run.id}><span><strong>{run.show}</strong><span className="operator-list__meta">{run.macroObjectId}</span></span><StatusBadge tone="good" icon="▶" label="Running" /></li>)}
+              {currentRuns.map((run) => <CurrentRunRow key={run.id} run={run} />)}
             </ul>
           )}
         </section>
