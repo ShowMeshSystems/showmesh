@@ -733,12 +733,12 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `observation-hash-mismatch` | shipped | Track H seam H2 |
 | `definition-superseded` | reserved | Lane 16, SM-290 |
 | `evidence-unavailable` | reserved | Lane 16, SM-290 |
-| `node-render-unassigned` | reserved | Lane 16, SM-281 |
+| `node-render-unassigned` | shipped | Lane 16, SM-281 (merged `main` at `533bbf2`, PR #156) |
 | `assets-missing` | reserved | Lane 16, SM-285 |
 | `node-catalog-stale` | reserved | Lane 16, SM-285 |
-| `output-policy-unsupported` | reserved | Lane 16, SM-285 |
+| `output-policy-unsupported` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
 | `exclusive-claim-conflict` | reserved | Lane 16, SM-285 |
-| `plugin-capability-ungated` | reserved | Lane 16, SM-285 |
+| `plugin-capability-ungated` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
 
 **`definition-superseded` and `observation-hash-mismatch` answer different
 questions and must not be merged.** The shipped condition compares the
@@ -754,12 +754,30 @@ not know, and 'I could not check' should not read the same as 'I checked and
 it is fine'." This condition is how readiness says it could not evaluate a
 required check, and it is a failing condition rather than a warning.
 
-**Four of SM-285's five are reserved, not promised.** SM-285's acceptance
-lets a condition be recorded as explicitly out of scope for this season
-instead of built. A reservation costs nothing and keeps the name from being
-minted differently by Lane 20's SM-314, which shares the per-node readiness
-resolution. `plugin-capability-ungated` is the one most likely to be
-recorded out of scope rather than built.
+**`node-render-unassigned` shipped; the rest of Lane 16's rows above have
+not, because their branches have not merged to `main`.** SM-281 merged as
+`533bbf2` (PR #156); `internal/coordinator/fppreconcile/readiness.go` on
+`main` declares `ReadinessNodeRenderUnassigned ReadinessCondition =
+"node-render-unassigned"`. SM-285's own branch, which builds
+`node-catalog-stale` and `exclusive-claim-conflict`, has not merged, so both
+stay reserved.
+
+**`output-policy-unsupported` and `plugin-capability-ungated` are reserved
+names recorded out of scope for this season, not pending work.** SM-285's
+acceptance lets a condition be recorded as explicitly out of scope instead
+of built, and neither name has any representation in this codebase: H0.6's
+enforcement-boundary section in
+[TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) never
+assigns either one to Authoring, Readiness, Activation or Dispatch. The
+reservation stands so the name is not minted differently by Lane 20's
+SM-314, which shares the per-node readiness resolution.
+
+**`assets-missing` is reserved and not built, for a different reason: its
+dependency merged after SM-285 was cut.** The condition needs SM-287's
+narrowing of `ExpectedAssetsForNode` (`NodeCueSequenceIDs`), which reached
+`main` at `f6923ed` (PR #158) roughly ninety minutes after SM-285's last
+commit — there was nothing to build the readiness condition against at the
+time SM-285 was written.
 
 ## MQTT topics
 
