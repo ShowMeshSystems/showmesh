@@ -30,6 +30,62 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
+> **`main` is at `629754e`** (2026-08-27). The last four lanes to land are
+> recorded in the dated entries below: Lane 16's ten Track H defect fixes
+> (`85ed4bc`..`629754e`), Lane 19's three node-agent and audio-node fixes
+> (`f2d13e6`, `7c7129a`, `1528203`), Lane 15's five defect fixes
+> (`85ed4bc`..`d297c05`), and Lane 20's identifier reservation (`ccd83b7`).
+> Two integration branches are deliberately **not** on `main`:
+> `dev/fpp-connect` (Track E phase 2, six pull requests, rebases onto `main`
+> after the 28 August landing) and `dev/multi-audio` (Lane 20's ADR-045 and
+> schema v20).
+>
+> **Track H has H1 through H6 merged, and H7's defect list is now closed
+> except for three follow-ups.** The chain was assembled and run end to end for
+> the first time on 2026-08-26, on a containerized FPP 10.0, a coordinator and a
+> node agent all on one laptop, and the multi-sequence swap works. Every defect
+> that run filed against this repository is now fixed on `main`: the shutdown
+> panic (`4d4fb2d`), render content identity (`e2d6274`), its own follow-up
+> SM-292 (`cc2f9f8`), the per-cue asset gate (`f6923ed`), render assignment
+> readiness (`533bbf2`), catalog-deploy establishment (`fa6cec9`), the superseded
+> render verdict (`5e178a9`), and four readiness conditions (`795c48e`,
+> `629754e`). Three follow-ups the lane filed rather than fixed remain open:
+> `assets-missing` readiness (now unblocked), the coordinator/node disagreement
+> about a never-uploaded sequence, and the intermittent supervisor-test race that
+> reddens the Go 1.25 leg on unrelated branches. **No hardware, NDI,
+> audio-hardware or wall evidence exists for any of it.** The bench and its
+> case-by-case record are at `f404ebd`: `bench/track-h-chain/` and
+> [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md).
+>
+> **Readiness now checks nine ordered conditions, and the list is still growing.**
+> `internal/coordinator/fppreconcile/readiness.go`'s `ReadinessCondition` const
+> list is the authoritative one; nothing else, including `api/openapi.yaml`,
+> restates a count. Two concurrent branches each wrote a different total into the
+> same API description before this rule existed.
+>
+> **A Raspberry Pi 3B+ has been proven as an audio node.** The node agent
+> installs from a prebuilt arm64 tarball with no build toolchain on the host
+> (`f2d13e6`), `make package-node-agent` names the tarball for the platform it
+> actually built (`7c7129a`), and a two-output interface can be declared as a
+> program-only `audio.node` with no LTC (`1528203`). This is the first real
+> hardware evidence in the node-install path. The Pi needs reinstalling from
+> `main` to pick up all three.
+>
+> **Schema versions on `main` run to v19; v20 is reserved for Lane 20 and lands
+> with `dev/multi-audio`.** [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is
+> the register. **Builders never edit it**, a rule three builders broke in one
+> lane; nothing enforces it yet.
+>
+> **The repository hygiene sweep covers private references in shipped source.**
+> `TestNoLinearIssueReferencesInShippedSource` matches the tracker key, a tracker
+> URL and a build-lane label, and sweeps `cmd`, `internal`, `pkg`, `test`,
+> `ui/src`, `deploy`, `api/openapi.yaml`, the `Dockerfile` and the `Makefile`.
+> `docs/` is deliberately excluded and may cite internal history.
+>
+> ---
+>
+> *The paragraphs below describe earlier lanes and are kept for continuity.*
+>
 > **Lane 8 left `main` at `349093a`.** Other lanes were merging concurrently on 2026-08-26, so `main` may already be ahead of that; this paragraph describes what this lane landed, not the tip. The Operator UI fold took it to `53d3db0`, six defect fixes to `cf0c349`, then #115, #116, #117 and #128 to `270aead`, then the audit contract change #129 to `d4aee09`, then the nav and chrome work #114 to `349093a`. Twenty-two pull requests, #91 through #112 excluding #109, were squash-merged between 2026-08-25 18:40Z and 2026-08-26 01:30Z, in merge-time order: 91 (`03a1cc5`), 92 (`03db85a`), 93 (`4efc96c`), 94 (`00f278e`), 95 (`d846f15`), 99 (`bff51fb`), 98 (`87a2c63`), 96 (`af06ddc`), 100 (`89ca8ae`), 101 (`fe3eb99`), 97 (`2400f0d`), 102 (`966cb16`), 103 (`21c65d1`), 104 (`01b081d`), 105 (`03256b9`), 106 (`a1ceb56`), 107 (`5c89297`), 108 (`3ed4ef5`), 110 (`d24a1c6`), 112 (`3c6b06f`), 111 (`53d3db0`). This is the Operator UI fold that ships Track H's **H6**; see the dated entry below. PR #109 (`c7fd5e8`) also merged in this window but is the FPP Connect decisions record, a separate track, and is why a docs-only commit appears inside this range.
 >
 > Before this fold, `main` was at `6eafb4e` (`9f28832` after the dependabot `docker/login-action` bump). Eight pull requests, #82 through #89, were squash-merged between `44b16fa` and `6eafb4e` on 2026-08-25, in this order: 84, 85, 86, 82, 83, 87, 89, 88. **Every merge was gated by `make check` on the merged tree** (each pull request merged onto the then-current `main` in a temporary worktree and gated there); #88, the last, also ran `make test-integration` on its merged tree. Before that, twenty-four pull requests, #55 through #78, were folded the same way between `e2d6c47` and `3d7d822` on 2026-08-24 and 2026-08-25 (order: 67, 55, 56, 57, 63, 65, 62, 60, 68, 59, 66, 70, 61, 78, 69, 72, 74, 75, 58, 77, 64, 71, 73, 76), with `make test-integration` on `main` at `410bf22`, `3d2883b` and `3d7d822`. The three 2026-08-25/26 dated entries below (this fold's and the two earlier ones) are the records of the three folds.
@@ -51,6 +107,175 @@ The **Current state** block at the top of this file is overwritten each session:
 > **Browser click-through for the Operator UI fold was collected for one pull request only.** PR #91 (node detail evidence panel) was exercised against the local compose stack at `f102ae6`. Every other pull request in the fold records "not exercised in a browser": the local stack has no audio node, no audio session, no configured cues and no `audio.settings` revision, so those screens' paths are unreachable there. **Nothing in this fold, or in any earlier fold recorded above, ran on real hardware, on a deployed fleet, or against a real Resolume Arena.** Bench and hardware acceptance for the Operator UI fold's screens is tracked separately as SM-253, SM-254, SM-255 and SM-269. The Operator UI parity audit (SM-242) classified 144 API operations and found 41 gaps (20 show-night, 12 authoring, 10 admin); readability is tracked as SM-241; gap issues SM-243 through SM-249 are Done; follow-ups SM-250, SM-251, SM-252, SM-256, SM-257, SM-258, SM-259, SM-268, SM-270 and SM-271 are filed.
 >
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
+
+---
+
+## 2026-08-26/2026-08-27 (Lane 16, the Track H defect lane: ten pull requests, `main` from `85ed4bc` to `629754e`)
+
+**Goal:** close the defects the 2026-08-26 Track H end-to-end run filed, and the
+identifier reservations the lane needed before nine concurrent branches started.
+
+**Completed.** Merged overnight on 2026-08-26:
+
+- **#150 (`6da29d6`).** The identifier reservation, made before any builder
+  started: eight readiness conditions, two render-surface signals and one new
+  `surface.pipeline.state` member. It also adds a Playlist readiness condition
+  section to [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md), because
+  [TRACK-H-H2-SPEC.md](TRACK-H-H2-SPEC.md) section 6 had fixed five values as a
+  closed vocabulary and this lane opens it.
+- **#158 (`f6923ed`).** A missing asset now refuses only the cue whose own asset
+  is genuinely absent, and the refusal names it, instead of refusing every cue on
+  the node. This is the defect that blocked the first otherwise-working
+  end-to-end run.
+- **#156 (`533bbf2`).** A node holding no render assignment fails readiness by
+  name, and an unreachable node is distinguished from a genuinely unassigned one.
+
+Merged 2026-08-27, after a pre-merge review over all eight branches:
+
+- **#152 (`bdd9bb1`).** The plugin/coordinator contract now fixes which of FPP's
+  two playlist section spellings goes on the wire, with a shared fixture
+  (`test/fixtures/fpp/section-mapping.json`) both implementations check against,
+  so two correct implementations cannot disagree again.
+- **#155 (`fd263fb`).** `showmeshctl --help` lists `cuecatalog deploy` and every
+  other subcommand it was hiding, and a coverage guard now fails the build when a
+  dispatcher gains a verb that help does not list.
+- **#153 (`f9c589b`).** The deploy image build stamps the real
+  `VERSION`/`COMMIT`/`BUILD_DATE`. A bare `docker compose up -d --build` with
+  those unset now refuses to build rather than producing a coordinator that
+  reports `version=dev commit=none build_date=unknown`.
+- **#168 (`fa6cec9`).** A confirmed cue-catalog deploy establishes every one of
+  the active Show's `show.surface` objects on that node with no sequence
+  selected, so the first cue activation has something to swap an FSEQ onto. Before
+  this, a render node that rebooted mid-show never rendered again on its own,
+  because ADR-043's H0.7 clears assignments at boot and nothing but a manual
+  `render.surface.apply` ever created one.
+- **#167 (`5e178a9`).** A render held under a superseded show is reported as
+  `superseded`, compared on the show and generation tuple rather than on catalog
+  revision.
+- **#163 (`795c48e`).** The `node-catalog-stale` and `exclusive-claim-conflict`
+  readiness conditions, both built by reusing the existing resolvers rather than
+  deriving a second computation.
+- **#164 (`629754e`).** `definition-superseded` and `evidence-unavailable`.
+  Readiness detects an edited FPP playlist directly from the definition store,
+  so it no longer needs FPP to have played anything since the edit; and an
+  observation that was received but could not establish identity is now its own
+  failing condition rather than a warning alongside `ready: true`.
+
+**Decisions made:**
+
+- **The readiness condition list is not restated as a number anywhere.**
+  `ReadinessCondition`'s own const list is the authoritative count, and
+  `api/openapi.yaml` points at the `failingCondition` enum rather than naming a
+  total. #163 and #164 were written concurrently, each opened the vocabulary by
+  two, and each independently wrote "eight" into the same API description meaning
+  two different eights. Caught in the pre-merge review; the fix is to stop
+  counting in prose, not to correct the number.
+- **Ordering: binding-specific conditions run before fleet-wide ones.**
+  `node-render-unassigned`, `exclusive-claim-conflict` and `node-catalog-stale`
+  hold or fail identically for every Playlist of a Show. Readiness stops at the
+  first failing condition, so on an undeployed fleet a Playlist whose own binding
+  had drifted would never surface that. The ordered list is now
+  `definition-missing`, `definition-superseded`, `entry-not-in-definition`,
+  `entry-filename-mismatch`, `cue-not-ready`, then the observation check
+  (`evidence-unavailable` or `observation-hash-mismatch`), then
+  `node-render-unassigned`, `exclusive-claim-conflict` and `node-catalog-stale`.
+
+**Found in the pre-merge review, and worth keeping:**
+
+- **#163 and #164 conflicted in five files** and were clean only in isolation.
+  Merging #163 first and rebasing #164 onto it was a real conflict resolution
+  across `api/openapi.yaml`, `TRACK-H-H2-SPEC.md`, `readiness.go`,
+  `fppreconciliation.go` and `DomainBadges.tsx`, including renumbering the
+  ordered conditions for the combined list. Two lanes editing one closed
+  vocabulary is the shape that produces this; the identifier register prevented
+  the name collision, not the prose collision.
+- **Private references reached public files that the hygiene sweep did not
+  cover.** "Lane 16" shipped into `api/openapi.yaml`, `readiness.go`,
+  `fppreconciliation.go` and `DomainBadges.tsx`; `SM-291` into the `Dockerfile`,
+  `Makefile`, `deploy/docker-compose.yml` and `deploy/.env.example`; a test
+  fixture show was named for the lane that wrote it. All removed before merge.
+  `TestNoLinearIssueReferencesInShippedSource` could not see any of it: it swept
+  only `cmd`, `internal`, `pkg`, `test`, `ui/src` and `api/openapi.yaml`, and
+  matched only the tracker key. Widened in #169, which immediately found two more
+  that had already shipped, in `deploy/node/preflight.sh` and the `Makefile`.
+
+**Deferred:**
+
+- `assets-missing`, the fourth readiness condition Track H specified, was blocked
+  on #158's rework of `assetsync.ExpectedAssetsForNode` and could not be built on
+  an unmerged tip. Its dependency is now on `main`; the condition is not built.
+- `output-policy-unsupported` and `plugin-capability-ungated` are recorded as out
+  of scope this season, with reasons, in
+  [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) section H6.
+
+**Verification gates:** every one of the ten pull requests was green on all ten
+GitHub checks before merge. #168 also ran `make test-integration` on its own
+branch in an isolated broker slot, passing, including the rebuilt
+clear/redeploy/re-establish sequence. #164's rebase onto #163 was re-gated
+locally before merge: `go build ./...`, `go test` over every non-audio package,
+`gofmt`, `tsc --noEmit`, and 1101 UI tests across 89 files, all passing on the
+merged tree. **No hardware, deployed-fleet, browser or live-Arena evidence exists
+for any of it.** #168's establishment path has never run against a real render
+node, and none of the readiness conditions has been seen by a real FPP.
+
+---
+
+## 2026-08-26 (Lane 15: five defects from the Track H run and the audio lane fixed, `main` from `982fa2f` to `d297c05`)
+
+**Goal:** fix the defects filed against `main` immediately after the Track H
+end-to-end run and the 2026-08-26 audio lane, none of which needed new design.
+
+**Completed:**
+
+- **#146 (`85ed4bc`).** The FPP instance page's "Current playback" panel refetches
+  the reconciliation verdict whenever that instance reports a new playlist entry,
+  not only on reconnect, and shows the verdict's own fetch time so an operator can
+  tell a stale verdict from a fresh one.
+- **#147 (`ae3d431`).** `bench/track-h-chain/run-chain.sh` refuses to run unless
+  both `COORD` and `FPP` resolve to loopback, before any write. Its idle wait is
+  bounded and fails loudly instead of hanging, and `ADMIN_TOKEN` no longer appears
+  in any process's argv. This laptop keeps a preserved `.env` pointing at the live
+  fleet, which is why an unguarded bench script mattered.
+- **#148 (`91f4c9a`).** `showmeshctl cuecatalog get` shows a node's held
+  cue-catalog acknowledgement in both table and JSON output, matching what the API
+  already returned.
+- **#149 (`cc2f9f8`).** The four `surface.content.*` signals are stamped from a
+  real content-read timestamp. They had reported the right values with an evidence
+  time from before the content changed, which is the dangerous direction.
+- **#151 (`d297c05`).** `defaultMaxBackgroundGainDb` gains a -60 dB floor.
+
+**Verification gates:** each pull request green on GitHub before merge. No
+hardware or deployed-fleet evidence; #149's fix addresses a defect that was
+observed on running binaries, and the fix itself has not been re-observed there.
+
+---
+
+## 2026-08-26 (Lane 20, multi-node audio: the ADR and the first schema change, on `dev/multi-audio`, not on `main`)
+
+**Goal:** record the multi-audio-node decisions durably and land the first
+additive contract and storage changes behind them.
+
+**Only the identifier reservation is on `main`.** #157 (`ccd83b7`) reserves
+ADR-045 and schema v20 in [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md). The
+two code pull requests merged into the integration branch `dev/multi-audio` and
+are **not on `main`**:
+
+- **#160 (`82c16c7`).** ADR-045 carries the five owner decisions (a target node on
+  cue audio, LTC and announcement outputs; one LTC emitter per installation; an
+  `audio.node` `role` and `zone`; `audio.settings` stays a singleton this season;
+  night-mode targets become a list), plus the additive contract change itself.
+- **#161 (`b5149d8`).** `audio_sessions` is keyed by `(node_id, id)` in schema
+  v20. The cue and blackAndSilence session ids are global constants, so two nodes
+  shared one row and `PutAudioSession`'s revision guard silently dropped the
+  second node's write.
+
+**Deferred:** the rest of the multi-audio work, and the rebase of
+`dev/multi-audio` onto `main`. Readiness conditions for a second LTC emitter and
+for a cue whose target node is missing or unbound are specified and not built.
+
+**Verification gates:** both pull requests green on GitHub before merging to
+`dev/multi-audio`. Nothing here has run on a real audio node, and no installation
+has ever had two audio nodes.
 
 ---
 
