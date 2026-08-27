@@ -1,6 +1,6 @@
 import { cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ScrollToTop } from './App'
+import { RouteTitle, ScrollToTop } from './App'
 
 // Operator-reported: clicking the show-mode badge (a hash link to
 // /config#show-mode) from a long, scrolled page left the page at its old
@@ -99,5 +99,23 @@ describe('ScrollToTop', () => {
     render(<ScrollToTop />)
 
     expect(scrollTo).toHaveBeenCalledWith(0, 0)
+  })
+})
+
+describe('RouteTitle', () => {
+  it('gives deep-linked routes a useful document title without changing routing', () => {
+    useLocationMock.mockReturnValue({ pathname: '/config/show/holiday', hash: '' })
+
+    render(<RouteTitle />)
+
+    expect(document.title).toBe('Shows · ShowMesh Operator')
+  })
+
+  it('uses a stable product title for legacy routes without a dedicated label', () => {
+    useLocationMock.mockReturnValue({ pathname: '/audit', hash: '' })
+
+    render(<RouteTitle />)
+
+    expect(document.title).toBe('ShowMesh Operator')
   })
 })

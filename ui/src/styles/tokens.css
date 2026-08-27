@@ -21,16 +21,27 @@
  */
 
 :root {
-  /* Surfaces */
-  --color-bg: #f4f5f7;
+  /* Brand palette: graphite neutrals with a blue-green action accent. */
+  --color-graphite-50: #f3f6f5;
+  --color-graphite-100: #e7edeb;
+  --color-graphite-300: #b7c5c2;
+  --color-graphite-600: #52615f;
+  --color-graphite-800: #293735;
+  --color-graphite-950: #111b1b;
+  --color-blue-green-500: #087f78;
+  --color-blue-green-700: #06635f;
+
+  /* Semantic roles. Components use these roles, never palette values. */
+  --color-bg: var(--color-graphite-50);
   --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
-  --color-border: #c9ccd3;
-  --color-text: #1a1d23;
-  --color-text-muted: #565c66;
-  --color-accent: #1f5fbf;
-  --color-focus-ring: #1f5fbf;
-  --color-link: #1f5fbf;
+  --color-border: var(--color-graphite-300);
+  --color-text: var(--color-graphite-950);
+  --color-text-muted: var(--color-graphite-600);
+  --color-accent: var(--color-blue-green-700);
+  --color-focus-ring: var(--color-blue-green-500);
+  --color-link: var(--color-blue-green-700);
+  --shadow-nav: 0 -0.75rem 2rem rgb(17 27 27 / 16%);
 
   /* Status pairs: background + foreground, used together, never alone */
   --status-good-bg: #e3f5e9;
@@ -79,15 +90,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #14161a;
-    --color-surface: #1d2027;
-    --color-surface-raised: #262a33;
-    --color-border: #3a3f4a;
-    --color-text: #eef0f4;
-    --color-text-muted: #a7acb8;
-    --color-accent: #6ba3ff;
-    --color-focus-ring: #6ba3ff;
-    --color-link: #6ba3ff;
+    --color-bg: #111b1b;
+    --color-surface: #1b2928;
+    --color-surface-raised: #263735;
+    --color-border: #4b605d;
+    --color-text: #edf5f3;
+    --color-text-muted: #afc0bc;
+    --color-accent: #65d1c5;
+    --color-focus-ring: #8be8df;
+    --color-link: #8be8df;
+    --shadow-nav: 0 -0.75rem 2rem rgb(0 0 0 / 38%);
 
     --status-good-bg: #163322;
     --status-good-fg: #6bdb92;
@@ -116,6 +128,7 @@
   --color-accent: #66d9ff;
   --color-focus-ring: #ffff00;
   --color-link: #7fd0ff;
+  --shadow-nav: none;
 
   --status-good-bg: #003d17;
   --status-good-fg: #4dff8f;

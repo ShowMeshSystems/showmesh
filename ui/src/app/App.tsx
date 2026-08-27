@@ -132,6 +132,29 @@ export function ScrollToTop() {
   return null
 }
 
+const ROUTE_TITLES: Array<[string, string]> = [
+  ['/', 'Dashboard'],
+  ['/night', 'Show Night'],
+  ['/macros', 'Live Control'],
+  ['/config/show', 'Shows'],
+  ['/assets', 'Assets'],
+  ['/nodes', 'Monitor'],
+  ['/config', 'Settings'],
+]
+
+export function RouteTitle() {
+  const { pathname } = useLocation()
+
+  useEffect(() => {
+    const title = ROUTE_TITLES.find(([prefix]) =>
+      prefix === '/' ? pathname === '/' : pathname === prefix || pathname.startsWith(`${prefix}/`),
+    )?.[1]
+    document.title = title === undefined ? 'ShowMesh Operator' : `${title} · ShowMesh Operator`
+  }, [pathname])
+
+  return null
+}
+
 export default function App() {
   const model = useModel()
 
@@ -139,6 +162,7 @@ export default function App() {
     <ModelContext.Provider value={model}>
       <BrowserRouter>
         <ScrollToTop />
+        <RouteTitle />
         <Routes>
           <Route element={<Layout onSubmitToken={submitToken} />}>
             <Route index element={<Dashboard />} />

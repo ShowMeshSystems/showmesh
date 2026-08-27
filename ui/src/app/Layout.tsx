@@ -136,6 +136,35 @@ const NAV_GROUPS: Array<{
   },
 ]
 
+// The compact route chooser is intentionally limited to the seven paths an
+// operator reaches most often. The complete legacy destination list remains
+// below it in the expandable directory, preserving deep-link discoverability
+// without turning the phone navigation into a wall of tiny tabs.
+const PRIMARY_NAV = [
+  {
+    heading: 'Operate',
+    items: [
+      { to: '/', label: 'Dashboard', end: true },
+      { to: '/night', label: 'Show Night', end: false },
+      { to: '/macros', label: 'Live Control', end: false },
+    ],
+  },
+  {
+    heading: 'Author',
+    items: [
+      { to: '/config/show', label: 'Shows', end: false },
+      { to: '/assets', label: 'Assets', end: false },
+    ],
+  },
+  {
+    heading: 'System',
+    items: [
+      { to: '/nodes', label: 'Monitor', end: false },
+      { to: '/config', label: 'Settings', end: false },
+    ],
+  },
+] as const
+
 // A stable DOM id for each group's link list (aria-controls target), not
 // used for anything else -- lowercased/hyphenated so it stays a valid id
 // across every current and future heading in NAV_GROUPS.
@@ -165,46 +194,58 @@ export function Layout({ onSubmitToken }: LayoutProps) {
 
   return (
     <div className="app-shell">
-      <nav className="app-nav" aria-label="Primary">
-        {NAV_GROUPS.map((group) => {
-          const open = isOpen(group.heading)
-          const linksId = `app-nav__group-links-${slugifyHeading(group.heading)}`
-          return (
-            // The group wrapper AND its links list are both `display:
-            // contents` at phone width (styles/global.css), so every link
-            // stays a direct flex child of the bottom tab bar and that
-            // layout is unaffected by collapsing -- collapsing only takes
-            // effect at the sidebar breakpoint. `data-open` drives that
-            // breakpoint's show/hide rule.
-            <div key={group.heading} className="app-nav__group" data-open={open}>
-              <button
-                type="button"
-                className="app-nav__group-heading"
-                aria-expanded={open}
-                aria-controls={linksId}
-                onClick={() => toggle(group.heading)}
-              >
-                <span>{group.heading}</span>
-                {/* A collapsed group still shows how many links it holds,
-                    so an operator can see there is something in there
-                    rather than reading it as an empty label. */}
-                {!open && <span className="app-nav__group-count">{group.items.length}</span>}
-              </button>
-              <div id={linksId} className="app-nav__group-links">
+      <aside className="app-sidebar">
+        <NavLink to="/" className="app-brand" aria-label="ShowMesh Operator home">
+          <span className="app-brand__mark" aria-hidden="true">SM</span>
+          <span className="app-brand__name">ShowMesh</span>
+          <span className="app-brand__product">Operator</span>
+        </NavLink>
+        <nav className="app-nav app-nav--primary" aria-label="Operator navigation">
+          {PRIMARY_NAV.map((group) => (
+            <section key={group.heading} className="app-nav__primary-group">
+              <h2 className="app-nav__primary-heading">{group.heading}</h2>
+              <div className="app-nav__primary-links">
                 {group.items.map((item) => (
-                  <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
-                    {/* react-router-dom's NavLink sets aria-current="page" on the active
-                        link automatically; styles/global.css's [aria-current='page']
-                        rule uses that rather than a className toggle. */}
+                  <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__primary-link">
                     {item.label}
                   </NavLink>
                 ))}
               </div>
-            </div>
-          )
-        })}
-      </nav>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            </section>
+          ))}
+        </nav>
+        <details className="app-nav__directory">
+          <summary>All destinations</summary>
+          <nav className="app-nav app-nav--directory" aria-label="All destinations">
+            {NAV_GROUPS.map((group) => {
+              const open = isOpen(group.heading)
+              const linksId = `app-nav__group-links-${slugifyHeading(group.heading)}`
+              return (
+                <div key={group.heading} className="app-nav__group" data-open={open}>
+                  <button
+                    type="button"
+                    className="app-nav__group-heading"
+                    aria-expanded={open}
+                    aria-controls={linksId}
+                    onClick={() => toggle(group.heading)}
+                  >
+                    <span>{group.heading}</span>
+                    {!open && <span className="app-nav__group-count">{group.items.length}</span>}
+                  </button>
+                  <div id={linksId} className="app-nav__group-links">
+                    {group.items.map((item) => (
+                      <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </nav>
+        </details>
+      </aside>
+      <div className="app-content">
         <header className="app-header">
           <h1 className="app-header__title">ShowMesh Operator</h1>
           {/* ADR-033 decision 3: the installation-wide operating mode is

@@ -123,6 +123,31 @@ function renderLayout(m: Model, initialPath = '/') {
 }
 
 describe('Layout', () => {
+  it('keeps the compact operator navigation focused on the three working areas', () => {
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+
+    const primary = document.querySelector('.app-nav--primary')
+    expect(primary).not.toBeNull()
+    expect(primary).toHaveTextContent('Operate')
+    expect(primary).toHaveTextContent('Author')
+    expect(primary).toHaveTextContent('System')
+    expect(primary?.querySelector('a[href="/night"]')).toHaveTextContent('Show Night')
+    expect(primary?.querySelector('a[href="/macros"]')).toHaveTextContent('Live Control')
+    expect(primary?.querySelector('a[href="/config/show"]')).toHaveTextContent('Shows')
+    expect(primary?.querySelector('a[href="/assets"]')).toHaveTextContent('Assets')
+    expect(primary?.querySelector('a[href="/nodes"]')).toHaveTextContent('Monitor')
+    expect(primary?.querySelector('a[href="/config"]')).toHaveTextContent('Settings')
+  })
+
+  it('keeps the full legacy directory available without crowding the compact navigation', () => {
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+
+    const directory = document.querySelector('.app-nav__directory')
+    expect(directory).not.toBeNull()
+    expect(directory).toHaveTextContent('All destinations')
+    expect(document.querySelectorAll('a.app-nav__link')).toHaveLength(25)
+  })
+
   // Acceptance criterion 5: an incompatible coordinator produces the
   // explicit error, never a partial render of the normal views.
   it('does not render the underlying view while the API version is incompatible', () => {
@@ -418,8 +443,8 @@ describe('collapsible nav groups', () => {
     // The nav still renders normally -- Show night's own default applies
     // (its group holds the active '/' route here too, so it is open
     // either way) and every link is still reachable.
-    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Macros' })).toBeInTheDocument()
+    expect(document.querySelector('a.app-nav__link[href="/"]')).toBeInTheDocument()
+    expect(document.querySelector('a.app-nav__link[href="/macros"]')).toBeInTheDocument()
 
     getItemSpy.mockRestore()
     setItemSpy.mockRestore()
