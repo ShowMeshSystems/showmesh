@@ -292,49 +292,14 @@ func (h *handlers) handleRenderTransportProbe(w http.ResponseWriter, r *http.Req
 // operator as the NODE having rejected the command, when the coordinator
 // never actually resolved one.
 func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surfaceID, sequenceID string) (map[string]any, *v1.Problem, error) {
-	if h.deps.AssetManifests == nil || h.deps.Config == nil {
-		p := invalidParameterProblem("this coordinator has no asset store or config store wired in; render.surface.apply cannot resolve an assignment")
-		return nil, &p, nil
+	base, problem, err := h.resolveRenderSurfaceBase(ctx, nodeID, surfaceID)
+	if err != nil || problem != nil {
+		return nil, problem, err
 	}
 
-	obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowSurfaceConfigKind, surfaceID)
+	expected, err := assetsync.ExpectedAssetsForNode(ctx, h.deps.AssetManifests, base.Active.ShowID, nodeID)
 	if err != nil {
-		if errors.Is(err, store.ErrConfigObjectNotFound) {
-			p := resourceNotFoundProblem(fmt.Sprintf("surface %q is not a configured show.surface object", surfaceID))
-			return nil, &p, nil
-		}
-		return nil, nil, fmt.Errorf("read show.surface config object %q: %w", surfaceID, err)
-	}
-	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowSurfaceConfigKind, surfaceID, obj.CurrentRevision)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read show.surface config revision for %q: %w", surfaceID, err)
-	}
-	payload, verr := config.DecodeShowSurfacePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
-	if verr != nil {
-		p := invalidParameterProblem(fmt.Sprintf("surface %q has a stored payload that no longer decodes: %s", surfaceID, verr.Detail))
-		return nil, &p, nil
-	}
-	if payload.Node != nodeID {
-		p := invalidParameterProblem(fmt.Sprintf("surface %q is assigned to node %q, not %q", surfaceID, payload.Node, nodeID))
-		return nil, &p, nil
-	}
-
-	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve active show: %w", err)
-	}
-	if !active.Configured {
-		p := invalidParameterProblem("no active show is configured; render.surface.apply has no show to resolve an asset against")
-		return nil, &p, nil
-	}
-	if payload.Show != active.ShowID {
-		p := invalidParameterProblem(fmt.Sprintf("surface %q belongs to show %q, which is not the active show %q", surfaceID, payload.Show, active.ShowID))
-		return nil, &p, nil
-	}
-
-	expected, err := assetsync.ExpectedAssetsForNode(ctx, h.deps.AssetManifests, active.ShowID, nodeID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve expected assets for node %q in show %q: %w", nodeID, active.ShowID, err)
+		return nil, nil, fmt.Errorf("resolve expected assets for node %q in show %q: %w", nodeID, base.Active.ShowID, err)
 	}
 	var matches []assetsync.ExpectedAsset
 	for _, a := range expected.Assets {
@@ -344,34 +309,20 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 	}
 	switch len(matches) {
 	case 0:
-		p := invalidParameterProblem(fmt.Sprintf("no asset found for surface %q (sequence %q) in show %q", surfaceID, sequenceID, active.ShowID))
+		p := invalidParameterProblem(fmt.Sprintf("no asset found for surface %q (sequence %q) in show %q", surfaceID, sequenceID, base.Active.ShowID))
 		return nil, &p, nil
 	default:
 		if len(matches) > 1 {
-			p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(matches), sequenceID, nodeID, active.ShowID))
+			p := invalidParameterProblem(fmt.Sprintf("ambiguous: %d current assets match sequence %q for node %q in show %q; cannot resolve one FSEQ to assign", len(matches), sequenceID, nodeID, base.Active.ShowID))
 			return nil, &p, nil
 		}
 	}
 	asset := matches[0]
 
-	// render.settings.idleOutput is resolved to a CONCRETE value here, at
-	// dispatch time, through the same [resolveRenderSettings] every other
-	// reader uses (rendersettings.go) — the node is told a resolved value
-	// and never has to know the coordinator's own default (build contract
-	// ruling 4: the assignment is complete and self-contained). A
-	// resolution error is treated the same as this function's other
-	// internal-error paths (return nil, nil, rendered as a 500 by the
-	// caller): render.settings' own store being unavailable is not a bad
-	// request.
-	settings, _, err := resolveRenderSettings(ctx, h.deps.Config)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve render.settings: %w", err)
-	}
-
 	raw, err := json.Marshal(renderApplyParamsPayload{
-		SurfaceID: surfaceID, Show: payload.Show, Name: payload.Name, Node: payload.Node,
-		ChannelRange: payload.ChannelRange, Geometry: payload.Geometry, FrameRate: payload.FrameRate, Output: payload.Output,
-		FSEQFilename: asset.Filename, FSEQContentHash: asset.ContentHash, IdleOutput: settings.IdleOutput,
+		SurfaceID: surfaceID, Show: base.Payload.Show, Name: base.Payload.Name, Node: base.Payload.Node,
+		ChannelRange: base.Payload.ChannelRange, Geometry: base.Payload.Geometry, FrameRate: base.Payload.FrameRate, Output: base.Payload.Output,
+		FSEQFilename: asset.Filename, FSEQContentHash: asset.ContentHash, IdleOutput: base.IdleOutput,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode render.surface.apply params: %w", err)
@@ -381,6 +332,191 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 		return nil, nil, fmt.Errorf("decode render.surface.apply params back into a map: %w", err)
 	}
 	return params, nil, nil
+}
+
+// renderSurfaceBase is [handlers.resolveRenderSurfaceBase]'s result: the
+// resolution render.surface.apply's own asset-and-sequence step and SM-281
+// half-two's own catalog-deploy establishment (resolveRenderEstablishParams,
+// below) share in full — everything render.surface.apply's params need
+// EXCEPT a resolved FSEQ, which only the former ever adds on top.
+type renderSurfaceBase struct {
+	Payload    config.ShowSurfacePayload
+	Active     assetsync.ActiveShow
+	IdleOutput string
+}
+
+// resolveRenderSurfaceBase is resolveRenderApplyParams and
+// resolveRenderEstablishParams's shared resolution: surfaceID's own
+// show.surface config (validated against nodeID), the active show it must
+// belong to, and render.settings.idleOutput resolved to a concrete value
+// (rendersettings.go) — the node is told a resolved value and never has to
+// know the coordinator's own default (build contract ruling 4). Split out
+// of what was previously resolveRenderApplyParams' own body so
+// establishment reuses this EXACT resolution rather than a second one —
+// the only thing that ever differs between an apply and an establishment
+// is whether a sequence is resolved to an FSEQ on top of it.
+//
+// Same three-shape result resolveRenderApplyParams documents: (base, nil,
+// nil) on success; (zero, problem, nil) when the CALLER's own request
+// cannot be resolved; (zero, nil, err) when this coordinator failed to
+// read its own store.
+func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surfaceID string) (renderSurfaceBase, *v1.Problem, error) {
+	if h.deps.AssetManifests == nil || h.deps.Config == nil {
+		p := invalidParameterProblem("this coordinator has no asset store or config store wired in; render.surface.apply cannot resolve an assignment")
+		return renderSurfaceBase{}, &p, nil
+	}
+
+	obj, err := h.deps.Config.GetConfigObject(ctx, config.ShowSurfaceConfigKind, surfaceID)
+	if err != nil {
+		if errors.Is(err, store.ErrConfigObjectNotFound) {
+			p := resourceNotFoundProblem(fmt.Sprintf("surface %q is not a configured show.surface object", surfaceID))
+			return renderSurfaceBase{}, &p, nil
+		}
+		return renderSurfaceBase{}, nil, fmt.Errorf("read show.surface config object %q: %w", surfaceID, err)
+	}
+	rev, err := h.deps.Config.GetConfigRevision(ctx, config.ShowSurfaceConfigKind, surfaceID, obj.CurrentRevision)
+	if err != nil {
+		return renderSurfaceBase{}, nil, fmt.Errorf("read show.surface config revision for %q: %w", surfaceID, err)
+	}
+	payload, verr := config.DecodeShowSurfacePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
+	if verr != nil {
+		p := invalidParameterProblem(fmt.Sprintf("surface %q has a stored payload that no longer decodes: %s", surfaceID, verr.Detail))
+		return renderSurfaceBase{}, &p, nil
+	}
+	if payload.Node != nodeID {
+		p := invalidParameterProblem(fmt.Sprintf("surface %q is assigned to node %q, not %q", surfaceID, payload.Node, nodeID))
+		return renderSurfaceBase{}, &p, nil
+	}
+
+	active, err := assetsync.ResolveActiveShow(ctx, h.deps.AssetManifests)
+	if err != nil {
+		return renderSurfaceBase{}, nil, fmt.Errorf("resolve active show: %w", err)
+	}
+	if !active.Configured {
+		p := invalidParameterProblem("no active show is configured; render.surface.apply has no show to resolve an assignment against")
+		return renderSurfaceBase{}, &p, nil
+	}
+	if payload.Show != active.ShowID {
+		p := invalidParameterProblem(fmt.Sprintf("surface %q belongs to show %q, which is not the active show %q", surfaceID, payload.Show, active.ShowID))
+		return renderSurfaceBase{}, &p, nil
+	}
+
+	settings, _, err := resolveRenderSettings(ctx, h.deps.Config)
+	if err != nil {
+		return renderSurfaceBase{}, nil, fmt.Errorf("resolve render.settings: %w", err)
+	}
+
+	return renderSurfaceBase{Payload: payload, Active: active, IdleOutput: settings.IdleOutput}, nil, nil
+}
+
+// renderEstablishParamsPayload is render.surface.apply's params for a
+// catalog-deploy-triggered ESTABLISHMENT (SM-281 half-two): the same
+// resolution renderApplyParamsPayload marshals, minus the two FSEQ fields
+// — there is no sequence to resolve one against — plus the H3
+// authorization tuple (generation, catalogRevision; "show" is already
+// present) so a later boot resumes this exact assignment
+// ([decideBootResume], internal/agent/bootresume.go) instead of discarding
+// it the way any other unauthenticated apply already would.
+//
+// Omitting fseqFilename/fseqContentHash entirely (never sending them
+// empty) is what makes this a valid render.surface.apply request at all:
+// [renderApplyKnownKeys]' own doc comment (internal/agent/renderops.go)
+// already states "an assignment with no FSEQ information is still a valid
+// request," and buildFSEQAssignment's ok==false branch is exactly the
+// "declared, no content yet" state this half needed and did not have to
+// invent — the agent falls back to its own test-pattern pipeline with no
+// frame writer, which is what draws render.settings.idleOutput until the
+// first activateSurfaceRender (internal/agent/cueactivationrender.go)
+// swaps a real FSEQ onto it.
+type renderEstablishParamsPayload struct {
+	SurfaceID       string                         `json:"surfaceId"`
+	Show            string                         `json:"show"`
+	Name            string                         `json:"name"`
+	Node            string                         `json:"node"`
+	ChannelRange    config.ShowSurfaceChannelRange `json:"channelRange"`
+	Geometry        config.ShowSurfaceGeometry     `json:"geometry"`
+	FrameRate       int                            `json:"frameRate"`
+	Output          config.ShowSurfaceOutput       `json:"output"`
+	IdleOutput      string                         `json:"idleOutput"`
+	Generation      int64                          `json:"generation"`
+	CatalogRevision string                         `json:"catalogRevision"`
+}
+
+// resolveRenderEstablishParams builds render.surface.apply's params for
+// establishing surfaceID's assignment with NO sequence selected —
+// cuecatalogdeploy.go's own establishRenderAssignments calls this once per
+// show.surface a confirmed cuecatalog.deploy covers. generation and
+// catalogRevision are the JUST-DEPLOYED catalog's own identity (never
+// re-derived here), so the persisted assignment's authorization tuple
+// matches exactly what the node holds.
+//
+// Reuses [handlers.resolveRenderSurfaceBase] — the identical show.surface/
+// active-show/idleOutput resolution render.surface.apply performs — rather
+// than a second resolution; see that function's own doc comment.
+func (h *handlers) resolveRenderEstablishParams(ctx context.Context, nodeID, surfaceID string, generation int64, catalogRevision string) (map[string]any, *v1.Problem, error) {
+	base, problem, err := h.resolveRenderSurfaceBase(ctx, nodeID, surfaceID)
+	if err != nil || problem != nil {
+		return nil, problem, err
+	}
+
+	raw, err := json.Marshal(renderEstablishParamsPayload{
+		SurfaceID: surfaceID, Show: base.Payload.Show, Name: base.Payload.Name, Node: base.Payload.Node,
+		ChannelRange: base.Payload.ChannelRange, Geometry: base.Payload.Geometry, FrameRate: base.Payload.FrameRate, Output: base.Payload.Output,
+		IdleOutput: base.IdleOutput, Generation: generation, CatalogRevision: catalogRevision,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode render.surface.apply establishment params: %w", err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil, nil, fmt.Errorf("decode render.surface.apply establishment params back into a map: %w", err)
+	}
+	return params, nil, nil
+}
+
+// renderSurfaceCurrentlyAssigned reports whether nodeID's own
+// surface.pipeline.state evidence for surfaceID is current — i.e. whether
+// [nodeHoldsRenderAssignment] (internal/coordinator/fppreconcile/
+// readiness.go) would already report this node as holding a render
+// assignment for it. establishRenderAssignment (cuecatalogdeploy.go) skips
+// dispatching to any surface this reports true for: a catalog CAN be
+// redeployed to a node with a surface already rendering real, cue-
+// activated content — an operator adding a Cue mid-show, not only a
+// post-reboot recovery — and unconditionally re-dispatching
+// render.surface.apply with no sequence would blow that surface's real
+// assignment away and replace it with an idle test pattern. Establishment
+// exists only to fill the gap [ReadinessNodeRenderUnassigned] reports,
+// never to touch a surface that is not in that gap.
+//
+// Reimplements nodeHoldsRenderAssignment's own value-bearing-evidence
+// check rather than importing fppreconcile (this package already mirrors
+// that package's renderSignalPipelineState/renderNodeSourceFor
+// independently — evaluateRenderSurfaceState's own doc comment states the
+// same each-side-of-a-layering-boundary convention). Narrowed to the one
+// question establishment needs: current, non-absent evidence exists at
+// all, regardless of which pipeline state it names — an idle test-pattern
+// "running" counts exactly the same as a real one.
+func (h *handlers) renderSurfaceCurrentlyAssigned(ctx context.Context, nodeID, surfaceID string) (bool, error) {
+	if h.deps.Observations == nil {
+		return false, nil
+	}
+	kind := observation.ResourceSurface
+	sig := observation.SignalID(renderSignalPipelineState)
+	wantSource := renderNodeSourceFor(nodeID)
+	obs, err := h.deps.Observations.ListObservations(ctx, ObservationFilter{ResourceKind: &kind, ResourceID: &surfaceID, Signal: &sig})
+	if err != nil {
+		return false, fmt.Errorf("read surface.pipeline.state for surface %q: %w", surfaceID, err)
+	}
+	for _, o := range obs {
+		if o.Resource.Kind != kind || o.Resource.ID != surfaceID || o.Signal != sig || o.Source != wantSource {
+			continue
+		}
+		if o.Absence != "" {
+			return false, nil
+		}
+		return o.StateAt(h.now()) == observation.StateCurrent, nil
+	}
+	return false, nil
 }
 
 // renderApplyParamsPayload's JSON key set matches

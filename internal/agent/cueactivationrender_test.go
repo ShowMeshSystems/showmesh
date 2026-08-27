@@ -100,6 +100,156 @@ func TestActivateRenderSwapsFSEQ(t *testing.T) {
 	}
 }
 
+// establishApplyParams builds a render.surface.apply params map carrying
+// NO fseqFilename/fseqContentHash — SM-281 half-two's own "declared, no
+// content yet" shape a catalog-deploy-triggered establishment sends
+// (internal/coordinator/api/renderdispatch.go's
+// resolveRenderEstablishParams), including the H3 authorization tuple so
+// the resulting persisted assignment is one activateSurfaceRender can
+// later swap an FSEQ onto. Unlike fseqApplyParams (renderfseq_test.go),
+// channelRange/geometry/frameRate are NOT validated at establishment time
+// (buildFSEQAssignment's ok==false branch never looks at them — see that
+// function's own doc comment), but they are still included and persisted
+// here: a LATER activateSurfaceRender re-validates them once a real
+// fseqFilename is merged in, and this is the one place that first has to
+// supply them.
+func establishApplyParams(surfaceID, show string, generation int64, catalogRevision string, startChannel1Based, channelCount, width, height int, pixelFormat string, frameRate int) map[string]any {
+	return map[string]any{
+		"surfaceId": surfaceID,
+		"show":      show,
+		"channelRange": map[string]any{
+			"startChannel": float64(startChannel1Based),
+			"channelCount": float64(channelCount),
+		},
+		"geometry": map[string]any{
+			"width":       float64(width),
+			"height":      float64(height),
+			"pixelFormat": pixelFormat,
+		},
+		"frameRate":       float64(frameRate),
+		"idleOutput":      pipeline.IdleOutputBlack,
+		"generation":      float64(generation),
+		"catalogRevision": catalogRevision,
+	}
+}
+
+// TestActivateRenderSucceedsOnAnEstablishedNoSequenceAssignment is SM-281
+// half-two's own acceptance proof at the agent unit-test level, using the
+// SAME production code its coordinator-side fix invokes over MQTT
+// (render.surface.apply, applySurface — renderops.go) rather than a mock
+// of it: the exact defect this half closes was that NOTHING ever created a
+// node's persisted render assignment except a manual, sequence-carrying
+// render.surface.apply, so a rebooted node (ADR-043 H0.7 clears
+// assignments at boot) had nothing for its first cue activation to
+// activate onto until an operator remembered to apply one by hand.
+//
+// First reproduces that defect directly (a completely fresh node — no
+// assignment, exactly the post-reboot state — refuses a cue activation
+// with the exact stated reason), then proves establishing the assignment
+// with NO sequence selected (exactly what cuecatalogdeploy.go's
+// establishRenderAssignments now dispatches on every confirmed
+// cuecatalog.deploy) is sufficient on its own for the SAME activation to
+// then succeed, swapping in the Cue's resolved FSEQ — activateSurfaceRender
+// itself is unmodified by this half; this proves it needed nothing more
+// than what establishment now supplies.
+func TestActivateRenderSucceedsOnAnEstablishedNoSequenceAssignment(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}
+	sup := newRenderTestSupervisor(t, clock)
+	assignmentStore := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, assignmentStore, dir, clock)
+
+	newPath := writeSynthFSEQ(t, dir, "new.fseq", cueActivationRenderChannelCount, 10, 25)
+	newHash, err := hashFile(newPath)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+
+	catalogStore := heldcatalog.NewFileStore(dir)
+	entry := cuecatalog.Entry{
+		CueID: "cue-2", CueRevision: 1,
+		Outputs: cuecatalog.Outputs{
+			Render: &cuecatalog.RenderOutput{Sequence: "seq-new", Filename: "new.fseq", AssetHashes: []string{newHash}},
+		},
+	}
+	saveHeld(t, catalogStore, "halloween-2026", 3, "rev-a", []cuecatalog.Entry{entry})
+
+	op := &cueActivationOperation{assetDir: dir, catalogStore: catalogStore, render: renderOps}
+	act := testActivation("act-render-establish", "cue-2", 1, "halloween-2026", 3, "rev-a", 0)
+
+	// --- THE REPRODUCTION: a completely fresh node (no assignment at
+	// all — the post-reboot state) refuses the activation outright,
+	// naming the exact defect this half closes. ---
+	before, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate on a node with no assignment at all: unexpected error: %v", err)
+	}
+	if before.Confirmed {
+		t.Fatalf("activate on a node with no assignment at all: Confirmed = true, want false")
+	}
+	value, ok := before.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("activate result Value = %#v (%T), want a map", before.Value, before.Value)
+	}
+	reasons, _ := value["reasons"].([]string)
+	if len(reasons) != 1 || reasons[0] != `cue.activate: no surface is currently assigned on this node; nothing to activate Cue "cue-2"'s render output onto` {
+		t.Fatalf("activate refusal reasons = %#v, want exactly the no-assignment refusal", value["reasons"])
+	}
+
+	// --- establish, with NO sequence selected — exactly what a confirmed
+	// cuecatalog.deploy now dispatches. ---
+	establishParams := establishApplyParams("surface-1", "halloween-2026", 3, "rev-a", 1, cueActivationRenderChannelCount, 2, 2, "rgb", 40)
+	if _, err := renderOps.applySurface(context.Background(), establishParams, clock.now); err != nil {
+		t.Fatalf("establish (applySurface with no sequence): %v", err)
+	}
+
+	// The established assignment carries no FSEQ — nothing for
+	// activateRender to have swapped away from, unlike
+	// TestActivateRenderSwapsFSEQ's setupActivatedSurface.
+	established, err := assignmentStore.Load()
+	if err != nil {
+		t.Fatalf("reloading assignments after establish: %v", err)
+	}
+	if len(established) != 1 {
+		t.Fatalf("persisted assignments after establish = %+v, want exactly one", established)
+	}
+	var establishedParams map[string]any
+	if err := json.Unmarshal(established[0].RawParams, &establishedParams); err != nil {
+		t.Fatalf("decoding persisted establish params: %v", err)
+	}
+	if _, has := establishedParams["fseqFilename"]; has {
+		t.Fatalf("persisted establish params = %+v, want no fseqFilename key at all", establishedParams)
+	}
+
+	// --- the SAME activation that was refused a moment ago now succeeds
+	// on top of nothing but the establishment above. ---
+	result, err := op.activate(context.Background(), activationParams(t, act), clock.now)
+	if err != nil {
+		t.Fatalf("activate after establishment: %v", err)
+	}
+	if !result.Confirmed {
+		t.Fatalf("activate after establishment did not confirm: %+v", result)
+	}
+
+	reloaded, err := assignmentStore.Load()
+	if err != nil {
+		t.Fatalf("reloading assignments after activation: %v", err)
+	}
+	if len(reloaded) != 1 {
+		t.Fatalf("persisted assignments after activation = %+v, want exactly one", reloaded)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(reloaded[0].RawParams, &params); err != nil {
+		t.Fatalf("decoding persisted params: %v", err)
+	}
+	if params["fseqFilename"] != "new.fseq" {
+		t.Fatalf("persisted fseqFilename = %v, want new.fseq", params["fseqFilename"])
+	}
+	if params["fseqContentHash"] != newHash {
+		t.Fatalf("persisted fseqContentHash = %v, want %s", params["fseqContentHash"], newHash)
+	}
+}
+
 // TestActivateRenderBadNewFSEQLeavesOldRunningWithStatedFailure proves the
 // "validate before stopping the old writer" ordering this seam's own
 // cueactivationrender.go doc comment states: a new FSEQ whose content hash
