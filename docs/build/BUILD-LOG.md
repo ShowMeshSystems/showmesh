@@ -40,6 +40,22 @@ The **Current state** block at the top of this file is overwritten each session:
 > after the 28 August landing) and `dev/multi-audio` (Lane 20's ADR-045 and
 > schema v20).
 >
+> **CI on `main` at `629754e` is red, on two known pre-existing failures, neither
+> caused by these merges.** `test (1.26.6)` failed on the audio engine's
+> `TestCloseTearsDownThreeConcurrentPlayingBranches` with the deferred-teardown
+> warnings that SM-252 describes; nothing in `6da29d6..629754e` touches
+> `internal/agent/audio`. `integration` was killed by its own timeout at 9m0s
+> while still running tests, with **zero assertion failures**, which is the same
+> gate-under-its-own-ceiling failure recorded against unmodified `main` the day
+> before. The same instability shows on other branches with different tests on
+> different legs: pull request #169's run passed `test (1.26.6)` and failed
+> `test (1.25.0)` on `TestLTCResumeRealignsAudioToNewPosition`, on a diff that
+> changes one test file, a shell comment and a Makefile comment. Both need
+> owner decisions rather than a fix chosen here: the audio-engine teardown flake
+> is filed and carries a `Needs decision` label, and the integration timeout was
+> deliberately closed as not worth fixing when it was believed to be a build-VM
+> problem, before it started failing on GitHub's own runners.
+>
 > **Track H has H1 through H6 merged, and H7's defect list is now closed
 > except for three follow-ups.** The chain was assembled and run end to end for
 > the first time on 2026-08-26, on a containerized FPP 10.0, a coordinator and a
