@@ -54,7 +54,11 @@ The **Current state** block at the top of this file is overwritten each session:
 > owner decisions rather than a fix chosen here: the audio-engine teardown flake
 > is filed and carries a `Needs decision` label, and the integration timeout was
 > deliberately closed as not worth fixing when it was believed to be a build-VM
-> problem, before it started failing on GitHub's own runners.
+> problem, before it started failing on GitHub's own runners. One half of that
+> integration failure now has a fix open as pull request #171 and **not yet on
+> `main`**: the suite built its three binaries inside its own 8m timeout, and
+> that build has moved into the scripts ahead of the clock. See the 2026-08-27
+> entry below.
 >
 > **Track H has H1 through H6 merged, and H7's defect list is now closed
 > except for three follow-ups.** The chain was assembled and run end to end for
@@ -123,6 +127,86 @@ The **Current state** block at the top of this file is overwritten each session:
 > **Browser click-through for the Operator UI fold was collected for one pull request only.** PR #91 (node detail evidence panel) was exercised against the local compose stack at `f102ae6`. Every other pull request in the fold records "not exercised in a browser": the local stack has no audio node, no audio session, no configured cues and no `audio.settings` revision, so those screens' paths are unreachable there. **Nothing in this fold, or in any earlier fold recorded above, ran on real hardware, on a deployed fleet, or against a real Resolume Arena.** Bench and hardware acceptance for the Operator UI fold's screens is tracked separately as SM-253, SM-254, SM-255 and SM-269. The Operator UI parity audit (SM-242) classified 144 API operations and found 41 gaps (20 show-night, 12 authoring, 10 admin); readability is tracked as SM-241; gap issues SM-243 through SM-249 are Done; follow-ups SM-250, SM-251, SM-252, SM-256, SM-257, SM-258, SM-259, SM-268, SM-270 and SM-271 are filed.
 >
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
+
+---
+
+## 2026-08-27 (the integration gate builds its binaries before its own timeout starts; open as #171, not on `main`)
+
+**Goal:** stop `make test-integration` failing with zero assertion failures on a
+loaded machine, so the gate again distinguishes a real hang from a busy host.
+
+**The defect.** `test/integration`'s `TestMain` shelled out to `go build` three
+times, for `showmesh-agent` with cgo, `showmesh-coordinator` and `showmeshctl`,
+after `go test -timeout=8m` had already started its clock. On a cold cache those
+builds cost about three minutes of the eight minute budget, measured on the
+GitHub runner. The suite then timed out on a loaded build
+host and in GitHub Actions with **zero assertion failures**, which is the
+`integration` leg failure recorded against unmodified `main` in the Current state
+block above.
+
+**Completed** (one commit, `77264b4`, three files):
+
+- `scripts/test-integration.sh` builds all three binaries into a `mktemp -d`
+  before the broker container starts, so a compile error fails fast without
+  touching Docker, and exports `SHOWMESH_TEST_AGENT_BIN`,
+  `SHOWMESH_TEST_COORDINATOR_BIN` and `SHOWMESH_TEST_SHOWMESHCTL_BIN`. Its
+  `cleanup()` trap removes the directory.
+- `scripts/test-integration-fpp.sh` does the same for its own
+  `./test/integration/...` invocation under its 20m timeout.
+- `test/integration/harness_test.go` gains `resolveBinary`. A variable that is
+  set and names an executable file is used as given, with no cleanup function,
+  because the caller owns the file. A variable that is set but names a missing or
+  non-executable path is a hard error. A variable that is unset falls back to the
+  existing `buildBinary` unchanged, so a bare
+  `go test -tags=integration ./test/integration/...` still works.
+
+**Decisions made:**
+
+- **`-timeout=8m` is deliberately unchanged.** A genuine hang must still fail
+  this gate rather than be absorbed by a larger limit. The fix moves the build
+  out of the window; it does not widen the window.
+- **A supplied path that is wrong is a hard error, never a silent fallback.**
+  Falling back to a build would hide the misconfiguration and reintroduce the
+  cost inside the timeout; falling back to whatever is on disk would test a stale
+  binary.
+- **Both scripts pin `CGO_ENABLED` per binary rather than inheriting it**,
+  matching the reasoning already in `buildEnvWithCGO`: ADR-042 requires the agent
+  to link the real GStreamer/libltc engine, and ADR-012 requires the coordinator
+  to build CGo-free. An inherited value would silently produce the wrong agent.
+
+**Deferred:** the work is on a branch and open as pull request #171. It is **not
+on `main`**, and the `integration` leg on `main` is still red for the reason
+described in Current state.
+
+**Verification gates**, all at `77264b4`:
+
+- `make check` passed. An earlier run of it failed on
+  `TestFadeHeldByStopStaysActive` in `internal/agent/audio/gstengine`, a package
+  this change does not touch; that package passed in isolation on `main` and
+  passed on the re-run, so it is read as a flake rather than a regression.
+- `make test-integration` passed: 72 passed, 13 skipped, 0 failed, with `go test`
+  reporting 340.5s against the unchanged 8m budget and 356s total wall. It was
+  run with `SHOWMESH_TEST_FPP_URL` pointed at an unreachable address to isolate
+  it from an unrelated `fppd` container already holding port 8090 on the build
+  machine, which is why the 13 FPP-dependent tests skipped.
+- `gofmt -l` clean, `go vet -tags=integration ./test/integration/...` clean, and
+  `bash -n` plus `shellcheck` clean on both scripts, with only pre-existing
+  SC2155 warnings on untouched lines.
+- The fallback path was exercised with all three variables unset. The hard-error
+  path was exercised with `SHOWMESH_TEST_AGENT_BIN=/nonexistent`, which exits in
+  0.4s naming the variable and the reason.
+- All twelve GitHub checks on `77264b4` passed, including `integration` and
+  `test-integration-fpp`, the two legs this change touches. In the `integration`
+  job the prebuild step, module downloads plus the three binaries on a cold
+  cache, took 2m29.8s, and every second of it now falls outside the timeout.
+  `go test` then reported 310.194s against the unchanged 480s budget, roughly
+  170s of headroom where the same suite previously did not finish inside it. The
+  job as a whole went from about 11m30s and failing to 8m52s and passing.
+
+**Unverified:** nothing material remains. The earlier acceptance gaps closed on
+the CI run described above: it supplied the cold-cache measurement this laptop's
+warm cache could not, and it exercised `scripts/test-integration-fpp.sh` end to
+end rather than only under `bash -n` and `shellcheck`.
 
 ---
 

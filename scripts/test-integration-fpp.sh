@@ -230,14 +230,35 @@ MOSQUITTO_IMAGE="eclipse-mosquitto:2.0.22"
 FPP_MOSQUITTO_CONTAINER="${SHOWMESH_TEST_FPP_MOSQUITTO_CONTAINER:-showmesh-test-mosquitto-fpp}"
 FPP_MOSQUITTO_PORT="${SHOWMESH_TEST_FPP_MQTT_PORT:-11893}"
 
+FPP_BIN_DIR="$(mktemp -d)"
+
 cleanup_fpp_mosquitto() {
   docker rm -f "$FPP_MOSQUITTO_CONTAINER" >/dev/null 2>&1 || true
+  rm -rf "$FPP_BIN_DIR"
 }
 trap cleanup_fpp_mosquitto EXIT
 
 # In case a previous run of this script was interrupted before its own
-# cleanup ran.
-cleanup_fpp_mosquitto
+# cleanup ran. Only the container: calling cleanup_fpp_mosquitto here
+# would delete the bin dir this run just created, leaving the builds below
+# to recreate it with different permissions than mktemp chose.
+docker rm -f "$FPP_MOSQUITTO_CONTAINER" >/dev/null 2>&1 || true
+
+# Built here rather than left to test/integration/harness_test.go's own
+# TestMain, for the identical reason test-integration.sh now does this:
+# the -timeout below covers everything TestMain does, and a cold-cache
+# `go build` for these three binaries competes with the tests for that
+# budget. CGO_ENABLED is pinned per binary rather than inherited, matching
+# buildEnvWithCGO's own reasoning in harness_test.go: ADR-042 requires the
+# agent link the real cgo GStreamer/libltc engine, and ADR-012 requires the
+# coordinator (and showmeshctl, which needs no cgo either) build CGo-free.
+echo "test-integration-fpp: prebuilding showmesh-agent, showmesh-coordinator, and showmeshctl"
+CGO_ENABLED=1 go build -o "$FPP_BIN_DIR/showmesh-agent" ./cmd/showmesh-agent
+CGO_ENABLED=0 go build -o "$FPP_BIN_DIR/showmesh-coordinator" ./cmd/showmesh-coordinator
+CGO_ENABLED=0 go build -o "$FPP_BIN_DIR/showmeshctl" ./cmd/showmeshctl
+export SHOWMESH_TEST_AGENT_BIN="$FPP_BIN_DIR/showmesh-agent"
+export SHOWMESH_TEST_COORDINATOR_BIN="$FPP_BIN_DIR/showmesh-coordinator"
+export SHOWMESH_TEST_SHOWMESHCTL_BIN="$FPP_BIN_DIR/showmeshctl"
 
 # ADR-024 decision 10 (Step 6): the shipped mosquitto.conf sets
 # allow_anonymous false and requires both password_file and acl_file to
