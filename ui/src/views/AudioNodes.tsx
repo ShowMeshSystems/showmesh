@@ -5,6 +5,7 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import type { ConfigObjectSummary } from '../app/types'
+import type { Node } from '../app/types'
 
 // ADR-018/ADR-039: the audio.node object list. `config:write` gates both
 // reads and writes alike, matching audio.node's own GET/PUT (no separate
@@ -15,6 +16,18 @@ type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; objects: ConfigObjectSummary[] }
+
+function capabilityRoutes(node: Node | undefined, capabilityId: string): string[] {
+  const capability = node?.capabilities.find((candidate) => candidate.id === capabilityId)
+  const routes = capability?.attributes?.routes
+  return Array.isArray(routes) ? routes.filter((route): route is string => typeof route === 'string') : []
+}
+
+function nodeStatus(node: Node | undefined, connectionKind: string): string {
+  if (connectionKind !== 'live') return `Disconnected: API ${connectionKind}`
+  if (node === undefined) return 'Disconnected: no live evidence'
+  return node.controlPlane.state === 'online' ? 'Online' : `Disconnected: ${node.controlPlane.state}`
+}
 
 export function AudioNodes() {
   const model = useModelContext()
@@ -41,7 +54,8 @@ export function AudioNodes() {
   }, [scopeGate.allowed])
 
   return (
-    <div>
+    <div className="operator-page audio-nodes-page">
+      <p className="settings-breadcrumb"><a href="/config">Settings</a> / Audio routing</p>
       <div
         style={{
           display: 'flex',
@@ -86,31 +100,46 @@ export function AudioNodes() {
       {scopeGate.allowed && state.kind === 'loaded' && (
         <>
           {state.objects.length === 0 ? (
-            <p className="text-muted">No audio.node object is configured yet.</p>
+            <p className="text-muted">No audio.node object is configured yet. No audio node is configured.</p>
           ) : (
             <div className="table-scroll">
-              <table className="config-table">
+              <table className="config-table" aria-label="Configured audio nodes">
                 <thead>
                   <tr>
-                    <th>Node id</th>
-                    <th>Program route</th>
-                    <th>Revision</th>
-                    <th>Updated</th>
+                    <th scope="col">Node id</th>
+                    <th scope="col">Node status</th>
+                    <th scope="col">Program interfaces</th>
+                    <th scope="col">LTC interfaces</th>
+                    <th scope="col">Revision</th>
+                    <th scope="col">Updated</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {state.objects.map((obj) => (
-                    <tr key={obj.id}>
-                      <td>
-                        <Link className="entity-link" to={`/config/audio.node/${encodeURIComponent(obj.id)}`}>
-                          {obj.id}
-                        </Link>
-                      </td>
-                      <td>{obj.label}</td>
-                      <td>{obj.currentRevision}</td>
-                      <td>{formatAbsolute(obj.updatedAt)}</td>
-                    </tr>
-                  ))}
+                  {state.objects.map((obj) => {
+                    const node = model.nodes.find((candidate) => candidate.nodeId === obj.id)
+                    const programRoutes = capabilityRoutes(node, 'audio.output.local')
+                    const ltcRoutes = capabilityRoutes(node, 'audio.output.ltc')
+                    return (
+                      <tr key={obj.id}>
+                        <td>
+                          <Link className="entity-link" to={`/config/audio.node/${encodeURIComponent(obj.id)}`}>
+                            {obj.id}
+                          </Link>
+                        </td>
+                        <td>{nodeStatus(node, model.connection.kind)}</td>
+                        <td>
+                          {programRoutes.length > 0 ? (
+                            programRoutes.join(', ')
+                          ) : (
+                            <>Unavailable from API (configured: <span>{obj.label}</span>)</>
+                          )}
+                        </td>
+                        <td>{ltcRoutes.length > 0 ? ltcRoutes.join(', ') : 'Unavailable from API'}</td>
+                        <td>{obj.currentRevision}</td>
+                        <td>{formatAbsolute(obj.updatedAt)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

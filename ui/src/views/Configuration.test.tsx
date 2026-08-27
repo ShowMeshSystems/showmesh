@@ -542,9 +542,9 @@ describe('Configuration', () => {
   })
 
   // Readability seam: a section index at the top of the page links to
-  // every top-level section (the four configuration kinds plus render
-  // settings and show mode), so reaching one no longer requires scrolling
-  // past the others.
+  // every top-level section (the four configuration kinds plus render,
+  // show-mode, and audio settings destinations), so reaching one no longer
+  // requires scrolling past the others or opening another navigation column.
   it('renders a section index linking to every top-level section', () => {
     renderConfiguration(makeModel({ session: adminSession }))
 
@@ -567,6 +567,14 @@ describe('Configuration', () => {
       '#render-settings',
     )
     expect(within(nav).getByRole('link', { name: 'Show mode' })).toHaveAttribute('href', '#show-mode')
+    expect(within(nav).getByRole('link', { name: 'Audio defaults' })).toHaveAttribute(
+      'href',
+      '/config/audio.settings',
+    )
+    expect(within(nav).getByRole('link', { name: 'Audio routing' })).toHaveAttribute(
+      'href',
+      '/config/audio.node',
+    )
   })
 
   // Readability seam: the restart-required notice (currently always "no

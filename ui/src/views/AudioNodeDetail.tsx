@@ -62,32 +62,75 @@ function attributeRoutes(attributes: Record<string, unknown> | undefined): strin
 }
 
 /**
- * The route names this node has actually advertised as BOTH
- * audio.output.local- and audio.output.ltc-capable -- the only names a
- * `PUT` naming them as programRoute/ltcRoute can succeed with, since the
- * coordinator refuses a route neither capability names AND refuses
- * programRoute/ltcRoute disagreeing with each other (api/openapi.yaml's
- * PUT /config/audio.node/{id} description). Driving the picker from this
- * intersection, rather than a free text field, is what keeps an operator
- * from ever typing a route this node cannot actually place audio on.
+ * Program and LTC route names come from their distinct capability
+ * advertisements. The coordinator requires both names to match when LTC is
+ * enabled, so the LTC picker is narrowed to the selected program route below.
+ * A program-only node can still use a program-capable route that is not LTC
+ * capable.
  */
-function advertisedRoutes(node: Node | undefined): string[] {
-  if (node === undefined) return []
-  const local = node.capabilities.find((c) => c.id === 'audio.output.local')
-  const ltc = node.capabilities.find((c) => c.id === 'audio.output.ltc')
-  const localRoutes = attributeRoutes(local?.attributes as Record<string, unknown> | undefined)
-  const ltcRoutes = attributeRoutes(ltc?.attributes as Record<string, unknown> | undefined)
-  return localRoutes.filter((r) => ltcRoutes.includes(r))
+function capabilityAttributes(node: Node | undefined, id: string): Record<string, unknown> | undefined {
+  const capability = node?.capabilities.find((candidate) => candidate.id === id)
+  return capability?.attributes as Record<string, unknown> | undefined
+}
+
+function advertisedRoutes(node: Node | undefined, capabilityId: string): string[] {
+  return attributeRoutes(capabilityAttributes(node, capabilityId))
+}
+
+interface OutputGroup {
+  id: string
+  label: string
+  channels: number[]
+}
+
+interface ChannelEvidence {
+  channels: number[]
+  groups: OutputGroup[]
+}
+
+/**
+ * Read channel inventories only when the node capability actually carries
+ * them. The current agent advertises routes, not channel inventories, so the
+ * manual editor below is intentionally retained as a visibly separate
+ * fallback. In particular, outputCount is a route count and must never be
+ * turned into a made-up list of channels.
+ */
+function channelEvidence(node: Node | undefined, route: string, capabilityId = 'audio.output.local'): ChannelEvidence {
+  const attributes = capabilityAttributes(node, capabilityId)
+  if (attributes === undefined) return { channels: [], groups: [] }
+
+  const channels = Array.isArray(attributes.channels)
+    ? attributes.channels.filter(
+        (channel): channel is number =>
+          typeof channel === 'number' && Number.isInteger(channel) && channel > 0,
+      )
+    : []
+  const groups = Array.isArray(attributes.outputGroups)
+    ? attributes.outputGroups.flatMap((group, index): OutputGroup[] => {
+        if (typeof group !== 'object' || group === null) return []
+        const candidate = group as Record<string, unknown>
+        const groupChannels = Array.isArray(candidate.channels)
+          ? candidate.channels.filter(
+              (channel): channel is number =>
+                typeof channel === 'number' && Number.isInteger(channel) && channel > 0,
+            )
+          : []
+        if (groupChannels.length === 0) return []
+        const id = typeof candidate.id === 'string' ? candidate.id : `${route}-group-${index + 1}`
+        const label = typeof candidate.label === 'string' ? candidate.label : id
+        return [{ id, label, channels: groupChannels }]
+      })
+    : []
+  return { channels: [...new Set(channels)].sort((a, b) => a - b), groups }
 }
 
 /**
  * Mirrors, not enforces (ADR-030): every check here also exists
  * server-side. programRoute/ltcRoute's live cross-check against this
  * node's own capability advertisement is NOT mirrored here beyond
- * restricting the picker to [advertisedRoutes] when that evidence
- * exists -- a route this form could not restrict to (no evidence
- * available) is still sent as typed and the coordinator's own refusal
- * is what the operator sees.
+ * restricting each picker to its own advertised capability when that evidence
+ * exists. When no evidence is available the manual fallback remains visible
+ * and the coordinator's own refusal is what the operator sees.
  */
 function buildPayload(form: FormState): { payload: ConfigAudioNode } | { error: string } {
   if (form.programRoute.trim() === '') return { error: 'Program route is required.' }
@@ -255,10 +298,29 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
 
   const targetNodeId = isNew ? newId.trim() : (existingId ?? '')
   const targetNode = model.nodes.find((n) => n.nodeId === targetNodeId)
-  const routes = advertisedRoutes(targetNode)
+  const programRoutes = advertisedRoutes(targetNode, 'audio.output.local')
+  const ltcRoutes = advertisedRoutes(targetNode, 'audio.output.ltc')
+  const channelInventory = channelEvidence(targetNode, form.programRoute)
+  const ltcChannelInventory = channelEvidence(targetNode, form.programRoute, 'audio.output.ltc')
+  const ltcChannels = ltcChannelInventory.channels.filter((channel) => {
+    const programChannels = form.programChannels
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isInteger(value) && value > 0)
+    return !programChannels.includes(channel)
+  })
+  const selectedNodeIsOffline = targetNode !== undefined && targetNode.controlPlane.state !== 'online'
+  const observedAudioNodes = model.nodes.filter(
+    (node) =>
+      node.capabilities.some((capability) => capability.id === 'audio.output.local') ||
+      node.capabilities.some((capability) => capability.id === 'audio.output.ltc'),
+  )
 
   return (
-    <div>
+    <div className="operator-page audio-node-detail-page">
+      <p className="settings-breadcrumb">
+        <a href="/config">Settings</a> / <a href="/config/audio.node">Audio routing</a>
+      </p>
       <h2 className="panel__title">{isNew ? 'New audio node' : existingId}</h2>
       <p className="text-muted">
         This node&rsquo;s program and LTC output routes, channel assignment, and declared clock
@@ -268,48 +330,85 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
       </p>
 
       {isNew && (
-        <label className="form-field">
-          Node id
-          <input
-            type="text"
-            list="audio-node-known-ids"
-            value={newId}
-            onChange={(e) => setNewId(e.target.value)}
-          />
-          <datalist id="audio-node-known-ids">
-            {model.nodes.map((n) => (
-              <option key={n.nodeId} value={n.nodeId} />
-            ))}
-          </datalist>
-        </label>
+        <>
+          <label className="form-field">
+            Select an observed audio node
+            <select
+              aria-label="Select an observed audio node"
+              value={observedAudioNodes.some((node) => node.nodeId === newId) ? newId : ''}
+              onChange={(e) => setNewId(e.target.value)}
+            >
+              <option value="">Choose a node or enter an id manually</option>
+              {observedAudioNodes.map((node) => (
+                <option key={node.nodeId} value={node.nodeId}>
+                  {node.nodeId}{node.label === null ? '' : ` (${node.label})`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-field">
+            Node id (manual fallback)
+            <input
+              type="text"
+              list="audio-node-known-ids"
+              aria-label="Node id"
+              value={newId}
+              onChange={(e) => setNewId(e.target.value)}
+            />
+            <datalist id="audio-node-known-ids">
+              {model.nodes.map((n) => (
+                <option key={n.nodeId} value={n.nodeId} />
+              ))}
+            </datalist>
+          </label>
+        </>
       )}
 
-      {targetNodeId !== '' && targetNode === undefined && (
-        <p className="text-muted" role="status">
-          This coordinator has no node evidence for &ldquo;{targetNodeId}&rdquo; yet, so no
-          advertised route is known. Route/LTC route are plain text below; an incorrect route is
-          refused by the coordinator on save.
+      {targetNodeId !== '' && selectedNodeIsOffline && (
+        <p className="panel panel--warning" role="status">
+          This node is currently {targetNode.controlPlane.state}. Its last advertised capabilities
+          remain visible, but a save is checked against the coordinator&rsquo;s latest evidence.
         </p>
       )}
-      {targetNodeId !== '' && targetNode !== undefined && routes.length === 0 && (
-        <p className="text-muted" role="status">
-          This node has not advertised any route usable for both program and LTC output. Route/LTC
-          route are plain text below; an incorrect route is refused by the coordinator on save.
+      {targetNodeId !== '' && targetNode === undefined && (
+        <p className="panel panel--warning" role="status">
+          No live API evidence is available for &ldquo;{targetNodeId}&rdquo;. Route choices and
+          channel inventories cannot be offered from browser state. The manual route fallback is
+          retained below and an incorrect route is refused by the coordinator on save.
+        </p>
+      )}
+      {targetNodeId !== '' && targetNode !== undefined && programRoutes.length === 0 && (
+        <p className="panel panel--warning" role="status">
+          This node has not advertised a program output route. The API cannot provide a route
+          choice, so use the clearly marked manual fallback below only if the coordinator has
+          separately confirmed the route.
         </p>
       )}
 
       <label className="form-field">
         Program route
-        {routes.length > 0 ? (
+        {programRoutes.length > 0 ? (
           <select
             aria-label="Program route"
             value={form.programRoute}
-            onChange={(e) => setForm({ ...form, programRoute: e.target.value, ltcRoute: e.target.value })}
+            onChange={(e) => {
+              const route = e.target.value
+              setForm({
+                ...form,
+                programRoute: route,
+                ltcRoute: form.ltcRoute === '' ? '' : ltcRoutes.includes(route) ? route : '',
+              })
+            }}
           >
             <option value="" disabled>
               Choose an advertised route
             </option>
-            {routes.map((r) => (
+            {form.programRoute !== '' && !programRoutes.includes(form.programRoute) && (
+              <option value={form.programRoute} disabled>
+                {form.programRoute} (no longer advertised)
+              </option>
+            )}
+            {programRoutes.map((r) => (
               <option key={r} value={r}>
                 {r}
               </option>
@@ -319,86 +418,213 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
           <input
             type="text"
             aria-label="Program route"
+            placeholder="API route evidence unavailable"
             value={form.programRoute}
             onChange={(e) => setForm({ ...form, programRoute: e.target.value })}
           />
         )}
       </label>
+      {programRoutes.length === 0 && (
+        <p className="audio-manual-fallback" role="note">
+          Manual route fallback. The coordinator remains authoritative; this field is not an
+          inventory of detected interfaces.
+        </p>
+      )}
 
       <label className="form-field">
-        LTC route
-        {routes.length > 0 ? (
+        LTC output
+        {ltcRoutes.length > 0 ? (
           <select
             aria-label="LTC route"
             value={form.ltcRoute}
-            onChange={(e) => setForm({ ...form, ltcRoute: e.target.value, programRoute: e.target.value })}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                ltcRoute: e.target.value,
+                ltcChannel: e.target.value === '' ? '' : form.ltcChannel,
+              })
+            }
           >
-            <option value="" disabled>
-              Choose an advertised route
-            </option>
-            {routes.map((r) => (
-              <option key={r} value={r}>
-                {r}
+            <option value="">Off</option>
+            {ltcRoutes
+              .filter((route) => form.programRoute === '' || route === form.programRoute)
+              .map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            {form.ltcRoute !== '' && !ltcRoutes.includes(form.ltcRoute) && (
+              <option value={form.ltcRoute} disabled>
+                {form.ltcRoute} (no longer advertised)
               </option>
-            ))}
+            )}
           </select>
         ) : (
           <input
             type="text"
             aria-label="LTC route"
+            placeholder="API LTC route evidence unavailable"
             value={form.ltcRoute}
             onChange={(e) => setForm({ ...form, ltcRoute: e.target.value })}
           />
         )}
       </label>
+      {ltcRoutes.length === 0 && (
+        <p className="audio-manual-fallback" role="note">
+          Manual LTC route fallback. No LTC-capable route is advertised by the API, so an LTC
+          route cannot be safely suggested.
+        </p>
+      )}
       <p className="text-muted">
-        Program route and LTC route must name the same route: program and LTC leave through one
-        interface in one clock domain.
+        Off disables LTC. When enabled, the coordinator requires program and LTC to use the same
+        advertised interface and one clock domain.
       </p>
 
-      <label className="form-field">
-        Program channels (comma-separated, distinct, 1-based, e.g. &ldquo;1, 2&rdquo;)
-        <input
-          type="text"
-          aria-label="Program channels"
-          value={form.programChannels}
-          onChange={(e) => setForm({ ...form, programChannels: e.target.value })}
-        />
-      </label>
+      {channelInventory.groups.length > 0 ? (
+        <fieldset className="audio-output-groups">
+          <legend>Program output groups</legend>
+          <p className="text-muted">
+            Choose groups from the node&rsquo;s advertised channel inventory.
+          </p>
+          {channelInventory.groups.map((group) => {
+            const selected = group.channels.every((channel) =>
+              form.programChannels.split(',').map((value) => Number(value.trim())).includes(channel),
+            )
+            return (
+              <label key={group.id} className="audio-output-group">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={(e) => {
+                    const current = new Set(
+                      form.programChannels
+                        .split(',')
+                        .map((value) => Number(value.trim()))
+                        .filter((value) => Number.isInteger(value) && value > 0),
+                    )
+                    group.channels.forEach((channel) =>
+                      e.target.checked ? current.add(channel) : current.delete(channel),
+                    )
+                    setForm({ ...form, programChannels: [...current].sort((a, b) => a - b).join(', ') })
+                  }}
+                />
+                {group.label} ({group.channels.join(', ')})
+              </label>
+            )
+          })}
+        </fieldset>
+      ) : channelInventory.channels.length > 0 ? (
+        <fieldset className="audio-output-groups">
+          <legend>Program output channels</legend>
+          <p className="text-muted">Choose channels from the node&rsquo;s advertised inventory.</p>
+          {channelInventory.channels.map((channel) => (
+            <label key={channel} className="audio-output-group">
+              <input
+                type="checkbox"
+                checked={form.programChannels
+                  .split(',')
+                  .map((value) => Number(value.trim()))
+                  .includes(channel)}
+                onChange={(e) => {
+                  const current = new Set(
+                    form.programChannels
+                      .split(',')
+                      .map((value) => Number(value.trim()))
+                      .filter((value) => Number.isInteger(value) && value > 0),
+                  )
+                  if (e.target.checked) current.add(channel)
+                  else current.delete(channel)
+                  setForm({ ...form, programChannels: [...current].sort((a, b) => a - b).join(', ') })
+                }}
+              />
+              Channel {channel}
+            </label>
+          ))}
+        </fieldset>
+      ) : (
+        <div className="audio-manual-fallback">
+          <label className="form-field">
+            Program output groups/channels (manual fallback; comma-separated, distinct, 1-based)
+            <input
+              type="text"
+              aria-label="Program channels"
+              placeholder="API channel inventory unavailable"
+              value={form.programChannels}
+              onChange={(e) => setForm({ ...form, programChannels: e.target.value })}
+            />
+          </label>
+          <p role="note">
+            The API advertises routes only, not channel inventory. No channel list is inferred.
+          </p>
+        </div>
+      )}
 
-      <label className="form-field">
-        LTC channel (1-based, must not also be a program channel)
-        <input
-          type="number"
-          min={1}
-          aria-label="LTC channel"
-          value={form.ltcChannel}
-          onChange={(e) => setForm({ ...form, ltcChannel: e.target.value })}
-        />
-      </label>
+      {ltcChannels.length > 0 ? (
+        <label className="form-field">
+          LTC output channel
+          <select
+            aria-label="LTC channel"
+            value={form.ltcChannel}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                ltcChannel: e.target.value,
+                ltcRoute: e.target.value === '' ? '' : form.ltcRoute,
+              })
+            }
+          >
+            <option value="">Off</option>
+            {ltcChannels.map((channel) => (
+              <option key={channel} value={channel}>
+                Channel {channel}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <div className="audio-manual-fallback">
+          <label className="form-field">
+            LTC output channel (manual fallback; 1-based and excluded from program channels)
+            <input
+              type="number"
+              min={1}
+              aria-label="LTC channel"
+              placeholder="API channel inventory unavailable"
+              value={form.ltcChannel}
+              onChange={(e) => setForm({ ...form, ltcChannel: e.target.value })}
+            />
+          </label>
+          <p role="note">
+            Off means clear this field and LTC output. No channel inventory is inferred.
+          </p>
+        </div>
+      )}
 
-      <label className="form-field">
-        Clock domain
-        <input
-          type="text"
-          aria-label="Clock domain"
-          value={form.clockDomain}
-          onChange={(e) => setForm({ ...form, clockDomain: e.target.value })}
-        />
-      </label>
-      <label className="form-field">
-        Clock domain provenance
-        <input
-          type="text"
-          aria-label="Clock domain provenance"
-          value={form.clockDomainProvenance}
-          onChange={(e) => setForm({ ...form, clockDomainProvenance: e.target.value })}
-        />
-      </label>
-      <p className="text-muted">
-        Operator-declared, never inferred: no software call on this platform proves two outputs
-        share a hardware clock.
-      </p>
+      <section className="audio-clock-fallback" aria-labelledby="audio-clock-heading">
+        <h3 id="audio-clock-heading">Clock verification</h3>
+        <p role="status">
+          API clock verification is unavailable. The coordinator does not advertise authoritative
+          clock choices, so no dropdown is shown and no browser clock is used.
+        </p>
+        <label className="form-field">
+          Manual clock domain declaration
+          <input
+            type="text"
+            aria-label="Clock domain"
+            value={form.clockDomain}
+            onChange={(e) => setForm({ ...form, clockDomain: e.target.value })}
+          />
+        </label>
+        <label className="form-field">
+          Manual clock domain provenance
+          <input
+            type="text"
+            aria-label="Clock domain provenance"
+            value={form.clockDomainProvenance}
+            onChange={(e) => setForm({ ...form, clockDomainProvenance: e.target.value })}
+          />
+        </label>
+      </section>
 
       <div style={{ marginTop: '1rem' }}>
         {saveError !== null && (

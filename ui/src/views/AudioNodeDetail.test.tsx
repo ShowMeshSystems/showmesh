@@ -121,6 +121,28 @@ describe('AudioNodeDetail (viewing an existing node)', () => {
     expect(await screen.findByText(/active revision 3/i)).toBeInTheDocument()
   })
 
+  it('does not dispatch two saves when the operator activates save twice quickly', async () => {
+    getAudioNode.mockResolvedValue(storedNode)
+    getAudioNodeConfigRevisions.mockResolvedValue(emptyRevisions)
+    let resolvePut: ((value: typeof storedNode) => void) | undefined
+    putAudioNode.mockReturnValue(
+      new Promise<typeof storedNode>((resolve) => {
+        resolvePut = resolve
+      }),
+    )
+    const user = userEvent.setup()
+    renderExisting('node-1')
+
+    await screen.findByLabelText('Clock domain')
+    const save = screen.getByRole('button', { name: /save audio node/i })
+    await user.click(save)
+    await user.click(save)
+    expect(putAudioNode).toHaveBeenCalledTimes(1)
+
+    resolvePut?.({ ...storedNode, revision: 3 })
+    await waitFor(() => expect(getAudioNodeConfigRevisions).toHaveBeenCalledTimes(2))
+  })
+
   it("renders the coordinator's own refusal reason and does not read as saved", async () => {
     getAudioNode.mockResolvedValue(storedNode)
     getAudioNodeConfigRevisions.mockResolvedValue(emptyRevisions)
@@ -229,11 +251,11 @@ describe('AudioNodeDetail (viewing an existing node)', () => {
 
     const programRouteSelect = await screen.findByLabelText('Program route')
     expect(programRouteSelect.tagName).toBe('SELECT')
-    // Only "hw:0,0" is advertised as BOTH local- and LTC-capable -- the
-    // only name a write can actually succeed with, so it is the only
-    // option offered (besides the disabled placeholder).
+    // Program routes come from the local-output capability, while LTC is
+    // narrowed to the selected route. A program-only node may legitimately
+    // use hw:1,0 even though it is not LTC-capable.
     expect(screen.getAllByRole('option', { name: 'hw:0,0' }).length).toBeGreaterThan(0)
-    expect(screen.queryByRole('option', { name: 'hw:1,0' })).not.toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'hw:1,0' })).toBeInTheDocument()
   })
 
   it('falls back to a plain input when no advertised route evidence is reachable', async () => {
@@ -243,6 +265,39 @@ describe('AudioNodeDetail (viewing an existing node)', () => {
 
     const programRouteInput = await screen.findByLabelText('Program route')
     expect(programRouteInput.tagName).toBe('INPUT')
+  })
+
+  it('shows advertised output groups and excludes program channels from LTC choices', async () => {
+    getAudioNode.mockResolvedValue(storedNode)
+    getAudioNodeConfigRevisions.mockResolvedValue(emptyRevisions)
+    const model = makeModel({
+      session: adminSession,
+      nodes: [
+        makeNode('node-1', {
+          capabilities: [
+            {
+              id: 'audio.output.local',
+              version: 1,
+              attributes: {
+                routes: ['hw:0,0'],
+                channels: [1, 2, 3, 4],
+                outputGroups: [{ id: 'stereo', label: 'Program stereo', channels: [1, 2] }],
+              },
+            },
+            { id: 'audio.output.ltc', version: 1, attributes: { routes: ['hw:0,0'], channels: [1, 2, 3, 4] } },
+          ],
+        }),
+      ],
+    })
+    renderExisting('node-1', model)
+
+    expect(await screen.findByText(/program stereo/i)).toBeInTheDocument()
+    const ltc = screen.getByLabelText('LTC channel')
+    expect(ltc.tagName).toBe('SELECT')
+    expect(screen.getAllByRole('option', { name: 'Off' }).length).toBeGreaterThan(0)
+    expect(screen.getByRole('option', { name: 'Channel 3' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Channel 1' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Channel 2' })).not.toBeInTheDocument()
   })
 })
 

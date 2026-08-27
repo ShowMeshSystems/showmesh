@@ -109,10 +109,12 @@ export function Configuration() {
 
   return (
     <div>
-      <h2 className="panel__title">Configuration</h2>
+      <h2 className="panel__title">Settings</h2>
       <p className="text-muted">
-        Requires the <code>config:write</code> scope (admin only); there is no read-only scope for
-        this page.
+        Global coordinator settings live here. Audio defaults and per-node routing are separate
+        settings sections, reached from this page without adding another persistent navigation
+        column. Requires the <code>config:write</code> scope (admin only); there is no read-only
+        scope for this page.
       </p>
 
       {!scopeGate.allowed && (
@@ -150,6 +152,12 @@ export function Configuration() {
               </li>
               <li>
                 <a href="#show-mode">Show mode</a>
+              </li>
+              <li>
+                <a href="/config/audio.settings">Audio defaults</a>
+              </li>
+              <li>
+                <a href="/config/audio.node">Audio routing</a>
               </li>
             </ul>
           </nav>

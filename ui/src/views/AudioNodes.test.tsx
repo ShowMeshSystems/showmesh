@@ -36,6 +36,13 @@ function renderView(model: Model = makeModel({ session: adminSession })) {
 }
 
 describe('AudioNodes', () => {
+  it('keeps the loading state explicit while the configuration list is pending', () => {
+    listConfigObjects.mockReturnValue(new Promise(() => undefined))
+    renderView()
+
+    expect(screen.getByText(/loading audio nodes/i)).toBeInTheDocument()
+  })
+
   it('renders one row per configured audio.node object', async () => {
     listConfigObjects.mockResolvedValue({
       serverTime: '2026-08-25T00:00:00Z',
@@ -59,6 +66,19 @@ describe('AudioNodes', () => {
     renderView()
 
     expect(await screen.findByText(/no audio\.node object is configured yet/i)).toBeInTheDocument()
+  })
+
+  it('labels configured nodes without live evidence as disconnected and does not invent interfaces', async () => {
+    listConfigObjects.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'audio.node',
+      objects: [{ id: 'offline-node', label: 'hw:9,0', show: '', currentRevision: 4, updatedAt: '2026-08-25T00:00:00Z' }],
+    })
+    renderView()
+
+    expect(await screen.findByText('Disconnected: no live evidence')).toBeInTheDocument()
+    expect(screen.getByText('Unavailable from API')).toBeInTheDocument()
+    expect(screen.getByText('hw:9,0')).toBeInTheDocument()
   })
 
   it('is unavailable, with a stated reason, without the config:write scope', () => {

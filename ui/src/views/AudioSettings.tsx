@@ -199,7 +199,8 @@ export function AudioSettings() {
   }
 
   return (
-    <div>
+    <div className="operator-page audio-settings-page">
+      <p className="settings-breadcrumb"><a href="/config">Settings</a> / Audio defaults</p>
       <h2 className="panel__title">Audio settings</h2>
       <p className="text-muted">
         The audio engine&rsquo;s installation-wide defaults: drift tolerance, fade behaviour,
@@ -223,11 +224,16 @@ export function AudioSettings() {
 
       {scopeGate.allowed && state.kind === 'loaded' && (
         <>
-          <p className="panel" role="status">
+          <p className="panel config-status" role="status">
             Active revision {state.config.revision} (source {state.config.source}
             {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}), last
             updated {formatAbsolute(state.config.updatedAt)}.
           </p>
+          {state.config.source !== 'api' && (
+            <p className="panel panel--warning" role="status">
+              These are coordinator defaults. They have not been saved as an operator revision yet.
+            </p>
+          )}
 
           <label className="form-field">
             Drift ignore threshold (milliseconds)

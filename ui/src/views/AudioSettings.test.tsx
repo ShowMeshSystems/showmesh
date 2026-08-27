@@ -64,6 +64,15 @@ function renderView(model: Model = makeModel({ session: adminSession })) {
 }
 
 describe('AudioSettings', () => {
+  it('renders an explicit API failure instead of an empty or browser-derived settings form', async () => {
+    getAudioSettingsConfig.mockRejectedValue(new TypeError('Failed to fetch'))
+    getAudioSettingsConfigRevisions.mockResolvedValue(emptyRevisions)
+    renderView()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/failed to fetch/i)
+    expect(screen.queryByLabelText('LTC frame rate')).not.toBeInTheDocument()
+  })
+
   it('renders the current payload', async () => {
     getAudioSettingsConfig.mockResolvedValue(activeConfig)
     getAudioSettingsConfigRevisions.mockResolvedValue(emptyRevisions)
