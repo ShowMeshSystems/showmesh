@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -90,6 +91,19 @@ type handlers struct {
 	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
+
+	// cueActivationFailToBlackWG owns every dispatchAssetMissingFailToBlack
+	// goroutine cueActivationTickOne has launched but not yet finished (see
+	// that method's own doc comment in cueactivationloop.go for why the
+	// dispatch runs off the tick's own critical path in the first place).
+	// [CueActivationLoop.Run] Waits on this SAME *handlers' WaitGroup before
+	// returning from its own ctx.Done() case, so shutdown cannot close the
+	// store while one of these goroutines is still writing to it, and it
+	// gives this package's own tests an explicit way to synchronize with a
+	// dispatch's real completion instead of inferring it from a side effect
+	// (e.g. a dispatched command appearing in a fake publisher) that can
+	// still be running well after that side effect is observed.
+	cueActivationFailToBlackWG sync.WaitGroup
 }
 
 func (h *handlers) now() time.Time { return h.clock() }

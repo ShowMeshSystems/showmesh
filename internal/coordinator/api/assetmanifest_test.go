@@ -557,10 +557,26 @@ func TestNodeAssetManifestGapNamesUncoveredSequence(t *testing.T) {
 		t.Fatalf("PUT show.surface: status = %d, body: %s", resp.StatusCode, body)
 	}
 
-	// ...but only render-02 has any asset for sequence "opening" — the
-	// show's own asset rows are what makes "opening" a known sequence at
-	// all (assetsync's showSequenceIDs), and render-01 has zero coverage
-	// for it, node-targeted or show-wide.
+	// ...and render-01's own Cue (referenced by a Playlist, so it is not a
+	// draft) names sequence "opening" as its render output — the sequence
+	// this test's gap is legitimately about: a gap must be scoped to the
+	// SURFACED NODE'S OWN cues, never merely "any sequence the show has an
+	// asset for".
+	mustPutCue(t, api, token, "opening-cue", `{
+		"show": "halloween-2026",
+		"name": "Opening",
+		"outputs": {"render": {"sequence": "opening"}}
+	}`)
+	playlistReq := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.playlist/main", `{
+		"show": "halloween-2026", "name": "Main", "runner": "showmesh-audio",
+		"entries": [{"id": "e1", "cue": "opening-cue"}]
+	}`, auth)
+	if resp, body := doRawRequest(t, api.Handler, playlistReq); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.playlist: status = %d, body: %s", resp.StatusCode, body)
+	}
+
+	// ...but only render-02 has any asset for sequence "opening" — render-01
+	// has zero coverage for it, node-targeted or show-wide.
 	uploadOneAsset(t, api, auth, "render-02", "opening", "Thriller.fseq", []byte("content"))
 
 	if err := st.ReplaceNodeAssetInventory(context.Background(), "render-01", nil,
