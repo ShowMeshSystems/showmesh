@@ -13,6 +13,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
@@ -120,34 +121,24 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// resolveCueCatalogAcknowledgedFields reads nodeID's persisted cue-catalog
-// acknowledgement ([store.GetNodeCueCatalogAck]) and turns it into
-// CueCatalogResponse's three-way verdict without ever performing a write:
-// [v1.CueCatalogStatusNeverAcknowledged] when nodeID has never
-// acknowledged anything ([store.ErrNodeCueCatalogAckNotFound]),
-// [v1.CueCatalogStatusCurrent] when the acknowledged revision equals
-// currentRevision, and [v1.CueCatalogStatusStale] otherwise, including
-// when currentRevision is "" (no active show resolved), matching
-// handlePostNodeCueCatalogAcknowledge's own rule that there is no
-// "current" for an unconfigured active show to match. The returned
+// resolveCueCatalogAcknowledgedFields turns [fppreconcile.NodeCatalogAckStatus]'s
+// answer into CueCatalogResponse's three-way verdict: the returned
 // revision/timestamp pointers are both nil exactly when the status is
-// never-acknowledged. A non-nil error means a genuine store failure, which
-// the caller must turn into a 500 rather than reporting
-// never-acknowledged.
+// [v1.CueCatalogStatusNeverAcknowledged]. This is a thin wire-formatting
+// wrapper, never a second resolution: see that function's own doc comment
+// for the acknowledgement semantics, shared with this package's
+// node-catalog-stale readiness condition and the per-node readiness
+// resolution any later caller needs.
 func (h *handlers) resolveCueCatalogAcknowledgedFields(ctx context.Context, nodeID, currentRevision string) (status string, revision, acknowledgedAt *string, err error) {
-	ack, err := h.deps.AssetManifests.GetNodeCueCatalogAck(ctx, nodeID)
-	if errors.Is(err, store.ErrNodeCueCatalogAckNotFound) {
-		return v1.CueCatalogStatusNeverAcknowledged, nil, nil, nil
-	}
+	status, ackRevision, ackAt, err := fppreconcile.NodeCatalogAckStatus(ctx, h.deps.AssetManifests, nodeID, currentRevision)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	status = v1.CueCatalogStatusStale
-	if currentRevision != "" && ack.Revision == currentRevision {
-		status = v1.CueCatalogStatusCurrent
+	if status == v1.CueCatalogStatusNeverAcknowledged {
+		return status, nil, nil, nil
 	}
-	rev := ack.Revision
-	at := formatTime(ack.AcknowledgedAt)
+	rev := ackRevision
+	at := formatTime(ackAt)
 	return status, &rev, &at, nil
 }
 

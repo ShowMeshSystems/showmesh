@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -19,9 +23,14 @@ import (
 // five-member vocabulary for why an FPP-backed Playlist is not ready,
 // checked in order and stopped at the first failing one — "an FPP-backed
 // Playlist is ready when all of these hold, and reports the exact failing
-// one when not." Lane 16 opens this vocabulary (docs/build/
-// IDENTIFIER-REGISTER.md's "Playlist readiness conditions" section);
-// [ReadinessNodeRenderUnassigned] is its first addition.
+// one when not." That vocabulary is now open: see docs/build/
+// TRACK-H-cues-and-playlists.md section H6 for the full account of the
+// added conditions, including which remain out of scope this season and
+// why. [ReadinessNodeCatalogStale] and [ReadinessExclusiveClaimConflict]
+// reuse the existing resolvers rather than deriving a second one. This
+// type's own const list below is the current, authoritative member
+// count; nothing else in this codebase should restate a fixed number,
+// since the list is still growing.
 type ReadinessCondition string
 
 const (
@@ -87,25 +96,53 @@ const (
 	// the closed vocabulary section 6 defines is not reopened here — only
 	// Reason varies.
 	ReadinessNodeRenderUnassigned ReadinessCondition = "node-render-unassigned"
+
+	// ReadinessNodeCatalogStale: a node holding at least one resolved
+	// output for this Playlist's Show (render, audio, LTC, or
+	// announcement — see [assetsync.ResolveCueCatalog]) has not
+	// acknowledged the exact catalog revision the active show currently
+	// requires, per [NodeCatalogAckStatus]'s three-way vocabulary
+	// (catalog-current/catalog-stale/catalog-unacknowledged). Skipped
+	// entirely — never a failure and never a warning — when this
+	// Playlist's own Show is not the currently active show: a node only
+	// ever holds a catalog for the active show, so there is nothing this
+	// condition could compare against for any other Show (see
+	// [nodeCatalogReadiness]'s own doc comment).
+	ReadinessNodeCatalogStale ReadinessCondition = "node-catalog-stale"
+
+	// ReadinessExclusiveClaimConflict: two Cues this Show's Playlists
+	// could concurrently run hold a colliding H0.5 exclusive resource
+	// claim (TRACK-H-cues-and-playlists.md section H0.5), exactly as
+	// [assetsync.ResolveCueCatalog] already computes and the cue-catalog
+	// deploy path already refuses on
+	// (internal/coordinator/api/cuecatalogdeploy.go). This condition
+	// reads that SAME computation rather than deriving a second one — see
+	// [exclusiveClaimReadiness]'s own doc comment.
+	ReadinessExclusiveClaimConflict ReadinessCondition = "exclusive-claim-conflict"
 )
 
 // Report is [PlaylistReadiness]'s result.
 type Report struct {
 	PlaylistID string
 	Ready      bool
-	// FailingCondition is the exact one of the five [ReadinessCondition]
+	// FailingCondition is the exact one of the [ReadinessCondition]
 	// values that made Ready false. Empty when Ready.
 	FailingCondition ReadinessCondition
 	// Reason explains FailingCondition. Empty when Ready and there is no
 	// warning either.
 	Reason string
-	// Warning is set when the observation-hash-mismatch check did not
-	// fail readiness (no comparable observation exists yet) but is still
-	// worth surfacing to an operator — section 6's own "the normal
-	// afternoon state, not a fault" case. Never set alongside
-	// FailingCondition == ReadinessObservationHashMismatch: that
-	// combination is the hard-failure form of this same check, not the
-	// warning form.
+	// Warning is set when a condition did not fail readiness outright but
+	// is still worth surfacing to an operator: either the
+	// observation-hash-mismatch check's non-fatal form (no comparable
+	// observation exists yet — section 6's own "the normal afternoon
+	// state, not a fault" case), or exclusive-claim-conflict's own
+	// undecodable-cue case (see [exclusiveClaimReadiness]'s own doc
+	// comment) — a stored show.cue elsewhere in the store could not be
+	// decoded, so this condition could not be verified one way or the
+	// other. Both can be present at once, joined by "; " rather than one
+	// overwriting the other. Never set alongside FailingCondition ==
+	// ReadinessObservationHashMismatch: that combination is the
+	// hard-failure form of the observation check, not its warning form.
 	Warning string
 }
 
@@ -208,6 +245,16 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// establish identity (contracts section 1.4) carries no hash to
 	// compare either, and is treated the same way for the same reason:
 	// there is nothing to disagree with.
+	//
+	// This binding-specific check runs BEFORE the fleet-wide conditions
+	// below on purpose (H6 review): node-render-unassigned,
+	// exclusive-claim-conflict, and node-catalog-stale hold or fail
+	// identically for every Playlist of a Show, so on an undeployed fleet
+	// a Playlist whose OWN binding has drifted (this condition) would
+	// otherwise never surface that — PlaylistReadiness stops at the first
+	// failing condition, and every Playlist would report the same
+	// fleet-wide failure instead. Checking this one first means a binding
+	// problem is never masked by a fleet-wide one.
 	obs, err := st.GetFPPPlaylistEntryObservation(ctx, p.FPP.InstanceUUID)
 	switch {
 	case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
@@ -223,17 +270,17 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return report, nil
 	}
 
-	// Condition 6 (Lane 16): every node holding a show.surface
-	// object for this Playlist's own Show must currently hold a render
-	// assignment for it, PROVIDED some referenced Cue actually declares
-	// outputs.render — config.DeriveShowCueClaims expands one Cue's
-	// render output through every one of the Show's surfaces rather than
-	// naming one, so there is no per-Cue surface to check against; the
-	// Show's own show.surface objects are the only place "which surfaces
-	// this show's cues target" can be answered. Skipped entirely when no
-	// entry's Cue declares a render output, matching condition 4's own
-	// per-entry Cue lookups (already known-good by this point: every
-	// entry above already passed cueReady).
+	// Condition 6: every node holding a show.surface object for this
+	// Playlist's own Show must currently hold a render assignment for it,
+	// PROVIDED some referenced Cue actually declares outputs.render —
+	// config.DeriveShowCueClaims expands one Cue's render output through
+	// every one of the Show's surfaces rather than naming one, so there is
+	// no per-Cue surface to check against; the Show's own show.surface
+	// objects are the only place "which surfaces this show's cues target"
+	// can be answered. Skipped entirely when no entry's Cue declares a
+	// render output, matching condition 4's own per-entry Cue lookups
+	// (already known-good by this point: every entry above already passed
+	// cueReady).
 	if cond, reason, err := nodeRenderAssignmentReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
@@ -243,7 +290,42 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return report, nil
 	}
 
+	// Condition 7: no two Cues this Show's Playlists could
+	// concurrently run hold a colliding H0.5 exclusive claim.
+	if cond, reason, warning, err := exclusiveClaimReadiness(ctx, st, logger, p); err != nil {
+		return Report{}, err
+	} else if cond != "" {
+		report.Ready = false
+		report.FailingCondition = cond
+		report.Reason = reason
+		return report, nil
+	} else if warning != "" {
+		report.Warning = appendWarning(report.Warning, warning)
+	}
+
+	// Condition 8: every node participating in this Show's catalog has
+	// acknowledged the active show's currently required catalog revision.
+	if cond, reason, err := nodeCatalogReadiness(ctx, st, p); err != nil {
+		return Report{}, err
+	} else if cond != "" {
+		report.Ready = false
+		report.FailingCondition = cond
+		report.Reason = reason
+		return report, nil
+	}
+
 	return report, nil
+}
+
+// appendWarning combines two independently-produced Report.Warning texts
+// (the observation check's and [exclusiveClaimReadiness]'s undecodable-cue
+// case can both fire on the same report) without either silently
+// overwriting the other.
+func appendWarning(existing, add string) string {
+	if existing == "" {
+		return add
+	}
+	return existing + "; " + add
 }
 
 // nodeRenderAssignmentReadiness implements condition 6 (see
@@ -491,6 +573,181 @@ func nodeHoldsRenderAssignment(ctx context.Context, st *store.Store, now time.Ti
 // reasoning internal/coordinator/api/renderdispatch.go's own alwaysTrue
 // documents.
 func alwaysTrueForReadiness(string) bool { return true }
+
+// exclusiveClaimReadiness implements condition 7 (see [PlaylistReadiness]'s
+// own doc comment): TRACK-H-cues-and-playlists.md section H0.6's "Readiness
+// rejects... conflicting claims across the Playlists a Show can run
+// concurrently." It is evaluated against p.Show directly, not against
+// whichever show.active happens to be configured right now — matching
+// [participatingNodesForShow] in internal/coordinator/cueactivate/decide.go's
+// own reasoning ("Generation is irrelevant to which nodes participate"):
+// an H0.5 claim collision is a fact about how p.Show's Cues and Playlists
+// are AUTHORED, not about runtime activation, so it is worth catching
+// before this Show is ever made active, not only once it is.
+//
+// It reuses [assetsync.ResolveCueCatalog]'s own conflict detection
+// (Catalog.Conflicts) — the SAME computation
+// internal/coordinator/api/cuecatalogdeploy.go already refuses a deploy
+// on — rather than deriving a second one: TRACK-H-cues-and-playlists.md's
+// own H0.5 ruling ("a claim conflict is a readiness fact about the
+// catalog, not a resolution failure") is exactly what makes it safe to
+// read Conflicts here instead of failing the whole resolution.
+//
+// Every declared node is checked (not only nodes p.Entries themselves
+// touch): a claim conflict between two Cues is a fact about the Show as a
+// whole, and the SAME conflict is visible on every node whose catalog
+// includes both colliding Cues, so scoping to p's own entries would only
+// mean this Playlist's own readiness sometimes fails to see a conflict
+// entirely owned by two OTHER Playlists of the same Show — exactly the
+// case H0.6's "across the Playlists a Show can run concurrently" calls
+// out. Nodes are visited in id order and the first conflict found is
+// reported, so which pair is named is deterministic rather than dependent
+// on store iteration order.
+//
+// [assetsync.ResolveCueCatalog] decodes EVERY stored show.cue in the
+// WHOLE store (every Show, not only p.Show) before it ever gets to
+// filtering by show — internal/coordinator/assetsync is out of this
+// seam's bounds to change, so that ordering cannot be fixed here. Left
+// unhandled, one undecodable show.cue anywhere would turn this condition
+// into a hard error for every Playlist of every Show, the exact "local
+// fault becomes a total one" shape this lane exists to remove. This
+// function instead recognizes that one specific, stable failure shape
+// (see [undecodableCueID]) and reports it the way a genuinely
+// unverifiable condition is reported elsewhere in this file (compare
+// PlaylistReadiness's own observation-unavailable handling): a named,
+// non-fatal Warning rather than Ready=false — this function cannot tell
+// whether the corrupted Cue could ever collide with p.Show's own claims,
+// so it neither asserts a conflict nor silently claims there is none. Any
+// OTHER error from ResolveCueCatalog (a genuine store failure, for
+// instance) still fails this condition hard, exactly as before.
+func exclusiveClaimReadiness(ctx context.Context, st *store.Store, logger *slog.Logger, p config.ShowPlaylistPayload) (cond ReadinessCondition, reason string, warning string, err error) {
+	active := assetsync.ActiveShow{Configured: true, ShowID: p.Show}
+	nodes, err := st.ListNodeDeclarations(ctx)
+	if err != nil {
+		return "", "", "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			if cueID, ok := undecodableCueID(err); ok {
+				if logger != nil {
+					logger.Warn("fppreconcile: exclusive-claim-conflict could not be fully evaluated; a stored show.cue could not be decoded", "cueId", cueID, "error", err)
+				}
+				return "", "", fmt.Sprintf("exclusive-claim-conflict could not be verified: cue %q has a stored revision that could not be decoded", cueID), nil
+			}
+			return "", "", "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		if len(catalog.Conflicts) > 0 {
+			return ReadinessExclusiveClaimConflict, catalog.Conflicts[0].Detail(), "", nil
+		}
+	}
+	return "", "", "", nil
+}
+
+// undecodableCueID recognizes the one, stable error text
+// [assetsync.ResolveCueCatalog] returns when a stored show.cue revision
+// anywhere in the store fails to decode ("assetsync: resolve cue catalog:
+// decode stored show.cue %q: ..."), extracting the offending cue id.
+// assetsync exposes no sentinel error for this shape, and this package
+// must not add one to it (out of this seam's bounds) — matching that one
+// stable prefix is the only lever [exclusiveClaimReadiness] has to tell
+// "a specific stored cue is corrupted" apart from any other resolver
+// failure, which must keep failing this condition hard rather than being
+// silently swallowed. ok is false, and cueID is meaningless, for any
+// error that does not match.
+func undecodableCueID(err error) (cueID string, ok bool) {
+	const prefix = `assetsync: resolve cue catalog: decode stored show.cue "`
+	rest, ok := strings.CutPrefix(err.Error(), prefix)
+	if !ok {
+		return "", false
+	}
+	id, _, ok := strings.Cut(rest, `":`)
+	if !ok {
+		return "", false
+	}
+	return id, true
+}
+
+// nodeCatalogReadiness implements condition 8 (see [PlaylistReadiness]'s
+// own doc comment): TRACK-H-cues-and-playlists.md section H0.6's
+// "Readiness rejects... a node without the authorized catalog revision."
+//
+// Unlike [exclusiveClaimReadiness], this condition genuinely needs the
+// REAL currently active show, not merely p.Show: a node's cue-catalog
+// acknowledgement ([NodeCatalogAckStatus]) is only ever compared against
+// the exact revision [assetsync.ResolveCueCatalog] computes for the
+// active show's own generation (TRACK-H-H3-SPEC.md section 3.1), and
+// fabricating a generation for a Show that is not actually active would
+// compare a node's real acknowledgement against a revision the
+// coordinator never actually asked it to hold — a false "stale" report,
+// which is worse than not checking at all. So when p.Show is not the
+// currently active show, this condition has nothing correct to compare
+// against and is skipped entirely: neither a failure nor a warning, the
+// same "not this condition's question to answer" posture
+// [nodeRenderAssignmentReadiness] takes for a surface payload that no
+// longer decodes.
+//
+// A node "participates" for this purpose when [assetsync.ResolveCueCatalog]
+// resolves it at least one non-empty output anywhere in the active show's
+// catalog (render, audio, LTC, or announcement) — the same test
+// [participatingNodesForShow] in internal/coordinator/cueactivate/decide.go
+// applies for its own, unrelated purpose (the blackAndSilence effect's
+// target set), reimplemented narrowly here because that function is
+// unexported and internal/coordinator/cueactivate is out of this seam's
+// bounds to modify. A node with no resolved output has no catalog
+// obligation at all and is silently skipped, matching
+// [NodeCatalogAckStatus]'s own currentRevision == "" rule.
+func nodeCatalogReadiness(ctx context.Context, st *store.Store, p config.ShowPlaylistPayload) (ReadinessCondition, string, error) {
+	active, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil {
+		return "", "", fmt.Errorf("fppreconcile: resolve active show: %w", err)
+	}
+	if !active.Configured || active.ShowID != p.Show {
+		return "", "", nil
+	}
+
+	nodes, err := st.ListNodeDeclarations(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("fppreconcile: list node declarations: %w", err)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	for _, n := range nodes {
+		catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, n.NodeID)
+		if err != nil {
+			return "", "", fmt.Errorf("fppreconcile: resolve cue catalog for node %q: %w", n.NodeID, err)
+		}
+		if !catalogHasAnyOutput(catalog) {
+			continue
+		}
+		status, ackRevision, _, err := NodeCatalogAckStatus(ctx, st, n.NodeID, catalog.Revision)
+		if err != nil {
+			return "", "", fmt.Errorf("fppreconcile: resolve node catalog ack status for %q: %w", n.NodeID, err)
+		}
+		if status != v1.CueCatalogStatusCurrent {
+			return ReadinessNodeCatalogStale, fmt.Sprintf(
+				"node %q has not acknowledged the active show's required catalog revision %q (status: %s, acknowledged revision: %q)",
+				n.NodeID, catalog.Revision, status, ackRevision), nil
+		}
+	}
+	return "", "", nil
+}
+
+// catalogHasAnyOutput reports whether catalog resolves at least one
+// non-empty output (render, audio, LTC, or announcement) for ANY Cue —
+// i.e. whether the node this catalog was resolved for actually
+// participates in the active show at all, mirroring
+// internal/coordinator/cueactivate/decide.go's own unexported
+// hasAnyOutput, reimplemented here for the identical reason
+// [nodeCatalogReadiness]'s own doc comment gives.
+func catalogHasAnyOutput(catalog assetsync.Catalog) bool {
+	for _, e := range catalog.Entries {
+		if e.Outputs.Render != nil || e.Outputs.Audio != nil || e.Outputs.LTC != nil || e.Outputs.Announcement != nil {
+			return true
+		}
+	}
+	return false
+}
 
 // cueReady implements condition 4's narrow Cue check (see
 // [PlaylistReadiness]'s own doc comment): exists, has an active revision,

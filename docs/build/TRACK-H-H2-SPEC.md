@@ -206,6 +206,13 @@ observation has been received at all, because an FPP host that has not played
 anything since the coordinator started is the normal afternoon state, not a
 fault.
 
+This is H2's own list, frozen to this seam's original scope. Lane 16
+later opened §6's vocabulary and added two more, fleet-wide conditions; the
+current, authoritative list lives in
+`internal/coordinator/fppreconcile/readiness.go`'s own doc comment, with the
+full account of what Lane 16 added and why in
+[TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) section H6.
+
 ## 7. Surfaces
 
 - `POST` and the two `GET` routes of contracts section 3, plus the entries
