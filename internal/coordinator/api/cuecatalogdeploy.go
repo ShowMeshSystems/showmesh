@@ -368,9 +368,9 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		// does.
 		h.applyShowmeshAudioPlaylistIfAny(ctx, h.now(), nodeID, active)
 
-		// SM-281 half-two: a node that just proved it holds the active
-		// Show's authorized Cue catalog is exactly the node whose
-		// show.surface objects should hold SOME render assignment — see
+		// A node that just proved it holds the active Show's authorized
+		// Cue catalog is exactly the node whose show.surface objects
+		// should hold SOME render assignment — see
 		// establishRenderAssignments' own doc comment for the defect this
 		// closes. Best-effort, matching the two calls above it: the
 		// deploy itself already succeeded regardless of whether this
@@ -497,9 +497,10 @@ func (h *handlers) writeCueCatalogDeployAudit(ctx context.Context, now time.Time
 // an operator directly asked for.
 const renderEstablishIssuerPrincipalID = "system:cuecatalog-deploy"
 
-// establishRenderAssignments is SM-281 half-two's own fix for the gap its
-// build task describes: nothing ever created a node's persisted render
-// assignment except an operator dispatching render.surface.apply by hand,
+// establishRenderAssignments closes a gap in the Track H render pipeline
+// (see TRACK-H-cues-and-playlists.md): nothing ever created a node's
+// persisted render assignment except an operator dispatching
+// render.surface.apply by hand,
 // and ADR-043's H0.7 clears assignments at boot — together, a render node
 // that reboots mid-show never renders again on its own, forever, until
 // somebody remembers to run a manual apply. A confirmed cuecatalog.deploy

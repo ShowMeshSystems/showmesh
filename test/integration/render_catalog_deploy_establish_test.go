@@ -8,8 +8,9 @@ import (
 	"time"
 )
 
-// This file is SM-281 half-two's own acceptance proof, following
-// render_dispatch_test.go's established pattern: every claim is driven
+// This file is the acceptance proof for the Track H render-assignment gap
+// (see TRACK-H-cues-and-playlists.md), following render_dispatch_test.go's
+// established pattern: every claim is driven
 // through the REAL showmeshctl binary against a REAL showmesh-coordinator
 // subprocess and a REAL showmesh-agent subprocess over a real Mosquitto
 // broker. Nothing here dispatches raw MQTT directly.

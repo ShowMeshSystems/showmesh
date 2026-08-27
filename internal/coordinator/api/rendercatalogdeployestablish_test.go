@@ -11,8 +11,9 @@ import (
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
-// This file is SM-281 half-two's own coordinator-side regression coverage:
-// nothing ever created a node's persisted render assignment except an
+// This file is the coordinator-side regression coverage for the Track H
+// render-assignment gap (see TRACK-H-cues-and-playlists.md): nothing ever
+// created a node's persisted render assignment except an
 // operator dispatching render.surface.apply by hand, and ADR-043's H0.7
 // clears assignments at boot — together, a render node that reboots
 // mid-show never renders again on its own. cuecatalogdeploy.go's

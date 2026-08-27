@@ -101,8 +101,8 @@ func TestActivateRenderSwapsFSEQ(t *testing.T) {
 }
 
 // establishApplyParams builds a render.surface.apply params map carrying
-// NO fseqFilename/fseqContentHash — SM-281 half-two's own "declared, no
-// content yet" shape a catalog-deploy-triggered establishment sends
+// NO fseqFilename/fseqContentHash — the "declared, no content yet" shape a
+// catalog-deploy-triggered establishment sends
 // (internal/coordinator/api/renderdispatch.go's
 // resolveRenderEstablishParams), including the H3 authorization tuple so
 // the resulting persisted assignment is one activateSurfaceRender can
@@ -133,9 +133,9 @@ func establishApplyParams(surfaceID, show string, generation int64, catalogRevis
 	}
 }
 
-// TestActivateRenderSucceedsOnAnEstablishedNoSequenceAssignment is SM-281
-// half-two's own acceptance proof at the agent unit-test level, using the
-// SAME production code its coordinator-side fix invokes over MQTT
+// TestActivateRenderSucceedsOnAnEstablishedNoSequenceAssignment is the
+// acceptance proof at the agent unit-test level, using the SAME
+// production code the coordinator-side fix invokes over MQTT
 // (render.surface.apply, applySurface — renderops.go) rather than a mock
 // of it: the exact defect this half closes was that NOTHING ever created a
 // node's persisted render assignment except a manual, sequence-carrying

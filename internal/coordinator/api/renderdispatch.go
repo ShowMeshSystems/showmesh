@@ -335,9 +335,9 @@ func (h *handlers) resolveRenderApplyParams(ctx context.Context, nodeID, surface
 }
 
 // renderSurfaceBase is [handlers.resolveRenderSurfaceBase]'s result: the
-// resolution render.surface.apply's own asset-and-sequence step and SM-281
-// half-two's own catalog-deploy establishment (resolveRenderEstablishParams,
-// below) share in full — everything render.surface.apply's params need
+// resolution render.surface.apply's own asset-and-sequence step and the
+// catalog-deploy establishment (resolveRenderEstablishParams, below) share
+// in full — everything render.surface.apply's params need
 // EXCEPT a resolved FSEQ, which only the former ever adds on top.
 type renderSurfaceBase struct {
 	Payload    config.ShowSurfacePayload
@@ -410,8 +410,8 @@ func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surface
 }
 
 // renderEstablishParamsPayload is render.surface.apply's params for a
-// catalog-deploy-triggered ESTABLISHMENT (SM-281 half-two): the same
-// resolution renderApplyParamsPayload marshals, minus the two FSEQ fields
+// catalog-deploy-triggered ESTABLISHMENT: the same resolution
+// renderApplyParamsPayload marshals, minus the two FSEQ fields
 // — there is no sequence to resolve one against — plus the H3
 // authorization tuple (generation, catalogRevision; "show" is already
 // present) so a later boot resumes this exact assignment
