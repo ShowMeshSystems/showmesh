@@ -222,7 +222,7 @@ func (h *handlers) pushFPPConnectToAllNodes(ctx context.Context, now time.Time) 
 		go func() {
 			pushCtx, cancel := context.WithTimeout(detached, fppConnectConfigPushTimeout)
 			defer cancel()
-			fppconnectpush.BestEffort(pushCtx, h.deps.Config, h.deps.RenderPublisher, h.now, nodeID, h.logger)
+			fppconnectpush.BestEffort(pushCtx, h.deps.Config, h.deps.RenderPublisher, h.now, nodeID, h.logger, h.deps.FPPConnectStatus)
 		}()
 	}
 }
@@ -237,7 +237,7 @@ func (h *handlers) pushFPPConnectToNode(ctx context.Context, nodeID string) {
 	go func() {
 		pushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fppConnectConfigPushTimeout)
 		defer cancel()
-		fppconnectpush.BestEffort(pushCtx, h.deps.Config, h.deps.RenderPublisher, h.now, nodeID, h.logger)
+		fppconnectpush.BestEffort(pushCtx, h.deps.Config, h.deps.RenderPublisher, h.now, nodeID, h.logger, h.deps.FPPConnectStatus)
 	}()
 }
 

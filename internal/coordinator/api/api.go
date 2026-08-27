@@ -14,6 +14,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -49,6 +50,24 @@ type Dependencies struct {
 	// A nil field is replaced by [noNodeAudioLister], matching Render's
 	// identical no-op default posture.
 	Audio NodeAudioLister
+
+	// FPPConnectStatus: this SAME *fppconnectpush.StatusStore instance
+	// is both written to (by
+	// pushFPPConnectToAllNodes/pushFPPConnectToNode, passed straight into
+	// fppconnectpush.BestEffort/ToNode as their statusStore argument —
+	// fppconnectsettingsconfig.go) and read from (via its own
+	// NodeFPPConnectObservations method, mapNode's fppConnectObs source),
+	// mirroring Render/Audio's identical "the real dependency already has
+	// this method set" pattern one push surface over. Unlike Render/Audio
+	// this is a concrete type, not a package-local interface: this
+	// package already imports internal/coordinator/fppconnectpush
+	// directly for the write half, so a second, api-package-declared
+	// interface for the read half alone would name nothing this package
+	// does not already depend on concretely. A nil field is nil-safe on
+	// both sides — [fppconnectpush.StatusStore.NodeFPPConnectObservations]
+	// and fppconnectpush.BestEffort/ToNode already tolerate a nil
+	// *StatusStore — so no withDefaults() entry is needed.
+	FPPConnectStatus *fppconnectpush.StatusStore
 
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is

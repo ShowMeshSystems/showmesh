@@ -132,7 +132,7 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID)))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
 	}
 	jsonWrite(w, v1.NodesResponse{ServerTime: formatTime(now), Nodes: nodes})
 }
@@ -165,7 +165,7 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
-			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID))})
+			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID))})
 			return
 		}
 	}
@@ -448,7 +448,7 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID)))
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)

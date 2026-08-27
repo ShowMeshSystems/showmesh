@@ -2589,6 +2589,8 @@ export interface components {
             render: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.audio.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published an audio discovery report. */
             audio: components["schemas"]["ObservationEntry"][];
+            /** @description Whatever node.fppconnect.channel_range.* observations this coordinator currently holds for this node's most recently resolved fppconnect.configure push - whether the pushed channel range was formatted, legitimately empty (no configured surface), or dropped (a surface existed but could not be formatted, e.g. a refused range or a string too long for the ping's 120-byte field), and why. Never omitted; an empty array means this node has never had a fppconnect.configure push resolved for it. Resource names this node directly, the `node.multisync.*` precedent (one push carries one channel-range string per node). */
+            fppConnect: components["schemas"]["ObservationEntry"][];
         };
         /**
          * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run - never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).

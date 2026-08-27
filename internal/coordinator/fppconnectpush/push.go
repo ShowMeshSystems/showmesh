@@ -121,11 +121,22 @@ type resolvedFPPConnectState struct {
 // passes one, matching BestEffort's own contract) rather than failing the
 // whole push, this node's active show, show names, and byte caps are
 // still good pushes even when its channel ranges are not.
-func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.Time, nodeID string, logger *slog.Logger) error {
-	resolved, err := resolveForNode(ctx, cs, nodeID, logger)
+//
+// statusStore, when non-nil, records this call's resolved channel-range
+// outcome: formatted, no_surfaces, or dropped-with-a-reason,
+// readable back through [StatusStore.NodeFPPConnectObservations] so an
+// operator can see a dropped range without reading this package's log —
+// the fix for the gap [ToNode]'s own doc comment above describes ("logged
+// through logger") being the ONLY trace a formatting failure left behind.
+// Recorded regardless of whether the publish below succeeds: the
+// formatting outcome is a fact about the RESOLVED state, independent of
+// transport delivery.
+func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.Time, nodeID string, logger *slog.Logger, statusStore *StatusStore) error {
+	resolved, rangeStatus, err := resolveForNode(ctx, cs, nodeID, logger)
 	if err != nil {
 		return fmt.Errorf("resolve fppconnect state for %s: %w", nodeID, err)
 	}
+	statusStore.record(nodeID, rangeStatus.state, rangeStatus.reason, now())
 
 	params := map[string]any{
 		"schema":        schemaVersion,
@@ -149,25 +160,29 @@ func ToNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.
 // the write or the hello that triggered it. The node converges on its
 // next successful push, its next hello, or the next write to any of the
 // four kinds this package watches. Matches audioconfigpush.BestEffort
-// exactly.
-func BestEffort(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.Time, nodeID string, logger *slog.Logger) {
-	if err := ToNode(ctx, cs, pub, now, nodeID, logger); err != nil && logger != nil {
+// exactly, plus [ToNode]'s own statusStore parameter.
+func BestEffort(ctx context.Context, cs ConfigStore, pub Publisher, now func() time.Time, nodeID string, logger *slog.Logger, statusStore *StatusStore) {
+	if err := ToNode(ctx, cs, pub, now, nodeID, logger, statusStore); err != nil && logger != nil {
 		logger.Warn("fppconnect config push failed", "node_id", nodeID, "error", err)
 	}
 }
 
 // resolveForNode reads every input "fppconnect.configure" carries for
-// nodeID, out of cs.
-func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *slog.Logger) (resolvedFPPConnectState, error) {
+// nodeID, out of cs. The second return value is nodeID's channel-range
+// resolution outcome: what [StatusStore.record] stores when ToNode's
+// caller passes a non-nil statusStore.
+func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *slog.Logger) (resolvedFPPConnectState, channelRangeStatus, error) {
 	var revisions []string
 
 	ranges, surfaceRevisions, err := nodeChannelRanges(ctx, cs, nodeID)
 	if err != nil {
-		return resolvedFPPConnectState{}, fmt.Errorf("collect show.surface channel ranges: %w", err)
+		return resolvedFPPConnectState{}, channelRangeStatus{}, fmt.Errorf("collect show.surface channel ranges: %w", err)
 	}
 	revisions = append(revisions, surfaceRevisions...)
 
 	channelRanges := ""
+	rangeState := ChannelRangeStateNoSurfaces
+	rangeReason := ""
 	if len(ranges) > 0 {
 		formatted, ferr := fppconnect.FormatChannelRanges(ranges)
 		if ferr != nil {
@@ -176,18 +191,23 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 			// surface's own contribution, there is no way to publish a
 			// partial sparse window without risking gaps a real xLights
 			// render would silently skip. This node's active show, show
-			// names, and byte caps are still good pushes.
+			// names, and byte caps are still good pushes. rangeState/
+			// rangeReason below are what make this visible to an operator
+			// beyond this log line — see [ToNode]'s statusStore parameter.
+			rangeState = ChannelRangeStateDropped
+			rangeReason = ferr.Error()
 			if logger != nil {
 				logger.Warn("fppconnect channel range formatting failed; pushing an empty range instead", "node_id", nodeID, "error", ferr)
 			}
 		} else {
 			channelRanges = formatted
+			rangeState = ChannelRangeStateFormatted
 		}
 	}
 
 	showNamesByID, showRevisions, err := allShowNames(ctx, cs)
 	if err != nil {
-		return resolvedFPPConnectState{}, fmt.Errorf("list show names: %w", err)
+		return resolvedFPPConnectState{}, channelRangeStatus{}, fmt.Errorf("list show names: %w", err)
 	}
 	revisions = append(revisions, showRevisions...)
 	showNames := make([]string, 0, len(showNamesByID))
@@ -201,19 +221,19 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 
 	activeShow, activeShowRevision, err := activeShowName(ctx, cs, showNamesByID)
 	if err != nil {
-		return resolvedFPPConnectState{}, fmt.Errorf("resolve active show: %w", err)
+		return resolvedFPPConnectState{}, channelRangeStatus{}, fmt.Errorf("resolve active show: %w", err)
 	}
 	revisions = append(revisions, activeShowRevision)
 
 	settings, settingsRevision, err := currentFPPConnectSettings(ctx, cs)
 	if err != nil {
-		return resolvedFPPConnectState{}, fmt.Errorf("resolve fppconnect.settings: %w", err)
+		return resolvedFPPConnectState{}, channelRangeStatus{}, fmt.Errorf("resolve fppconnect.settings: %w", err)
 	}
 	revisions = append(revisions, settingsRevision)
 
 	coordinatorBaseURL, assetSettingsRevision, err := currentCoordinatorBaseURL(ctx, cs)
 	if err != nil {
-		return resolvedFPPConnectState{}, fmt.Errorf("resolve assets.settings: %w", err)
+		return resolvedFPPConnectState{}, channelRangeStatus{}, fmt.Errorf("resolve assets.settings: %w", err)
 	}
 	revisions = append(revisions, assetSettingsRevision)
 
@@ -225,7 +245,7 @@ func resolveForNode(ctx context.Context, cs ConfigStore, nodeID string, logger *
 		Settings:           settings,
 		CoordinatorBaseURL: coordinatorBaseURL,
 		revisions:          revisions,
-	}, nil
+	}, channelRangeStatus{state: rangeState, reason: rangeReason}, nil
 }
 
 // nodeChannelRanges collects every "show.surface" object whose "node"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,7 +154,7 @@ func (p *fakePublisher) last() (mqttproto.CmdPayload, bool) {
 func TestToNodeNoSurfacesPushesEmptyRanges(t *testing.T) {
 	cs := newFakeConfigStore()
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, ok := pub.last()
@@ -176,7 +177,7 @@ func TestToNodeOneSurfaceStartingAtChannelOne(t *testing.T) {
 	putShow(cs, "front-yard", "Front Yard")
 	putSurface(cs, "surface-1", "front-yard", "node-1", 1, 150)
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -192,7 +193,7 @@ func TestToNodeTwoSurfacesOnOneNode(t *testing.T) {
 	putSurface(cs, "surface-2", "front-yard", "node-1", 1, 150)
 	putSurface(cs, "surface-3", "front-yard", "node-2", 1, 150) // different node: excluded
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -214,7 +215,7 @@ func TestToNodeFormattingFailureSkipsRangeButStillPushes(t *testing.T) {
 	}
 	putActiveShow(cs, "front-yard")
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", slog.Default()); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", slog.Default(), nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -226,11 +227,109 @@ func TestToNodeFormattingFailureSkipsRangeButStillPushes(t *testing.T) {
 	}
 }
 
+// TestToNodeFormattingFailureRecordsDroppedStatus proves a formatting
+// failure that used to leave no trace outside the coordinator log (see
+// TestToNodeFormattingFailureSkipsRangeButStillPushes above, which
+// proves the SAME setup's published channelRanges is indistinguishable
+// from TestToNodeNoSurfacesPushesEmptyRanges' legitimate empty case) is
+// now readable back through the statusStore as "dropped", with a reason
+// naming the actual refusal.
+func TestToNodeFormattingFailureRecordsDroppedStatus(t *testing.T) {
+	cs := newFakeConfigStore()
+	putShow(cs, "front-yard", "Front Yard")
+	for i := 0; i < 20; i++ {
+		putSurface(cs, fmt.Sprintf("surface-%d", i), "front-yard", "node-1", 1+i*200, 150)
+	}
+	pub := &fakePublisher{}
+	statusStore := NewStatusStore()
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, statusStore); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+
+	obs := statusStore.NodeFPPConnectObservations("node-1")
+	if len(obs) != 2 {
+		t.Fatalf("NodeFPPConnectObservations returned %d entries, want 2", len(obs))
+	}
+	state, reason := obs[0], obs[1]
+	if state.Signal != SignalChannelRangeState || state.Value != ChannelRangeStateDropped {
+		t.Errorf("state observation = %+v, want signal %q value %q", state, SignalChannelRangeState, ChannelRangeStateDropped)
+	}
+	reasonStr, ok := reason.Value.(string)
+	if reason.Signal != SignalChannelRangeReason || !ok || reasonStr == "" {
+		t.Errorf("reason observation = %+v, want a non-empty string reason", reason)
+	}
+	if !strings.Contains(reasonStr, "120-byte") {
+		t.Errorf("reason = %q, want it to name the actual refusal (120-byte ping field)", reasonStr)
+	}
+}
+
+// TestToNodeNoSurfacesRecordsNoSurfacesStatus proves a node with no
+// configured surface at all records "no_surfaces", never "dropped" — the
+// legitimate empty case must stay distinguishable from a real drop.
+func TestToNodeNoSurfacesRecordsNoSurfacesStatus(t *testing.T) {
+	cs := newFakeConfigStore()
+	pub := &fakePublisher{}
+	statusStore := NewStatusStore()
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, statusStore); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+
+	obs := statusStore.NodeFPPConnectObservations("node-1")
+	if len(obs) != 2 {
+		t.Fatalf("NodeFPPConnectObservations returned %d entries, want 2", len(obs))
+	}
+	if obs[0].Value != ChannelRangeStateNoSurfaces {
+		t.Errorf("state = %v, want %q", obs[0].Value, ChannelRangeStateNoSurfaces)
+	}
+	if obs[1].Value != "" {
+		t.Errorf("reason = %v, want empty string (not applicable)", obs[1].Value)
+	}
+}
+
+// TestToNodeFormattedSurfaceRecordsFormattedStatus proves a node whose
+// range formats successfully records "formatted".
+func TestToNodeFormattedSurfaceRecordsFormattedStatus(t *testing.T) {
+	cs := newFakeConfigStore()
+	putShow(cs, "front-yard", "Front Yard")
+	putSurface(cs, "surface-1", "front-yard", "node-1", 1, 150)
+	pub := &fakePublisher{}
+	statusStore := NewStatusStore()
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, statusStore); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+
+	obs := statusStore.NodeFPPConnectObservations("node-1")
+	if len(obs) != 2 {
+		t.Fatalf("NodeFPPConnectObservations returned %d entries, want 2", len(obs))
+	}
+	if obs[0].Value != ChannelRangeStateFormatted {
+		t.Errorf("state = %v, want %q", obs[0].Value, ChannelRangeStateFormatted)
+	}
+	if obs[1].Value != "" {
+		t.Errorf("reason = %v, want empty string (not applicable)", obs[1].Value)
+	}
+}
+
+// TestToNodeNilStatusStoreIsANoOp proves a nil statusStore (an unwired
+// dependency) never panics ToNode, matching every other nil-safe optional
+// dependency in this package.
+func TestToNodeNilStatusStoreIsANoOp(t *testing.T) {
+	cs := newFakeConfigStore()
+	putShow(cs, "front-yard", "Front Yard")
+	for i := 0; i < 20; i++ {
+		putSurface(cs, fmt.Sprintf("surface-%d", i), "front-yard", "node-1", 1+i*200, 150)
+	}
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+}
+
 func TestToNodeActiveShowNullWhenNeverActivated(t *testing.T) {
 	cs := newFakeConfigStore()
 	putShow(cs, "front-yard", "Front Yard")
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -245,7 +344,7 @@ func TestToNodeActiveShowNameAndShowNamesList(t *testing.T) {
 	putShow(cs, "back-yard", "Back Yard")
 	putActiveShow(cs, "front-yard")
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -267,7 +366,7 @@ func TestToNodePushesShowsIDNameList(t *testing.T) {
 	putShow(cs, "front-yard", "Front Yard")
 	putShow(cs, "back-yard", "Back Yard")
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -291,7 +390,7 @@ func TestToNodePushesShowsIDNameList(t *testing.T) {
 func TestToNodePushesEmptyShowsListWhenNoShowsExist(t *testing.T) {
 	cs := newFakeConfigStore()
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -308,14 +407,14 @@ func TestIdempotencyKeyChangesWhenAShowIsRenamed(t *testing.T) {
 	cs := newFakeConfigStore()
 	putShow(cs, "front-yard", "Front Yard")
 
-	resolved1, err := resolveForNode(context.Background(), cs, "node-1", nil)
+	resolved1, _, err := resolveForNode(context.Background(), cs, "node-1", nil)
 	if err != nil {
 		t.Fatalf("resolveForNode: %v", err)
 	}
 	key1 := idempotencyKeyFor("node-1", resolved1)
 
 	putShow(cs, "front-yard", "Front Yard Renamed")
-	resolved2, err := resolveForNode(context.Background(), cs, "node-1", nil)
+	resolved2, _, err := resolveForNode(context.Background(), cs, "node-1", nil)
 	if err != nil {
 		t.Fatalf("resolveForNode: %v", err)
 	}
@@ -329,7 +428,7 @@ func TestIdempotencyKeyChangesWhenAShowIsRenamed(t *testing.T) {
 func TestToNodePushesDefaultSettingsWhenUnconfigured(t *testing.T) {
 	cs := newFakeConfigStore()
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -349,7 +448,7 @@ func TestToNodePushesConfiguredSettings(t *testing.T) {
 	cs := newFakeConfigStore()
 	putSettings(cs, config.FPPConnectSettingsPayload{Enabled: false, MaxFileBytes: 100, MaxAssetDirBytes: 1000})
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -368,7 +467,7 @@ func TestToNodePushesConfiguredSettings(t *testing.T) {
 func TestToNodePushesEmptyCoordinatorBaseURLWhenUnconfigured(t *testing.T) {
 	cs := newFakeConfigStore()
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -384,7 +483,7 @@ func TestToNodePushesConfiguredCoordinatorBaseURL(t *testing.T) {
 	cs := newFakeConfigStore()
 	putAssetSettings(cs, config.AssetSettings{ContentBaseURL: "http://coordinator.example:8080"})
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -401,14 +500,14 @@ func TestIdempotencyKeyChangesWhenCoordinatorBaseURLChanges(t *testing.T) {
 	cs := newFakeConfigStore()
 	putAssetSettings(cs, config.AssetSettings{ContentBaseURL: "http://coordinator.example:8080"})
 
-	resolved1, err := resolveForNode(context.Background(), cs, "node-1", nil)
+	resolved1, _, err := resolveForNode(context.Background(), cs, "node-1", nil)
 	if err != nil {
 		t.Fatalf("resolveForNode: %v", err)
 	}
 	key1 := idempotencyKeyFor("node-1", resolved1)
 
 	putAssetSettings(cs, config.AssetSettings{ContentBaseURL: "http://coordinator.example:9090"})
-	resolved2, err := resolveForNode(context.Background(), cs, "node-1", nil)
+	resolved2, _, err := resolveForNode(context.Background(), cs, "node-1", nil)
 	if err != nil {
 		t.Fatalf("resolveForNode: %v", err)
 	}
@@ -428,13 +527,13 @@ func TestIdempotencyKeyStableWhenNothingChangedButChangesWhenSomethingDoes(t *te
 	putSurface(cs, "surface-1", "front-yard", "node-1", 1, 150)
 
 	pub1 := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub1, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub1, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (1): %v", err)
 	}
 	cmd1, _ := pub1.last()
 
 	pub2 := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub2, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub2, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (2): %v", err)
 	}
 	cmd2, _ := pub2.last()
@@ -445,7 +544,7 @@ func TestIdempotencyKeyStableWhenNothingChangedButChangesWhenSomethingDoes(t *te
 
 	putSurface(cs, "surface-2", "front-yard", "node-1", 301, 150)
 	pub3 := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub3, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub3, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (3): %v", err)
 	}
 	cmd3, _ := pub3.last()
@@ -480,7 +579,7 @@ func TestIdempotencyKeyNeverRepeatsAcrossARevertToAnEarlierValue(t *testing.T) {
 	// Revision 1: Halloween.
 	cs.put(config.ShowActiveConfigKind, config.ShowActiveObjectID, 1, rawHalloween)
 	pub1 := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub1, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub1, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (1): %v", err)
 	}
 	cmd1, _ := pub1.last()
@@ -491,7 +590,7 @@ func TestIdempotencyKeyNeverRepeatsAcrossARevertToAnEarlierValue(t *testing.T) {
 	// Revision 2: Christmas.
 	cs.put(config.ShowActiveConfigKind, config.ShowActiveObjectID, 2, rawChristmas)
 	pub2 := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub2, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub2, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (2): %v", err)
 	}
 	cmd2, _ := pub2.last()
@@ -500,7 +599,7 @@ func TestIdempotencyKeyNeverRepeatsAcrossARevertToAnEarlierValue(t *testing.T) {
 	// revision 1's push, but a genuinely new, later revision.
 	cs.put(config.ShowActiveConfigKind, config.ShowActiveObjectID, 3, rawHalloween)
 	pub3 := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub3, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub3, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (3): %v", err)
 	}
 	cmd3, _ := pub3.last()
@@ -536,7 +635,7 @@ func TestIdempotencyKeyNeverRepeatsWhenASurfaceIsMovedOffANode(t *testing.T) {
 
 	// Baseline: node-1 has never had a surface.
 	baselinePub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, baselinePub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, baselinePub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (baseline): %v", err)
 	}
 	baselineCmd, _ := baselinePub.last()
@@ -547,7 +646,7 @@ func TestIdempotencyKeyNeverRepeatsWhenASurfaceIsMovedOffANode(t *testing.T) {
 	// Revision 1: the surface is created on node-1.
 	putSurface(cs, "garage-door", "halloween", "node-1", 1, 150)
 	addedPub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, addedPub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, addedPub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (added): %v", err)
 	}
 	addedCmd, _ := addedPub.last()
@@ -570,7 +669,7 @@ func TestIdempotencyKeyNeverRepeatsWhenASurfaceIsMovedOffANode(t *testing.T) {
 	}
 	cs.put(config.ShowSurfaceConfigKind, "garage-door", 2, movedRaw)
 	vacatedPub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, vacatedPub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, vacatedPub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (vacated): %v", err)
 	}
 	vacatedCmd, _ := vacatedPub.last()
@@ -590,7 +689,7 @@ func TestIdempotencyKeyNeverRepeatsWhenASurfaceIsMovedOffANode(t *testing.T) {
 	// Revision 3: the surface moves back onto node-1, the revert case.
 	cs.put(config.ShowSurfaceConfigKind, "garage-door", 3, addedSurfaceRaw(t))
 	revertPub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, revertPub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, revertPub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode (revert): %v", err)
 	}
 	revertCmd, _ := revertPub.last()
@@ -639,7 +738,7 @@ func TestActiveShowUnresolvableReferenceReportsNilNotRawID(t *testing.T) {
 	putActiveShow(cs, "ghost-show")
 
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	cmd, _ := pub.last()
@@ -654,7 +753,7 @@ func TestActiveShowUnresolvableReferenceReportsNilNotRawID(t *testing.T) {
 func TestBestEffortNeverPanicsOnPublishFailure(t *testing.T) {
 	cs := newFakeConfigStore()
 	pub := &fakePublisher{failNext: true}
-	BestEffort(context.Background(), cs, pub, time.Now, "any-node", nil)
+	BestEffort(context.Background(), cs, pub, time.Now, "any-node", nil, nil)
 }
 
 // TestEachWriteProducesExactlyOnePushPerAffectedNode proves ToNode itself
@@ -664,7 +763,7 @@ func TestBestEffortNeverPanicsOnPublishFailure(t *testing.T) {
 func TestEachWriteProducesExactlyOnePushPerAffectedNode(t *testing.T) {
 	cs := newFakeConfigStore()
 	pub := &fakePublisher{}
-	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil); err != nil {
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1", nil, nil); err != nil {
 		t.Fatalf("ToNode: %v", err)
 	}
 	if len(pub.published) != 1 {
