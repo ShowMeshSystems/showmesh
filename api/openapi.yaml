@@ -6497,10 +6497,13 @@ paths:
         exists in that definition with matching filenames, every
         referenced Cue exists and belongs to the same Show, and the
         latest accepted observation (when one exists) carries the same
-        playlistHash), and the exact failing one when it does not. Refuses
-        with `400` for a playlist whose runner is not `fpp`: §6 readiness
-        is an FPP-specific concept. Read-only: this route never activates
-        anything.
+        playlistHash), plus one Lane 16 addition: when a
+        referenced Cue declares a render output, every node holding a
+        show.surface object for this Playlist's Show must currently hold a
+        render assignment for it. Reports the exact failing one when any
+        does not. Refuses with `400` for a playlist whose runner is not
+        `fpp`: §6 readiness is an FPP-specific concept. Read-only: this
+        route never activates anything.
       parameters:
         - name: playlistId
           in: path
@@ -12204,7 +12207,8 @@ components:
       type: object
       description: >-
         The body of GET /integrations/fpp/playlists/{playlistId}/readiness
-        (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is
+        (TRACK-H-H2-SPEC.md §6, plus Lane 16's `node-render-unassigned`
+        addition): whether one FPP-backed Playlist is
         ready, and which condition fails first when it is not.
         `warning` is set only for the non-fatal form of the
         observation-hash check (no observation received yet, "the
@@ -12224,6 +12228,7 @@ components:
             - entry-filename-mismatch
             - cue-not-ready
             - observation-hash-mismatch
+            - node-render-unassigned
         reason:
           type: string
         warning:
