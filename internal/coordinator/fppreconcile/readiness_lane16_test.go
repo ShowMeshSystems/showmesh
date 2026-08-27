@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
@@ -31,8 +32,11 @@ func TestPlaylistReadinessNodeCatalogStale(t *testing.T) {
 	putAudioNode(t, st, "node-1")
 	declareNode(t, st, "node-1")
 	// cue-1 (from singleEntryPlaylist) declares only render, so give
-	// node-1 a surface so it actually participates in this show's catalog.
+	// node-1 a surface so it actually participates in this show's catalog,
+	// and a confirmed render assignment for it so node-render-unassigned
+	// (now checked before this condition) does not mask it.
 	putSurface(t, st, "surface-1", "show-1", "node-1")
+	putSurfacePipelineState(t, st, "surface-1", "node-1", "running", time.Unix(1000, 0).UTC())
 
 	// node-1 NEVER acknowledges any cue-catalog revision at all.
 
@@ -62,6 +66,7 @@ func TestPlaylistReadinessNodeCatalogStaleWrongAcknowledgedRevision(t *testing.T
 	putAudioNode(t, st, "node-1")
 	declareNode(t, st, "node-1")
 	putSurface(t, st, "surface-1", "show-1", "node-1")
+	putSurfacePipelineState(t, st, "surface-1", "node-1", "running", time.Unix(1000, 0).UTC())
 
 	// node-1 acknowledges SOME revision, but not the one the coordinator
 	// currently resolves for this show/generation/node.
@@ -101,6 +106,7 @@ func TestPlaylistReadinessNodeCatalogCurrentPasses(t *testing.T) {
 	putAudioNode(t, st, "node-1")
 	declareNode(t, st, "node-1")
 	putSurface(t, st, "surface-1", "show-1", "node-1")
+	putSurfacePipelineState(t, st, "surface-1", "node-1", "running", time.Unix(1000, 0).UTC())
 
 	active, err := assetsync.ResolveActiveShow(context.Background(), st)
 	if err != nil {
@@ -378,21 +384,6 @@ func putAudioNode(t *testing.T, st *store.Store, nodeID string) {
 		t.Fatalf("encode audio.node payload: %v", err)
 	}
 	putConfig(t, st, config.AudioNodeConfigKind, nodeID, raw)
-}
-
-func putSurface(t *testing.T, st *store.Store, surfaceID, showID, nodeID string) {
-	t.Helper()
-	payload, err := config.EncodeShowSurfacePayload(config.ShowSurfacePayload{
-		Show: showID, Name: surfaceID, Node: nodeID,
-		ChannelRange: config.ShowSurfaceChannelRange{StartChannel: 1, ChannelCount: 12},
-		Geometry:     config.ShowSurfaceGeometry{Width: 2, Height: 2, PixelFormat: config.ShowSurfacePixelFormatRGB},
-		FrameRate:    40,
-		Output:       config.ShowSurfaceOutput{Transport: config.ShowSurfaceTransportNDI, NDI: &config.ShowSurfaceNDIOutput{SourceName: "test"}},
-	})
-	if err != nil {
-		t.Fatalf("encode show.surface payload: %v", err)
-	}
-	putConfig(t, st, config.ShowSurfaceConfigKind, surfaceID, payload)
 }
 
 func declareNode(t *testing.T, st *store.Store, nodeID string) {
