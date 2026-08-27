@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getShowCue, getShowCueRevisions, putShowCue, type ConfigRevisionMeta } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
 import { ShowSelect } from '../components/ShowSelect'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 import type { ConfigShowCue, CueAnnouncementPolicy, ShowCueConfigResponse } from '../app/types'
 
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.cue authoring.
@@ -261,7 +262,10 @@ export function ShowCueDetail({ isNew = false }: ShowCueDetailProps) {
   const editable = writeGate.allowed
 
   return (
-    <div>
+    <div className="operator-page authoring-page">
+      {!isNew && form.show !== '' && (
+        <p className="settings-breadcrumb"><Link to={showWorkspacePath(form.show)}>Back to {form.show}</Link> / Cue details</p>
+      )}
       <h2 className="panel__title">{isNew ? 'New cue' : form.name || existingId}</h2>
 
       {!editable && (

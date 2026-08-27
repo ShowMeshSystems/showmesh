@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getShowAction, getShowActionRevisions, putShowAction, type ConfigRevisionMeta } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
@@ -16,6 +16,7 @@ import { ScopedButton } from '../components/ScopedButton'
 import { ShowSelect } from '../components/ShowSelect'
 import { ActionBindingCheck } from '../components/ActionBindingCheck'
 import { ActionInvokeButton } from '../components/ActionInvokeButton'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 import type { ActionIntegration, ConfigShowAction, SafetyClass, ShowActionConfigResponse } from '../app/types'
 
 // Authoring surface #1 of 2 for this wave (STEP-9-SPEC.md section 5.3):
@@ -589,7 +590,10 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
   const editable = writeGate.allowed
 
   return (
-    <div>
+    <div className="operator-page authoring-page">
+      {!isNew && form.show !== '' && (
+        <p className="settings-breadcrumb"><Link to={showWorkspacePath(form.show)}>Back to {form.show}</Link> / Action details</p>
+      )}
       <h2 className="panel__title">{isNew ? 'New show action' : form.label || existingId}</h2>
 
       {!isNew && existingId && (
@@ -1041,4 +1045,3 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
     </div>
   )
 }
-

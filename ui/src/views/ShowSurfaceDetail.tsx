@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   getShowSurface,
   getShowSurfaceRevisions,
@@ -11,6 +11,7 @@ import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
 import { ShowSelect } from '../components/ShowSelect'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 import type {
   ConfigShowSurface,
   ShowSurfaceConfigResponse,
@@ -242,7 +243,10 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
   const editable = writeGate.allowed
 
   return (
-    <div>
+    <div className="operator-page authoring-page">
+      {!isNew && form.show !== '' && (
+        <p className="settings-breadcrumb"><Link to={showWorkspacePath(form.show)}>Back to {form.show}</Link> / Surface details</p>
+      )}
       <h2 className="panel__title">{isNew ? 'New surface' : form.name || existingId}</h2>
 
       {!editable && (

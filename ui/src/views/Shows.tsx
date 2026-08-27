@@ -44,8 +44,8 @@ export function Shows() {
   }, [readGate.allowed])
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.75rem' }}>
+    <div className="operator-page authoring-page">
+      <div className="operator-page__header">
         <h2 className="panel__title">Shows</h2>
         {writeGate.allowed ? (
           <Link className="entity-link" to="/config/show/new">
@@ -62,9 +62,9 @@ export function Shows() {
       </div>
       {/* A show is a namespace, not a container (ADR-027 decision 2): surfaces, actions, and macros
           each carry a reference to one, so programming one show cannot accidentally revise another. */}
-      <p className="text-muted">
-        A show is a namespace: surfaces, actions, and macros each carry a reference to one, so
-        programming one show cannot accidentally revise another. See{' '}
+      <p className="operator-page__lede text-muted">
+        A Show is the authoring workspace and namespace for its Cues, Playlists, Assets, Automation,
+        Presentation, Show Night, and Readiness. See{' '}
         <Link to="/config/show.active">the active show</Link> to change what is currently running.
       </p>
 

@@ -6,6 +6,7 @@ import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { AssetUpload } from '../components/AssetUpload'
 import type { Asset } from '../app/types'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 
 // Track G seam G-8: the asset browser (ADR-028). Metadata list, narrowable
 // by show/sequence/node via query params (mirroring GET /assets' own
@@ -64,10 +65,10 @@ export function Assets() {
   }
 
   return (
-    <div>
+    <div className="operator-page authoring-page">
       <h2 className="panel__title">Assets</h2>
       {/* Metadata in SQLite, bytes never in it (ADR-028 decision 4). */}
-      <p className="text-muted">
+      <p className="operator-page__lede text-muted">
         Every stored asset&rsquo;s metadata: bytes never live in this list. Identity is show +
         sequence + target + content hash, never a filename: three different targets&rsquo;
         artifacts for one xLights sequence may legitimately share one filename.
@@ -135,7 +136,7 @@ export function Assets() {
                       {state.assets.map((a) => (
                         <tr key={a.id}>
                           <td>{a.sequence}</td>
-                          <td>{a.show}</td>
+                          <td><Link className="entity-link" to={showWorkspacePath(a.show)}>{a.show}</Link></td>
                           <td>{a.targetKind === 'node' ? a.target : 'show-wide'}</td>
                           <td>{a.mediaType}</td>
                           <td>{a.runtimeFilename}</td>

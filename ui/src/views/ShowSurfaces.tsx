@@ -5,6 +5,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import type { ConfigObjectSummary } from '../app/types'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 
 // Track G seam G-8: the show.surface list, narrowable by show
 // (?show=<id>, api/openapi.yaml's own `GET /config/show.surface`
@@ -47,8 +48,8 @@ export function ShowSurfaces() {
   }, [readGate.allowed, showFilter])
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.75rem' }}>
+    <div className="operator-page authoring-page">
+      <div className="operator-page__header">
         <h2 className="panel__title">Surfaces</h2>
         {writeGate.allowed ? (
           <Link className="entity-link" to="/config/show.surface/new">
@@ -66,7 +67,7 @@ export function ShowSurfaces() {
       {/* A surface owns a logical canvas, its virtual-matrix channel extraction, and its output
           (ADR-026); a manual channel range is a permanent, first-class configuration path, not a
           fallback (ADR-027 decision 4). */}
-      <p className="text-muted">
+      <p className="operator-page__lede text-muted">
         A surface owns one node&rsquo;s canvas, its virtual-matrix channel extraction, and its
         output. A manual channel range is a permanent, first-class way to configure one, not a
         fallback.
@@ -120,7 +121,7 @@ export function ShowSurfaces() {
                           {obj.label}
                         </Link>
                       </td>
-                      <td>{obj.show}</td>
+                      <td><Link className="entity-link" to={showWorkspacePath(obj.show)}>{obj.show}</Link></td>
                       <td>{obj.currentRevision}</td>
                       <td>{formatAbsolute(obj.updatedAt)}</td>
                     </tr>

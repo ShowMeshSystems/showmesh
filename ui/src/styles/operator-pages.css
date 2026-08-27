@@ -270,6 +270,156 @@
   font-size: var(--font-size-sm);
 }
 
+/* Show authoring is a workspace, not a second global navigation tree. The
+ * links stay compact on desktop and become a horizontally scrollable tab row
+ * on a phone so every destination remains reachable without shrinking the
+ * text below a comfortable size. */
+.show-workspace {
+  gap: var(--space-4);
+}
+
+.show-workspace__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.show-workspace__header .settings-breadcrumb {
+  margin-bottom: var(--space-2);
+}
+
+.show-workspace__nav {
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.show-workspace__nav ul {
+  display: flex;
+  gap: var(--space-1);
+  min-width: max-content;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.show-workspace__nav-link {
+  display: block;
+  min-width: 7rem;
+  min-height: var(--touch-target-min);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 3px solid transparent;
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+.show-workspace__nav-link:hover,
+.show-workspace__nav-link[aria-current='page'] {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.show-workspace__nav-detail {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--font-size-xs);
+}
+
+.show-workspace__intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.show-workspace__intro h2,
+.show-workspace__future h2,
+.show-workspace__content > section > h2 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.show-workspace__revision {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.show-workspace__cards {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.show-workspace__card {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: 8rem;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.show-workspace__card:hover {
+  border-color: var(--color-accent);
+}
+
+.show-workspace__card-label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.show-workspace__card-count {
+  font-size: var(--font-size-xl);
+  font-variant-numeric: tabular-nums;
+}
+
+.show-workspace__card-detail {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.show-workspace__future {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.show-workspace__future > p {
+  margin: 0;
+}
+
+.show-workspace__future-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.show-workspace__future-link {
+  display: grid;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding: var(--space-3);
+  border-left: 3px solid var(--color-border);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.show-workspace__future-link:hover {
+  border-left-color: var(--color-accent);
+}
+
+.show-workspace__future-link span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
 /* Monitor is a directory of operational surfaces. Its navigation is a
  * simple list of links, not decorative dashboard tiles, so the same
  * structure remains useful on a phone and with a keyboard. */
@@ -429,6 +579,14 @@
   .monitor-page__summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .show-workspace__cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .show-workspace__future-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 620px) {
@@ -466,5 +624,14 @@
 
   .monitor-page__nav-link {
     align-items: flex-start;
+  }
+
+  .show-workspace__header .entity-link {
+    width: 100%;
+    text-align: center;
+  }
+
+  .show-workspace__cards {
+    grid-template-columns: 1fr;
   }
 }

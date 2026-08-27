@@ -7,6 +7,7 @@ import { formatAbsolute } from '../app/time'
 import type { ActionBinding, ConfigObjectSummary } from '../app/types'
 import { ActionBindingBadge } from '../components/DomainBadges'
 import { ActionInvokeButton } from '../components/ActionInvokeButton'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 
 // Same read posture as Macros.tsx (STEP-9-SPEC.md section 5.5: "Same
 // read posture as GET /config/show.action"): show:macro:run OR
@@ -72,8 +73,8 @@ export function ShowActions() {
   }, [showFilter])
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.75rem' }}>
+    <div className="operator-page authoring-page">
+      <div className="operator-page__header">
         <h2 className="panel__title">Show actions</h2>
         {/* This task's finding 9, applied identically to Macros.tsx's
             "New macro" link: hidden outright for a principal without
@@ -95,7 +96,7 @@ export function ShowActions() {
           </span>
         )}
       </div>
-      <p className="text-muted">
+      <p className="operator-page__lede text-muted">
         A show action is one logical step a macro can invoke: an FPP primitive or an external
         MQTT command. Macros compose actions; actions never appear on their own in a running
         show.
@@ -157,7 +158,7 @@ export function ShowActions() {
                             {obj.label}
                           </Link>
                         </td>
-                        <td>{obj.show}</td>
+                        <td><Link className="entity-link" to={showWorkspacePath(obj.show)}>{obj.show}</Link></td>
                         <td>{obj.currentRevision}</td>
                         <td>{formatAbsolute(obj.updatedAt)}</td>
                         <td>

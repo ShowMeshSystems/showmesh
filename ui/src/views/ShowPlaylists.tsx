@@ -5,6 +5,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import type { ConfigObjectSummary } from '../app/types'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): the show.playlist
 // list, narrowable by show (?show=<id>, api/openapi.yaml's own
@@ -48,8 +49,8 @@ export function ShowPlaylists() {
   }, [readGate.allowed, showFilter])
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.75rem' }}>
+    <div className="operator-page authoring-page">
+      <div className="operator-page__header">
         <h2 className="panel__title">Playlists</h2>
         {writeGate.allowed ? (
           <Link className="entity-link" to="/config/show.playlist/new">
@@ -67,7 +68,7 @@ export function ShowPlaylists() {
       {/* A Playlist is the ordered run of Cues a runner plays (ADR-043,
           TRACK-H-cues-and-playlists.md H1/H6): each entry names one Cue,
           and never defines output directly itself. */}
-      <p className="text-muted">
+      <p className="operator-page__lede text-muted">
         A Playlist declares the ordered run of Cues a runner (FPP or
         showmesh-audio) plays. Each entry names a Cue defined elsewhere; a
         Playlist never declares an output directly itself.
@@ -121,7 +122,7 @@ export function ShowPlaylists() {
                           {obj.label}
                         </Link>
                       </th>
-                      <td>{obj.show}</td>
+                      <td><Link className="entity-link" to={showWorkspacePath(obj.show)}>{obj.show}</Link></td>
                       <td>{obj.currentRevision}</td>
                       <td>{formatAbsolute(obj.updatedAt)}</td>
                     </tr>

@@ -110,7 +110,7 @@ export function AssetManifest() {
   }, [readGate.allowed])
 
   return (
-    <div>
+    <div className="operator-page authoring-page">
       <h2 className="panel__title">Asset manifest</h2>
       {/* ADR-028 seam E5: "what should this node hold" versus "what does it actually hold". */}
       <p className="text-muted">

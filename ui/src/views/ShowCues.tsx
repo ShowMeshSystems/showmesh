@@ -5,6 +5,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import type { ConfigObjectSummary } from '../app/types'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): the show.cue list,
 // narrowable by show (?show=<id>, api/openapi.yaml's own
@@ -47,8 +48,8 @@ export function ShowCues() {
   }, [readGate.allowed, showFilter])
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.75rem' }}>
+    <div className="operator-page authoring-page">
+      <div className="operator-page__header">
         <h2 className="panel__title">Cues</h2>
         {writeGate.allowed ? (
           <Link className="entity-link" to="/config/show.cue/new">
@@ -67,7 +68,7 @@ export function ShowCues() {
           activation share (ADR-043, TRACK-H-cues-and-playlists.md H1/H4): a
           Playlist's entries each name one, and never define output directly
           themselves. */}
-      <p className="text-muted">
+      <p className="operator-page__lede text-muted">
         A Cue declares what one activation does: a render sequence, a local
         audio asset and its LTC offset, and an announcement policy. A
         Playlist&rsquo;s entries each name a Cue; a Cue never appears without
@@ -122,7 +123,7 @@ export function ShowCues() {
                           {obj.label}
                         </Link>
                       </th>
-                      <td>{obj.show}</td>
+                      <td><Link className="entity-link" to={showWorkspacePath(obj.show)}>{obj.show}</Link></td>
                       <td>{obj.currentRevision}</td>
                       <td>{formatAbsolute(obj.updatedAt)}</td>
                     </tr>

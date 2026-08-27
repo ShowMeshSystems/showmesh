@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   getShowPlaylist,
   getShowPlaylistRevisions,
@@ -19,6 +19,7 @@ import type {
   PlaylistShowmeshAudioRepeat,
   ShowPlaylistConfigResponse,
 } from '../app/types'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
 
 // Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): show.playlist
 // authoring. Same "mirror, not authority" posture as ShowActionDetail.tsx
@@ -374,7 +375,10 @@ export function ShowPlaylistDetail({ isNew = false }: ShowPlaylistDetailProps) {
   const editable = writeGate.allowed
 
   return (
-    <div>
+    <div className="operator-page authoring-page">
+      {!isNew && form.show !== '' && (
+        <p className="settings-breadcrumb"><Link to={showWorkspacePath(form.show)}>Back to {form.show}</Link> / Playlist details</p>
+      )}
       <h2 className="panel__title">{isNew ? 'New playlist' : form.name || existingId}</h2>
 
       {!editable && (
