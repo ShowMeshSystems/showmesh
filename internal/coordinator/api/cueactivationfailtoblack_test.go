@@ -456,4 +456,16 @@ func TestCueActivationTickOneAssetMissingFailToBlackDoesNotBlockTick(t *testing.
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
+
+	// setup.renderPub.count() > 0 only proves the clear was DISPATCHED —
+	// the background goroutine cueActivationTickOne launched is still
+	// polling toward its own renderCommandConfirmDeadline (it never
+	// confirms, by this test's own fixture) when that count first turns
+	// positive. h.cueActivationFailToBlackWG is that goroutine's real
+	// owner (see cueactivationloop.go's own doc comment); waiting on it
+	// here — an explicit hook, not a sleep — is what lets t.Cleanup above
+	// safely restore renderCommandConfirmDeadline/renderCommandPollInterval
+	// once this call returns, instead of racing the still-running goroutine's
+	// own reads of those same package vars.
+	h.cueActivationFailToBlackWG.Wait()
 }

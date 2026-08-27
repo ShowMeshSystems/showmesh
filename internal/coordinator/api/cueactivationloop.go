@@ -124,6 +124,17 @@ func (l *CueActivationLoop) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			l.inFlight <- struct{}{}
+			// The tick's own goroutine (runTick, above) is now done, so it
+			// can no longer launch a new dispatchAssetMissingFailToBlack
+			// goroutine (cueActivationTickOne's own go statement, below) —
+			// l.h.cueActivationFailToBlackWG's own Add calls are all
+			// already made, and Wait can only shrink from here. Waiting on
+			// this SAME *handlers' WaitGroup (l.h is the one instance both
+			// runTick and cueActivationTickOne share) is what gives that
+			// goroutine a real owner: without it, Run could return, and the
+			// store it still writes to could close, while it was still
+			// dispatching a fail-to-black and appending its audit entry.
+			l.h.cueActivationFailToBlackWG.Wait()
 			return
 		case <-ticker.C:
 			l.runTick(ctx)
@@ -268,9 +279,23 @@ func (h *handlers) cueActivationTickOne(ctx context.Context, now time.Time, obs 
 		// long-lived context (this tick's caller), not a per-request one,
 		// so it outlives this method's own return exactly the way the
 		// outer per-tick goroutine (runTick) already does one level up.
+		//
+		// h.cueActivationFailToBlackWG is this goroutine's real owner:
+		// Add happens here, on the CALLER's own goroutine, strictly
+		// before the go statement starts the new one, so
+		// [CueActivationLoop.Run]'s own ctx.Done() Wait can never
+		// observe a zero counter while a dispatch is still about to
+		// start. Without an owner, this goroutine could still be
+		// dispatching, and appending its audit entry, after Run had
+		// already returned and the coordinator's shutdown path had
+		// closed the store out from under it.
 		if targets := assetMissingFailToBlackTargets(outcomes); len(targets) > 0 {
 			episode := blackAndSilenceEpisode(obs)
-			go h.dispatchAssetMissingFailToBlack(ctx, now, obs.InstanceUUID, targets, issuer, episode)
+			h.cueActivationFailToBlackWG.Add(1)
+			go func() {
+				defer h.cueActivationFailToBlackWG.Done()
+				h.dispatchAssetMissingFailToBlack(ctx, now, obs.InstanceUUID, targets, issuer, episode)
+			}()
 		}
 	case cueactivate.StateUnbound, cueactivate.StateIdentityUnavailable:
 		// Nothing to dispatch or hold — see [cueactivate.State]'s own doc
