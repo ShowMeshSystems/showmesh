@@ -94,8 +94,11 @@ func EncodeAudioNodePayload(p AudioNodePayload) (string, error) {
 	return string(b), nil
 }
 
-// DecodeAudioNodePayload parses and validates raw's STRUCTURE: every field
-// required, non-null, non-empty. It deliberately does NOT check
+// DecodeAudioNodePayload parses and validates raw's STRUCTURE: every
+// required field non-null and non-empty. "ltcRoute" and "ltcChannel" are
+// the one OPTIONAL pair, and they are optional together: both absent
+// declares a program-only node that emits no LTC, and one without the
+// other is refused (see [decodeAudioNodeLTC]). It deliberately does NOT check
 // ProgramRoute/LTCRoute against a node's advertised capabilities — that is
 // probe evidence, fetched by the API layer, checked by
 // [ValidateAudioNodePlacement], exactly the same split showsurface.go uses

@@ -54,7 +54,7 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
-## 2026-08-26 (SM-317: a two-output audio interface could not be declared as an `audio.node` at all; built, not merged)
+## 2026-08-26 (SM-317: a two-output audio interface could not be declared as an `audio.node` at all)
 
 **Goal:** make a program-only audio node declarable. Found while trying to
 run the Lane 19 Raspberry Pi audio node, and it is neither arm64-specific
@@ -142,20 +142,72 @@ screen: a program-only save asserting both LTC keys are absent from the
 PUT body rather than sent empty, and a half-declared pair refused before
 any request is dispatched.
 
-**Gates.** `make check` in the foreground.
+**Review found two blocking defects in the first cut, both fixed here.**
 
-**Not merged, deliberately.** This changes `api/openapi.yaml` and the
-`audio.node` config kind during the SM-310 API freeze checkpoint that
-Lane 17 owns, so it is built and pushed for review and routing rather
-than merged from this lane.
+- **A program-only node broke cue-catalog resolution for the WHOLE show,
+  not just its LTC cue.** `assetsync/cuecatalog.go`'s
+  `scopeShowCueOutputsForNode` cleared `Outputs.LTC` only when the node
+  had no `audio.node` at all. A program-only node HAS one, so
+  `Outputs.LTC` survived scoping while `ShowCueClaimContext.LTCRoute` was
+  empty, and `DeriveShowCueClaims` then refused with "outputs.ltc is
+  declared but ShowCueClaimContext.LTCNode/LTCRoute is empty", which
+  `ResolveCueCatalog` propagates as `return Catalog{}, err`. Every cue on
+  that node failed, which is exactly the opaque failure the `Catalog`
+  type's own doc comment forbids, and activation and deployment for all
+  of them depend on it. The scoping function's comment stated the
+  assumption in as many words: a node with no `audio.node` "leaves those
+  context fields empty by construction". Making the LTC pair optional
+  destroyed that by-construction guarantee, so the predicate is now
+  explicit: `nodeHasLTC := nodeHasAudioNode && audioNode.LTCRoute != ""`,
+  used for LTC scoping, LTC output projection and the LTC claim context,
+  while `nodeHasAudioNode` still governs Audio and Announcement.
+  `resolveCueOutputs` had the same wrong predicate and is fixed too; it
+  was an independent second defect, not merely masked by the first, and
+  reverting only that line makes the new tests fail with an `LTCOutput`
+  shipped to a node that emits no LTC.
+- **`showmeshctl` could not declare a program-only node.** `audio node
+  set` hard-required `--ltc-route` and `--ltc-channel`, and
+  `configAudioNode` carried no `omitempty`, so even a relaxed flag check
+  would have sent `"ltcRoute":""`, which the new decode correctly refuses
+  as field-empty. Operator capabilities are API-first and must stay
+  usable through `showmeshctl` at practical parity with the UI, and a
+  headless operator had no path at all to the exact device class this
+  change exists to support. Both flags are now optional together with the
+  same both-or-neither refusal the server applies, failing fast rather
+  than spending a round trip. `printAudioNodeDetail` printed a blank "LTC
+  route:" and "LTC channel: 0"; it now says "LTC: none (program-only
+  node)" outright, removing from the CLI the same misleading channel-zero
+  render that was removed from the UI.
+
+`api/openapi.yaml` also gained `dependentRequired` ({ltcRoute:
+[ltcChannel], ltcChannel: [ltcRoute]}) so a generated client refuses the
+half-pair the server refuses, rather than accepting it and learning at
+runtime. The document is 3.1.0, so the keyword is available.
+
+**Gates.** `make check` run in the foreground, **exit 0, clean tree**,
+against the final pushed commit; the commit identifier is recorded in the
+pull request. `make test-integration` was not run: another lane was
+exercising the same broker and container resources, and this change is
+covered at the decode, placement, catalog-resolution, push, CLI and UI
+layers rather than across the wire.
 
 **Not verified.** No stored pre-change `audio.node` revision was migrated
 or re-decoded; every existing revision carries both LTC fields and
 decodes unchanged, but that was reasoned from the decode path rather than
-exercised against a populated store. The end-to-end path (declare a
-program-only node, prepare and play a session on the Raspberry Pi through
-the agent's own session engine) is SM-181's remaining measurement and is
-recorded there, not here.
+exercised against a populated store. The Operator UI and CLI changes have
+component and command-level test evidence only, with no browser or
+terminal click-through. The end-to-end path (declare a program-only node,
+prepare and play a session on the Raspberry Pi through the agent's own
+session engine) was exercised against a branch build of this change and
+is recorded on SM-181, not here.
+
+Two related limitations are deliberately NOT addressed here and are filed
+separately: the Operator UI's route picker still intersects program-
+capable and LTC-capable routes, and nothing flags an LTC-capable node
+accidentally declared program-only.
+
+---
+
 ## 2026-08-26 (Installing a prebuilt node agent no longer needs a compiler; first arm64 install, on a Raspberry Pi 3B+)
 
 **Goal:** install the native node agent on a Raspberry Pi from a prebuilt

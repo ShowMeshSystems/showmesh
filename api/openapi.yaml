@@ -10665,6 +10665,9 @@ components:
         inferred, and are required on a program-only node too.
       required:
         [programRoute, programChannels, clockDomain, clockDomainProvenance]
+      dependentRequired:
+        ltcRoute: [ltcChannel]
+        ltcChannel: [ltcRoute]
       properties:
         programRoute:
           type: string

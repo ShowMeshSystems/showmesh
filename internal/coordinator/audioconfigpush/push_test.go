@@ -119,6 +119,81 @@ func TestToNodePushesConfiguredAudioNode(t *testing.T) {
 	}
 }
 
+// TestToNodePushesProgramOnlyAudioNodeWithoutLTCKeys pins the push half
+// of a program-only binding. Such a node's stored payload carries no LTC route
+// or channel, and the AGENT refuses one of the pair without the other,
+// so the push must omit BOTH keys rather than sending an empty route and
+// a zero channel. Getting this wrong makes the coordinator's own push be
+// rejected by its own agent, and the binding never lands.
+func TestToNodePushesProgramOnlyAudioNodeWithoutLTCKeys(t *testing.T) {
+	cs := newFakeConfigStore()
+	payload := config.AudioNodePayload{
+		ProgramRoute:    "hw:CARD=USB,DEV=0",
+		ProgramChannels: []int{1, 2},
+		ClockDomain:     "solo", ClockDomainProvenance: "two-output interface",
+	}
+	raw, err := config.EncodeAudioNodePayload(payload)
+	if err != nil {
+		t.Fatalf("EncodeAudioNodePayload: %v", err)
+	}
+	cs.put(config.AudioNodeConfigKind, "pi-audio-01", 1, raw)
+
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "pi-audio-01"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+
+	params, ok := pub.actionParams("audio.node.configure")
+	if !ok {
+		t.Fatal("no audio.node.configure command was published")
+	}
+	if _, present := params["ltcRoute"]; present {
+		t.Errorf("params carries ltcRoute = %v for a program-only node; the key must be absent, not empty", params["ltcRoute"])
+	}
+	if _, present := params["ltcChannel"]; present {
+		t.Errorf("params carries ltcChannel = %v for a program-only node; the key must be absent, not zero", params["ltcChannel"])
+	}
+	if params["programRoute"] != payload.ProgramRoute {
+		t.Errorf("programRoute = %v, want %v", params["programRoute"], payload.ProgramRoute)
+	}
+	if params["clockDomain"] != payload.ClockDomain {
+		t.Errorf("clockDomain = %v, want %v", params["clockDomain"], payload.ClockDomain)
+	}
+}
+
+// TestToNodePushesBothLTCKeysWhenDeclared is the other half: a node that
+// DOES declare LTC must still get both keys, so the program-only path
+// above cannot be satisfied by dropping them unconditionally.
+func TestToNodePushesBothLTCKeysWhenDeclared(t *testing.T) {
+	cs := newFakeConfigStore()
+	payload := config.AudioNodePayload{
+		ProgramRoute: "hw:CARD=X,DEV=0", LTCRoute: "hw:CARD=X,DEV=0",
+		ProgramChannels: []int{1, 2}, LTCChannel: 3,
+		ClockDomain: "one-interface", ClockDomainProvenance: "single card",
+	}
+	raw, err := config.EncodeAudioNodePayload(payload)
+	if err != nil {
+		t.Fatalf("EncodeAudioNodePayload: %v", err)
+	}
+	cs.put(config.AudioNodeConfigKind, "node-1", 1, raw)
+
+	pub := &fakePublisher{}
+	if err := ToNode(context.Background(), cs, pub, time.Now, "node-1"); err != nil {
+		t.Fatalf("ToNode: %v", err)
+	}
+	params, ok := pub.actionParams("audio.node.configure")
+	if !ok {
+		t.Fatal("no audio.node.configure command was published")
+	}
+	if params["ltcRoute"] != payload.LTCRoute {
+		t.Errorf("ltcRoute = %v, want %v", params["ltcRoute"], payload.LTCRoute)
+	}
+	ch, ok := params["ltcChannel"].(float64)
+	if !ok || int(ch) != payload.LTCChannel {
+		t.Errorf("ltcChannel = %v, want %d", params["ltcChannel"], payload.LTCChannel)
+	}
+}
+
 // TestToNodeSkipsUnconfiguredAudioNode proves a node with no audio.node
 // object ever written gets no audio.node.configure push — never an
 // error, and never a push carrying a fabricated binding.

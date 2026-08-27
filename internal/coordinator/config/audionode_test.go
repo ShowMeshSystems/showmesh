@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -151,6 +152,22 @@ func TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice(t *testin
 	}
 }
 
+// TestValidateAudioNodePlacementNoEvidenceStillFiresForProgramOnly proves
+// the more basic refusal survives: "this node has advertised nothing at
+// all" is distinct from "advertised something, but not this route", and
+// making the LTC pair optional must not let a program-only payload be
+// placed against a node with no probe evidence whatsoever.
+func TestValidateAudioNodePlacementNoEvidenceStillFiresForProgramOnly(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	err := ValidateAudioNodePlacement(p, nil, nil)
+	if !errors.Is(err, ErrAudioNodeNoEvidence) {
+		t.Fatalf("placement = %v, want ErrAudioNodeNoEvidence", err)
+	}
+}
+
 // TestValidateAudioNodePlacementRejectsProgramOnlyUnevidencedRoute
 // proves the program half is still checked against probe evidence when
 // no LTC is declared: dropping LTC must not drop every check with it.
@@ -218,6 +235,12 @@ func TestDecodeAudioNodePayloadRejectsNullField(t *testing.T) {
 		{"ltcChannel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":null,"clockDomain":"d","clockDomainProvenance":"p"}`},
 		{"clockDomain", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":null,"clockDomainProvenance":"p"}`},
 		{"clockDomainProvenance", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":null}`},
+		// Both LTC keys present but null. The pair is "present" as far as
+		// the optional-together check is concerned, so this must reach
+		// the null refusal rather than being read as a program-only
+		// declaration: an operator who typed null meant to say something,
+		// and silently treating it as "no LTC" would hide the mistake.
+		{"ltcRoute", `{"programRoute":"a","ltcRoute":null,"programChannels":[1],"ltcChannel":null,"clockDomain":"d","clockDomainProvenance":"p"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
