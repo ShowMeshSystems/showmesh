@@ -159,7 +159,7 @@ const PRIMARY_NAV = [
   {
     heading: 'System',
     items: [
-      { to: '/nodes', label: 'Monitor', end: false },
+      { to: '/monitor', label: 'Monitor', end: false },
       { to: '/config', label: 'Settings', end: false },
     ],
   },

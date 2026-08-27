@@ -14,6 +14,8 @@ import { useModel, submitToken } from '../api'
 import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
 import { Dashboard } from '../views/Dashboard'
+import { Monitor } from '../views/Monitor'
+import { Observations } from '../views/Observations'
 import { NodesList } from '../views/NodesList'
 import { NodeDetail } from '../views/NodeDetail'
 import { FPPList } from '../views/FPPList'
@@ -140,6 +142,8 @@ const ROUTE_TITLES: Array<[string, string]> = [
   ['/macros', 'Macros'],
   ['/config/show', 'Shows'],
   ['/assets', 'Assets'],
+  ['/monitor', 'Monitor'],
+  ['/observations', 'Observations'],
   ['/nodes', 'Monitor'],
   ['/config', 'Settings'],
 ]
@@ -168,6 +172,8 @@ export default function App() {
         <Routes>
           <Route element={<Layout onSubmitToken={submitToken} />}>
             <Route index element={<Dashboard />} />
+            <Route path="monitor" element={<Monitor />} />
+            <Route path="observations" element={<Observations />} />
             <Route path="nodes" element={<NodesList />} />
             <Route path="nodes/:nodeId" element={<NodeDetail />} />
             <Route path="fpp" element={<FPPList />} />

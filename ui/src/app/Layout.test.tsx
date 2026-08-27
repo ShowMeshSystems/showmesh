@@ -138,7 +138,7 @@ describe('Layout', () => {
     expect(primary?.querySelector('a[href="/control"]')).toHaveTextContent('Live Control')
     expect(primary?.querySelector('a[href="/config/show"]')).toHaveTextContent('Shows')
     expect(primary?.querySelector('a[href="/assets"]')).toHaveTextContent('Assets')
-    expect(primary?.querySelector('a[href="/nodes"]')).toHaveTextContent('Monitor')
+    expect(primary?.querySelector('a[href="/monitor"]')).toHaveTextContent('Monitor')
     expect(primary?.querySelector('a[href="/config"]')).toHaveTextContent('Settings')
   })
 
