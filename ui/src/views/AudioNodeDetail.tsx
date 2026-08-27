@@ -38,9 +38,11 @@ function emptyForm(): FormState {
 function formFromPayload(payload: ConfigAudioNode): FormState {
   return {
     programRoute: payload.programRoute,
-    ltcRoute: payload.ltcRoute,
+    // A program-only node stores neither LTC field; both come back as
+    // blank, which is the same shape buildPayload treats as "no LTC".
+    ltcRoute: payload.ltcRoute ?? '',
     programChannels: payload.programChannels.join(', '),
-    ltcChannel: String(payload.ltcChannel),
+    ltcChannel: payload.ltcChannel === undefined ? '' : String(payload.ltcChannel),
     clockDomain: payload.clockDomain,
     clockDomainProvenance: payload.clockDomainProvenance,
   }
@@ -89,8 +91,20 @@ function advertisedRoutes(node: Node | undefined): string[] {
  */
 function buildPayload(form: FormState): { payload: ConfigAudioNode } | { error: string } {
   if (form.programRoute.trim() === '') return { error: 'Program route is required.' }
-  if (form.ltcRoute.trim() === '') return { error: 'LTC route is required.' }
-  if (form.programRoute.trim() !== form.ltcRoute.trim()) {
+
+  // LTC route and LTC channel are optional TOGETHER: both blank declares
+  // a program-only node that emits no LTC, which is the only shape a
+  // two-output interface can be declared in. One without the other is
+  // refused here for the same reason the coordinator refuses it, rather
+  // than sending half a declaration and letting the server explain.
+  const wantLTC = form.ltcRoute.trim() !== '' || form.ltcChannel.trim() !== ''
+  if (wantLTC && form.ltcRoute.trim() === '') {
+    return { error: 'LTC route is required when an LTC channel is given. Clear both to declare a program-only node.' }
+  }
+  if (wantLTC && form.ltcChannel.trim() === '') {
+    return { error: 'LTC channel is required when an LTC route is given. Clear both to declare a program-only node.' }
+  }
+  if (wantLTC && form.programRoute.trim() !== form.ltcRoute.trim()) {
     return {
       error:
         'Program route and LTC route must name the same route: program and LTC leave through one interface in one clock domain.',
@@ -114,26 +128,27 @@ function buildPayload(form: FormState): { payload: ConfigAudioNode } | { error: 
   }
 
   const ltcChannel = Number(form.ltcChannel)
-  if (form.ltcChannel.trim() === '' || !Number.isInteger(ltcChannel) || ltcChannel < 1) {
+  if (wantLTC && (!Number.isInteger(ltcChannel) || ltcChannel < 1)) {
     return { error: 'LTC channel must be a positive, 1-based channel index.' }
   }
-  if (programChannels.includes(ltcChannel)) {
+  if (wantLTC && programChannels.includes(ltcChannel)) {
     return { error: 'LTC channel must not also appear in program channels.' }
   }
 
   if (form.clockDomain.trim() === '') return { error: 'Clock domain is required.' }
   if (form.clockDomainProvenance.trim() === '') return { error: 'Clock domain provenance is required.' }
 
-  return {
-    payload: {
-      programRoute: form.programRoute.trim(),
-      ltcRoute: form.ltcRoute.trim(),
-      programChannels,
-      ltcChannel,
-      clockDomain: form.clockDomain.trim(),
-      clockDomainProvenance: form.clockDomainProvenance.trim(),
-    },
+  const payload: ConfigAudioNode = {
+    programRoute: form.programRoute.trim(),
+    programChannels,
+    clockDomain: form.clockDomain.trim(),
+    clockDomainProvenance: form.clockDomainProvenance.trim(),
   }
+  if (wantLTC) {
+    payload.ltcRoute = form.ltcRoute.trim()
+    payload.ltcChannel = ltcChannel
+  }
+  return { payload }
 }
 
 type LoadState =

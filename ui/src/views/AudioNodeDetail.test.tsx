@@ -138,6 +138,45 @@ describe('AudioNodeDetail (viewing an existing node)', () => {
     expect(getAudioNode).toHaveBeenCalledTimes(1)
   })
 
+  it('saves a program-only node when both LTC fields are cleared', async () => {
+    getAudioNode.mockResolvedValue(storedNode)
+    getAudioNodeConfigRevisions.mockResolvedValue(emptyRevisions)
+    putAudioNode.mockResolvedValue({ ...storedNode, revision: 3 })
+    const user = userEvent.setup()
+    renderExisting('node-1')
+
+    await user.clear(await screen.findByLabelText('LTC channel'))
+    await user.clear(screen.getByLabelText('LTC route'))
+
+    await user.click(screen.getByRole('button', { name: /save audio node/i }))
+
+    // Both keys are OMITTED, not sent empty: the coordinator refuses an
+    // empty ltcRoute, and a two-output interface has no LTC channel to
+    // declare in the first place.
+    await waitFor(() =>
+      expect(putAudioNode).toHaveBeenCalledWith('node-1', {
+        programRoute: 'hw:0,0',
+        programChannels: [1, 2],
+        clockDomain: 'onboard-clock',
+        clockDomainProvenance: 'commissioning notes 2026-08-01',
+      }),
+    )
+  })
+
+  it('refuses half a declared LTC pair before ever dispatching a PUT', async () => {
+    getAudioNode.mockResolvedValue(storedNode)
+    getAudioNodeConfigRevisions.mockResolvedValue(emptyRevisions)
+    const user = userEvent.setup()
+    renderExisting('node-1')
+
+    await user.clear(await screen.findByLabelText('LTC channel'))
+
+    await user.click(screen.getByRole('button', { name: /save audio node/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/clear both to declare a program-only node/i)
+    expect(putAudioNode).not.toHaveBeenCalled()
+  })
+
   it('refuses an invalid field client-side before ever dispatching a PUT', async () => {
     getAudioNode.mockResolvedValue(storedNode)
     getAudioNodeConfigRevisions.mockResolvedValue(emptyRevisions)

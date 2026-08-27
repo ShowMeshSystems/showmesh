@@ -3730,12 +3730,18 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
-        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. */
+        /**
+         * @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every required field non-null and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and, when both are given, MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`.
+         *
+         *     `ltcRoute` and `ltcChannel` are the one optional pair, and they are optional TOGETHER: omitting both declares a program-only node that emits no LTC at all, and giving one without the other is refused rather than half-honoured. A program-only declaration is the only way to place a two-output interface, whose LTC-capable route list is correctly empty because ADR-018 requires LTC on a channel discrete from the program pair. Every LTC refusal is unchanged for a declaration that DOES name an LTC route, including the check that the route is one the node advertised as LTC-capable. ADR-042 section 5 already treats losing LTC as costing timecode and never the audience's program audio.
+         *
+         *     `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the routes run on, never inferred, and are required on a program-only node too.
+         */
         ConfigAudioNode: {
             programRoute: string;
-            ltcRoute: string;
+            ltcRoute?: string;
             programChannels: number[];
-            ltcChannel: number;
+            ltcChannel?: number;
             clockDomain: string;
             clockDomainProvenance: string;
         };
