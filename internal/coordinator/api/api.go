@@ -14,6 +14,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetstore"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
@@ -32,6 +33,12 @@ import (
 // no-op defaults deliberately, to prove the router itself works before any
 // real store exists.
 type Dependencies struct {
+	// CurrentRuns is the authoritative, server-computed view used by the
+	// operator's current-runs screen. It is deliberately separate from the
+	// broad snapshot: runner playback, reconciliation, activation context,
+	// and target evidence must be read as one projection.
+	CurrentRuns CurrentRunsReader
+
 	Nodes        NodeLister
 	FPP          FPPLister
 	Observations ObservationLister
@@ -535,6 +542,9 @@ var _ FPPReconciliationStore = StoreFPPReconciliation{}
 // withDefaults returns d with every nil field replaced by a no-op
 // implementation.
 func (d Dependencies) withDefaults() Dependencies {
+	if d.CurrentRuns == nil {
+		d.CurrentRuns = currentrun.Coordinator{}
+	}
 	if d.Nodes == nil {
 		d.Nodes = noNodeLister{}
 	}
@@ -1477,6 +1487,10 @@ func New(deps Dependencies, opts Options) *API {
 	// names as what the read scopes gate. See this package's report.
 	mux.HandleFunc("GET /api/v1/{$}", h.handleServiceDescriptor)
 	mux.HandleFunc("GET /api/v1/snapshot", h.readGuardAll(readAllScopes, h.handleSnapshot))
+	// GET /api/v1/current-runs is the runner-neutral playback projection.
+	// It uses the same all-read-scope guard as snapshot because one response
+	// may contain FPP, audio-node, observation, and active-show context.
+	mux.HandleFunc("GET /api/v1/current-runs", h.readGuardAll(readAllScopes, h.handleCurrentRuns))
 	mux.HandleFunc("GET /api/v1/nodes", h.readGuard(identity.ScopeNodeRead, h.handleNodes))
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}", h.readGuard(identity.ScopeNodeRead, h.handleNode))
 	mux.HandleFunc("GET /api/v1/fpp", h.readGuard(identity.ScopeFPPRead, h.handleFPPList))

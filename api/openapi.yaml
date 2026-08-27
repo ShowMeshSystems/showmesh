@@ -46,14 +46,10 @@ info:
     `state: "unknown_age"`.
 
 
-    **Desired state, capability assignments, and reconciliation status are
-    not modelled by this API yet.** They are a real part of the eventual
-    architecture (see ARCHITECTURE section 7.2 and OPERATOR-UI section 10),
-    but nothing in the coordinator computes them today, and Step 3
-    deliberately ships no placeholder field for them: a field like
-    `reconciliationStatus: "unknown"` that no code actually computes would
-    be read by an operator as a real verdict. These arrive additively, in
-    the version of this API that introduces the behavior behind them.
+    **Current runner state is exposed by `GET /current-runs`.** It is a
+    server-computed, runner-neutral full frame. FPP is optional, FPP and
+    `showmesh-audio` may be active concurrently, and absent reconciliation or
+    next-item evidence is stated explicitly rather than inferred by a client.
 
 
     **A `gap: true` on `GET /api/v1/events` means history was permanently
@@ -173,6 +169,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Snapshot"
+        "400":
+          $ref: "#/components/responses/UnsupportedAPIVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /current-runs:
+    get:
+      operationId: getCurrentRuns
+      summary: Current runner playback
+      description: >-
+        Full runner-neutral projection of the current zero-to-many runs.
+        FPP is optional; FPP and showmesh-audio can be present concurrently.
+        The server computes active Show/generation context, runner status,
+        playback and freshness, reconciliation, activation, and per-target
+        evidence. `next` is null unless a runner provided an authoritative
+        next item, so clients must not infer one from local playlist order.
+        After reconnect, refetch this endpoint; `currentRuns.changed` is an
+        optional full-frame prompt, not a resumable cursor.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentRunsResponse"
         "400":
           $ref: "#/components/responses/UnsupportedAPIVersion"
         "401":
@@ -1908,6 +1937,7 @@ paths:
           | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
           | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
           | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
+          | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
           | `stream.reset` | `StreamReset` | every connection |
 
         `data:` is always exactly one line of compact (no embedded
@@ -8718,6 +8748,129 @@ components:
           type: boolean
         oldestRetainedSeq:
           type: [integer, "null"]
+    CurrentRunsResponse:
+      type: object
+      required: [serverTime, activeShow, runs]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        activeShow:
+          $ref: "#/components/schemas/CurrentShowContext"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurrentRun"
+    CurrentShowContext:
+      type: object
+      required: [configured, show, generation]
+      properties:
+        configured:
+          type: boolean
+        show:
+          type: [string, "null"]
+        generation:
+          type: [integer, "null"]
+    CurrentRun:
+      type: object
+      required:
+        [id, runner, show, generation, playlistId, playlistRevision,
+         status, statusReason, playback, freshness, reconciliation,
+         activation, targets, next]
+      properties:
+        id: {type: string}
+        runner:
+          type: string
+          enum: [fpp, showmesh-audio]
+        show: {type: string}
+        generation: {type: integer}
+        playlistId: {type: string}
+        playlistRevision: {type: integer}
+        status: {type: string}
+        statusReason: {type: string}
+        playback:
+          $ref: "#/components/schemas/CurrentPlayback"
+        freshness:
+          $ref: "#/components/schemas/CurrentRunFreshness"
+        reconciliation:
+          $ref: "#/components/schemas/CurrentReconciliation"
+        activation:
+          $ref: "#/components/schemas/CurrentRunActivation"
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurrentRunTarget"
+        next:
+          oneOf:
+            - $ref: "#/components/schemas/CurrentRunNext"
+            - type: "null"
+    CurrentPlayback:
+      type: object
+      required: [state, reason, itemId, itemIndex, positionMs, media, evidence]
+      properties:
+        state: {type: string}
+        reason: {type: string}
+        itemId: {type: string}
+        itemIndex: {type: [integer, "null"]}
+        positionMs: {type: [integer, "null"]}
+        media: {type: string}
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/Evidence"
+    CurrentRunFreshness:
+      type: object
+      required: [state, reason, observedAt, collectedAt]
+      properties:
+        state: {type: string}
+        reason: {type: string}
+        observedAt: {type: [string, "null"], format: date-time}
+        collectedAt: {type: [string, "null"], format: date-time}
+    CurrentReconciliation:
+      type: object
+      required: [state, reason]
+      properties:
+        state: {type: string}
+        reason: {type: string}
+    CurrentRunActivation:
+      type: object
+      required: [show, generation, playlistId, revision, runner]
+      properties:
+        show: {type: string}
+        generation: {type: integer}
+        playlistId: {type: string}
+        revision: {type: integer}
+        runner: {type: string}
+    CurrentRunTarget:
+      type: object
+      required: [kind, id, evidence]
+      properties:
+        kind: {type: string}
+        id: {type: string}
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/Evidence"
+    CurrentRunNext:
+      type: object
+      required: [itemId, itemIndex, media, source]
+      properties:
+        itemId: {type: string}
+        itemIndex: {type: integer}
+        media: {type: string}
+        source: {type: string}
+    CurrentRunsChangedEvent:
+      type: object
+      required: [seq, serverTime, activeShow, runs]
+      properties:
+        seq: {type: integer}
+        serverTime: {type: string, format: date-time}
+        activeShow:
+          $ref: "#/components/schemas/CurrentShowContext"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CurrentRun"
     Snapshot:
       type: object
       required:
