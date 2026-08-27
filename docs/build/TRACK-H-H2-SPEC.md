@@ -194,7 +194,7 @@ failing one when not:
 
 - a definition is stored for its `(instanceUuid, playlistHash)`;
 - no NEWER stored definition exists for the same instance and playlist name
-  under a different hash (`definition-superseded`, SM-290 — see below);
+  under a different hash (`definition-superseded`; see the amendment below);
 - every entry's `(section, position)` exists in that definition;
 - every entry's expected filenames match the definition at that position;
 - every referenced Cue exists, belongs to the same Show, and passes its own
