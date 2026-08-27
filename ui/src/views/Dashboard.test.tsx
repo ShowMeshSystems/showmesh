@@ -63,6 +63,29 @@ describe('Dashboard', () => {
     expect(screen.getAllByText(/Authoritative current playback is unavailable/).length).toBeGreaterThan(0)
   })
 
+  it.each([
+    ['unknown', 'unknown'],
+    ['unavailable', 'unknown'],
+  ] as const)('does not render an authoritative current run with status %s as healthy', (status, tone) => {
+    renderDashboard(makeModel({ currentRuns: makeCurrentRuns({ runs: [makeCurrentRun({ status })] }) }))
+
+    const badge = document.querySelector('.current-run .status-badge')
+    expect(badge?.className).toContain(`status-badge--${tone}`)
+    expect(badge?.className).not.toContain('status-badge--good')
+  })
+
+  it.each([
+    ['running', 'good'],
+    ['playing', 'good'],
+    ['failed', 'bad'],
+    ['stopped', 'unknown'],
+    ['idle', 'unknown'],
+  ] as const)('maps authoritative current run status %s to the %s tone', (status, tone) => {
+    renderDashboard(makeModel({ currentRuns: makeCurrentRuns({ runs: [makeCurrentRun({ status })] }) }))
+
+    expect(document.querySelector('.current-run .status-badge')?.className).toContain(`status-badge--${tone}`)
+  })
+
   // D2 / OBSERVABILITY section 6.2's ordering rule and ADR-011: critical
   // first, then warning, and an 'unknown' health must produce its own
   // attention item rather than reading as healthy. Before this fix, every

@@ -176,11 +176,31 @@ function readiness(model: ReturnType<typeof useModelContext>): { label: string; 
   return { label: 'Ready', detail: 'Current resource evidence is healthy.', tone: 'good', icon: '✓' }
 }
 
+const CURRENT_RUN_STATUS_TONE: Record<string, StatusTone> = {
+  playing: 'good',
+  running: 'good',
+  current: 'good',
+  failed: 'bad',
+  unknown: 'unknown',
+  unavailable: 'unknown',
+  stopped: 'unknown',
+  idle: 'unknown',
+  paused: 'unknown',
+  ready: 'unknown',
+}
+
 function currentRunStatusTone(run: CurrentRun): StatusTone {
-  if (run.freshness.state !== 'current') return 'unknown'
+  // A known failure remains a failure even when its freshness is stale.
   if (run.status === 'failed' || run.playback.state === 'failed') return 'bad'
+  if (run.freshness.state !== 'current') return 'unknown'
+
+  // Keep indeterminate and non-active states out of the healthy tone. There
+  // is no neutral badge in the shared vocabulary, so unknown is the honest
+  // non-good presentation for stopped, idle, and future status literals.
+  const statusTone = CURRENT_RUN_STATUS_TONE[run.status] ?? 'unknown'
+  if (statusTone !== 'good') return statusTone
   if (run.reconciliation.state === 'degraded' || run.reconciliation.state === 'conflicted') return 'warn'
-  return 'good'
+  return statusTone
 }
 
 function CurrentRunRow({ run }: { run: CurrentRun }) {
