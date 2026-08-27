@@ -422,7 +422,7 @@ verify-fpp-plugin-reproducible:
 clean-fpp-plugin-dist:
 	rm -rf $(FPP_PLUGIN_DIST)
 
-# --- Node agent install bundle (SM-43) ---
+# --- Node agent install bundle ---
 #
 # The native agent (build-agent-native, CGO_ENABLED=1: go-gst + libltc,
 # ADR-042) has no install path of its own. This packages that binary
