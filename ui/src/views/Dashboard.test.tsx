@@ -298,6 +298,26 @@ describe('Dashboard', () => {
     expect(screen.getByText(/wall-1.*pipeline state is stale/)).toBeInTheDocument()
   })
 
+  // A render held across an active-show switch (ADR-043 H0.7)
+  // reports 'superseded' instead of 'running' — the wall still looks
+  // healthy, so this must surface as its own attention item rather than
+  // falling into the same silent bucket a genuinely healthy 'running'
+  // pipeline does.
+  it('surfaces a superseded render pipeline as a warning', () => {
+    const nodes = [
+      makeNode('media-01', {
+        render: [
+          makeEvidence({ signal: 'surface.pipeline.state', value: 'superseded' }),
+        ].map((e) => ({ resource: { kind: 'surface' as const, id: 'wall-1' }, ...e })),
+      }),
+    ]
+    renderDashboard(makeModel({ nodes }))
+    const labels = attentionBadgeLabels()
+    expect(labels).toHaveLength(1)
+    expect(labels[0]).toContain('warning')
+    expect(screen.getByText(/wall-1.*no longer active/)).toBeInTheDocument()
+  })
+
   it('does not flag a running or stopped pipeline', () => {
     const nodes = [
       makeNode('media-01', {

@@ -138,6 +138,13 @@ function attentionFromRender(nodes: Node[]): AttentionItem[] {
         items.push({ tone: 'critical', text: `${label} pipeline has failed`, to: `/nodes/${node.nodeId}` })
       } else if (entry.value === 'restarting') {
         items.push({ tone: 'warning', text: `${label} pipeline is restarting`, to: `/nodes/${node.nodeId}` })
+      } else if (entry.value === 'superseded') {
+        // This surface is holding a render authorized by a show
+        // that is no longer active (ADR-043 H0.7) — the wall looks
+        // identical to a healthy "running" render, so the whole point of
+        // this state is that it must not disappear into the same
+        // no-attention-item bucket "running" does.
+        items.push({ tone: 'warning', text: `${label} is showing content from a show that is no longer active`, to: `/nodes/${node.nodeId}` })
       }
     }
   }

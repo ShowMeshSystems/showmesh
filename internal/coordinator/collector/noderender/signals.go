@@ -88,6 +88,25 @@ const (
 	// tuple (TRACK-H-H3-SPEC.md section 5); absent for a legacy assignment
 	// or one applied before the tuple existed.
 	SignalSurfaceContentCatalogRevision observation.SignalID = "surface.content.catalog_revision"
+
+	// SignalSurfaceContentShow and SignalSurfaceContentGeneration name
+	// the Show and generation that authorized this
+	// surface's held assignment (mqttproto.RenderSurfaceReport.Show/
+	// Generation, [pipeline.AssignmentAuth.Show]/Generation), rendered as
+	// their own signals rather than folded into SignalSurfacePipelineState
+	// itself — IDENTIFIER-REGISTER.md's own ruling: superseded is a new
+	// MEMBER of that signal's existing state vocabulary, not a reason to
+	// mint a second parallel signal. This package never derives the
+	// superseded verdict itself (these two signals, plus
+	// SignalSurfaceContentCatalogRevision and SignalSurfaceContentCueID
+	// above, are ALL a node ever states about what it holds); the
+	// coordinator's API/readiness layer is the only place that compares
+	// them against its own active-show resolution — see that layer's own
+	// doc comment for why this package must not make that comparison.
+	// Present/absent together, mirroring SignalSurfaceContentCatalogRevision's
+	// identical "no authorization tuple" absence rule one signal up.
+	SignalSurfaceContentShow       observation.SignalID = "surface.content.show"
+	SignalSurfaceContentGeneration observation.SignalID = "surface.content.generation"
 )
 
 // Two more signals minted alongside the four above, but under the "node"
@@ -126,6 +145,8 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceContentFSEQContentHash,
 	SignalSurfaceContentCueID,
 	SignalSurfaceContentCatalogRevision,
+	SignalSurfaceContentShow,
+	SignalSurfaceContentGeneration,
 }
 
 // AllNodeSignalIDs is every NODE-resource signal this package emits, in the

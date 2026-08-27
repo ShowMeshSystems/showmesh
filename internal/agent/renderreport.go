@@ -156,14 +156,15 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 	}
 }
 
-// applyContentIdentity stamps rep's four content-identity fields from
-// a, the assignment this node actually PERSISTED for this
-// surface, the same record cueactivationrender.go and renderops.go read
-// back at boot to resume rendering, never from anything the coordinator
-// most recently requested. Leaves every field "" (already rep's zero
-// value) when a's params carry no fseqFilename, so an undecodable or
-// content-less assignment reports absence rather than propagating a
-// decode failure into a fabricated identity.
+// applyContentIdentity stamps rep's six content-identity fields (the
+// original four, plus Show/Generation) from a, the assignment this
+// node actually PERSISTED for this surface, the same record
+// cueactivationrender.go and renderops.go read back at boot to resume
+// rendering, never from anything the coordinator most recently requested.
+// Leaves every field "" or 0 (already rep's zero value) when a's params
+// carry no fseqFilename, so an undecodable or content-less assignment
+// reports absence rather than propagating a decode failure into a
+// fabricated identity.
 //
 // observedAt is this node's own read time for a — the caller's now() at
 // the moment it re-read the persisted assignment store, stamped onto
@@ -189,6 +190,8 @@ func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignm
 	rep.CueID = a.CueID
 	if a.Auth != nil {
 		rep.CatalogRevision = a.Auth.CatalogRevision
+		rep.Show = a.Auth.Show
+		rep.Generation = a.Auth.Generation
 	}
 	rep.ContentObservedAt = observedAt
 }

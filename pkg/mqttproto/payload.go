@@ -571,6 +571,24 @@ const (
 	RenderPipelineStateFailed      = "failed"
 	RenderPipelineStateStopped     = "stopped"
 	RenderPipelineStateUnsupported = "unsupported"
+
+	// RenderPipelineStateSuperseded is this open vocabulary's addition for
+	// ADR-043's H0.7: a node holding its render across a Show
+	// switch reports its pipeline as running, honestly, but the Show and
+	// generation that authorized what it holds are no longer the active
+	// ones. A node never publishes this value itself — it has no notion of
+	// which Show is active (the coupling Track H deliberately avoids, per
+	// H0.7's own "a node that decided this for itself would need to know
+	// the active show" ruling) and always reports RenderPipelineStateRunning
+	// for a held pipeline. The coordinator's API/readiness layer derives
+	// this value at read time by comparing Show/CatalogRevision below
+	// against its own active-show resolution, and renders it in place of
+	// "running" on the surface.pipeline.state signal — never persisted as
+	// this surface's raw evidence (internal/coordinator/collector/
+	// noderender never emits it), so a confirming command (render.surface.
+	// apply's own wait for "running") still sees the node's real, honest
+	// state.
+	RenderPipelineStateSuperseded = "superseded"
 )
 
 // maxRenderSurfaces bounds [RenderPayload.Surfaces], matching
@@ -776,6 +794,25 @@ type RenderSurfaceReport struct {
 	// TRACK-H-H3-SPEC.md section 5 existed, or a coordinator that has not
 	// yet started sending it) or no assignment is held at all.
 	CatalogRevision string `json:"catalogRevision"`
+
+	// Show is [pipeline.AssignmentAuth.Show] for this surface's current
+	// assignment: "" exactly when CatalogRevision is "" (both come from
+	// the same authorization tuple, or its absence). This is the node's
+	// own evidence for which Show authorized what it currently holds, so
+	// a render held across a Show switch (ADR-043 H0.7) can name the Show
+	// that is no longer active, rather than the report staying silent
+	// about it. The node states this fact only; it
+	// never compares it against the active Show itself (see
+	// [RenderPipelineStateSuperseded]'s doc comment).
+	Show string `json:"show"`
+
+	// Generation is [pipeline.AssignmentAuth.Generation] for this
+	// surface's current assignment: 0 exactly when Show is "". A real
+	// generation is never 0 — show.active's config revision numbering
+	// starts at 1 (an object with CurrentRevision == 0 has never been
+	// activated at all) — so 0 unambiguously means "no tuple", the same
+	// role CatalogRevision's "" plays for a string field.
+	Generation int64 `json:"generation"`
 }
 
 // RenderDrawingContent, RenderDrawingIdle, and RenderDrawingFailure are the
@@ -936,6 +973,10 @@ func (p RenderPayload) Validate() error {
 		}
 		if (s.FSEQFilename == "") != (s.FSEQContentHash == "") {
 			return fmt.Errorf("%w: surfaces[%d].fseqFilename and fseqContentHash must be both empty or both set",
+				ErrPayloadMissingField, i)
+		}
+		if (s.Show == "") != (s.Generation == 0) {
+			return fmt.Errorf("%w: surfaces[%d].show and generation must be both empty/zero or both set",
 				ErrPayloadMissingField, i)
 		}
 	}

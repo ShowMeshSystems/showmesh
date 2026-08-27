@@ -7495,6 +7495,16 @@ components:
             surface a node supervises and attributing its status to a
             surface would report one fact once per surface as though each
             were independent.
+
+
+            `surface.pipeline.state`'s open vocabulary includes `superseded`:
+            a surface holding its previous render across an active-show
+            switch reports this instead of `running` - the coordinator's own
+            verdict, compared against its current show resolution, never a
+            claim the node makes about itself. `surface.content.show` and
+            `surface.content.generation` name the show and generation that
+            authorized what is currently held, present exactly when
+            `surface.content.catalog_revision` is.
           items:
             $ref: "#/components/schemas/ObservationEntry"
         audio:

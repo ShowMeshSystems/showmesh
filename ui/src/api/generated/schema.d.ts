@@ -2544,7 +2544,11 @@ export interface components {
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
             declaration: components["schemas"]["NodeDeclaration"];
-            /** @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent. */
+            /**
+             * @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent.
+             *
+             *     `surface.pipeline.state`'s open vocabulary includes `superseded`: a surface holding its previous render across an active-show switch reports this instead of `running` - the coordinator's own verdict, compared against its current show resolution, never a claim the node makes about itself. `surface.content.show` and `surface.content.generation` name the show and generation that authorized what is currently held, present exactly when `surface.content.catalog_revision` is.
+             */
             render: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.audio.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published an audio discovery report. */
             audio: components["schemas"]["ObservationEntry"][];
