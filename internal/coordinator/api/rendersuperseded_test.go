@@ -158,12 +158,12 @@ func TestApplySupersededVerdictOverridesOnRevisionMismatch(t *testing.T) {
 	}
 
 	// The operator switches shows during setup — H0.7's own scenario.
-	mustPutShow(t, api, token, "lane14-other", `{"name":"Lane 14 Other","notes":""}`)
-	mustPutShowActive(t, api, token, "lane14-other")
+	mustPutShow(t, api, token, "other-show", `{"name":"Other Show","notes":""}`)
+	mustPutShowActive(t, api, token, "other-show")
 
 	nowActive, err := assetsync.ResolveActiveShow(ctx, st)
-	if err != nil || !nowActive.Configured || nowActive.ShowID != "lane14-other" {
-		t.Fatalf("ResolveActiveShow (lane14-other): %v, %+v", err, nowActive)
+	if err != nil || !nowActive.Configured || nowActive.ShowID != "other-show" {
+		t.Fatalf("ResolveActiveShow (other-show): %v, %+v", err, nowActive)
 	}
 
 	// obs states exactly what the node itself would report: still holding
@@ -182,8 +182,8 @@ func TestApplySupersededVerdictOverridesOnRevisionMismatch(t *testing.T) {
 	if !strings.Contains(got.Reason, "halloween-2026") {
 		t.Errorf("Reason = %q, want it to name the held show %q", got.Reason, "halloween-2026")
 	}
-	if !strings.Contains(got.Reason, "lane14-other") {
-		t.Errorf("Reason = %q, want it to name the currently active show %q", got.Reason, "lane14-other")
+	if !strings.Contains(got.Reason, "other-show") {
+		t.Errorf("Reason = %q, want it to name the currently active show %q", got.Reason, "other-show")
 	}
 	// Every other field on the observation is untouched: this is a
 	// read-time relabeling, not a fresh evidence sample.
@@ -355,8 +355,8 @@ func TestNodeRenderObservationsReachRealAPISuperseded(t *testing.T) {
 	}
 
 	// --- the operator switches the active show (ADR-043 H0.7's case) ---
-	mustPutShow(t, api, token, "lane14-other", `{"name":"Lane 14 Other","notes":""}`)
-	mustPutShowActive(t, api, token, "lane14-other")
+	mustPutShow(t, api, token, "other-show", `{"name":"Other Show","notes":""}`)
+	mustPutShowActive(t, api, token, "other-show")
 
 	resp, superseded := doRequest(t, liveAPI.Handler, "GET", "/api/v1/nodes/render-01", nil)
 	if resp.StatusCode != http.StatusOK {
@@ -382,13 +382,13 @@ func TestNodeRenderObservationsReachRealAPISuperseded(t *testing.T) {
 	// doc comment), since driving an actual FPP-triggered cue activation
 	// end to end is docs/bench/track-h-chain's own scope, not this API
 	// package's.
-	activeLane14, err := assetsync.ResolveActiveShow(ctx, st)
-	if err != nil || !activeLane14.Configured || activeLane14.ShowID != "lane14-other" {
-		t.Fatalf("ResolveActiveShow (lane14-other): %v, %+v", err, activeLane14)
+	activeOtherShow, err := assetsync.ResolveActiveShow(ctx, st)
+	if err != nil || !activeOtherShow.Configured || activeOtherShow.ShowID != "other-show" {
+		t.Fatalf("ResolveActiveShow (other-show): %v, %+v", err, activeOtherShow)
 	}
-	catalogLane14, err := assetsync.ResolveCueCatalog(ctx, st, activeLane14, "render-01")
+	catalogLane14, err := assetsync.ResolveCueCatalog(ctx, st, activeOtherShow, "render-01")
 	if err != nil {
-		t.Fatalf("ResolveCueCatalog (lane14-other): %v", err)
+		t.Fatalf("ResolveCueCatalog (other-show): %v", err)
 	}
 	redeployedAt := receivedAt.Add(time.Second)
 	renderStore.Put("render-01", mqttproto.RenderPayload{
@@ -402,11 +402,11 @@ func TestNodeRenderObservationsReachRealAPISuperseded(t *testing.T) {
 				ConsecutiveFailures: 0,
 				Transport:           "ndi",
 				ObservedAt:          redeployedAt,
-				FSEQFilename:        "lane14-01.fseq",
+				FSEQFilename:        "other-show-01.fseq",
 				FSEQContentHash:     "sha256:cafef00d",
 				CatalogRevision:     catalogLane14.Revision,
-				Show:                activeLane14.ShowID,
-				Generation:          activeLane14.Generation,
+				Show:                activeOtherShow.ShowID,
+				Generation:          activeOtherShow.Generation,
 				ContentObservedAt:   redeployedAt,
 			},
 		},
@@ -415,7 +415,7 @@ func TestNodeRenderObservationsReachRealAPISuperseded(t *testing.T) {
 	_, cleared := doRequest(t, liveAPI.Handler, "GET", "/api/v1/nodes/render-01", nil)
 	cBody := string(cleared)
 	if !strings.Contains(cBody, `"surface.pipeline.state","value":"running"`) {
-		t.Errorf("GET /nodes/render-01 (after redeploy+reassign under lane14-other) does not clear back to running: %s", cBody)
+		t.Errorf("GET /nodes/render-01 (after redeploy+reassign under other-show) does not clear back to running: %s", cBody)
 	}
 	if strings.Contains(cBody, `"surface.pipeline.state","value":"superseded"`) {
 		t.Errorf("GET /nodes/render-01 (after redeploy+reassign) still reports superseded: %s", cBody)

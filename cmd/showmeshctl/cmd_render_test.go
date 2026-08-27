@@ -211,7 +211,7 @@ func TestCmdRenderStatusRendersSupersededVerdictAndAuthTuple(t *testing.T) {
 			  "heartbeat":{"signal":"node.heartbeat","value":null,"unit":null,"state":"not_collected","reason":"none","observedAt":null,"collectedAt":"2026-08-26T21:00:00Z","source":"s","quality":"direct"}
 			},
 			"render":[
-			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.pipeline.state","value":"superseded","unit":null,"state":"current","reason":"this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"lane14-other\" generation 2","observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"derived","validForSeconds":45},
+			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.pipeline.state","value":"superseded","unit":null,"state":"current","reason":"this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"other-show\" generation 2","observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"derived","validForSeconds":45},
 			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.content.show","value":"halloween-2026","unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"direct","validForSeconds":45},
 			  {"resource":{"kind":"surface","id":"garage"},"signal":"surface.content.generation","value":1,"unit":null,"state":"current","reason":null,"observedAt":"2026-08-26T20:59:00Z","collectedAt":"2026-08-26T20:59:00Z","source":"node-render:render-01","quality":"direct","validForSeconds":45}
 			],"audio":[]}}`)
@@ -228,7 +228,7 @@ func TestCmdRenderStatusRendersSupersededVerdictAndAuthTuple(t *testing.T) {
 		"surface.pipeline.state", "superseded",
 		"surface.content.show", "halloween-2026",
 		"surface.content.generation", "1",
-		"lane14-other",
+		"other-show",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)

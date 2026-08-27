@@ -359,7 +359,7 @@ func TestMapEvidenceDeliversAuthoredReasonEvenWhenStateIsCurrent(t *testing.T) {
 	observedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	o := healthMustObs(observation.Measured(healthRes, "surface.pipeline.state", "superseded", observedAt,
 		observation.WithSource("node-render:render-01"), observation.WithValidFor(45*time.Second)))
-	o.Reason = "this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"lane14-other\" generation 2"
+	o.Reason = "this surface is holding a render authorized by show \"halloween-2026\" generation 1; the coordinator's currently active show is \"other-show\" generation 2"
 	o.Quality = observation.QualityDerived
 
 	ev := mapEvidence(o, observedAt)
