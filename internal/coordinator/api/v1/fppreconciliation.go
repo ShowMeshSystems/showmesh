@@ -52,15 +52,22 @@ type FPPPlaylistEntryReconciliationResponse struct {
 // /integrations/fpp/playlists/{playlistId}/readiness's body,
 // TRACK-H-H2-SPEC.md §6 plus the later extensions of the same
 // vocabulary (docs/build/IDENTIFIER-REGISTER.md's "Playlist readiness
-// conditions"): whether one FPP-backed Playlist is ready, and which
-// condition fails first when it is not. A read-only projection of
-// internal/coordinator/fppreconcile.Report. FailingCondition is one of
-// "definition-missing", "entry-not-in-definition",
-// "entry-filename-mismatch", "cue-not-ready", "observation-hash-mismatch",
-// or "node-render-unassigned" (fppreconcile.ReadinessCondition's wire
-// spellings), empty when Ready. Warning is set only for the non-fatal
-// form of the observation-hash condition (§6's own "the normal afternoon
-// state, not a fault" case), never alongside a non-empty FailingCondition.
+// conditions"): whether one FPP-backed Playlist is ready, and which of
+// the ordered conditions fails first when it is not. A read-only
+// projection of internal/coordinator/fppreconcile.Report.
+// FailingCondition is one of "definition-missing",
+// "definition-superseded", "entry-not-in-definition",
+// "entry-filename-mismatch", "cue-not-ready", "evidence-unavailable",
+// "observation-hash-mismatch", "node-render-unassigned",
+// "exclusive-claim-conflict", or "node-catalog-stale"
+// (fppreconcile.ReadinessCondition's wire spellings), empty when Ready.
+// Warning is set for a condition that did not fail readiness outright but
+// is still worth surfacing: no observation received at all yet (§6's own
+// "the normal afternoon state, not a fault"), or exclusive-claim-conflict's
+// own inconclusive form. An observation that WAS received but could not
+// establish identity is "evidence-unavailable", a FailingCondition, not a
+// Warning: readiness never reports Ready == true for a check it could not
+// evaluate.
 type FPPPlaylistReadinessResponse struct {
 	PlaylistID       string `json:"playlistId"`
 	Ready            bool   `json:"ready"`

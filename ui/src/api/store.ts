@@ -664,7 +664,7 @@ export class ApiStore {
   /**
    * `GET /api/v1/integrations/fpp/playlists/{playlistId}/readiness`
    * (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is ready to
-   * run, and the first of §6's five conditions that fails when it is not.
+   * run, and the first of §6's seven conditions that fails when it is not.
    * Open under `observation:read`, same posture as
    * [listFPPPlaylistEntryObservations] above. Throws (400) for a
    * non-fpp-runner playlist and (404) for a playlist with no active

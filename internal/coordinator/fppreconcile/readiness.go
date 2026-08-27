@@ -23,20 +23,70 @@ import (
 // five-member vocabulary for why an FPP-backed Playlist is not ready,
 // checked in order and stopped at the first failing one — "an FPP-backed
 // Playlist is ready when all of these hold, and reports the exact failing
-// one when not." That vocabulary is now open: see docs/build/
-// TRACK-H-cues-and-playlists.md section H6 for the full account of the
-// added conditions, including which remain out of scope this season and
-// why. [ReadinessNodeCatalogStale] and [ReadinessExclusiveClaimConflict]
-// reuse the existing resolvers rather than deriving a second one. This
-// type's own const list below is the current, authoritative member
-// count; nothing else in this codebase should restate a fixed number,
-// since the list is still growing.
+// one when not." That vocabulary is now open (docs/build/
+// IDENTIFIER-REGISTER.md's "Playlist readiness conditions" section) and
+// has taken four additions since; see docs/build/
+// TRACK-H-cues-and-playlists.md section H6 for the full account,
+// including which conditions remain out of scope this season and why.
+//
+// [ReadinessDefinitionSuperseded] and [ReadinessEvidenceUnavailable]
+// close the same gap. The [ReadinessObservationHashMismatch] check below
+// only ever compares against the latest PLAYBACK observation, and FPP's
+// own Playlist::GetInfo() legitimately returns no identity once a
+// playlist goes idle, so the last observation of every run erases the
+// only evidence that check reads: from the moment a playlist finishes
+// until the next one starts, an edited-but-never-played FPP playlist read
+// ready. ReadinessDefinitionSuperseded answers the same question from
+// evidence that does not require playback at all (the plugin posts the
+// full definition on every re-scan, not only on play);
+// ReadinessEvidenceUnavailable makes "the observation-based check could
+// not run" its own failing condition rather than a warning alongside
+// Ready == true, because "I could not check" must never render the same
+// as "I checked and it is fine."
+//
+// [ReadinessNodeCatalogStale] and [ReadinessExclusiveClaimConflict] reuse
+// the existing resolvers rather than deriving a second one. This type's
+// own const list below is the current, authoritative member count;
+// nothing else in this codebase should restate a fixed number, since the
+// list is still growing.
 type ReadinessCondition string
 
 const (
 	// ReadinessDefinitionMissing: no definition is stored for the
 	// binding's (instanceUuid, playlistHash).
 	ReadinessDefinitionMissing ReadinessCondition = "definition-missing"
+	// ReadinessDefinitionSuperseded: a newer stored definition exists for
+	// the same instance and playlist name, under a hash different from
+	// the binding's. This is evidence the FPP playlist was edited that
+	// exists independent of playback — the plugin re-scans and re-posts
+	// on its own schedule, not only when a playlist plays — so this
+	// condition can fail readiness with FPP sitting idle and nothing
+	// having been played since the edit, which [ReadinessObservationHashMismatch]
+	// below cannot do. "Same playlist name" and "newer" are both decided
+	// against the stored definitions themselves, never against the
+	// binding's own copies of that data — see [PlaylistReadiness]'s own
+	// condition-2 comment for why.
+	//
+	// This condition only ever compares the bound definition against
+	// OTHER stored definitions; it says nothing about whether the bound
+	// definition itself is still an accurate read of FPP right now. A
+	// playlist that genuinely has not changed in months, and a playlist
+	// whose plugin has stopped re-posting altogether (a dead or
+	// unreachable plugin), produce the identical row set — no newer row
+	// exists to compare against in either case — so both read as Ready
+	// here. That is a deliberate, narrower boundary than
+	// [ReadinessEvidenceUnavailable]'s, not an oversight: an observation
+	// can be marked Unavailable by the collector itself when it received
+	// something but could not identify it (contracts §1.4), giving this
+	// package a positive "I could not check" signal to fail on. The
+	// definitions table has no equivalent marker for "the plugin went
+	// quiet" — silence here is indistinguishable from "confirmed
+	// unchanged" — so promoting silence itself to a failure would also
+	// fail every playlist that is genuinely unedited. Detecting a plugin
+	// that has stopped reporting at all is a liveness question (see
+	// internal/coordinator/inventory), not a per-playlist readiness
+	// question, and belongs there, not here.
+	ReadinessDefinitionSuperseded ReadinessCondition = "definition-superseded"
 	// ReadinessEntryNotInDefinition: an entry's (section, position) does
 	// not exist in the stored definition.
 	ReadinessEntryNotInDefinition ReadinessCondition = "entry-not-in-definition"
@@ -54,6 +104,14 @@ const (
 	// binding's. Section 6's own text: "a warning rather than a failure
 	// when no observation has been received at all."
 	ReadinessObservationHashMismatch ReadinessCondition = "observation-hash-mismatch"
+	// ReadinessEvidenceUnavailable: an observation exists for this
+	// instance but could not establish identity (contracts section 1.4),
+	// so it carries no playlistHash to compare. Unlike "no observation
+	// has been received at all" (still a warning: nothing has happened
+	// yet to check), this is a required check that DID have evidence to
+	// look at and could not conclude anything from it — "I could not
+	// check" must not read as "I checked and it is fine."
+	ReadinessEvidenceUnavailable ReadinessCondition = "evidence-unavailable"
 
 	// ReadinessNodeRenderUnassigned: a referenced Cue declares
 	// outputs.render, and a node holding one of the active show's
@@ -151,10 +209,10 @@ type Report struct {
 // object id, revision, and decoded payload by the caller (the read route
 // that already fetched it to render the Playlist, or a test). p.Runner
 // must be [config.ShowPlaylistRunnerFPP] with a non-nil p.FPP; anything
-// else is a caller contract violation, not one of the five conditions,
+// else is a caller contract violation, not one of the eight conditions,
 // and is reported as a plain error.
 //
-// Cue readiness (section 6's fourth condition, "passes its own
+// Cue readiness (section 6's fifth condition, "passes its own
 // readiness") is deliberately narrow here: exists, has an active
 // revision, and belongs to the same show. No richer Cue readiness concept
 // (render/audio/LTC path health, asset presence) exists anywhere in this
@@ -182,6 +240,64 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return Report{}, fmt.Errorf("fppreconcile: get playlist definition: %w", err)
 	}
 
+	// Condition 2: a newer definition is stored for this
+	// instance under the same playlist name but a different hash — the
+	// plugin re-scanned and re-posted after the operator edited the FPP
+	// playlist. This is checked against the definition store directly,
+	// never against an observation, so it answers the question with FPP
+	// idle and nothing played since the edit (see [ReadinessDefinitionSuperseded]'s
+	// own doc comment for why the observation-based check below cannot).
+	//
+	// "Same playlist" is matched against defRec.PlaylistName — the bound
+	// definition's OWN stored name — never against p.FPP.PlaylistName
+	// (the binding's copy of that name). The two are normally equal, but
+	// nothing keeps them equal, and matching on the binding's copy
+	// instead of the definition's own name means a definition whose name
+	// has drifted from the binding would never surface as superseding:
+	// the loop below would silently exclude every row that could prove
+	// it. defRec is already the definition everything else in this
+	// function is evaluated against, so its own name, not the binding's
+	// possibly-stale copy of it, is the identity to match candidates on.
+	//
+	// "Newer" is decided by ReceivedAt, the coordinator's own insertion
+	// timestamp — fpp_playlist_definitions is insert-only and never
+	// overwrites a row (store/fppplaylistdefinitions.go's own doc
+	// comment), so ReceivedAt reflects the true order the coordinator
+	// learned about each definition. CapturedAt is not used for this
+	// ordering: it is plugin-supplied wall-clock time, and a plugin
+	// restart, host clock skew, or two definitions captured inside the
+	// same coarse timestamp can all give a genuinely newer definition a
+	// CapturedAt equal to or earlier than the bound one's. A candidate is
+	// excluded here only when it is providably received BEFORE the bound
+	// definition; equal-or-later is never treated as "ignore" — it is
+	// still different content under the same playlist name, and is
+	// reported as superseding rather than silently passed over.
+	instanceDefs, err := st.ListFPPPlaylistDefinitionsByInstance(ctx, p.FPP.InstanceUUID)
+	if err != nil {
+		return Report{}, fmt.Errorf("fppreconcile: list playlist definitions for instance: %w", err)
+	}
+	var newest *store.FPPPlaylistDefinitionRecord
+	for i := range instanceDefs {
+		d := &instanceDefs[i]
+		if d.PlaylistName != defRec.PlaylistName || d.PlaylistHash == p.FPP.PlaylistHash {
+			continue
+		}
+		if d.ReceivedAt.Before(defRec.ReceivedAt) {
+			continue
+		}
+		if newest == nil || d.ReceivedAt.After(newest.ReceivedAt) {
+			newest = d
+		}
+	}
+	if newest != nil {
+		report.Ready = false
+		report.FailingCondition = ReadinessDefinitionSuperseded
+		report.Reason = fmt.Sprintf(
+			"a newer playlist definition (hash %s, captured %s) is stored for instance %q playlist %q than the bound hash %s (captured %s); the FPP playlist was edited since import",
+			newest.PlaylistHash, newest.CapturedAt.Format(time.RFC3339), p.FPP.InstanceUUID, p.FPP.PlaylistName, p.FPP.PlaylistHash, defRec.CapturedAt.Format(time.RFC3339))
+		return report, nil
+	}
+
 	entries, err := fppidentity.ParseDefinitionEntries(defRec.DefinitionJSON)
 	if err != nil {
 		return Report{}, fmt.Errorf("fppreconcile: parse stored definition entries: %w", err)
@@ -195,7 +311,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		byKey[sectionPosition{section: e.Section, position: e.Position}] = e
 	}
 
-	// Conditions 2 and 3, in one pass over the binding's entries: every
+	// Conditions 3 and 4, in one pass over the binding's entries: every
 	// entry's (section, position) must exist in the definition, and its
 	// declared filenames (when any are declared) must match it there.
 	for _, entry := range p.Entries {
@@ -224,7 +340,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		}
 	}
 
-	// Condition 4: every referenced Cue exists, belongs to the same Show,
+	// Condition 5: every referenced Cue exists, belongs to the same Show,
 	// and passes its own (narrow) readiness — see this function's own doc
 	// comment.
 	for _, entry := range p.Entries {
@@ -238,23 +354,24 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		}
 	}
 
-	// Condition 5: the latest accepted observation, when one exists,
+	// Condition 6: the latest accepted observation, when one exists,
 	// carries the same playlistHash. A warning, not a failure, when no
 	// observation has been received at all — "the normal afternoon
-	// state, not a fault." An observation that exists but could not
-	// establish identity (contracts section 1.4) carries no hash to
-	// compare either, and is treated the same way for the same reason:
-	// there is nothing to disagree with.
+	// state, not a fault": there is nothing yet for this check to have
+	// evaluated. An observation that exists but could not establish
+	// identity (contracts section 1.4) is different: this check DID have
+	// evidence to look at and could not conclude anything from it, so it
+	// fails as [ReadinessEvidenceUnavailable] rather than warning:
+	// "I could not check" must not read as "I checked and it is fine."
 	//
 	// This binding-specific check runs BEFORE the fleet-wide conditions
-	// below on purpose (H6 review): node-render-unassigned,
-	// exclusive-claim-conflict, and node-catalog-stale hold or fail
-	// identically for every Playlist of a Show, so on an undeployed fleet
-	// a Playlist whose OWN binding has drifted (this condition) would
-	// otherwise never surface that — PlaylistReadiness stops at the first
-	// failing condition, and every Playlist would report the same
-	// fleet-wide failure instead. Checking this one first means a binding
-	// problem is never masked by a fleet-wide one.
+	// below on purpose: node-render-unassigned, exclusive-claim-conflict
+	// and node-catalog-stale hold or fail identically for every Playlist
+	// of a Show, so on an undeployed fleet a Playlist whose OWN binding
+	// has drifted would otherwise never surface that. PlaylistReadiness
+	// stops at the first failing condition, and every Playlist would
+	// report the same fleet-wide failure instead. Checking this one first
+	// means a binding problem is never masked by a fleet-wide one.
 	obs, err := st.GetFPPPlaylistEntryObservation(ctx, p.FPP.InstanceUUID)
 	switch {
 	case errors.Is(err, store.ErrFPPPlaylistEntryObservationNotFound):
@@ -262,7 +379,10 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	case err != nil:
 		return Report{}, fmt.Errorf("fppreconcile: get latest observation: %w", err)
 	case obs.Unavailable != "":
-		report.Warning = fmt.Sprintf("the latest observation for this instance could not establish identity (%s), so its playlistHash cannot be compared", obs.Unavailable)
+		report.Ready = false
+		report.FailingCondition = ReadinessEvidenceUnavailable
+		report.Reason = fmt.Sprintf("the latest observation for this instance could not establish identity (%s), so its playlistHash cannot be compared", obs.Unavailable)
+		return report, nil
 	case obs.PlaylistHash != p.FPP.PlaylistHash:
 		report.Ready = false
 		report.FailingCondition = ReadinessObservationHashMismatch
@@ -270,15 +390,15 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return report, nil
 	}
 
-	// Condition 6: every node holding a show.surface object for this
+	// Condition 7: every node holding a show.surface object for this
 	// Playlist's own Show must currently hold a render assignment for it,
-	// PROVIDED some referenced Cue actually declares outputs.render —
+	// PROVIDED some referenced Cue actually declares outputs.render:
 	// config.DeriveShowCueClaims expands one Cue's render output through
 	// every one of the Show's surfaces rather than naming one, so there is
 	// no per-Cue surface to check against; the Show's own show.surface
 	// objects are the only place "which surfaces this show's cues target"
 	// can be answered. Skipped entirely when no entry's Cue declares a
-	// render output, matching condition 4's own per-entry Cue lookups
+	// render output, matching condition 5's own per-entry Cue lookups
 	// (already known-good by this point: every entry above already passed
 	// cueReady).
 	if cond, reason, err := nodeRenderAssignmentReadiness(ctx, st, p); err != nil {
@@ -290,7 +410,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		return report, nil
 	}
 
-	// Condition 7: no two Cues this Show's Playlists could
+	// Condition 8: no two Cues this Show's Playlists could
 	// concurrently run hold a colliding H0.5 exclusive claim.
 	if cond, reason, warning, err := exclusiveClaimReadiness(ctx, st, logger, p); err != nil {
 		return Report{}, err
@@ -303,7 +423,7 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 		report.Warning = appendWarning(report.Warning, warning)
 	}
 
-	// Condition 8: every node participating in this Show's catalog has
+	// Condition 9: every node participating in this Show's catalog has
 	// acknowledged the active show's currently required catalog revision.
 	if cond, reason, err := nodeCatalogReadiness(ctx, st, p); err != nil {
 		return Report{}, err
@@ -328,7 +448,7 @@ func appendWarning(existing, add string) string {
 	return existing + "; " + add
 }
 
-// nodeRenderAssignmentReadiness implements condition 6 (see
+// nodeRenderAssignmentReadiness implements condition 7 (see
 // [PlaylistReadiness]'s own doc comment). It runs only when at least one of
 // p's entries references a Cue declaring outputs.render; otherwise this
 // Playlist has no render obligation to check and it returns ("", "", nil)
@@ -574,7 +694,7 @@ func nodeHoldsRenderAssignment(ctx context.Context, st *store.Store, now time.Ti
 // documents.
 func alwaysTrueForReadiness(string) bool { return true }
 
-// exclusiveClaimReadiness implements condition 7 (see [PlaylistReadiness]'s
+// exclusiveClaimReadiness implements condition 8 (see [PlaylistReadiness]'s
 // own doc comment): TRACK-H-cues-and-playlists.md section H0.6's "Readiness
 // rejects... conflicting claims across the Playlists a Show can run
 // concurrently." It is evaluated against p.Show directly, not against
@@ -669,7 +789,7 @@ func undecodableCueID(err error) (cueID string, ok bool) {
 	return id, true
 }
 
-// nodeCatalogReadiness implements condition 8 (see [PlaylistReadiness]'s
+// nodeCatalogReadiness implements condition 9 (see [PlaylistReadiness]'s
 // own doc comment): TRACK-H-cues-and-playlists.md section H0.6's
 // "Readiness rejects... a node without the authorized catalog revision."
 //
@@ -749,7 +869,7 @@ func catalogHasAnyOutput(catalog assetsync.Catalog) bool {
 	return false
 }
 
-// cueReady implements condition 4's narrow Cue check (see
+// cueReady implements condition 5's narrow Cue check (see
 // [PlaylistReadiness]'s own doc comment): exists, has an active revision,
 // and belongs to playlistShow. Returns ("", "", nil) when ready.
 //

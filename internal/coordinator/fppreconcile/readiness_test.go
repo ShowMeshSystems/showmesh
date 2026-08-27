@@ -62,6 +62,40 @@ func putDefinitionWithEntries(t *testing.T, st *store.Store, instanceUUID, playl
 	}
 }
 
+// putDefinitionAt stores a definition, with a single mainPlaylist entry at
+// position 0 (matching singleEntryPlaylist's own binding shape), under
+// playlistHash, captured at capturedAt, so a test can control which of
+// several definitions for the same instance/playlist name is "newer"
+// while still satisfying the entry-position checks that run after
+// definition-superseded.
+func putDefinitionAt(t *testing.T, st *store.Store, instanceUUID, playlistHash, playlistName string, capturedAt time.Time) {
+	t.Helper()
+	_, err := st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: instanceUUID, PlaylistHash: playlistHash, PlaylistName: playlistName,
+		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"}],"leadOut":[]}`,
+		CapturedAt:     capturedAt, ReceivedAt: capturedAt,
+	})
+	if err != nil {
+		t.Fatalf("put fpp playlist definition: %v", err)
+	}
+}
+
+// putDefinitionAtTimes is [putDefinitionAt] with CapturedAt and ReceivedAt
+// controlled independently, for tests that need to prove ordering is
+// decided by ReceivedAt (the coordinator's own arrival order) rather than
+// CapturedAt (the plugin's own, less trustworthy, wall-clock claim).
+func putDefinitionAtTimes(t *testing.T, st *store.Store, instanceUUID, playlistHash, playlistName string, capturedAt, receivedAt time.Time) {
+	t.Helper()
+	_, err := st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: instanceUUID, PlaylistHash: playlistHash, PlaylistName: playlistName,
+		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"}],"leadOut":[]}`,
+		CapturedAt:     capturedAt, ReceivedAt: receivedAt,
+	})
+	if err != nil {
+		t.Fatalf("put fpp playlist definition: %v", err)
+	}
+}
+
 func putObservation(t *testing.T, st *store.Store, rec store.FPPPlaylistEntryObservationRecord) {
 	t.Helper()
 	if err := st.PutFPPPlaylistEntryObservation(context.Background(), rec); err != nil {
@@ -292,6 +326,157 @@ func TestPlaylistReadinessObservationHashMismatchIsWarningWhenNoObservationRecei
 	}
 	if report.Warning == "" {
 		t.Fatal("Warning is empty, want a non-empty warning explaining that no observation has been received yet")
+	}
+}
+
+// TestPlaylistReadinessDetectsEditedPlaylistWhileFPPIdle reproduces the
+// operator-visible defect this test file's own new conditions close: an
+// operator edits the FPP playlist (the plugin re-scans
+// and posts a NEW definition under a new hash, same instance and playlist
+// name) and never plays anything afterward. No observation exists at all
+// — "the normal afternoon state" — yet the coordinator already holds
+// evidence the bound hash is stale, because the definition store is
+// evidence independent of playback.
+func TestPlaylistReadinessDetectsEditedPlaylistWhileFPPIdle(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	oldHash := hash64("old")
+	newHash := hash64("new")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", oldHash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionAt(t, st, "inst-1", oldHash, "Main", time.Unix(1000, 0).UTC())
+	putDefinitionAt(t, st, "inst-1", newHash, "Main", time.Unix(2000, 0).UTC())
+	// Deliberately no observation stored: FPP has not been played at all
+	// since the edit. This is the exact case the issue names: "without
+	// anything having to be played first."
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatalf("Ready = true, want false: a newer definition (%s) is stored for this instance/playlist name than the bound hash (%s), and FPP was never played", newHash, oldHash)
+	}
+	if report.FailingCondition != ReadinessDefinitionSuperseded {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessDefinitionSuperseded)
+	}
+}
+
+// TestPlaylistReadinessDefinitionSupersededIgnoresOlderOrOtherPlaylistName
+// guards the two ways a naive "any other hash exists" check would
+// over-fire: an older definition under the same playlist name (recorded
+// before the currently bound one — not an edit, just history) and a
+// definition under a different playlist name entirely (a different FPP
+// playlist, irrelevant to this binding) must never trip
+// definition-superseded.
+func TestPlaylistReadinessDefinitionSupersededIgnoresOlderOrOtherPlaylistName(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	boundHash := hash64("bound")
+	olderHash := hash64("older")
+	otherNameHash := hash64("othername")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", boundHash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionAt(t, st, "inst-1", olderHash, "Main", time.Unix(500, 0).UTC())
+	putDefinitionAt(t, st, "inst-1", boundHash, "Main", time.Unix(1000, 0).UTC())
+	putDefinitionAt(t, st, "inst-1", otherNameHash, "SomeOtherPlaylist", time.Unix(9000, 0).UTC())
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if !report.Ready {
+		t.Fatalf("Ready = false, want true (failing condition %q: %s); an older same-name definition and a different-name definition must not trip definition-superseded", report.FailingCondition, report.Reason)
+	}
+}
+
+// TestPlaylistReadinessDefinitionSupersededMatchesOnTheDefinitionsOwnName
+// reproduces the defect where definition-superseded silently never fires
+// when the binding's own p.FPP.PlaylistName has drifted from the bound
+// definition's own stored name: matching candidate rows against the
+// binding's copy of the name, instead of against defRec.PlaylistName,
+// excludes every genuinely-newer row before it can ever be compared.
+func TestPlaylistReadinessDefinitionSupersededMatchesOnTheDefinitionsOwnName(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	boundHash := hash64("bound")
+	newHash := hash64("new")
+	// The binding's own copy of the playlist name ("Stale Name") disagrees
+	// with what the bound definition is actually stored under ("Main") —
+	// e.g. an import that predates a rename on the FPP side.
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Stale Name", boundHash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionAt(t, st, "inst-1", boundHash, "Main", time.Unix(1000, 0).UTC())
+	putDefinitionAt(t, st, "inst-1", newHash, "Main", time.Unix(2000, 0).UTC())
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: a newer definition is stored under the bound definition's own name, even though the binding's own playlistName field disagrees with it")
+	}
+	if report.FailingCondition != ReadinessDefinitionSuperseded {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessDefinitionSuperseded)
+	}
+}
+
+// TestPlaylistReadinessDefinitionSupersededComparesReceivedAtNotCapturedAt
+// reproduces the defect where a genuinely newer definition is skipped
+// because its plugin-supplied CapturedAt is equal to (here: a same-tick
+// collision) the bound definition's own CapturedAt. ReceivedAt — the
+// coordinator's own, trustworthy arrival order — says the new row arrived
+// after the bound one, so it must still be reported as superseding.
+func TestPlaylistReadinessDefinitionSupersededComparesReceivedAtNotCapturedAt(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	boundHash := hash64("bound")
+	newHash := hash64("new")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", boundHash, "cue-1", "mainPlaylist", 0, "", "")
+	sameTick := time.Unix(1000, 0).UTC()
+	putDefinitionAtTimes(t, st, "inst-1", boundHash, "Main", sameTick, sameTick)
+	// newHash's CapturedAt ties the bound definition's own (a coarse
+	// plugin timestamp collision); only ReceivedAt shows it arrived later.
+	putDefinitionAtTimes(t, st, "inst-1", newHash, "Main", sameTick, sameTick.Add(time.Second))
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatal("Ready = true, want false: a definition received after the bound one, under the same playlist name and a different hash, must not be ignored just because its CapturedAt ties the bound one's")
+	}
+	if report.FailingCondition != ReadinessDefinitionSuperseded {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessDefinitionSuperseded)
+	}
+}
+
+// TestPlaylistReadinessObservationUnavailableIsFailureNotWarning is the
+// issue's own reported output, reproduced directly: FPP played the edited
+// playlist and its last callback (Playlist::GetInfo() gone idle) lost
+// identity, so the latest observation exists but carries no hash to
+// compare. Readiness must never say "ready" for a check it could not
+// evaluate — this is the "I could not check" case, distinct from "I
+// checked and it is fine".
+func TestPlaylistReadinessObservationUnavailableIsFailureNotWarning(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "show-1", "Show One")
+	hash := hash64("h1")
+	p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+	putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+	// No newer definition posted: this test isolates the observation-side
+	// evidence-unavailable case from definition-superseded.
+
+	obs := baseObservation("inst-1")
+	obs.Unavailable = "missing_playlist_name"
+	putObservation(t, st, obs)
+
+	report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+	if err != nil {
+		t.Fatalf("PlaylistReadiness: %v", err)
+	}
+	if report.Ready {
+		t.Fatalf("Ready = true, want false: the latest observation could not establish identity, so this check could not run; got warning %q", report.Warning)
+	}
+	if report.FailingCondition != ReadinessEvidenceUnavailable {
+		t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessEvidenceUnavailable)
 	}
 }
 
@@ -647,4 +832,198 @@ func TestPlaylistReadinessNodeRenderStaleAssignmentFails(t *testing.T) {
 	if !strings.Contains(report.Reason, "stale") {
 		t.Fatalf("Reason = %q, want it to name the evidence as stale rather than assert an unqualified unassignment", report.Reason)
 	}
+}
+
+// TestPlaylistReadinessEveryConditionIsInvokedInOrder is a direct,
+// assertable answer to "does PlaylistReadiness's call site still invoke
+// every one of the eight ReadinessCondition values, in the documented
+// order" — the exact question a merge that folds two branches' additions
+// to this same call site raises: a conflict resolution that silently took
+// one side's invocations and dropped the other's would still compile and
+// would still pass every other, single-condition test in this file
+// unchanged, because a condition that is never invoked simply never
+// fires.
+//
+// Each subtest builds a store where its own condition, AND every
+// condition ordered after it, are simultaneously true, then asserts only
+// its own condition is reported. That proves both that the condition
+// under test is actually reached (nothing ordered before it swallowed the
+// call), and that nothing ordered after it preempts it (the order these
+// comments claim is the order actually enforced).
+func TestPlaylistReadinessEveryConditionIsInvokedInOrder(t *testing.T) {
+	t.Run("definition-missing", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "", "")
+		// Nothing at all is stored for (inst-1, hash): every later condition
+		// is unreachable from here, which is exactly the point.
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessDefinitionMissing {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessDefinitionMissing)
+		}
+	})
+
+	t.Run("definition-superseded", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
+		// entry.Cue is repointed at a Cue that was never stored: cue-not-ready
+		// (ordered after this one) would also fire if reached.
+		p.Entries[0].Cue = "cue-missing"
+		// The bound definition's own entry has no sequenceName, so it
+		// mismatches the binding's ExpectedSequenceFilename: entry-filename-
+		// mismatch (also ordered after this one) would also fire if reached.
+		putDefinitionAt(t, st, "inst-1", hash, "Main", time.Unix(1000, 0).UTC())
+		putDefinitionAt(t, st, "inst-1", hash64("newer"), "Main", time.Unix(2000, 0).UTC())
+		// No observation and no show.surface at all: left broken too, though
+		// an absent observation is only ever a warning, never a hard failure.
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessDefinitionSuperseded {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessDefinitionSuperseded)
+		}
+	})
+
+	t.Run("entry-not-in-definition", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
+		p.Entries[0].Cue = "cue-missing"
+		_, err := st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+			InstanceUUID: "inst-1", PlaylistHash: hash, PlaylistName: "Main",
+			DefinitionJSON: `{"leadIn":[],"mainPlaylist":[],"leadOut":[]}`,
+			CapturedAt:     time.Unix(1000, 0).UTC(), ReceivedAt: time.Unix(1000, 0).UTC(),
+		})
+		if err != nil {
+			t.Fatalf("put fpp playlist definition: %v", err)
+		}
+		// No newer definition is stored: definition-superseded (ordered
+		// before this one) does not fire, isolating this condition.
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessEntryNotInDefinition {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessEntryNotInDefinition)
+		}
+	})
+
+	t.Run("entry-filename-mismatch", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
+		p.Entries[0].Cue = "cue-missing"
+		putDefinitionWithEntries(t, st, "inst-1", hash, "WrongName.fseq", "")
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessEntryFilenameMismatch {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessEntryFilenameMismatch)
+		}
+	})
+
+	t.Run("cue-not-ready", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
+		p.Entries[0].Cue = "cue-missing"
+		putDefinitionWithEntries(t, st, "inst-1", hash, "Thriller.fseq", "")
+		obs := baseObservation("inst-1")
+		obs.Unavailable = "missing_playlist_name"
+		putObservation(t, st, obs)
+		// evidence-unavailable (ordered after this one) would also fire if
+		// reached.
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessCueNotReady {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessCueNotReady)
+		}
+	})
+
+	t.Run("evidence-unavailable", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
+		putDefinitionWithEntries(t, st, "inst-1", hash, "Thriller.fseq", "")
+		obs := baseObservation("inst-1")
+		obs.Unavailable = "missing_playlist_name"
+		putObservation(t, st, obs)
+		putSurface(t, st, "wall-1", "show-1", "node-1")
+		// No render-assignment evidence for wall-1: node-render-unassigned
+		// (ordered after this one) would also fire if reached.
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessEvidenceUnavailable {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessEvidenceUnavailable)
+		}
+	})
+
+	t.Run("observation-hash-mismatch", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
+		putDefinitionWithEntries(t, st, "inst-1", hash, "Thriller.fseq", "")
+		obs := baseObservation("inst-1")
+		obs.PlaylistHash = hash64("different")
+		putObservation(t, st, obs)
+		putSurface(t, st, "wall-1", "show-1", "node-1")
+		// No render-assignment evidence for wall-1: node-render-unassigned
+		// (ordered after this one) would also fire if reached.
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessObservationHashMismatch {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessObservationHashMismatch)
+		}
+	})
+
+	t.Run("node-render-unassigned", func(t *testing.T) {
+		st := openTestStore(t)
+		putShow(t, st, "show-1", "Show One")
+		hash := hash64("h1")
+		p := singleEntryPlaylist(t, st, "show-1", "inst-1", "Main", hash, "cue-1", "mainPlaylist", 0, "Thriller.fseq", "")
+		putDefinitionWithEntries(t, st, "inst-1", hash, "Thriller.fseq", "")
+		obs := baseObservation("inst-1")
+		obs.PlaylistName, obs.PlaylistHash, obs.Section, obs.Position = "Main", hash, "mainPlaylist", 0
+		obs.EntryKey = entryKeyFor(t, p, "entry-1")
+		putObservation(t, st, obs)
+		putSurface(t, st, "wall-1", "show-1", "node-1")
+		// Deliberately no surface.pipeline.state evidence for node-1/wall-1.
+		// This is the last ordered condition, so there is nothing left to
+		// prove it isn't preempted by; TestPlaylistReadinessNodeRenderUnassignedDefect
+		// already covers this same shape on its own.
+
+		report, err := PlaylistReadiness(context.Background(), st, nil, "playlist-1", 1, p)
+		if err != nil {
+			t.Fatalf("PlaylistReadiness: %v", err)
+		}
+		if report.FailingCondition != ReadinessNodeRenderUnassigned {
+			t.Fatalf("FailingCondition = %q, want %q", report.FailingCondition, ReadinessNodeRenderUnassigned)
+		}
+	})
 }
