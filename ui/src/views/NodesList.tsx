@@ -7,6 +7,7 @@ import { ScopedButton } from '../components/ScopedButton'
 import { declareNode, deleteNodeDeclaration, runDiscovery } from '../api'
 import type { DiscoveryProposal, DiscoveryRun } from '../app/types'
 import { describeApiError } from '../app/session'
+import '../styles/operator-pages.css'
 
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6): node discovery and
 // declaration, laid on top of Step 4's read-only node list. The honest
@@ -83,9 +84,15 @@ export function NodesList() {
   }
 
   return (
-    <div>
+    <section className="monitor-detail monitor-node-list" aria-labelledby="nodes-title">
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
-      <h2 className="panel__title">Nodes</h2>
+      <header className="monitor-detail__header">
+        <div>
+          <p className="monitor-detail__eyebrow">Monitor</p>
+          <h1 id="nodes-title">Nodes</h1>
+          <p className="operator-page__lede text-muted">Node liveness, declarations, capabilities, and available controls.</p>
+        </div>
+      </header>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
         {/* BUILD-PLAN Step 7 seam B review defect 7: a double-click here
@@ -198,6 +205,6 @@ export function NodesList() {
           </table>
         </div>
       )}
-    </div>
+    </section>
   )
 }

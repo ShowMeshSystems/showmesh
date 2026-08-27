@@ -23,6 +23,7 @@ import { ScopedButton } from '../components/ScopedButton'
 import { formatAbsolute } from '../app/time'
 import { findObservation, groupFppObservations } from '../app/fppSignals'
 import type { FPPInstance, FPPPlaylistEntryReconciliationResponse } from '../app/types'
+import '../styles/operator-pages.css'
 
 // FPP instance detail. Not named in spec section 6.4's view list, which
 // enumerates Dashboard/Nodes/Capabilities/Events, but OBSERVABILITY
@@ -53,7 +54,7 @@ export function FPPDetail() {
   const warningsCount = instance ? findObservation(instance.observations, 'fpp.warnings.count') : undefined
 
   return (
-    <div>
+    <section className="monitor-detail monitor-fpp-detail" aria-labelledby="fpp-detail-title">
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
       <p>
         <Link to="/fpp">← All FPP instances</Link>
@@ -66,7 +67,13 @@ export function FPPDetail() {
         </p>
       ) : (
         <>
-          <h2 className="panel__title">{instance.instanceId}</h2>
+          <header className="monitor-detail__header">
+            <div>
+              <p className="monitor-detail__eyebrow">FPP player detail</p>
+              <h1 id="fpp-detail-title">{instance.instanceId}</h1>
+              <p className="operator-page__lede text-muted">Authoritative player health, playback evidence, and existing controls.</p>
+            </div>
+          </header>
 
           <PanelErrorBoundary panelLabel="FPP instance summary">
             <section className="panel">
@@ -286,7 +293,7 @@ export function FPPDetail() {
           )}
         </>
       )}
-    </div>
+    </section>
   )
 }
 

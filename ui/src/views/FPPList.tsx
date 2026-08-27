@@ -4,6 +4,7 @@ import { FPPHealthBadge } from '../components/DomainBadges'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { FleetSignalBadge } from '../components/FleetSignalBadge'
 import { findObservation, summarizeFleetVersions } from '../app/fppSignals'
+import '../styles/operator-pages.css'
 
 export function FPPList() {
   const model = useModelContext()
@@ -17,9 +18,15 @@ export function FPPList() {
   const versionSummary = summarizeFleetVersions(model.fpp)
 
   return (
-    <div>
+    <section className="monitor-detail monitor-fpp-list" aria-labelledby="fpp-title">
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
-      <h2 className="panel__title">FPP instances</h2>
+      <header className="monitor-detail__header">
+        <div>
+          <p className="monitor-detail__eyebrow">Monitor</p>
+          <h1 id="fpp-title">FPP players</h1>
+          <p className="operator-page__lede text-muted">Health, playback, controller, and pixel-port evidence reported by each player.</p>
+        </div>
+      </header>
       {model.fpp.length === 0 ? (
         <p className="text-muted">No FPP instances are configured on this coordinator.</p>
       ) : (
@@ -80,6 +87,6 @@ export function FPPList() {
           </div>
         </>
       )}
-    </div>
+    </section>
   )
 }

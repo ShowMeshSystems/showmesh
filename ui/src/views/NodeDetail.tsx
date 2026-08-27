@@ -9,6 +9,7 @@ import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
 import { AudioSessionPanel } from '../components/AudioSessionPanel'
 import { CueCatalogPanel } from '../components/CueCatalogPanel'
 import { formatAbsolute } from '../app/time'
+import '../styles/operator-pages.css'
 
 // Node detail (spec section 6.4 / OPERATOR-UI section 8.1): control-plane
 // state with its reason, agent version, platform, boot ID, started-at,
@@ -23,7 +24,7 @@ export function NodeDetail() {
   const connected = model.connection.kind === 'live'
 
   return (
-    <div>
+    <section className="monitor-detail monitor-node-detail" aria-labelledby="node-detail-title">
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
       <p>
         <Link to="/nodes">← All nodes</Link>
@@ -36,13 +37,19 @@ export function NodeDetail() {
         </p>
       ) : (
         <>
-          <h2 className="panel__title">{node.label ?? node.nodeId}</h2>
+          <header className="monitor-detail__header">
+            <div>
+              <p className="monitor-detail__eyebrow">Node detail</p>
+              <h1 id="node-detail-title">{node.label ?? node.nodeId}</h1>
+              <p className="operator-page__lede text-muted">Node, render, and audio evidence are grouped by meaning; each report carries its own freshness.</p>
+            </div>
+          </header>
 
           {/* Node summary and control-plane evidence are short peers, so they
               share the wide-display two-column grid (.panel-grid, global.css).
               Render is deliberately outside it: its signal table is the tallest
               thing on the page and half a column wraps every reason line. */}
-          <div className="panel-grid">
+          <div className="panel-grid monitor-evidence-group">
             <PanelErrorBoundary panelLabel="Node summary">
               <section className="panel">
                 <div style={{ marginBottom: '0.75rem' }}>
@@ -132,7 +139,7 @@ export function NodeDetail() {
           </div>
 
           <PanelErrorBoundary panelLabel="Render">
-            <section className="panel">
+            <section className="panel monitor-evidence-group">
               <h3 className="panel__title">Render</h3>
               <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
             </section>
@@ -143,7 +150,7 @@ export function NodeDetail() {
               their own controls, which makes this panel tall in the same
               way the render signal table is. */}
           <PanelErrorBoundary panelLabel="Audio">
-            <section className="panel">
+            <section className="panel monitor-evidence-group">
               <h3 className="panel__title">Audio</h3>
               <AudioSessionPanel nodeId={node.nodeId} entries={node.audio} />
             </section>
@@ -166,6 +173,6 @@ export function NodeDetail() {
           )}
         </>
       )}
-    </div>
+    </section>
   )
 }

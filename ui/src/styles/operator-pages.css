@@ -219,6 +219,152 @@
   font-size: var(--font-size-sm);
 }
 
+/* Monitor is a directory of operational surfaces. Its navigation is a
+ * simple list of links, not decorative dashboard tiles, so the same
+ * structure remains useful on a phone and with a keyboard. */
+.monitor-page,
+.monitor-observations,
+.monitor-detail {
+  gap: var(--space-4);
+}
+
+.monitor-page__header .status-badge {
+  align-self: flex-start;
+}
+
+.monitor-page__nav ul {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.monitor-page__nav li {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.monitor-page__nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: var(--touch-target-min);
+  padding: var(--space-3) 0;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.monitor-page__nav-link:hover {
+  color: var(--color-link);
+}
+
+.monitor-page__nav-link strong,
+.monitor-page__nav-detail {
+  display: block;
+}
+
+.monitor-page__nav-detail {
+  margin-top: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.monitor-page__section {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.monitor-page__section-heading h2 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.monitor-page__section-heading p {
+  margin: var(--space-1) 0 0;
+}
+
+.monitor-page__summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.monitor-page__summary > div {
+  min-width: 0;
+  padding-top: var(--space-3);
+  border-top: 2px solid var(--color-border);
+}
+
+.monitor-page__summary dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.monitor-page__summary dd {
+  margin: var(--space-1) 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.monitor-page__summary span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.monitor-observations__table {
+  min-width: 52rem;
+}
+
+.monitor-observations__table code {
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.monitor-observations__table td {
+  vertical-align: top;
+}
+
+.monitor-observations__table .evidence {
+  min-width: 15rem;
+}
+
+.monitor-detail__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.monitor-detail__header h1 {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-tight);
+}
+
+.monitor-detail__eyebrow {
+  margin: 0 0 var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.monitor-evidence-group {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.monitor-evidence-group > h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
 @media (max-width: 900px) {
   .operator-status-strip,
   .operator-summary-grid {
@@ -227,6 +373,10 @@
 
   .operator-page__columns {
     grid-template-columns: 1fr;
+  }
+
+  .monitor-page__summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -257,5 +407,13 @@
 
   .current-run__facts dd {
     margin-bottom: var(--space-2);
+  }
+
+  .monitor-page__summary {
+    grid-template-columns: 1fr;
+  }
+
+  .monitor-page__nav-link {
+    align-items: flex-start;
   }
 }
