@@ -17,6 +17,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
@@ -247,6 +248,9 @@ func TestOpenAPIDocumentIsWellFormed(t *testing.T) {
 		"Snapshot", "Problem", "StreamStart", "StreamReset",
 		"NodeChangedEvent", "FPPChangedEvent", "EventRecordedEvent",
 		"FPPObservationsChangedEvent",
+		"CurrentRunsResponse", "CurrentShowContext", "CurrentRun", "CurrentPlayback",
+		"CurrentRunFreshness", "CurrentReconciliation", "CurrentRunActivation",
+		"CurrentRunTarget", "CurrentRunNext", "CurrentRunsChangedEvent",
 		"SessionResponse", "AuditResponse", "AuditEntry",
 		"PrincipalSummary", "SessionInfo", "BootstrapRequest",
 		"ConfigFPPEndpoint", "ConfigFPPEndpointsPayload",
@@ -292,6 +296,7 @@ func TestOpenAPISchemasMatchRealResponses(t *testing.T) {
 		{"GET", "/api/v1/observations", "ObservationsResponse"},
 		{"GET", "/api/v1/events", "EventsResponse"},
 		{"GET", "/api/v1/snapshot", "Snapshot"},
+		{"GET", "/api/v1/current-runs", "CurrentRunsResponse"},
 		{"GET", "/api/v1/session", "SessionResponse"},
 		{"GET", "/api/v1/resolume/instances", "ResolumeInstancesResponse"},
 		{"GET", "/api/v1/resolume/instances/resolume", "ResolumeInstanceResponse"},
@@ -795,6 +800,45 @@ func TestOpenAPIStreamEventSchemasMatchRealFrames(t *testing.T) {
 		t.Fatalf("event = %q, want node.changed", event)
 	}
 	assertMatchesSchema(t, c, "NodeChangedEvent", []byte(data))
+}
+
+// TestOpenAPICurrentRunsChangedEventSchemaMatchesRealFrame verifies the
+// runner-neutral event on the actual SSE transport, including its complete
+// zero-to-many replacement payload rather than only the direct pendingFrame
+// test in currentruns_test.go.
+func TestOpenAPICurrentRunsChangedEventSchemaMatchesRealFrame(t *testing.T) {
+	c := newOpenAPICompiler(t)
+	testAPI := newStreamTestAPI(Dependencies{
+		CurrentRuns: currentRunsReaderFake{snapshot: currentrun.Snapshot{Runs: []currentrun.Run{{
+			ID: "showmesh-audio:node-a:s-1", Runner: currentrun.RunnerShowmeshAudio,
+			Status: "playing", Playback: currentrun.Playback{State: "playing"},
+		}}}},
+		Nodes: &fakeNodeLister{}, FPP: &fakeFPPLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go testAPI.Hub.Run(ctx)
+
+	srv := httptest.NewServer(testAPI.Handler)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/v1/stream")
+	if err != nil {
+		t.Fatalf("GET /api/v1/stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r := bufio.NewReader(resp.Body)
+	if event, _ := readEventWithTimeout(t, r, 5*time.Second); event != "stream.start" {
+		t.Fatalf("event = %q, want stream.start", event)
+	}
+
+	testAPI.Hub.Notify()
+	event, data := readEventWithTimeout(t, r, 5*time.Second)
+	if event != "currentRuns.changed" {
+		t.Fatalf("event = %q, want currentRuns.changed", event)
+	}
+	assertMatchesSchema(t, c, "CurrentRunsChangedEvent", []byte(data))
 }
 
 // TestOpenAPIFPPObservationsChangedEventSchemaMatchesRealFrame is

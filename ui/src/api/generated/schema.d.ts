@@ -49,6 +49,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/current-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Current runner playback
+         * @description Full runner-neutral projection of the current zero-to-many runs. FPP is optional; FPP and showmesh-audio can be present concurrently. The server computes active Show/generation context, runner status, playback and freshness, reconciliation, activation, and per-target evidence. `next` is null unless a runner provided an authoritative next item, so clients must not infer one from local playlist order. After reconnect, refetch this endpoint; `currentRuns.changed` is an optional full-frame prompt, not a resumable cursor.
+         */
+        get: operations["getCurrentRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes": {
         parameters: {
             query?: never;
@@ -612,6 +632,7 @@ export interface paths {
          *       | `resolumeRecovery.changed` | `ResolumeRecoveryChangedEvent` | every connection |
          *       | `nightSession.changed` | `NightSessionChangedEvent` | every connection |
          *       | `fppPlaylistEntry.changed` | `FPPPlaylistEntryChangedEvent` | every connection |
+         *       | `currentRuns.changed` | `CurrentRunsChangedEvent` | every connection |
          *       | `stream.reset` | `StreamReset` | every connection |
          *
          *     `data:` is always exactly one line of compact (no embedded newlines) JSON - never pretty-printed, never split across multiple `data:` lines. No other SSE field (`event:`, `data:`) is ever emitted for the event types in the table above, and no other event type is defined; a client encountering an `event:` name not in this table should ignore that frame rather than fail, in the same unknown-field-tolerant spirit as contract section 6.2's additive-only rule for JSON fields.
@@ -2971,6 +2992,80 @@ export interface components {
             latestSeq: number;
             gap: boolean;
             oldestRetainedSeq: number | null;
+        };
+        CurrentRunsResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            activeShow: components["schemas"]["CurrentShowContext"];
+            runs: components["schemas"]["CurrentRun"][];
+        };
+        CurrentShowContext: {
+            configured: boolean;
+            show: string | null;
+            generation: number | null;
+        };
+        CurrentRun: {
+            id: string;
+            /** @enum {string} */
+            runner: "fpp" | "showmesh-audio";
+            show: string;
+            generation: number;
+            playlistId: string;
+            playlistRevision: number;
+            status: string;
+            statusReason: string;
+            playback: components["schemas"]["CurrentPlayback"];
+            freshness: components["schemas"]["CurrentRunFreshness"];
+            reconciliation: components["schemas"]["CurrentReconciliation"];
+            activation: components["schemas"]["CurrentRunActivation"];
+            targets: components["schemas"]["CurrentRunTarget"][];
+            next: components["schemas"]["CurrentRunNext"] | null;
+        };
+        CurrentPlayback: {
+            state: string;
+            reason: string;
+            itemId: string;
+            itemIndex: number | null;
+            positionMs: number | null;
+            media: string;
+            evidence: components["schemas"]["Evidence"][];
+        };
+        CurrentRunFreshness: {
+            state: string;
+            reason: string;
+            /** Format: date-time */
+            observedAt: string | null;
+            /** Format: date-time */
+            collectedAt: string | null;
+        };
+        CurrentReconciliation: {
+            state: string;
+            reason: string;
+        };
+        CurrentRunActivation: {
+            show: string;
+            generation: number;
+            playlistId: string;
+            revision: number;
+            runner: string;
+        };
+        CurrentRunTarget: {
+            kind: string;
+            id: string;
+            evidence: components["schemas"]["Evidence"][];
+        };
+        CurrentRunNext: {
+            itemId: string;
+            itemIndex: number;
+            media: string;
+            source: string;
+        };
+        CurrentRunsChangedEvent: {
+            seq: number;
+            /** Format: date-time */
+            serverTime: string;
+            activeShow: components["schemas"]["CurrentShowContext"];
+            runs: components["schemas"]["CurrentRun"][];
         };
         Snapshot: {
             /** Format: date-time */
@@ -5403,6 +5498,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Snapshot"];
+                };
+            };
+            400: components["responses"]["UnsupportedAPIVersion"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getCurrentRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentRunsResponse"];
                 };
             };
             400: components["responses"]["UnsupportedAPIVersion"];
