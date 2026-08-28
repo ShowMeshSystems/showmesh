@@ -13,6 +13,7 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/currentrun"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -192,6 +193,10 @@ func (r currentRunsReader) appendAudioRuns(ctx context.Context, now time.Time, o
 			}
 		}
 	}
+	// NodeLister implementations may return their backing slice. Sort a copy
+	// so deterministic projection never mutates collector/inventory state.
+	nodes = append([]inventory.NodeView(nil), nodes...)
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
 	for _, node := range nodes {
 		observations := r.deps.Audio.NodeAudioObservations(node.NodeID)
 		bySession := make(map[string][]observation.Observation)
@@ -200,7 +205,13 @@ func (r currentRunsReader) appendAudioRuns(ctx context.Context, now time.Time, o
 				bySession[o.Resource.ID] = append(bySession[o.Resource.ID], o)
 			}
 		}
-		for sessionID, sessionObs := range bySession {
+		sessionIDs := make([]string, 0, len(bySession))
+		for sessionID := range bySession {
+			sessionIDs = append(sessionIDs, sessionID)
+		}
+		sort.Strings(sessionIDs)
+		for _, sessionID := range sessionIDs {
+			sessionObs := bySession[sessionID]
 			run := audioRun(now, out.Active, audioPlaylist, node.NodeID, sessionID, sessionObs)
 			out.Runs = append(out.Runs, run)
 		}
@@ -212,41 +223,38 @@ func audioRun(now time.Time, active currentrun.ActiveContext, pl *currentPlaylis
 	state, reason := "unknown", "no audio session state evidence"
 	itemID, media := "", ""
 	var itemIndex, position, playlistRevision *int64
-	var newest *observation.Observation
-	for i := range obs {
-		o := obs[i]
-		if newest == nil || (o.ObservedAt != nil && (newest.ObservedAt == nil || o.ObservedAt.After(*newest.ObservedAt))) {
-			copy := o
-			newest = &copy
-		}
-		switch string(o.Signal) {
-		case "audio_session.state":
-			state, _ = o.Value.(string)
-			reason = audioStateReason(state)
-		case "audio_session.playlist.item_id":
-			itemID, _ = o.Value.(string)
-		case "audio_session.playlist.item_index":
-			itemIndex = int64PtrValue(o.Value)
-		case "audio_session.position_ms":
-			position = int64PtrValue(o.Value)
-		case "audio_session.playlist.revision":
-			playlistRevision = int64PtrValue(o.Value)
+	newest := latestAudioObservation(obs, "")
+	stateObs := latestAudioObservation(obs, "audio_session.state")
+	if stateObs != nil {
+		if value, ok := stateObs.Value.(string); ok && value != "" {
+			state, reason = value, audioStateReason(value)
+		} else {
+			state, reason = "unknown", audioSessionEvidenceReason(stateObs, "audio session state")
 		}
 	}
+	if o := latestAudioObservation(obs, "audio_session.playlist.item_id"); o != nil {
+		itemID, _ = o.Value.(string)
+	}
+	if o := latestAudioObservation(obs, "audio_session.playlist.item_index"); o != nil {
+		itemIndex = int64PtrValue(o.Value)
+	}
+	if o := latestAudioObservation(obs, "audio_session.position_ms"); o != nil {
+		position = int64PtrValue(o.Value)
+	}
+	playlistRevisionObs := latestAudioObservation(obs, "audio_session.playlist.revision")
+	if playlistRevisionObs != nil {
+		playlistRevision = int64PtrValue(playlistRevisionObs.Value)
+	}
+	roleObs := latestAudioObservation(obs, "audio_session.source_role")
+	role, roleCurrent := audioSessionRole(roleObs, now)
 	show, generation, playlistID, revision := "", int64(0), "", int64(0)
-	if pl != nil {
+	if pl != nil && role == "background" && roleCurrent && playlistRevisionObs != nil && observationIsCurrent(playlistRevisionObs, now) && playlistRevision != nil && *playlistRevision == pl.Revision {
 		show, playlistID, revision = pl.Payload.Show, pl.ID, pl.Revision
 		if active.Configured && active.Show == show {
 			generation = active.Generation
 		}
 	}
-	recon := currentrun.Reconciliation{State: "unbound", Reason: "no active showmesh-audio playlist is bound to this session"}
-	if pl != nil {
-		recon = currentrun.Reconciliation{State: "resolved", Reason: "audio session playlist is resolved against the active Show"}
-		if playlistRevision != nil && *playlistRevision != revision {
-			recon = currentrun.Reconciliation{State: "stale-import", Reason: "audio session reports a different playlist revision than the active playlist"}
-		}
-	}
+	recon := audioSessionReconciliation(now, pl, role, roleCurrent, playlistRevisionObs, playlistRevision)
 	fresh := currentrun.Freshness{State: "not_collected", Reason: "no audio session evidence"}
 	if newest != nil {
 		freshState := currentEvidenceState(now, derefTime(newest.ObservedAt))
@@ -255,16 +263,142 @@ func audioRun(now time.Time, active currentrun.ActiveContext, pl *currentPlaylis
 	run := currentrun.Run{ID: "showmesh-audio:" + nodeID + ":" + sessionID, Runner: currentrun.RunnerShowmeshAudio,
 		Show: show, Generation: generation, PlaylistID: playlistID, PlaylistRevision: revision,
 		Status: state, StatusReason: reason,
-		Playback:  currentrun.Playback{State: state, Reason: reason, ItemID: itemID, PositionMs: position, Media: media, Evidence: currentEvidenceList(obs, now)},
+		Playback:  currentrun.Playback{State: state, Reason: reason, ItemID: itemID, PositionMs: position, Media: media, Evidence: currentAudioEvidenceList(obs, now)},
 		Freshness: fresh, Reconciliation: recon,
 		Activation: currentrun.Activation{Show: show, Generation: generation, PlaylistID: playlistID, Revision: revision, Runner: currentrun.RunnerShowmeshAudio},
-		Targets:    []currentrun.Target{{Kind: string(observation.ResourceNode), ID: nodeID, Evidence: currentEvidenceList(obs, now)}},
+		Targets:    []currentrun.Target{{Kind: string(observation.ResourceNode), ID: nodeID, Evidence: currentAudioEvidenceList(obs, now)}},
 	}
 	if itemIndex != nil {
 		i := int(*itemIndex)
 		run.Playback.ItemIndex = &i
 	}
 	return run
+}
+
+// latestAudioObservation returns one deterministic observation for signal.
+// Node-audio normally emits one row per signal, but retained/stale reports and
+// test doubles can expose duplicates. Selection must follow evidence time and
+// collection time, never the caller's slice order.
+func latestAudioObservation(obs []observation.Observation, signal observation.SignalID) *observation.Observation {
+	var latest *observation.Observation
+	for i := range obs {
+		if signal != "" && obs[i].Signal != signal {
+			continue
+		}
+		candidate := obs[i]
+		if latest == nil || newerAudioObservation(candidate, *latest) {
+			latest = &candidate
+		}
+	}
+	return latest
+}
+
+func newerAudioObservation(a, b observation.Observation) bool {
+	aAt, bAt := audioObservationOrderTime(a), audioObservationOrderTime(b)
+	if aAt.After(bAt) {
+		return true
+	}
+	if bAt.After(aAt) {
+		return false
+	}
+	if a.CollectedAt.After(b.CollectedAt) {
+		return true
+	}
+	if b.CollectedAt.After(a.CollectedAt) {
+		return false
+	}
+	if (a.ObservedAt != nil) != (b.ObservedAt != nil) {
+		return a.ObservedAt != nil
+	}
+	// Equal timestamps are unusual, but source and the remaining scalar fields
+	// provide a stable total order for duplicate observations.
+	if a.Source != b.Source {
+		return a.Source > b.Source
+	}
+	if a.Absence != b.Absence {
+		return a.Absence > b.Absence
+	}
+	if a.Reason != b.Reason {
+		return a.Reason > b.Reason
+	}
+	if a.Unit != b.Unit {
+		return a.Unit > b.Unit
+	}
+	if a.Quality != b.Quality {
+		return a.Quality > b.Quality
+	}
+	if a.ValidFor != b.ValidFor {
+		return a.ValidFor > b.ValidFor
+	}
+	return fmt.Sprint(a.Value) > fmt.Sprint(b.Value)
+}
+
+func audioObservationOrderTime(o observation.Observation) time.Time {
+	if o.ObservedAt != nil {
+		return *o.ObservedAt
+	}
+	return o.CollectedAt
+}
+
+func observationIsCurrent(o *observation.Observation, now time.Time) bool {
+	return o != nil && o.Value != nil && o.StateAt(now) == observation.StateCurrent
+}
+
+func audioSessionRole(o *observation.Observation, now time.Time) (string, bool) {
+	if !observationIsCurrent(o, now) {
+		return "", false
+	}
+	role, ok := o.Value.(string)
+	return role, ok && role != ""
+}
+
+func audioSessionEvidenceReason(o *observation.Observation, label string) string {
+	if o == nil {
+		return label + " evidence is unavailable"
+	}
+	if o.Reason != "" {
+		return o.Reason
+	}
+	if o.Absence != "" {
+		return label + " evidence is " + string(o.Absence)
+	}
+	return label + " evidence is unavailable"
+}
+
+func audioSessionReconciliation(now time.Time, pl *currentPlaylist, role string, roleCurrent bool, playlistRevisionObs *observation.Observation, playlistRevision *int64) currentrun.Reconciliation {
+	if !roleCurrent {
+		return currentrun.Reconciliation{State: "unknown", Reason: "audio session source role evidence is unavailable or stale"}
+	}
+	if role != "background" {
+		return currentrun.Reconciliation{State: "unbound", Reason: "audio session source role is not the showmesh-audio background role"}
+	}
+	if pl == nil {
+		return currentrun.Reconciliation{State: "unbound", Reason: "no active showmesh-audio playlist is bound to this session"}
+	}
+	if !observationIsCurrent(playlistRevisionObs, now) || playlistRevision == nil {
+		return currentrun.Reconciliation{State: "unknown", Reason: "background audio session has no current playlist revision evidence"}
+	}
+	if *playlistRevision != pl.Revision {
+		return currentrun.Reconciliation{State: "stale-import", Reason: "audio session reports a different playlist revision than the active playlist"}
+	}
+	return currentrun.Reconciliation{State: "resolved", Reason: "audio session playlist identity matches the active Show playlist"}
+}
+
+func currentAudioEvidenceList(in []observation.Observation, now time.Time) []currentrun.Evidence {
+	bySignal := make(map[observation.SignalID]observation.Observation)
+	for _, o := range in {
+		if o.Resource.Kind != observation.ResourceAudioSession {
+			continue
+		}
+		if prior, ok := bySignal[o.Signal]; !ok || newerAudioObservation(o, prior) {
+			bySignal[o.Signal] = o
+		}
+	}
+	resolved := make([]observation.Observation, 0, len(bySignal))
+	for _, o := range bySignal {
+		resolved = append(resolved, o)
+	}
+	return currentEvidenceList(resolved, now)
 }
 
 func audioStateReason(state string) string {
