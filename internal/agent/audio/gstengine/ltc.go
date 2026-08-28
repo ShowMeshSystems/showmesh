@@ -58,17 +58,30 @@ const ltcAppSrcLeadSeconds = 0.2
 // is a worse failure than the queue lag this constant corrects for.
 const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
 
+// ltcTransitionDownstreamMargin approximates the shared pipeline's own
+// latency beyond the LTC appsrc's own queue: appsink measurement of the
+// real tail after a Stop or Start swap (loopback, no flush) showed real
+// audio on the wire for close to 0.29s (reproduced independently at
+// 290.6ms), about 90ms more than ltcAppSrcLeadDuration's 0.2s nominal
+// queue depth -- scheduling and the downstream interleave/sink stages add
+// the rest. Shrinking that downstream component itself is a separate
+// piece of work, not this guard's.
+const ltcTransitionDownstreamMargin = 100 * time.Millisecond
+
 // ltcTransitionGuardDuration bounds [ltcChannel.beginTransition]'s guard
-// window: appsink measurement of the real tail after a Stop or Start
-// swap (loopback, no flush) showed real audio on the wire for close to
-// 0.29s, above ltcAppSrcLeadDuration's own 0.2s nominal queue depth --
-// scheduling and downstream pipeline latency beyond the appsrc's own
-// queue add to it. This constant is sized with headroom over that
-// measurement rather than reused from the nominal bound, because
-// erring toward reporting the outgoing run's evidence a little longer
-// is the safe direction; claiming the run stopped while it is still on
-// the wire is the defect this guards against.
-const ltcTransitionGuardDuration = 2 * ltcAppSrcLeadDuration
+// window only when no stronger evidence ends it sooner (see
+// [ltcChannel.observe]): sized to the measured real tail
+// (ltcAppSrcLeadDuration plus ltcTransitionDownstreamMargin) with a small
+// margin for jitter, not a blind 2x lead. StartLTC's own realignment
+// path ends the guard as soon as the feeder confirms the incoming run's
+// first emission, well before this bound is ever reached; StopLTC has no
+// future confirmation to wait for (the incoming "run" is silence, and
+// nothing about it ever reports LTCRunning), so this fixed bound is what
+// actually governs how long that path's guard lasts. Erring toward
+// reporting the outgoing run's evidence a little longer than the
+// measured tail is still the safe direction: claiming the run stopped
+// while it is still on the wire is the defect this guards against.
+const ltcTransitionGuardDuration = ltcAppSrcLeadDuration + ltcTransitionDownstreamMargin + 10*time.Millisecond
 
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
 // feeder goroutine to exit after unblocking it. It is a backstop, not the
@@ -244,7 +257,17 @@ func (ch *ltcChannel) observe(now time.Time) agentaudio.LTCObservation {
 	o := ch.obs
 	lastConfirmed := ch.lastConfirmed
 	if !ch.transitionDeadline.IsZero() {
-		if now.Before(ch.transitionDeadline) {
+		if o.State == agentaudio.LTCRunning {
+			// The feeder has already confirmed the incoming run's first
+			// emission (ch.obs is only ever set to LTCRunning for the
+			// current generation, under this same lock): that is real
+			// evidence the swap landed, so end the guard on it now
+			// rather than waiting out ltcTransitionGuardDuration
+			// regardless. StopLTC's incoming "run" is silence and never
+			// reports LTCRunning, so this never fires for that path;
+			// the fixed bound below is what ends it there.
+			ch.transitionDeadline = time.Time{}
+		} else if now.Before(ch.transitionDeadline) {
 			o = ch.preTransitionObs
 			if o.TimecodeKnown && o.FrameRateKnown {
 				if extended, err := o.Timecode.Advance(now.Sub(o.ObservedAt), o.FrameRate); err == nil {
