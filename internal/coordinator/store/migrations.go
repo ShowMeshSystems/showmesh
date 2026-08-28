@@ -62,6 +62,7 @@ var migrations = []migration{
 	{version: 17, sql: schemaV17},
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
+	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
