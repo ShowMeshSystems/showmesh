@@ -614,6 +614,18 @@ func (b *branch) unblockFlow() {
 	}
 }
 
+// silenceDeferredBranch mutes a branch whose teardown just deferred.
+// doTeardown always unblocks its flow ahead of the state change it may
+// go on to abandon (see doTeardown's own comment on that ordering), so a
+// deferred branch is left unblocked and possibly still PLAYING, holding
+// its mixer request pads: without this it can keep sounding under
+// whatever the session loads next. A property set on volume needs no
+// state-changing call of its own, so it cannot race the abandoned
+// SetState this branch's elements may still be driving.
+func (b *branch) silenceDeferredBranch() {
+	b.volume.SetObjectProperty("volume", float64(0))
+}
+
 func (b *branch) freezeAt(pos time.Duration) {
 	b.mu.Lock()
 	b.frozen = true
