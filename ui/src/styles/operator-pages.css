@@ -31,6 +31,8 @@
 }
 
 .live-control-page {
+  min-width: 0;
+  max-width: 100%;
   gap: var(--space-5);
 }
 
@@ -125,14 +127,14 @@
 
 .live-control-columns {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
   gap: var(--space-5);
   align-items: start;
 }
 
 .live-control-groups {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
   gap: var(--space-4);
 }
 
@@ -153,15 +155,42 @@
   margin: 0;
 }
 
-.live-control-actions {
-  display: flex;
-  flex-wrap: wrap;
+.live-control-command-rack {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* A command and the evidence it returns are one operable unit. Keeping them
+ * in their own grid cell prevents a long refusal or confirmation from
+ * overlapping the next control or forcing the page itself wider. */
+.live-control-command-rack > * {
+  display: grid;
+  align-content: start;
   gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.live-control-command-rack .fpp-command-control {
+  margin-top: 0;
+}
+
+.live-control-command-rack .scoped-button {
+  min-width: 0;
+}
+
+.live-control-command-rack p {
+  overflow-wrap: anywhere;
 }
 
 .live-control-unavailable {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
   gap: var(--space-3);
 }
 
@@ -663,9 +692,7 @@
 }
 
 @media (max-width: 620px) {
-  .live-control-status-strip,
-  .live-control-groups,
-  .live-control-unavailable {
+  .live-control-status-strip {
     grid-template-columns: 1fr;
   }
 

@@ -139,7 +139,7 @@ export function LiveControl() {
                 <article className="live-control-group">
                   <h3>{instance.instanceId}</h3>
                   <p className="text-muted">Commands remain scope-gated and report confirmation below each control.</p>
-                  <div className="live-control-actions">
+                  <div className="live-control-command-rack" aria-label={`FPP commands for ${instance.instanceId}`}>
                     <FPPStartPlaylistControl instanceId={instance.instanceId} />
                     <FPPStopPlaylistControl instanceId={instance.instanceId} />
                     <FPPStopPlaylistGracefullyControl instanceId={instance.instanceId} />
@@ -164,7 +164,7 @@ export function LiveControl() {
         <p className="section-notice">
           Lifecycle controls are always visible. They are disabled with a reason when permission or current evidence is insufficient.
         </p>
-        <div className="live-control-actions" aria-label="Show Night lifecycle actions">
+        <div className="live-control-command-rack" aria-label="Show Night lifecycle actions">
           <NightCommandButton command="prepare-site" label="Prepare site" />
           <NightCommandButton command="run-readiness" label="Run readiness" />
           <NightCommandButton command="start-preshow" label="Start preshow" />
