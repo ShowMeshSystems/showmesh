@@ -34,4 +34,13 @@ describe('operator shell foundation', () => {
     expect(css).not.toMatch(/\.app-nav__legacy-group/)
     expect(css).not.toMatch(/position:\s*fixed/)
   })
+
+  it('keeps shared action and choice targets at the outdoor 48px minimum', () => {
+    const css = readFileSync(path.join(stylesDir, 'global.css'), 'utf8')
+
+    expect(css).toMatch(/button,[\s\S]*?\.icon-button\s*\{[\s\S]*?min-height:\s*var\(--touch-target-min\)/)
+    expect(css).toMatch(/\.icon-button\s*\{[\s\S]*?min-width:\s*var\(--touch-target-min\)/)
+    expect(css).toMatch(/label:has\(> input\[type='checkbox'\]\),[\s\S]*?label:has\(> input\[type='radio'\]\)\s*\{[\s\S]*?min-height:\s*var\(--touch-target-min\)/)
+    expect(css).toMatch(/label:has\(> input\[type='checkbox'\]\),[\s\S]*?cursor:\s*pointer/)
+  })
 })

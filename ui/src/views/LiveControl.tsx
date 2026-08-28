@@ -6,6 +6,7 @@ import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope } from '../app/session'
 import { useResolumeComposition, resolumeCompositionOrNull } from '../app/useResolumeComposition'
 import { AudioSessionPanel } from '../components/AudioSessionPanel'
+import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import {
   FPPNextPlaylistItemControl,
   FPPPausePlaylistControl,
@@ -77,6 +78,9 @@ export function LiveControl() {
   const resolumeActions = useResolumeActions(resolume !== undefined)
   const compositionState = useResolumeComposition(resolume?.composition?.name ?? null, resolume !== undefined)
   const composition = resolumeCompositionOrNull(compositionState)
+  const fppStatus = fppControlStatus(model)
+  const audioStatus = audioControlStatus(model)
+  const resolumeStatus = resolumeControlStatus(model)
 
   return (
     <div className="operator-page live-control-page">
@@ -92,6 +96,8 @@ export function LiveControl() {
         </Link>
       </header>
 
+      <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
+
       <section className="live-control-section" aria-labelledby="live-control-status">
         <div className="live-control-section__heading">
           <h2 id="live-control-status">Control status</h2>
@@ -106,21 +112,15 @@ export function LiveControl() {
           />
           <StatusCard
             label="FPP"
-            value={model.fpp.length === 0 ? 'Unavailable' : `${model.fpp.length} configured`}
-            detail="FPP transport controls"
-            tone={model.fpp.length === 0 ? 'unknown' : 'good'}
+            {...fppStatus}
           />
           <StatusCard
             label="Audio"
-            value={model.nodes.some((node) => node.audio.length > 0) ? 'Available' : 'Unobserved'}
-            detail="Session evidence required"
-            tone={model.nodes.some((node) => node.audio.length > 0) ? 'good' : 'unknown'}
+            {...audioStatus}
           />
           <StatusCard
             label="Resolume"
-            value={resolume === undefined ? 'Unavailable' : 'Available'}
-            detail="Capability-driven"
-            tone={resolume === undefined ? 'unknown' : 'good'}
+            {...resolumeStatus}
           />
         </div>
       </section>
@@ -273,7 +273,47 @@ export function LiveControl() {
   )
 }
 
-function StatusCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: 'good' | 'unknown' }) {
+type StatusTone = 'good' | 'unknown' | 'bad'
+
+type ControlStatus = { value: string; detail: string; tone: StatusTone }
+
+function snapshotStatus(model: ReturnType<typeof useModelContext>): 'unobserved' | 'stale' | 'live' {
+  if (model.snapshotReceivedAt === null) return 'unobserved'
+  return model.connection.kind === 'live' ? 'live' : 'stale'
+}
+
+function fppControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
+  if (model.fpp.length === 0) return { value: 'Unavailable', detail: 'No FPP instance is configured', tone: 'unknown' }
+  if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
+  if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known FPP evidence', tone: 'unknown' }
+  if (model.fpp.some((instance) => instance.health === 'failed')) return { value: 'Failed', detail: 'An FPP instance has failed', tone: 'bad' }
+  if (model.fpp.some((instance) => instance.health !== 'healthy' && instance.health !== 'suppressed')) {
+    return { value: 'Unknown', detail: 'FPP health is not healthy', tone: 'unknown' }
+  }
+  return { value: 'Live', detail: `${model.fpp.length} configured`, tone: 'good' }
+}
+
+function audioControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
+  const hasAudioEvidence = model.nodes.some((node) => node.audio.length > 0)
+  if (!hasAudioEvidence) return { value: 'Unobserved', detail: 'Session evidence required', tone: 'unknown' }
+  if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
+  if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known audio evidence', tone: 'unknown' }
+  return { value: 'Live', detail: 'Current session evidence', tone: 'good' }
+}
+
+function resolumeControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
+  const resolume = model.resolume[0]
+  if (resolume === undefined) return { value: 'Unavailable', detail: 'Not configured on this coordinator', tone: 'unknown' }
+  if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
+  if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known Resolume evidence', tone: 'unknown' }
+  if (resolume.health === 'failed') return { value: 'Failed', detail: 'The Resolume instance has failed', tone: 'bad' }
+  if (resolume.health !== 'healthy' && resolume.health !== 'suppressed') {
+    return { value: 'Unknown', detail: 'Resolume health is not healthy', tone: 'unknown' }
+  }
+  return { value: 'Live', detail: 'Current coordinator evidence', tone: 'good' }
+}
+
+function StatusCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: StatusTone }) {
   return (
     <div className={`live-control-status live-control-status--${tone}`}>
       <span className="live-control-status__label">{label}</span>

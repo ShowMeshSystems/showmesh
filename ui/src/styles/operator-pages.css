@@ -105,6 +105,10 @@
   background: var(--status-good-fg);
 }
 
+.live-control-status--bad .live-control-status__label::before {
+  background: var(--status-bad-fg);
+}
+
 .live-control-status__value {
   overflow: hidden;
   font-size: var(--font-size-md);
