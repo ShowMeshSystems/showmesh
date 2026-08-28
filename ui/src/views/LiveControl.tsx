@@ -23,13 +23,12 @@ import { ResolumeActionController } from '../components/ResolumeActionController
 import { RunMacroButton } from '../components/RunMacroButton'
 import '../styles/operator-pages.css'
 
-type LoadState<T> =
-  | { kind: 'loading' }
-  | { kind: 'loaded'; value: T }
-  | { kind: 'error'; message: string }
+type LoadState<T> = { kind: 'loading' } | { kind: 'loaded'; value: T } | { kind: 'error'; message: string }
 
 function useMacroObjects(allowed: boolean): LoadState<ConfigObjectSummary[]> {
-  const [state, setState] = useState<LoadState<ConfigObjectSummary[]>>({ kind: 'loading' })
+  const [state, setState] = useState<LoadState<ConfigObjectSummary[]>>({
+    kind: 'loading',
+  })
   useEffect(() => {
     if (!allowed) return
     let cancelled = false
@@ -49,7 +48,9 @@ function useMacroObjects(allowed: boolean): LoadState<ConfigObjectSummary[]> {
 }
 
 function useResolumeActions(available: boolean): LoadState<ResolumeAction[]> {
-  const [state, setState] = useState<LoadState<ResolumeAction[]>>({ kind: 'loading' })
+  const [state, setState] = useState<LoadState<ResolumeAction[]>>({
+    kind: 'loading',
+  })
   useEffect(() => {
     if (!available) return
     let cancelled = false
@@ -78,7 +79,7 @@ export function LiveControl() {
   const composition = resolumeCompositionOrNull(compositionState)
 
   return (
-    <div className="operator-page">
+    <div className="operator-page live-control-page">
       <header className="operator-page__header">
         <div>
           <h1 className="operator-page__title">Live Control</h1>
@@ -86,33 +87,59 @@ export function LiveControl() {
             Dispatch the controls that are available on this coordinator. Every command reports its own confirmation or refusal.
           </p>
         </div>
-        <Link className="button" to="/">
+        <Link className="button button--secondary" to="/">
           Back to dashboard
         </Link>
       </header>
 
-      <section aria-labelledby="live-control-status">
-        <h2 id="live-control-status" className="panel__title">Control status</h2>
-        <div className="operator-status-strip">
-          <StatusCard label="Coordinator" value={model.connection.kind === 'live' ? 'Connected' : model.connection.kind} detail="Connection state" />
-          <StatusCard label="FPP" value={model.fpp.length === 0 ? 'Unavailable' : `${model.fpp.length} configured`} detail="FPP transport controls" />
-          <StatusCard label="Audio" value={model.nodes.some((node) => node.audio.length > 0) ? 'Available' : 'Unobserved'} detail="Session evidence required" />
-          <StatusCard label="Resolume" value={resolume === undefined ? 'Unavailable' : 'Available'} detail="Capability-driven" />
+      <section className="live-control-section" aria-labelledby="live-control-status">
+        <div className="live-control-section__heading">
+          <h2 id="live-control-status">Control status</h2>
+          <p>What this coordinator can currently confirm</p>
+        </div>
+        <div className="live-control-status-strip">
+          <StatusCard
+            label="Coordinator"
+            value={model.connection.kind === 'live' ? 'Connected' : model.connection.kind}
+            detail="Connection state"
+            tone={model.connection.kind === 'live' ? 'good' : 'unknown'}
+          />
+          <StatusCard
+            label="FPP"
+            value={model.fpp.length === 0 ? 'Unavailable' : `${model.fpp.length} configured`}
+            detail="FPP transport controls"
+            tone={model.fpp.length === 0 ? 'unknown' : 'good'}
+          />
+          <StatusCard
+            label="Audio"
+            value={model.nodes.some((node) => node.audio.length > 0) ? 'Available' : 'Unobserved'}
+            detail="Session evidence required"
+            tone={model.nodes.some((node) => node.audio.length > 0) ? 'good' : 'unknown'}
+          />
+          <StatusCard
+            label="Resolume"
+            value={resolume === undefined ? 'Unavailable' : 'Available'}
+            detail="Capability-driven"
+            tone={resolume === undefined ? 'unknown' : 'good'}
+          />
         </div>
       </section>
 
-      <section aria-labelledby="fpp-controls">
-        <h2 id="fpp-controls" className="panel__title">FPP transport</h2>
+      <section className="live-control-section" aria-labelledby="fpp-controls">
+        <div className="live-control-section__heading">
+          <h2 id="fpp-controls">FPP transport</h2>
+          <p>Playlist and output controls</p>
+        </div>
         {model.fpp.length === 0 ? (
           <Unavailable title="FPP transport" reason="No FPP instance is configured on this coordinator." />
         ) : (
-          <div className="operator-control-grid">
+          <div className="live-control-groups">
             {model.fpp.map((instance) => (
               <PanelErrorBoundary key={instance.instanceId} panelLabel={`FPP controls for ${instance.instanceId}`}>
-                <article className="operator-control-card">
+                <article className="live-control-group">
                   <h3>{instance.instanceId}</h3>
                   <p className="text-muted">Commands remain scope-gated and report confirmation below each control.</p>
-                  <div className="operator-control-card__actions">
+                  <div className="live-control-actions">
                     <FPPStartPlaylistControl instanceId={instance.instanceId} />
                     <FPPStopPlaylistControl instanceId={instance.instanceId} />
                     <FPPStopPlaylistGracefullyControl instanceId={instance.instanceId} />
@@ -129,32 +156,38 @@ export function LiveControl() {
         )}
       </section>
 
-      <section aria-labelledby="night-controls">
-        <h2 id="night-controls" className="panel__title">Show Night controls</h2>
-        <div className="operator-control-card operator-control-card--wide">
-          <p className="text-muted">Lifecycle controls are always visible. They are disabled with a reason when permission or current evidence is insufficient.</p>
-          <div className="operator-control-card__actions">
-            <NightCommandButton command="prepare-site" label="Prepare site" />
-            <NightCommandButton command="run-readiness" label="Run readiness" />
-            <NightCommandButton command="start-preshow" label="Start preshow" />
-            <NightCommandButton command="start-night" label="Start night" />
-            <NightCommandButton command="request-final-show" label="Request final show" />
-            <NightCommandButton command="fade-out-night" label="Fade out night" />
-            <NightCommandButton command="power-down-presentation" label="Power down presentation" />
-          </div>
+      <section className="live-control-section" aria-labelledby="night-controls">
+        <div className="live-control-section__heading">
+          <h2 id="night-controls">Show Night controls</h2>
+          <p>Lifecycle controls</p>
+        </div>
+        <p className="section-notice">
+          Lifecycle controls are always visible. They are disabled with a reason when permission or current evidence is insufficient.
+        </p>
+        <div className="live-control-actions" aria-label="Show Night lifecycle actions">
+          <NightCommandButton command="prepare-site" label="Prepare site" />
+          <NightCommandButton command="run-readiness" label="Run readiness" />
+          <NightCommandButton command="start-preshow" label="Start preshow" />
+          <NightCommandButton command="start-night" label="Start night" />
+          <NightCommandButton command="request-final-show" label="Request final show" />
+          <NightCommandButton command="fade-out-night" label="Fade out night" />
+          <NightCommandButton command="power-down-presentation" label="Power down presentation" />
         </div>
       </section>
 
-      <div className="operator-page__columns">
-        <section aria-labelledby="node-controls">
-          <h2 id="node-controls" className="panel__title">Node controls</h2>
+      <div className="live-control-columns">
+        <section className="live-control-section" aria-labelledby="node-controls">
+          <div className="live-control-section__heading">
+            <h2 id="node-controls">Node controls</h2>
+            <p>Audio and rendering sessions</p>
+          </div>
           {model.nodes.length === 0 ? (
             <Unavailable title="Node controls" reason="No nodes are currently observed." />
           ) : (
-            <div className="operator-control-grid">
+            <div className="live-control-groups">
               {model.nodes.map((node) => (
                 <PanelErrorBoundary key={node.nodeId} panelLabel={`Controls for ${node.label ?? node.nodeId}`}>
-                  <article className="operator-control-card">
+                  <article className="live-control-group">
                     <h3>{node.label ?? node.nodeId}</h3>
                     <AudioSessionPanel nodeId={node.nodeId} entries={node.audio} />
                     <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
@@ -165,18 +198,28 @@ export function LiveControl() {
           )}
         </section>
 
-        <section aria-labelledby="resolume-controls">
-          <h2 id="resolume-controls" className="panel__title">Resolume controls</h2>
+        <section className="live-control-section" aria-labelledby="resolume-controls">
+          <div className="live-control-section__heading">
+            <h2 id="resolume-controls">Resolume controls</h2>
+            <p>Composition actions</p>
+          </div>
           {resolume === undefined ? (
             <Unavailable title="Resolume controls" reason="Resolume is not configured on this coordinator." />
           ) : resolumeActions.kind === 'error' ? (
-            <p className="panel panel--error" role="alert">{resolumeActions.message}</p>
+            <p className="section-notice notice--error" role="alert">
+              {resolumeActions.message}
+            </p>
           ) : resolumeActions.kind !== 'loaded' ? (
-            <p className="text-muted" role="status">Loading Resolume actions…</p>
+            <p className="text-muted" role="status">
+              Loading Resolume actions…
+            </p>
           ) : compositionState.kind !== 'loaded' ? (
-            <Unavailable title="Resolume controls" reason={compositionState.kind === 'loading' ? 'Loading the stored composition…' : 'No usable composition is available.'} />
+            <Unavailable
+              title="Resolume controls"
+              reason={compositionState.kind === 'loading' ? 'Loading the stored composition…' : 'No usable composition is available.'}
+            />
           ) : (
-            <div className="operator-control-card">
+            <div className="live-control-group">
               <p className="text-muted">Available actions are populated from the stored composition.</p>
               <ResolumeActionController actions={resolumeActions.value} composition={composition} />
             </div>
@@ -184,20 +227,27 @@ export function LiveControl() {
         </section>
       </div>
 
-      <section aria-labelledby="macro-controls">
-        <h2 id="macro-controls" className="panel__title">Show actions</h2>
+      <section className="live-control-section" aria-labelledby="macro-controls">
+        <div className="live-control-section__heading">
+          <h2 id="macro-controls">Show actions</h2>
+          <p>Configured macros</p>
+        </div>
         {!macroRead.allowed ? (
           <Unavailable title="Show actions" reason={macroRead.reason} />
         ) : macros.kind === 'loading' ? (
-          <p className="text-muted" role="status">Loading available show actions…</p>
+          <p className="text-muted" role="status">
+            Loading available show actions…
+          </p>
         ) : macros.kind === 'error' ? (
-          <p className="panel panel--error" role="alert">{macros.message}</p>
+          <p className="section-notice notice--error" role="alert">
+            {macros.message}
+          </p>
         ) : macros.value.length === 0 ? (
           <Unavailable title="Show actions" reason="No show macros are configured yet." />
         ) : (
-          <div className="operator-control-grid">
+          <div className="live-control-groups">
             {macros.value.map((macro) => (
-              <article key={macro.id} className="operator-control-card">
+              <article key={macro.id} className="live-control-group">
                 <h3>{macro.label || macro.id}</h3>
                 <span className="operator-list__meta">Revision {macro.currentRevision}</span>
                 <RunMacroButton macroId={macro.id} />
@@ -207,9 +257,12 @@ export function LiveControl() {
         )}
       </section>
 
-      <section aria-labelledby="unavailable-controls">
-        <h2 id="unavailable-controls" className="panel__title">Not available on this coordinator</h2>
-        <div className="operator-summary-grid">
+      <section className="live-control-section" aria-labelledby="unavailable-controls">
+        <div className="live-control-section__heading">
+          <h2 id="unavailable-controls">Not available on this coordinator</h2>
+          <p>Capabilities not advertised here</p>
+        </div>
+        <div className="live-control-unavailable">
           <Unavailable title="Brightness ceiling" reason="No brightness control capability is advertised." />
           <Unavailable title="Site control" reason="No site-control capability is advertised." />
           <Unavailable title="Interlocks" reason="No interlock capability is advertised." />
@@ -220,21 +273,21 @@ export function LiveControl() {
   )
 }
 
-function StatusCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+function StatusCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: 'good' | 'unknown' }) {
   return (
-    <div className="operator-status-card">
-      <span className="operator-status-card__label">{label}</span>
-      <span className="operator-status-card__value">{value}</span>
-      <span className="operator-status-card__detail">{detail}</span>
+    <div className={`live-control-status live-control-status--${tone}`}>
+      <span className="live-control-status__label">{label}</span>
+      <strong className="live-control-status__value">{value}</strong>
+      <span className="live-control-status__detail">{detail}</span>
     </div>
   )
 }
 
 function Unavailable({ title, reason }: { title: string; reason: string }) {
   return (
-    <article className="operator-control-card">
+    <article className="section-notice notice--warning live-control-unavailable-notice">
       <h3>{title}</h3>
-      <p className="text-muted" role="status">Unavailable: {reason}</p>
+      <p role="status">Unavailable: {reason}</p>
     </article>
   )
 }

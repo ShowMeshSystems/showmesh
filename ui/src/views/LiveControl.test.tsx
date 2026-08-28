@@ -7,7 +7,9 @@ import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 
-const { dispatchNightCommand } = vi.hoisted(() => ({ dispatchNightCommand: vi.fn() }))
+const { dispatchNightCommand } = vi.hoisted(() => ({
+  dispatchNightCommand: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return { ...actual, dispatchNightCommand }
@@ -31,7 +33,13 @@ describe('LiveControl', () => {
     renderView()
 
     expect(screen.getByRole('heading', { name: 'Live Control' })).toBeInTheDocument()
-    expect(screen.getByText('Unavailable: No FPP instance is configured on this coordinator.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to dashboard' })).toHaveClass('button--secondary')
+    expect(screen.getByText('Control status').closest('section')).toHaveClass('live-control-section')
+    expect(screen.getByText('Coordinator').closest('.live-control-status')).toHaveClass('live-control-status--good')
+    const fppUnavailable = screen.getByText('Unavailable: No FPP instance is configured on this coordinator.')
+    expect(fppUnavailable).toBeInTheDocument()
+    expect(fppUnavailable.closest('.section-notice')).toHaveClass('notice--warning')
+    expect(fppUnavailable.closest('section')).toHaveAttribute('aria-labelledby', 'fpp-controls')
     expect(screen.getByText('Unavailable: No nodes are currently observed.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: Resolume is not configured on this coordinator.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: No brightness control capability is advertised.')).toBeInTheDocument()
@@ -49,11 +57,17 @@ describe('LiveControl', () => {
   it('preserves a successful Show Night command outcome on the control page', async () => {
     dispatchNightCommand.mockResolvedValue({
       serverTime: '2026-08-27T00:00:00Z',
-      command: { command: 'start-night', outcome: 'applied', attributionDegraded: false },
+      command: {
+        command: 'start-night',
+        outcome: 'applied',
+        attributionDegraded: false,
+      },
       session: {},
     })
     const user = userEvent.setup()
-    renderView({ session: makeAuthenticatedSession({ scopes: ['night:command'] }) })
+    renderView({
+      session: makeAuthenticatedSession({ scopes: ['night:command'] }),
+    })
 
     await user.click(screen.getByRole('button', { name: 'Start night' }))
     expect(await screen.findByText('Start night accepted and applied.')).toBeInTheDocument()
