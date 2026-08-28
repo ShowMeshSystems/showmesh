@@ -130,6 +130,20 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-08-28 (PTP research, two rulings, Track I opened; no code)
+
+**Goal:** turn the multi-node audio synchronization question into a research record with a defensible architecture, verified against current FPP master rather than release notes, and record the owner rulings it produced.
+
+**Completed:** `docs/research/RES-019-ptp-synchronized-multi-node-audio.md` (four-problem split, clock-provider model, scheduled start, two rate-lock candidates, failure and observability requirements, staged plan, FPP-originated AES67 as program source, upstream MultiSync opportunity, third-party listener note); `docs/decisions/ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md`; `docs/decisions/ADR-047-fpp-aes67-is-the-primary-program-source.md`; `docs/build/TRACK-I-clock-and-sync.md`; amendments in place to ADR-017, ADR-018, ARCHITECTURE §5, AUDIO-ENGINE §4.2 and §16, and Track C's principles; RES-019 indexed and allocated in the register. Upstream facts were read from `FalconChristmas/fpp` master at `d318b1d` (2026-08-28), linuxptp, GStreamer, PipeWire, and kernel sources, with commits and files cited in RES-019 §18.
+
+**Decisions made:** ADR-046: a bounded ppm-scale rate trim of a whole audio interface against a locked shared PTP clock is permitted; slews, seeks as ordinary correction, and chasing the MultiSync position feed stay forbidden (the owner's 2025 skipping-CD test was the latter). ADR-047: FPP's AES67 stream is the primary program source, local playback the standby and the engine for every ShowMesh-owned source, with an ordering rule that clock provider and scheduled start land before AES67 receive.
+
+**Questions raised with the owner:** whether continuous rate correction could ever be allowed (answered: yes, as ADR-046 bounds it); whether FPP's stream should be the preferred program source (answered: yes, ADR-047, with the source-priority model the owner supplied).
+
+**Deferred:** every ShowMesh measurement (drift curve, output latency, audibility, LTC under trim) to Track I seams I0 and I4 to I5; the FPP "AES67-only output group keeps `secondsElapsed`" capture, which now gates ADR-047's primary source; the go-gst custom-clock question.
+
+**Verification gates:** documentation-only; internal links checked, no em dashes, no executable file touched. `make check` not run.
+
 ## 2026-08-27 (the integration gate builds its binaries before its own timeout starts; open as #171, not on `main`)
 
 **Goal:** stop `make test-integration` failing with zero assertion failures on a

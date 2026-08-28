@@ -287,7 +287,7 @@ Owner brainstorm, 2026-08-28. The idea: when FPP 10 sends its program audio as A
 
 ADR-017 decides that audio nodes play local media, that "real-time audio streaming may exist later as a separate input/output capability" and "is not the synchronized show-audio architecture", and it rejected "streaming PCM from the coordinator or from FPP to audio nodes" because it puts the network in the real-time path and makes every dropout a network event. AUDIO-ENGINE §8 lists stream inputs and outputs as secondary and "never required for basic show playback". ADR-017 also requires FPP's audience audio output to be disabled or unused, and the AES67 sender is fed by FPP actively playing media through its PipeWire graph.
 
-Making AES67 the *preferred* program source with local playback as fallback is therefore a narrowing of ADR-017, not an implementation detail. The owner adopted the model in §15.3 on 2026-08-28. A narrowing ADR against ADR-017 is owed and must land before any seam builds toward it; the failover research in §15.3 and questions Q6 to Q10 stay open regardless.
+Making AES67 the *preferred* program source with local playback as fallback is therefore a narrowing of ADR-017, not an implementation detail. The owner adopted the model in §15.3 on 2026-08-28 and [ADR-047](../decisions/ADR-047-fpp-aes67-is-the-primary-program-source.md) records it, including the ordering rule that the clock provider and scheduled start land before AES67 receive. The failover research in §15.3 and questions Q6 to Q10 stay open regardless; [Track I](../build/TRACK-I-clock-and-sync.md) carries the seams.
 
 ### 15.2 What the FPP source actually establishes
 

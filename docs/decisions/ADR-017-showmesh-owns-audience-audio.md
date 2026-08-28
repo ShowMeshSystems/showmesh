@@ -2,7 +2,7 @@
 
 Status: Accepted  
 Date: 2026-08-10  
-Amended: 2026-08-28, [ADR-046](ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md) narrows "playback-rate manipulation is avoided" to slews and seeks; a bounded ppm-scale rate trim against a locked shared PTP clock is permitted. Following a position feed remains rejected.
+Amended: 2026-08-28, [ADR-046](ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md) narrows "playback-rate manipulation is avoided" to slews and seeks; a bounded ppm-scale rate trim against a locked shared PTP clock is permitted. Following a position feed remains rejected. [ADR-047](ADR-047-fpp-aes67-is-the-primary-program-source.md) narrows the local-playback and unused-FPP-output decisions: FPP's AES67 stream is the primary program source, local playback is the standby and the engine for every ShowMesh-owned source, and FPP's output may feed an AES67-only output group.
 
 ## Context
 
