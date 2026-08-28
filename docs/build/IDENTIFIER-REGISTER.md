@@ -935,7 +935,8 @@ sessions running.
 |---|---|---|
 | RES-001 to RES-017 | shipped | see the research tracker |
 | RES-018 | issued | FPP brightness, ADR-043 playlist identity, and the three-repository plugin runtime (Tracks F/H) |
-| RES-019+ | unallocated | free |
+| RES-019 | issued | PTP-synchronized multi-node audio: clock provider, scheduled start, rate lock, output latency |
+| RES-020+ | unallocated | free |
 
 ## API paths
 
