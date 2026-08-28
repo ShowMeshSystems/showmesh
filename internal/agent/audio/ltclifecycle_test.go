@@ -514,6 +514,89 @@ func TestSecondShowSessionNeverTakesLTCFromTheFirst(t *testing.T) {
 	}
 }
 
+// TestSecondShowSessionRefusalIsVisibleOnItsOwnSessionSnapshot proves the
+// coordinator-visible half of TestSecondShowSessionNeverTakesLTCFromTheFirst
+// above: not only is show-b turned away, its own [SessionSnapshot] states
+// so directly (LTCClaimState "refused" with a reason naming show-a), and
+// show-a's snapshot states it holds the run. Before this, the only
+// evidence of a refusal was a warn-level log line on the node.
+func TestSecondShowSessionRefusalIsVisibleOnItsOwnSessionSnapshot(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	m := NewManager(NewFakeEngine(c.now), NewFileSessionStore(dir), dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	configureLTC(m, pkgaudio.LTCFrameRate30, "00:00:00:00")
+	ctx := context.Background()
+
+	refA := writeTestAsset(t, dir, "a.wav", "asset-a", []byte("a"))
+	refB := writeTestAsset(t, dir, "b.wav", "asset-b", []byte("b"))
+	startPlaying(t, m, ctx, "show-a", refA, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	reqB := pkgaudio.ApplyRequest{
+		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleShow),
+		Media:      pkgaudio.SetField(refB),
+	}
+	if r := m.Apply(ctx, "show-b", "apply-b", 7, reqB); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply show-b refused: %+v", r)
+	}
+	if r := m.Start(ctx, "show-b", "start-b", 8); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start show-b refused: %+v", r)
+	}
+
+	snapA := snapshotFor(t, m, "show-a")
+	if snapA.LTCClaimState != LTCClaimHeld {
+		t.Fatalf("show-a LTCClaimState = %q, want %q", snapA.LTCClaimState, LTCClaimHeld)
+	}
+	if snapA.LTCClaimReason != "" {
+		t.Errorf("show-a LTCClaimReason = %q, want empty while it holds the run", snapA.LTCClaimReason)
+	}
+
+	snapB := snapshotFor(t, m, "show-b")
+	if snapB.LTCClaimState != LTCClaimRefused {
+		t.Fatalf("show-b LTCClaimState = %q, want %q -- the refusal is the whole point of this test", snapB.LTCClaimState, LTCClaimRefused)
+	}
+	if snapB.LTCClaimReason == "" {
+		t.Fatal("show-b LTCClaimReason is empty, want a stated reason naming the holding session")
+	}
+}
+
+// TestLTCClaimStateReturnsToNoneAfterRelease proves the other half: a
+// session that voluntarily releases the run (a commanded stop) reports
+// LTCClaimState back to "none", not stuck at "held" for a run it no
+// longer has.
+func TestLTCClaimStateReturnsToNoneAfterRelease(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	configureLTC(m, pkgaudio.LTCFrameRate30, "00:00:00:00")
+	ctx := context.Background()
+
+	ref := writeTestAsset(t, m.assetDir, "show.wav", "asset-show", []byte("show"))
+	startPlaying(t, m, ctx, "show", ref, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	if snap := snapshotFor(t, m, "show"); snap.LTCClaimState != LTCClaimHeld {
+		t.Fatalf("precondition: LTCClaimState = %q, want %q", snap.LTCClaimState, LTCClaimHeld)
+	}
+
+	m.Stop(ctx, "show", "stop", 3)
+
+	if snap := snapshotFor(t, m, "show"); snap.LTCClaimState != LTCClaimNone {
+		t.Fatalf("LTCClaimState after stop = %q, want %q", snap.LTCClaimState, LTCClaimNone)
+	}
+}
+
+// snapshotFor builds id's current [SessionSnapshot] via the session's own
+// exported Snapshot path (through [Manager.Snapshot]), failing the test
+// if id has no session.
+func snapshotFor(t *testing.T, m *Manager, id pkgaudio.SessionID) SessionSnapshot {
+	t.Helper()
+	for _, snap := range m.Snapshot(context.Background()) {
+		if snap.ID == id {
+			return snap
+		}
+	}
+	t.Fatalf("no session snapshot found for %q", id)
+	return SessionSnapshot{}
+}
+
 // TestCheckStopCompletionReleasesLTCOwnership verifies that a session
 // resolved to Stopped by [Session.checkStopCompletionLocked] releases
 // this node's LTC run if it owned it — not only [Manager.Stop]'s own

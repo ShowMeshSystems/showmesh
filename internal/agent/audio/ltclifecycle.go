@@ -19,6 +19,24 @@ type ltcOwner struct {
 	owned bool
 }
 
+// LTCClaimState is a session's own standing relationship to this node's
+// one LTC run (audio_session.ltc.claim.state): "held" while it owns the
+// run, "refused" when its own attempt to claim it was turned away
+// because another session still holds it, "none" for a session that has
+// never attempted a claim (never a show session, or a show session that
+// released or never started one). A refused session's only OTHER
+// evidence used to be a warn-level log line on the node — invisible to
+// every coordinator surface; this field is what makes the refusal
+// itself, not just the resulting "no LTC for this session" absence,
+// legible to an operator looking at the session that was turned away.
+type LTCClaimState string
+
+const (
+	LTCClaimNone    LTCClaimState = "none"
+	LTCClaimHeld    LTCClaimState = "held"
+	LTCClaimRefused LTCClaimState = "refused"
+)
+
 // claim gives id the LTC run when it is free or already id's own,
 // reporting the current owner when another session holds it. LTC is never
 // taken from a session that still holds it: re-anchoring a running show's
@@ -105,14 +123,18 @@ func (m *Manager) startLTCLocked(ctx context.Context, s *Session, position time.
 		return
 	}
 	if holder, free := m.ltc.claim(s.id); !free {
-		m.logLTC(s.id, "audio: LTC not started", "this node's one LTC run is held by session "+string(holder))
+		reason := "this node's one LTC run is held by session " + string(holder)
+		s.ltcClaimState, s.ltcClaimReason = LTCClaimRefused, reason
+		m.logLTC(s.id, "audio: LTC not started", reason)
 		return
 	}
+	s.ltcClaimState, s.ltcClaimReason = LTCClaimHeld, ""
 	startCtx, cancel := boundedEngineCallContext(ctx)
 	_, err = gen.StartLTC(startCtx, LTCSpec{FrameRate: rate, StartTimecode: tc})
 	cancel()
 	if err != nil {
 		m.ltc.release(s.id)
+		s.ltcClaimState, s.ltcClaimReason = LTCClaimNone, ""
 		m.logLTC(s.id, "audio: StartLTC failed", err.Error())
 	}
 }
@@ -125,6 +147,7 @@ func (m *Manager) stopLTCLocked(ctx context.Context, s *Session) {
 	if !m.ltc.release(s.id) {
 		return
 	}
+	s.ltcClaimState, s.ltcClaimReason = LTCClaimNone, ""
 	gen, ok := m.engine.(LTCGenerator)
 	if !ok {
 		return

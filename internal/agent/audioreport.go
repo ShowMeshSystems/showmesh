@@ -254,10 +254,15 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 		ItemGapReason:    s.GapReason,
 		Fault:            string(s.Fault),
 		FaultReason:      s.FaultReason,
+		LTCClaimState:    string(s.LTCClaimState),
+		LTCClaimReason:   s.LTCClaimReason,
 		Stale:            s.Stale,
 	}
 	if r.Fault == "" {
 		r.Fault = "none"
+	}
+	if r.LTCClaimState == "" {
+		r.LTCClaimState = "none"
 	}
 	if r.FadeState == "" {
 		r.FadeState = "none"

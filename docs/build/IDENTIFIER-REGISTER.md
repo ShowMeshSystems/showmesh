@@ -712,9 +712,20 @@ rest reserved rather than released.
 |---|---|---|
 | `audio_session.gain.effective_db` | reserved | Lane 18a (dB companion to `audio_session.gain.effective`) |
 | `audio_session.gain.ceiling_db` | reserved | Lane 18a (dB companion to `audio_session.gain.ceiling`) |
-| `audio_session.ltc.claim.state` | reserved | Lane 18a (`held`, `refused` or `none`: whether this session drives the node's one LTC run) |
-| `audio_session.ltc.claim.reason` | reserved | Lane 18a (why a claim was refused; required whenever the state is `refused`) |
+| `audio_session.ltc.claim.state` | shipped | Lane 18a (`held`, `refused` or `none`: whether this session drives the node's one LTC run) |
+| `audio_session.ltc.claim.reason` | shipped | Lane 18a (why a claim was refused; required whenever the state is `refused`) |
 | `node.audio.ltc.owner_session_id` | reserved | Lane 18a (which session holds the node's single LTC run, so a mismatch is legible from node-level evidence) |
+
+**A refused LTC claim's own shape, 2026-08-28.** The session-level pair
+above ships; `node.audio.ltc.owner_session_id` stays reserved. A session
+whose claim on this node's one LTC run is refused now carries that fact
+itself (`audio_session.ltc.claim.state` = `refused`, with `.reason`
+naming the session that holds the run) — legible from the refused
+session's own evidence, not only inferable by cross-referencing which
+session started the node's LTC generator. The node-level owner id would
+answer the same question from the other direction and remains available
+to a future builder who needs it; shipping both was not required to make
+the refusal itself observable.
 
 **The two gain rows are companions, not replacements.** Operators enter
 gain in decibels, so the observation must read in decibels; whether that

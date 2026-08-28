@@ -353,6 +353,17 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
 	}
 
+	ltcClaimState := sess.LTCClaimState
+	if ltcClaimState == "" {
+		ltcClaimState = "none"
+	}
+	obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimState, ltcClaimState, sessionAt, rep))
+	if ltcClaimState == "refused" {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimReason, sess.LTCClaimReason, sessionAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionLTCClaimReason, source, "session's LTC claim was not refused", rep.receivedAt))
+	}
+
 	if sess.GapKnown {
 		obs = append(obs,
 			buildSessionValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),

@@ -1317,6 +1317,17 @@ type AudioSessionReport struct {
 	Fault       string `json:"fault"`
 	FaultReason string `json:"faultReason"`
 
+	// LTCClaimState is this session's own standing relationship to this
+	// node's one LTC run: "held", "refused", or "none"
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.ltc.claim.state).
+	// LTCClaimReason is required whenever LTCClaimState is "refused" —
+	// the same one-signal-names-the-other-refusal rule Fault/FaultReason
+	// follow above, distinct from them: a session can hold no fault at
+	// all while its own claim on this node's LTC run was refused by a
+	// session that still holds it.
+	LTCClaimState  string `json:"ltcClaimState"`
+	LTCClaimReason string `json:"ltcClaimReason"`
+
 	// ObservedAt is the engine's own evidence time for PositionMs, nil
 	// when PositionKnown is false. Never the coordinator's or this
 	// node's own receipt time (ADR-011).
@@ -1531,6 +1542,9 @@ func (p AudioPayload) Validate() error {
 		}
 		if sess.Fault != "" && sess.Fault != "none" && sess.FaultReason == "" {
 			return fmt.Errorf("%w: sessions[%d].faultReason (required whenever fault is not \"none\")", ErrPayloadMissingField, i)
+		}
+		if sess.LTCClaimState == "refused" && sess.LTCClaimReason == "" {
+			return fmt.Errorf("%w: sessions[%d].ltcClaimReason (required whenever ltcClaimState is \"refused\")", ErrPayloadMissingField, i)
 		}
 	}
 	if p.ObservedAt == nil {
