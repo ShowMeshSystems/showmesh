@@ -19,6 +19,7 @@ function renderSettings(model: Model) {
 describe('ConfigEditorPage permission evidence', () => {
   it.each([
     ['Loading permissions', makeModel({ session: null }), 'shared-state-block--loading'],
+    ['Setup required', makeModel({ session: makeSessionResponse({ bootstrapRequired: true }) }), 'shared-state-block--unavailable'],
     ['Signed out', makeModel({ session: makeSessionResponse() }), 'shared-state-block--unavailable'],
     ['Stale permission evidence', makeModel({ session: makeAuthenticatedSession({ scopes: ['config:write'] }), sessionFetchFailed: true }), 'shared-state-block--stale'],
     ['Stale permission evidence', makeModel({ session: makeAuthenticatedSession({ scopes: ['config:write'], scopesState: 'unknown' }) }), 'shared-state-block--stale'],
@@ -29,5 +30,8 @@ describe('ConfigEditorPage permission evidence', () => {
     expect(screen.getByRole('heading', { name: title })).toBeVisible()
     expect(document.querySelector(`.${stateClass}`)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Asset store settings' })).not.toBeInTheDocument()
+    if (title === 'Setup required') {
+      expect(screen.queryByRole('heading', { name: 'Signed out' })).not.toBeInTheDocument()
+    }
   })
 })

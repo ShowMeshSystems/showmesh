@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { evaluateScope } from '../app/session'
+import { describeSignInState, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { RenderSettingsPanel } from '../components/RenderSettingsPanel'
 import { ShowModePanel } from '../components/ShowModePanel'
@@ -36,10 +36,15 @@ function permissionStateBlock(
   sessionFetchFailed: boolean,
   insufficientPermissionReason: string | null,
 ) {
-  if (session === null) {
+  const signInState = describeSignInState(session)
+
+  if (signInState.kind === 'loading') {
     return <LoadingBlock title="Loading permissions" reason="Waiting for the coordinator to report what this device may do." />
   }
-  if (!session.authenticated) {
+  if (signInState.kind === 'bootstrap_required') {
+    return <UnavailableBlock title="Setup required" reason="No administrator exists on this coordinator. Claim the bootstrap code from its data volume to create one before editing settings." />
+  }
+  if (signInState.kind === 'signed_out') {
     return <UnavailableBlock title="Signed out" reason="This device is not signed in, so it cannot edit these settings." />
   }
   if (sessionFetchFailed || session.scopesState !== 'current') {
