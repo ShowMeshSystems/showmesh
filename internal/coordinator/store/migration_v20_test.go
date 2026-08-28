@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 )
 
@@ -61,21 +60,12 @@ func TestMigrateV20LeavesCompletePayloadsAlone(t *testing.T) {
 		`SELECT payload_json FROM config_revisions WHERE kind = ? AND revision = 1`, audioSettingsKind).Scan(&raw); err != nil {
 		t.Fatalf("read revision: %v", err)
 	}
-	var got map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("decode revision: %v", err)
-	}
-	var want map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(complete), &want); err != nil {
-		t.Fatalf("decode want: %v", err)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("payload keys = %v, want the same set as %v", got, want)
-	}
-	for k, v := range want {
-		if string(got[k]) != string(v) {
-			t.Errorf("key %s = %s, want unchanged %s", k, got[k], v)
-		}
+	// Byte-for-byte, not decode-and-compare: a decode-then-reencode
+	// (map iteration reorders keys) would pass a decoded-map comparison
+	// while still rewriting a payload this migration had no business
+	// touching.
+	if raw != complete {
+		t.Errorf("payload = %s, want it byte-for-byte unchanged:\n%s", raw, complete)
 	}
 }
 
@@ -104,6 +94,31 @@ func TestMigrateV20TouchesOnlyAudioSettings(t *testing.T) {
 	}
 	if raw != other {
 		t.Errorf("render.settings payload = %s, want it unchanged: %s", raw, other)
+	}
+}
+
+// A stored payload_json of the JSON literal null decodes to a nil map,
+// not an error: json.Unmarshal leaves top nil rather than failing. v19
+// handles this cleanly (neither renamed field is present in a nil map, so
+// it reports unchanged); this migration must too, rather than panicking
+// with "assignment to entry in nil map" when it tries to backfill a key
+// into that nil map. A coordinator meeting this payload hits it inside
+// store.Open, so a panic here means the coordinator never starts.
+func TestMigrateV20HandlesNullPayloadWithoutPanicking(t *testing.T) {
+	db := openDatabaseAtV18(t)
+	seedAudioSettingsRevision(t, db, 1, `null`)
+
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var raw string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT payload_json FROM config_revisions WHERE kind = ? AND revision = 1`, audioSettingsKind).Scan(&raw); err != nil {
+		t.Fatalf("read revision: %v", err)
+	}
+	if raw != "null" {
+		t.Errorf("payload = %s, want it left unchanged: null", raw)
 	}
 }
 

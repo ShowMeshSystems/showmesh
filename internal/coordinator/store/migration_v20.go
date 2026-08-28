@@ -104,6 +104,14 @@ func v20BackfillAudioSettingsPayload(raw string) (string, bool, error) {
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
 		return "", false, fmt.Errorf("stored payload is not a JSON object: %w", err)
 	}
+	if top == nil {
+		// raw is the JSON literal null, not an object: json.Unmarshal
+		// leaves top nil rather than failing. There is no top-level
+		// object to backfill a key into, so report unchanged, matching
+		// migrateV19AudioSettingsGainToDb's own handling of the same
+		// input one migration below this one.
+		return "", false, nil
+	}
 
 	changed := false
 	for key, def := range v20AudioSettingsRequiredFieldDefaults {
