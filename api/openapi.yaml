@@ -4053,6 +4053,144 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/node.clock:
+    get:
+      operationId: listNodeClocks
+      summary: Enumerate node.clock objects (Track I seam I1, ADR-039)
+      description: >-
+        Requires `config:write`. Object ids (the node id) with label (the
+        configured provider) and current revision number, NOT the full
+        payloads - `show` is always empty, since node.clock carries no
+        show reference.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigObjectsListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/node.clock/{id}:
+    get:
+      operationId: getNodeClock
+      summary: One node.clock object's active revision
+      description: Requires `config:write`. `id` is the node id.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeClockConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ResourceNotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putNodeClock
+      summary: Write a new node.clock revision (Track I seam I1)
+      description: >-
+        Requires `config:write` (admin only). `id` is the node id and must
+        pass the same syntax a node id must satisfy. This is a FULL
+        REPLACEMENT: `provider`, `interface`, and `domain` are required on
+        every write. `provider` selects which of the three concrete PTP
+        providers this node runs (`managed`, `external`, or `fpp`);
+        `fppBaseUrl` is required exactly when `provider` is `fpp`. A node
+        with no node.clock object reports `unsynchronized` and behaves
+        exactly as a node before this seam existed (RES-019).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigNodeClock"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeClockConfigResponse"
+        "400":
+          description: An ordinary payload validation refusal.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/node.clock/{id}/revisions:
+    get:
+      operationId: getNodeClockConfigRevisions
+      summary: node.clock revision history, newest first
+      description: Requires `config:write`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /resolume/actions:
     get:
       operationId: listResolumeActions
@@ -7459,7 +7597,7 @@ components:
       required:
         [nodeId, label, platform, agentVersion, bootId, startedAt,
          firstSeenAt, updatedAt, capabilities, controlPlane, evidence,
-         declaration, render, audio]
+         declaration, render, audio, clock]
       properties:
         nodeId:
           type: string
@@ -7522,6 +7660,16 @@ components:
             holds for this node, one entry per signal. Never omitted; an
             empty array means this node has never published an audio
             discovery report.
+          items:
+            $ref: "#/components/schemas/ObservationEntry"
+        clock:
+          type: array
+          description: >-
+            Track I seam I1: whatever node.clock.ptp.* observations this
+            coordinator currently holds for this node, one entry per
+            signal. Never omitted; an empty array means this node has
+            never published a clock status report (no node.clock
+            configuration, or a node still starting up).
           items:
             $ref: "#/components/schemas/ObservationEntry"
     NodeDeclaration:
@@ -9558,7 +9706,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, node.clock]
         revisions:
           type: array
           items:
@@ -10734,6 +10882,85 @@ components:
           type: [string, "null"]
         source:
           type: string
+    ConfigNodeClock:
+      type: object
+      description: >-
+        The "node.clock" configuration kind's decoded payload (Track I
+        seam I1, RES-019, ADR-039): the body PUT /config/node.clock/{id}
+        accepts (a full replacement), and the "payload" member of GET
+        /config/node.clock/{id}'s response. `provider` selects which of
+        the three concrete PTP providers this node runs: `managed`
+        (ShowMesh writes the ptp4l config and supervises the process,
+        refusing to start when one is already bound on `interface` and
+        `domain`), `external` (observes an externally-owned ptp4l's
+        read-only management socket only), or `fpp` (observes an FPP 10
+        host's own AES67/PTP status over HTTP). `domain` is the declared
+        PTP domain number (0-255), used to detect a mismatch when a
+        provider's own observed domain disagrees. `clientOnly` declares
+        this node's role policy for `managed`: true when the operator
+        declares an external domain, so this node never attempts to
+        become the domain's own grandmaster. `holdoverLimitSeconds`
+        bounds how long a lost lock is reported as `holdover` before
+        this node gives up and reports `unsynchronized`; it defaults to
+        60 when omitted. `priority1` and `hardwareTimestamping` apply to
+        `managed` only. `externalUdsAddress` applies to `external` only,
+        defaulting to linuxptp's own `/var/run/ptp/ptp4lro`.
+        `fppBaseUrl` is required exactly when `provider` is `fpp`. A node
+        with no node.clock object reports `unsynchronized` and behaves
+        exactly as it did before this seam existed.
+      required: [provider, interface, domain]
+      properties:
+        provider:
+          type: string
+          enum: [managed, external, fpp]
+        interface:
+          type: string
+        domain:
+          type: integer
+          minimum: 0
+          maximum: 255
+        clientOnly:
+          type: boolean
+        holdoverLimitSeconds:
+          type: integer
+          minimum: 1
+        priority1:
+          type: integer
+          minimum: 0
+          maximum: 255
+        hardwareTimestamping:
+          type: boolean
+        externalUdsAddress:
+          type: string
+        fppBaseUrl:
+          type: string
+    NodeClockConfigResponse:
+      type: object
+      description: The body of GET and PUT /config/node.clock/{id}.
+      required:
+        [serverTime, kind, id, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        id:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigNodeClock"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
     Problem:
       type: object
       description: >-
@@ -11075,10 +11302,12 @@ components:
       description: >-
         The body of GET /config/show.action, GET /config/show.macro, GET
         /config/show, GET /config/show.surface, GET /config/show.cue, GET
-        /config/show.playlist, GET /config/night.session, and GET
+        /config/show.playlist, GET /config/night.session, GET
         /config/audio.node (audio.node's own list summary reports its
         configured programRoute as label and leaves show empty, since
-        audio.node carries no show reference).
+        audio.node carries no show reference), and GET /config/node.clock
+        (node.clock's own list summary reports its configured provider as
+        label and leaves show empty, for the identical reason).
       required: [serverTime, kind, objects]
       properties:
         serverTime:
@@ -11086,7 +11315,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, audio.node]
+          enum: [show.action, show.macro, show, show.surface, show.cue, show.playlist, night.session, audio.node, node.clock]
         objects:
           type: array
           items:

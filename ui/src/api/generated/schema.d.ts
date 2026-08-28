@@ -1319,6 +1319,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/node.clock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Enumerate node.clock objects (Track I seam I1, ADR-039)
+         * @description Requires `config:write`. Object ids (the node id) with label (the configured provider) and current revision number, NOT the full payloads - `show` is always empty, since node.clock carries no show reference.
+         */
+        get: operations["listNodeClocks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/node.clock/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One node.clock object's active revision
+         * @description Requires `config:write`. `id` is the node id.
+         */
+        get: operations["getNodeClock"];
+        /**
+         * Write a new node.clock revision (Track I seam I1)
+         * @description Requires `config:write` (admin only). `id` is the node id and must pass the same syntax a node id must satisfy. This is a FULL REPLACEMENT: `provider`, `interface`, and `domain` are required on every write. `provider` selects which of the three concrete PTP providers this node runs (`managed`, `external`, or `fpp`); `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as a node before this seam existed (RES-019).
+         */
+        put: operations["putNodeClock"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/node.clock/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * node.clock revision history, newest first
+         * @description Requires `config:write`.
+         */
+        get: operations["getNodeClockConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/resolume/actions": {
         parameters: {
             query?: never;
@@ -2552,6 +2616,8 @@ export interface components {
             render: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.audio.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published an audio discovery report. */
             audio: components["schemas"]["ObservationEntry"][];
+            /** @description Track I seam I1: whatever node.clock.ptp.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a clock status report (no node.clock configuration, or a node still starting up). */
+            clock: components["schemas"]["ObservationEntry"][];
         };
         /**
          * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run - never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).
@@ -3301,7 +3367,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "node.clock";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3763,6 +3829,33 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
+        /** @description The "node.clock" configuration kind's decoded payload (Track I seam I1, RES-019, ADR-039): the body PUT /config/node.clock/{id} accepts (a full replacement), and the "payload" member of GET /config/node.clock/{id}'s response. `provider` selects which of the three concrete PTP providers this node runs: `managed` (ShowMesh writes the ptp4l config and supervises the process, refusing to start when one is already bound on `interface` and `domain`), `external` (observes an externally-owned ptp4l's read-only management socket only), or `fpp` (observes an FPP 10 host's own AES67/PTP status over HTTP). `domain` is the declared PTP domain number (0-255), used to detect a mismatch when a provider's own observed domain disagrees. `clientOnly` declares this node's role policy for `managed`: true when the operator declares an external domain, so this node never attempts to become the domain's own grandmaster. `holdoverLimitSeconds` bounds how long a lost lock is reported as `holdover` before this node gives up and reports `unsynchronized`; it defaults to 60 when omitted. `priority1` and `hardwareTimestamping` apply to `managed` only. `externalUdsAddress` applies to `external` only, defaulting to linuxptp's own `/var/run/ptp/ptp4lro`. `fppBaseUrl` is required exactly when `provider` is `fpp`. A node with no node.clock object reports `unsynchronized` and behaves exactly as it did before this seam existed. */
+        ConfigNodeClock: {
+            /** @enum {string} */
+            provider: "managed" | "external" | "fpp";
+            interface: string;
+            domain: number;
+            clientOnly?: boolean;
+            holdoverLimitSeconds?: number;
+            priority1?: number;
+            hardwareTimestamping?: boolean;
+            externalUdsAddress?: string;
+            fppBaseUrl?: string;
+        };
+        /** @description The body of GET and PUT /config/node.clock/{id}. */
+        NodeClockConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            id: string;
+            revision: number;
+            payload: components["schemas"]["ConfigNodeClock"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
         /**
          * @description RFC 9457 application/problem+json. serverTime is an extension member present on every problem this API produces, with no exception (section 6.2 and 6.6). supportedVersions is present only on an "unsupported-api-version" problem. type is a stable, documented identifier a client dispatches on - the values in its enum below are every class this coordinator currently produces, and this list is the single source of truth for that set. It is deliberately not a fetchable URI: nothing in this API or its tests dereferences it over the network.
          *
@@ -3848,12 +3941,12 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, and GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference). */
+        /** @description The body of GET /config/show.action, GET /config/show.macro, GET /config/show, GET /config/show.surface, GET /config/show.cue, GET /config/show.playlist, GET /config/night.session, GET /config/audio.node (audio.node's own list summary reports its configured programRoute as label and leaves show empty, since audio.node carries no show reference), and GET /config/node.clock (node.clock's own list summary reports its configured provider as label and leaves show empty, for the identical reason). */
         ConfigObjectsListResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "audio.node";
+            kind: "show.action" | "show.macro" | "show" | "show.surface" | "show.cue" | "show.playlist" | "night.session" | "audio.node" | "node.clock";
             objects: components["schemas"]["ConfigObjectSummary"][];
         };
         /** @description The STORED/READ shape of show.action.target.publish (STEP-9-SPEC.md section 5.3), present only when target.integration is "mqtt". retain is always the resolved value here, never absent. To submit a publish target, use ConfigShowActionMQTTPublishWrite instead, which allows retain to be absent. */
@@ -7958,6 +8051,127 @@ export interface operations {
         };
     };
     getAudioNodeConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listNodeClocks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigObjectsListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNodeClock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeClockConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["ResourceNotFound"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putNodeClock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigNodeClock"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeClockConfigResponse"];
+                };
+            };
+            /** @description An ordinary payload validation refusal. */
+            400: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getNodeClockConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;

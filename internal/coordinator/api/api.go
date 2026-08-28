@@ -50,6 +50,11 @@ type Dependencies struct {
 	// identical no-op default posture.
 	Audio NodeAudioLister
 
+	// Clock is Track I seam I1's dependency — see [NodeClockLister]. A
+	// nil field is replaced by [noNodeClockLister], matching Audio's
+	// identical no-op default posture.
+	Clock NodeClockLister
+
 	// RenderPublisher is Track B seam B2b-front's own dependency — see
 	// [RenderPublisher]'s doc comment (renderdispatch.go). A nil field is
 	// replaced by [noRenderPublisher], under which every render.* dispatch
@@ -556,6 +561,9 @@ func (d Dependencies) withDefaults() Dependencies {
 	if d.Audio == nil {
 		d.Audio = noNodeAudioLister{}
 	}
+	if d.Clock == nil {
+		d.Clock = noNodeClockLister{}
+	}
 	if d.RenderPublisher == nil {
 		d.RenderPublisher = noRenderPublisher{}
 	}
@@ -886,6 +894,12 @@ func (noNodeRenderLister) NodeRenderObservations(string) []observation.Observati
 type noNodeAudioLister struct{}
 
 func (noNodeAudioLister) NodeAudioObservations(string) []observation.Observation { return nil }
+
+// noNodeClockLister is [Dependencies.Clock]'s nil-safe default, matching
+// [noNodeAudioLister]'s identical posture one dependency over.
+type noNodeClockLister struct{}
+
+func (noNodeClockLister) NodeClockObservations(string) []observation.Observation { return nil }
 
 type noFPPLister struct{}
 
@@ -1961,6 +1975,16 @@ func New(deps Dependencies, opts Options) *API {
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNode))
 	mux.HandleFunc("PUT /api/v1/config/audio.node/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutAudioNode))
 	mux.HandleFunc("GET /api/v1/config/audio.node/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetAudioNodeRevisions))
+
+	// GET/PUT /api/v1/config/node.clock/{id} (Track I seam I1, ADR-039): a
+	// collection keyed by node id, mirroring audio.node's identical
+	// four-route shape (nodeclock.go) and its config:write-only posture —
+	// see config.NodeClockConfigKind's own doc comment for why this is a
+	// separate kind from audio.node.
+	mux.HandleFunc("GET /api/v1/config/node.clock", h.requireScope(identity.ScopeConfigWrite, h.handleListNodeClocks))
+	mux.HandleFunc("GET /api/v1/config/node.clock/{id}", h.requireScope(identity.ScopeConfigWrite, h.handleGetNodeClock))
+	mux.HandleFunc("PUT /api/v1/config/node.clock/{id}", h.writeGuard(&scopeConfigWrite, h.handlePutNodeClock))
+	mux.HandleFunc("GET /api/v1/config/node.clock/{id}/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetNodeClockRevisions))
 
 	// GET /api/v1/resolume/instances and /instances/{instanceId} (Track D
 	// seam E): Resolume as a first-class observability resource. "instances"

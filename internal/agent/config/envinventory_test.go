@@ -52,6 +52,8 @@ var agentConfigEnvVars = map[string]string{
 		"Config.RenderReportInterval",
 	"SHOWMESH_AUDIO_REPORT_INTERVAL": "audio discovery report cadence with a default, documented on " +
 		"Config.AudioReportInterval",
+	"SHOWMESH_CLOCK_REPORT_INTERVAL": "PTP clock status report cadence with a default, documented on " +
+		"Config.ClockReportInterval",
 	"SHOWMESH_MULTISYNC_LISTEN_ADDR": "the local host:port the render node's MultiSync listener binds; " +
 		"Config.MultiSyncListenAddr defaults to pkg/multisync's own default",
 	"SHOWMESH_MULTISYNC_INTERFACE": "restricts the MultiSync multicast group join to one named interface; " +

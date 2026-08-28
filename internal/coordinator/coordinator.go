@@ -20,9 +20,11 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/clockconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/fpp"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeclock"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
@@ -248,6 +250,11 @@ func Run() int {
 	// operator-declared audio.node configuration, read live on every poll).
 	audioStore := nodeaudio.NewStore(nodeaudio.WithClockDomainSource(st))
 
+	// Track I seam I1: node.clock's own push cache, the identical shape
+	// as audioStore above, one report type over — see nodeclock's
+	// package doc comment.
+	clockStore := nodeclock.NewStore()
+
 	// bm is assigned below, once broker.NewBrokerManager has built it —
 	// the identical "capture by reference in a closure" shape hub/notifyHub
 	// use just above, for the identical reason: onHello can fire the
@@ -255,15 +262,19 @@ func Run() int {
 	// assignment below runs. ADR-039/ADR-036: this is the node-hello half
 	// of the audio.node/audio.settings config push, converging a node that
 	// was offline during a write; see internal/coordinator/audioconfigpush.
+	// Track I seam I1's node.clock push (internal/coordinator/
+	// clockconfigpush) follows the identical precedent, best-effort
+	// alongside it.
 	var bm *broker.BrokerManager
 	onHello := func(nodeID string) {
 		if bm == nil {
 			return
 		}
 		go audioconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
+		go clockconfigpush.BestEffort(ctx, st, bm, time.Now, nodeID, logger)
 	}
 
-	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore))
+	inv := inventory.New(st, logger, inventory.WithOnChange(notifyHub), inventory.WithOnHello(onHello), inventory.WithRenderSink(renderStore), inventory.WithAudioSink(audioStore), inventory.WithClockSink(clockStore))
 
 	// assetSync is constructed further down (it needs bm itself as its
 	// Publisher), but bm's OWN construction needs assetSync.HandleMessage
@@ -410,6 +421,12 @@ func Run() int {
 	// no known-surfaces-style restart bookkeeping.
 	fppRunner.Add(nodeaudio.New(audioStore), nodeaudio.DefaultPollInterval)
 
+	// Track I seam I1: clockStore's own read side, sharing fppRunner for
+	// the identical reason audioStore's does — no per-node dynamic list
+	// to seed here either (node.clock.ptp.* are fixed, one-per-node
+	// signals).
+	fppRunner.Add(nodeclock.New(clockStore), nodeclock.DefaultPollInterval)
+
 	// Step 9 (STEP-9-SPEC.md section 2.10, wave 2 shared contract section
 	// 5): one *broker.BrokerManager per declared external MQTT broker
 	// (SHOWMESH_INTEGRATION_BROKERS), registered under its own identifier.
@@ -537,6 +554,10 @@ func Run() int {
 		// api.NodeAudioLister's NodeAudioObservations method directly, no
 		// adapter needed, matching renderStore's identical wiring above.
 		Audio: audioStore,
+		// Track I seam I1: clockStore already satisfies api.
+		// NodeClockLister's NodeClockObservations method directly, no
+		// adapter needed, matching Audio's identical wiring above.
+		Clock: clockStore,
 		// RenderPublisher is Track B seam B2b-front's own dependency: the
 		// SAME *broker.BrokerManager (bm) assetSync's own Publisher was
 		// built from above already satisfies api.RenderPublisher with no

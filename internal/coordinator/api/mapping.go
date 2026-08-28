@@ -398,8 +398,10 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 // collection on [v1.Node].
 //
 // audioObs is [NodeAudioLister.NodeAudioObservations]'s identical
-// pass-through, one dependency over.
-func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs []observation.Observation) v1.Node {
+// pass-through, one dependency over. clockObs is [NodeClockLister.
+// NodeClockObservations]'s identical pass-through, Track I seam I1's
+// addition.
+func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs, clockObs []observation.Observation) v1.Node {
 	render := make([]v1.ObservationEntry, 0, len(renderObs))
 	for _, o := range renderObs {
 		render = append(render, mapObservationEntry(o, now))
@@ -407,6 +409,10 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 	audio := make([]v1.ObservationEntry, 0, len(audioObs))
 	for _, o := range audioObs {
 		audio = append(audio, mapObservationEntry(o, now))
+	}
+	clock := make([]v1.ObservationEntry, 0, len(clockObs))
+	for _, o := range clockObs {
+		clock = append(clock, mapObservationEntry(o, now))
 	}
 
 	n := v1.Node{
@@ -423,6 +429,7 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 		Declaration: mapNodeDeclaration(decl, latestRun),
 		Render:      render,
 		Audio:       audio,
+		Clock:       clock,
 	}
 
 	if nv.Hello != nil {

@@ -78,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdRender(rest, stdout, stderr, clock)
 	case "audio":
 		return cmdAudio(rest, stdout, stderr, clock)
+	case "node-clock":
+		return cmdNodeClock(rest, stdout, stderr, clock)
 	case "fpp-mqtt":
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
@@ -347,6 +349,11 @@ Commands:
                                         dispatch audio.output.mute (write, requires audio:command)
   audio output unmute <nodeId> <sessionId>
                                         dispatch audio.output.unmute (write, requires audio:command)
+  node-clock list                      enumerate node.clock objects (id is the node id)
+  node-clock get <nodeId>              show one node's clock configuration
+  node-clock set <nodeId>              write a new node.clock revision (write, full
+                                        replacement, requires config:write)
+  node-clock revisions <nodeId>        list node.clock revision history, newest first
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields

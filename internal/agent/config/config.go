@@ -101,6 +101,14 @@ type Config struct {
 	// an empty report on this cadence.
 	AudioReportInterval time.Duration
 
+	// ClockReportInterval is how often this agent publishes its PTP clock
+	// status report (internal/agent/clockreport.go), matching
+	// AudioReportInterval's identical reasoning: a node with no node.clock
+	// configuration still costs nothing publishing on this cadence (see
+	// internal/agent/clock's own package doc comment for what it
+	// publishes in that case).
+	ClockReportInterval time.Duration
+
 	// MultiSyncListenAddr is the local "host:port" the render node's
 	// MultiSync listener binds. Defaults to "" meaning
 	// pkg/multisync.NewListener's own default (":32320", the fixed FPP
@@ -168,6 +176,7 @@ const (
 	envAssetInventoryInterval = "SHOWMESH_ASSET_INVENTORY_INTERVAL"
 	envRenderReportInterval   = "SHOWMESH_RENDER_REPORT_INTERVAL"
 	envAudioReportInterval    = "SHOWMESH_AUDIO_REPORT_INTERVAL"
+	envClockReportInterval    = "SHOWMESH_CLOCK_REPORT_INTERVAL"
 	envMultiSyncListenAddr    = "SHOWMESH_MULTISYNC_LISTEN_ADDR"
 	envMultiSyncInterface     = "SHOWMESH_MULTISYNC_INTERFACE"
 
@@ -183,6 +192,7 @@ const (
 	defaultAssetInventoryInterval = 2 * time.Minute
 	defaultRenderReportInterval   = 15 * time.Second
 	defaultAudioReportInterval    = 15 * time.Second
+	defaultClockReportInterval    = 15 * time.Second
 
 	// The diagnostic surface's defaults are an ordinary 1080p projector
 	// output at the reference profile's own frame rate (RES-004/the Track B
@@ -289,6 +299,18 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		audioReportInterval = d
 	}
 
+	clockReportInterval := defaultClockReportInterval
+	if raw, ok := lookup(envClockReportInterval); ok && raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s %q is not a valid duration: %w", envClockReportInterval, raw, err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("%s %q must be positive", envClockReportInterval, raw)
+		}
+		clockReportInterval = d
+	}
+
 	diagnostic, err := loadDiagnosticSurface(lookup)
 	if err != nil {
 		return Config{}, err
@@ -308,6 +330,7 @@ func LoadConfigFrom(lookup func(string) (string, bool), hostname func() (string,
 		AssetInventoryInterval: assetInventoryInterval,
 		RenderReportInterval:   renderReportInterval,
 		AudioReportInterval:    audioReportInterval,
+		ClockReportInterval:    clockReportInterval,
 		MultiSyncListenAddr:    getEnvDefault(lookup, envMultiSyncListenAddr, ""),
 		MultiSyncInterface:     getEnvDefault(lookup, envMultiSyncInterface, ""),
 		DiagnosticSurface:      diagnostic,
@@ -494,6 +517,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%s must be positive", envAudioReportInterval)
 	}
 
+	if c.ClockReportInterval <= 0 {
+		return fmt.Errorf("%s must be positive", envClockReportInterval)
+	}
+
 	if c.DiagnosticSurface.Enabled() {
 		if c.DiagnosticSurface.Width <= 0 || c.DiagnosticSurface.Height <= 0 {
 			return fmt.Errorf("%s and %s must be positive", envDiagnosticWidth, envDiagnosticHeight)
@@ -547,6 +574,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("asset_inventory_interval", c.AssetInventoryInterval),
 		slog.Duration("render_report_interval", c.RenderReportInterval),
 		slog.Duration("audio_report_interval", c.AudioReportInterval),
+		slog.Duration("clock_report_interval", c.ClockReportInterval),
 		slog.String("multisync_listen_addr", c.MultiSyncListenAddr),
 		slog.String("multisync_interface", c.MultiSyncInterface),
 		slog.String("diagnostic_surface_id", c.DiagnosticSurface.SurfaceID),

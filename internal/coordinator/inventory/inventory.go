@@ -123,6 +123,12 @@ type Manager struct {
 	// an "audio" observed subpath is then dropped exactly like any other
 	// subpath this step does not understand (the default case below).
 	audioSink AudioSink
+
+	// clockSink receives every decoded PTP clock status report — see
+	// [WithClockSink]. nil (the default) means no clock ingestion at all:
+	// a "clock" observed subpath is then dropped exactly like any other
+	// subpath this step does not understand (the default case below).
+	clockSink ClockSink
 }
 
 // RenderSink receives a node's decoded render report as it arrives, so
@@ -149,6 +155,17 @@ type AudioSink interface {
 	// Put records payload as nodeID's latest audio report. receivedAt is
 	// this coordinator's own receipt time — see [Manager.handleAudio].
 	Put(nodeID string, payload mqttproto.AudioPayload, receivedAt time.Time)
+}
+
+// ClockSink receives a node's decoded PTP clock status report as it
+// arrives, so internal/coordinator/collector/nodeclock's push cache can
+// be fed without this package importing that collector package directly
+// — [AudioSink]'s identical role, one report type over.
+// *nodeclock.Store already satisfies this with no adapter needed.
+type ClockSink interface {
+	// Put records payload as nodeID's latest clock report. receivedAt is
+	// this coordinator's own receipt time — see [Manager.handleClock].
+	Put(nodeID string, payload mqttproto.ClockPayload, receivedAt time.Time)
 }
 
 // Option configures optional Manager behavior at [New]. The zero value
@@ -190,6 +207,14 @@ func WithRenderSink(sink RenderSink) Option {
 // exactly like any other subpath this step does not model.
 func WithAudioSink(sink AudioSink) Option {
 	return func(m *Manager) { m.audioSink = sink }
+}
+
+// WithClockSink registers sink to receive every decoded PTP clock status
+// report — see [Manager.clockSink] and [Manager.handleClock]. Optional:
+// the default (no sink registered) drops "clock" observed messages
+// exactly like any other subpath this step does not model.
+func WithClockSink(sink ClockSink) Option {
+	return func(m *Manager) { m.clockSink = sink }
 }
 
 // New builds a Manager backed by st. logger may be nil, in which case
@@ -416,6 +441,8 @@ func (m *Manager) HandleMessage(msg broker.Message) {
 			m.handleRender(ctx, topic.NodeID, msg)
 		case "audio":
 			m.handleAudio(topic.NodeID, msg)
+		case "clock":
+			m.handleClock(topic.NodeID, msg)
 		default:
 			m.logger.Debug("ignoring observed subpath this step does not understand",
 				"node_id", topic.NodeID, "subpath", topic.Subpath)
@@ -698,6 +725,36 @@ func (m *Manager) handleAudio(nodeID string, msg broker.Message) {
 	// never evidence of the node's own state (see [Manager.handleRender]'s
 	// identical comment on why this bypasses [Manager.classify]).
 	m.audioSink.Put(nodeID, audio, m.now())
+	m.notify()
+}
+
+// handleClock ingests a node's PTP clock status report into m.clockSink,
+// if one was registered — see [WithClockSink]. A nil clockSink silently
+// drops the message. Matches [Manager.handleAudio]'s identical retained-
+// delivery rule: [ClockPayload.ObservedAt] is the node's own evidence
+// timestamp, so a RETAINED delivery IS stored, and age is reasoned about
+// from that field, not from delivery kind.
+func (m *Manager) handleClock(nodeID string, msg broker.Message) {
+	if m.clockSink == nil {
+		m.logger.Debug("ignoring clock report: no clock sink registered", "node_id", nodeID)
+		return
+	}
+
+	env, err := decodeEnvelope(msg.Payload, nodeID)
+	if err != nil {
+		m.logMalformed("clock", nodeID, err)
+		return
+	}
+	clockPayload, err := mqttproto.DecodeClockPayload(env)
+	if err != nil {
+		m.logMalformed("clock", nodeID, err)
+		return
+	}
+
+	// receivedAt is this coordinator's own receipt time — bookkeeping,
+	// never evidence of the node's own state (see [Manager.handleRender]'s
+	// identical comment on why this bypasses [Manager.classify]).
+	m.clockSink.Put(nodeID, clockPayload, m.now())
 	m.notify()
 }
 

@@ -119,6 +119,14 @@ type node struct {
 	// "render status" (cmd_render.go) reports [exitRenderUnavailable] when
 	// no SURFACE entry is present, regardless of node.multisync.*.
 	Render []observationEntry `json:"render"`
+
+	// Clock is Track I seam I1's addition, additive per contract §6.2:
+	// whatever node.clock.ptp.* observations this coordinator currently
+	// holds for this node, one [observationEntry] per signal. Never null
+	// on a coordinator that has this field — an empty slice means this
+	// node has never published a clock status report (no node.clock
+	// configuration, or a node still starting up).
+	Clock []observationEntry `json:"clock"`
 }
 
 // observationEntry mirrors internal/coordinator/api/v1.ObservationEntry:
