@@ -16,23 +16,21 @@ describe('operator shell foundation', () => {
     expect(css).toMatch(/--color-focus-ring:\s*#ffff00/)
   })
 
-  it('keeps the phone chooser fixed and the larger directory independently scrollable', () => {
+  it('keeps the graphite rail in flow on phones and independently scrollable on desktop', () => {
     const css = readFileSync(path.join(stylesDir, 'global.css'), 'utf8')
 
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*?\.app-sidebar\s*\{[\s\S]*?position:\s*fixed/)
-    expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.app-sidebar\s*\{[\s\S]*?overflow-y:\s*auto/)
-    expect(css).toMatch(/\.app-nav__directory\s*\{\s*display:\s*none/)
-    expect(css).toMatch(/\.app-nav__directory\s*> summary\s*\{[\s\S]*?cursor:\s*pointer/)
+    expect(css).toMatch(/\.app-sidebar\s*\{[\s\S]*?--rail-bg:\s*var\(--color-graphite-950\)/)
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*?\.app-sidebar\s*\{[\s\S]*?position:\s*static[\s\S]*?max-height:\s*none[\s\S]*?overflow:\s*visible/)
+    expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?\.app-sidebar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?overflow-y:\s*auto/)
+    expect(css).toMatch(/@media \(min-width: 768px\)[\s\S]*?width:\s*13rem/)
+    expect(css).not.toMatch(/22rem/)
   })
 
-  it('reserves clearance for the wrapped two-row phone chooser at 360px', () => {
+  it('keeps the responsive nav compact without a fixed-height chooser', () => {
     const css = readFileSync(path.join(stylesDir, 'global.css'), 'utf8')
-    const phoneBlock = css.match(/@media \(max-width: 767px\) \{([\s\S]*?)\n\}/)
-    expect(phoneBlock).not.toBeNull()
-    const body = phoneBlock?.[1] ?? ''
-    expect(body).toMatch(/padding-bottom:\s*calc\(22rem \+ env\(safe-area-inset-bottom, 0px\)\)/)
-    expect(body).toMatch(/\.app-sidebar\s*\{[\s\S]*?max-height:\s*min\(50vh, 22rem\)/)
-    expect(css).toMatch(/\.app-nav__primary-links\s*\{[\s\S]*?flex-wrap:\s*wrap/)
-    expect(css).toMatch(/\.app-nav__primary-link\s*\{[\s\S]*?flex:\s*0 0 50%/)
+    expect(css).toMatch(/\.app-nav\s*\{[\s\S]*?position:\s*static/)
+    expect(css).toMatch(/\.app-nav__group\[data-open='false'\]\s+\.app-nav__group-links\s*\{[\s\S]*?display:\s*none/)
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*?\.app-nav__primary-links,[\s\S]*?display:\s*grid/)
+    expect(css).not.toMatch(/position:\s*fixed/)
   })
 })

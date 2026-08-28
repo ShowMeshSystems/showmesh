@@ -8,10 +8,9 @@ import { useCallback, useEffect, useState } from 'react'
 // localStorage rather than sessionStorage.
 const STORAGE_KEY = 'showmesh-ui-nav-groups'
 
-// Show night is open on a first visit (no stored preference at all) since
-// it is the show-night group and the reason the nav was regrouped in the
-// first place. Every other group defaults closed.
-const DEFAULT_OPEN: Record<string, boolean> = { 'Show night': true }
+// Operate is open on a first visit (no stored preference at all) because it
+// is the operator's primary route group. Every other group defaults closed.
+const DEFAULT_OPEN: Record<string, boolean> = { Operate: true }
 
 export interface NavGroupItem {
   to: string

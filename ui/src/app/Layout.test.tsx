@@ -294,28 +294,21 @@ describe('Layout', () => {
     })
   })
 
-  // Operator-reported: at the sidebar breakpoint (>=768px), .app-nav had
-  // scrollHeight 1228px against a clientHeight of 753px with no
-  // overflow rule, so 475px of links were clipped below the viewport and
-  // unreachable, while the document itself scrolled instead (because
-  // nothing else contained that height) -- and the nav's own background
-  // stopped at the viewport edge while links kept going underneath it
-  // against the page background. jsdom does not run a real layout engine
-  // or load global.css, so scrollHeight/clientHeight/computed overflow are
-  // not observable from a render here -- this reads the actual rule from
-  // the stylesheet instead, which is what this codebase's own
-  // fppCommandCopyGuard.test.ts precedent does for the same reason.
+  // jsdom does not run layout or load global.css, so scrollHeight,
+  // clientHeight, and computed overflow are not observable from a render.
+  // Read the desktop rail rule from the stylesheet instead.
   it('gives the sidebar its own internal scroll at the sidebar breakpoint, instead of clipping', () => {
     const css = readFileSync(path.resolve(__dirname, '../styles/global.css'), 'utf-8')
-    const desktopBlock = css.match(/@media \(min-width: 768px\) \{([\s\S]*?)\n\}\n\n\.app-header/)
+    const shellCss = css.slice(css.lastIndexOf('/* Final shell contract.'))
+    const desktopBlock = shellCss.match(/@media \(min-width: 768px\) \{([\s\S]*?)\n\}\s*$/)
     expect(desktopBlock).not.toBeNull()
     const desktopBlockBody = desktopBlock?.[1] ?? ''
     const navRule = desktopBlockBody.match(/\.app-nav \{([\s\S]*?)\}/)
     expect(navRule).not.toBeNull()
     expect(navRule?.[1] ?? '').toMatch(/overflow-y:\s*auto/)
-    // The phone (unqualified, mobile-first) rule must stay exactly as it
-    // was -- a fixed bottom tab bar with no overflow rule of its own.
-    const phoneRule = css.match(/\.app-nav \{([\s\S]*?)\}/)
+    // The phone (unqualified, mobile-first) rule keeps the nav in normal
+    // flow rather than restoring a fixed bottom chooser.
+    const phoneRule = shellCss.match(/\.app-nav \{([\s\S]*?)\}/)
     expect(phoneRule).not.toBeNull()
     expect(phoneRule?.[1] ?? '').not.toMatch(/overflow-y/)
   })
@@ -465,23 +458,13 @@ describe('collapsible nav groups', () => {
     expect(new Set(Array.from(links, (link) => link.getAttribute('href'))).size).toBe(ALL_NAV_HREFS.length)
   })
 
-  // jsdom does not run layout or load global.css (see the sidebar-scroll
-  // test above for the same caveat), so this reads the collapse rule
-  // straight from the stylesheet: it must exist only inside the sidebar
-  // (min-width: 768px) block, never in the phone-first, unqualified
-  // rules, which is what keeps the phone tab bar untouched.
-  it('confines the collapsed-group hiding rule to the sidebar breakpoint only', () => {
+  // jsdom does not run layout or load global.css, so this reads the collapse
+  // rule straight from the stylesheet. The same normal-flow navigation is
+  // used on phones and desktop, so collapsed groups must be hidden at every
+  // viewport size.
+  it('keeps collapsed groups hidden in the responsive navigation', () => {
     const css = readFileSync(path.resolve(__dirname, '../styles/global.css'), 'utf-8')
-    const desktopBlock = css.match(/@media \(min-width: 768px\) \{([\s\S]*?)\n\}\n\n\.app-header/)
-    expect(desktopBlock).not.toBeNull()
-    const desktopBlockBody = desktopBlock?.[1] ?? ''
-    expect(desktopBlockBody).toMatch(/\.app-nav__group\[data-open='false'\]\s*\.app-nav__group-links\s*\{[\s\S]*?display:\s*none/)
-
-    const phoneOnly = css.slice(0, css.indexOf('@media (min-width: 768px)'))
-    expect(phoneOnly).not.toMatch(/data-open/)
-    // The phone rule for the group and its links wrapper both stay
-    // `display: contents`, exactly as #114 shipped for the group alone.
-    expect(phoneOnly).toMatch(/\.app-nav__group\s*\{\s*display:\s*contents;\s*\}/)
-    expect(phoneOnly).toMatch(/\.app-nav__group-links\s*\{\s*display:\s*contents;\s*\}/)
+    expect(css).toMatch(/\.app-nav__group\[data-open='false'\]\s+\.app-nav__group-links\s*\{[\s\S]*?display:\s*none/)
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*?\.app-nav__primary-links,[\s\S]*?display:\s*grid/)
   })
 })
