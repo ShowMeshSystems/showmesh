@@ -55,24 +55,10 @@ func resolveAudioSettings(ctx context.Context, cs ConfigStore) (payload config.A
 	return payload, true, nil
 }
 
-// audioConfigPushStatus reports whether the coordinator can decode its
-// stored audio.settings revision right now: the same read-and-decode
-// [audioconfigpush.pushSettings] performs (not [audioconfigpush.ToNode],
-// which decodes a NODE's own separate audio.node binding first and
-// returns before ever reaching audio.settings on that failure — a stale
-// audio.node revision strands ITS node on both pushes without this field
-// moving, because audio.node is per-node configuration this coordinator-
-// wide singleton was never scoped to cover). So this can never claim
-// "usable" while a real push's own audio.settings decode would refuse and
-// vice versa, but "usable" here answers only "is the engine-wide
-// audio.settings revision itself readable" — never "will every node's
-// next push actually land," which also depends on that node's own
-// audio.node binding and reachability. err is non-nil only for a genuine
-// store failure (not for a decode failure, which is reported as
-// state=unusable instead — this function's whole job is to turn that case
-// into a value the caller can show rather than propagate as a request
-// failure). See [audioConfigPushStatusDegradeOnError] for the store-error
-// case's own resolution.
+// audioConfigPushStatus reports whether the audio.settings singleton
+// itself decodes. "usable" claims nothing about a node's own audio.node
+// binding or reachability. err is a store failure, never a decode
+// failure — see [audioConfigPushStatusDegradeOnError].
 func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConfigPushRunState, reason *string, err error) {
 	obj, err := cs.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID)
 	switch {
@@ -96,16 +82,9 @@ func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConf
 }
 
 // audioConfigPushStatusDegradeOnError reads [audioConfigPushStatus],
-// logging and reporting state=unknown on a genuine config-store error
-// rather than propagating it — the same "you cannot act, never you
-// cannot see" resolution [resolumeCompositionDegradeOnError] already
-// establishes for this same handler and the same ConfigStore dependency
-// (owner review finding 3, 2026-08-16): GET /api/v1/snapshot has real
-// node/FPP/collector/resolume evidence to render regardless of whether
-// this ONE field's own store read succeeds, and a storage hiccup reading
-// it must not cost the operator that whole view. A store failure is
-// reported "unknown", never "unusable": the stored revision itself may be
-// perfectly fine, this coordinator just could not read it right now.
+// logging and reporting state=unknown on a store error rather than
+// propagating it: the revision may be fine, only the read failed, so
+// this must not be conflated with "unusable" (a real decode failure).
 func audioConfigPushStatusDegradeOnError(ctx context.Context, cs ConfigStore, logger *slog.Logger, action string) (state AudioConfigPushRunState, reason *string) {
 	state, reason, err := audioConfigPushStatus(ctx, cs)
 	if err != nil {
