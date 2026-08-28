@@ -5,13 +5,13 @@ import {
   putAudioSettingsConfig,
   type ConfigRevisionMeta,
 } from '../api'
-import { describeApiError, evaluateScope } from '../app/session'
+import { describeApiError, describeSignInState, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
 import { useUnsavedChanges } from '../app/UnsavedChanges'
 import type { AudioSettingsConfigResponse, ConfigAudioSettingsPayload } from '../app/types'
-import { ConfigurationSection, FailedBlock, LoadingBlock, OperatorPageHeader, UnavailableBlock } from '../components/SharedLayouts'
+import { ConfigurationSection, FailedBlock, LoadingBlock, OperatorPageHeader, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
 
 // ADR-039: the audio.settings engine-wide singleton, the last of the two
 // audio configuration kinds that shipped with a full API path and
@@ -151,6 +151,15 @@ export function AudioSettings() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const savingRef = useRef(false)
   const [reloadGeneration, setReloadGeneration] = useState(0)
+  const signInState = describeSignInState(model.session)
+
+  const permissionState = !scopeGate.allowed && (
+    signInState.kind === 'loading' ? <LoadingBlock title="Loading permissions" reason="Waiting for the coordinator to report what this device may do." />
+      : signInState.kind === 'bootstrap_required' ? <UnavailableBlock title="Setup required" reason="No administrator exists on this coordinator. Claim the bootstrap code from its data volume to create one before editing audio settings." />
+        : signInState.kind === 'signed_out' ? <UnavailableBlock title="Signed out" reason="This device is not signed in, so it cannot edit audio settings." />
+          : model.sessionFetchFailed || signInState.session.scopesState !== 'current' ? <StaleBlock title="Stale permission evidence" reason="Audio settings remain unavailable until the coordinator can confirm this device’s current permissions." />
+            : <UnavailableBlock title="Insufficient permission" reason={scopeGate.reason} />
+  )
 
   useEffect(() => {
     if (!scopeGate.allowed) clearUnsavedChanges()
@@ -215,13 +224,11 @@ export function AudioSettings() {
         lede={<>The audio engine&rsquo;s installation-wide defaults: drift tolerance, fade behaviour, background gain ceiling, ducking, and the LTC timecode Resolume receives. Requires the <code>config:write</code> scope (admin only); there is no read-only scope for this page.</>}
       />
 
-      {!scopeGate.allowed && (
-        <UnavailableBlock title="Audio settings unavailable" reason={scopeGate.reason} />
-      )}
+      {permissionState}
 
       {scopeGate.allowed && state.kind === 'loading' && <LoadingBlock title="Loading audio settings" reason="Loading configuration…" />}
       {scopeGate.allowed && state.kind === 'error' && (
-        <FailedBlock title="Audio settings could not be loaded" reason={state.message} />
+        <FailedBlock title="Audio settings could not be loaded" reason={<>{state.message} <button type="button" onClick={() => setReloadGeneration((g) => g + 1)}>Retry</button></>} />
       )}
 
       {scopeGate.allowed && state.kind === 'loaded' && (

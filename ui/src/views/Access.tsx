@@ -12,11 +12,12 @@ import {
   type PrincipalObject,
   type TokenObject,
 } from '../api'
-import { describeApiError, evaluateScope } from '../app/session'
+import { describeApiError, describeSignInState, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
 import { useUnsavedChanges } from '../app/UnsavedChanges'
+import { EmptyBlock, FailedBlock, LoadingBlock, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
 
 // Track G seam G-5: identity administration's own view — the Access page.
 // Reads render under principal:read; every control follows ScopedButton's
@@ -54,10 +55,19 @@ export function Access() {
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [reloadGeneration, setReloadGeneration] = useState(0)
+  const signInState = describeSignInState(model.session)
+  const permissionState = !readGate.allowed && (
+    signInState.kind === 'loading' ? <LoadingBlock title="Loading permissions" reason="Waiting for the coordinator to report what this device may do." />
+      : signInState.kind === 'bootstrap_required' ? <UnavailableBlock title="Setup required" reason="No administrator exists on this coordinator. Claim the bootstrap code from its data volume to create one before managing access." />
+        : signInState.kind === 'signed_out' ? <UnavailableBlock title="Signed out" reason="This device is not signed in, so it cannot manage access." />
+          : model.sessionFetchFailed || signInState.session.scopesState !== 'current' ? <StaleBlock title="Stale permission evidence" reason="Access remains unavailable until the coordinator can confirm this device’s current permissions." />
+            : <UnavailableBlock title="Insufficient permission" reason={readGate.reason} />
+  )
 
   useEffect(() => {
     if (!readGate.allowed) return
     let cancelled = false
+    setState({ kind: 'loading' })
 
     async function load(): Promise<void> {
       try {
@@ -90,26 +100,20 @@ export function Access() {
         credential able to reach that scope, is refused rather than performed.
       </p>
 
-      {!readGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {readGate.reason}
-        </p>
-      )}
+      {permissionState}
 
       {readGate.allowed && (
         <>
-          {state.kind === 'loading' && <p className="text-muted">Loading principals…</p>}
+          {state.kind === 'loading' && <LoadingBlock title="Loading principals" reason="Loading coordinator access records…" />}
           {state.kind === 'error' && (
-            <p className="panel panel--error" role="alert">
-              {state.message}
-            </p>
+            <FailedBlock title="Principals could not be loaded" reason={<>{state.message} <button type="button" onClick={reload}>Retry</button></>} />
           )}
           {state.kind === 'loaded' && (
             <>
               <CreatePrincipalForm onCreated={reload} />
               <h3 className="panel__title">Principals</h3>
               {state.principals.length === 0 ? (
-                <p className="text-muted">(no principals)</p>
+                <EmptyBlock title="No principals" reason="The coordinator returned no principals." />
               ) : (
                 <div className="table-scroll">
                   <table className="config-table">
@@ -376,6 +380,7 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
 function TokensPanel({ principalID, locked }: { principalID: string; locked: boolean }) {
   const { clearUnsavedChanges } = useUnsavedChanges(`access-principal-${principalID}-token-issue`)
   const [tokens, setTokens] = useState<TokenObject[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [label, setLabel] = useState('')
   const [expires, setExpires] = useState('')
@@ -389,9 +394,12 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
     async function load(): Promise<void> {
       try {
         const resp = await listPrincipalTokens(principalID)
-        if (!cancelled) setTokens(resp.tokens)
+        if (!cancelled) {
+          setLoadError(null)
+          setTokens(resp.tokens)
+        }
       } catch (err) {
-        if (!cancelled) setError(describeApiError(err))
+        if (!cancelled) setLoadError(describeApiError(err))
       }
     }
     void load()
@@ -403,6 +411,12 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
   function reload(): void {
     // Show the loading state and bump the generation so the effect above
     // actually re-fetches (its deps include reloadGeneration).
+    setTokens(null)
+    setReloadGeneration((g) => g + 1)
+  }
+
+  function retryLoad(): void {
+    setLoadError(null)
     setTokens(null)
     setReloadGeneration((g) => g + 1)
   }
@@ -468,10 +482,12 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
           <code>{issuedValue}</code>
         </p>
       )}
-      {tokens === null ? (
-        <p className="text-muted">Loading tokens…</p>
+      {loadError !== null ? (
+        <FailedBlock title="Tokens could not be loaded" reason={<>{loadError} <button type="button" onClick={retryLoad}>Retry</button></>} headingLevel={3} />
+      ) : tokens === null ? (
+        <LoadingBlock title="Loading tokens" reason="Loading coordinator access records…" headingLevel={3} />
       ) : tokens.length === 0 ? (
-        <p className="text-muted">(no tokens)</p>
+        <EmptyBlock title="No tokens" reason="No tokens are currently issued for this principal." headingLevel={3} />
       ) : (
         <div className="table-scroll">
           <table className="config-table">

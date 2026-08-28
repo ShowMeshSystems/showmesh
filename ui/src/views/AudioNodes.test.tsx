@@ -1,4 +1,5 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AudioNodes } from './AudioNodes'
@@ -66,6 +67,21 @@ describe('AudioNodes', () => {
     renderView()
 
     expect(await screen.findByText(/no audio\.node object is configured yet/i)).toBeInTheDocument()
+    expect(document.querySelector('.shared-state-block--empty')).toBeInTheDocument()
+  })
+
+  it('retries a failed read without changing the current route', async () => {
+    listConfigObjects
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ serverTime: '2026-08-25T00:00:00Z', kind: 'audio.node', objects: [] })
+    const user = userEvent.setup()
+    renderView()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/failed to fetch/i)
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByRole('heading', { name: 'No audio nodes configured' })).toBeInTheDocument()
+    expect(listConfigObjects).toHaveBeenCalledTimes(2)
   })
 
   it('labels configured nodes without live evidence as disconnected and does not invent interfaces', async () => {

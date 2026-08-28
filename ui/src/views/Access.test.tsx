@@ -138,7 +138,7 @@ describe('Access: tokens panel', () => {
     const row = (await screen.findByText('smt_a1b2…')).closest('tr')!
     await user.click(within(row).getByRole('button', { name: /revoke/i }))
 
-    expect(await screen.findByText('(no tokens)')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'No tokens' })).toBeInTheDocument()
     expect(screen.queryByText(/loading tokens/i)).not.toBeInTheDocument()
     expect(revokePrincipalToken).toHaveBeenCalledWith('p-2', 't-1')
     await waitFor(() => expect(listPrincipalTokens).toHaveBeenCalledTimes(2))

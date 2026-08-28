@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { listConfigObjects } from '../api'
-import { describeApiError, evaluateScope } from '../app/session'
+import { describeApiError, describeSignInState, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import type { ConfigObjectSummary } from '../app/types'
 import type { Node } from '../app/types'
+import { EmptyBlock, FailedBlock, LoadingBlock, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
 
 // ADR-018/ADR-039: the audio.node object list. `config:write` gates both
 // reads and writes alike, matching audio.node's own GET/PUT (no separate
@@ -34,6 +35,15 @@ export function AudioNodes() {
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [reloadGeneration, setReloadGeneration] = useState(0)
+  const signInState = describeSignInState(model.session)
+  const permissionState = !scopeGate.allowed && (
+    signInState.kind === 'loading' ? <LoadingBlock title="Loading permissions" reason="Waiting for the coordinator to report what this device may do." />
+      : signInState.kind === 'bootstrap_required' ? <UnavailableBlock title="Setup required" reason="No administrator exists on this coordinator. Claim the bootstrap code from its data volume to create one before editing audio routing." />
+        : signInState.kind === 'signed_out' ? <UnavailableBlock title="Signed out" reason="This device is not signed in, so it cannot edit audio routing." />
+          : model.sessionFetchFailed || signInState.session.scopesState !== 'current' ? <StaleBlock title="Stale permission evidence" reason="Audio routing remains unavailable until the coordinator can confirm this device’s current permissions." />
+            : <UnavailableBlock title="Insufficient permission" reason={scopeGate.reason} />
+  )
 
   useEffect(() => {
     if (!scopeGate.allowed) return
@@ -51,7 +61,7 @@ export function AudioNodes() {
     return () => {
       cancelled = true
     }
-  }, [scopeGate.allowed])
+  }, [scopeGate.allowed, reloadGeneration])
 
   return (
     <div className="operator-page audio-nodes-page">
@@ -85,22 +95,16 @@ export function AudioNodes() {
         <code>showmeshctl</code>. A node with no row here has never had one written for it.
       </p>
 
-      {!scopeGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {scopeGate.reason}
-        </p>
-      )}
+      {permissionState}
 
-      {scopeGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading audio nodes…</p>}
+      {scopeGate.allowed && state.kind === 'loading' && <LoadingBlock title="Loading audio nodes" reason="Loading coordinator configuration…" />}
       {scopeGate.allowed && state.kind === 'error' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
-        </p>
+        <FailedBlock title="Audio nodes could not be loaded" reason={<>{state.message} <button type="button" onClick={() => setReloadGeneration((g) => g + 1)}>Retry</button></>} />
       )}
       {scopeGate.allowed && state.kind === 'loaded' && (
         <>
           {state.objects.length === 0 ? (
-            <p className="text-muted">No audio.node object is configured yet. No audio node is configured.</p>
+            <EmptyBlock title="No audio nodes configured" reason="No audio.node object is configured yet."><Link className="entity-link" to="/config/audio.node/new">Create an audio node</Link></EmptyBlock>
           ) : (
             <div className="table-scroll">
               <table className="config-table" aria-label="Configured audio nodes">
