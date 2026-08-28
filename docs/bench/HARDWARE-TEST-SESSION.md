@@ -19,7 +19,7 @@ development checkout stays free for unrelated work:
 
 ```sh
 git fetch origin
-git worktree add -b test/YYYY-MM-DD-hardware \
+git worktree add -b dev/test-YYYY-MM-DD-hardware \
   ../ShowMesh-worktrees/test-YYYY-MM-DD origin/main
 ```
 
