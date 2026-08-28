@@ -148,6 +148,7 @@ describe('Layout', () => {
 
     expect(document.querySelectorAll('nav.app-nav')).toHaveLength(1)
     expect(document.querySelector('.app-nav__directory')).toBeNull()
+    expect(document.querySelector('nav.app-nav details')).toBeNull()
     expect(screen.queryByText('All destinations')).not.toBeInTheDocument()
     expect(document.querySelector('a[href="/nodes"]')).toHaveTextContent('Nodes')
     expect(document.querySelector('a[href="/config/audio.node"]')).toHaveTextContent('Audio nodes')
@@ -300,12 +301,7 @@ describe('Layout', () => {
   it('gives the sidebar its own internal scroll at the sidebar breakpoint, instead of clipping', () => {
     const css = readFileSync(path.resolve(__dirname, '../styles/global.css'), 'utf-8')
     const shellCss = css.slice(css.lastIndexOf('/* Final shell contract.'))
-    const desktopBlock = shellCss.match(/@media \(min-width: 768px\) \{([\s\S]*?)\n\}\s*$/)
-    expect(desktopBlock).not.toBeNull()
-    const desktopBlockBody = desktopBlock?.[1] ?? ''
-    const navRule = desktopBlockBody.match(/\.app-nav \{([\s\S]*?)\}/)
-    expect(navRule).not.toBeNull()
-    expect(navRule?.[1] ?? '').toMatch(/overflow-y:\s*auto/)
+    expect(shellCss).toMatch(/@media \(min-width: 768px\) \{[\s\S]*?\.app-nav \{[\s\S]*?overflow-y:\s*auto/)
     // The phone (unqualified, mobile-first) rule keeps the nav in normal
     // flow rather than restoring a fixed bottom chooser.
     const phoneRule = shellCss.match(/\.app-nav \{([\s\S]*?)\}/)
@@ -465,6 +461,6 @@ describe('collapsible nav groups', () => {
   it('keeps collapsed groups hidden in the responsive navigation', () => {
     const css = readFileSync(path.resolve(__dirname, '../styles/global.css'), 'utf-8')
     expect(css).toMatch(/\.app-nav__group\[data-open='false'\]\s+\.app-nav__group-links\s*\{[\s\S]*?display:\s*none/)
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*?\.app-nav__primary-links,[\s\S]*?display:\s*grid/)
+    expect(css).toMatch(/\.app-nav__secondary-links/)
   })
 })

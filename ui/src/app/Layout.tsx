@@ -39,8 +39,7 @@ export interface LayoutProps {
  * the same way these two did.
  */
 type NavItem = { to: string; label: string; end: boolean }
-type NavSubgroup = { heading: string; items: NavItem[] }
-type NavGroup = { heading: string; primary: NavItem[]; groups: NavSubgroup[] }
+type NavGroup = { heading: string; primary: NavItem[]; secondary: NavItem[] }
 
 // One rail nav owns both the seven primary destinations and the compact
 // legacy groups. Keeping each route in one place prevents the former primary
@@ -53,14 +52,9 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/night', label: 'Show Night', end: true },
       { to: '/control', label: 'Live Control', end: true },
     ],
-    groups: [
-      {
-        heading: 'Show night tools',
-        items: [
-          { to: '/config/show.active', label: 'Active show', end: false },
-          { to: '/playlists/readiness', label: 'Playlist readiness', end: false },
-        ],
-      },
+    secondary: [
+      { to: '/config/show.active', label: 'Active show', end: false },
+      { to: '/playlists/readiness', label: 'Playlist readiness', end: false },
     ],
   },
   {
@@ -69,18 +63,13 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/config/show', label: 'Shows', end: true },
       { to: '/assets', label: 'Assets', end: true },
     ],
-    groups: [
-      {
-        heading: 'Show authoring',
-        items: [
-          { to: '/config/show.surface', label: 'Surfaces', end: false },
-          { to: '/config/show.cue', label: 'Cues', end: false },
-          { to: '/config/show.playlist', label: 'Playlists', end: false },
-          { to: '/config/fpp-playlist-definitions', label: 'FPP playlist definitions', end: false },
-          { to: '/config/night.session', label: 'Night sessions', end: false },
-          { to: '/config/night.session.active', label: 'Active night session', end: false },
-        ],
-      },
+    secondary: [
+      { to: '/config/show.surface', label: 'Surfaces', end: false },
+      { to: '/config/show.cue', label: 'Cues', end: false },
+      { to: '/config/show.playlist', label: 'Playlists', end: false },
+      { to: '/config/fpp-playlist-definitions', label: 'FPP playlist definitions', end: false },
+      { to: '/config/night.session', label: 'Night sessions', end: false },
+      { to: '/config/night.session.active', label: 'Active night session', end: false },
     ],
   },
   {
@@ -89,33 +78,18 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/monitor', label: 'Monitor', end: true },
       { to: '/config', label: 'Settings', end: true },
     ],
-    groups: [
-      {
-        heading: 'Monitoring',
-        items: [
-          { to: '/nodes', label: 'Nodes', end: false },
-          { to: '/fpp', label: 'FPP', end: false },
-          { to: '/resolume', label: 'Resolume', end: false },
-          { to: '/events', label: 'Events', end: false },
-        ],
-      },
-      {
-        heading: 'Diagnostics',
-        items: [
-          { to: '/capabilities', label: 'Capabilities', end: false },
-          { to: '/assets/manifest', label: 'Asset manifest', end: false },
-          { to: '/audit', label: 'Audit log', end: false },
-        ],
-      },
-      {
-        heading: 'Administration',
-        items: [
-          { to: '/actions', label: 'Show actions', end: false },
-          { to: '/access', label: 'Access', end: false },
-          { to: '/config/audio.settings', label: 'Audio settings', end: false },
-          { to: '/config/audio.node', label: 'Audio nodes', end: false },
-        ],
-      },
+    secondary: [
+      { to: '/nodes', label: 'Nodes', end: false },
+      { to: '/fpp', label: 'FPP', end: false },
+      { to: '/resolume', label: 'Resolume', end: false },
+      { to: '/events', label: 'Events', end: false },
+      { to: '/capabilities', label: 'Capabilities', end: false },
+      { to: '/assets/manifest', label: 'Asset manifest', end: false },
+      { to: '/audit', label: 'Audit log', end: false },
+      { to: '/actions', label: 'Show actions', end: false },
+      { to: '/access', label: 'Access', end: false },
+      { to: '/config/audio.settings', label: 'Audio settings', end: false },
+      { to: '/config/audio.node', label: 'Audio nodes', end: false },
     ],
   },
 ]
@@ -125,7 +99,7 @@ const NAV_GROUPS: NavGroup[] = [
 // above so the rail stays compact and each legacy destination has one owner.
 const NAV_STATE_GROUPS = NAV_GROUPS.map((group) => ({
   heading: group.heading,
-  items: [...group.primary, ...group.groups.flatMap((subgroup) => subgroup.items)],
+  items: [...group.primary, ...group.secondary],
 }))
 
 // A stable DOM id for each group's link list (aria-controls target), not
@@ -133,10 +107,6 @@ const NAV_STATE_GROUPS = NAV_GROUPS.map((group) => ({
 // across every current and future heading in NAV_GROUPS.
 function slugifyHeading(heading: string): string {
   return heading.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-}
-
-function navItemMatches(item: NavItem, pathname: string): boolean {
-  return item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(`${item.to}/`)
 }
 
 export function Layout({ onSubmitToken }: LayoutProps) {
@@ -183,7 +153,7 @@ export function Layout({ onSubmitToken }: LayoutProps) {
                   <span>{group.heading}</span>
                   {!open && (
                     <span className="app-nav__group-count">
-                      {group.primary.length + group.groups.reduce((count, subgroup) => count + subgroup.items.length, 0)}
+                      {group.primary.length + group.secondary.length}
                     </span>
                   )}
                 </button>
@@ -195,22 +165,12 @@ export function Layout({ onSubmitToken }: LayoutProps) {
                       </NavLink>
                     ))}
                   </div>
-                  <div className="app-nav__legacy-groups">
-                    {group.groups.map((subgroup) => {
-                      const subgroupOpen = subgroup.items.some((item) => navItemMatches(item, location.pathname))
-                      return (
-                        <details key={subgroup.heading} className="app-nav__legacy-group" open={subgroupOpen}>
-                          <summary>{subgroup.heading}</summary>
-                          <div className="app-nav__legacy-links">
-                            {subgroup.items.map((item) => (
-                              <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
-                                {item.label}
-                              </NavLink>
-                            ))}
-                          </div>
-                        </details>
-                      )
-                    })}
+                  <div className="app-nav__secondary-links">
+                    {group.secondary.map((item) => (
+                      <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__secondary-link">
+                        {item.label}
+                      </NavLink>
+                    ))}
                   </div>
                 </div>
               </section>

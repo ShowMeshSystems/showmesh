@@ -223,8 +223,8 @@
   gap: var(--space-3);
   flex-wrap: wrap;
   padding: var(--space-2) var(--space-4);
-  background: var(--status-warn-bg);
-  color: var(--status-warn-fg);
+  background: var(--notice-info-bg);
+  color: var(--notice-info-fg);
   border-bottom: 1px solid var(--color-border);
   font-size: var(--font-size-sm);
 }
