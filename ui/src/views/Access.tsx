@@ -111,24 +111,26 @@ export function Access() {
               {state.principals.length === 0 ? (
                 <p className="text-muted">(no principals)</p>
               ) : (
-                <table className="config-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Kind</th>
-                      <th>Role</th>
-                      <th>Disabled</th>
-                      <th>Has password</th>
-                      <th>Created</th>
-                      <th aria-label="Actions" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {state.principals.map((p) => (
-                      <PrincipalRow key={p.id} principal={p} onChanged={reload} />
-                    ))}
-                  </tbody>
-                </table>
+                <div className="table-scroll">
+                  <table className="config-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Kind</th>
+                        <th>Role</th>
+                        <th>Disabled</th>
+                        <th>Has password</th>
+                        <th>Created</th>
+                        <th aria-label="Actions" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {state.principals.map((p) => (
+                        <PrincipalRow key={p.id} principal={p} onChanged={reload} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </>
           )}
@@ -463,41 +465,43 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
       ) : tokens.length === 0 ? (
         <p className="text-muted">(no tokens)</p>
       ) : (
-        <table className="config-table">
-          <thead>
-            <tr>
-              <th>Hint</th>
-              <th>Label</th>
-              <th>Created</th>
-              <th>Expires</th>
-              <th>Last used</th>
-              <th aria-label="Actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {tokens.map((t) => (
-              <tr key={t.id}>
-                <td>{t.hint}</td>
-                <td>{t.label || '-'}</td>
-                <td>{formatAbsolute(t.createdAt)}</td>
-                <td>{t.expiresAt === null ? 'never' : formatAbsolute(t.expiresAt)}</td>
-                <td>{t.lastUsedAt === null ? 'never' : formatAbsolute(t.lastUsedAt)}</td>
-                <td>
-                  {!locked && (
-                    <ScopedButton
-                      requiredScope={PRINCIPAL_WRITE_SCOPE}
-                      onClick={() => void handleRevoke(t.id)}
-                      busy={busy}
-                      busyReason="Revoking this token…"
-                    >
-                      Revoke
-                    </ScopedButton>
-                  )}
-                </td>
+        <div className="table-scroll">
+          <table className="config-table">
+            <thead>
+              <tr>
+                <th>Hint</th>
+                <th>Label</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>Last used</th>
+                <th aria-label="Actions" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {tokens.map((t) => (
+                <tr key={t.id}>
+                  <td>{t.hint}</td>
+                  <td>{t.label || '-'}</td>
+                  <td>{formatAbsolute(t.createdAt)}</td>
+                  <td>{t.expiresAt === null ? 'never' : formatAbsolute(t.expiresAt)}</td>
+                  <td>{t.lastUsedAt === null ? 'never' : formatAbsolute(t.lastUsedAt)}</td>
+                  <td>
+                    {!locked && (
+                      <ScopedButton
+                        requiredScope={PRINCIPAL_WRITE_SCOPE}
+                        onClick={() => void handleRevoke(t.id)}
+                        busy={busy}
+                        busyReason="Revoking this token…"
+                      >
+                        Revoke
+                      </ScopedButton>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {!locked && (
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'end', marginTop: '0.5rem' }}>

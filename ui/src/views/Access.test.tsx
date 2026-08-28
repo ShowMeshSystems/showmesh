@@ -107,6 +107,10 @@ describe('Access: tokens panel', () => {
     expect(await screen.findByText('smt_c3d4…')).toBeInTheDocument()
     expect(screen.getByText('smt_a1b2…')).toBeInTheDocument()
     expect(screen.queryByText(/loading tokens/i)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('table')).toHaveLength(2)
+    for (const table of screen.getAllByRole('table')) {
+      expect(table.parentElement).toHaveClass('table-scroll')
+    }
     await waitFor(() => expect(listPrincipalTokens).toHaveBeenCalledTimes(2))
   })
 

@@ -21,7 +21,10 @@ function ConfigEditorPage({ title, lede, children }: { title: string; lede: Reac
       {!gate.allowed ? (
         <p className="panel panel--error" role="status">{gate.reason}</p>
       ) : (
-        <div className="settings-direct-page__editor">{children}</div>
+        <section className="settings-direct-page__editor">
+          <h2 className="visually-hidden">{title} settings editor</h2>
+          {children}
+        </section>
       )}
     </div>
   )

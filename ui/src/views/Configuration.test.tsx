@@ -575,6 +575,8 @@ describe('Configuration', () => {
     for (const id of ['fpp-endpoints', 'resolume-instances', 'fpp-mqtt', 'assets-settings', 'render-settings', 'show-mode']) {
       expect(document.getElementById(id)).not.toBeNull()
     }
+    expect(screen.getByRole('heading', { level: 2, name: 'Connections settings editor' })).toHaveClass('visually-hidden')
+    expect(screen.getByRole('heading', { level: 2, name: 'Content delivery settings editor' })).toHaveClass('visually-hidden')
     expect(screen.getByText(/persistent High contrast control in the sidebar footer/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /high contrast/i })).not.toBeInTheDocument()
   })
