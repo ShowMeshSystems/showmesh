@@ -281,7 +281,7 @@ func (m *Manager) gateAvailability(outcome pkgaudio.OutcomeResult) pkgaudio.Outc
 // evidenced
 // by the resulting desired state, not by an engine transition — apply
 // never touches the engine.
-func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, req pkgaudio.ApplyRequest) pkgaudio.OutcomeResult {
+func (m *Manager) Apply(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, req pkgaudio.ApplyRequest) pkgaudio.OutcomeResult {
 	s := m.getOrCreate(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -305,6 +305,14 @@ func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkg
 		}
 		if s.state == pkgaudio.StateUnknown {
 			s.state = pkgaudio.StateReady
+		}
+		// A session that just stopped being a show session (or never was
+		// one) must not keep reporting a stale LTC claim it no longer
+		// earns — the same clear-on-exit stopLTCLocked applies to a
+		// commanded stop, whether or not this session ever actually held
+		// the run.
+		if !isShowSessionLocked(s) && s.ltcClaimState != LTCClaimNone && s.ltcClaimState != "" {
+			m.stopLTCLocked(ctx, s)
 		}
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomePosition})
 	})

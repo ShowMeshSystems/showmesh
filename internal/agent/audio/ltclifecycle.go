@@ -139,15 +139,22 @@ func (m *Manager) startLTCLocked(ctx context.Context, s *Session, position time.
 	}
 }
 
-// stopLTCLocked stops this node's LTC run when s currently owns it — a
-// no-op for any other session. A [LTCGenerator.StopLTC] failure is
-// logged and never propagated, the same rule [Manager.startLTCLocked]
-// follows. Caller holds s.mu.
+// stopLTCLocked clears s's own standing claim on this node's one LTC run
+// — s stopped, or stopped being a show-role session, either way s earns
+// no further claim evidence — and stops the engine's run too when s is
+// the one that actually held it; a no-op on the engine for any other
+// session. A refused session never held the run, so it must still leave
+// here with its claim reset to [LTCClaimNone]: without that, a session
+// turned away once kept reporting "refused" forever, naming a holder
+// that may itself have long since released the run. A
+// [LTCGenerator.StopLTC] failure is logged and never propagated, the
+// same rule [Manager.startLTCLocked] follows. Caller holds s.mu.
 func (m *Manager) stopLTCLocked(ctx context.Context, s *Session) {
-	if !m.ltc.release(s.id) {
+	held := m.ltc.release(s.id)
+	s.ltcClaimState, s.ltcClaimReason = LTCClaimNone, ""
+	if !held {
 		return
 	}
-	s.ltcClaimState, s.ltcClaimReason = LTCClaimNone, ""
 	gen, ok := m.engine.(LTCGenerator)
 	if !ok {
 		return
