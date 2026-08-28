@@ -1345,6 +1345,31 @@ type AudioSessionReport struct {
 	LTCClaimState  string `json:"ltcClaimState"`
 	LTCClaimReason string `json:"ltcClaimReason"`
 
+	// RestorePending is true whenever this session currently has a
+	// restore queued on this node, whether or not the automatic retry
+	// driver has made an attempt on its behalf yet. This is the
+	// authoritative signal for whether a restore is queued at all:
+	// RestoreAttempts starting at 0 is genuinely ambiguous between
+	// "nothing queued" and "queued, no attempt yet", and only this field
+	// resolves that ambiguity.
+	RestorePending bool `json:"restorePending"`
+
+	// RestoreAttempts, RestoreNextAttemptMs, and RestoreLastReason are
+	// this node's own automatic restore-retry driver's status for this
+	// session (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.restore.attempts/.next_attempt_ms/.last_reason),
+	// meaningful only when RestorePending is true: how many automatic
+	// attempts it has made since this session's restore was last
+	// deferred or re-queued, a countdown in milliseconds to the next
+	// backed-off attempt (0 both before the driver's first attempt and
+	// once its bounded schedule is exhausted), and why the most recent
+	// attempt did not build an engine. RestoreLastReason is required
+	// whenever RestoreAttempts is nonzero. All three are the zero value
+	// whenever RestorePending is false.
+	RestoreAttempts      int64  `json:"restoreAttempts"`
+	RestoreNextAttemptMs int64  `json:"restoreNextAttemptMs"`
+	RestoreLastReason    string `json:"restoreLastReason"`
+
 	// ObservedAt is the engine's own evidence time for PositionMs, nil
 	// when PositionKnown is false. Never the coordinator's or this
 	// node's own receipt time (ADR-011).
@@ -1562,6 +1587,9 @@ func (p AudioPayload) Validate() error {
 		}
 		if sess.LTCClaimState == "refused" && sess.LTCClaimReason == "" {
 			return fmt.Errorf("%w: sessions[%d].ltcClaimReason (required whenever ltcClaimState is \"refused\")", ErrPayloadMissingField, i)
+		}
+		if sess.RestoreAttempts > 0 && sess.RestoreLastReason == "" {
+			return fmt.Errorf("%w: sessions[%d].restoreLastReason (required whenever restoreAttempts is nonzero)", ErrPayloadMissingField, i)
 		}
 	}
 	if p.ObservedAt == nil {

@@ -343,3 +343,59 @@ func TestClockAlignmentAlwaysNotCollected(t *testing.T) {
 		t.Error("clock alignment reason is empty, want a stated explanation")
 	}
 }
+
+// TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt reproduces
+// a review-flagged honesty defect: a session with a restore genuinely
+// queued, but not yet retried by the node's own automatic driver
+// (RestoreAttempts still 0), must not be reported identically to a
+// session with nothing queued at all. Gating on RestoreAttempts > 0
+// alone cannot tell those two apart -- RestorePending is the
+// authoritative signal, and this is exactly the window an operator most
+// needs visibility into.
+func TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "restore_pending", Fault: "other", FaultReason: "no audio engine bound yet",
+		RestorePending: true, RestoreAttempts: 0, RestoreNextAttemptMs: 0, RestoreLastReason: "",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	attempts := findSessionObs(t, obs, SignalSessionRestoreAttempts)
+	if attempts.Absence != "" {
+		t.Errorf("restore.attempts absence = %q, want collected (a restore IS queued, even with zero attempts so far)", attempts.Absence)
+	}
+	if attempts.Value != int64(0) {
+		t.Errorf("restore.attempts value = %v, want 0", attempts.Value)
+	}
+
+	next := findSessionObs(t, obs, SignalSessionRestoreNextAttemptMs)
+	if next.Absence != "" {
+		t.Errorf("restore.next_attempt_ms absence = %q, want collected", next.Absence)
+	}
+
+	reason := findSessionObs(t, obs, SignalSessionRestoreLastReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("restore.last_reason absence = %q, want %q: no attempt has run yet, so there is no reason to report", reason.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestRestoreSignalsAllNotCollectedWhenNothingIsQueued is the negative
+// case TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt
+// exists to distinguish: an ordinary session with no restore queued at
+// all reports all three restore.* signals as not collected.
+func TestRestoreSignalsAllNotCollectedWhenNothingIsQueued(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none", RestorePending: false,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalSessionRestoreAttempts, SignalSessionRestoreNextAttemptMs, SignalSessionRestoreLastReason} {
+		o := findSessionObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s absence = %q, want %q when no restore is queued", sig, o.Absence, observation.StateNotCollected)
+		}
+	}
+}
