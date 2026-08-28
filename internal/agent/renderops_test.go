@@ -60,7 +60,7 @@ func TestHandleMessageRenderSurfaceApplyConfirmed(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
@@ -109,7 +109,7 @@ func TestHandleMessageRenderSurfaceApplyMissingSurfaceID(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{})
@@ -144,7 +144,7 @@ func TestHandleMessageRenderSurfaceApplyRejectsUnknownKey(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{
@@ -170,7 +170,7 @@ func TestHandleMessageRenderSurfaceClearRemovesAssignment(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	applyCmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
@@ -212,7 +212,7 @@ func TestHandleMessageRenderPipelineRestart(t *testing.T) {
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	applyCmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
@@ -240,7 +240,7 @@ func TestHandleMessageRenderTriggerSignalsOnlyForRenderActions(t *testing.T) {
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
 	trigger := make(chan struct{}, 1)
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, trigger, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, trigger, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	echoCmd := baseEchoCmd("cmd-1", "idem-1")
@@ -607,7 +607,7 @@ func TestHandleMessageRenderTransportProbeFiresRenderTrigger(t *testing.T) {
 	}
 
 	renderTrigger := make(chan struct{}, 1)
-	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, renderTrigger, nil, nil, nil, clock.now, discardLogger())
+	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, renderTrigger, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
 	cmd := renderCmd("render.transport.probe", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})

@@ -3903,6 +3903,114 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/fppconnect.settings:
+    get:
+      operationId: getFPPConnectSettingsConfig
+      summary: The fppconnect.settings singleton (ADR-044 decision 5)
+      description: >-
+        Requires `config:write`, mirroring `GET /config/audio.settings`'s
+        own always-sensitive, never-404 posture: the payload has a
+        well-defined default, so this always answers `200`, with `revision`
+        `0` and `source` `"default"` when nothing has ever been written.
+        `enabled` gates the node's unauthenticated xLights ingestion
+        listener; `maxFileBytes` and `maxAssetDirBytes` are the two byte
+        caps ADR-044 decision 4 requires (a per-file cap and a total
+        asset-directory cap), pushed to every node over the existing MQTT
+        command path alongside its channel ranges and active show.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPConnectSettingsConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putFPPConnectSettingsConfig
+      summary: Write a new fppconnect.settings revision (ADR-044 decision 5)
+      description: >-
+        Requires `config:write` (admin only). A full replacement: every
+        field is required and non-null on every write - never merged
+        against the previous revision, so an absent key is refused by name
+        rather than silently defaulting or carrying the old value forward.
+        `maxFileBytes` and `maxAssetDirBytes` must each be at least 1 byte,
+        and `maxAssetDirBytes` must be at least `maxFileBytes` - a total
+        cap smaller than the per-file cap would refuse every upload
+        unconditionally. On success, appends a new immutable revision and
+        activates it in the SAME transaction as its audit log entry
+        (ADR-024 decision 11's same-transaction rule). A
+        cookie-authenticated request additionally requires
+        `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a
+        bearer-token-authenticated request is exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigFPPConnectSettingsPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FPPConnectSettingsConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/fppconnect.settings/revisions:
+    get:
+      operationId: getFPPConnectSettingsConfigRevisions
+      summary: fppconnect.settings revision history, newest first
+      description: Requires `config:write`. Metadata only, mirroring `GET /config/audio.settings/revisions`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /config/audio.node:
     get:
       operationId: listAudioNodes
@@ -7459,7 +7567,7 @@ components:
       required:
         [nodeId, label, platform, agentVersion, bootId, startedAt,
          firstSeenAt, updatedAt, capabilities, controlPlane, evidence,
-         declaration, render, audio]
+         declaration, render, audio, fppConnect]
       properties:
         nodeId:
           type: string
@@ -7522,6 +7630,22 @@ components:
             holds for this node, one entry per signal. Never omitted; an
             empty array means this node has never published an audio
             discovery report.
+          items:
+            $ref: "#/components/schemas/ObservationEntry"
+        fppConnect:
+          type: array
+          description: >-
+            Whatever node.fppconnect.channel_range.* observations
+            this coordinator currently holds for this node's most recently
+            resolved fppconnect.configure push - whether the pushed
+            channel range was formatted, legitimately empty (no configured
+            surface), or dropped (a surface existed but could not be
+            formatted, e.g. a refused range or a string too long for the
+            ping's 120-byte field), and why. Never omitted; an empty array
+            means this node has never had a fppconnect.configure push
+            resolved for it. Resource names this node directly, the
+            `node.multisync.*` precedent (one push carries one
+            channel-range string per node).
           items:
             $ref: "#/components/schemas/ObservationEntry"
     NodeDeclaration:
@@ -9542,15 +9666,17 @@ components:
         /config/resolume.instances/revisions, GET
         /config/fpp.mqtt/revisions, GET
         /config/assets.settings/revisions, GET
-        /config/audio.settings/revisions, and GET
-        /config/audio.node/{id}/revisions, newest first - one shape
+        /config/audio.settings/revisions, GET
+        /config/audio.node/{id}/revisions, and GET
+        /config/fppconnect.settings/revisions, newest first - one shape
         shared across every configuration kind's own revision history route
         (Step 9 wave 2: kind's const narrowed to fpp.endpoints was
         Step 7-only and never revisited when this schema gained more
         callers; Track E added three more, Track D seam D-3a another,
         Track B seam B2c another, Track G seams G-2, G-3, and G-4 one
         each more, audio.settings/audio.node two more, Track H seam
-        H1 two more, and ADR-033's show.mode one more).
+        H1 two more, ADR-033's show.mode one more, and Track E phase 2
+        seam FC1a's fppconnect.settings one more).
       required: [serverTime, kind, revisions]
       properties:
         serverTime:
@@ -9558,7 +9684,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings]
         revisions:
           type: array
           items:
@@ -10641,6 +10767,60 @@ components:
           type: integer
         payload:
           $ref: "#/components/schemas/ConfigAudioSettingsPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    ConfigFPPConnectSettingsPayload:
+      type: object
+      description: >-
+        The "fppconnect.settings" configuration kind's decoded payload
+        (ADR-044 decision 5): the body PUT /config/fppconnect.settings
+        accepts (a full replacement - every field required and non-null),
+        and the "payload" member of GET /config/fppconnect.settings'
+        response. `enabled` gates the node's unauthenticated xLights
+        ingestion listener. `maxFileBytes` is the per-file byte cap on one
+        ingested upload; `maxAssetDirBytes` is the total byte cap on the
+        node's asset directory and must be at least `maxFileBytes` - a
+        cap smaller than the per-file cap would refuse every upload
+        unconditionally. Defaults: `enabled` true (a builder default, not
+        an owner ruling), `maxFileBytes` 2147483648 (2 GiB),
+        `maxAssetDirBytes` 21474836480 (20 GiB).
+      required: [enabled, maxFileBytes, maxAssetDirBytes]
+      properties:
+        enabled:
+          type: boolean
+        maxFileBytes:
+          type: integer
+          description: Always at least 1.
+        maxAssetDirBytes:
+          type: integer
+          description: Always at least 1, and always at least maxFileBytes.
+    FPPConnectSettingsConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/fppconnect.settings. Never `404`s:
+        the payload has a well-defined default, reported with `revision`
+        `0` and `source` `"default"` when nothing has ever been written,
+        mirroring AudioSettingsConfigResponse's identical posture.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigFPPConnectSettingsPayload"
         updatedAt:
           type: string
           format: date-time

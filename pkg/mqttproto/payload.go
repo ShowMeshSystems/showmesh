@@ -601,6 +601,25 @@ const (
 // envelope cap."
 const maxRenderSurfaces = 8
 
+// maxRenderHeldFiles and maxRenderHeldEvents bound
+// [RenderPayload.FPPConnectHeld] and [RenderPayload.FPPConnectHeldEvents]
+// (review round 3 finding 2): an unbounded held-file list, or an unbounded
+// evidence log, could otherwise ride every render report past
+// [maxEnvelopeSize] once enough files or events accumulate. Conservative,
+// unmeasured guesses at "far more than a real show's node ever holds or
+// generates, far short of the envelope cap," the same reasoning
+// [maxRenderSurfaces] states for Surfaces one field up.
+//
+// maxRenderHeldEvents is deliberately above internal/agent/fppconnectheld.
+// go's own fppConnectMaxEvents (50): that constant already bounds how many
+// events the store itself ever holds, so this wire cap exists only as a
+// backstop against a caller that skips the publisher's own truncation, and
+// must never be smaller than what normal operation legitimately produces.
+const (
+	maxRenderHeldFiles  = 256
+	maxRenderHeldEvents = 64
+)
+
 // maxRenderStderrBytes bounds [RenderSurfaceReport.LastStderr] before
 // [RenderPayload.Validate] rejects the payload outright — the wire-boundary
 // backstop behind whatever cap internal/agent/pipeline already applies when
@@ -915,6 +934,216 @@ type RenderPayload struct {
 	// healthy value) — not enforced as required by Validate, for the
 	// identical additive-compatibility reason MultiSyncReason is not.
 	MultiSyncObservedAt time.Time `json:"multiSyncObservedAt"`
+
+	// FPPConnectListening is true once this node's FPP Connect HTTP
+	// compatibility listener (ADR-044) has successfully bound and is
+	// serving, false otherwise. It stays true while the listener is bound
+	// but administratively disabled: the socket stays open (so the next
+	// enable takes effect with no restart) and only the routes' behavior
+	// changes, which FPPConnectReason states. Not enforced as required by
+	// Validate, matching MultiSyncReason's identical additive-compatibility
+	// reasoning: this field is added after SchemaNodeRenderV1 first shipped.
+	FPPConnectListening bool `json:"fppConnectListening"`
+
+	// FPPConnectReason is the bind error, the "not yet attempted" starting
+	// value, or the disabled-by-configuration explanation, whenever
+	// FPPConnectListening is false or the listener is bound but disabled.
+	// See MultiSyncReason's identical rule one field up.
+	FPPConnectReason string `json:"fppConnectReason"`
+
+	// FPPConnectObservedAt is the node's own clock at the moment the FPP
+	// Connect HTTP listener's status was last determined, mirroring
+	// MultiSyncObservedAt's identical evidence-time reasoning one field up.
+	FPPConnectObservedAt time.Time `json:"fppConnectObservedAt"`
+
+	// FPPConnectHeld is nil-safe like Surfaces: this package's own encoder
+	// emits "fppConnectHeld":[] for a nil slice, never null, matching
+	// Surfaces' identical rule. Every file FC2's chunked upload receiver
+	// (ADR-044) currently holds, bound or not, is here, up to
+	// [maxRenderHeldFiles]: FPPConnectHeldCount states the true total
+	// separately, so a publisher that must cut this list down (review
+	// round 3 finding 2: an unbounded list here could otherwise ride
+	// every render report past [maxEnvelopeSize] once enough files
+	// accumulate) never has to also hide how many exist. This is the
+	// only place an unbound held file is surfaced to an operator: ADR-044
+	// decision 8 requires an unresolvable upload be "reported as an
+	// unbound held file the operator can claim," and xLights never
+	// inspects the playlist POST's status, so this node report is the
+	// only evidence path available. Not enforced as required by Validate:
+	// this field is added after SchemaNodeRenderV1 first shipped, matching
+	// FPPConnectListening's identical additive-compatibility reasoning
+	// (a hard requirement here would reject every render report a node
+	// published before this field existed). The length cap IS enforced
+	// (see Validate): that check passes trivially for a nil or short
+	// slice, so it does not weaken the additive-compatibility promise
+	// above, only refuses a payload that is genuinely too large to be
+	// safe regardless of when the field was introduced.
+	FPPConnectHeld []RenderFPPConnectHeldFile `json:"fppConnectHeld"`
+
+	// FPPConnectHeldCount is the true total number of files this node
+	// currently holds, independent of FPPConnectHeld's own length: the two
+	// can differ once the publisher truncates the list to
+	// [maxRenderHeldFiles], and a consumer that only needs "how many files
+	// are held" should read this field rather than len(FPPConnectHeld).
+	FPPConnectHeldCount int `json:"fppConnectHeldCount"`
+
+	// FPPConnectHeldEvents is FC2's bounded evidence log (unknown and
+	// ambiguous playlist posts, and refused uploads: too large, over the
+	// asset-directory cap, disk full, an offset gap, an upload length that
+	// changed mid-upload, an unsafe upload name, or a disallowed
+	// directory), oldest first, up to [maxRenderHeldEvents]. ADR-044
+	// decision 4 requires exceeding a bound, or exhausting the disk, be
+	// "reported as evidence"; xLights never inspects any of these calls'
+	// status, so this is that evidence's only path to an operator. Same
+	// additive-compatibility, not-required-by-Validate treatment as
+	// FPPConnectHeld, and the same reasoning for why its length cap is
+	// enforced regardless.
+	FPPConnectHeldEvents []RenderFPPConnectHeldEvent `json:"fppConnectHeldEvents"`
+
+	// FPPConnectHeldEventsTotal is the true total number of events this
+	// node currently holds, independent of FPPConnectHeldEvents' own
+	// length, mirroring FPPConnectHeldCount's identical relationship to
+	// FPPConnectHeld one field up (review round 8 finding 2): the two can
+	// differ once a publisher trims the list, whether for
+	// [maxRenderHeldEvents]'s own count cap or for the envelope's overall
+	// size budget, and neither trim previously left any trace a consumer
+	// could read; len(FPPConnectHeldEvents) alone could not distinguish
+	// "this node has exactly this many events" from "this node has more,
+	// and some were cut to fit." A consumer that only needs "how many
+	// events exist" reads this field rather than
+	// len(FPPConnectHeldEvents).
+	FPPConnectHeldEventsTotal int `json:"fppConnectHeldEventsTotal"`
+}
+
+// RenderFPPConnectHeldFile is one file FC2's chunked upload receiver
+// (internal/agent/fppconnectheld.go) currently holds, inside
+// [RenderPayload.FPPConnectHeld]. Field-for-field the same evidence that
+// package's own fppConnectHeldRecord carries, independently reproduced
+// for this wire boundary per this codebase's standing convention.
+type RenderFPPConnectHeldFile struct {
+	// Dir is the accepted upload directory ("sequences", "music", or
+	// "videos") this file was received into.
+	Dir string `json:"dir"`
+
+	// Name is the file name with its extension, exactly as xLights sent
+	// it in Upload-Name (RES-003 section 10.6's join key). Never a
+	// resolved or sanitized variant.
+	Name string `json:"name"`
+
+	SizeBytes int64 `json:"sizeBytes"`
+
+	// ContentHash is "sha256:<hex>", matching ADR-028 decision 1's
+	// identity scheme and AssetInventoryEntry.ContentHash's identical
+	// shape.
+	ContentHash string `json:"contentHash"`
+
+	// ReceivedAt is when this node finished assembling and hashing this
+	// file, on the node's own clock.
+	ReceivedAt time.Time `json:"receivedAt"`
+
+	// Bound is false for a held-but-unbound file (ADR-044 decision 8):
+	// kept, registered nowhere, and visible here rather than guessed at
+	// or silently dropped.
+	Bound bool `json:"bound"`
+
+	// Show is the ShowMesh show this file is bound to, empty when Bound
+	// is false.
+	Show string `json:"show,omitempty"`
+
+	// ShowID is Show's resolved config object id (FC3, ADR-028 decision
+	// 8), the value FC3's registrar sends as POST /api/v1/assets' `show`
+	// field. Empty when Bound is false.
+	ShowID string `json:"showId,omitempty"`
+
+	// LogicalSequence is the file name stem, slugified to the assets
+	// API's own sequence-id rule (FC3), set only when Bound is true.
+	LogicalSequence string `json:"logicalSequence,omitempty"`
+
+	// UnboundReason names which of ADR-039 decision 5's distinct
+	// unresolved states produced Bound==false: never pushed an active
+	// show, pushed an explicit "no active show," or an active show
+	// pushed with an empty name. Empty whenever Bound is true.
+	UnboundReason string `json:"unboundReason,omitempty"`
+
+	// RegistrationState is FC3's addition (ADR-028 decision 8): "" for a
+	// bound file not yet attempted, "skipped" for a music/videos file
+	// (this lane registers FSEQ content only), "pending" while a
+	// retryable attempt is scheduled, "registered" once the coordinator
+	// has accepted it, or "failed" for a non-retryable refusal or a
+	// content-hash mismatch against the coordinator's response. Always ""
+	// when Bound is false: an unresolved binding is reported as unbound,
+	// never as pending registration.
+	RegistrationState string `json:"registrationState,omitempty"`
+
+	// RegistrationAssetID is the coordinator-assigned asset id, set only
+	// when RegistrationState is "registered".
+	RegistrationAssetID string `json:"registrationAssetId,omitempty"`
+
+	// RegistrationRolledBack mirrors the coordinator's own rolledBack
+	// flag (ADR-028 decision 10) from the registration that produced
+	// RegistrationAssetID.
+	RegistrationRolledBack bool `json:"registrationRolledBack,omitempty"`
+
+	// RegistrationReason is evidence for the current RegistrationState:
+	// why registration is skipped, the retry reason while pending, or the
+	// failure detail. Empty when RegistrationState is "" or "registered".
+	RegistrationReason string `json:"registrationReason,omitempty"`
+
+	// RegistrationProblemType is the coordinator's RFC 9457 problem
+	// `type` for a non-retryable refusal, set only when RegistrationState
+	// is "failed" and the failure came from the coordinator's own
+	// response (empty for a locally-detected failure, e.g. a
+	// content-hash mismatch).
+	RegistrationProblemType string `json:"registrationProblemType,omitempty"`
+
+	// RegistrationNextRetryAt is when the retry loop will next attempt
+	// registration, set only when RegistrationState is "pending".
+	RegistrationNextRetryAt time.Time `json:"registrationNextRetryAt,omitempty"`
+}
+
+// RenderFPPConnectHeldEvent is one entry in FC2's bounded evidence log,
+// inside [RenderPayload.FPPConnectHeldEvents]. Kind is an open vocabulary
+// (this schema's standing "clients ignore what they don't know"
+// convention, ADR-020), currently one of: "unknown" and "ambiguous" (a
+// POST /api/playlist/{name} whose name matched no show, or matched more
+// than one), "show-id-not-pushed" (the name matched exactly one show by
+// display name, but that show's config object id has not been pushed
+// yet), and "too-large", "dir-full", "disk-full", "gap",
+// "length-mismatch", "bad-name", and "bad-dir" (a refused upload chunk,
+// ADR-044 decision 4).
+type RenderFPPConnectHeldEvent struct {
+	Kind string `json:"kind"`
+
+	// Name is the playlist name for a "unknown"/"ambiguous" event, or the
+	// attempted Upload-Name for a refused-upload event.
+	Name string `json:"name"`
+
+	// Dir is the attempted upload directory, set only for a refused-
+	// upload event.
+	Dir string `json:"dir,omitempty"`
+
+	// Reason is the human-readable refusal text, set only for a refused-
+	// upload event.
+	Reason string `json:"reason,omitempty"`
+
+	// Entries is the set of file names (sequenceName/mediaName) the
+	// posted playlist body named, set only for "unknown"/"ambiguous", and
+	// capped independently of this whole event log's own length (review
+	// round 3 finding 2: a single POST /api/playlist/{name} body, up to 1
+	// MiB with no per-entry count limit, could otherwise name tens of
+	// thousands of distinct values and carry every one of them onto every
+	// render report forever). EntriesTruncated states how many were cut.
+	Entries []string `json:"entries,omitempty"`
+
+	// EntriesTruncated is how many additional names the posted body
+	// carried beyond what Entries kept, 0 when nothing was cut.
+	EntriesTruncated int `json:"entriesTruncated,omitempty"`
+
+	// MatchCount is how many times Name occurred in the node's show name
+	// list, set only for "ambiguous".
+	MatchCount int `json:"matchCount,omitempty"`
+
+	At time.Time `json:"at"`
 }
 
 // Validate enforces: at most [maxRenderSurfaces] entries, every SurfaceID
@@ -979,6 +1208,18 @@ func (p RenderPayload) Validate() error {
 			return fmt.Errorf("%w: surfaces[%d].show and generation must be both empty/zero or both set",
 				ErrPayloadMissingField, i)
 		}
+	}
+	// These two length caps are enforced even though neither field is
+	// required (see FPPConnectHeld's own doc comment): a nil or short
+	// slice always passes trivially, so this never rejects a payload
+	// built before either field existed, only one that is genuinely too
+	// large to be safe regardless of when the field was introduced
+	// (review round 3 finding 2).
+	if len(p.FPPConnectHeld) > maxRenderHeldFiles {
+		return fmt.Errorf("%w: %d fppConnectHeld entries, max %d", ErrPayloadTooLarge, len(p.FPPConnectHeld), maxRenderHeldFiles)
+	}
+	if len(p.FPPConnectHeldEvents) > maxRenderHeldEvents {
+		return fmt.Errorf("%w: %d fppConnectHeldEvents entries, max %d", ErrPayloadTooLarge, len(p.FPPConnectHeldEvents), maxRenderHeldEvents)
 	}
 	return nil
 }

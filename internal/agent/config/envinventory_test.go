@@ -56,6 +56,10 @@ var agentConfigEnvVars = map[string]string{
 		"Config.MultiSyncListenAddr defaults to pkg/multisync's own default",
 	"SHOWMESH_MULTISYNC_INTERFACE": "restricts the MultiSync multicast group join to one named interface; " +
 		"Config.MultiSyncInterface",
+	"SHOWMESH_FPPCONNECT_LISTEN_ADDR": "the local host:port the render node's FPP Connect HTTP compatibility " +
+		"listener binds, default \":80\" because xLights hardcodes port 80 in both the discovery and upload " +
+		"URLs it builds (RES-003 section 10.4); a bind address must be known before the process starts " +
+		"(ADR-044 decision 5, ADR-039 decision 9); Config.FPPConnectListenAddr",
 	"SHOWMESH_RENDER_DIAGNOSTIC_SURFACE": "names the node-local diagnostic idle surface, empty (the default) " +
 		"disabling it; DiagnosticSurface's own doc comment records why the owner's ruling on diagnostic idle " +
 		"output makes this node-local start-time configuration rather than a coordinator-delivered setting",

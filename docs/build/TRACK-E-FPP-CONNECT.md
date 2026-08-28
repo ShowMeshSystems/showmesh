@@ -61,6 +61,525 @@ Every item below was an open owner decision when this document was written on 20
 - **Universe-output endpoints and the models dropdown** (§9.6): per-target dropdowns defaulting to "None", serving FPP-as-pixel-controller deployments. A render node is not one. **The playlist endpoints are no longer deferred**: RES-003 §10.6 found that the playlist dropdown is the only binding signal xLights' existing UI can carry, so FC1 and FC2 serve them deliberately.
 - **The `GET /` HTML-sniffing fallback**: unexamined upstream behaviour, avoided entirely by serving `multiSyncSystems` correctly.
 
+## Listener surface
+
+FC1's build, as specified and tested (ADR-044 decision 2: this section, not
+`api/openapi.yaml`, is this listener's specification). The listener binds
+`SHOWMESH_FPPCONNECT_LISTEN_ADDR` (default `:80`; ADR-044 decision 5) and
+serves exactly four `GET` routes (`HEAD` is also served, with no body, per
+`net/http`'s own handling). Anything else, including a known path with the
+wrong method, is 404: ADR-044 decision 1 makes everything outside the four
+routes 404, so a wrong method never gets `http.ServeMux`'s own 405-plus-
+`Allow`-header answer. Routing does not use `http.ServeMux` at all, because
+its automatic path cleaning would 301-redirect a dirty path (a doubled
+slash, a literal `..` segment) with an HTML body before any pattern is even
+considered; this listener matches the escaped path itself so that path is
+structurally unreachable. The fourth route's `{name}` is additionally
+refused, before the show-name check, if it contains `/`, `\`, a NUL byte, or
+is exactly `..`: FC2's upload receiver reuses this same string near the
+filesystem.
+
+- **`GET /api/system/info`**: a JSON object with `uuid` (UUIDv5 of the node
+  id under a fixed ShowMesh namespace UUID, stable across restarts and
+  identical on every node sharing a node id), `HostName` (the node id),
+  `Version`/`majorVersion`/`minorVersion` (`internal/fppconnect`'s
+  `AdvertisedVersion`/`AdvertisedVersionMajor`/`AdvertisedVersionMinor`),
+  `Mode` (`AdvertisedMode`, `"player"`), `typeId` (`127`, i.e.
+  `multisync.SystemTypeShowMesh`), `channelRanges` (the holder's advertised
+  string, key omitted entirely when it is empty, never `""`), and
+  `Platform`/`Variant` (`"ShowMesh"`).
+- **`GET /api/fppd/multiSyncSystems`**: `{"systems":[<one self-entry>]}`. The
+  entry carries `address` (the local IP of the connection the request
+  arrived on, never a wildcard bind address and never `127.0.0.1` unless
+  that is genuinely what it arrived on), `hostname`, `fppMode`/
+  `fppModeString` (`multisync.PingModePlayer` / `"player"`), `version`/
+  `majorVersion`/`minorVersion`, `type`/`typeId` (`"ShowMesh"` / `127`),
+  `uuid`, `channelRanges` (same omission rule as system info), and `local:
+  true`.
+- **`GET /api/playlists`**: a bare JSON array of the holder's show names,
+  `200`, `[]` when there are none. Never an object.
+- **`GET /api/playlist/{name}`**: `{name}` is percent-decoded the way FPP
+  decodes it (segment-by-segment percent-decoding; a literal `+` is never
+  treated as a space). A name on the holder's show list gets `{"name":
+  <name>, "mainPlaylist": [], "leadIn": [], "leadOut": [], "playlistInfo":
+  {"total_duration": 0, "total_items": 0}}`; FC2's upload receiver is what
+  populates `mainPlaylist`. Any other name is 404.
+- **Everything else**: 404, a short plain-text body, never HTML.
+
+**Disabled behaviour.** While the pushed `fppconnect.settings.enabled` flag
+is false, every route above answers 404 and the listener's status reports
+"disabled by configuration." The socket stays bound throughout, so the next
+enable takes effect with no restart. `fppConnectStateView.Enabled` reads this
+flag from the holder the coordinator's `fppconnect.configure` push
+(`internal/agent/fppconnectops.go`) applies, and reports `true` (enabled)
+before the coordinator has ever pushed settings, matching the coordinator's
+own `resolveFPPConnectSettings` default.
+
+**Bind-failure behaviour.** A bind failure (most commonly a node without
+`CAP_NET_BIND_SERVICE` trying to bind `:80`) never stops the agent. It is
+recorded the way `multiSyncStatus` records a MultiSync bind failure, with
+the reason text naming the address, and carried on the same
+`showmesh.node.render/v1` payload MultiSync's own bind status is carried
+on: `fppConnectListening`/`fppConnectReason`/`fppConnectObservedAt` sit
+alongside `multiSyncListening`/`multiSyncReason`/`multiSyncObservedAt` in
+the render report. No `node.fppconnect.*` collector signal or API field
+exists yet to surface this to an operator the way the coordinator surfaces
+other node evidence; that is a follow-up, not this seam's scope. A bind
+failure never falls back to a different port: xLights only ever contacts
+port 80.
+
+**Environment.** `SHOWMESH_FPPCONNECT_LISTEN_ADDR` is the only environment
+variable this feature adds (ADR-044 decision 5), allow-listed under ADR-039
+decision 9 because a bind address must be known before the process starts.
+
+**FC2's addition: the chunked upload and playlist bind routes.** Built and
+tested as specified below (`internal/agent/fppconnectupload.go`'s HTTP
+framing over `internal/agent/fppconnectheld.go`'s store). These two routes
+never pass through the three fixed routes' small (4 KiB)
+`fppConnectMaxBodyBytes` cap (`GET /api/playlist/{name}` does not either:
+`route()` matches it, like the file and playlist-bind routes, ahead of the
+fixed-route switch that cap wraps); each bounds its own, much larger, body.
+
+**Per-route read and write deadlines (review round 1 finding 4, corrected
+by review round 3 findings 1 and 8).** Each route sets its own read
+deadline via `http.ResponseController.SetReadDeadline`
+(`fppConnectSetReadDeadline`): `fppConnectDiscoveryReadDeadline` (10s) on
+the three fixed discovery routes (`GET /api/system/info`,
+`GET /api/fppd/multiSyncSystems`, `GET /api/playlists`) and the two
+playlist routes (`GET`/`POST /api/playlist/{name}`, review round 5 finding
+6 correcting an earlier count that put the playlist `GET` in both groups:
+`routeFixed`'s own switch dispatches only the first three, never
+`/api/playlist/{name}`, which `route()` matches ahead of it and sends to
+the shared playlist dispatcher instead, alongside its `POST`),
+`fppConnectFileReadDeadline` (10 minutes, generous rather than idle-based)
+on the file PATCH route alone. The server-wide `ReadTimeout` is not 0: it
+is `fppConnectServerReadTimeoutFloor` (15 minutes), a generous floor kept
+under those tighter per-route deadlines in case a future `ResponseWriter`
+wrapper's controller does not support `SetReadDeadline` at all (round 3
+finding 8). `ReadHeaderTimeout` (5s) is unchanged and still bounds a
+client that never finishes sending headers.
+
+**`WriteTimeout` was NOT harmless, and round 1's own claim that it was is
+wrong** (round 3 finding 1, CONFIRMED and blocking). `net/http` arms a
+nonzero server-wide `WriteTimeout`'s deadline on the connection as soon as
+headers are read, before the handler or its body reads ever run, and that
+deadline covers the whole rest of the request-response cycle on that
+connection, not merely the final `Write()` calls the name suggests. With
+`fppConnectFileReadDeadline` (10 minutes) far longer than the old fixed
+10s `WriteTimeout`, a real chunk that took more than 10s to arrive had
+that armed deadline expire mid-read: the client got an EOF instead of a
+response, and xLights retried the same chunk into this listener's gap
+branch, killing the upload with a 409 it never sent a byte wrong to
+deserve. Fixed by removing the server-wide `WriteTimeout` (now 0) and
+setting a write deadline (`fppConnectWriteDeadline`, 10s) per route via
+`fppConnectSetWriteDeadline`, only once a route is actually about to write
+its response: the three discovery routes and the no-op file-POST route set
+it immediately (nothing before them ever reads a body); the file PATCH
+route sets it only after `WriteChunk` returns; the two playlist routes
+each set it individually right before each of their own writes, not once
+up front, since the POST half reads its own body first (round 4 finding
+4: an earlier version of this fix set it once at the top of the shared
+playlist dispatcher, ahead of that read, exactly the ordering
+`fppConnectSetWriteDeadline`'s own doc comment forbids, even with that
+read already bounded by its own read deadline). The three write paths
+that run ahead of routing altogether (the disabled-listener 404, the
+fixed-routes' oversized-body 404, and the file route's wrong-method 404)
+each set their own write deadline too (round 4 finding 3), since none of
+them passes through any route's own deadline-setting code. Proven by
+`TestFPPConnectUploadDrippedOverTenSeconds`, which drips a body over a
+real `http.Server` built through `newFPPConnectProductionServer`, the
+same constructor `runFPPConnectHTTPListener` itself calls (round 4
+finding 6, so a regression that re-adds a server-wide `WriteTimeout`
+fails this test directly rather than only a hand-copied literal), for
+longer than the old fixed timeout.
+
+**The read and write deadlines are not symmetric, and that is accepted,
+not an oversight** (round 4 finding 6). `fppConnectServerReadTimeoutFloor`
+(15 minutes) exists because a `ResponseWriter` whose controller cannot set
+a read deadline would otherwise leave a body read entirely unbounded, and
+a hostile or merely slow client can hold a connection open indefinitely by
+never finishing a send. The write side has no equivalent floor:
+`WriteTimeout` is `0` because a nonzero server-wide write timeout is
+exactly the bug round 3 removed, and this listener never waits on further
+client input to produce a response, so a write has nothing analogous to
+wait on indefinitely. A `SetWriteDeadline` failure is logged the same way
+a read-deadline failure is; after that, a truly dead connection is still
+torn down by the kernel's own TCP retransmission timeout regardless of any
+deadline this listener sets.
+
+- **`PATCH /api/file/{dir}`**: the real chunked-upload transport (RES-003
+  section 9.4). Headers `Upload-Offset`, `Upload-Length`, `Upload-Name` are
+  all required; the body is one chunk, capped at 32 MiB
+  (`fppConnectMaxChunkBytes`, headroom over xLights' own 16 MiB chunks, not
+  an operator-configured cap). `{dir}` is matched as everything after the
+  fixed prefix, including a literal `/`, so the directory allowlist check
+  below is what turns a malformed segment into a 403 rather than routing
+  matching it away as an unmapped 404.
+- **`POST /api/file/{dir}`**: the documented initiating call xLights never
+  sends. Accepted as FPP's own handler treats it, a no-op returning `200`
+  with a JSON body carrying an opaque id (`{"id": "<uuid>"}`), after the
+  same directory allowlist check PATCH applies.
+- **`POST /api/playlist/{name}`**: binds files to a show (ADR-044 decision
+  8). Reads only `mainPlaylist[].sequenceName` and `mainPlaylist[].mediaName`
+  from the body; every other field of FPP's playlist object is ignored.
+  Always answers `200` regardless of outcome, matching RES-003 section
+  10.6's finding that xLights never inspects this call's status. `{name}`
+  is validated by the same `fppConnectValidPlaylistName` check GET applies
+  (a path-shaped name is a 404, before any show-name membership check).
+- **`GET /api/playlist/{name}`** (FC1's route, FC2's data): `mainPlaylist`
+  is no longer always empty. It lists one entry per held file currently
+  bound to `name`, in RES-003 section 10.6's "without media" shape
+  (`{"type":"sequence","enabled":1,"playOnce":0,"sequenceName":"<name>","duration":0}`),
+  sorted by file name. `duration` is always `0`: this seam parses no FSEQ
+  or media metadata, and xLights' own read-modify-write only checks
+  `sequenceName` presence, never `duration`, so the round trip holds
+  without it. This is what makes xLights' GET-then-append merge
+  idempotent across the up-to-twice-per-target POST RES-003 records.
+  **Review round 1 finding 10, stated here rather than only in code: a
+  held file from `music/` or `videos/` gets exactly this same shape.**
+  RES-003 section 10.6 also documents a "with media" entry pairing one
+  sequence with one media file
+  (`{"type":"both",...,"sequenceName":"<seq>","mediaName":"<media>",...}`),
+  which this store never emits: a bound sequence file and a bound media
+  file are two independent held records that happen to share a `show`,
+  not one paired binding this store tracks together, so there is no
+  `mediaName` to attach to either one's entry. A held `Halloween.mp3` in
+  `music/` therefore comes back as `{"type":"sequence",...,
+  "sequenceName":"Halloween.mp3",...}`, not paired with any sequence.
+  This does not break xLights' round trip (it only ever checks whether a
+  `sequenceName` it already posted is present, never `type` or pairing),
+  but a future reader of this endpoint that expects real pairing
+  information will not find it here.
+
+**The three bounds (ADR-044 decision 4), as built:**
+
+1. **Directory allowlist.** Exactly `sequences`, `music`, `videos`
+   (`fppConnectAllowedDirs`). Anything else, including `effects`, a
+   `../`-prefixed segment, an empty segment, or a segment containing `/`,
+   is refused with `403` and a plain-text reason naming the directory,
+   before either PATCH or POST writes anything. Checked for both methods,
+   not just PATCH, even though POST never writes: consistency, not a
+   requirement POST's no-op behavior demands.
+2. **Upload-Name never escapes its directory.** Validated by the same
+   `fppConnectValidPlaylistName` check the fourth route's `{name}` already
+   used (no `/`, `\`, NUL byte, or `..` segment, no name that
+   `filepath.Clean`s down to `.` or `..` (review round 1 finding 9: a bare
+   `.` passed every other check and then failed the rename into the held
+   area with a `500`), non-empty), reused rather than reimplemented: both
+   are "a string this listener writes near the filesystem." A violation is
+   `403`.
+3. **Per-file and total asset-directory byte caps**
+   (`fppConnectHeldStore.WriteChunk`). `Upload-Length` over
+   `fppconnect.settings.maxFileBytes` is refused at offset `0` (the first
+   chunk of a fresh attempt; offset `0` always starts fresh) with `413`
+   naming both numbers. An accumulated total that would exceed either the
+   declared `Upload-Length` or `maxFileBytes` is refused the same way on
+   any later chunk, discarding the fragment. The bytes already under
+   `AssetDir` (assets, held files, staging, checked by walking the whole
+   tree), **plus every other in-progress upload's own still-outstanding
+   remainder** (review round 1 finding 5: checking only bytes already on
+   disk let two uploads that each individually fit under the cap pass
+   independently and together exceed it, since neither's check saw the
+   other's undelivered bytes), plus the declared `Upload-Length` exceeding
+   `fppconnect.settings.maxAssetDirBytes` is refused with `507` naming
+   the numbers, checked once, at offset `0`. Both refusals remove the
+   staging fragment and leave every existing file untouched.
+
+**Disk-full outcome.** `ENOSPC` while writing a chunk is classified
+distinctly from a generic write failure: `507`, a reason naming the disk
+as full, the staging fragment removed, nothing registered. Injected in
+tests through `fppConnectChunkWriter`, the small interface
+`fppConnectHeldStore.WriteChunk` streams through (a chunk is read directly
+off the request body and copied into the positioned staging file via
+`io.Copy`/`io.NewOffsetWriter`, review round 1 finding 3: never buffered
+whole in memory the way an earlier `io.ReadAll` version did) rather than
+by filling a real disk.
+
+**Refused-upload evidence (review round 1 finding 2).** ADR-044 decision 4
+says exceeding a bound, or exhausting the disk, "is reported as evidence."
+The original build returned a reason to the HTTP caller and persisted
+nothing. Every refusal now appends one `fppConnectEvent` to the same
+bounded evidence log unknown/ambiguous playlist posts use (below), with a
+`kind` of `too-large`, `dir-full`, `disk-full`, `gap`, `length-mismatch`
+(review round 3 finding 5), `bad-name`, or `bad-dir`, the attempted
+`dir`/`name`, and the refusal reason text. See "Reporting" below for how
+this reaches an operator.
+
+**Every event's own Name, Reason, and Entries strings are bounded at
+record time too (review round 4 finding 1).** `fppConnectMaxEventEntries`
+(32) bounds how MANY names one event carries, not how large any one of
+them is: an `Upload-Name` header can itself be up to `fppConnectMaxHeaderBytes`
+(16 KiB), a refusal's `Reason` often echoes that name straight back inside
+a formatted sentence, and a single playlist entry has no length limit of
+its own short of `fppConnectMaxPlaylistBodyBytes` (1 MiB): a single
+outsized value in any of those three fields could already carry one event,
+and so the whole render report, past the wire envelope limit. Every event
+Name and Reason, and every surviving `Entries` string, is capped to
+`fppConnectMaxEventStringBytes` (256 bytes, with a trailing truncation
+marker) the moment it is appended (`appendEventLocked`), the one
+checkpoint every event passes through regardless of kind. `load()`
+re-applies the identical bound to whatever a persisted index already
+carries (review round 4 finding 2), matching how it already re-applies the
+pending and event list caps just below.
+
+**Held area layout**, under `<AssetDir>/fppconnect-uploads/`:
+
+```
+staging/<dir>/<Upload-Name>.partial   in-progress bytes
+held/<dir>/<Upload-Name>              assembled bytes, renamed in only after hashing
+index.json                            every held record, pending binding, and evidence event
+```
+
+An in-progress upload's offset, running SHA-256, and asset-directory-cap
+reservation live only in memory (`fppConnectHeldStore.inFlight`), not as a
+per-chunk on-disk sidecar: review round 1 findings 3 and 4 found the
+original sidecar file added a JSON read-modify-write on every chunk for
+state a restart already discards regardless (the boot sweep below), and
+found completion re-hashing the whole finished file from disk risked
+exceeding the listener's write timeout on a large upload. The hash is now
+computed incrementally as each chunk streams through
+(`io.TeeReader`/`hash.Hash`), so completion only finalizes an already-
+running sum.
+
+Assembly is offset-gated: a chunk is written only when its `Upload-Offset`
+equals the bytes already received for that name (tracked in memory, above);
+a gap or an overlap is `409`, and the fragment is discarded. A later
+chunk's `Upload-Length` must equal the value declared at offset 0 or it is
+refused the same way, `409` with a `length-mismatch` event (review round 3
+finding 5): trusting a changed value let `bytesReceived` grow past the
+reservation frozen at offset 0, driving that upload's own remainder
+negative and manufacturing free asset-directory-cap headroom for a
+concurrent upload; every reservation is also clamped at zero as defense in
+depth regardless. Offset `0` truncates the staging file as it opens
+(review round 1 finding 7: the prior code discarded a stale fragment only
+via a best-effort `os.Remove` whose error was ignored, then reopened
+without `O_TRUNC`, so a failed Remove could leave a longer previous
+attempt's tail bytes past the new, shorter upload's end); `staging/` is
+also swept at boot (`sweepFPPConnectUploadStaging`, called from `agent.go`
+alongside `sweepAssetStaging`), mirroring `internal/agent/assets.go`'s
+identical discipline; `held/` and `index.json` are untouched by that
+sweep. An in-flight entry with no chunk in longer than
+`fppConnectInFlightTTL` (three times `fppConnectFileReadDeadline`, so 30
+minutes) is swept the same way, at the top of every subsequent
+`WriteChunk` call, so an abandoned upload's reservation does not survive
+for the rest of the process's life (review round 3 finding 4). On
+completion (accumulated bytes equal `Upload-Length`), the in-memory hash
+is finalized (`sha256:<hex>`, the store's identity per ADR-028), then the
+staging file is renamed into `held/`; any failure before that rename
+removes the staging fragment and nothing is registered.
+
+**The store's mutex is held only for validation and for reconciling a
+chunk's result, never across the network read itself (review round 3
+finding 3).** The original single-lock `WriteChunk` held it for the whole
+copy, so one slow client blocked `Held()`/`Events()` (and so render report
+publication, and every other upload or playlist request) for up to
+`fppConnectFileReadDeadline`. `prepareChunkLocked` validates under lock
+and marks the in-flight entry `writing` before releasing it; the unlocked
+copy runs; `finishChunkLocked` retakes the lock to reconcile. A second
+request for the SAME key while one is `writing` is refused (`gap`) rather
+than allowed to race it; a request for any other key is unaffected the
+whole time. A deferred cleanup resets `writing` back to false even if the
+unlocked copy panics (review round 4 finding 5): net/http recovers a
+handler panic per connection, so without this the owning goroutine would
+never reach `finishChunkLocked`, and the entry would stay refused as
+"already in progress" forever, including against a fresh offset-0 retry.
+As a second, independent safety net, the idle sweep also reclaims an
+entry still marked `writing` once it is older than
+`fppConnectStuckWritingTTL` (three times `fppConnectInFlightTTL`, so 90
+minutes): well beyond how long any legitimate single chunk transfer can
+possibly still be in progress, so it never reclaims one that is merely
+slow.
+
+**Pending bindings are bounded too (review round 1 finding 6).** A single
+`POST /api/playlist/{name}` body can name tens of thousands of files
+(`fppConnectMaxPlaylistBodyBytes` is 1 MiB, with no per-entry count limit)
+that this node has not yet received; every one becomes a pending binding.
+`fppConnectHeldStore.pending` is capped at `fppConnectMaxPending` (500)
+the same way the evidence log is capped at `fppConnectMaxEvents` (50):
+oldest evicted first, order tracked and persisted alongside the map so
+eviction survives a restart correctly. Each event's own `Entries` field is
+separately capped at `fppConnectMaxEventEntries` (32, with an
+`entriesTruncated` count) at the moment it is recorded, independent of how
+many events the log itself holds (review round 3 finding 2): the two caps
+bound two different things (how many distinct names one event carries,
+versus how many events exist at all), and a single oversized playlist post
+could otherwise defeat the log's own bound by inflating just one entry
+without limit. `load()` re-applies both the pending and event caps to
+whatever was just read from disk (review round 3 finding 9): the two
+`addPendingLocked`/`appendEventLocked` helpers only ever enforce a cap
+going forward, so loading is the one path that can hand this store a
+collection already over it (a persisted index older than a cap, or edited
+outside this store's own writes) and must trim on the way in.
+
+**Binding rules, as built (ADR-044 decision 8):** on `POST
+/api/playlist/{name}`, every held file (in any directory) whose name
+appears as a `sequenceName` or `mediaName` in the body is bound to `name`,
+recording the file name stem as its logical sequence; a name in the body
+that matches no held file yet is remembered as a pending binding so a file
+completing afterwards binds on completion. `name` matching none of the
+holder's show names is an unknown-playlist evidence event (bound nothing,
+still `200`); `name` occurring more than once in the holder's show name
+list (two shows sharing a display name, the only ambiguity this listener
+can detect without a show id) is an ambiguous-playlist evidence event
+(bound nothing, still `200`, naming the match count). On completion of a
+file with no binding already recorded for it: a pending binding from an
+earlier POST wins first; otherwise a prior record for the same file name
+that was already bound keeps that binding (a re-uploaded file is not
+silently unbound); otherwise the active show's tri-state decides,
+distinguishing "never pushed" from "pushed null" in the record's
+`unboundReason` when neither yields a bound show. An unbound held file is
+a first-class, visible state (`fppConnectHeldRecord.Bound == false`,
+`UnboundReason` naming why), never deleted and never guessed.
+
+**Reporting.** Review round 1 finding 1 caught this as a gap in the
+original build: `Held()`, `Events()`, and `SetOnHeld` existed with no
+non-test caller, so ADR-044 decision 8's "reported as an unbound held file
+the operator can claim" had nowhere to actually reach an operator, since
+xLights never inspects any of these calls' response status. Fixed in this
+seam, not deferred to FC3: `internal/agent/renderreport.go` reads
+`fcHeld.Held()` and `fcHeld.Events()` on every render report tick and
+publishes them as `fppConnectHeldCount`/`fppConnectHeld` (every currently
+held file, bound or not, with its `unboundReason` when unbound) and
+`fppConnectHeldEvents` (the bounded evidence log: `unknown`, `ambiguous`,
+and `show-id-not-pushed` playlist posts (review round 2 finding D: the
+name matched exactly one show by display name, but that show's config
+object id has not been pushed yet), and refused uploads: `too-large`,
+`dir-full`, `disk-full`, `gap`, `length-mismatch`, `bad-name`, `bad-dir`,
+ADR-044 decision 4) on the same `showmesh.node.render/v1` payload the listener's
+own bind status already travels on. Neither list is required as present
+by `RenderPayload.Validate` (matching `fppConnectListening`'s identical
+additive-compatibility reasoning: both fields are added after
+`SchemaNodeRenderV1` first shipped), but their LENGTH is capped there
+(`maxRenderHeldFiles` 256, `maxRenderHeldEvents` 64, review round 3
+finding 2): `mqttproto.NewRenderEnvelope` calls `Validate` itself before
+marshalling, so an unbounded list would not merely bloat one publish, it
+would make Validate refuse the payload and cancel every future publish
+outright. `publishOneRenderReport` truncates to those same caps BEFORE
+building the payload, the way `truncateForWire` already did for a
+surface's `lastStderr`: for held files, unbound records are kept first
+(the operator-actionable ones ADR-044 decision 8 exists to surface, kept
+ahead of the ones already resolved when a cut has to happen at all), with
+`fppConnectHeldCount` always stating the true total independent of any
+truncation; for events, the most recent are kept. No `node.fppconnect.*`
+collector signal or coordinator API field exists yet to surface this list
+the way the coordinator surfaces other node evidence (matching the
+bind-status gap already noted above); that remains a follow-up, and is
+listed as an acceptance gap on this seam's own pull request.
+
+**A final byte-size check backstops every cap above (review round 4
+finding 1).** Each cap so far bounds one field's own size (how many held
+files, how many events, how many entries one event carries, how long one
+string is), never the report as a whole: a report carrying many events or
+many held records, each individually within its own per-field caps, could
+still exceed the envelope once combined with everything else the report
+carries. `shrinkRenderPayloadToFitEnvelope` measures the payload's actual
+serialized size against `renderReportEnvelopeSizeBudget` (240 KiB, kept
+under `mqttproto`'s own 256 KiB envelope limit for the envelope wrapper's
+own overhead) immediately BEFORE calling `NewRenderEnvelope`, dropping the
+oldest event, then the lowest-priority held record, until it fits, or
+until nothing is left to drop.
+
+**FC3's hook.** `fppConnectHeldStore.SetOnHeld(func(fppConnectHeldRecord))`
+registers a callback invoked whenever a record is created or its binding
+changes (upload completion and every successful bind); `Held() []
+fppConnectHeldRecord` (the same method the render report above reads) lists
+every currently held record, for a registration seam that starts after
+files already exist. This hook is a separate concern from the reporting
+paragraph above: it is how FC3 learns a file is ready to register with the
+coordinator's asset store, not how an operator learns a file exists. Both
+are internal to `internal/agent`; FC3 wires the callback from `agent.go`.
+
+**FC3, as built.** `internal/agent/fppconnectregister.go`'s registrar wires
+`SetOnHeld` and walks `Held()` once at startup, after FC2's own sweep: a
+registered, skipped, or failed record is left alone, a bound record in any
+other state enters the retry loop, and an unbound one stays unbound (never
+even considered). `OnHeld` and the boot walk both go through one `startLoop`
+gate keyed by `dir/name`, so xLights' documented up-to-twice-per-target
+playlist POST re-firing `OnHeld` for a record a loop already owns never
+starts a second one; every loop iteration re-reads the record's current
+state before acting, rather than trust the copy it was started or last
+retried with.
+
+Only `sequences` uploads register: `mediaType` `fseq`, `show` the bound
+show's config object id (never its display name: the assets API validates
+`show` against the id, review round 1 finding 1), `sequence` the file name
+stem slugified to that same API's own id rule (lowercased, every run of
+non-`[a-z0-9]` characters collapsed to one hyphen, trimmed and truncated to
+64 characters, review round 1 finding 2; an empty result fails registration
+with no request ever sent), `targetKind` `node`, `target` this node id,
+`file` streamed last from the held file, never buffered whole, and the
+request built before the streaming writer goroutine ever starts so a
+request-build failure cannot leave that goroutine blocked forever on an
+unread pipe. Both the show id and the slug are resolved once, at bind time
+in `fppconnectheld.go`, and stored on the held record so the render report
+and the registration request always agree; a display name that no longer
+resolves to exactly one show id leaves the file unbound with its own
+reason, the same as any other unresolved binding. A `music` or `videos`
+upload is held and bound exactly as FC2 already does, but its record's
+`registrationState` is `skipped` and says so; nothing from those two
+directories ever reaches `POST /api/v1/assets`. A `200` is verified against
+FC2's own content hash before it is trusted: a mismatch is recorded as a
+failure, never as a registration. `400`, `401`, `403`, `405`, and `413` are
+recorded as failures and never retried (none of their causes changes on its
+own); `500` and `507` retry with capped exponential backoff (10s, doubling,
+capped at 5 minutes), as does a transport error, and a fresh
+`fppconnect.configure` push wakes every retry loop immediately, since the
+operator may have just fixed the coordinator base URL or the coordinator's
+reachability. A successful registration signals the asset inventory to
+republish out of cadence, reusing `command.go`'s `assetFetchTrigger`.
+Every `registerLoop` goroutine is counted on the registrar's own
+`sync.WaitGroup`, joined from `agent.go`'s clean-shutdown path like every
+other long-lived loop there.
+
+**`coordinatorBaseUrl`.** The agent has no configured coordinator base URL
+of its own (ADR-044 decision 5 allows exactly one environment variable,
+already spent by `SHOWMESH_FPPCONNECT_LISTEN_ADDR`). Instead
+`internal/coordinator/fppconnectpush`'s `fppconnect.configure` push carries
+one additive field, `coordinatorBaseUrl`, resolved from
+`assets.settings.contentBaseUrl` the same way
+`internal/coordinator/assetsync.Service.fetchURL` resolves it, including
+its own default (`""`, unconfigured) and its own revision tuple in the
+push's idempotency fingerprint. A write to `assets.settings` is this
+package's fifth push trigger, alongside `show`, `show.surface`,
+`show.active`, and `fppconnect.settings`: it fans out to every inventory
+node immediately, the identical best-effort push every other trigger here
+uses, so a changed `contentBaseUrl` reaches a node without waiting on its
+next hello. `showmesh.node.fppconnect.config/v1` is unchanged: an added
+optional field is wire-compatible, and the agent decodes its absence as
+`""`, identical to an explicit empty push. An empty `coordinatorBaseUrl`,
+whether never pushed or pushed empty, leaves every bound `sequences`
+record pending with the reason "coordinator base URL not configured" and
+sends no request at all: a visible operator problem, never a silent stall.
+
+**`shows`.** A second additive field alongside `coordinatorBaseUrl`: every
+show's config object id paired with its display name, sorted by id.
+`showNames` is unchanged and remains what `GET /api/playlists` serves; a
+node resolves a display name to its id through `shows` only when FC2's own
+binding needs to send that id onward to the assets API. A name shared by
+more than one show resolves to no id at all, the identical ambiguity
+`showNames`' own duplicate count already detects.
+
+**Credential scope.** `SHOWMESH_AGENT_API_TOKEN` (ADR-044, this document's
+own FC3 paragraph above) is the one token this registrar sends. It was
+already documented as the `asset.fetch` read credential
+(`internal/agent/config/config.go`); registration is a second, write use of
+the identical token, gated by `asset:write` rather than `node:read`. A node
+that ever receives an FPP Connect upload needs a token carrying both
+scopes, or every registration attempt fails with a permanent `403`. Whether
+a node principal should instead carry a narrower, write-scoped credential
+of its own is an open owner question, not resolved by this seam; see the
+acceptance gap on this seam's own pull request.
+
+**Reporting.** `registrationState` (`""`, `skipped`, `pending`,
+`registered`, or `failed`), `registrationAssetId`, `registrationRolledBack`,
+`registrationReason`, `registrationProblemType`, and
+`registrationNextRetryAt` extend `fppConnectHeldRecord` and the render
+report's existing `fppConnectHeld` entries directly, rather than a second
+block: an unbound record's `registrationState` is always `""`, never
+`pending`, matching ADR-030 decision 5's "an interrupted upload registers
+nothing" extended to an unresolved binding. `showId` sits next to `show` on
+the same record and report entry.
+
 ## Acceptance criteria
 
 1. From an unmodified, shipping xLights on the owner's machine: a ShowMesh render node is discovered and listed in FPP Connect alongside real FPP targets, with no ShowMesh-side content claiming to be Falcon Player.

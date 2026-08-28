@@ -805,3 +805,15 @@ func TestUnknownValueStringers(t *testing.T) {
 		t.Errorf("combined PingMode.String() = %q, want %q", got, want)
 	}
 }
+
+// TestSystemTypeShowMesh pins SystemTypeShowMesh to 0x7f, the value ADR-044
+// decision 6 and RES-003 section 10.2 settled on (never SystemTypeOther's
+// 0xC0, which xLights rejects), and confirms String() names it.
+func TestSystemTypeShowMesh(t *testing.T) {
+	if got, want := SystemTypeShowMesh, SystemType(0x7f); got != want {
+		t.Errorf("SystemTypeShowMesh = 0x%02x, want 0x%02x", uint8(got), uint8(want))
+	}
+	if got, want := SystemTypeShowMesh.String(), "ShowMesh"; got != want {
+		t.Errorf("SystemTypeShowMesh.String() = %q, want %q", got, want)
+	}
+}
