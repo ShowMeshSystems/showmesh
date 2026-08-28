@@ -12,13 +12,13 @@ The reusable asset is the media clock and timeline, not any one playback path.
 
 ## Integration branch
 
-Built on `dev/clock-sync`, the way multi-node audio is built on `dev/multi-audio` and FPP Connect was built on `dev/fpp-connect`: seams merge to the integration branch with the usual gates and `main` stays the stable representation. The branch lands on `main` after the owner's hardware test of the seams it carries; nothing here is required for the show to run.
+Built on `dev/clock-sync`, the way multi-node audio is built on `dev/multi-audio` and FPP Connect was built on `dev/fpp-connect`: seams merge to the integration branch with the usual gates and `main` stays the stable representation. The branch lands on `main` through a fold pull request after the owner's hardware test of the seams it carries; nothing here is required for the show to run. `main` keeps moving during a hardware session and is merged into the integration branch, never the other way round by rebase.
 
 ## The ordering rule that will bite if ignored
 
 ADR-047 decision 6, restated as a build rule: **I1 (clock provider) and I2 (scheduled start) merge before I3 (AES67 receive) starts, and I3 merges before I4 (rate lock) is required.** The standby source is only synchronized if the node already holds the media clock, the schedule, and the measured stream offset. A build that takes the stream first produces a node that goes silent or jumps on failover. An orchestrator that finds I1 or I2 unmerged when I3 is proposed stops and says so on the track's working issue; it does not reorder.
 
-The second dependency is external to this track: I2 needs cue outputs to resolve to a target node (Track C's multi-node seam on `dev/multi-audio`), otherwise there is no second node to schedule. `dev/clock-sync` is cut from `main`; I1 does not need multi-audio, and I2 waits for `dev/multi-audio` to land on `main`, then `dev/clock-sync` rebases onto it.
+The second dependency is external to this track: I2 needs cue outputs to resolve to a target node (Track C's multi-node seam on `dev/multi-audio`), otherwise there is no second node to schedule. `dev/clock-sync` is cut from `main`; I1 does not need multi-audio, and I2 waits for `dev/multi-audio` to land on `main`, then `main` is merged into `dev/clock-sync`. A pushed integration branch is never rebased onto `main` ([HARDWARE-TEST-SESSION.md](../bench/HARDWARE-TEST-SESSION.md)); each lane merges `main` in before it starts and the fold to `main` is an ordinary pull request.
 
 ## Seams
 
