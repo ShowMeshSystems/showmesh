@@ -919,6 +919,16 @@ type SessionSnapshot struct {
 	GapReason     string
 	GapObservedAt time.Time
 
+	// RestoreAttempts, RestoreNextAttempt, and RestoreLastReason are
+	// internal/agent's own automatic restore-retry driver's status
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.restore.attempts/
+	// .next_attempt_ms/.last_reason) — meaningful only while this
+	// session has a restore queued ([Manager.sessionPendingRestore]),
+	// zero otherwise. See snapshotLocked's own gate.
+	RestoreAttempts    int
+	RestoreNextAttempt time.Duration
+	RestoreLastReason  string
+
 	// CollectedAt is when this snapshot's own fields were captured --
 	// distinct from ObservedAt, which is specifically Position's engine
 	// evidence time and is zero whenever PositionKnown is false. Always
@@ -957,6 +967,16 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 		LTCClaimState: s.ltcClaimState, LTCClaimReason: s.ltcClaimReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
 		CollectedAt: s.mgr.now(),
+	}
+
+	// Gated on m.pendingEngineRestore membership, not on s.state: this
+	// branch is cut independently of the sibling PR that changes what
+	// State itself reports for a pending restore, so it must not depend
+	// on a State value that PR alone introduces. Once both land, a
+	// pending session satisfies both this check and that PR's own
+	// State == RestorePending.
+	if s.mgr.sessionPendingRestore(s.id) {
+		snap.RestoreAttempts, snap.RestoreNextAttempt, snap.RestoreLastReason = s.mgr.RestoreRetryStatus(snap.CollectedAt)
 	}
 
 	if s.desired.SourceRole != nil {

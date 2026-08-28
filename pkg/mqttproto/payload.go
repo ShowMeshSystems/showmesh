@@ -1345,6 +1345,22 @@ type AudioSessionReport struct {
 	LTCClaimState  string `json:"ltcClaimState"`
 	LTCClaimReason string `json:"ltcClaimReason"`
 
+	// RestoreAttempts, RestoreNextAttemptMs, and RestoreLastReason are
+	// this node's own automatic restore-retry driver's status for this
+	// session (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.restore.attempts/.next_attempt_ms/.last_reason): how
+	// many automatic attempts it has made since this
+	// session's restore was last deferred or re-queued, a countdown in
+	// milliseconds to the next backed-off attempt (0 once the driver's
+	// own bounded schedule is exhausted or no attempt is scheduled), and
+	// why the most recent attempt did not build an engine.
+	// RestoreLastReason is required whenever RestoreAttempts is nonzero.
+	// All three are the zero value whenever this session has no restore
+	// currently queued.
+	RestoreAttempts      int64  `json:"restoreAttempts"`
+	RestoreNextAttemptMs int64  `json:"restoreNextAttemptMs"`
+	RestoreLastReason    string `json:"restoreLastReason"`
+
 	// ObservedAt is the engine's own evidence time for PositionMs, nil
 	// when PositionKnown is false. Never the coordinator's or this
 	// node's own receipt time (ADR-011).
@@ -1562,6 +1578,9 @@ func (p AudioPayload) Validate() error {
 		}
 		if sess.LTCClaimState == "refused" && sess.LTCClaimReason == "" {
 			return fmt.Errorf("%w: sessions[%d].ltcClaimReason (required whenever ltcClaimState is \"refused\")", ErrPayloadMissingField, i)
+		}
+		if sess.RestoreAttempts > 0 && sess.RestoreLastReason == "" {
+			return fmt.Errorf("%w: sessions[%d].restoreLastReason (required whenever restoreAttempts is nonzero)", ErrPayloadMissingField, i)
 		}
 	}
 	if p.ObservedAt == nil {

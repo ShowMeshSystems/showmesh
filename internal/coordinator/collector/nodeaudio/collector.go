@@ -367,6 +367,20 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		obs = append(obs, notCollected(res, SignalSessionLTCClaimReason, source, "session's LTC claim was not refused", rep.receivedAt))
 	}
 
+	if sess.RestoreAttempts > 0 {
+		obs = append(obs,
+			buildSessionValue(res, source, SignalSessionRestoreAttempts, sess.RestoreAttempts, sessionAt, rep),
+			buildSessionValue(res, source, SignalSessionRestoreNextAttemptMs, sess.RestoreNextAttemptMs, sessionAt, rep),
+			buildSessionValue(res, source, SignalSessionRestoreLastReason, sess.RestoreLastReason, sessionAt, rep),
+		)
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalSessionRestoreAttempts, source, "no restore is currently queued for this session", rep.receivedAt),
+			notCollected(res, SignalSessionRestoreNextAttemptMs, source, "no restore is currently queued for this session", rep.receivedAt),
+			notCollected(res, SignalSessionRestoreLastReason, source, "no restore is currently queued for this session", rep.receivedAt),
+		)
+	}
+
 	if sess.GapKnown {
 		obs = append(obs,
 			buildSessionValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),

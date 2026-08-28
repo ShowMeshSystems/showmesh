@@ -57,6 +57,18 @@ type Manager struct {
 	// no engine handle and no persisted Failed record to explain why.
 	pendingEngineRestore map[pkgaudio.SessionID]struct{}
 
+	// restoreRetryAttempts, restoreRetryNextAttemptAt, and
+	// restoreRetryLastReason are internal/agent's own automatic
+	// restore-retry driver's status, never written by this
+	// package itself — see restoreretry.go's
+	// SetRestoreRetryStatus/ClearRestoreRetryStatus and
+	// RestoreRetryStatus. A session reporting
+	// [pkgaudio.StateRestorePending] reads these back on its own
+	// snapshot.
+	restoreRetryAttempts      int
+	restoreRetryNextAttemptAt time.Time
+	restoreRetryLastReason    string
+
 	// rebindMu makes invalidate-Set-retry one atomic unit across
 	// concurrent RebindEngine calls. Two audio.node.configure commands
 	// delivered back to back produce genuinely concurrent calls (MQTT

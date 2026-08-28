@@ -179,7 +179,48 @@ func newAudioEngineRebuilder(ctx context.Context, assetDir string, switchable *a
 // SampleRate with real probe evidence after the outgoing engine closes.
 const validationSampleRate = 1
 
+// audioRebuildOutcome is what one [audioEngineRebuilder.rebuildResult]
+// call actually did — reported back to internal/agent's own automatic
+// restore-retry driver (audiorestoreretry.go) so it can tell an
+// attempt that genuinely ran the probe-and-build sequence apart from a
+// dropped, stale revision, and can report "why the last attempt did not
+// build an engine" (docs/build/IDENTIFIER-REGISTER.md
+// audio_session.restore.last_reason) without re-deriving it from a log
+// line.
+type audioRebuildOutcome struct {
+	// Attempted is false only when node.Revision was dropped as older
+	// than the one already bound. The retry driver replays the same,
+	// already-accepted binding on every automatic attempt, so this can
+	// only ever be false there if a genuinely newer binding raced in
+	// concurrently and won.
+	Attempted bool
+	// Available and Reason mirror the bound engine's own
+	// [audio.Engine.Available] at the moment this call bound it — Reason
+	// is populated whenever Available is false, and meaningless
+	// (untouched) when Attempted is false.
+	Available bool
+	Reason    string
+}
+
+// rebuild is the onNode callback [audioBinding] invokes for every
+// genuinely newer audio.node.configure delivery; it discards the
+// [audioRebuildOutcome] [rebuildResult] returns, since a coordinator-
+// pushed binding has nowhere to report it. See [rebuildResult]'s own doc
+// comment for the actual rebuild logic.
 func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
+	r.rebuildResult(node)
+}
+
+// rebuildResult is [rebuild]'s own body, returning what it actually did
+// so the automatic retry driver (audiorestoreretry.go), which calls this
+// directly instead of through the onNode callback, can decide
+// whether the attempt counts against its own bounded schedule and what
+// to report as the standing reason. Every ordering and behavior
+// guarantee in this method's own package doc comment (validate, rebind,
+// close, probe, build — every probe call site after the close) is
+// unchanged; this only adds a return value alongside each existing
+// return point.
+func (r *audioEngineRebuilder) rebuildResult(node audioNodeConfig) audioRebuildOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -193,7 +234,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 			r.logger.Warn("dropped an audio.node revision older than the one currently bound",
 				"revision", node.Revision, "bound_revision", r.builtRevision)
 		}
-		return
+		return audioRebuildOutcome{}
 	}
 
 	staticCfg := staticGstEngineConfig(r.assetDir, node)
@@ -202,7 +243,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		if r.logger != nil {
 			r.logger.Error("audio.node.configure delivered a binding this node cannot build an engine from", "revision", node.Revision, "error", err)
 		}
-		return
+		return audioRebuildOutcome{Attempted: true, Available: false, Reason: err.Error()}
 	}
 
 	prev := r.mgr.RebindEngine(r.ctx, r.switchable, nil, audio.RebindReasonEngineRebind)
@@ -218,7 +259,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		r.bind(gstengine.NewUnavailable(reason))
 		r.builtRevision = node.Revision
 		r.haveBuilt = true
-		return
+		return audioRebuildOutcome{Attempted: true, Available: false, Reason: reason}
 	}
 	engine, err := newGstEngine(cfg)
 	if err != nil {
@@ -228,10 +269,10 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		if r.logger != nil {
 			r.logger.Error("failed to build the real audio engine after releasing the outgoing one; this node has no audio engine until the next audio.node.configure", "revision", node.Revision, "error", err)
 		}
-		return
+		return audioRebuildOutcome{Attempted: true, Available: false, Reason: err.Error()}
 	}
+	ok, reason := engine.Available()
 	if r.logger != nil {
-		ok, reason := engine.Available()
 		r.logger.Info("rebuilt the real audio engine from a delivered audio.node binding",
 			"revision", node.Revision, "program_route", node.ProgramRoute,
 			"sample_rate", cfg.SampleRate, "sample_rate_source", rateSource,
@@ -243,6 +284,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 	// guard above never drops a revision on the strength of a failed build.
 	r.builtRevision = node.Revision
 	r.haveBuilt = true
+	return audioRebuildOutcome{Attempted: true, Available: ok, Reason: reason}
 }
 
 // bind installs engine as this node's current engine through

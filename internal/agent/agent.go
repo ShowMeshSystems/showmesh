@@ -370,6 +370,18 @@ func Run() int {
 		audioMgr.RunWatcher(sigCtx, ticker.C)
 	}()
 
+	// audioRestoreRetryDone: this node's own bounded, backed-off retry of
+	// every deferred audio restore, re-probing the device on its own
+	// instead of waiting for a coordinator-pushed audio.node binding —
+	// see audiorestoreretry.go's own doc comment.
+	audioRestoreRetryDone := make(chan struct{})
+	go func() {
+		defer close(audioRestoreRetryDone)
+		ticker := time.NewTicker(audioRestoreRetryPollInterval)
+		defer ticker.Stop()
+		runAudioRestoreRetry(sigCtx, audioMgr, audioEngine.Available, audioBind.currentNode, audioRebuilder.rebuildResult, time.Now, ticker.C, logger)
+	}()
+
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across
 	// every reconnect: its idempotency cache and allowlisted operations'
 	// state (e.g. agentEchoState's stored value) are this process's memory
@@ -442,15 +454,17 @@ func Run() int {
 	stopSignal()
 
 	// The heartbeat, asset inventory, render report, audio report, audio
-	// session watcher, MultiSync listener, FPP Connect HTTP listener, and
-	// show mode watch loops also select on sigCtx.Done() and exit on their
-	// own; wait for all eight so none can race the final offline publish
-	// below with a publish still in flight.
+	// session watcher, audio restore retry, MultiSync listener, FPP
+	// Connect HTTP listener, and show mode watch loops also select on
+	// sigCtx.Done() and exit on their own; wait for all nine so none can
+	// race the final offline publish below with a publish still in
+	// flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
 	<-audioReportDone
 	<-audioWatchDone
+	<-audioRestoreRetryDone
 	<-multiSyncDone
 	<-fppConnectHTTPDone
 

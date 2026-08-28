@@ -156,6 +156,21 @@ const (
 	SignalSessionLTCClaimState  observation.SignalID = "audio_session.ltc.claim.state"
 	SignalSessionLTCClaimReason observation.SignalID = "audio_session.ltc.claim.reason"
 
+	// SignalSessionRestoreAttempts, SignalSessionRestoreNextAttemptMs,
+	// and SignalSessionRestoreLastReason are this node's own automatic
+	// restore-retry driver's status for a session currently waiting on a
+	// deferred or re-queued restore (see the sibling change that
+	// introduces the pkg/audio.State value "restore_pending" for what
+	// State itself reports while this is happening).
+	// Attempts and NextAttemptMs report [observation.StateNotCollected]
+	// with a stated reason whenever the node reports no restore
+	// currently queued for this session; LastReason is present whenever
+	// Attempts is nonzero, matching SignalSessionFaultReason's identical
+	// shape.
+	SignalSessionRestoreAttempts      observation.SignalID = "audio_session.restore.attempts"
+	SignalSessionRestoreNextAttemptMs observation.SignalID = "audio_session.restore.next_attempt_ms"
+	SignalSessionRestoreLastReason    observation.SignalID = "audio_session.restore.last_reason"
+
 	// SignalSessionItemGapMs and SignalSessionItemGapReason are the
 	// measured interval between one playlist item's natural completion
 	// and its successor's confirmed start — a measurement, never a
@@ -200,6 +215,9 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionFaultReason,
 	SignalSessionLTCClaimState,
 	SignalSessionLTCClaimReason,
+	SignalSessionRestoreAttempts,
+	SignalSessionRestoreNextAttemptMs,
+	SignalSessionRestoreLastReason,
 	SignalSessionItemGapMs,
 	SignalSessionItemGapReason,
 	SignalSessionStale,
