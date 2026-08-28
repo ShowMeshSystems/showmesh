@@ -213,22 +213,17 @@ func TestObserveEndsGuardAsSoonAsIncomingRunIsConfirmed(t *testing.T) {
 	}
 }
 
-// TestLTCTransitionGuardDurationIsCloseToTheMeasuredTail is a
-// guard on ltcTransitionGuardDuration's own value: it must still bound
-// the measured real tail (about 290ms, reproduced independently at
-// 290.6ms -- see TestLTCStopDoesNotClaimStoppedWhileAudible) with some
-// margin for jitter, since StopLTC's path has no further evidence and
-// relies on this fixed bound alone (see [ltcChannel.observe]), but it
-// must no longer be sized as a blind 2x lead: 350ms leaves a hard,
-// specific ceiling well under the old 400ms this issue reproduced
-// against.
-func TestLTCTransitionGuardDurationIsCloseToTheMeasuredTail(t *testing.T) {
-	const measuredTail = 291 * time.Millisecond
-	if ltcTransitionGuardDuration < measuredTail {
-		t.Fatalf("ltcTransitionGuardDuration = %s, want at least the measured real tail (%s): StopLTC's path has no further evidence to end the guard on, so a shorter bound risks claiming LTCStopped while the wire is still audible", ltcTransitionGuardDuration, measuredTail)
-	}
-	const maxGuardDuration = 350 * time.Millisecond
-	if ltcTransitionGuardDuration > maxGuardDuration {
-		t.Fatalf("ltcTransitionGuardDuration = %s, want no more than %s: it must be calibrated to the measured tail, not a blind multiplier of ltcAppSrcLeadDuration", ltcTransitionGuardDuration, maxGuardDuration)
+// TestLTCTransitionGuardDurationCoversTheMeasuredTail is a guard on
+// ltcTransitionGuardDuration's own value: StopLTC's path has no further
+// evidence to end the guard on (see [ltcChannel.observe]) and relies on
+// this fixed bound alone, so it must stay at or above the worst measured
+// real tail with real margin -- a dev machine measured about 290ms, a CI
+// runner measured as high as 316ms in the same suite. A shorter bound
+// risks claiming LTCStopped while the wire is still audible, exactly the
+// regression a CI run reproduced against a bound trimmed to 310ms.
+func TestLTCTransitionGuardDurationCoversTheMeasuredTail(t *testing.T) {
+	const worstMeasuredTail = 320 * time.Millisecond
+	if ltcTransitionGuardDuration < worstMeasuredTail {
+		t.Fatalf("ltcTransitionGuardDuration = %s, want at least %s: StopLTC's path has no further evidence to end the guard on, so a shorter bound risks claiming LTCStopped while the wire is still audible", ltcTransitionGuardDuration, worstMeasuredTail)
 	}
 }

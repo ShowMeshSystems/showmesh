@@ -58,30 +58,25 @@ const ltcAppSrcLeadSeconds = 0.2
 // is a worse failure than the queue lag this constant corrects for.
 const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
 
-// ltcTransitionDownstreamMargin approximates the shared pipeline's own
-// latency beyond the LTC appsrc's own queue: appsink measurement of the
-// real tail after a Stop or Start swap (loopback, no flush) showed real
-// audio on the wire for close to 0.29s (reproduced independently at
-// 290.6ms), about 90ms more than ltcAppSrcLeadDuration's 0.2s nominal
-// queue depth -- scheduling and the downstream interleave/sink stages add
-// the rest. Shrinking that downstream component itself is a separate
-// piece of work, not this guard's.
-const ltcTransitionDownstreamMargin = 100 * time.Millisecond
-
 // ltcTransitionGuardDuration bounds [ltcChannel.beginTransition]'s guard
 // window only when no stronger evidence ends it sooner (see
-// [ltcChannel.observe]): sized to the measured real tail
-// (ltcAppSrcLeadDuration plus ltcTransitionDownstreamMargin) with a small
-// margin for jitter, not a blind 2x lead. StartLTC's own realignment
-// path ends the guard as soon as the feeder confirms the incoming run's
-// first emission, well before this bound is ever reached; StopLTC has no
-// future confirmation to wait for (the incoming "run" is silence, and
-// nothing about it ever reports LTCRunning), so this fixed bound is what
-// actually governs how long that path's guard lasts. Erring toward
-// reporting the outgoing run's evidence a little longer than the
-// measured tail is still the safe direction: claiming the run stopped
-// while it is still on the wire is the defect this guards against.
-const ltcTransitionGuardDuration = ltcAppSrcLeadDuration + ltcTransitionDownstreamMargin + 10*time.Millisecond
+// [ltcChannel.observe]): appsink measurement of the real tail after a
+// Stop or Start swap (loopback, no flush) showed real audio on the wire
+// for close to 0.29s on one dev machine, but a CI runner measured as high
+// as 316ms in the same suite -- real-world downstream latency varies more
+// than a single dev-machine measurement suggested, so this stays at 2x
+// ltcAppSrcLeadDuration's nominal queue depth rather than being trimmed
+// to the smaller measurement. StartLTC's own realignment path ends the
+// guard as soon as the feeder confirms the incoming run's first emission
+// (see below), typically well before this bound is ever reached; StopLTC
+// has no future confirmation to wait for (the incoming "run" is silence,
+// and nothing about it ever reports LTCRunning), so this fixed bound is
+// what actually governs how long that path's guard lasts. Erring toward
+// reporting the outgoing run's evidence a little longer than necessary is
+// the safe direction: claiming the run stopped while it is still on the
+// wire is the defect this guards against, and a CI-measured 316ms tail
+// against a trimmed 310ms bound reproduced exactly that regression.
+const ltcTransitionGuardDuration = 2 * ltcAppSrcLeadDuration
 
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
 // feeder goroutine to exit after unblocking it. It is a backstop, not the
