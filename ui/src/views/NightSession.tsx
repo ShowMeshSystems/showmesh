@@ -302,68 +302,6 @@ function NightSessionDetail({ session, configuredSteps, onReload }: { session: N
         </section>
       </PanelErrorBoundary>
 
-      <h3 className="section-title">Final-cycle status</h3>
-      <PanelErrorBoundary panelLabel="Final-cycle status">
-        <section className="panel show-night__after-status">
-          <dl className="field-list">
-            <dt>Cycle</dt>
-            <dd>{session.cycle}</dd>
-            <dt>Final show requested</dt>
-            <dd>
-              {session.finalShowRequested ? 'yes' : 'no'}
-              {session.finalShowRequestedAt !== null && `, at ${formatAbsolute(session.finalShowRequestedAt)}`}
-            </dd>
-            <dt>Admission closed</dt>
-            <dd>
-              {session.admissionClosed ? 'yes' : 'no'}
-              {session.admissionClosedAt !== null && `, at ${formatAbsolute(session.admissionClosedAt)}`}
-            </dd>
-          </dl>
-        </section>
-      </PanelErrorBoundary>
-
-      <h3 className="section-title">Transition evidence</h3>
-      <PanelErrorBoundary panelLabel="Transition evidence">
-        <section className="panel show-night__evidence-card">
-          <div className="show-night__evidence-badge">
-            <NightPhaseEvidenceBadge state={session.transition.state} />
-          </div>
-          <p className="text-muted">{session.transition.reason}</p>
-        </section>
-      </PanelErrorBoundary>
-
-      <h3 className="section-title">Power phase evidence</h3>
-      <PanelErrorBoundary panelLabel="Power phase evidence">
-        <section className="panel show-night__evidence-card">
-          <div className="show-night__evidence-badge">
-            <NightPhaseEvidenceBadge state={session.powerPhase.state} />
-          </div>
-          <p className="text-muted">{session.powerPhase.reason}</p>
-        </section>
-      </PanelErrorBoundary>
-
-      <h3 className="section-title">Next Transition Step</h3>
-      <PanelErrorBoundary panelLabel="Next Transition Step">
-        <section className="panel show-night__next-step" role="status">
-          {session.cues.state !== 'recorded' && <p className="text-muted">{session.cues.reason}</p>}
-          {session.cues.state === 'recorded' && nextCue === null && (
-            <p className="text-muted">No pending Transition Step in the current cycle&rsquo;s outbox.</p>
-          )}
-          {session.cues.state === 'recorded' && nextCue !== null && (
-            <dl className="field-list">
-              <dt>Name</dt>
-              <dd>{nextCue.name}</dd>
-              <dt>Phase</dt>
-              <dd>{nextCue.phase}</dd>
-              <dt>State</dt>
-              <dd>
-                <NightCueStateBadge state={nextCue.state} />
-              </dd>
-            </dl>
-          )}
-        </section>
-      </PanelErrorBoundary>
-
       <OperatorSection
         title="Configured Transition Steps"
         detail="Authored work pinned for this Show Night. These are not runtime executions."
@@ -458,6 +396,62 @@ function NightSessionDetail({ session, configuredSteps, onReload }: { session: N
                 </table>
               </EvidenceTable>
             ))}
+        </section>
+      </PanelErrorBoundary>
+
+      <h3 className="section-title">Next Transition Step</h3>
+      <PanelErrorBoundary panelLabel="Next Transition Step">
+        <section className="panel show-night__next-step" role="status">
+          {session.cues.state !== 'recorded' && <p className="text-muted">{session.cues.reason}</p>}
+          {session.cues.state === 'recorded' && nextCue === null && (
+            <p className="text-muted">No pending Transition Step in the current cycle&rsquo;s outbox.</p>
+          )}
+          {session.cues.state === 'recorded' && nextCue !== null && (
+            <dl className="field-list">
+              <dt>Name</dt>
+              <dd>{nextCue.name}</dd>
+              <dt>Phase</dt>
+              <dd>{nextCue.phase}</dd>
+              <dt>State</dt>
+              <dd><NightCueStateBadge state={nextCue.state} /></dd>
+            </dl>
+          )}
+        </section>
+      </PanelErrorBoundary>
+
+      <h3 className="section-title">Final-cycle status</h3>
+      <PanelErrorBoundary panelLabel="Final-cycle status">
+        <section className="panel show-night__after-status">
+          <dl className="field-list">
+            <dt>Cycle</dt>
+            <dd>{session.cycle}</dd>
+            <dt>Final show requested</dt>
+            <dd>
+              {session.finalShowRequested ? 'yes' : 'no'}
+              {session.finalShowRequestedAt !== null && `, at ${formatAbsolute(session.finalShowRequestedAt)}`}
+            </dd>
+            <dt>Admission closed</dt>
+            <dd>
+              {session.admissionClosed ? 'yes' : 'no'}
+              {session.admissionClosedAt !== null && `, at ${formatAbsolute(session.admissionClosedAt)}`}
+            </dd>
+          </dl>
+        </section>
+      </PanelErrorBoundary>
+
+      <h3 className="section-title">Transition evidence</h3>
+      <PanelErrorBoundary panelLabel="Transition evidence">
+        <section className="panel show-night__evidence-card">
+          <div className="show-night__evidence-badge"><NightPhaseEvidenceBadge state={session.transition.state} /></div>
+          <p className="text-muted">{session.transition.reason}</p>
+        </section>
+      </PanelErrorBoundary>
+
+      <h3 className="section-title">Power phase evidence</h3>
+      <PanelErrorBoundary panelLabel="Power phase evidence">
+        <section className="panel show-night__evidence-card">
+          <div className="show-night__evidence-badge"><NightPhaseEvidenceBadge state={session.powerPhase.state} /></div>
+          <p className="text-muted">{session.powerPhase.reason}</p>
         </section>
       </PanelErrorBoundary>
 

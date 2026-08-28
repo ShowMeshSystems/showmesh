@@ -286,6 +286,34 @@ describe('NightSession', () => {
     expect(screen.getAllByText('Last confirmed').length).toBe(2)
   })
 
+  it('places configured and runtime Run of Show content before runtime diagnostics in DOM, heading, and keyboard order', async () => {
+    getCurrentNightSession.mockResolvedValue({
+      serverTime: '2026-08-22T00:00:00Z',
+      session: makeNightSessionState({
+        state: 'live', configObjectId: 'halloween-night', configRevision: 7,
+        cues: { state: 'recorded', reason: '', cues: [{ name: 'fade-surfaces', phase: 'enterShow', role: 'projection', action: 'fade', actionRevision: 4, state: 'pending', dispatchedAt: null, resolvedAt: null }] },
+      }),
+    })
+    getNightSessionConfigRevision.mockResolvedValue({
+      id: 'halloween-night', revision: 7, updatedAt: '2026-08-22T00:00:00Z',
+      payload: { show: 'halloween', label: 'Halloween', showPlaylist: { fppInstanceId: 'fpp-1', playlist: 'show' }, resting: { fppInstanceId: 'fpp-1', playlist: 'rest', endOfNightPlaylist: 'rest', endOfNightRepeat: false, timelineAsset: { show: 'halloween', sequence: 'rest', target: 'front' } }, enterShow: { cues: [], blackoutHoldMs: 0 }, enterResting: { cues: [], blackoutAfterShowMs: 0 } },
+    })
+    renderView(makeModel())
+
+    await screen.findByRole('heading', { name: 'Configured Transition Steps' })
+    const headings = Array.from(document.querySelectorAll('.show-night__detail h2, .show-night__detail h3'))
+    const positions = (name: string) => headings.findIndex((heading) => heading.textContent === name)
+    expect(positions('Configured Transition Steps')).toBeGreaterThanOrEqual(0)
+    expect(positions('Run of Show')).toBeGreaterThan(positions('Configured Transition Steps'))
+    expect(positions('Next Transition Step')).toBeGreaterThan(positions('Run of Show'))
+    expect(positions('Transition evidence')).toBeGreaterThan(positions('Run of Show'))
+    expect(positions('Power phase evidence')).toBeGreaterThan(positions('Run of Show'))
+
+    const configured = screen.getByRole('heading', { name: 'Configured Transition Steps' })
+    const runtime = screen.getByRole('region', { name: 'Run of Show runtime executions' })
+    expect(configured.compareDocumentPosition(runtime) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   // Review finding 7: a "not_configured" (or any non-recorded) state must
   // render the coordinator's own `reason`, never a hardcoded string that
   // discards the distinction between "not configured", "not yet

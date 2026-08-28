@@ -1006,6 +1006,7 @@
 .dashboard-current-run {
   display: grid;
   gap: var(--space-2);
+  min-width: 0;
   padding: var(--space-3) 0;
   border-top: 1px solid var(--color-border);
 }
@@ -1019,6 +1020,11 @@
   align-items: start;
   justify-content: space-between;
   gap: var(--space-3);
+  min-width: 0;
+}
+
+.dashboard-current-run__heading > div {
+  min-width: 0;
 }
 
 .dashboard-current-run__heading strong,
@@ -1036,6 +1042,13 @@
 
 .dashboard-current-run > p {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-current-run__heading strong,
+.dashboard-current-run__heading span {
+  overflow-wrap: anywhere;
 }
 
 .dashboard-current-run__evidence {
@@ -1466,22 +1479,17 @@
   background: transparent;
 }
 
-/* The board is the primary Show Night object. Flex ordering brings it above
- * the older diagnostic evidence sections without removing those contracts. */
 .show-night__board-title {
-  order: -10;
   margin: 0;
   font-size: var(--font-size-lg);
 }
 
 .show-night__board-detail {
-  order: -9;
-  margin: calc(var(--space-4) * -1) 0 0;
+  margin: calc(var(--space-3) * -1) 0 0;
   font-size: var(--font-size-sm);
 }
 
 .show-night__board {
-  order: -8;
   margin: 0;
   padding: 0;
   border: 0;
@@ -1556,7 +1564,6 @@
 }
 
 .show-night__next-step {
-  order: -8;
   margin: 0;
   padding: var(--space-3) 0 !important;
   border-block: 1px solid var(--color-border) !important;

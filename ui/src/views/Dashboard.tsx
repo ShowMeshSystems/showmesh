@@ -56,12 +56,23 @@ function attentionFromRender(nodes: Node[]): AttentionItem[] {
   return items
 }
 
+function attentionFromCurrentRuns(runs: CurrentRun[] | null): AttentionItem[] {
+  if (runs === null) return []
+  return runs.flatMap((run) => (run.status === 'failed' || run.playback.state === 'failed')
+    ? [{
+        tone: 'critical' as const,
+        text: `${run.runner} runner (source ${run.runner}) reports failed for "${run.show}"; freshness ${run.freshness.state}: ${run.freshness.reason}`,
+        to: '/control',
+      }]
+    : [])
+}
+
 function readiness(model: ReturnType<typeof useModelContext>): { label: string; detail: string; tone: StatusTone; icon: string } {
   if (model.snapshotReceivedAt === null || model.connection.kind === 'connecting') return { label: 'Unknown', detail: 'Waiting for coordinator data.', tone: 'unknown', icon: '?' }
   if (model.connection.kind !== 'live') return { label: 'Stale', detail: 'Last known data is shown while disconnected.', tone: 'unknown', icon: '!' }
-  if (model.fpp.length === 0 && model.nodes.length === 0 && model.resolume.length === 0) return { label: 'Unknown', detail: 'No presentation evidence is configured.', tone: 'unknown', icon: '?' }
   const renderEntries = model.nodes.flatMap((node) => node.render.filter((entry) => entry.signal === 'surface.pipeline.state'))
-  if (model.fpp.some((instance) => instance.health === 'failed') || model.resolume.some((instance) => instance.health === 'failed') || renderEntries.some((entry) => entry.state === 'current' && entry.value === 'failed')) return { label: 'Not ready', detail: 'A presentation resource has failed.', tone: 'bad', icon: '✕' }
+  if (model.currentRuns?.runs.some((run) => run.status === 'failed' || run.playback.state === 'failed') || model.fpp.some((instance) => instance.health === 'failed') || model.resolume.some((instance) => instance.health === 'failed') || renderEntries.some((entry) => entry.state === 'current' && entry.value === 'failed')) return { label: 'Not ready', detail: 'A presentation resource or authoritative current run has failed.', tone: 'bad', icon: '✕' }
+  if (model.fpp.length === 0 && model.nodes.length === 0 && model.resolume.length === 0) return { label: 'Unknown', detail: 'No presentation evidence is configured.', tone: 'unknown', icon: '?' }
   if (model.fpp.some((instance) => instance.health === 'degraded' || instance.health === 'unknown') || model.resolume.some((instance) => instance.health === 'degraded' || instance.health === 'unknown') || model.nodes.some((node) => node.controlPlane.state !== 'online') || renderEntries.some((entry) => entry.state !== 'current' || entry.value === 'restarting' || entry.value === 'superseded')) return { label: 'Needs attention', detail: 'One or more resources are degraded or unobserved.', tone: 'warn', icon: '⚠' }
   return { label: 'Ready', detail: 'Current resource evidence is healthy.', tone: 'good', icon: '✓' }
 }
@@ -106,7 +117,7 @@ function RecentActivity({ model }: { model: ReturnType<typeof useModelContext> }
 
 export function Dashboard() {
   const model = useModelContext()
-  const attention = [...attentionFromFPP(model.fpp), ...attentionFromResolume(model.resolume), ...attentionFromNodes(model.nodes), ...attentionFromRender(model.nodes)]
+  const attention = [...attentionFromCurrentRuns(model.currentRuns?.runs ?? null), ...attentionFromFPP(model.fpp), ...attentionFromResolume(model.resolume), ...attentionFromNodes(model.nodes), ...attentionFromRender(model.nodes)]
   const ready = readiness(model)
   const renderEntries = model.nodes.flatMap((node) => node.render.filter((entry) => entry.signal === 'surface.pipeline.state'))
   const currentRunTones = model.currentRuns?.runs.map(currentRunStatusTone) ?? []

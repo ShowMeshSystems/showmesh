@@ -124,6 +124,19 @@ describe('Dashboard layout constraints', () => {
     expect(narrow).toMatch(/\.dashboard-current-run__evidence\s*\{\s*grid-template-columns:\s*1fr/)
   })
 
+  it('allows unbroken current-run identifiers to wrap inside the 390px page instead of widening it', () => {
+    const row = ruleBodyFor(css, '.dashboard-current-run')
+    const heading = ruleBodyFor(css, '.dashboard-current-run__heading')
+    const headingContent = ruleBodyFor(css, '.dashboard-current-run__heading > div')
+    const playback = ruleBodyFor(css, '.dashboard-current-run > p')
+
+    expect(row).toMatch(/min-width:\s*0/)
+    expect(heading).toMatch(/min-width:\s*0/)
+    expect(headingContent).toMatch(/min-width:\s*0/)
+    expect(playback).toMatch(/overflow-wrap:\s*anywhere/)
+    expect(css).toMatch(/\.dashboard-current-run__heading strong,\s*\.dashboard-current-run__heading span\s*\{[^}]*overflow-wrap:\s*anywhere/)
+  })
+
   it('keeps the activity table scrollable and keyboard-focusable without widening the page', () => {
     const scroll = ruleBodyFor(css, '.dashboard-activity-table-scroll')
     const focus = ruleBodyFor(css, '.dashboard-activity-table-scroll:focus-visible')
@@ -152,5 +165,12 @@ describe('Show Night layout constraints', () => {
 
     expect(narrow).toMatch(/\.show-night__runhead\s*\{\s*grid-template-columns:\s*1fr/)
     expect(narrow).toMatch(/\.show-night__table\s*\{\s*min-width:\s*40rem/)
+  })
+
+  it('does not use CSS order to make the Run of Show appear before its diagnostics', () => {
+    expect(ruleBodyFor(css, '.show-night__board-title')).not.toMatch(/\border\s*:/)
+    expect(ruleBodyFor(css, '.show-night__board-detail')).not.toMatch(/\border\s*:/)
+    expect(ruleBodyFor(css, '.show-night__board')).not.toMatch(/\border\s*:/)
+    expect(ruleBodyFor(css, '.show-night__next-step')).not.toMatch(/\border\s*:/)
   })
 })

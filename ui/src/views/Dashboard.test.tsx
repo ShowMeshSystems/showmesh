@@ -60,6 +60,25 @@ describe('Dashboard', () => {
     expect(document.querySelector('.dashboard-current-run .status-badge')?.className).toContain('status-badge--bad')
   })
 
+  it('escalates an authoritative failed run into readiness and attention without discarding its runner or freshness evidence', () => {
+    renderDashboard(makeModel({
+      currentRuns: makeCurrentRuns({ runs: [makeCurrentRun({
+        runner: 'showmesh-audio',
+        show: 'an-unbroken-show-identifier',
+        status: 'failed',
+        freshness: { state: 'stale', reason: 'runner report is old', observedAt: null, collectedAt: null },
+      })] }),
+    }))
+
+    expect(screen.getByLabelText('Show path readiness')).toHaveTextContent('Not ready')
+    expect(screen.getByLabelText('Show path readiness')).toHaveTextContent('1 attention item')
+    const attention = screen.getByRole('list', { name: 'Operator attention' })
+    expect(attention).toHaveTextContent('showmesh-audio runner')
+    expect(attention).toHaveTextContent('source showmesh-audio')
+    expect(attention).toHaveTextContent('freshness stale: runner report is old')
+    expect(attention.querySelector('a[href="/control"]')).not.toBeNull()
+  })
+
   it('routes failed, disconnected, and unknown evidence to detail pages without collapsing them', () => {
     renderDashboard(makeModel({
       fpp: [makeFPPInstance('failed-fpp', { health: 'failed' }), makeFPPInstance('unknown-fpp', { health: 'unknown' })],
