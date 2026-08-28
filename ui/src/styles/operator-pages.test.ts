@@ -62,3 +62,25 @@ describe('Live Control layout constraints', () => {
     expect(narrow).not.toMatch(/\.live-control-unavailable/)
   })
 })
+
+describe('shared layout overflow constraints', () => {
+  const css = readFileSync(CSS_PATH, 'utf8')
+
+  it('keeps wide evidence in a bounded local scroll region with a visible keyboard focus treatment', () => {
+    const evidence = ruleBodyFor(css, '.shared-evidence-table')
+    const focus = ruleBodyFor(css, '.shared-evidence-table:focus-visible')
+
+    expect(evidence).toMatch(/max-width:\s*100%/)
+    expect(evidence).toMatch(/overflow-x:\s*auto/)
+    expect(evidence).toMatch(/overscroll-behavior-inline:\s*contain/)
+    expect(focus).toMatch(/outline:\s*2px solid var\(--color-focus-ring\)/)
+  })
+
+  it('lets overview and detail stack on narrow screens instead of forcing page-level overflow', () => {
+    const workspace = ruleBodyFor(css, '.shared-overview-detail')
+    const narrow = css.slice(css.lastIndexOf('@media (max-width: 620px)'))
+
+    expect(workspace).toMatch(/min-width:\s*0/)
+    expect(narrow).toMatch(/\.shared-overview-detail\s*\{\s*grid-template-columns:\s*1fr/)
+  })
+})

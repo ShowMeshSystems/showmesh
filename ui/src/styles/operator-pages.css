@@ -24,6 +24,86 @@
   margin: var(--space-2) 0 0;
 }
 
+/* Shared presentational primitives. They deliberately accept rendered truth
+ * from their page: labels, evidence, and permission reasons stay owned by
+ * the caller and its existing truth components. */
+.shared-page-header,
+.shared-section,
+.shared-configuration-section,
+.shared-command-group,
+.shared-state-block {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.shared-page-header,
+.shared-section__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.shared-page-header__eyebrow,
+.shared-page-header__lede,
+.shared-section__heading p,
+.shared-configuration-section p,
+.shared-command-group > p,
+.shared-state-block p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.shared-page-header__eyebrow,
+.shared-status-strip dt {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.shared-page-header__title,
+.shared-section h2,
+.shared-configuration-section h2,
+.shared-command-group h3,
+.shared-state-block h2 {
+  margin: 0;
+}
+
+.shared-page-header__title { font-size: var(--font-size-2xl); line-height: var(--line-height-tight); }
+.shared-section h2,
+.shared-configuration-section h2 { font-size: var(--font-size-lg); }
+.shared-page-header__actions,
+.shared-section__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.shared-status-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); margin: 0; border-block: 1px solid var(--color-border); }
+.shared-status-strip__item { min-width: 0; padding: var(--space-3); }
+.shared-status-strip__item + .shared-status-strip__item { border-left: 1px solid var(--color-border); }
+.shared-status-strip dt { margin-bottom: var(--space-2); color: var(--color-text-muted); }
+.shared-status-strip dd { margin: 0; font-variant-numeric: tabular-nums; }
+.shared-status-strip__item > span { display: block; margin-top: var(--space-1); color: var(--color-text-muted); font-size: var(--font-size-sm); }
+.shared-status-strip__item--good dt { color: var(--status-good-fg); }
+.shared-status-strip__item--warn dt { color: var(--status-warn-fg); }
+.shared-status-strip__item--bad dt { color: var(--status-bad-fg); }
+
+.shared-attention-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-border); }
+.shared-attention-list__item { min-width: 0; padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border); }
+.shared-overview-detail { display: grid; grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr); gap: var(--space-5); align-items: start; min-width: 0; }
+.shared-overview-detail__overview,
+.shared-overview-detail__detail { min-width: 0; }
+.shared-command-group { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border); }
+.shared-command-group__commands { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--space-3); min-width: 0; }
+.shared-configuration-section { padding-top: var(--space-4); border-top: 1px solid var(--color-border); }
+.shared-evidence-table { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; outline-offset: var(--space-1); }
+.shared-evidence-table:focus-visible { outline: 2px solid var(--color-focus-ring); }
+.shared-state-block { padding: var(--space-4); border: 1px solid var(--color-border); border-left: 3px solid var(--status-unknown-fg); background: var(--color-surface-raised); }
+.shared-state-block--failed { border-left-color: var(--status-bad-fg); }
+.shared-state-block--stale { border-left-color: var(--status-warn-fg); }
+.shared-state-block--unavailable { border-left-color: var(--color-text-muted); }
+
 .settings-breadcrumb {
   margin: 0;
   color: var(--color-text-muted);
@@ -1468,5 +1548,14 @@
   .show-night__runmeta {
     display: grid;
     gap: var(--space-2);
+  }
+
+  .shared-status-strip__item + .shared-status-strip__item {
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
+  }
+
+  .shared-overview-detail {
+    grid-template-columns: 1fr;
   }
 }
