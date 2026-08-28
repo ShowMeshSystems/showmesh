@@ -38,132 +38,95 @@ export interface LayoutProps {
  * devices) stays absent from this list until its own behaviour ships,
  * the same way these two did.
  */
-const NAV_GROUPS: Array<{
-  heading: string
-  items: Array<{ to: string; label: string; end: boolean }>
-}> = [
-  {
-    heading: 'Show night',
-    items: [
-      // Track F seam F2 (UI half): the night-session lifecycle operating
-      // view — observes and commands the RUNNING controller. It is what
-      // an operator opens first while the installation is running.
-      { to: '/night', label: 'Night session', end: false },
-      { to: '/config/show.active', label: 'Active show', end: false },
-      // TRACK-H-H2-SPEC.md §5/§6: whether a show's Playlists are actually
-      // ready to run, and whether each FPP instance's latest observation
-      // still matches what the show declares. This is the show-night
-      // question a stale import, missing asset, or unbound Playlist
-      // would otherwise only surface from `showmeshctl fpp`.
-      { to: '/playlists/readiness', label: 'Playlist readiness', end: false },
-      { to: '/', label: 'Dashboard', end: true },
-    ],
-  },
-  {
-    heading: 'Monitor',
-    items: [
-      { to: '/nodes', label: 'Nodes', end: false },
-      { to: '/fpp', label: 'FPP', end: false },
-      // Track D seam D-4: monitor and control both live on this one route
-      // (build contract §2.2/§2.3), so it belongs in Monitor rather than
-      // splitting it across two nav groups.
-      { to: '/resolume', label: 'Resolume', end: false },
-      { to: '/events', label: 'Events', end: false },
-    ],
-  },
-  {
-    heading: 'Diagnostics',
-    items: [
-      { to: '/capabilities', label: 'Capabilities', end: false },
-      // Track G seam G-8: read-only surfaces — a node's own asset
-      // readiness and the append-only audit log.
-      { to: '/assets/manifest', label: 'Asset manifest', end: false },
-      { to: '/audit', label: 'Audit log', end: false },
-    ],
-  },
-  {
-    heading: 'Control',
-    items: [{ to: '/control', label: 'Live Control', end: false }],
-  },
-  {
-    heading: 'Configure',
-    // /config holds both the FPP endpoints and (Track G seam G-2, ADR-039)
-    // the Resolume instance connection, so the label names both. Before
-    // that seam this label named Resolume while Configuration.tsx held no
-    // Resolume content at all — the composition upload lives on /resolume,
-    // not here — which TRACK-G-surface-parity.md's own audit named as a
-    // placement fault seam G-2 was scoped to fix by making the label true
-    // rather than by changing it.
-    items: [
-      // `end: true`, unlike every other item in this list (Track G seam
-      // G-8 finding): NavLink's non-end matching is "current path starts
-      // with this path plus a segment boundary", and every new
-      // /config/show* route below satisfies that boundary against bare
-      // /config — this link would otherwise render as "active" on every
-      // page this seam added.
-      { to: '/config', label: 'FPP & Resolume', end: true },
-      { to: '/actions', label: 'Show actions', end: false },
-      // Track G seam G-5: identity administration's own nav entry.
-      { to: '/access', label: 'Access', end: false },
-      // Track G seam G-8: Track E's authoring surfaces, previously
-      // reachable only from showmeshctl.
-      { to: '/config/show', label: 'Shows', end: false },
-      { to: '/config/show.surface', label: 'Surfaces', end: false },
-      // Track H seam H6: the show.cue authoring surface, previously
-      // reachable only from showmeshctl.
-      { to: '/config/show.cue', label: 'Cues', end: false },
+type NavItem = { to: string; label: string; end: boolean }
+type NavSubgroup = { heading: string; items: NavItem[] }
+type NavGroup = { heading: string; primary: NavItem[]; groups: NavSubgroup[] }
 
-      // ADR-039/ADR-018: the audio.settings/audio.node configuration
-      // kinds, previously reachable only from showmeshctl.
-      { to: '/config/audio.settings', label: 'Audio settings', end: false },
-      { to: '/config/audio.node', label: 'Audio nodes', end: false },
-
-      // Track H seam H6: show.playlist authoring, previously reachable
-      // only from showmeshctl.
-      { to: '/config/show.playlist', label: 'Playlists', end: false },
-      // TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition
-      // import evidence -- what an author sees to decide whether a
-      // Playlist binding still matches what FPP will actually play.
-      // Previously reachable only from `showmeshctl fpp
-      // playlist-definitions`.
-      { to: '/config/fpp-playlist-definitions', label: 'FPP playlist definitions', end: false },
-      // Track F seam F1 (UI half): the night.session/night.session.active
-      // authoring surfaces, previously reachable only from showmeshctl.
-      { to: '/config/night.session', label: 'Night sessions', end: false },
-      { to: '/config/night.session.active', label: 'Active night session', end: false },
-      { to: '/assets', label: 'Assets', end: false },
-    ],
-  },
-]
-
-// The compact route chooser is intentionally limited to the seven paths an
-// operator reaches most often. The complete legacy destination list remains
-// below it in the expandable directory, preserving deep-link discoverability
-// without turning the phone navigation into a wall of tiny tabs.
-const PRIMARY_NAV = [
+// One rail nav owns both the seven primary destinations and the compact
+// legacy groups. Keeping each route in one place prevents the former primary
+// and "All destinations" trees from drifting into duplicate current links.
+const NAV_GROUPS: NavGroup[] = [
   {
     heading: 'Operate',
-    items: [
+    primary: [
       { to: '/', label: 'Dashboard', end: true },
-      { to: '/night', label: 'Show Night', end: false },
-      { to: '/control', label: 'Live Control', end: false },
+      { to: '/night', label: 'Show Night', end: true },
+      { to: '/control', label: 'Live Control', end: true },
+    ],
+    groups: [
+      {
+        heading: 'Show night tools',
+        items: [
+          { to: '/config/show.active', label: 'Active show', end: false },
+          { to: '/playlists/readiness', label: 'Playlist readiness', end: false },
+        ],
+      },
     ],
   },
   {
     heading: 'Author',
-    items: [
-      { to: '/config/show', label: 'Shows', end: false },
-      { to: '/assets', label: 'Assets', end: false },
+    primary: [
+      { to: '/config/show', label: 'Shows', end: true },
+      { to: '/assets', label: 'Assets', end: true },
+    ],
+    groups: [
+      {
+        heading: 'Show authoring',
+        items: [
+          { to: '/config/show.surface', label: 'Surfaces', end: false },
+          { to: '/config/show.cue', label: 'Cues', end: false },
+          { to: '/config/show.playlist', label: 'Playlists', end: false },
+          { to: '/config/fpp-playlist-definitions', label: 'FPP playlist definitions', end: false },
+          { to: '/config/night.session', label: 'Night sessions', end: false },
+          { to: '/config/night.session.active', label: 'Active night session', end: false },
+        ],
+      },
     ],
   },
   {
     heading: 'System',
-    items: [
-      { to: '/monitor', label: 'Monitor', end: false },
-      { to: '/config', label: 'Settings', end: false },
+    primary: [
+      { to: '/monitor', label: 'Monitor', end: true },
+      { to: '/config', label: 'Settings', end: true },
+    ],
+    groups: [
+      {
+        heading: 'Monitoring',
+        items: [
+          { to: '/nodes', label: 'Nodes', end: false },
+          { to: '/fpp', label: 'FPP', end: false },
+          { to: '/resolume', label: 'Resolume', end: false },
+          { to: '/events', label: 'Events', end: false },
+        ],
+      },
+      {
+        heading: 'Diagnostics',
+        items: [
+          { to: '/capabilities', label: 'Capabilities', end: false },
+          { to: '/assets/manifest', label: 'Asset manifest', end: false },
+          { to: '/audit', label: 'Audit log', end: false },
+        ],
+      },
+      {
+        heading: 'Administration',
+        items: [
+          { to: '/actions', label: 'Show actions', end: false },
+          { to: '/access', label: 'Access', end: false },
+          { to: '/config/audio.settings', label: 'Audio settings', end: false },
+          { to: '/config/audio.node', label: 'Audio nodes', end: false },
+        ],
+      },
     ],
   },
-] as const
+]
+
+// The state hook only needs the flattened route set to keep a top-level group
+// open for its active destination. Rendering still uses the nested structure
+// above so the rail stays compact and each legacy destination has one owner.
+const NAV_STATE_GROUPS = NAV_GROUPS.map((group) => ({
+  heading: group.heading,
+  items: [...group.primary, ...group.groups.flatMap((subgroup) => subgroup.items)],
+}))
 
 // A stable DOM id for each group's link list (aria-controls target), not
 // used for anything else -- lowercased/hyphenated so it stays a valid id
@@ -172,11 +135,15 @@ function slugifyHeading(heading: string): string {
   return heading.toLowerCase().replace(/[^a-z0-9]+/g, '-')
 }
 
+function navItemMatches(item: NavItem, pathname: string): boolean {
+  return item.end ? pathname === item.to : pathname === item.to || pathname.startsWith(`${item.to}/`)
+}
+
 export function Layout({ onSubmitToken }: LayoutProps) {
   const model = useModelContext()
   const [highContrast, toggleHighContrast] = useHighContrast()
   const location = useLocation()
-  const { isOpen, toggle } = useNavGroupOpenState(NAV_GROUPS, location.pathname)
+  const { isOpen, toggle } = useNavGroupOpenState(NAV_STATE_GROUPS, location.pathname)
 
   // Acceptance criterion 5 (spec section 7 / OPERATOR-UI section 5.1): an
   // incompatible coordinator "produces the explicit error, not a partial
@@ -194,85 +161,65 @@ export function Layout({ onSubmitToken }: LayoutProps) {
 
   return (
     <div className="app-shell">
-      <aside className="app-sidebar">
+      <aside className="app-sidebar" aria-label="ShowMesh Operator">
         <NavLink to="/" className="app-brand" aria-label="ShowMesh Operator home">
           <span className="app-brand__mark" aria-hidden="true">SM</span>
           <span className="app-brand__name">ShowMesh</span>
           <span className="app-brand__product">Operator</span>
         </NavLink>
-        <nav className="app-nav app-nav--primary" aria-label="Operator navigation">
-          {PRIMARY_NAV.map((group) => (
-            <section key={group.heading} className="app-nav__primary-group">
-              <h2 className="app-nav__primary-heading">{group.heading}</h2>
-              <div className="app-nav__primary-links">
-                {group.items.map((item) => (
-                  <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__primary-link">
-                    {item.label}
-                  </NavLink>
-                ))}
-              </div>
-            </section>
-          ))}
-        </nav>
-        <details className="app-nav__directory">
-          <summary>All destinations</summary>
-          <nav className="app-nav app-nav--directory" aria-label="All destinations">
-            {NAV_GROUPS.map((group) => {
-              const open = isOpen(group.heading)
-              const linksId = `app-nav__group-links-${slugifyHeading(group.heading)}`
-              return (
-                <div key={group.heading} className="app-nav__group" data-open={open}>
-                  <button
-                    type="button"
-                    className="app-nav__group-heading"
-                    aria-expanded={open}
-                    aria-controls={linksId}
-                    onClick={() => toggle(group.heading)}
-                  >
-                    <span>{group.heading}</span>
-                    {!open && <span className="app-nav__group-count">{group.items.length}</span>}
-                  </button>
-                  <div id={linksId} className="app-nav__group-links">
-                    {group.items.map((item) => (
-                      <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
+        <nav className="app-nav" aria-label="Operator navigation">
+          {NAV_GROUPS.map((group) => {
+            const open = isOpen(group.heading)
+            const linksId = `app-nav__group-links-${slugifyHeading(group.heading)}`
+            return (
+              <section key={group.heading} className="app-nav__group" data-open={open}>
+                <button
+                  type="button"
+                  className="app-nav__group-heading"
+                  aria-expanded={open}
+                  aria-controls={linksId}
+                  onClick={() => toggle(group.heading)}
+                >
+                  <span>{group.heading}</span>
+                  {!open && (
+                    <span className="app-nav__group-count">
+                      {group.primary.length + group.groups.reduce((count, subgroup) => count + subgroup.items.length, 0)}
+                    </span>
+                  )}
+                </button>
+                <div id={linksId} className="app-nav__group-links">
+                  <div className="app-nav__primary-links">
+                    {group.primary.map((item) => (
+                      <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__primary-link">
                         {item.label}
                       </NavLink>
                     ))}
                   </div>
+                  <div className="app-nav__legacy-groups">
+                    {group.groups.map((subgroup) => {
+                      const subgroupOpen = subgroup.items.some((item) => navItemMatches(item, location.pathname))
+                      return (
+                        <details key={subgroup.heading} className="app-nav__legacy-group" open={subgroupOpen}>
+                          <summary>{subgroup.heading}</summary>
+                          <div className="app-nav__legacy-links">
+                            {subgroup.items.map((item) => (
+                              <NavLink key={item.to} to={item.to} end={item.end} className="app-nav__link">
+                                {item.label}
+                              </NavLink>
+                            ))}
+                          </div>
+                        </details>
+                      )
+                    })}
+                  </div>
                 </div>
-              )
-            })}
-          </nav>
-        </details>
-      </aside>
-      <div className="app-content">
-        <header className="app-header">
-          <h1 className="app-header__title">ShowMesh Operator</h1>
-          {/* ADR-033 decision 3: the installation-wide operating mode is
-              visible PERSISTENTLY, on every route, not on a settings page.
-              It sits in this header for the same reason SessionIdentity
-              below is not gated on `blockContent`: an operator must be able
-              to see which mode they are in even while the rest of the page
-              is showing "no data yet", because that is exactly the moment
-              every surface behaves differently and nothing says why. */}
+              </section>
+            )
+          })}
+        </nav>
+        <footer className="app-sidebar__footer" aria-label="Operator status and controls">
           <ShowModeIndicator />
-          {/* GET / (getServiceDescriptor): "is this the thing I just
-              deployed" has no other answer anywhere in this UI during a
-              fleet upgrade -- showmeshctl version reports it, this did not.
-              Low-noise reference text, never an alert, since an
-              unreachable coordinator already has ConnectionBanner's own
-              alert below. Operator-reported: this used to be its own
-              full-width row below the connection banner, one of three
-              stacked bands consuming vertical space before any page
-              content -- it folds in here instead, next to the other
-              persistent header text, and still states plainly when the
-              descriptor could not be read rather than rendering blank. */}
           <CoordinatorBuildNotice />
-          {/* Operator-reported: this used to be a full-width band
-              (SessionPanel's signed-in case) below, spent purely on
-              "Signed in as X" and Sign out. It renders here instead, same
-              non-gating on `blockContent` as SessionPanel's other states
-              below -- see SessionIdentity's own header comment. */}
           <SessionIdentity />
           <button
             type="button"
@@ -282,7 +229,9 @@ export function Layout({ onSubmitToken }: LayoutProps) {
           >
             {highContrast ? 'High contrast: on' : 'High contrast: off'}
           </button>
-        </header>
+        </footer>
+      </aside>
+      <div className="app-content">
         <ConnectionBanner connection={model.connection} />
         {model.connection.kind === 'unauthorized' && (
           <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />

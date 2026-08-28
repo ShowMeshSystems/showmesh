@@ -129,26 +129,43 @@ describe('Layout', () => {
   it('keeps the compact operator navigation focused on the three working areas', () => {
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
 
-    const primary = document.querySelector('.app-nav--primary')
-    expect(primary).not.toBeNull()
-    expect(primary).toHaveTextContent('Operate')
-    expect(primary).toHaveTextContent('Author')
-    expect(primary).toHaveTextContent('System')
-    expect(primary?.querySelector('a[href="/night"]')).toHaveTextContent('Show Night')
-    expect(primary?.querySelector('a[href="/control"]')).toHaveTextContent('Live Control')
-    expect(primary?.querySelector('a[href="/config/show"]')).toHaveTextContent('Shows')
-    expect(primary?.querySelector('a[href="/assets"]')).toHaveTextContent('Assets')
-    expect(primary?.querySelector('a[href="/monitor"]')).toHaveTextContent('Monitor')
-    expect(primary?.querySelector('a[href="/config"]')).toHaveTextContent('Settings')
+    expect(screen.getByRole('complementary', { name: 'ShowMesh Operator' })).toBeInTheDocument()
+    const nav = document.querySelector('nav.app-nav')
+    expect(nav).not.toBeNull()
+    expect(nav).toHaveTextContent('Operate')
+    expect(nav).toHaveTextContent('Author')
+    expect(nav).toHaveTextContent('System')
+    expect(nav?.querySelector('a[href="/night"]')).toHaveTextContent('Show Night')
+    expect(nav?.querySelector('a[href="/control"]')).toHaveTextContent('Live Control')
+    expect(nav?.querySelector('a[href="/config/show"]')).toHaveTextContent('Shows')
+    expect(nav?.querySelector('a[href="/assets"]')).toHaveTextContent('Assets')
+    expect(nav?.querySelector('a[href="/monitor"]')).toHaveTextContent('Monitor')
+    expect(nav?.querySelector('a[href="/config"]')).toHaveTextContent('Settings')
   })
 
-  it('keeps the full legacy directory available without crowding the compact navigation', () => {
+  it('keeps legacy destinations in the same compact navigation hierarchy', () => {
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
 
-    const directory = document.querySelector('.app-nav__directory')
-    expect(directory).not.toBeNull()
-    expect(directory).toHaveTextContent('All destinations')
-    expect(document.querySelectorAll('a.app-nav__link')).toHaveLength(25)
+    expect(document.querySelectorAll('nav.app-nav')).toHaveLength(1)
+    expect(document.querySelector('.app-nav__directory')).toBeNull()
+    expect(screen.queryByText('All destinations')).not.toBeInTheDocument()
+    expect(document.querySelector('a[href="/nodes"]')).toHaveTextContent('Nodes')
+    expect(document.querySelector('a[href="/config/audio.node"]')).toHaveTextContent('Audio nodes')
+  })
+
+  it('marks the current primary destination with page semantics', () => {
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/control')
+
+    const liveControl = document.querySelector('.app-nav a[href="/control"]')
+    expect(liveControl).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('keeps persistent utility controls in the rail footer', () => {
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+
+    expect(screen.getByRole('contentinfo', { name: 'Operator status and controls' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Show mode').closest('footer')).not.toBeNull()
+    expect(screen.getByRole('button', { name: /High contrast/ }).closest('footer')).not.toBeNull()
   })
 
   // Acceptance criterion 5: an incompatible coordinator produces the
@@ -209,18 +226,11 @@ describe('Layout', () => {
     expect(screen.getByText('Signed out on this device.')).toBeInTheDocument()
   })
 
-  // Fix 2 (Track D seam D-2a): /config now holds both the FPP endpoints
-  // configuration AND the Resolume composition upload (ADR-032 decision
-  // 8), added to the SAME page rather than a second route. "FPP
-  // endpoints" named only the first of those and gave an operator looking
-  // for the composition control no reason to click it — this pins the
-  // renamed label so a future edit cannot silently narrow it back to
-  // naming only one of the two things this page does.
-  it('labels the single Configure nav entry for both things /config now holds, not just FPP endpoints', () => {
+  it('labels the direct /config entry Settings without creating a second settings destination', () => {
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
-    const link = screen.getByRole('link', { name: 'FPP & Resolume' })
+    const link = screen.getByRole('link', { name: 'Settings' })
     expect(link).toHaveAttribute('href', '/config')
-    expect(screen.queryByText('FPP endpoints')).not.toBeInTheDocument()
+    expect(screen.queryByText('FPP & Resolume')).not.toBeInTheDocument()
   })
 
   // ADR-033 decision 3: "the mode appears on the Operator UI persistently,
@@ -311,10 +321,9 @@ describe('Layout', () => {
   })
 
   // Operator-reported: the signed-in identity ("Signed in as eric
-  // (admin)") and Sign out used to render as a full-width band in the
-  // main column. It now renders in the header alongside the title, mode
-  // indicator, and coordinator build line.
-  it('renders the signed-in identity and sign-out control in the header, not as a full-width band', () => {
+  // (admin)") and Sign out are quiet persistent utility controls in the
+  // rail footer, not a full-width content band.
+  it('renders the signed-in identity and sign-out control in the rail footer', () => {
     const SIGNED_IN_SESSION: SessionResponse = {
       serverTime: '2026-08-11T12:00:00.000Z',
       authenticated: true,
@@ -328,97 +337,90 @@ describe('Layout', () => {
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345, SIGNED_IN_SESSION))
 
     const identity = screen.getByText(/Signed in as eric/)
-    const header = document.querySelector('.app-header')
-    expect(header).not.toBeNull()
-    expect(header!.contains(identity)).toBe(true)
+    const footer = screen.getByRole('contentinfo', { name: 'Operator status and controls' })
+    expect(footer.contains(identity)).toBe(true)
     expect(screen.getByRole('button', { name: /Sign out/ })).toBeInTheDocument()
+    expect(footer.contains(screen.getByRole('button', { name: /Sign out/ }))).toBe(true)
   })
 })
 
-// The full set of every top-level nav link's href, per NAV_GROUPS in
-// Layout.tsx -- kept here (rather than importing NAV_GROUPS, which is not
-// exported) so a future change to that list must touch this assertion
-// deliberately, the same way Layout.tsx's own "labels the single
-// Configure nav entry" test above pins one entry directly.
+// The full set of every nav link's href, per NAV_GROUPS in Layout.tsx -- kept
+// here (rather than importing NAV_GROUPS, which is not exported) so a future
+// change to that list must touch this assertion deliberately.
 const ALL_NAV_HREFS = [
-  // Show night
+  // Operate
+  '/',
   '/night',
+  '/control',
   '/config/show.active',
   '/playlists/readiness',
-  '/',
-  // Monitor
-  '/nodes',
-  '/fpp',
-  '/resolume',
-  '/events',
-  // Diagnostics
-  '/capabilities',
-  '/assets/manifest',
-  '/audit',
-  // Control
-  '/control',
-  // Configure
-  '/config',
-  '/actions',
-  '/access',
+  // Author
   '/config/show',
+  '/assets',
   '/config/show.surface',
   '/config/show.cue',
-  '/config/audio.settings',
-  '/config/audio.node',
   '/config/show.playlist',
   '/config/fpp-playlist-definitions',
   '/config/night.session',
   '/config/night.session.active',
-  '/assets',
+  // System
+  '/monitor',
+  '/config',
+  '/nodes',
+  '/fpp',
+  '/resolume',
+  '/events',
+  '/capabilities',
+  '/assets/manifest',
+  '/audit',
+  '/actions',
+  '/access',
+  '/config/audio.settings',
+  '/config/audio.node',
 ]
 
-// Requirement: each of the 5 groups collapses/expands, the group holding
+// Requirement: each of the 3 groups collapses/expands, the group holding
 // the current route is always open regardless of stored state, a stored
 // preference is otherwise honoured, a throwing localStorage never breaks
-// rendering, and none of this touches what actually renders on the phone
-// tab bar (collapsing is a sidebar-only CSS affordance -- see the
-// "gives the sidebar its own internal scroll" test above for why jsdom
-// cannot observe the CSS itself, and the stylesheet assertion below for
-// the collapse rule's own equivalent).
+// rendering, and every destination stays inside the one nav hierarchy.
 describe('collapsible nav groups', () => {
   it('always reports the active route\'s group expanded, even when storage says it is collapsed', () => {
-    window.localStorage.setItem('showmesh-ui-nav-groups', JSON.stringify({ Monitor: false }))
+    window.localStorage.setItem('showmesh-ui-nav-groups', JSON.stringify({ System: false }))
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/nodes')
 
-    const monitorHeading = screen.getByRole('button', { name: /Monitor/ })
-    expect(monitorHeading).toHaveAttribute('aria-expanded', 'true')
+    const systemHeading = screen.getByRole('button', { name: /System/ })
+    expect(systemHeading).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('honours a stored collapsed/expanded preference for a group that does not hold the current route', () => {
     window.localStorage.setItem(
       'showmesh-ui-nav-groups',
-      JSON.stringify({ 'Show night': false, Diagnostics: true }),
+      JSON.stringify({ Operate: false, System: true }),
     )
-    // /control is Control's own route, so Control is the active group here
-    // and Show night/Diagnostics are free to reflect their stored values.
+    // /control is Operate's own route, so Operate is the active group here
+    // and Author/System are free to reflect their stored values.
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/control')
 
-    expect(screen.getByRole('button', { name: /Show night/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /Author/ })).toHaveAttribute(
       'aria-expanded',
       'false',
     )
-    expect(screen.getByRole('button', { name: /Diagnostics/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /System/ })).toHaveAttribute(
       'aria-expanded',
       'true',
     )
   })
 
-  it('opens Show night by default on a first visit, with no stored preference at all', () => {
-    // /control keeps Show night out of the active group so its default,
+  it('opens Operate by default on a first visit, with no stored preference at all', () => {
+    // /config keeps Operate out of the active group so its default,
     // not the active-route override, is what this observes.
-    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/control')
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/config')
 
-    expect(screen.getByRole('button', { name: /Show night/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /Operate/ })).toHaveAttribute(
       'aria-expanded',
       'true',
     )
-    expect(screen.getByRole('button', { name: /Monitor/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /Author/ })).toHaveAttribute(
       'aria-expanded',
       'false',
     )
@@ -427,9 +429,9 @@ describe('collapsible nav groups', () => {
   it('shows a link count on a collapsed group', () => {
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/control')
 
-    // Monitor is collapsed by default on this route (Control is active).
-    const monitorHeading = screen.getByRole('button', { name: /Monitor/ })
-    expect(monitorHeading).toHaveTextContent('4')
+    // System is collapsed by default on this route (Operate is active).
+    const systemHeading = screen.getByRole('button', { name: /System/ })
+    expect(systemHeading).toHaveTextContent('13')
   })
 
   it('does not break rendering when localStorage throws on both read and write', () => {
@@ -443,23 +445,24 @@ describe('collapsible nav groups', () => {
 
     expect(() => renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))).not.toThrow()
 
-    // The nav still renders normally -- Show night's own default applies
-    // (its group holds the active '/' route here too, so it is open
-    // either way) and every link is still reachable.
-    expect(document.querySelector('a.app-nav__link[href="/"]')).toBeInTheDocument()
-    expect(document.querySelector('a.app-nav__link[href="/control"]')).toBeInTheDocument()
+    // The nav still renders normally and every direct route remains
+    // reachable even when localStorage is unavailable.
+    expect(document.querySelector('a[href="/"]')).toBeInTheDocument()
+    expect(document.querySelector('a[href="/control"]')).toBeInTheDocument()
 
     getItemSpy.mockRestore()
     setItemSpy.mockRestore()
   })
 
-  it('keeps every one of the 25 nav links present in the DOM, which is what the phone tab bar renders directly', () => {
+  it('keeps every destination present exactly once in the one nav hierarchy', () => {
     renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
 
     for (const href of ALL_NAV_HREFS) {
-      expect(document.querySelector(`a.app-nav__link[href="${href}"]`)).not.toBeNull()
+      expect(document.querySelector(`nav.app-nav a[href="${href}"]`)).not.toBeNull()
     }
-    expect(document.querySelectorAll('a.app-nav__link')).toHaveLength(ALL_NAV_HREFS.length)
+    const links = document.querySelectorAll('nav.app-nav a')
+    expect(links).toHaveLength(ALL_NAV_HREFS.length)
+    expect(new Set(Array.from(links, (link) => link.getAttribute('href'))).size).toBe(ALL_NAV_HREFS.length)
   })
 
   // jsdom does not run layout or load global.css (see the sidebar-scroll
