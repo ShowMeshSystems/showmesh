@@ -39,6 +39,12 @@ type branch struct {
 	filesrcName   string
 	decodebinName string
 
+	// elementNames holds the GStreamer names of every element in
+	// elements(), computed ahead of construction so [Engine.indexBranch]
+	// can register them before the elements themselves exist — see that
+	// method's doc comment for why.
+	elementNames []string
+
 	channelMixerPads []gst.Pad // index k links to engine.channelMixers[k]
 	linkedCount      atomic.Int32
 
@@ -178,6 +184,11 @@ func (b *branch) build(path string) error {
 	name := func(role string) string { return fmt.Sprintf("h%d-%s", b.id, role) }
 	b.filesrcName = name("filesrc")
 	b.decodebinName = name("decodebin")
+	b.elementNames = []string{
+		b.filesrcName, b.decodebinName,
+		name("audioconvert"), name("audioresample"), name("capsfilter"),
+		name("volume"), name("queue"), name("deinterleave"),
+	}
 	e.indexBranch(b)
 
 	b.filesrc = gst.ElementFactoryMake("filesrc", b.filesrcName)
@@ -621,8 +632,12 @@ func (b *branch) unblockFlow() {
 // its mixer request pads: without this it can keep sounding under
 // whatever the session loads next. A property set on volume needs no
 // state-changing call of its own, so it cannot race the abandoned
-// SetState this branch's elements may still be driving.
+// SetState this branch's elements may still be driving. cancelFade runs
+// first: a live GstController binding re-syncs "volume" from its own
+// interpolation source on the pipeline's next buffer regardless of what
+// this call just set, which would silently un-mute the branch again.
 func (b *branch) silenceDeferredBranch() {
+	b.cancelFade()
 	b.volume.SetObjectProperty("volume", float64(0))
 }
 
