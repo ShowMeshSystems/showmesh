@@ -147,7 +147,12 @@ export function RenderSurfacePanel({ nodeId, entries }: RenderSurfacePanelProps)
               // One row per signal (spec section 6.6 legibility fix): a
               // surface with many signals used to be a wall of stacked
               // evidence blocks with nothing aligned.
-              <div className="table-scroll">
+              <div
+                className="table-scroll"
+                role="region"
+                tabIndex={0}
+                aria-label={`Render evidence for node ${nodeId}, surface ${surfaceId}`}
+              >
                 <table className="config-table" aria-label={`Signals for surface ${surfaceId}`}>
                   <thead>
                     <tr>

@@ -148,6 +148,18 @@ describe('RenderSurfacePanel', () => {
     expect(within(table).getByRole('rowheader', { name: 'surface.pipeline.fps' })).toBeInTheDocument()
   })
 
+  it('tabs to the labelled render evidence region before its controls', async () => {
+    const user = userEvent.setup()
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry()])
+
+    const region = screen.getByRole('region', { name: 'Render evidence for node media-01, surface wall-1' })
+    expect(region).toHaveAccessibleName('Render evidence for node media-01, surface wall-1')
+
+    await user.tab()
+    expect(region).toHaveFocus()
+  })
+
   it('renders apply/clear/restart/probe disabled, never enabled, when the operator lacks render:command', () => {
     const model = makeModel({ session: signedIn({ scopes: ['node:read'] }) })
     renderPanel(model, [entry()])
