@@ -108,7 +108,7 @@ export function Configuration() {
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
   return (
-    <div>
+    <div className="configuration-page">
       <h2 className="panel__title">Settings</h2>
       <p className="text-muted">
         Global coordinator settings live here. Audio defaults and per-node routing are separate
@@ -162,17 +162,17 @@ export function Configuration() {
             </ul>
           </nav>
 
-          <FPPEndpointsSection />
-          <ResolumeInstancesSection />
-          <FPPMQTTSection />
-          <AssetsSettingsSection />
-          <hr style={{ margin: '2rem 0' }} />
+          <div className="configuration-sections">
+            <FPPEndpointsSection />
+            <ResolumeInstancesSection />
+            <FPPMQTTSection />
+            <AssetsSettingsSection />
           <div id="render-settings" className="panel config-section">
             <RenderSettingsPanel />
           </div>
-          <hr style={{ margin: '2rem 0' }} />
           <div id="show-mode" className="panel config-section">
             <ShowModePanel />
+          </div>
           </div>
         </>
       )}
@@ -304,7 +304,7 @@ function FPPEndpointsSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status panel" role="status">
+            <div className="config-status" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -315,6 +315,7 @@ function FPPEndpointsSection() {
             </div>
           )}
 
+          <div className="table-scroll">
           <table className="config-table">
             <thead>
               <tr>
@@ -345,6 +346,7 @@ function FPPEndpointsSection() {
                   </td>
                   <td>
                     <button
+                      className="button-danger"
                       type="button"
                       onClick={() => removeRow(index)}
                       aria-label={`Remove instance ${index + 1}`}
@@ -356,11 +358,13 @@ function FPPEndpointsSection() {
               ))}
             </tbody>
           </table>
-          <button type="button" onClick={addRow}>
+          </div>
+          <div className="config-actions">
+          <button className="button--secondary" type="button" onClick={addRow}>
             Add instance
           </button>
 
-          <div style={{ marginTop: '1rem' }}>
+          <div className="config-save-row">
             {saveError !== null && (
               <p role="alert" className="session-form__error">
                 {saveError}
@@ -374,6 +378,7 @@ function FPPEndpointsSection() {
             >
               {saving ? 'Saving…' : 'Save configuration'}
             </ScopedButton>
+          </div>
           </div>
 
           <p className="text-muted">
@@ -471,7 +476,7 @@ function ResolumeInstancesSection() {
   }
 
   return (
-    <section id="resolume-instances" className="panel config-section" style={{ marginTop: '2rem' }}>
+    <section id="resolume-instances" className="panel config-section">
       <h3 className="panel__title">Resolume</h3>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
@@ -489,7 +494,7 @@ function ResolumeInstancesSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status panel" role="status">
+            <div className="config-status" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -500,6 +505,7 @@ function ResolumeInstancesSection() {
             </div>
           )}
 
+          <div className="table-scroll">
           <table className="config-table">
             <thead>
               <tr>
@@ -529,8 +535,9 @@ function ResolumeInstancesSection() {
               </tr>
             </tbody>
           </table>
+          </div>
 
-          <div style={{ marginTop: '1rem' }}>
+          <div className="config-save-row">
             {saveError !== null && (
               <p role="alert" className="session-form__error">
                 {saveError}
@@ -702,7 +709,7 @@ function FPPMQTTSection() {
   }
 
   return (
-    <section id="fpp-mqtt" className="panel config-section" style={{ marginTop: '2rem' }}>
+    <section id="fpp-mqtt" className="panel config-section">
       <h3 className="panel__title">FPP MQTT</h3>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
@@ -720,7 +727,7 @@ function FPPMQTTSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status panel" role="status">
+            <div className="config-status" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -777,7 +784,7 @@ function FPPMQTTSection() {
               disabled={clearPassword}
               onChange={(e) => setPasswordInput(e.target.value)}
             />
-            <label>
+            <label className="form-field--checkbox">
               <input
                 type="checkbox"
                 checked={clearPassword}
@@ -790,6 +797,7 @@ function FPPMQTTSection() {
             </label>
           </div>
 
+          <div className="table-scroll">
           <table className="config-table">
             <thead>
               <tr>
@@ -818,7 +826,7 @@ function FPPMQTTSection() {
                     />
                   </td>
                   <td>
-                    <button type="button" onClick={() => removeHostRow(index)} aria-label={`Remove host ${index + 1}`}>
+                    <button className="button-danger" type="button" onClick={() => removeHostRow(index)} aria-label={`Remove host ${index + 1}`}>
                       Remove
                     </button>
                   </td>
@@ -826,11 +834,13 @@ function FPPMQTTSection() {
               ))}
             </tbody>
           </table>
-          <button type="button" onClick={addHostRow}>
+          </div>
+          <div className="config-actions">
+          <button className="button--secondary" type="button" onClick={addHostRow}>
             Add host
           </button>
 
-          <div style={{ marginTop: '1rem' }}>
+          <div className="config-save-row">
             {saveError !== null && (
               <p role="alert" className="session-form__error">
                 {saveError}
@@ -844,6 +854,7 @@ function FPPMQTTSection() {
             >
               {saving ? 'Saving…' : 'Save FPP MQTT configuration'}
             </ScopedButton>
+          </div>
           </div>
 
           <p className="text-muted">
@@ -952,7 +963,7 @@ function AssetsSettingsSection() {
   }
 
   return (
-    <section id="assets-settings" className="panel config-section" style={{ marginTop: '2rem' }}>
+    <section id="assets-settings" className="panel config-section">
       <h3 className="panel__title">Asset store settings</h3>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
@@ -970,7 +981,7 @@ function AssetsSettingsSection() {
             </p>
           )}
           {state.kind === 'loaded' && (
-            <div className="config-status panel" role="status">
+            <div className="config-status" role="status">
               <p>
                 Active revision {state.config.revision} (source {state.config.source}
                 {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}).
@@ -987,6 +998,7 @@ function AssetsSettingsSection() {
             itself, not from this coordinator.
           </p>
 
+          <div className="table-scroll">
           <table className="config-table">
             <thead>
               <tr>
@@ -1034,8 +1046,9 @@ function AssetsSettingsSection() {
               </tr>
             </tbody>
           </table>
+          </div>
 
-          <div style={{ marginTop: '1rem' }}>
+          <div className="config-save-row">
             {saveError !== null && (
               <p role="alert" className="session-form__error">
                 {saveError}
@@ -1079,6 +1092,7 @@ function AssetsSettingsSection() {
 // own ConfigRevisionsResponse description).
 function RevisionsTable({ revisions }: { revisions: ConfigRevisionMeta[] }) {
   return (
+    <div className="table-scroll">
     <table className="config-table">
       <thead>
         <tr>
@@ -1101,5 +1115,6 @@ function RevisionsTable({ revisions }: { revisions: ConfigRevisionMeta[] }) {
         ))}
       </tbody>
     </table>
+    </div>
   )
 }

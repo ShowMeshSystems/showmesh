@@ -318,6 +318,7 @@ describe('Configuration', () => {
 
     await user.click(summary)
     expect(revisionCell).toBeVisible()
+    expect(revisionCell.closest('table')?.parentElement).toHaveClass('table-scroll')
   })
 
   it('renders the coordinator\'s own 404 reason with an empty editor, not as an error', async () => {
@@ -592,12 +593,7 @@ describe('Configuration', () => {
     expect(notice.tagName).toBe('STRONG')
   })
 
-  // Defect follow-up to #116: `.config-status` (styles/global.css) defines
-  // only margins, so the active-revision block lost its bordered callout
-  // treatment when it moved off `<p className="panel" role="status">`.
-  // Pairing the existing `.panel` class back onto it restores that
-  // treatment from existing design tokens, with no new colour values.
-  it('renders the active-revision block with the shared bordered callout treatment', async () => {
+  it('keeps active revision metadata visually quiet and leaves the restart reason visible', async () => {
     getFPPEndpointsConfig.mockResolvedValue(activeConfig)
     getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
     renderConfiguration(makeModel({ session: adminSession }))
@@ -605,6 +601,6 @@ describe('Configuration', () => {
     const notice = await screen.findByText(activeConfig.restartRequiredReason)
     const callout = notice.closest('.config-status') as HTMLElement
     expect(callout).not.toBeNull()
-    expect(callout.classList.contains('panel')).toBe(true)
+    expect(callout).not.toHaveClass('panel')
   })
 })

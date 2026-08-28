@@ -373,8 +373,9 @@ input {
    in this application. */
 .config-table {
   width: 100%;
+  min-width: 34rem;
   border-collapse: collapse;
-  margin-bottom: var(--space-3);
+  margin: 0;
 }
 
 /* This task's finding 11: .config-table had no horizontal-overflow
@@ -387,6 +388,8 @@ input {
    count makes plausible to overflow. */
 .table-scroll {
   overflow-x: auto;
+  margin-bottom: var(--space-3);
+  max-width: 100%;
 }
 
 .config-table th,
@@ -399,6 +402,15 @@ input {
 .config-table input[type='text'] {
   width: 100%;
   box-sizing: border-box;
+}
+
+.config-table input[type='number'] {
+  min-width: 8rem;
+}
+
+.config-table th:last-child,
+.config-table td:last-child {
+  white-space: nowrap;
 }
 
 /* NightSessionDetail.tsx/Configuration.tsx/ShowActionDetail.tsx: the
@@ -444,6 +456,16 @@ input {
   scroll-margin-top: var(--space-6);
 }
 
+.configuration-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.configuration-sections > .panel {
+  margin-bottom: 0;
+}
+
 /* The section index at the top of Configuration.tsx: a plain in-page
    jump list, not a tab component (none is permitted here) - four links
    to the four `.config-section` panels below, wrapping on a narrow
@@ -484,6 +506,8 @@ input {
    the currently active revision. */
 .config-status {
   margin: 0 0 var(--space-3) 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
 }
 
 .config-status p {
@@ -492,6 +516,23 @@ input {
 
 .config-status p:last-child {
   margin-bottom: 0;
+}
+
+.config-actions,
+.config-save-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.config-save-row {
+  margin: var(--space-3) 0;
+}
+
+.config-save-row .session-form__error {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 /* FPPDetail.tsx's "Commands" panel: the transport commands (Stop, Stop

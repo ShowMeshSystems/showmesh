@@ -130,7 +130,7 @@ export function RenderSettingsPanel() {
 
           {state.kind === 'loaded' && (
             <>
-              <p className="panel" role="status">
+              <p className="config-status" role="status">
                 {state.config.revision === 0 ? (
                   <>
                     Never configured, showing the built-in default (source <code>{state.config.source}</code>).
@@ -193,7 +193,7 @@ export function RenderSettingsPanel() {
                 />
               </div>
 
-              <div style={{ marginTop: '1rem' }}>
+              <div className="config-save-row">
                 {saveError !== null && (
                   <p role="alert" className="session-form__error">
                     {saveError}
@@ -212,6 +212,7 @@ export function RenderSettingsPanel() {
               {state.revisions.length > 0 && (
                 <>
                   <h3 className="panel__title">Revision history</h3>
+                  <div className="table-scroll">
                   <table className="config-table">
                     <thead>
                       <tr>
@@ -234,6 +235,7 @@ export function RenderSettingsPanel() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </>
               )}
             </>

@@ -115,6 +115,7 @@ describe('RenderSettingsPanel', () => {
     await waitFor(() => screen.getByText(/active revision 3/i))
     expect(screen.getAllByText(/admin-1/).length).toBeGreaterThan(0)
     expect(screen.getByText(/source api/i)).toBeInTheDocument()
+    expect(screen.getByRole('table').parentElement).toHaveClass('table-scroll')
   })
 
   it('submits the full payload on save, including every restartPolicy member', async () => {

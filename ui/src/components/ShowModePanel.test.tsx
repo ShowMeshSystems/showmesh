@@ -104,6 +104,7 @@ describe('ShowModePanel', () => {
     await waitFor(() => screen.getByText(/active revision 3/i))
     expect(screen.getAllByText(/admin-1/).length).toBeGreaterThan(0)
     expect(screen.getByText(/source api/i)).toBeInTheDocument()
+    expect(screen.getByRole('table').parentElement).toHaveClass('table-scroll')
   })
 
   // ADR-033 decision 3: a behaviour caused by the mode states the mode as
