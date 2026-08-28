@@ -1464,6 +1464,28 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Dense Show Night evidence keeps its intrinsic table width in the local
+ * scroller, including the background-audio and readiness config tables.
+ * The shell remains responsible for the page frame; these constraints only
+ * prevent this page's evidence from widening that frame at tablet and phone
+ * widths. */
+.show-night-page,
+.show-night__detail > *,
+.show-night__detail .shared-evidence-table,
+.show-night__table-scroll {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.show-night__detail .shared-evidence-table,
+.show-night__table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 .show-night__detail > .section-title {

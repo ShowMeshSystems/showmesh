@@ -160,6 +160,20 @@ describe('Show Night layout constraints', () => {
     expect(table).toMatch(/min-width:\s*48rem/)
   })
 
+  it('contains every Show Night evidence wrapper before its dense tables can widen the page', () => {
+    const detail = ruleBodyFor(css, '.show-night__detail')
+    const localContainment = /\.show-night-page,\s*\.show-night__detail > \*,\s*\.show-night__detail \.shared-evidence-table,\s*\.show-night__table-scroll\s*\{([^}]*)\}/.exec(css)?.[1]
+    const localScrollers = Array.from(css.matchAll(/\.show-night__detail \.shared-evidence-table,\s*\.show-night__table-scroll\s*\{([^}]*)\}/g)).at(-1)?.[1]
+
+    expect(detail).toMatch(/min-width:\s*0/)
+    expect(detail).toMatch(/max-width:\s*100%/)
+    expect(localContainment).toMatch(/min-width:\s*0/)
+    expect(localContainment).toMatch(/max-width:\s*100%/)
+    expect(localScrollers).toMatch(/width:\s*100%/)
+    expect(localScrollers).toMatch(/overflow-x:\s*auto/)
+    expect(localScrollers).toMatch(/overscroll-behavior-inline:\s*contain/)
+  })
+
   it('stacks the Show Night runtime summary and reduces table width on narrow layouts', () => {
     const narrow = css.slice(css.indexOf('@media (max-width: 700px)'))
 

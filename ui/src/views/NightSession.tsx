@@ -482,7 +482,7 @@ function NightSessionDetail({ session, configuredSteps, onReload }: { session: N
                 No background audio steps recorded for this cycle yet, or none is configured.
               </p>
             ) : (
-              <div className="table-scroll">
+              <div className="table-scroll show-night__table-scroll">
                 <table className="config-table">
                   <thead>
                     <tr>
@@ -555,7 +555,7 @@ function NightSessionDetail({ session, configuredSteps, onReload }: { session: N
                 <dd>{session.readiness.fresh ? 'yes' : 'no'}</dd>
               </dl>
               {session.readiness.checks.length > 0 && (
-                <div className="table-scroll">
+                <div className="table-scroll show-night__table-scroll">
                   <table className="config-table">
                     <thead>
                       <tr>

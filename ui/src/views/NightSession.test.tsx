@@ -373,6 +373,7 @@ describe('NightSession', () => {
     expect(screen.getByText('start')).toBeVisible()
     expect(screen.getByText('3')).toBeVisible()
     expect(screen.getByText('confirmed')).toBeVisible()
+    expect(screen.getByText('resting-bed-start').closest('.show-night__table-scroll')).not.toBeNull()
   })
 
   // The two failures this section exists for: a refused restore leaves the
