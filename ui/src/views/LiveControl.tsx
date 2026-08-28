@@ -96,28 +96,30 @@ export function LiveControl() {
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
 
       <OperatorSection title="Control status" detail="What this coordinator can currently confirm" aria-labelledby="live-control-status">
-        <StatusStrip label="Control status">
-          <StatusStripItem
-            label="Coordinator"
-            detail="Connection state"
-            tone={model.connection.kind === 'live' ? 'good' : 'unknown'}
-          >{model.connection.kind === 'live' ? 'Connected' : model.connection.kind}</StatusStripItem>
-          <StatusStripItem
-            label="FPP"
-            detail={fppStatus.detail}
-            tone={fppStatus.tone === 'good' ? 'good' : fppStatus.tone === 'bad' ? 'bad' : 'unknown'}
-          >{fppStatus.value}</StatusStripItem>
-          <StatusStripItem
-            label="Audio"
-            detail={audioStatus.detail}
-            tone={audioStatus.tone === 'good' ? 'good' : audioStatus.tone === 'bad' ? 'bad' : 'unknown'}
-          >{audioStatus.value}</StatusStripItem>
-          <StatusStripItem
-            label="Resolume"
-            detail={resolumeStatus.detail}
-            tone={resolumeStatus.tone === 'good' ? 'good' : resolumeStatus.tone === 'bad' ? 'bad' : 'unknown'}
-          >{resolumeStatus.value}</StatusStripItem>
-        </StatusStrip>
+        <div className="live-control-status-region">
+          <StatusStrip label="Control status">
+            <StatusStripItem
+              label="Coordinator"
+              detail="Connection state"
+              tone={model.connection.kind === 'live' ? 'good' : 'unknown'}
+            >{model.connection.kind === 'live' ? 'Connected' : model.connection.kind}</StatusStripItem>
+            <StatusStripItem
+              label="FPP"
+              detail={fppStatus.detail}
+              tone={fppStatus.tone === 'good' ? 'good' : fppStatus.tone === 'bad' ? 'bad' : 'unknown'}
+            >{fppStatus.value}</StatusStripItem>
+            <StatusStripItem
+              label="Audio"
+              detail={audioStatus.detail}
+              tone={audioStatus.tone === 'good' ? 'good' : audioStatus.tone === 'bad' ? 'bad' : 'unknown'}
+            >{audioStatus.value}</StatusStripItem>
+            <StatusStripItem
+              label="Resolume"
+              detail={resolumeStatus.detail}
+              tone={resolumeStatus.tone === 'good' ? 'good' : resolumeStatus.tone === 'bad' ? 'bad' : 'unknown'}
+            >{resolumeStatus.value}</StatusStripItem>
+          </StatusStrip>
+        </div>
       </OperatorSection>
 
       <section className="live-control-section" aria-labelledby="fpp-controls">

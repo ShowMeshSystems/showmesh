@@ -32,6 +32,17 @@ describe('Live Control layout constraints', () => {
     expect(cell).toMatch(/align-content:\s*start/)
   })
 
+  it('bounds the shared status grid inside the Live Control section instead of letting its intrinsic width widen the page', () => {
+    const region = ruleBodyFor(css, '.live-control-status-region')
+    const strip = ruleBodyFor(css, '.live-control-status-region .shared-status-strip')
+
+    expect(region).toMatch(/min-width:\s*0/)
+    expect(region).toMatch(/max-width:\s*100%/)
+    expect(strip).toMatch(/width:\s*100%/)
+    expect(strip).toMatch(/min-width:\s*0/)
+    expect(strip).toMatch(/max-width:\s*100%/)
+  })
+
   it('reserves full operator targets for Live Control fields without changing compact forms elsewhere', () => {
     const select = ruleBodyFor(css, '.live-control-page select')
     const textFieldLabel = ruleBodyFor(

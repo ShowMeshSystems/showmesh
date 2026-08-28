@@ -116,6 +116,20 @@
   gap: var(--space-5);
 }
 
+/* StatusStrip is itself a responsive grid. Its intrinsic width must not
+ * become the width of the page-level section that contains it; Live Control
+ * owns this boundary so the shared primitive remains usable in other layouts. */
+.live-control-status-region {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.live-control-status-region .shared-status-strip {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .live-control-section {
   min-width: 0;
   border-top: 1px solid var(--color-border);
