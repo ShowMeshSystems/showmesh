@@ -43,6 +43,12 @@
   --color-accent: var(--color-blue-green-700);
   --color-focus-ring: #80e4da;
   --color-link: #80e4da;
+  --color-on-accent: #071817;
+  --color-nav-surface: var(--color-surface-raised);
+  --color-nav-border: var(--color-border);
+  --color-nav-text: var(--color-text);
+  --color-nav-text-muted: var(--color-text-muted);
+  --color-nav-hover: var(--color-surface);
   --shadow-nav: 0 1.25rem 3.5rem rgb(0 0 0 / 28%);
 
   /* Status pairs: background + foreground, used together, never alone. */
@@ -79,18 +85,26 @@
   --control-height-sm: 2rem;
   --control-height: 2.25rem;
   --control-height-lg: 2.5rem;
+  --control-content-gap: var(--space-2);
 
   /* Type: compact operator scale plus a fixed-width face for metadata. */
   --font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  --font-size-3xs: 0.5625rem;
-  --font-size-2xs: 0.625rem;
-  --font-size-xs: 0.6875rem;
-  --font-size-sm: 0.75rem;
-  --font-size-md: 0.875rem;
-  --font-size-lg: 1.25rem;
-  --font-size-xl: 1.5625rem;
-  --font-size-2xl: 2rem;
+  --font-size-micro: 0.6875rem;
+  --font-size-small: 0.75rem;
+  --font-size-body: 0.875rem;
+  --font-size-heading: 1.25rem;
+  --font-size-display: 1.5625rem;
+  /* Compatibility aliases keep page-specific styles on the same five
+     deliberate roles while shared styles use the role names above. */
+  --font-size-3xs: var(--font-size-micro);
+  --font-size-2xs: var(--font-size-micro);
+  --font-size-xs: var(--font-size-micro);
+  --font-size-sm: var(--font-size-small);
+  --font-size-md: var(--font-size-body);
+  --font-size-lg: var(--font-size-heading);
+  --font-size-xl: var(--font-size-display);
+  --font-size-2xl: var(--font-size-display);
   --font-weight-normal: 400;
   --font-weight-medium: 600;
   --font-weight-bold: 700;
@@ -115,6 +129,12 @@
     --color-accent: var(--color-blue-green-500);
     --color-focus-ring: var(--color-blue-green-500);
     --color-link: var(--color-blue-green-500);
+    --color-on-accent: #ffffff;
+    --color-nav-surface: var(--color-surface-raised);
+    --color-nav-border: var(--color-border);
+    --color-nav-text: var(--color-text);
+    --color-nav-text-muted: var(--color-text-muted);
+    --color-nav-hover: var(--color-graphite-100);
     --shadow-nav: 0 0.75rem 2rem rgb(17 27 27 / 12%);
 
     --status-good-bg: #e3f5e9;
@@ -143,6 +163,12 @@
     --color-accent: var(--color-blue-green-700);
     --color-focus-ring: #80e4da;
     --color-link: #80e4da;
+    --color-on-accent: #071817;
+    --color-nav-surface: var(--color-surface-raised);
+    --color-nav-border: var(--color-border);
+    --color-nav-text: var(--color-text);
+    --color-nav-text-muted: var(--color-text-muted);
+    --color-nav-hover: var(--color-surface);
     --shadow-nav: 0 1.25rem 3.5rem rgb(0 0 0 / 28%);
 
     --status-good-bg: #102a24;
@@ -176,6 +202,12 @@
   --color-accent: #66d9ff;
   --color-focus-ring: #ffff00;
   --color-link: #7fd0ff;
+  --color-on-accent: #000000;
+  --color-nav-surface: #000000;
+  --color-nav-border: #ffffff;
+  --color-nav-text: #ffffff;
+  --color-nav-text-muted: #e0e0e0;
+  --color-nav-hover: #0d0d0d;
   --shadow-nav: none;
 
   --status-good-bg: #003d17;

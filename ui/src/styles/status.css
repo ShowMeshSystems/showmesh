@@ -18,7 +18,7 @@
   gap: var(--space-2);
   padding: var(--space-1) var(--space-3);
   border-radius: 999px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -76,7 +76,7 @@
 }
 
 .evidence__reason {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   color: var(--color-text-muted);
 }
 
@@ -96,7 +96,7 @@
    --font-size-xs, which would render a stale/failed/unsupported reading's
    freshness text smaller than a healthy one's. */
 .evidence__age {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   color: var(--color-text-muted);
 }
 
@@ -106,7 +106,7 @@
    .evidence__age above; the non-"current" case must never render smaller
    than this one. */
 .evidence__age--inline {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   color: var(--color-text-muted);
 }
 
@@ -144,7 +144,7 @@
    the same failure-mode split status-badge's own header comment and
    ConnectionBanner draw between a browser problem and a show problem. */
 .evidence__as-of {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   font-style: italic;
   color: var(--status-warn-fg);
 }
@@ -167,7 +167,7 @@
 
 .connection-banner__detail {
   font-weight: 400;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
 }
 
 .connection-banner--live {
@@ -175,7 +175,7 @@
   color: var(--connection-live-fg);
   border-bottom: 1px solid var(--color-border);
   font-weight: 400;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   padding: var(--space-2) var(--space-4);
 }
 
@@ -226,7 +226,7 @@
   background: var(--notice-info-bg);
   color: var(--notice-info-fg);
   border-bottom: 1px solid var(--color-border);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
 }
 
 /* ADR-024 decision 9: the unclaimed-bootstrap banner is "loud and
@@ -272,7 +272,7 @@
 }
 
 .session-form label {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   font-weight: var(--font-weight-medium);
 }
 
@@ -291,7 +291,7 @@
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-accent);
   background: var(--color-accent);
-  color: var(--color-surface);
+  color: var(--color-on-accent);
   cursor: pointer;
   font-weight: var(--font-weight-medium);
   align-self: flex-start;
@@ -312,7 +312,7 @@
 }
 
 .scoped-button__reason {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-small);
   color: var(--color-text-muted);
   max-width: 32ch;
 }

@@ -21,13 +21,15 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-family);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-body);
   line-height: var(--line-height-normal);
   -webkit-font-smoothing: antialiased;
 }
 
 a {
   color: var(--color-link);
+  text-decoration-color: currentColor;
+  text-underline-offset: 0.18em;
 }
 
 button,
@@ -399,6 +401,21 @@ input {
   border-bottom: 1px solid var(--color-border);
 }
 
+.config-table th {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-micro);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Table borders already draw horizontal lines. Offset an explicit link
+   underline so it cannot be mistaken for a row divider. */
+.config-table a {
+  color: var(--color-link);
+  font-weight: var(--font-weight-medium);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.24em;
+}
+
 .config-table input[type='text'] {
   width: 100%;
   box-sizing: border-box;
@@ -523,7 +540,7 @@ input {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--control-content-gap);
 }
 
 .config-save-row {
@@ -914,11 +931,11 @@ button:disabled {
 }
 
 .app-sidebar {
-  --rail-bg: var(--color-graphite-950);
-  --rail-border: var(--color-graphite-800);
-  --rail-muted: var(--color-graphite-300);
-  --rail-text: var(--color-graphite-50);
-  --rail-hover: var(--color-graphite-800);
+  --rail-bg: var(--color-nav-surface);
+  --rail-border: var(--color-nav-border);
+  --rail-muted: var(--color-nav-text-muted);
+  --rail-text: var(--color-nav-text);
+  --rail-hover: var(--color-nav-hover);
   display: flex;
   width: 100%;
   min-width: 0;
@@ -1172,7 +1189,7 @@ button:disabled {
 
 .panel__title {
   margin: 0 0 var(--space-3);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-heading);
   font-weight: var(--font-weight-bold);
   line-height: var(--line-height-tight);
 }
@@ -1276,9 +1293,13 @@ button,
 .button,
 .button-danger,
 .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--control-content-gap);
   min-height: var(--touch-target-min);
   border-radius: var(--radius-control);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-body);
   font-weight: var(--font-weight-medium);
   line-height: 1;
 }
@@ -1288,7 +1309,7 @@ button,
   padding: 0 var(--space-3);
   border: 1px solid var(--color-accent);
   background: var(--color-accent);
-  color: var(--color-bg);
+  color: var(--color-on-accent);
   cursor: pointer;
   text-decoration: none;
 }
@@ -1315,7 +1336,7 @@ button:hover:not(:disabled),
 .button-danger {
   border-color: var(--status-bad-fg);
   background: var(--status-bad-fg);
-  color: var(--color-bg);
+  color: var(--color-on-accent);
 }
 
 .icon-button {
@@ -1333,6 +1354,7 @@ button:disabled,
 }
 
 a:not(.app-nav__primary-link):not(.app-nav__secondary-link):not(.entity-link):not(.button) {
+  font-weight: var(--font-weight-medium);
   text-decoration-thickness: 1px;
   text-underline-offset: 0.15em;
 }

@@ -27,7 +27,13 @@ import { describe, expect, it } from 'vitest'
 
 const STATUS_CSS_PATH = path.join(__dirname, 'status.css')
 
-const FONT_SIZE_STEPS = ['--font-size-xs', '--font-size-sm', '--font-size-md', '--font-size-lg', '--font-size-xl']
+const FONT_SIZE_STEPS = [
+  '--font-size-micro',
+  '--font-size-small',
+  '--font-size-body',
+  '--font-size-heading',
+  '--font-size-display',
+]
 
 function stepIndex(token: string): number {
   const index = FONT_SIZE_STEPS.indexOf(token)
