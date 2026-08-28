@@ -45,7 +45,6 @@ type LoadState =
   | { kind: 'loaded'; principals: PrincipalObject[] }
 
 export function Access() {
-  const { clearUnsavedChanges } = useUnsavedChanges('access-principals')
   const model = useModelContext()
   // Same posture as Configuration.tsx's own scopeGate: every request this
   // page could make (including the list read) is refused identically
@@ -58,9 +57,7 @@ export function Access() {
 
   useEffect(() => {
     if (!readGate.allowed) return
-    clearUnsavedChanges()
     let cancelled = false
-    setState({ kind: 'loading' })
 
     async function load(): Promise<void> {
       try {
@@ -76,14 +73,14 @@ export function Access() {
     return () => {
       cancelled = true
     }
-  }, [clearUnsavedChanges, readGate.allowed, reloadGeneration])
+  }, [readGate.allowed, reloadGeneration])
 
   function reload(): void {
     setReloadGeneration((g) => g + 1)
   }
 
   return (
-    <div data-unsaved-form="access-principals">
+    <div>
       <h2 className="panel__title">Access</h2>
       <p className="text-muted">
         Principals, their role and enabled state, their passwords, and their API tokens. Reads
@@ -144,6 +141,7 @@ export function Access() {
 }
 
 function CreatePrincipalForm({ onCreated }: { onCreated: () => void }) {
+  const { clearUnsavedChanges } = useUnsavedChanges('access-create-principal')
   const [name, setName] = useState('')
   const [kind, setKind] = useState<'human' | 'machine'>('human')
   const [role, setRole] = useState<(typeof ROLES)[number]>('viewer')
@@ -164,6 +162,7 @@ function CreatePrincipalForm({ onCreated }: { onCreated: () => void }) {
       await createPrincipal({ name: name.trim(), kind, role, password })
       setName('')
       setPassword('')
+      clearUnsavedChanges()
       onCreated()
     } catch (err) {
       setError(describeApiError(err))
@@ -174,7 +173,7 @@ function CreatePrincipalForm({ onCreated }: { onCreated: () => void }) {
   }
 
   return (
-    <div style={{ marginBottom: '1.5rem' }}>
+    <div data-unsaved-form="access-create-principal" style={{ marginBottom: '1.5rem' }}>
       <h3 className="panel__title">Create a principal</h3>
       {error !== null && (
         <p role="alert" className="session-form__error">
@@ -221,6 +220,8 @@ function CreatePrincipalForm({ onCreated }: { onCreated: () => void }) {
 }
 
 function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; onChanged: () => void }) {
+  const { clearUnsavedChanges: clearRoleUnsavedChanges } = useUnsavedChanges(`access-principal-${principal.id}-role`)
+  const { clearUnsavedChanges: clearPasswordUnsavedChanges } = useUnsavedChanges(`access-principal-${principal.id}-password`)
   const [roleDraft, setRoleDraft] = useState(principal.role)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -255,6 +256,7 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
   async function handleSetRole(): Promise<void> {
     await runAction('role', async () => {
       await setPrincipalRole(principal.id, { role: roleDraft })
+      clearRoleUnsavedChanges()
     })
   }
 
@@ -273,6 +275,7 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
       await resetPrincipalPassword(principal.id, { password })
       setPassword('')
       setPasswordOpen(false)
+      clearPasswordUnsavedChanges()
     })
   }
 
@@ -288,7 +291,7 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
           {locked ? (
             principal.role
           ) : (
-            <>
+            <span data-unsaved-form={`access-principal-${principal.id}-role`}>
               <select value={roleDraft} onChange={(e) => setRoleDraft(e.target.value as (typeof ROLES)[number])}>
                 {ROLES.map((r) => (
                   <option key={r} value={r}>
@@ -304,7 +307,7 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
               >
                 Set role
               </ScopedButton>
-            </>
+            </span>
           )}
         </td>
         <td>{principal.disabled ? 'yes' : 'no'}</td>
@@ -342,7 +345,7 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
       )}
       {passwordOpen && !locked && (
         <tr>
-          <td colSpan={7}>
+          <td colSpan={7} data-unsaved-form={`access-principal-${principal.id}-password`}>
             <label>
               New password
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -371,6 +374,7 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
 }
 
 function TokensPanel({ principalID, locked }: { principalID: string; locked: boolean }) {
+  const { clearUnsavedChanges } = useUnsavedChanges(`access-principal-${principalID}-token-issue`)
   const [tokens, setTokens] = useState<TokenObject[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [label, setLabel] = useState('')
@@ -425,6 +429,7 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
       setIssuedValue(resp.value)
       setLabel('')
       setExpires('')
+      clearUnsavedChanges()
       reload()
     } catch (err) {
       setError(describeApiError(err))
@@ -507,7 +512,7 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
         </div>
       )}
       {!locked && (
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'end', marginTop: '0.5rem' }}>
+        <div data-unsaved-form={`access-principal-${principalID}-token-issue`} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'end', marginTop: '0.5rem' }}>
           <label>
             Label
             <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} />

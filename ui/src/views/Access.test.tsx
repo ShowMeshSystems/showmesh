@@ -1,8 +1,10 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Access } from './Access'
 import { ModelContext } from '../app/ModelContext'
+import { UnsavedChangesProvider } from '../app/UnsavedChanges'
 import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
@@ -12,11 +14,12 @@ import type { Model } from '../app/types'
 // list — a prior version's reload() only set tokens to null and relied on
 // an effect keyed on [principalID] alone, so the panel showed "Loading
 // tokens…" forever after any issue/revoke.
-const { listPrincipals, listPrincipalTokens, issuePrincipalToken, revokePrincipalToken } = vi.hoisted(() => ({
+const { listPrincipals, listPrincipalTokens, issuePrincipalToken, revokePrincipalToken, setPrincipalRole } = vi.hoisted(() => ({
   listPrincipals: vi.fn(),
   listPrincipalTokens: vi.fn(),
   issuePrincipalToken: vi.fn(),
   revokePrincipalToken: vi.fn(),
+  setPrincipalRole: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -26,6 +29,7 @@ vi.mock('../api', async (importOriginal) => {
     listPrincipalTokens,
     issuePrincipalToken,
     revokePrincipalToken,
+    setPrincipalRole,
   }
 })
 
@@ -38,6 +42,12 @@ const machinePrincipal = {
   hasPassword: false,
   reserved: false,
   createdAt: '2026-08-17T00:00:00Z',
+}
+
+const secondMachinePrincipal = {
+  ...machinePrincipal,
+  id: 'p-3',
+  name: 'second-fpp-host',
 }
 
 const tokenA = {
@@ -80,6 +90,7 @@ afterEach(() => {
   listPrincipalTokens.mockReset()
   issuePrincipalToken.mockReset()
   revokePrincipalToken.mockReset()
+  setPrincipalRole.mockReset()
 })
 
 describe('Access: tokens panel', () => {
@@ -131,5 +142,42 @@ describe('Access: tokens panel', () => {
     expect(screen.queryByText(/loading tokens/i)).not.toBeInTheDocument()
     expect(revokePrincipalToken).toHaveBeenCalledWith('p-2', 't-1')
     await waitFor(() => expect(listPrincipalTokens).toHaveBeenCalledTimes(2))
+  })
+})
+
+describe('Access: independent unsaved owners', () => {
+  it('keeps another principal role draft protected after a successful role save reloads the list', async () => {
+    listPrincipals.mockResolvedValue({
+      serverTime: '2026-08-17T00:00:00Z',
+      principals: [machinePrincipal, secondMachinePrincipal],
+    })
+    setPrincipalRole.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/access']}>
+        <UnsavedChangesProvider>
+          <ModelContext.Provider value={makeModel({ session: adminSession })}>
+            <Routes>
+              <Route path="/access" element={<><Access /><Link to="/elsewhere">Leave access</Link></>} />
+              <Route path="/elsewhere" element={<p>Elsewhere</p>} />
+            </Routes>
+          </ModelContext.Provider>
+        </UnsavedChangesProvider>
+      </MemoryRouter>,
+    )
+
+    const [firstRole, secondRole] = await screen.findAllByDisplayValue('scheduler')
+    expect(firstRole).toBeDefined()
+    expect(secondRole).toBeDefined()
+    await user.selectOptions(firstRole!, 'operator')
+    await user.selectOptions(secondRole!, 'admin')
+    await user.click(screen.getAllByRole('button', { name: 'Set role' })[0]!)
+
+    await waitFor(() => expect(setPrincipalRole).toHaveBeenCalledWith('p-2', { role: 'operator' }))
+    await waitFor(() => expect(listPrincipals).toHaveBeenCalledTimes(2))
+    await user.click(screen.getByRole('link', { name: 'Leave access' }))
+
+    expect(screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' })).toBeInTheDocument()
   })
 })
