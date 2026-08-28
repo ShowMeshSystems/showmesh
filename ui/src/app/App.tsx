@@ -176,12 +176,25 @@ function ShowWorkspaceOverviewRoute() {
   return <ShowWorkspaceOverview showId={id} />
 }
 
+// The Settings directory replaced the former single long Configuration page.
+// Keep its established fragment links working, including the in-page target
+// when the destination contains more than one editor.
+export const LEGACY_CONFIGURATION_HASH_DESTINATIONS: Record<string, string> = {
+  '#fpp-endpoints': '/config/connections#fpp-endpoints',
+  '#resolume-instances': '/config/connections#resolume-instances',
+  '#fpp-mqtt': '/config/connections#fpp-mqtt',
+  '#assets-settings': '/config/content-delivery#assets-settings',
+  '#render-settings': '/config/render-recovery#render-settings',
+  '#show-mode': '/config/mode#show-mode',
+}
+
 export function ConfigurationRoute() {
   const { hash } = useLocation()
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (hash === '#show-mode') navigate('/config/mode', { replace: true })
+    const destination = LEGACY_CONFIGURATION_HASH_DESTINATIONS[hash]
+    if (destination) navigate(destination, { replace: true })
   }, [hash, navigate])
 
   return <Configuration />

@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { evaluateScope } from '../app/session'
-import { useHighContrast } from '../app/useHighContrast'
 import { useModelContext } from '../app/ModelContext'
 import { RenderSettingsPanel } from '../components/RenderSettingsPanel'
 import { ShowModePanel } from '../components/ShowModePanel'
@@ -49,7 +48,9 @@ export function ContentDeliverySettings() {
 export function RenderRecoverySettings() {
   return (
     <ConfigEditorPage title="Render recovery" lede="Idle output and bounded render-pipeline restart behavior.">
-      <RenderSettingsPanel />
+      <div id="render-settings">
+        <RenderSettingsPanel />
+      </div>
     </ConfigEditorPage>
   )
 }
@@ -57,7 +58,9 @@ export function RenderRecoverySettings() {
 export function ModeSettings() {
   return (
     <ConfigEditorPage title="Mode" lede="Choose the installation-wide operating mode.">
-      <ShowModePanel />
+      <div id="show-mode">
+        <ShowModePanel />
+      </div>
     </ConfigEditorPage>
   )
 }
@@ -77,14 +80,12 @@ export function AudioSettingsDirectory() {
 }
 
 export function AppearanceSettings() {
-  const [highContrast, toggleHighContrast] = useHighContrast()
   return (
     <div className="settings-direct-page">
       <OperatorPageHeader title="Appearance" eyebrow="Settings" lede="Appearance is local to this browser and does not create a coordinator revision." />
       <section className="panel settings-direct-page__appearance" aria-labelledby="contrast-heading">
         <h2 id="contrast-heading" className="panel__title">High contrast</h2>
-        <p className="text-muted">{highContrast ? 'High contrast is on for this browser.' : 'High contrast is off for this browser.'}</p>
-        <button type="button" onClick={toggleHighContrast}>{highContrast ? 'Turn high contrast off' : 'Turn high contrast on'}</button>
+        <p className="text-muted">Use the persistent High contrast control in the sidebar footer. The preference applies only to this browser and does not change coordinator configuration.</p>
       </section>
     </div>
   )

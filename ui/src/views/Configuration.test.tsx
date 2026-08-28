@@ -4,8 +4,8 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Configuration } from './Configuration'
-import { ConnectionsSettings } from './SettingsPages'
-import { ConfigurationRoute } from '../app/App'
+import { AppearanceSettings, ConnectionsSettings, ContentDeliverySettings, ModeSettings, RenderRecoverySettings } from './SettingsPages'
+import { ConfigurationRoute, LEGACY_CONFIGURATION_HASH_DESTINATIONS } from '../app/App'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
@@ -547,15 +547,36 @@ describe('Configuration', () => {
     expect(within(nav).getByRole('link', { name: 'Mode' })).toHaveAttribute('href', '/config/mode')
   })
 
-  it('keeps the historical show-mode hash link compatible with the direct Mode page', async () => {
+  it('redirects every historical Configuration fragment to its direct Settings editor', async () => {
     function LocationProbe() {
       const location = useLocation()
       return <output>{`${location.pathname}${location.hash}`}</output>
     }
 
-    render(<MemoryRouter initialEntries={['/config#show-mode']}><ConfigurationRoute /><LocationProbe /></MemoryRouter>)
+    for (const [hash, destination] of Object.entries(LEGACY_CONFIGURATION_HASH_DESTINATIONS)) {
+      cleanup()
+      render(<MemoryRouter initialEntries={[`/config${hash}`]}><ConfigurationRoute /><LocationProbe /></MemoryRouter>)
 
-    expect(await screen.findByText('/config/mode')).toBeInTheDocument()
+      expect(await screen.findByText(destination)).toBeInTheDocument()
+    }
+  })
+
+  it('renders stable targets for direct Settings editors without duplicating the global contrast control', () => {
+    render(
+      <ModelContext.Provider value={makeModel({ session: adminSession })}>
+        <ConnectionsSettings />
+        <ContentDeliverySettings />
+        <RenderRecoverySettings />
+        <ModeSettings />
+        <AppearanceSettings />
+      </ModelContext.Provider>,
+    )
+
+    for (const id of ['fpp-endpoints', 'resolume-instances', 'fpp-mqtt', 'assets-settings', 'render-settings', 'show-mode']) {
+      expect(document.getElementById(id)).not.toBeNull()
+    }
+    expect(screen.getByText(/persistent High contrast control in the sidebar footer/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /high contrast/i })).not.toBeInTheDocument()
   })
 
   // Readability seam: the restart-required notice (currently always "no
