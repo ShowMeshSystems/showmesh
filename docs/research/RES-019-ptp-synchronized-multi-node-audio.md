@@ -39,7 +39,7 @@ PTP solves problem 1 and is the reference that makes 2, 3, and 4 solvable. Probl
 
 AUDIO-ENGINE §4.2 forbids continuous clock discipline of program audio: align at start, measure, ignore below a threshold, correct at track boundaries, allow a discrete seek when drift is operationally significant, "avoid audible playback-rate manipulation". ADR-018's alternatives section rejected "correcting in software" on the grounds that the correction would be continuous rate adjustment or repeated seeks. Both texts were written against a free-running node with no shared clock and no measurement, and against the audible artefacts of MultiSync-style four-frame slews.
 
-Problem 3 requires exactly the continuous rate correction those texts reject. The distinction that matters, and that the existing text does not draw, is between **a step or slew of tens of milliseconds**, which is audible, and **a ppm-scale ratio trim applied through a high-quality variable-ratio resampler**, which the AES67 and RAVENNA ecosystem, PipeWire, and zita-ajbridge apply continuously as a matter of course. This record recommends a superseding ADR that permits the second and continues to forbid the first (§13, stage 3). Until that ADR is accepted, §4.2 stands and stages 0 to 2 of the plan are all that may ship.
+Problem 3 requires exactly the continuous rate correction those texts reject. The distinction that matters, and that the existing text does not draw, is between **a step or slew of tens of milliseconds**, which is audible, and **a ppm-scale ratio trim applied through a high-quality variable-ratio resampler**, which the AES67 and RAVENNA ecosystem, PipeWire, and zita-ajbridge apply continuously as a matter of course. [ADR-046](../decisions/ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md) (owner, 2026-08-28) draws that distinction: rate trim against a locked shared clock is permitted; slews, seeks as ordinary correction, and chasing the position feed are not. The owner's original evidence for the ban was FPP MultiSync driving audio on a remote FPP node in 2025, a position-feed chase with frame-scale slews that sounded like a skipping CD; that mechanism stays forbidden.
 
 `audio.settings.driftIgnoreThresholdMs` defaults to 20 ms and is stored but consumed by nothing (`internal/coordinator/config/audiosettings.go`, Track C report).
 
@@ -252,14 +252,14 @@ Requirements this record places on the clock subsystem for AES67's sake: the pro
 
 ## 13. Staged plan
 
-Every stage ends with recorded evidence at the stated level. Stages 0 to 2 do not touch program audio's rate and are permitted under the current AUDIO-ENGINE §4.2; stage 3 requires the superseding ADR first.
+Every stage ends with recorded evidence at the stated level. Stages 0 to 2 do not touch program audio's rate; stage 3 is permitted by ADR-046 and gated on its own measurements.
 
 | Stage | Outcome | Evidence needed | Level |
 |---|---|---|---|
 | 0. Measure | Two real nodes, one 30 to 60 minute cue, two-channel recording of both outputs, drift curve in ms and ppm; `ethtool -T` on every node | owner hardware test | L2 |
 | 1. Clock provider | Provider interface, ShowMesh-managed and external linuxptp providers, FPP observed provider, `node.clock.ptp.*` telemetry, ownership check; no change to playback | container bench with two agents and `ptp4l` in software mode; unit tests | L2 |
 | 2. Scheduled start | `PREPARE` / `START AT T0`, timeline telemetry, seek-only resync on discontinuity, unsynchronized fallback | container bench: two agents, one `T0`, start skew measured from sink clocks; then real nodes | L2, then L3 |
-| 3. Rate lock | Superseding ADR, then candidate A spike (PipeWire PTP driver + `pipewiresink`), candidate B only on A's failure; H1 to H4 answered | container for lock behavior; real interfaces for audibility, LTC, and long-run hold | L2, then L3 |
+| 3. Rate lock | Candidate A spike (PipeWire PTP driver + `pipewiresink`), candidate B only on A's failure; H1 to H4 answered | container for lock behavior; real interfaces for audibility, LTC, and long-run hold | L2, then L3 |
 | 4. Latency calibration | `outputLatency` representation, measurement procedure, operator entry, applied to `T0` | loopback or acoustic rig, owner test | L2 |
 | 5. AES67 | `module-rtp-sink` or GStreamer send on the same clock; `ts-refclk` from the provider | protocol analyser plus two vendor receivers | L2 |
 
@@ -277,7 +277,7 @@ Requiring a spike (H1 to H4 in §7.4, plus):
 
 Requiring hardware: every number in §8, the drift curve in stage 0, the perceptual threshold RES-007 already asks for, and whether the Pi 5 timestamping defect in raspberrypi/linux #5904 affects the kernel the Pi node runs.
 
-Requiring an owner ruling: the superseding ADR for §3.3 (recommended: permit ppm-scale resampler trim on a PTP-locked node, keep forbidding slews and seeks as ordinary correction); whether PipeWire becomes a required dependency of the audio node (RES-007's open question, decided by stage 3's result).
+Requiring an owner ruling: the ADR question is closed by ADR-046. Still open: whether PipeWire becomes a required dependency of the audio node (RES-007's open question, decided by stage 3's result).
 
 ## 15. Sources
 
