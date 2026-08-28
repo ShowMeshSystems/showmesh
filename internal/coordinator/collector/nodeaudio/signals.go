@@ -125,7 +125,19 @@ const (
 	// audio reached an output. Always present, never empty.
 	SignalSessionStateReason observation.SignalID = "audio_session.state.reason"
 
-	SignalSessionDesiredRevision  observation.SignalID = "audio_session.desired_revision"
+	SignalSessionDesiredRevision observation.SignalID = "audio_session.desired_revision"
+
+	// SignalSessionGain and SignalSessionGainCeiling report in decibels
+	// (pkg/audio.GainToDb/CeilingToDb), matching the unit every
+	// operator-facing gain input already takes (pkg/audio/gain.go's own
+	// coordinator-boundary conversion). The agent's own report
+	// (mqttproto.AudioSessionReport.Gain/Ceiling) and everything below
+	// it — pkg/audio.Gain/Ceiling, the engine — stay linear; only this
+	// collector's read side converts, so an operator who typed -6 sees
+	// -6, never the linear multiplier that value produces.
+	// audio_session.gain.effective_db and .ceiling_db stay reserved and
+	// unshipped (docs/build/IDENTIFIER-REGISTER.md): these two existing
+	// signals were converted in place instead of gaining companions.
 	SignalSessionGain             observation.SignalID = "audio_session.gain.effective"
 	SignalSessionGainCeiling      observation.SignalID = "audio_session.gain.ceiling"
 	SignalSessionFadeState        observation.SignalID = "audio_session.fade.state"

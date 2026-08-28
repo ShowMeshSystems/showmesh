@@ -2,9 +2,11 @@ package nodeaudio
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -130,6 +132,45 @@ func TestSessionPositionUnknownIsNotCollectedNeverStale(t *testing.T) {
 	pos := findSessionObs(t, obs, SignalSessionPositionMs)
 	if pos.Absence != observation.StateNotCollected {
 		t.Errorf("position absence = %q, want %q", pos.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestSessionGainSignalsReportDecibelsNotLinearMultiplier proves the read
+// side agrees with the write side (PR #134 made every operator-facing
+// gain input decibels): an operator who typed -6 dB and a ceiling of
+// 3 dB must see -6 and 3 on audio_session.gain.effective/.ceiling, never
+// the agent's own linear multiplier (pkg/audio.Gain/Ceiling stay linear
+// all the way to the engine -- only the coordinator's read boundary here
+// converts, matching pkg/audio/gain.go's write-side boundary).
+func TestSessionGainSignalsReportDecibelsNotLinearMultiplier(t *testing.T) {
+	linearGain := float64(pkgaudio.GainFromDb(-6))
+	linearCeiling := float64(pkgaudio.CeilingFromDb(3))
+
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none",
+		HasGain: true, Gain: linearGain,
+		HasCeiling: true, Ceiling: linearCeiling,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	gain := findSessionObs(t, obs, SignalSessionGain)
+	gainDb, ok := gain.Value.(float64)
+	if !ok {
+		t.Fatalf("gain.effective value = %v (%T), want a float64 decibel value", gain.Value, gain.Value)
+	}
+	if math.Abs(gainDb-(-6)) > 0.01 {
+		t.Errorf("gain.effective value = %v, want -6 (dB, what the operator entered) -- not the linear multiplier %v", gainDb, linearGain)
+	}
+
+	ceiling := findSessionObs(t, obs, SignalSessionGainCeiling)
+	ceilingDb, ok := ceiling.Value.(float64)
+	if !ok {
+		t.Fatalf("gain.ceiling value = %v (%T), want a float64 decibel value", ceiling.Value, ceiling.Value)
+	}
+	if math.Abs(ceilingDb-3) > 0.01 {
+		t.Errorf("gain.ceiling value = %v, want 3 (dB, what the operator entered) -- not the linear multiplier %v", ceilingDb, linearCeiling)
 	}
 }
 
