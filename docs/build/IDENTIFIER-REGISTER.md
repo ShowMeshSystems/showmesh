@@ -734,6 +734,26 @@ signals is the builder's call. If the existing signals are converted in
 place, these two rows stay reserved and unshipped, because releasing a
 name only to re-mint it later is how a spelling drifts.
 
+**Lane 18b reservations, 2026-08-28.** Reserved by the lane before its
+builders start. SM-295 needs a way to say "a restore is queued and nothing
+is playing" and SM-296 needs the automatic retry to be visible without
+opening the node log; both are one design, so both names are minted here
+rather than by whichever branch lands first.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.restore.attempts` | reserved | Lane 18b SM-296 (how many automatic restore attempts this session has made) |
+| `audio_session.restore.next_attempt_ms` | reserved | Lane 18b SM-296 (milliseconds until the next backed-off attempt) |
+| `audio_session.restore.last_reason` | reserved | Lane 18b SM-296 (why the last attempt did not build an engine) |
+
+`pkg/audio.State` value `restore_pending` is reserved for Lane 18b SM-295.
+SM-295 leaves the choice of shape to its builder: a new `State` member or a
+documented state-plus-fault combination. If the builder takes the
+combination, this value stays reserved and unshipped rather than released,
+on the same rule the gain rows above follow. Either shape changes what
+`audio_session.state` can report, so it is an API change and is recorded on
+SM-310.
+
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
 signal exists so the threshold can be set from measurement, and a future
