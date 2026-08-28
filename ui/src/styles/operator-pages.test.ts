@@ -109,3 +109,28 @@ describe('shared layout overflow constraints', () => {
     expect(narrow).toMatch(/\.shared-overview-detail\s*\{\s*grid-template-columns:\s*1fr/)
   })
 })
+
+describe('Dashboard layout constraints', () => {
+  const css = readFileSync(CSS_PATH, 'utf8')
+
+  it('keeps concurrent-run evidence compact, themed, and locally wrapped', () => {
+    const runs = ruleBodyFor(css, '.dashboard-current-runs')
+    const evidence = ruleBodyFor(css, '.dashboard-current-run__evidence')
+    const narrow = css.slice(css.indexOf('@media (max-width: 700px)'))
+
+    expect(runs).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\) auto/)
+    expect(evidence).toMatch(/grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/)
+    expect(evidence).toMatch(/min-width:\s*0/)
+    expect(narrow).toMatch(/\.dashboard-current-run__evidence\s*\{\s*grid-template-columns:\s*1fr/)
+  })
+
+  it('keeps the activity table scrollable and keyboard-focusable without widening the page', () => {
+    const scroll = ruleBodyFor(css, '.dashboard-activity-table-scroll')
+    const focus = ruleBodyFor(css, '.dashboard-activity-table-scroll:focus-visible')
+
+    expect(scroll).toMatch(/max-width:\s*100%/)
+    expect(scroll).toMatch(/overflow-x:\s*auto/)
+    expect(scroll).toMatch(/overscroll-behavior-inline:\s*contain/)
+    expect(focus).toMatch(/outline:\s*2px solid var\(--color-focus-ring\)/)
+  })
+})
