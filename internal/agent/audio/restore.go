@@ -354,26 +354,12 @@ func (m *Manager) deferRestoreLocked(ctx context.Context, s *Session, id pkgaudi
 // queueForRetryLocked is deferRestoreLocked's and restoreOne's own
 // shared retry-queueing: it must never overwrite the on-disk persisted
 // record with StateFailed, because that overwrite is exactly the
-// permanent damage this exists to prevent. Nothing is persisted here,
-// and s.state is deliberately left exactly as restoreOne already loaded
-// it from disk (Playing/Preparing/Paused) — never set to
-// [pkgaudio.StateRestorePending] or any other value, and this is the ONE
-// place in this package that must hold that line: s.state is what every
-// persist call in this package writes verbatim ([Session.persistedLocked]),
-// and [Session.dispatch] persists after every accepted command,
-// including a refusal, so ANY command reaching this session during the
-// pending window would otherwise burn a reporting-only value onto the
-// disk record. [Manager.removeDuckerLocked] reaches the identical
-// persist path with no operator command at all, from the natural-
-// completion watcher. A state [Manager.restoreOne]'s own switch has no
-// case for is not a reporting nuance if it lands there: the record is
-// neither restored nor re-queued on the next boot, and whatever was
-// genuinely playing before this reboot is gone. The pending-vs-playing
-// distinction [Session.snapshotLocked] must still report is carried
-// instead by this session's id remaining in m.pendingEngineRestore
-// (set below) — read back there without ever touching s.state, so the
-// distinction cannot leak onto disk through any of this package's
-// persist call sites, present or future.
+// permanent damage this exists to prevent. Nothing is persisted here.
+// s.state is never set to a value restoreOne's own switch has no case
+// for: every persist call in this package writes s.state verbatim, and
+// dispatch persists after every accepted command, so the
+// pending-versus-playing distinction is carried by m.pendingEngineRestore
+// and applied only in snapshotLocked, never onto s.state.
 //
 // s is left with no engine handle (any partial Load this attempt
 // produced is released), so [Manager.invalidateActiveSessions] must

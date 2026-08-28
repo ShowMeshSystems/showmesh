@@ -309,12 +309,8 @@ func TestRestoreAllWithNoEngineBoundDoesNotFailPersistedState(t *testing.T) {
 	}
 
 	// Before the binding arrives, the session must be left exactly as
-	// deferred: still Playing internally (its persisted record is never
-	// touched here — see queueForRetryLocked's own doc comment), but
-	// reporting RestorePending (never Failed, and never Playing to a
-	// reader — nothing is actually playing here, and reporting the
-	// persisted Playing verbatim would be its own lie), with no engine
-	// handle actually loaded.
+	// deferred: still Playing internally, but reporting RestorePending,
+	// with no engine handle actually loaded.
 	s2, ok := m2.get(id)
 	if !ok {
 		t.Fatalf("session %s missing from the rebooted manager", id)
@@ -323,7 +319,7 @@ func TestRestoreAllWithNoEngineBoundDoesNotFailPersistedState(t *testing.T) {
 	stateBeforeBind, handleLoadedBeforeBind := s2.state, s2.handleLoaded
 	s2.mu.Unlock()
 	if stateBeforeBind != pkgaudio.StatePlaying {
-		t.Fatalf("in-memory state before any binding = %q, want Playing (deferred, not failed, and never itself set to RestorePending — see queueForRetryLocked's own doc comment)", stateBeforeBind)
+		t.Fatalf("in-memory state before any binding = %q, want Playing (deferred, not failed)", stateBeforeBind)
 	}
 	if handleLoadedBeforeBind {
 		t.Fatalf("session reports a loaded engine handle before any binding arrived, want none")
