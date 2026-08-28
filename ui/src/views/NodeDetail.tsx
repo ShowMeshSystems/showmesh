@@ -138,6 +138,51 @@ export function NodeDetail() {
             </section>
           </PanelErrorBoundary>
 
+          {/* Clock is Track I seam I1's addition: a flat, one-row-per-signal
+              table like Control-plane evidence above, not grouped like
+              Render's per-surface panel — every node.clock.ptp.* signal is
+              node-level (RES-019 section 5.2), so there is nothing to group
+              by. An empty node.clock (no configuration, or a node still
+              starting up) renders as an explicit note rather than an empty
+              table. */}
+          <PanelErrorBoundary panelLabel="Clock">
+            <section className="panel">
+              <h3 className="panel__title">Clock</h3>
+              {node.clock.length === 0 ? (
+                <p className="text-muted">
+                  This node has never published a clock status report (no node.clock
+                  configuration, or the node is still starting up).
+                </p>
+              ) : (
+                <div className="table-scroll">
+                  <table className="config-table" aria-label="Clock">
+                    <thead>
+                      <tr>
+                        <th scope="col">Signal</th>
+                        <th scope="col">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {node.clock.map((entry) => (
+                        <tr key={entry.signal}>
+                          <th scope="row">{entry.signal.replace(/^node\.clock\.ptp\./, '')}</th>
+                          <td>
+                            <EvidenceValue
+                              evidence={entry}
+                              serverTime={model.serverTime}
+                              serverTimeReceivedAt={model.serverTimeReceivedAt}
+                              connected={connected}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </PanelErrorBoundary>
+
           {/* Audio is its own full-width panel below the two-column grid,
               not inside it: a node can hold several sessions each with
               their own controls, which makes this panel tall in the same

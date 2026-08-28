@@ -176,17 +176,19 @@ func (s *agentEchoState) apply(_ context.Context, params map[string]any, now fun
 // Cue catalog onto this node — see cuecatalogops.go), and "cue.activate"
 // (Track H seam H4: a runner-neutral Cue activation, authorized against
 // the held catalog and applied to rendering, audio, and LTC — see
-// cueactivationops.go). Per
+// cueactivationops.go), and "node.clock.configure" (Track I seam I1: the
+// coordinator pushing this node's node.clock binding — see
+// clockconfigops.go). Per
 // ARCHITECTURE section 10.4 ("agents accept only allowlisted operations"),
 // this map itself IS the enforcement mechanism — [CommandHandler.
 // HandleMessage] refuses any Action that is not a key here, never executes
 // it, and never silently ignores it. assetDir and assetAPIToken configure
 // "asset.fetch" (see assets.go); render configures the four render.*
 // operations (see renderops.go); nodeID and catalogStore configure
-// "cuecatalog.deploy". Adding a further allowlisted operation later means
-// adding a further entry to this map, not building a second enforcement
-// path.
-func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore) map[string]OperationFunc {
+// "cuecatalog.deploy"; clockBind configures "node.clock.configure". Adding
+// a further allowlisted operation later means adding a further entry to
+// this map, not building a second enforcement path.
+func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *renderOperations, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding) map[string]OperationFunc {
 	state := &agentEchoState{}
 	fetch := assetFetchOperation{dir: assetDir, token: assetAPIToken}
 	mediaProbe := mediaProbeOperation{dir: assetDir}
@@ -222,6 +224,9 @@ func newOperationRegistry(nodeID, assetDir, assetAPIToken string, render *render
 		ops[action] = op
 	}
 	for action, op := range audioNodeConfigureOperations(binding) {
+		ops[action] = op
+	}
+	for action, op := range clockConfigureOperations(clockBind) {
 		ops[action] = op
 	}
 	return ops
@@ -394,10 +399,10 @@ type CommandHandler struct {
 // [CommandHandler.HandleMessage] takes the publisher to use as a call
 // argument instead of one fixed at construction time — see that method's
 // doc comment.
-func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, now func() time.Time, logger *slog.Logger) *CommandHandler {
+func newCommandHandler(nodeID, assetDir, assetAPIToken string, assetFetchTrigger chan<- struct{}, render *renderOperations, renderTrigger chan<- struct{}, audioMgr *audio.Manager, binding *audioBinding, catalogStore *heldcatalog.FileStore, clockBind *clockBinding, now func() time.Time, logger *slog.Logger) *CommandHandler {
 	return &CommandHandler{
 		nodeID:            nodeID,
-		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore),
+		ops:               newOperationRegistry(nodeID, assetDir, assetAPIToken, render, audioMgr, binding, catalogStore, clockBind),
 		cache:             newIdempotencyCache(agentIdempotencyCacheCapacity),
 		now:               now,
 		logger:            logger,

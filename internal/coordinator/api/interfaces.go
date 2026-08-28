@@ -127,6 +127,18 @@ type NodeAudioLister interface {
 	NodeAudioObservations(nodeID string) []observation.Observation
 }
 
+// NodeClockLister is [NodeRenderLister]'s analogue for Track I seam I1's
+// PTP clock status reports — a plain push-cache read like
+// NodeRenderObservations (node.clock.ptp.* comes straight off the node's
+// own report; no coordinator-declared value needs merging in, unlike
+// NodeAudioLister's clock-domain read).
+type NodeClockLister interface {
+	// NodeClockObservations returns every node.clock.ptp.* observation
+	// this coordinator currently holds for nodeID's most recently
+	// reported clock status, or nil if none has ever been received.
+	NodeClockObservations(nodeID string) []observation.Observation
+}
+
 // FPPMQTTHostLister reports the id->HostName map fpp.mqtt currently
 // configures, live — not a startup snapshot. Used by
 // handlePutFPPEndpointsConfig (config.go) to cross-check a proposed

@@ -43,6 +43,11 @@ const (
 	// [AudioPayload], published retained on
 	// showmesh/nodes/<node-id>/observed/audio.
 	SchemaNodeAudioV1 = "showmesh.node.audio/v1"
+
+	// SchemaNodeClockV1 is Track I seam I1's addition: the schema for
+	// [ClockPayload], published retained on
+	// showmesh/nodes/<node-id>/observed/clock.
+	SchemaNodeClockV1 = "showmesh.node.clock/v1"
 )
 
 // HelloPayload is the payload of the showmesh.node.hello/v1 schema,
@@ -1341,6 +1346,104 @@ func (p AudioPayload) Validate() error {
 	return nil
 }
 
+// ClockPayload is the payload of the showmesh.node.clock/v1 schema,
+// published RETAINED to a node's observed/clock topic ([ObservedTopic],
+// [ObservedDeliveryPolicy]): Track I seam I1's node.clock.ptp.* evidence
+// (RES-019 section 5.2, docs/build/IDENTIFIER-REGISTER.md). A node with
+// no node.clock configuration never publishes this topic at all — see
+// internal/agent/clock's own package doc comment — so its absence, not a
+// State value, is what "this node has no clock provider" looks like on
+// the wire; the coordinator's collector reports StateUnsynchronized for
+// that case itself (internal/coordinator/collector/nodeclock).
+type ClockPayload struct {
+	// State is one of internal/agent/clock's five State values.
+	State string `json:"state"`
+
+	// Reason is required whenever State is not "locked".
+	Reason string `json:"reason"`
+
+	// Provider is which of the three concrete providers produced this
+	// reading: "managed", "external", or "fpp".
+	Provider string `json:"provider"`
+
+	Role      string `json:"role"`
+	RoleKnown bool   `json:"roleKnown"`
+
+	// Owner names which component this node observed running ptp4l on
+	// Interface.
+	Owner     string `json:"owner"`
+	Interface string `json:"interface"`
+
+	Domain      int64 `json:"domain"`
+	DomainKnown bool  `json:"domainKnown"`
+
+	GrandmasterIdentity string `json:"grandmasterIdentity"`
+	GMKnown             bool   `json:"gmKnown"`
+
+	// Timescale is always present ("ptp", "arb", or "unknown") — never
+	// omitted, matching internal/agent/clock.RawStatus.Timescale's own
+	// "always reported" rule.
+	Timescale string `json:"timescale"`
+
+	OffsetNs    int64 `json:"offsetNs"`
+	OffsetKnown bool  `json:"offsetKnown"`
+
+	ClockClass      int64 `json:"clockClass"`
+	ClockClassKnown bool  `json:"clockClassKnown"`
+
+	Timestamping      string `json:"timestamping"`
+	TimestampingKnown bool   `json:"timestampingKnown"`
+
+	LockedSeconds      int64 `json:"lockedSeconds"`
+	LockedSecondsKnown bool  `json:"lockedSecondsKnown"`
+
+	// LastStepAt/LastStepNs are the most recent grandmaster-change step
+	// this node's Tracker has observed since this process started — see
+	// internal/agent/clock.Status.LastStepAt's own doc comment. Both nil/
+	// zero until LastStepKnown is true.
+	LastStepAt    *time.Time `json:"lastStepAt"`
+	LastStepNs    int64      `json:"lastStepNs"`
+	LastStepKnown bool       `json:"lastStepKnown"`
+
+	// Mismatch is RES-019 section 9's "locked, but not to the declared
+	// domain or grandmaster" — operator-visible, no automatic action.
+	Mismatch       bool   `json:"mismatch"`
+	MismatchReason string `json:"mismatchReason"`
+
+	// ObservedAt is this node's own evidence time for every field above
+	// (ADR-011) — never the coordinator's own receipt time. nil means
+	// genuinely unknown, matching this package's other payloads'
+	// identical convention; required by Validate.
+	ObservedAt *time.Time `json:"observedAt"`
+}
+
+// Validate enforces: observedAt present, reason required whenever state
+// is not "locked", and mismatchReason required whenever mismatch is true
+// — the same "a required-whenever field is enforced, not merely
+// documented" discipline [AudioPayload.Validate] applies one payload
+// over.
+func (p ClockPayload) Validate() error {
+	if p.State == "" {
+		return fmt.Errorf("%w: state", ErrPayloadMissingField)
+	}
+	if p.State != "locked" && p.Reason == "" {
+		return fmt.Errorf("%w: reason (required whenever state is not \"locked\")", ErrPayloadMissingField)
+	}
+	if p.Provider == "" {
+		return fmt.Errorf("%w: provider", ErrPayloadMissingField)
+	}
+	if p.Timescale == "" {
+		return fmt.Errorf("%w: timescale", ErrPayloadMissingField)
+	}
+	if p.Mismatch && p.MismatchReason == "" {
+		return fmt.Errorf("%w: mismatchReason (required whenever mismatch is true)", ErrPayloadMissingField)
+	}
+	if p.ObservedAt == nil {
+		return fmt.Errorf("%w: observedAt", ErrPayloadMissingField)
+	}
+	return nil
+}
+
 // ErrPayloadInvalidDrawing is wrapped by [RenderPayload.Validate] when a
 // surface's Drawing or FailureOutput is set to a value outside its own
 // closed vocabulary, matching [ErrPayloadInvalidOutcome]'s identical
@@ -1556,6 +1659,28 @@ func DecodeAudioPayload(env Envelope) (AudioPayload, error) {
 	return p, nil
 }
 
+// DecodeClockPayload decodes env.Payload as a [ClockPayload]. It returns
+// an [*UnsupportedSchemaError] if env.Schema is not [SchemaNodeClockV1],
+// an error wrapping [ErrPayloadEmpty] if env.Payload is empty or null,
+// and an error wrapping [ErrPayloadMissingField] (via
+// [ClockPayload.Validate]) if the payload is malformed.
+func DecodeClockPayload(env Envelope) (ClockPayload, error) {
+	if env.Schema != SchemaNodeClockV1 {
+		return ClockPayload{}, &UnsupportedSchemaError{Got: env.Schema, Want: SchemaNodeClockV1}
+	}
+	if err := checkPayloadPresent(env.Payload); err != nil {
+		return ClockPayload{}, fmt.Errorf("mqttproto: decode clock payload: %w", err)
+	}
+	var p ClockPayload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		return ClockPayload{}, fmt.Errorf("mqttproto: decode clock payload: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return ClockPayload{}, fmt.Errorf("mqttproto: decode clock payload: %w", err)
+	}
+	return p, nil
+}
+
 // newEnvelope stamps the fields every constructor must set so a caller
 // cannot forget one: a fresh UUIDv4 MessageID, SentAt from now (in UTC),
 // and the given schema and node ID. now is a clock function so tests do not
@@ -1669,4 +1794,18 @@ func NewAudioEnvelope(now func() time.Time, nodeID string, payload AudioPayload)
 		return Envelope{}, fmt.Errorf("mqttproto: build audio envelope: %w", err)
 	}
 	return newEnvelope(now, SchemaNodeAudioV1, nodeID, payload)
+}
+
+// NewClockEnvelope builds a complete, schema-tagged [Envelope] carrying
+// payload for nodeID, stamping MessageID and SentAt (see [newEnvelope] and
+// [NewHelloEnvelope]'s doc comment on the uniform nodeID argument).
+//
+// Like [NewAudioEnvelope], this constructor calls payload.Validate()
+// itself before marshalling, so a caller-built payload
+// [DecodeClockPayload] would refuse is never published as-is.
+func NewClockEnvelope(now func() time.Time, nodeID string, payload ClockPayload) (Envelope, error) {
+	if err := payload.Validate(); err != nil {
+		return Envelope{}, fmt.Errorf("mqttproto: build clock envelope: %w", err)
+	}
+	return newEnvelope(now, SchemaNodeClockV1, nodeID, payload)
 }

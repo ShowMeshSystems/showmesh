@@ -77,7 +77,8 @@
         "notSeenAsOfRunFinishedAt": null
       },
       "render": [],
-      "audio": []
+      "audio": [],
+      "clock": []
     },
     {
       "nodeId": "shed-01",
@@ -146,7 +147,8 @@
         "notSeenAsOfRunFinishedAt": null
       },
       "render": [],
-      "audio": []
+      "audio": [],
+      "clock": []
     }
   ],
   "fpp": {

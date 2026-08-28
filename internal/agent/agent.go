@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
+	"github.com/showmeshsystems/showmesh/internal/agent/clock"
 	"github.com/showmeshsystems/showmesh/internal/agent/config"
 	"github.com/showmeshsystems/showmesh/internal/agent/heldcatalog"
 	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
@@ -293,6 +294,16 @@ func Run() int {
 		audioMgr.RunWatcher(sigCtx, ticker.C)
 	}()
 
+	// clockMgr is Track I seam I1's PTP media clock: unconfigured until a
+	// node.clock.configure command delivers this node's binding
+	// (clockBind below rebuilds it — see clockconfigops.go), exactly the
+	// audioBind/audioMgr shape one seam over. An unconfigured Manager
+	// reports [clock.StatusUnconfigured] ("unsynchronized") on every
+	// report tick, matching what a node with no clock provider reported
+	// before this seam existed.
+	clockMgr := clock.NewManager(time.Now, logger)
+	clockBind := newClockBinding(clockMgr)
+
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across
 	// every reconnect: its idempotency cache and allowlisted operations'
 	// state (e.g. agentEchoState's stored value) are this process's memory
@@ -300,7 +311,7 @@ func Run() int {
 	// only the MQTT plumbing around it (the subscription, the
 	// publish-received callback binding) is rebuilt per connect. See
 	// mqtt.go's registerCommandHandling.
-	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, time.Now, logger)
+	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, clockBind, time.Now, logger)
 
 	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
 	if err != nil {
@@ -343,6 +354,17 @@ func Run() int {
 		runAudioReport(sigCtx, conn, cfg.NodeID, audioMgr, audioMgr, audioEngine, time.Now, ticker.C, logger)
 	}()
 
+	// Clock report: this node's current PTP status on its own cadence —
+	// see clockreport.go. No trigger channel, matching the audio report
+	// above: nothing here needs an out-of-cadence publish.
+	clockReportDone := make(chan struct{})
+	go func() {
+		defer close(clockReportDone)
+		ticker := time.NewTicker(cfg.ClockReportInterval)
+		defer ticker.Stop()
+		runClockReport(sigCtx, conn, cfg.NodeID, clockMgr, time.Now, ticker.C, logger)
+	}()
+
 	// runShowModeWatch is the observability half of ADR-033 decision 5: it
 	// logs when this node's mode stops being confirmed and starts being
 	// held. It publishes nothing, so it cannot race the final offline
@@ -364,18 +386,27 @@ func Run() int {
 	// remains as a harmless, idempotent safety net.
 	stopSignal()
 
-	// The heartbeat, asset inventory, render report, audio report, audio
-	// session watcher, and MultiSync listener loops also select on
-	// sigCtx.Done() and exit on their own; wait for all six so none can
-	// race the final offline publish below with a publish still in
-	// flight.
+	// The heartbeat, asset inventory, render report, audio report, clock
+	// report, audio session watcher, and MultiSync listener loops also
+	// select on sigCtx.Done() and exit on their own; wait for all seven
+	// so none can race the final offline publish below with a publish
+	// still in flight.
 	<-heartbeatDone
 	<-assetInventoryDone
 	<-renderReportDone
 	<-audioReportDone
+	<-clockReportDone
 	<-audioWatchDone
 	<-multiSyncDone
 	<-showModeWatchDone
+
+	// Stop whatever clock provider this node holds (a managed provider's
+	// own supervised ptp4l process, most notably) before the final offline
+	// publish — matching sup.Shutdown's identical "stop what this process
+	// owns before disconnecting" rule one seam over.
+	if err := clockMgr.Close(); err != nil {
+		logger.Warn("failed to cleanly close the clock manager at shutdown", "error", err)
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
