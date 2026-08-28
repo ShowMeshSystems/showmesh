@@ -38,10 +38,8 @@ type ManagedConfig struct {
 
 	// HardwareTimestamping requests hardware timestamping (RES-019 §1).
 	// [ManagedProvider.superviseLoop] attempts it first; if ptp4l exits
-	// within its own startup probe window — the real, observed failure
-	// mode of a driver with no hardware timestamping support, not a
-	// hypothetical — it falls back to software and retries, exactly once
-	// per Start. Whether the mode actually reached is hardware or
+	// within its own startup probe window it falls back to software and
+	// retries, exactly once per Start. Whether the mode actually reached is hardware or
 	// software is never assumed from this flag: read it from
 	// [ManagedProvider.reachedTimestampingMode] (which
 	// [ManagedProvider.Now] and [ManagedProvider.Poll] already do).
@@ -320,11 +318,12 @@ var (
 // "hardware timestamping with a software fallback attempt" (FPP itself
 // makes the analogous attempt: hardware+DSCP, software+DSCP, software).
 // "Exits early" is judged against hardwareTimestampingProbeWindow, an
-// explicit bounded startup window, not a guess: a driver that cannot
-// timestamp in hardware fails ptp4l's own clock-creation call within
-// milliseconds (confirmed against a real NIC while building this seam),
-// so a process still alive past this window has genuinely reached the
-// mode it was started with. fellBack is scoped to ONE Start call (a local
+// explicit bounded startup window: ptp4l refuses at its own
+// clock-creation call, within milliseconds, on an interface whose driver
+// does not support hardware timestamping (observed on this build VM's
+// virtual interface; never observed against a PTP-capable NIC, which no
+// gate behind this seam has), so a process still alive past this window
+// has genuinely reached the mode it was started with. fellBack is scoped to ONE Start call (a local
 // variable in this function, reset by construction on every fresh
 // superviseLoop goroutine) so a later explicit restart may attempt
 // hardware again, but a fallback already taken within this Start is never
