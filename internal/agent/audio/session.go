@@ -944,14 +944,20 @@ type SessionSnapshot struct {
 //
 // A session restore.go's queueForRetryLocked deferred (no engine bound
 // yet, or a retry-path engine failure) reports State as
-// [pkgaudio.StateRestorePending], not whatever was persisted, with
-// PositionKnown left false and Fault/FaultReason naming why. Nothing is
-// actually playing while a session is in this state, and the persisted
-// record itself (Playing/Preparing/Paused) is left untouched — see
-// queueForRetryLocked's own doc comment.
+// [pkgaudio.StateRestorePending] here, in the returned snapshot only —
+// s.state itself is never set to that value; see queueForRetryLocked's
+// own doc comment for why persisting it is exactly the defect this
+// split exists to prevent. PositionKnown is left false and
+// Fault/FaultReason name why: nothing is actually playing while a
+// session reports this, even though the persisted record on disk still
+// says Playing/Preparing/Paused.
 func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
+	reportedState := s.state
+	if s.mgr.sessionHasQueuedRestore(s.id) {
+		reportedState = pkgaudio.StateRestorePending
+	}
 	snap := SessionSnapshot{
-		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
+		ID: s.id, State: reportedState, DesiredRevision: s.revState.Current(),
 		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
 		LTCClaimState: s.ltcClaimState, LTCClaimReason: s.ltcClaimReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,

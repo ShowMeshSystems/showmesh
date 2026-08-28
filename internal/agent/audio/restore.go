@@ -354,16 +354,26 @@ func (m *Manager) deferRestoreLocked(ctx context.Context, s *Session, id pkgaudi
 // queueForRetryLocked is deferRestoreLocked's and restoreOne's own
 // shared retry-queueing: it must never overwrite the on-disk persisted
 // record with StateFailed, because that overwrite is exactly the
-// permanent damage this exists to prevent. Nothing is persisted here —
-// so a reboot before the next successful retry still finds the original
-// desired state on disk, not Failed. s.state itself is set in memory to
-// [pkgaudio.StateRestorePending], which [Session.snapshotLocked] reports
-// verbatim: a session waiting here has no engine handle and is not
-// driving audio, so it must never be reported as Playing (or Preparing
-// or Paused) even though that is what its persisted record still says.
-// restoreOne's own retry path reloads the persisted record fresh on the
-// next attempt, so this in-memory override never leaks into what a
-// successful retry resumes from.
+// permanent damage this exists to prevent. Nothing is persisted here,
+// and s.state is deliberately left exactly as restoreOne already loaded
+// it from disk (Playing/Preparing/Paused) — never set to
+// [pkgaudio.StateRestorePending] or any other value, and this is the ONE
+// place in this package that must hold that line: s.state is what every
+// persist call in this package writes verbatim ([Session.persistedLocked]),
+// and [Session.dispatch] persists after every accepted command,
+// including a refusal, so ANY command reaching this session during the
+// pending window would otherwise burn a reporting-only value onto the
+// disk record. [Manager.removeDuckerLocked] reaches the identical
+// persist path with no operator command at all, from the natural-
+// completion watcher. A state [Manager.restoreOne]'s own switch has no
+// case for is not a reporting nuance if it lands there: the record is
+// neither restored nor re-queued on the next boot, and whatever was
+// genuinely playing before this reboot is gone. The pending-vs-playing
+// distinction [Session.snapshotLocked] must still report is carried
+// instead by this session's id remaining in m.pendingEngineRestore
+// (set below) — read back there without ever touching s.state, so the
+// distinction cannot leak onto disk through any of this package's
+// persist call sites, present or future.
 //
 // s is left with no engine handle (any partial Load this attempt
 // produced is released), so [Manager.invalidateActiveSessions] must
@@ -386,7 +396,6 @@ func (m *Manager) queueForRetryLocked(ctx context.Context, s *Session, id pkgaud
 	// one behind.
 	s.releaseEngineLocked(ctx)
 	s.handle = ""
-	s.state = pkgaudio.StateRestorePending
 	s.setFaultLocked(pkgaudio.FaultOther, faultReason)
 	m.mu.Lock()
 	if m.pendingEngineRestore == nil {
@@ -395,6 +404,20 @@ func (m *Manager) queueForRetryLocked(ctx context.Context, s *Session, id pkgaud
 	m.pendingEngineRestore[id] = struct{}{}
 	m.mu.Unlock()
 	m.logf("audio session %s: %s", id, faultReason)
+}
+
+// sessionHasQueuedRestore reports whether id currently has a
+// restore queued (m.pendingEngineRestore) — [Session.snapshotLocked]'s
+// own gate for reporting [pkgaudio.StateRestorePending] in place of
+// s.state, which is never itself set to that value (see
+// queueForRetryLocked's own doc comment for why). Caller may or may not
+// hold s.mu for the session in question; this takes m.mu itself, the
+// same s.mu-then-m.mu order queueForRetryLocked already uses.
+func (m *Manager) sessionHasQueuedRestore(id pkgaudio.SessionID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, pending := m.pendingEngineRestore[id]
+	return pending
 }
 
 // sourceStillActiveOnDisk reports whether id's persisted record shows a
