@@ -43,6 +43,20 @@ describe('Live Control layout constraints', () => {
     expect(strip).toMatch(/max-width:\s*100%/)
   })
 
+  it('contains configured render evidence inside each Live Control group and scrolls its table locally', () => {
+    const group = ruleBodyFor(css, '.live-control-group')
+    const surface = ruleBodyFor(css, '.live-control-group .render-surface')
+    const tableScroll = ruleBodyFor(css, '.live-control-group .table-scroll')
+
+    expect(group).toMatch(/min-width:\s*0/)
+    expect(group).toMatch(/max-width:\s*100%/)
+    expect(surface).toMatch(/min-width:\s*0/)
+    expect(surface).toMatch(/max-width:\s*100%/)
+    expect(tableScroll).toMatch(/width:\s*100%/)
+    expect(tableScroll).toMatch(/max-width:\s*100%/)
+    expect(tableScroll).toMatch(/overflow-x:\s*auto/)
+  })
+
   it('reserves full operator targets for Live Control fields without changing compact forms elsewhere', () => {
     const select = ruleBodyFor(css, '.live-control-page select')
     const textFieldLabel = ruleBodyFor(

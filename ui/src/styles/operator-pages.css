@@ -236,8 +236,22 @@
   display: grid;
   gap: var(--space-3);
   min-width: 0;
+  max-width: 100%;
   padding: var(--space-3) 0;
   border-bottom: 1px solid var(--color-border);
+}
+
+/* Render evidence keeps its intrinsic table width, but that width must end at
+ * this Live Control group instead of widening the page or its grid column. */
+.live-control-group .render-surface {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.live-control-group .table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .live-control-group h3,
