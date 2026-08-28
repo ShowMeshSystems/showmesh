@@ -3034,6 +3034,17 @@ export interface components {
             macroRuns: components["schemas"]["MacroRunSummary"][];
             /** @description Every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
             resolume: components["schemas"]["ResolumeInstance"][];
+            audioConfigPush: components["schemas"]["AudioConfigPushStatus"];
+        };
+        /** @description Whether the coordinator can decode and push its stored audio.settings revision to a node right now. Coordinator-wide, not per-node or per-collector: audio.settings is a singleton (ADR-039), so there is exactly one current revision to decode, and pushing it to every node either can or cannot proceed as one fact. Computed fresh from the same decode a real push performs, so this always reflects the revision currently active. */
+        AudioConfigPushStatus: {
+            /**
+             * @description "usable": the stored revision (or the built-in default, when nothing has ever been written) decodes. "unusable": it does not, and every node is stranded on whatever audio.settings it last successfully received.
+             * @enum {string}
+             */
+            state: "usable" | "unusable";
+            /** @description Set whenever state is "unusable", null otherwise. */
+            reason: string | null;
         };
         /** @description A principal's own non-secret identity (ADR-024). */
         PrincipalSummary: {

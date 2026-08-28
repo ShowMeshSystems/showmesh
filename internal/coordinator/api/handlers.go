@@ -522,6 +522,14 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, now))
 	}
 
+	// Coordinator-wide, computed fresh from the same decode a real push
+	// performs — see audioConfigPushStatus's own doc comment.
+	pushState, pushReason, err := audioConfigPushStatus(ctx, h.deps.Config)
+	if err != nil {
+		h.writeInternalError(w, now, "resolve audio.settings config push status", err)
+		return
+	}
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -530,6 +538,9 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		Collectors:     collectors,
 		MacroRuns:      runs,
 		Resolume:       resolumeInstances,
+		AudioConfigPush: v1.AudioConfigPushStatus{
+			State: string(pushState), Reason: pushReason,
+		},
 	})
 }
 

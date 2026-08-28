@@ -229,6 +229,26 @@ type EventReader interface {
 	OldestEventSeq(ctx context.Context) (seq uint64, ok bool, err error)
 }
 
+// AudioConfigPushRunState is the closed, two-value vocabulary
+// [v1.AudioConfigPushStatus.State] uses. It answers one
+// question, coordinator-wide: can the stored audio.settings revision be
+// decoded and pushed to a node right now. It is computed fresh from the
+// same decode [audioconfigpush.ToNode] itself performs, not recorded from
+// any one push attempt, so it always reflects the revision currently
+// active rather than going stale between writes.
+type AudioConfigPushRunState string
+
+const (
+	// AudioConfigPushUsable: the stored audio.settings revision (or the
+	// default payload, when nothing has ever been written) decodes.
+	AudioConfigPushUsable AudioConfigPushRunState = "usable"
+
+	// AudioConfigPushUnusable: the stored revision fails to decode, so
+	// every node is stranded on whatever audio.settings it last
+	// successfully received. Reason is always set alongside this value.
+	AudioConfigPushUnusable AudioConfigPushRunState = "unusable"
+)
+
 // CollectorRunState is the closed, small vocabulary [CollectorState.State]
 // and [v1.CollectorStatus.State] use, deliberately distinct from
 // pkg/observation.State — see [v1.CollectorStatus]'s doc comment for why

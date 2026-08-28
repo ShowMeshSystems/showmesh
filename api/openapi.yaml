@@ -8846,7 +8846,7 @@ components:
       type: object
       required:
         [serverTime, latestEventSeq, nodes, fpp, collectors, macroRuns,
-         resolume]
+         resolume, audioConfigPush]
       properties:
         serverTime:
           type: string
@@ -8896,6 +8896,31 @@ components:
             coordinator reports an empty array.
           items:
             $ref: "#/components/schemas/ResolumeInstance"
+        audioConfigPush:
+          $ref: "#/components/schemas/AudioConfigPushStatus"
+    AudioConfigPushStatus:
+      type: object
+      description: >-
+        Whether the coordinator can decode and push its stored
+        audio.settings revision to a node right now. Coordinator-wide, not
+        per-node or per-collector: audio.settings is a singleton (ADR-039),
+        so there is exactly one current revision to decode, and pushing it
+        to every node either can or cannot proceed as one fact. Computed
+        fresh from the same decode a real push performs, so this always
+        reflects the revision currently active.
+      required: [state, reason]
+      properties:
+        state:
+          type: string
+          enum: [usable, unusable]
+          description: >-
+            "usable": the stored revision (or the built-in default, when
+            nothing has ever been written) decodes. "unusable": it does
+            not, and every node is stranded on whatever audio.settings it
+            last successfully received.
+        reason:
+          type: [string, "null"]
+          description: Set whenever state is "unusable", null otherwise.
     PrincipalSummary:
       type: object
       description: A principal's own non-secret identity (ADR-024).

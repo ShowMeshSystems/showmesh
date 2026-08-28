@@ -373,12 +373,21 @@ type snapshotFPP struct {
 
 // snapshot is the body of GET /api/v1/snapshot.
 type snapshot struct {
-	ServerTime     time.Time          `json:"serverTime"`
-	LatestEventSeq uint64             `json:"latestEventSeq"`
-	Nodes          []node             `json:"nodes"`
-	FPP            snapshotFPP        `json:"fpp"`
-	Collectors     []collectorState   `json:"collectors"`
-	Resolume       []resolumeInstance `json:"resolume"`
+	ServerTime      time.Time            `json:"serverTime"`
+	LatestEventSeq  uint64               `json:"latestEventSeq"`
+	Nodes           []node               `json:"nodes"`
+	FPP             snapshotFPP          `json:"fpp"`
+	Collectors      []collectorState     `json:"collectors"`
+	Resolume        []resolumeInstance   `json:"resolume"`
+	AudioConfigPush audioConfigPushState `json:"audioConfigPush"`
+}
+
+// audioConfigPushState is snapshot.audioConfigPush: whether the
+// coordinator can decode and push its stored audio.settings to a node
+// right now, coordinator-wide.
+type audioConfigPushState struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
 }
 
 // resolumeInstanceComposition is ResolumeInstance.composition: which show

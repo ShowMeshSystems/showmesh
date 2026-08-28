@@ -54,6 +54,36 @@ func resolveAudioSettings(ctx context.Context, cs ConfigStore) (payload config.A
 	return payload, true, nil
 }
 
+// audioConfigPushStatus reports whether the coordinator can decode and
+// push its stored audio.settings revision to a node right now: the same
+// read-and-decode [audioconfigpush.pushSettings] performs, so
+// this can never claim "usable" while a real push would refuse and vice
+// versa. err is non-nil only for a genuine store failure (not for a
+// decode failure, which is reported as state=unusable instead — this
+// function's whole job is to turn that case into a value the caller can
+// show rather than propagate as a request failure).
+func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConfigPushRunState, reason *string, err error) {
+	obj, err := cs.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+		return AudioConfigPushUsable, nil, nil
+	case err != nil:
+		return "", nil, fmt.Errorf("api: get audio.settings config object: %w", err)
+	case obj.CurrentRevision == 0:
+		return AudioConfigPushUsable, nil, nil
+	}
+
+	rev, err := cs.GetConfigRevision(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return "", nil, fmt.Errorf("api: get audio.settings config revision %d: %w", obj.CurrentRevision, err)
+	}
+	if _, verr := config.DecodeAudioSettingsPayload(rev.PayloadJSON); verr != nil {
+		detail := fmt.Sprintf("revision %d does not decode: %s", obj.CurrentRevision, verr.Error())
+		return AudioConfigPushUnusable, &detail, nil
+	}
+	return AudioConfigPushUsable, nil, nil
+}
+
 // handleGetAudioSettingsConfig serves GET /api/v1/config/audio.settings.
 // "Nothing has ever been written" is never a 404 here — the payload has a
 // well-defined default — so this always answers 200.

@@ -601,6 +601,12 @@ func printSnapshotDetail(w io.Writer, s snapshot) {
 		}
 		_, _ = fmt.Fprintln(w)
 	}
+
+	_, _ = fmt.Fprintf(w, "\nAudio config push: %s", s.AudioConfigPush.State)
+	if r := s.AudioConfigPush.Reason; r != nil && *r != "" {
+		_, _ = fmt.Fprintf(w, " (%s)", *r)
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 // printPrincipalsTable renders GET /api/v1/principals (Track G seam G-5).

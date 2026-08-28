@@ -673,6 +673,27 @@ type Snapshot struct {
 	// rendered exactly as GET /resolume/instances renders it. Never null,
 	// matching MacroRuns' own "fatal to omit" reasoning.
 	Resolume []ResolumeInstance `json:"resolume"`
+
+	// AudioConfigPush is the coordinator-level signal for whether the
+	// coordinator can decode and push its stored audio.settings revision
+	// to a node right now. Fatal to omit for the same reason Collectors
+	// is — an operator whose nodes have gone quiet on audio configuration
+	// has no other API-visible way to learn why.
+	AudioConfigPush AudioConfigPushStatus `json:"audioConfigPush"`
+}
+
+// AudioConfigPushStatus is GET /api/v1/snapshot's "audioConfigPush"
+// member (coordinator.audio.config.push.state /
+// coordinator.audio.config.push.reason in IDENTIFIER-REGISTER.md). Unlike
+// [CollectorStatus], this is a single coordinator-wide value, not a list:
+// audio.settings is a singleton (ADR-039), so there is exactly one
+// current revision to decode. State is one of
+// internal/coordinator/api.AudioConfigPushRunState's two values; Reason
+// is set whenever State is not "usable" and always nil otherwise, mirroring
+// [CollectorStatus.Reason]'s own convention.
+type AudioConfigPushStatus struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
 }
 
 // Problem is the RFC 9457 application/problem+json body every error in
