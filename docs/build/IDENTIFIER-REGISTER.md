@@ -106,6 +106,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `night.session` | operator-chosen | reserved | Track F seam F1 |
 | `night.session.active` | `default` singleton | reserved | Track F seam F1 |
 | `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
+| `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -116,6 +117,18 @@ Operator UI in a parallel worktree, and an additive payload field plus a new
 UI over the same object is the collision this register exists to prevent.
 A per-surface override of the renderer default is future work, sequenced
 after G-8 folds.
+
+**`node.clock` is a new kind rather than fields on `audio.node`, and that is
+deliberate.** The media clock is a node-level facility: RES-019 §11 states the
+reusable asset is the media clock and timeline, not the local playback engine,
+and the renderer and a later AES67 send read the same clock. `audio.node`
+requires a program route, channel map, `clockDomain` and its provenance, so
+folding the PTP provider into it would make declaring a clock impossible on a
+node with no audio placement, and would put a non-audio setting behind an audio
+object. `audio.node.clockDomain` and `clockDomainProvenance` are unchanged
+(RES-019 §5.4): they still declare that program and LTC leave one hardware
+clock, which is a different statement from which PTP domain that hardware clock
+follows.
 
 **`fppconnect.settings` holds the two byte caps and the enable flag for the
 node's xLights ingestion listener** (`enabled`, `maxFileBytes` default 2 GiB,
@@ -317,6 +330,7 @@ the wrong device, because every collector shares one
 | `resolume-survey` | shipped | `collector/resolume` (composition-derived) |
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
 | `node-audio` | shipped | Track C seam C1a (`collector/nodeaudio`) |
+| `node-clock` | reserved | Track I seam I1 (`collector/nodeclock`) |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -356,6 +370,7 @@ after shipping a breaking change to stored history.
 | `audio.media.probe` | reserved | Track C seam C2 |
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
+| `node.clock.configure` | reserved | Track I seam I1: the coordinator pushing the node's `node.clock` object over the existing MQTT command path, on write and on hello, exactly as `audio.node.configure` does. Payload schema string `showmesh.node.clock.config/v1` (ADR-044); the retained `observed/clock` payload is `showmesh.node.clock/v1` |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
@@ -454,6 +469,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `surface` | `surface.*` | shipped | Track B seam B2 |
 | `node` | `node.audio.*` | shipped | Track C seam C1a (engine, device, buses) |
 | `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
+| `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
@@ -530,6 +546,37 @@ listed because the last row was minted after the others had shipped:
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.fppconnect.channel_range.state` | reserved | Lane 16, SM-294 (node-level; one push per node) |
 | `node.fppconnect.channel_range.reason` | reserved | Lane 16, SM-294 |
+
+**Track I's `node.clock.ptp.*` signals, reserved 2026-08-28 before seam I1
+starts.** All are on the `node` resource kind, resource id the node id, from
+RES-019 §5.2 (provider status) and §10 (observability). A seam that emits a
+spelling not in this table renames the code before it ships, the way Track C's
+divergence was reconciled below.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.clock.ptp.state` | reserved | Track I seam I1 (`unsynchronized`, `acquiring`, `locked`, `holdover`, `failed`) |
+| `node.clock.ptp.reason` | reserved | Track I seam I1 (why the state is what it is; required whenever state is not `locked`) |
+| `node.clock.ptp.provider` | reserved | Track I seam I1 (`managed`, `external`, `fpp`, `none`) |
+| `node.clock.ptp.role` | reserved | Track I seam I1 (`grandmaster`, `follower`, `passive`, `listening`) |
+| `node.clock.ptp.owner` | reserved | Track I seam I1 (which component runs `ptp4l` on the interface) |
+| `node.clock.ptp.interface` | reserved | Track I seam I1 |
+| `node.clock.ptp.domain` | reserved | Track I seam I1 |
+| `node.clock.ptp.grandmaster_identity` | reserved | Track I seam I1 |
+| `node.clock.ptp.timescale` | reserved | Track I seam I1 (`ptp`, `arb`, `unknown`) |
+| `node.clock.ptp.offset_ns` | reserved | Track I seam I1 (`master_offset`) |
+| `node.clock.ptp.clock_class` | reserved | Track I seam I1 |
+| `node.clock.ptp.timestamping` | reserved | Track I seam I1 (`hardware`, `software`) |
+| `node.clock.ptp.locked_seconds` | reserved | Track I seam I1 (seconds since the current lock began) |
+| `node.clock.ptp.last_step_at` | reserved | Track I seam I1 |
+| `node.clock.ptp.last_step_ns` | reserved | Track I seam I1 (signed magnitude of the last step) |
+| `node.clock.ptp.mismatch` | reserved | Track I seam I1 (RES-019 §9: locked, but not to the declared domain or grandmaster) |
+
+**A new `observed/` subpath is only half the work**, as this file's MQTT
+section already says: `showmesh/nodes/<id>/observed/clock` needs a `case` in
+the coordinator's ingest switch (`internal/coordinator/inventory/inventory.go`),
+or the retained payload is dropped at Debug level and the collector reports
+nothing forever.
 
 **Track C's `audio_session.*` signals, as shipped by seams C6/C7 on
 2026-08-18.** They were reserved before C3 and C4 were written; the table
@@ -795,6 +842,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/result/<cmd-id>` | shipped | Step 2 |
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 | `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
+| `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
