@@ -354,6 +354,9 @@ Commands:
   fppconnect settings set              write a new fppconnect.settings revision (write,
                                         full replacement, requires config:write)
   fppconnect settings revisions        list fppconnect.settings revision history, newest first
+  fppconnect status <node-id>          show one node's most recently pushed FPP Connect
+                                        channel-range outcome: formatted, empty because no
+                                        surface is configured, or dropped and why (read)
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields
