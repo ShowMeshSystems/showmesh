@@ -30,15 +30,15 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
-> **`main` is at `629754e`** (2026-08-27). The last four lanes to land are
-> recorded in the dated entries below: Lane 16's ten Track H defect fixes
-> (`85ed4bc`..`629754e`), Lane 19's three node-agent and audio-node fixes
-> (`f2d13e6`, `7c7129a`, `1528203`), Lane 15's five defect fixes
-> (`85ed4bc`..`d297c05`), and Lane 20's identifier reservation (`ccd83b7`).
-> Two integration branches are deliberately **not** on `main`:
-> `dev/fpp-connect` (Track E phase 2, six pull requests, rebases onto `main`
-> after the 28 August landing) and `dev/multi-audio` (Lane 20's ADR-045 and
-> schema v20).
+> **`main` was at `ff56233`** (2026-08-28) when Lane 21 folded Track E phase 2
+> onto it as pull request #178. The lanes recorded in the dated entries below
+> are Lane 16's ten Track H defect fixes (`85ed4bc`..`629754e`), Lane 19's three
+> node-agent and audio-node fixes (`f2d13e6`, `7c7129a`, `1528203`), Lane 15's
+> five defect fixes (`85ed4bc`..`d297c05`), Lane 20's identifier reservation
+> (`ccd83b7`), Track I's research and reservations (`9157e26`, `ff56233`), and
+> Lane 21's FPP Connect fold. **`dev/fpp-connect` is now on `main`**; one
+> integration branch is still deliberately off it, `dev/multi-audio` (Lane 20's
+> ADR-045 and schema v20).
 >
 > **CI on `main` at `629754e` is red, on two known pre-existing failures, neither
 > caused by these merges.** `test (1.26.6)` failed on the audio engine's
@@ -126,9 +126,35 @@ The **Current state** block at the top of this file is overwritten each session:
 >
 > **Browser click-through for the Operator UI fold was collected for one pull request only.** PR #91 (node detail evidence panel) was exercised against the local compose stack at `f102ae6`. Every other pull request in the fold records "not exercised in a browser": the local stack has no audio node, no audio session, no configured cues and no `audio.settings` revision, so those screens' paths are unreachable there. **Nothing in this fold, or in any earlier fold recorded above, ran on real hardware, on a deployed fleet, or against a real Resolume Arena.** Bench and hardware acceptance for the Operator UI fold's screens is tracked separately as SM-253, SM-254, SM-255 and SM-269. The Operator UI parity audit (SM-242) classified 144 API operations and found 41 gaps (20 show-night, 12 authoring, 10 admin); readability is tracked as SM-241; gap issues SM-243 through SM-249 are Done; follow-ups SM-250, SM-251, SM-252, SM-256, SM-257, SM-258, SM-259, SM-268, SM-270 and SM-271 are filed.
 >
-> **Track E phase 2, FPP Connect, is built on the integration branch `dev/fpp-connect` and is not on `main`.** Seams FC0, FC1a, FC1b, FC2 and FC3 merged there on 2026-08-26 as `9292931` (#118), `e445e24` (#127), `8e79e15` (#126), `31165fc` (#136) and `5e57e9f` (#144), which is the branch tip. Each was gated by `showmesh-check` on the `showmesh-dev-01` build VM and by GitHub checks, and reviewed by Hermes and by an independent Opus reviewer. **Nothing ran against a real xLights or a real FPP, and no node has run it on hardware**, so FC4, the owner's bench, is still the acceptance gate. The branch rebases onto `main` and opens its pull request after the 28 August landing. The 2026-08-26 entry below is its record.
+> **Track E phase 2, FPP Connect, is on `main`.** Seams FC0, FC1a, FC1b, FC2 and FC3 merged onto `dev/fpp-connect` on 2026-08-26 as `9292931` (#118), `e445e24` (#127), `8e79e15` (#126), `31165fc` (#136) and `5e57e9f` (#144), followed by SM-294's channel-range visibility fix at `23ae13d` (#159). Each was gated by `showmesh-check` on the `showmesh-dev-01` build VM and by GitHub checks, and reviewed by Hermes and by an independent Opus reviewer. Lane 21 folded the branch onto `main` on 2026-08-28 as pull request #178; the 2026-08-28 entry below is that record and the 2026-08-26 entry is the branch's own. **Nothing has run against a real xLights or a real FPP, and no node has run it on hardware**, so FC4, the owner's bench, is still the acceptance gate and none of RES-003 §9's conclusions have moved above L1.
 >
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
+
+---
+
+## 2026-08-28 (Lane 21: FPP Connect folds onto `main`)
+
+**Goal:** land the `dev/fpp-connect` integration branch on `main` after the 28 August hardware test, on top of Lane 16's dispatch fixes, without rewriting the branch's published history.
+
+**Completed:** `main` merged into `dev/fpp-connect` at `9fc037d` and again at `8c94392` for Track I's `ff56233`, `fppconnect status` documented in `showmeshctl --help` at `3163470`, and the branch folded onto `main` as pull request #178. The fold carries the whole FPP Connect upload base: `pkg/multisync`'s v3 ping reply, `internal/coordinator/config/fppconnectsettings.go` and the `fppconnect.configure` push, `internal/agent/fppconnecthttp.go`'s inbound listener, `internal/agent/fppconnectupload.go`'s chunked receiver and show binding, `internal/agent/fppconnectregister.go`'s registration through `POST /api/v1/assets`, and `cmd/showmeshctl/cmd_fppconnect.go`'s `settings` and `status` verbs. `docs/build/IDENTIFIER-REGISTER.md` now records `fppconnect.settings` as shipped.
+
+**Decisions made:** none new. The fold is executed under [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) as written. The merge-not-rebase rule is `docs/bench/HARDWARE-TEST-SESSION.md`'s, and it is why no force-push happened on a published branch.
+
+**Questions raised with the owner:** none. The token-scope question this lane inherited was already ruled on 2026-08-28 (nodes keep the admin-scoped `SHOWMESH_AGENT_API_TOKEN` this season) and the narrowing is filed as its own after-Day-0 issue.
+
+**Conflict resolutions worth recording**, all toward `main`'s fixes:
+
+- `internal/coordinator/api/handlers.go` and `stream.go`: `main` had replaced a raw `NodeRenderObservations()` call with `nodeRenderView()` (the SM-281 render-assignment readiness fix) while the branch had added an `FPPConnectStatus` argument to `mapNode`. All four call sites keep `nodeRenderView()` and gain the FPP Connect argument.
+- `internal/agent/renderreport.go` and `agent.go`: `runRenderReport` and `publishOneRenderReport` gained `main`'s `store *pipeline.AssignmentStore` (content-identity stamping) and the branch's `fcStatus`/`fcHeld` (listener and held-file evidence) together, with five further call sites in `renderreport_test.go` and `main`'s own `rendercontentreport_test.go` updated for the combined signature.
+- `cmd/showmeshctl/main.go`: the two sides' help additions are both kept, and the missing `fppconnect status` entry was added. That subcommand arrived on the branch with #159 and the test enforcing help coverage arrived on `main` with #155, so the gap existed only in the merged tree.
+- `ui/src/api/generated/schema.d.ts` was regenerated with `npm run gen:api` rather than hand-resolved. `api/openapi.yaml` and the API golden JSON files auto-merged with both sides' fields intact.
+- `internal/coordinator/cueactivate`, `internal/coordinator/assetsync` and `internal/agent/cueactivation*` took no conflicts and are byte-identical to `main`.
+
+**Deferred:** SM-293, the `fppconnect.settings` byte caps decoding through the platform `int` range so the documented default cannot round-trip on a 32-bit build. It is real and unfixed; the coordinator ships as an amd64 container, CI runs 64-bit only, and it is invisible until someone builds for `GOARCH=386` or `arm`.
+
+**Verification gates:** `/build/bin/showmesh-check` passed on `showmesh-dev-01` at `3163470` (fmt-check, vet, lint, test, ui-lint, ui-test, ui-build, ui-gen-check; 0 golangci-lint issues, 1101 UI tests). `make test-integration` passed there at the same commit: `ok github.com/showmeshsystems/showmesh/test/integration 343.127s`, 72 passed, 13 skipped (FPP-dependent, no `fppd` reachable), 0 failed. Two earlier `showmesh-check` runs failed first: the help-coverage gap above, and one occurrence of the `TestLoadDeadlineDoesNotLeakElements` gstengine teardown flake already recorded against SM-252, which passed in isolation and did not recur. `8c94392` adds only the `IDENTIFIER-REGISTER.md` merge and was gated by GitHub checks on pull request #178 rather than by a fourth local run.
+
+**Acceptance, unchanged by this fold:** nothing here has run against a real xLights, a real FPP, a browser, a node's hardware, or the fleet. RES-003 §9 stays at L1 and Track E's seam FC4 bench (Eric's, on his machine) is the only thing that moves it. The seven acceptance criteria in [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md) are all unproven.
 
 ---
 
