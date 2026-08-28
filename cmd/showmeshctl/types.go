@@ -372,19 +372,30 @@ type snapshotFPP struct {
 }
 
 // snapshot is the body of GET /api/v1/snapshot.
+//
+// AudioConfigPush is *audioConfigPushState, not a bare value: a
+// coordinator that predates this field (before PR #189) omits it
+// entirely, and encoding/json leaves a missing field's pointer nil rather
+// than inventing a zero-value struct — the same "absent is a pointer"
+// rule this file's own doc comment states above. A bare struct here would
+// decode a pre-#189 coordinator's response as state="", which is not a
+// member of the state enum and prints/re-marshals as if the coordinator
+// had actually reported something.
 type snapshot struct {
-	ServerTime      time.Time            `json:"serverTime"`
-	LatestEventSeq  uint64               `json:"latestEventSeq"`
-	Nodes           []node               `json:"nodes"`
-	FPP             snapshotFPP          `json:"fpp"`
-	Collectors      []collectorState     `json:"collectors"`
-	Resolume        []resolumeInstance   `json:"resolume"`
-	AudioConfigPush audioConfigPushState `json:"audioConfigPush"`
+	ServerTime      time.Time             `json:"serverTime"`
+	LatestEventSeq  uint64                `json:"latestEventSeq"`
+	Nodes           []node                `json:"nodes"`
+	FPP             snapshotFPP           `json:"fpp"`
+	Collectors      []collectorState      `json:"collectors"`
+	Resolume        []resolumeInstance    `json:"resolume"`
+	AudioConfigPush *audioConfigPushState `json:"audioConfigPush"`
 }
 
 // audioConfigPushState is snapshot.audioConfigPush: whether the
-// coordinator can decode and push its stored audio.settings to a node
-// right now, coordinator-wide.
+// coordinator can decode its stored, engine-wide audio.settings revision
+// right now. Narrow by design — see the coordinator's own
+// v1.AudioConfigPushStatus doc comment: it says nothing about any one
+// node's own audio.node binding or reachability.
 type audioConfigPushState struct {
 	State  string  `json:"state"`
 	Reason *string `json:"reason"`

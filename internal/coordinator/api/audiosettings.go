@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -54,14 +55,24 @@ func resolveAudioSettings(ctx context.Context, cs ConfigStore) (payload config.A
 	return payload, true, nil
 }
 
-// audioConfigPushStatus reports whether the coordinator can decode and
-// push its stored audio.settings revision to a node right now: the same
-// read-and-decode [audioconfigpush.pushSettings] performs, so
-// this can never claim "usable" while a real push would refuse and vice
-// versa. err is non-nil only for a genuine store failure (not for a
-// decode failure, which is reported as state=unusable instead — this
-// function's whole job is to turn that case into a value the caller can
-// show rather than propagate as a request failure).
+// audioConfigPushStatus reports whether the coordinator can decode its
+// stored audio.settings revision right now: the same read-and-decode
+// [audioconfigpush.pushSettings] performs (not [audioconfigpush.ToNode],
+// which decodes a NODE's own separate audio.node binding first and
+// returns before ever reaching audio.settings on that failure — a stale
+// audio.node revision strands ITS node on both pushes without this field
+// moving, because audio.node is per-node configuration this coordinator-
+// wide singleton was never scoped to cover). So this can never claim
+// "usable" while a real push's own audio.settings decode would refuse and
+// vice versa, but "usable" here answers only "is the engine-wide
+// audio.settings revision itself readable" — never "will every node's
+// next push actually land," which also depends on that node's own
+// audio.node binding and reachability. err is non-nil only for a genuine
+// store failure (not for a decode failure, which is reported as
+// state=unusable instead — this function's whole job is to turn that case
+// into a value the caller can show rather than propagate as a request
+// failure). See [audioConfigPushStatusDegradeOnError] for the store-error
+// case's own resolution.
 func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConfigPushRunState, reason *string, err error) {
 	obj, err := cs.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID)
 	switch {
@@ -78,10 +89,33 @@ func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConf
 		return "", nil, fmt.Errorf("api: get audio.settings config revision %d: %w", obj.CurrentRevision, err)
 	}
 	if _, verr := config.DecodeAudioSettingsPayload(rev.PayloadJSON); verr != nil {
-		detail := fmt.Sprintf("revision %d does not decode: %s", obj.CurrentRevision, verr.Error())
+		detail := fmt.Sprintf("the engine-wide audio.settings revision %d does not decode: %s", obj.CurrentRevision, verr.Error())
 		return AudioConfigPushUnusable, &detail, nil
 	}
 	return AudioConfigPushUsable, nil, nil
+}
+
+// audioConfigPushStatusDegradeOnError reads [audioConfigPushStatus],
+// logging and reporting state=unknown on a genuine config-store error
+// rather than propagating it — the same "you cannot act, never you
+// cannot see" resolution [resolumeCompositionDegradeOnError] already
+// establishes for this same handler and the same ConfigStore dependency
+// (owner review finding 3, 2026-08-16): GET /api/v1/snapshot has real
+// node/FPP/collector/resolume evidence to render regardless of whether
+// this ONE field's own store read succeeds, and a storage hiccup reading
+// it must not cost the operator that whole view. A store failure is
+// reported "unknown", never "unusable": the stored revision itself may be
+// perfectly fine, this coordinator just could not read it right now.
+func audioConfigPushStatusDegradeOnError(ctx context.Context, cs ConfigStore, logger *slog.Logger, action string) (state AudioConfigPushRunState, reason *string) {
+	state, reason, err := audioConfigPushStatus(ctx, cs)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("audio.settings config push status read failed; reporting unknown", "action", action, "error", err)
+		}
+		detail := "the coordinator could not read its stored audio.settings configuration; see the coordinator log"
+		return AudioConfigPushUnknown, &detail
+	}
+	return state, reason
 }
 
 // handleGetAudioSettingsConfig serves GET /api/v1/config/audio.settings.

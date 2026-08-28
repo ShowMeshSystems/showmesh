@@ -3036,14 +3036,14 @@ export interface components {
             resolume: components["schemas"]["ResolumeInstance"][];
             audioConfigPush: components["schemas"]["AudioConfigPushStatus"];
         };
-        /** @description Whether the coordinator can decode and push its stored audio.settings revision to a node right now. Coordinator-wide, not per-node or per-collector: audio.settings is a singleton (ADR-039), so there is exactly one current revision to decode, and pushing it to every node either can or cannot proceed as one fact. Computed fresh from the same decode a real push performs, so this always reflects the revision currently active. */
+        /** @description Whether the coordinator can decode its stored, engine-wide audio.settings revision right now. Coordinator-wide, not per-node or per-collector: audio.settings is a singleton (ADR-039), so there is exactly one current revision to decode. Computed fresh from the same decode a real push performs on that revision, so this always reflects the revision currently active. Deliberately narrow: this reports only whether the audio.settings singleton itself decodes, never whether any one node's own separate audio.node binding does or whether that node is reachable — a node can still be stranded by a broken audio.node revision, or by being unreachable, while this reads "usable". */
         AudioConfigPushStatus: {
             /**
-             * @description "usable": the stored revision (or the built-in default, when nothing has ever been written) decodes. "unusable": it does not, and every node is stranded on whatever audio.settings it last successfully received.
+             * @description "usable": the stored audio.settings revision (or the built-in default, when nothing has ever been written) decodes. "unusable": it does not, and every node is stranded on whatever audio.settings it last successfully received. "unknown": a genuine config-store failure, not a decode failure, kept the coordinator from reading its own revision just now — the revision itself may be perfectly usable.
              * @enum {string}
              */
-            state: "usable" | "unusable";
-            /** @description Set whenever state is "unusable", null otherwise. */
+            state: "usable" | "unusable" | "unknown";
+            /** @description Set whenever state is not "usable", null otherwise. */
             reason: string | null;
         };
         /** @description A principal's own non-secret identity (ADR-024). */
