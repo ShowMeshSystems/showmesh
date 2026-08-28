@@ -9,6 +9,7 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { useUnsavedChanges } from '../app/UnsavedChanges'
 import type { AudioSettingsConfigResponse, ConfigAudioSettingsPayload } from '../app/types'
 import { ConfigurationSection, FailedBlock, LoadingBlock, OperatorPageHeader, UnavailableBlock } from '../components/SharedLayouts'
 
@@ -132,6 +133,7 @@ type LoadState =
   | { kind: 'loaded'; config: AudioSettingsConfigResponse; revisions: ConfigRevisionMeta[] }
 
 export function AudioSettings() {
+  const { clearUnsavedChanges } = useUnsavedChanges()
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
@@ -151,7 +153,12 @@ export function AudioSettings() {
   const [reloadGeneration, setReloadGeneration] = useState(0)
 
   useEffect(() => {
+    if (!scopeGate.allowed) clearUnsavedChanges()
+  }, [clearUnsavedChanges, scopeGate.allowed])
+
+  useEffect(() => {
     if (!scopeGate.allowed) return
+    clearUnsavedChanges()
     let cancelled = false
     setState({ kind: 'loading' })
 
@@ -173,7 +180,7 @@ export function AudioSettings() {
     return () => {
       cancelled = true
     }
-  }, [scopeGate.allowed, reloadGeneration])
+  }, [clearUnsavedChanges, scopeGate.allowed, reloadGeneration])
 
   async function handleSave(): Promise<void> {
     if (savingRef.current) return
@@ -187,6 +194,7 @@ export function AudioSettings() {
     setSaveError(null)
     try {
       await putAudioSettingsConfig(built.payload)
+      clearUnsavedChanges()
       setReloadGeneration((g) => g + 1)
     } catch (err) {
       // A refused write never reads as saved: the form keeps whatever the
@@ -200,7 +208,7 @@ export function AudioSettings() {
   }
 
   return (
-    <div className="operator-page audio-settings-page">
+    <div className="operator-page audio-settings-page" data-unsaved-form>
       <OperatorPageHeader
         eyebrow="Settings / Audio defaults"
         title="Audio settings"

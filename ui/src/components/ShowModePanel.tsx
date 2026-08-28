@@ -10,6 +10,7 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from './ScopedButton'
+import { useUnsavedChanges } from '../app/UnsavedChanges'
 
 // ADR-033: the WRITE surface for the installation-wide operating mode.
 // Mirrors RenderSettingsPanel's shape exactly, including showing the
@@ -45,6 +46,7 @@ export interface ShowModePanelProps {
 }
 
 export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
+  const { clearUnsavedChanges } = useUnsavedChanges()
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
@@ -59,9 +61,14 @@ export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
   const [reloadGeneration, setReloadGeneration] = useState(0)
 
   useEffect(() => {
+    if (!scopeGate.allowed) clearUnsavedChanges()
+  }, [clearUnsavedChanges, scopeGate.allowed])
+
+  useEffect(() => {
     if (!scopeGate.allowed) {
       return
     }
+    clearUnsavedChanges()
     let cancelled = false
     setState({ kind: 'loading' })
 
@@ -85,7 +92,7 @@ export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
     return () => {
       cancelled = true
     }
-  }, [scopeGate.allowed, reloadGeneration])
+  }, [clearUnsavedChanges, scopeGate.allowed, reloadGeneration])
 
   async function handleSave(): Promise<void> {
     if (savingRef.current) return
@@ -96,6 +103,7 @@ export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
       // A full replacement: "mode" is sent on every save, never merged
       // server-side against the previous revision.
       await putShowModeConfig({ mode })
+      clearUnsavedChanges()
       setReloadGeneration((g) => g + 1)
     } catch (err) {
       setSaveError(describeApiError(err))
@@ -106,7 +114,7 @@ export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
   }
 
   return (
-    <div>
+    <div data-unsaved-form>
       {headingLevel === 3 ? <h3 className="panel__title">Show mode</h3> : <h2 className="panel__title">Show mode</h2>}
       <p className="text-muted">
         One operating mode for the whole installation: <code>program</code> while it is being set up

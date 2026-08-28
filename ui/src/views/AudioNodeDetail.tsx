@@ -5,6 +5,7 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { useUnsavedChanges } from '../app/UnsavedChanges'
 import type { AudioNodeConfigResponse, ConfigAudioNode, Node } from '../app/types'
 
 // ADR-018/ADR-039: one audio.node object's editor, the second of the two
@@ -205,6 +206,7 @@ export interface AudioNodeDetailProps {
 }
 
 export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
+  const { clearUnsavedChanges } = useUnsavedChanges()
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
   const model = useModelContext()
@@ -219,9 +221,14 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
   const savingRef = useRef(false)
 
   useEffect(() => {
+    if (!scopeGate.allowed) clearUnsavedChanges()
+  }, [clearUnsavedChanges, scopeGate.allowed])
+
+  useEffect(() => {
     if (isNew) return
     if (existingId === undefined) return
     if (!scopeGate.allowed) return
+    clearUnsavedChanges()
     let cancelled = false
     setState({ kind: 'loading' })
     Promise.all([getAudioNode(existingId), getAudioNodeConfigRevisions(existingId)])
@@ -237,7 +244,7 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
     return () => {
       cancelled = true
     }
-  }, [existingId, scopeGate.allowed, isNew])
+  }, [clearUnsavedChanges, existingId, scopeGate.allowed, isNew])
 
   async function handleSave(): Promise<void> {
     if (savingRef.current) return
@@ -256,6 +263,7 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
     setSaveError(null)
     try {
       const resp = await putAudioNode(id, built.payload)
+      clearUnsavedChanges()
       if (isNew) {
         navigate(`/config/audio.node/${encodeURIComponent(id)}`)
         return
@@ -317,7 +325,7 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
   )
 
   return (
-    <div className="operator-page audio-node-detail-page">
+    <div className="operator-page audio-node-detail-page" data-unsaved-form>
       <p className="settings-breadcrumb">
         <a href="/config">Settings</a> / <a href="/config/audio.node">Audio routing</a>
       </p>

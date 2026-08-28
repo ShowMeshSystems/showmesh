@@ -16,6 +16,7 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { useUnsavedChanges } from '../app/UnsavedChanges'
 
 // Track G seam G-5: identity administration's own view — the Access page.
 // Reads render under principal:read; every control follows ScopedButton's
@@ -44,6 +45,7 @@ type LoadState =
   | { kind: 'loaded'; principals: PrincipalObject[] }
 
 export function Access() {
+  const { clearUnsavedChanges } = useUnsavedChanges()
   const model = useModelContext()
   // Same posture as Configuration.tsx's own scopeGate: every request this
   // page could make (including the list read) is refused identically
@@ -56,6 +58,7 @@ export function Access() {
 
   useEffect(() => {
     if (!readGate.allowed) return
+    clearUnsavedChanges()
     let cancelled = false
     setState({ kind: 'loading' })
 
@@ -73,14 +76,14 @@ export function Access() {
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed, reloadGeneration])
+  }, [clearUnsavedChanges, readGate.allowed, reloadGeneration])
 
   function reload(): void {
     setReloadGeneration((g) => g + 1)
   }
 
   return (
-    <div>
+    <div data-unsaved-form>
       <h2 className="panel__title">Access</h2>
       <p className="text-muted">
         Principals, their role and enabled state, their passwords, and their API tokens. Reads

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom'
+import { UnsavedChangesProvider } from './UnsavedChanges'
 // Seam B's public surface (spec sections 5.4-5.6): the `useModel()` hook
 // and a way to submit an operator-supplied API token. `ui/src/api` does
 // not exist in this working tree yet -- seam B is building it
@@ -221,9 +222,10 @@ export default function App() {
   return (
     <ModelContext.Provider value={model}>
       <BrowserRouter>
-        <ScrollToTop />
-        <RouteTitle />
-        <Routes>
+        <UnsavedChangesProvider>
+          <ScrollToTop />
+          <RouteTitle />
+          <Routes>
           <Route element={<Layout onSubmitToken={submitToken} />}>
             <Route index element={<Dashboard />} />
             <Route path="monitor" element={<Monitor />} />
@@ -327,7 +329,8 @@ export default function App() {
             <Route path="audit" element={<Audit />} />
             <Route path="*" element={<NotFound />} />
           </Route>
-        </Routes>
+          </Routes>
+        </UnsavedChangesProvider>
       </BrowserRouter>
     </ModelContext.Provider>
   )

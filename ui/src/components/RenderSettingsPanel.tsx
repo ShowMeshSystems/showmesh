@@ -11,6 +11,7 @@ import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from './ScopedButton'
+import { useUnsavedChanges } from '../app/UnsavedChanges'
 
 // Track B seam B2c (ADR-039): the render.settings configuration singleton
 // — what a surface draws while the MultiSync timeline is stopped, opened,
@@ -33,6 +34,7 @@ type LoadState =
   | { kind: 'loaded'; config: RenderSettingsConfigResponse; revisions: ConfigRevisionMeta[] }
 
 export function RenderSettingsPanel() {
+  const { clearUnsavedChanges } = useUnsavedChanges()
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
@@ -52,9 +54,14 @@ export function RenderSettingsPanel() {
   const [reloadGeneration, setReloadGeneration] = useState(0)
 
   useEffect(() => {
+    if (!scopeGate.allowed) clearUnsavedChanges()
+  }, [clearUnsavedChanges, scopeGate.allowed])
+
+  useEffect(() => {
     if (!scopeGate.allowed) {
       return
     }
+    clearUnsavedChanges()
     let cancelled = false
     setState({ kind: 'loading' })
 
@@ -80,7 +87,7 @@ export function RenderSettingsPanel() {
     return () => {
       cancelled = true
     }
-  }, [scopeGate.allowed, reloadGeneration])
+  }, [clearUnsavedChanges, scopeGate.allowed, reloadGeneration])
 
   async function handleSave(): Promise<void> {
     if (savingRef.current) return
@@ -94,6 +101,7 @@ export function RenderSettingsPanel() {
       // doc comment for why an absent field is refused rather than
       // defaulted.
       await putRenderSettingsConfig({ idleOutput, restartPolicy })
+      clearUnsavedChanges()
       setReloadGeneration((g) => g + 1)
     } catch (err) {
       setSaveError(describeApiError(err))
@@ -104,7 +112,7 @@ export function RenderSettingsPanel() {
   }
 
   return (
-    <div>
+    <div data-unsaved-form>
       <h2 className="panel__title">Render settings</h2>
       <p className="text-muted">
         What a render surface draws while its MultiSync timeline is stopped, opened, or unknown
