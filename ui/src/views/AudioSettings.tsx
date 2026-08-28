@@ -10,6 +10,7 @@ import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
 import type { AudioSettingsConfigResponse, ConfigAudioSettingsPayload } from '../app/types'
+import { ConfigurationSection, FailedBlock, LoadingBlock, OperatorPageHeader, UnavailableBlock } from '../components/SharedLayouts'
 
 // ADR-039: the audio.settings engine-wide singleton, the last of the two
 // audio configuration kinds that shipped with a full API path and
@@ -200,30 +201,23 @@ export function AudioSettings() {
 
   return (
     <div className="operator-page audio-settings-page">
-      <p className="settings-breadcrumb"><a href="/config">Settings</a> / Audio defaults</p>
-      <h2 className="panel__title">Audio settings</h2>
-      <p className="text-muted">
-        The audio engine&rsquo;s installation-wide defaults: drift tolerance, fade behaviour,
-        background gain ceiling, ducking, and the LTC timecode Resolume receives.
-        Requires the <code>config:write</code> scope (admin only); there is no read-only scope
-        for this page.
-      </p>
+      <OperatorPageHeader
+        eyebrow="Settings / Audio defaults"
+        title="Audio settings"
+        lede={<>The audio engine&rsquo;s installation-wide defaults: drift tolerance, fade behaviour, background gain ceiling, ducking, and the LTC timecode Resolume receives. Requires the <code>config:write</code> scope (admin only); there is no read-only scope for this page.</>}
+      />
 
       {!scopeGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {scopeGate.reason}
-        </p>
+        <UnavailableBlock title="Audio settings unavailable" reason={scopeGate.reason} />
       )}
 
-      {scopeGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
+      {scopeGate.allowed && state.kind === 'loading' && <LoadingBlock title="Loading audio settings" reason="Loading configuration…" />}
       {scopeGate.allowed && state.kind === 'error' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
-        </p>
+        <FailedBlock title="Audio settings could not be loaded" reason={state.message} />
       )}
 
       {scopeGate.allowed && state.kind === 'loaded' && (
-        <>
+        <ConfigurationSection title="Audio defaults" detail="Current coordinator configuration and its revision history.">
           <p className="panel config-status" role="status">
             Active revision {state.config.revision} (source {state.config.source}
             {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}), last
@@ -391,7 +385,7 @@ export function AudioSettings() {
               </div>
             </details>
           )}
-        </>
+        </ConfigurationSection>
       )}
     </div>
   )

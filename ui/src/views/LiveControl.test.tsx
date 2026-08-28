@@ -34,12 +34,13 @@ describe('LiveControl', () => {
 
     expect(screen.getByRole('heading', { name: 'Live Control' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Back to dashboard' })).toHaveClass('button--secondary')
-    expect(screen.getByText('Control status').closest('section')).toHaveClass('live-control-section')
-    expect(screen.getByText('Coordinator').closest('.live-control-status')).toHaveClass('live-control-status--good')
+    expect(screen.getByText('Control status').closest('section')).toHaveClass('shared-section')
+    expect(screen.getByRole('group', { name: 'Control status' })).toHaveClass('shared-status-strip')
+    expect(screen.getByText('Coordinator').closest('.shared-status-strip__item')).toHaveClass('shared-status-strip__item--good')
     const fppUnavailable = screen.getByText('Unavailable: No FPP instance is configured on this coordinator.')
     expect(fppUnavailable).toBeInTheDocument()
-    expect(fppUnavailable.closest('.section-notice')).toHaveClass('notice--warning')
-    expect(fppUnavailable.closest('section')).toHaveAttribute('aria-labelledby', 'fpp-controls')
+    expect(fppUnavailable.closest('.shared-state-block')).toHaveClass('shared-state-block--unavailable')
+    expect(fppUnavailable.closest('.shared-state-block')?.parentElement?.closest('section')).toHaveAttribute('aria-labelledby', 'fpp-controls')
     expect(screen.getByText('Unavailable: No nodes are currently observed.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: Resolume is not configured on this coordinator.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: No brightness control capability is advertised.')).toBeInTheDocument()
@@ -65,9 +66,9 @@ describe('LiveControl', () => {
 
     expect(screen.getByText(/Showing last known data, received/)).toBeInTheDocument()
     for (const label of ['FPP', 'Audio', 'Resolume']) {
-      const card = screen.getByText(label).closest('.live-control-status')
+      const card = screen.getByText(label).closest('.shared-status-strip__item')
       expect(card).toHaveTextContent('Stale')
-      expect(card).not.toHaveClass('live-control-status--good')
+      expect(card).not.toHaveClass('shared-status-strip__item--good')
     }
     expect(screen.queryByText('Available')).not.toBeInTheDocument()
   })
@@ -83,9 +84,9 @@ describe('LiveControl', () => {
 
     expect(screen.getByText('No data received from the coordinator yet.')).toBeInTheDocument()
     for (const label of ['FPP', 'Audio', 'Resolume']) {
-      const card = screen.getByText(label).closest('.live-control-status')
+      const card = screen.getByText(label).closest('.shared-status-strip__item')
       expect(card).toHaveTextContent('Unobserved')
-      expect(card).not.toHaveClass('live-control-status--good')
+      expect(card).not.toHaveClass('shared-status-strip__item--good')
     }
   })
 
@@ -95,10 +96,10 @@ describe('LiveControl', () => {
       resolume: [makeResolumeInstance('resolume-main', { health: 'failed' })],
     })
 
-    expect(screen.getByText('FPP').closest('.live-control-status')).toHaveTextContent('Failed')
-    expect(screen.getByText('FPP').closest('.live-control-status')).toHaveClass('live-control-status--bad')
-    expect(screen.getByText('Resolume').closest('.live-control-status')).toHaveTextContent('Failed')
-    expect(screen.getByText('Audio').closest('.live-control-status')).toHaveTextContent('Unobserved')
+    expect(screen.getByText('FPP').closest('.shared-status-strip__item')).toHaveTextContent('Failed')
+    expect(screen.getByText('FPP').closest('.shared-status-strip__item')).toHaveClass('shared-status-strip__item--bad')
+    expect(screen.getByText('Resolume').closest('.shared-status-strip__item')).toHaveTextContent('Failed')
+    expect(screen.getByText('Audio').closest('.shared-status-strip__item')).toHaveTextContent('Unobserved')
   })
 
   it('preserves a successful Show Night command outcome on the control page', async () => {

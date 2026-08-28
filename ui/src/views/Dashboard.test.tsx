@@ -42,6 +42,8 @@ describe('Dashboard', () => {
     expect(screen.getByRole('heading', { name: 'Presentation path' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Attention' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Recent activity' })).toBeInTheDocument()
+    expect(document.querySelector('.shared-page-header')).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'System summary' })).toHaveClass('shared-status-strip')
     expect(document.querySelector('.panel-grid')).toBeNull()
     expect(screen.getByRole('link', { name: 'Open Show Night' })).toHaveAttribute('href', '/night')
   })
@@ -123,6 +125,7 @@ describe('Dashboard', () => {
     expect(labels[3]).toContain('unknown')
 
     expect(screen.getByText('FPP instance "fpp-unknown" health is unknown')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Attention' })).toHaveClass('shared-attention-list')
     // Never says "no active conditions" once there is something to report.
     expect(screen.queryByText(/Nothing needs attention/)).not.toBeInTheDocument()
   })

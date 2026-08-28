@@ -22,6 +22,7 @@ import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
 import { ResolumeActionController } from '../components/ResolumeActionController'
 import { RunMacroButton } from '../components/RunMacroButton'
+import { CommandGroup, OperatorPageHeader, OperatorSection, StatusStrip, StatusStripItem, UnavailableBlock } from '../components/SharedLayouts'
 import '../styles/operator-pages.css'
 
 type LoadState<T> = { kind: 'loading' } | { kind: 'loaded'; value: T } | { kind: 'error'; message: string }
@@ -84,46 +85,40 @@ export function LiveControl() {
 
   return (
     <div className="operator-page live-control-page">
-      <header className="operator-page__header">
-        <div>
-          <h1 className="operator-page__title">Live Control</h1>
-          <p className="operator-page__lede text-muted">
-            Dispatch the controls that are available on this coordinator. Every command reports its own confirmation or refusal.
-          </p>
-        </div>
-        <Link className="button button--secondary" to="/">
+      <OperatorPageHeader
+        title="Live Control"
+        lede="Dispatch the controls that are available on this coordinator. Every command reports its own confirmation or refusal."
+        actions={<Link className="button button--secondary" to="/">
           Back to dashboard
-        </Link>
-      </header>
+        </Link>}
+      />
 
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
 
-      <section className="live-control-section" aria-labelledby="live-control-status">
-        <div className="live-control-section__heading">
-          <h2 id="live-control-status">Control status</h2>
-          <p>What this coordinator can currently confirm</p>
-        </div>
-        <div className="live-control-status-strip">
-          <StatusCard
+      <OperatorSection title="Control status" detail="What this coordinator can currently confirm" aria-labelledby="live-control-status">
+        <StatusStrip label="Control status">
+          <StatusStripItem
             label="Coordinator"
-            value={model.connection.kind === 'live' ? 'Connected' : model.connection.kind}
             detail="Connection state"
             tone={model.connection.kind === 'live' ? 'good' : 'unknown'}
-          />
-          <StatusCard
+          >{model.connection.kind === 'live' ? 'Connected' : model.connection.kind}</StatusStripItem>
+          <StatusStripItem
             label="FPP"
-            {...fppStatus}
-          />
-          <StatusCard
+            detail={fppStatus.detail}
+            tone={fppStatus.tone === 'good' ? 'good' : fppStatus.tone === 'bad' ? 'bad' : 'unknown'}
+          >{fppStatus.value}</StatusStripItem>
+          <StatusStripItem
             label="Audio"
-            {...audioStatus}
-          />
-          <StatusCard
+            detail={audioStatus.detail}
+            tone={audioStatus.tone === 'good' ? 'good' : audioStatus.tone === 'bad' ? 'bad' : 'unknown'}
+          >{audioStatus.value}</StatusStripItem>
+          <StatusStripItem
             label="Resolume"
-            {...resolumeStatus}
-          />
-        </div>
-      </section>
+            detail={resolumeStatus.detail}
+            tone={resolumeStatus.tone === 'good' ? 'good' : resolumeStatus.tone === 'bad' ? 'bad' : 'unknown'}
+          >{resolumeStatus.value}</StatusStripItem>
+        </StatusStrip>
+      </OperatorSection>
 
       <section className="live-control-section" aria-labelledby="fpp-controls">
         <div className="live-control-section__heading">
@@ -136,9 +131,7 @@ export function LiveControl() {
           <div className="live-control-groups">
             {model.fpp.map((instance) => (
               <PanelErrorBoundary key={instance.instanceId} panelLabel={`FPP controls for ${instance.instanceId}`}>
-                <article className="live-control-group">
-                  <h3>{instance.instanceId}</h3>
-                  <p className="text-muted">Commands remain scope-gated and report confirmation below each control.</p>
+                <CommandGroup title={instance.instanceId} detail="Commands remain scope-gated and report confirmation below each control.">
                   <div className="live-control-command-rack" aria-label={`FPP commands for ${instance.instanceId}`}>
                     <FPPStartPlaylistControl instanceId={instance.instanceId} />
                     <FPPStopPlaylistControl instanceId={instance.instanceId} />
@@ -149,7 +142,7 @@ export function LiveControl() {
                     <FPPNextPlaylistItemControl instanceId={instance.instanceId} observations={instance.observations} />
                     <FPPSetVolumeControl instanceId={instance.instanceId} />
                   </div>
-                </article>
+                </CommandGroup>
               </PanelErrorBoundary>
             ))}
           </div>
@@ -313,21 +306,6 @@ function resolumeControlStatus(model: ReturnType<typeof useModelContext>): Contr
   return { value: 'Live', detail: 'Current coordinator evidence', tone: 'good' }
 }
 
-function StatusCard({ label, value, detail, tone }: { label: string; value: string; detail: string; tone: StatusTone }) {
-  return (
-    <div className={`live-control-status live-control-status--${tone}`}>
-      <span className="live-control-status__label">{label}</span>
-      <strong className="live-control-status__value">{value}</strong>
-      <span className="live-control-status__detail">{detail}</span>
-    </div>
-  )
-}
-
 function Unavailable({ title, reason }: { title: string; reason: string }) {
-  return (
-    <article className="section-notice notice--warning live-control-unavailable-notice">
-      <h3>{title}</h3>
-      <p role="status">Unavailable: {reason}</p>
-    </article>
-  )
+  return <UnavailableBlock title={title} reason={<>Unavailable: {reason}</>} />
 }

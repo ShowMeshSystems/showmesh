@@ -11,6 +11,7 @@ import { findObservation } from '../app/fppSignals'
 import { summarizeFleetPorts, summarizeFleetWarnings } from '../app/fppDashboard'
 import { STATE_ICON, STATE_TONE } from '../app/evidenceState'
 import { EvidenceValue } from '../components/EvidenceValue'
+import { AttentionList, AttentionListItem, OperatorPageHeader, StatusStrip, StatusStripItem } from '../components/SharedLayouts'
 import type { CurrentRun, FPPInstance, Node, ResolumeInstance } from '../app/types'
 import '../styles/operator-pages.css'
 
@@ -399,16 +400,16 @@ function AttentionSection({ attention }: { attention: AttentionItem[] }) {
       {attention.length === 0 ? (
         <p className="dashboard-empty text-muted">Nothing needs attention: no active critical or warning conditions, and no instances with unknown health, in nodes or FPP instances right now.</p>
       ) : (
-        <ul className="dashboard-attention-list">
+        <AttentionList label="Attention">
           {attention.map((item) => (
-            <li key={item.to + item.text}>
+            <AttentionListItem key={item.to + item.text}>
               <Link className="dashboard-attention-row" to={item.to}>
                 <StatusBadge tone={ATTENTION_BADGE[item.tone].tone} icon={ATTENTION_BADGE[item.tone].icon} label={item.tone} />
                 <span>{item.text}</span>
               </Link>
-            </li>
+            </AttentionListItem>
           ))}
-        </ul>
+        </AttentionList>
       )}
     </section>
   )
@@ -562,17 +563,15 @@ export function Dashboard() {
 
   return (
     <div className="operator-page dashboard-page">
-      <header className="operator-page__header dashboard-page__header">
-        <div>
-          <p className="dashboard-page__kicker">Operator overview</p>
-          <h1 id="dashboard-title" className="operator-page__title">Dashboard</h1>
-          <p className="operator-page__lede text-muted">Readiness, current playback, and the presentation path at a glance.</p>
-        </div>
-        <div className="dashboard-page__actions">
+      <OperatorPageHeader
+        eyebrow="Operator overview"
+        title="Dashboard"
+        lede="Readiness, current playback, and the presentation path at a glance."
+        actions={<div className="dashboard-page__actions">
           <Link className="button" to="/night">Open Show Night</Link>
           <Link className="button button--secondary" to="/control">Live Control</Link>
-        </div>
-      </header>
+        </div>}
+      />
 
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
       <ClockSkewWarning clockSkewMs={model.clockSkewMs} />
@@ -585,12 +584,12 @@ export function Dashboard() {
         <span className="dashboard-readiness__meta">{ConnectionLabel({ model })} · {attentionSummary(attention)}</span>
       </section>
 
-      <section className="dashboard-stat-strip" aria-label="System summary">
-        <div className={`dashboard-stat dashboard-stat--${fppStatTone}`}><span>FPP</span><strong>{model.fpp.length === 0 ? 'Unknown' : `${fppHealthy} / ${model.fpp.length} healthy`}</strong><small>{model.fpp.length === 0 ? 'No instance evidence' : 'Instance health'}</small></div>
-        <div className={`dashboard-stat dashboard-stat--${renderStatTone}`}><span>Render</span><strong>{render.value}</strong><small>{render.detail}</small></div>
-        <div className={`dashboard-stat dashboard-stat--${nodeStatTone}`}><span>Nodes</span><strong>{model.nodes.length === 0 ? 'Unknown' : `${nodesOnline} / ${model.nodes.length} connected`}</strong><small>{model.nodes.length === 0 ? 'No node evidence' : 'Control-plane state'}</small></div>
-        <div className={`dashboard-stat dashboard-stat--${currentRunStatTone}`}><span>Current run</span><strong>{currentRunCount === null ? 'Unknown' : currentRunCount === 0 ? 'None observed' : `${currentRunCount} reported`}</strong><small>{currentRunCount === null ? 'Authoritative playback unavailable' : 'Runner projection'}</small></div>
-      </section>
+      <StatusStrip label="System summary">
+        <StatusStripItem label="FPP" tone={fppStatTone === 'good' ? 'good' : fppStatTone === 'bad' ? 'bad' : fppStatTone === 'warn' ? 'warn' : 'unknown'} detail={model.fpp.length === 0 ? 'No instance evidence' : 'Instance health'}>{model.fpp.length === 0 ? 'Unknown' : `${fppHealthy} / ${model.fpp.length} healthy`}</StatusStripItem>
+        <StatusStripItem label="Render" tone={renderStatTone === 'good' ? 'good' : renderStatTone === 'bad' ? 'bad' : renderStatTone === 'warn' ? 'warn' : 'unknown'} detail={render.detail}>{render.value}</StatusStripItem>
+        <StatusStripItem label="Nodes" tone={nodeStatTone === 'good' ? 'good' : nodeStatTone === 'warn' ? 'warn' : 'unknown'} detail={model.nodes.length === 0 ? 'No node evidence' : 'Control-plane state'}>{model.nodes.length === 0 ? 'Unknown' : `${nodesOnline} / ${model.nodes.length} connected`}</StatusStripItem>
+        <StatusStripItem label="Current run" tone={currentRunStatTone === 'good' ? 'good' : currentRunStatTone === 'bad' ? 'bad' : currentRunStatTone === 'warn' ? 'warn' : 'unknown'} detail={currentRunCount === null ? 'Authoritative playback unavailable' : 'Runner projection'}>{currentRunCount === null ? 'Unknown' : currentRunCount === 0 ? 'None observed' : `${currentRunCount} reported`}</StatusStripItem>
+      </StatusStrip>
 
       <div className="dashboard-content-grid">
         <PresentationPath model={model} />

@@ -3,6 +3,7 @@ import { useModelContext } from '../app/ModelContext'
 import { presentModelObservations } from '../app/observationPresentation'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { EvidenceValue } from '../components/EvidenceValue'
+import { EmptyBlock, EvidenceTable, OperatorPageHeader } from '../components/SharedLayouts'
 import '../styles/operator-pages.css'
 
 export function Observations() {
@@ -11,20 +12,16 @@ export function Observations() {
   const connected = model.connection.kind === 'live'
 
   return (
-    <section className="operator-page monitor-observations" aria-labelledby="observations-title">
-      <header className="operator-page__header">
-        <div>
-          <h1 id="observations-title" className="operator-page__title">Observations</h1>
-          <p className="operator-page__lede text-muted">
-            Latest reports from nodes, render surfaces, audio sessions, FPP players, and Resolume.
-          </p>
-        </div>
-      </header>
+    <section className="operator-page monitor-observations" aria-label="Observations">
+      <OperatorPageHeader
+        title="Observations"
+        lede="Latest reports from nodes, render surfaces, audio sessions, FPP players, and Resolume."
+      />
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
       {rows.length === 0 ? (
-        <p className="text-muted" role="status">No observations have been recorded yet.</p>
+        <EmptyBlock title="No observations" reason="No observations have been recorded yet." />
       ) : (
-        <div className="table-scroll monitor-observations__table-wrap">
+        <EvidenceTable label="Latest observations">
           <table className="config-table monitor-observations__table">
             <caption className="visually-hidden">Latest observations</caption>
             <thead>
@@ -57,7 +54,7 @@ export function Observations() {
               ))}
             </tbody>
           </table>
-        </div>
+        </EvidenceTable>
       )}
     </section>
   )

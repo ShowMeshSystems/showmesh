@@ -79,6 +79,8 @@ describe('AudioSettings', () => {
     renderView()
 
     await waitFor(() => expect(getAudioSettingsConfig).toHaveBeenCalled())
+    expect(document.querySelector('.shared-page-header')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Audio defaults' })).toHaveClass('shared-configuration-section')
     expect(await screen.findByDisplayValue('40')).toBeInTheDocument()
     expect(screen.getByLabelText('Default fade curve')).toHaveValue('linear')
     expect(screen.getByDisplayValue('500')).toBeInTheDocument()
@@ -211,6 +213,7 @@ describe('AudioSettings', () => {
     renderView(makeModel({ session: makeAuthenticatedSession({ scopes: ['node:read'] }) }))
 
     expect(screen.getByRole('status')).toHaveTextContent(/config:write/)
+    expect(document.querySelector('.shared-state-block--unavailable')).toBeInTheDocument()
     expect(screen.queryByLabelText('Default fade curve')).not.toBeInTheDocument()
     expect(getAudioSettingsConfig).not.toHaveBeenCalled()
   })

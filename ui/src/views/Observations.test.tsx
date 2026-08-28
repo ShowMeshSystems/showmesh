@@ -30,6 +30,7 @@ describe('Observations', () => {
       })],
     }))
     const table = screen.getByRole('table', { name: 'Latest observations' })
+    expect(screen.getByRole('region', { name: 'Latest observations' })).toHaveClass('shared-evidence-table')
     expect(within(table).getAllByText('node-a')).toHaveLength(3)
     expect(within(table).getByText('node.heartbeat')).toBeInTheDocument()
     expect(within(table).getByText('stale')).toBeInTheDocument()
@@ -40,5 +41,6 @@ describe('Observations', () => {
   it('states when no report exists', () => {
     renderObservations(makeModel())
     expect(screen.getByRole('status')).toHaveTextContent('No observations have been recorded yet.')
+    expect(document.querySelector('.shared-state-block--empty')).toBeInTheDocument()
   })
 })
