@@ -942,14 +942,13 @@ type SessionSnapshot struct {
 // treatment) and leaves PositionKnown false, never a stale reading
 // presented as current.
 //
-// Open question, not yet decided: a session restore.go's
-// queueForRetryLocked deferred (no engine bound yet, or a retry-path
-// engine failure) reports State exactly as persisted — Playing,
-// Preparing, or Paused — with PositionKnown left false and Fault/
-// FaultReason naming why. That state value is part of this package's
-// public [pkgaudio.State] vocabulary, so changing what gets reported
-// for this specific case is a caller-visible contract question, not an
-// internal implementation detail; nothing here decides it unilaterally.
+// A session restore.go's queueForRetryLocked deferred (no engine bound
+// yet, or a retry-path engine failure) reports State as
+// [pkgaudio.StateRestorePending], not whatever was persisted, with
+// PositionKnown left false and Fault/FaultReason naming why. Nothing is
+// actually playing while a session is in this state, and the persisted
+// record itself (Playing/Preparing/Paused) is left untouched — see
+// queueForRetryLocked's own doc comment.
 func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	snap := SessionSnapshot{
 		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
