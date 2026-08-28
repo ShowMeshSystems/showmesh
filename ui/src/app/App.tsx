@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigationType, useParams } from 'react-router-dom'
 // Seam B's public surface (spec sections 5.4-5.6): the `useModel()` hook
 // and a way to submit an operator-supplied API token. `ui/src/api` does
 // not exist in this working tree yet -- seam B is building it
@@ -33,6 +33,7 @@ import { Macros } from '../views/Macros'
 import { MacroDetail } from '../views/MacroDetail'
 import { MacroRunView } from '../views/MacroRunView'
 import { LiveControl } from '../views/LiveControl'
+import { ShowWorkspaceOverview } from '../components/ShowWorkspace'
 import { ShowActions } from '../views/ShowActions'
 import { ShowActionDetail } from '../views/ShowActionDetail'
 import { ResolumeView } from '../views/ResolumeView'
@@ -161,6 +162,26 @@ export function RouteTitle() {
   return null
 }
 
+function ShowWorkspaceOverviewRoute() {
+  const { id = '' } = useParams()
+  return <ShowWorkspaceOverview showId={id} />
+}
+
+function ShowWorkspaceRedirect({ destination }: { destination: 'playlists' | 'cues' | 'assets' | 'actions' | 'surfaces' | 'night' | 'readiness' }) {
+  const { id = '' } = useParams()
+  const query = `?show=${encodeURIComponent(id)}`
+  const targets = {
+    playlists: `/config/show.playlist${query}`,
+    cues: `/config/show.cue${query}`,
+    assets: `/assets${query}`,
+    actions: `/actions${query}`,
+    surfaces: `/config/show.surface${query}`,
+    night: '/night',
+    readiness: `/playlists/readiness${query}`,
+  }
+  return <Navigate replace to={targets[destination]} />
+}
+
 export default function App() {
   const model = useModel()
 
@@ -205,6 +226,14 @@ export default function App() {
             <Route path="config/show" element={<Shows />} />
             <Route path="config/show/new" element={<ShowDetail isNew />} />
             <Route path="config/show/:id" element={<ShowDetail />} />
+            <Route path="config/show/:id/workspace" element={<ShowWorkspaceOverviewRoute />} />
+            <Route path="config/show/:id/workspace/run-of-show" element={<ShowWorkspaceRedirect destination="playlists" />} />
+            <Route path="config/show/:id/workspace/cues" element={<ShowWorkspaceRedirect destination="cues" />} />
+            <Route path="config/show/:id/workspace/assets" element={<ShowWorkspaceRedirect destination="assets" />} />
+            <Route path="config/show/:id/workspace/automation" element={<ShowWorkspaceRedirect destination="actions" />} />
+            <Route path="config/show/:id/workspace/presentation" element={<ShowWorkspaceRedirect destination="surfaces" />} />
+            <Route path="config/show/:id/workspace/show-night" element={<ShowWorkspaceRedirect destination="night" />} />
+            <Route path="config/show/:id/workspace/readiness" element={<ShowWorkspaceRedirect destination="readiness" />} />
             <Route path="config/show.surface" element={<ShowSurfaces />} />
             <Route path="config/show.surface/new" element={<ShowSurfaceDetail isNew />} />
             <Route path="config/show.surface/:id" element={<ShowSurfaceDetail />} />
