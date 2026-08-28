@@ -231,7 +231,7 @@ func TestApplyContentIdentityStampsContentObservedAtFromTheReadTimeNotAppliedAt(
 	}
 
 	var rep mqttproto.RenderSurfaceReport
-	applyContentIdentity(&rep, a, readAt)
+	applyContentIdentity(&rep, a, readAt, discardLogger())
 
 	if rep.FSEQFilename != "halloween-01.fseq" {
 		t.Errorf("FSEQFilename = %q, want %q", rep.FSEQFilename, "halloween-01.fseq")
@@ -255,10 +255,162 @@ func TestApplyContentIdentityLeavesContentObservedAtZeroWhenNoContent(t *testing
 		RawParams: []byte(`{}`),
 	}
 	var rep mqttproto.RenderSurfaceReport
-	applyContentIdentity(&rep, a, time.Now())
+	applyContentIdentity(&rep, a, time.Now(), discardLogger())
 
 	if !rep.ContentObservedAt.IsZero() {
 		t.Errorf("ContentObservedAt = %v, want zero (no content identity was applied)", rep.ContentObservedAt)
+	}
+}
+
+// TestApplyContentIdentityWithholdsIdentityForAnEmptyHash is this issue's
+// unit-level regression test: the apply path (renderops.go) always
+// persists a non-empty fseqContentHash alongside a non-empty fseqFilename,
+// so this shape (filename set, hash empty) only reaches assignments.json
+// by hand-editing or predating the content-identity contract. Before this
+// fix, applyContentIdentity copied the empty hash through unconditionally,
+// which RenderPayload.Validate's both-empty-or-both-set invariant rejects
+// once this surface reaches a real envelope build — see
+// TestRunRenderReportPublishesRemainingSurfacesWhenOneAssignmentHasAnEmptyHash
+// for that failure's full blast radius. This proves the malformed pair is
+// withheld (both fields left "", satisfying Validate) with a stated
+// reason, rather than publishing an unverified filename with no hash.
+func TestApplyContentIdentityWithholdsIdentityForAnEmptyHash(t *testing.T) {
+	a := pipeline.Assignment{
+		SurfaceID: "wall-1",
+		RawParams: []byte(`{"fseqFilename":"halloween-01.fseq","fseqContentHash":""}`),
+		CueID:     "cue-42",
+	}
+	rep := mqttproto.RenderSurfaceReport{
+		SurfaceID:     "wall-1",
+		PipelineState: mqttproto.RenderPipelineStateRunning,
+	}
+	applyContentIdentity(&rep, a, time.Now(), discardLogger())
+
+	if rep.FSEQFilename != "" {
+		t.Errorf("FSEQFilename = %q, want empty: an unverified filename must never reach the wire", rep.FSEQFilename)
+	}
+	if rep.FSEQContentHash != "" {
+		t.Errorf("FSEQContentHash = %q, want empty", rep.FSEQContentHash)
+	}
+	if rep.CueID != "" {
+		t.Errorf("CueID = %q, want empty: no identity was actually applied", rep.CueID)
+	}
+	if rep.ContentIdentityReason == "" {
+		t.Error("ContentIdentityReason is empty, want it to name why this surface's content identity was withheld")
+	}
+	if !rep.ContentObservedAt.IsZero() {
+		t.Errorf("ContentObservedAt = %v, want zero: no genuine content identity was applied", rep.ContentObservedAt)
+	}
+
+	payload := mqttproto.RenderPayload{Surfaces: []mqttproto.RenderSurfaceReport{rep}}
+	if err := payload.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil: withholding the pair must satisfy the both-empty-or-both-set invariant", err)
+	}
+}
+
+// TestRunRenderReportPublishesRemainingSurfacesWhenOneAssignmentHasAnEmptyHash
+// is this issue's own reproduction. One persisted assignment carrying a
+// fseqFilename with no fseqContentHash (unreachable via the current apply
+// path, but reachable by a hand-edited or pre-content-identity-contract
+// assignments.json) must never silence this node's ENTIRE render report.
+// Against the unmodified tree, applyContentIdentity copies the empty hash
+// through, RenderPayload.Validate rejects the resulting surface, and
+// publishOneRenderReport's "log and return" on a failed envelope build
+// drops the healthy surface's report too — this test times out waiting for
+// any publish at all. After the fix, the healthy surface's content
+// identity survives intact and the malformed surface is named with a
+// reason, in the same published report.
+func TestRunRenderReportPublishesRemainingSurfacesWhenOneAssignmentHasAnEmptyHash(t *testing.T) {
+	clock := newTestClock()
+	fs := &fakeRenderStarter{}
+	sup := pipeline.NewSupervisor(clock.now, fs.Start, discardLogger())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sup.Shutdown(ctx)
+	})
+
+	for _, id := range []string{"good-surface", "bad-surface"} {
+		if err := sup.Apply(pipeline.DefaultTestPatternSpec(id)); err != nil {
+			t.Fatalf("Apply(%s): %v", id, err)
+		}
+	}
+	awaitCtx, awaitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer awaitCancel()
+	for _, id := range []string{"good-surface", "bad-surface"} {
+		if _, ok := sup.AwaitState(awaitCtx, id, []pipeline.State{pipeline.StateRunning}, time.Time{}, -1, 5*time.Millisecond); !ok {
+			t.Fatalf("setup: %s never reached running", id)
+		}
+	}
+
+	store := pipeline.NewAssignmentStore(t.TempDir())
+	if err := store.Save([]pipeline.Assignment{
+		{SurfaceID: "good-surface", RawParams: []byte(`{"fseqFilename":"halloween-01.fseq","fseqContentHash":"sha256:deadbeef"}`)},
+		{SurfaceID: "bad-surface", RawParams: []byte(`{"fseqFilename":"corrupt.fseq","fseqContentHash":""}`)},
+	}); err != nil {
+		t.Fatalf("setup: Save: %v", err)
+	}
+
+	pub := newFakePublisher()
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runRenderReport(ctx, pub, "media-03", sup, store, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
+	}()
+
+	select {
+	case ticks <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending tick")
+	}
+	select {
+	case <-pub.notify:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for publish: one malformed persisted assignment silenced the entire render report")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runRenderReport to return")
+	}
+
+	calls := pub.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("got %d publish calls, want 1", len(calls))
+	}
+	report := decodeRenderReport(t, calls[0].payload)
+	if len(report.Surfaces) != 2 {
+		t.Fatalf("got %d surfaces, want 2 (the malformed assignment must not drop the healthy surface)", len(report.Surfaces))
+	}
+
+	byID := map[string]mqttproto.RenderSurfaceReport{}
+	for _, s := range report.Surfaces {
+		byID[s.SurfaceID] = s
+	}
+
+	good, ok := byID["good-surface"]
+	if !ok {
+		t.Fatal("good-surface missing from report")
+	}
+	if good.FSEQFilename != "halloween-01.fseq" || good.FSEQContentHash != "sha256:deadbeef" {
+		t.Errorf("good-surface content identity = %+v, want the persisted filename/hash intact", good)
+	}
+
+	bad, ok := byID["bad-surface"]
+	if !ok {
+		t.Fatal("bad-surface missing from report")
+	}
+	if bad.FSEQFilename != "" || bad.FSEQContentHash != "" {
+		t.Errorf("bad-surface content identity = %+v, want both empty: an unverified filename must never reach the wire", bad)
+	}
+	if bad.ContentIdentityReason == "" {
+		t.Error("bad-surface ContentIdentityReason is empty, want it to name the malformed persisted assignment")
 	}
 }
 

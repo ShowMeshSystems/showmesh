@@ -99,7 +99,7 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	for _, s := range snapshots {
 		rep := toRenderSurfaceReport(s)
 		if a, ok := assignments[s.SurfaceID]; ok {
-			applyContentIdentity(&rep, a, now())
+			applyContentIdentity(&rep, a, now(), logger)
 		}
 		surfaces = append(surfaces, rep)
 	}
@@ -220,6 +220,19 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 // reports absence rather than propagating a decode failure into a
 // fabricated identity.
 //
+// A non-empty fseqFilename with an empty fseqContentHash is a second,
+// distinct failure mode: the apply path (renderops.go) always
+// persists a non-empty hash alongside a non-empty filename, so this shape
+// only reaches assignments.json by hand-editing or predating the
+// content-identity contract. Before this guard, that combination reached
+// the wire as-is, RenderPayload.Validate's both-empty-or-both-set
+// invariant rejected the whole envelope, and publishOneRenderReport's
+// failed-build path dropped this node's ENTIRE render report — every
+// surface, every tick — for as long as the malformed assignment persisted.
+// This function instead withholds the whole identity (never publishes a
+// filename with no hash to back it) and states why in
+// rep.ContentIdentityReason, so one malformed surface degrades alone.
+//
 // observedAt is this node's own read time for a — the caller's now() at
 // the moment it re-read the persisted assignment store, stamped onto
 // rep.ContentObservedAt only when a genuine identity is actually applied.
@@ -228,7 +241,7 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 // observation: a cue activation swaps the frame writer without
 // transitioning PipelineState, and a surface rendering the same content
 // steadily must not read stale merely because ObservedAt never moves.
-func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignment, observedAt time.Time) {
+func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignment, observedAt time.Time, logger *slog.Logger) {
 	var params map[string]any
 	if err := json.Unmarshal(a.RawParams, &params); err != nil {
 		return
@@ -238,6 +251,12 @@ func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignm
 		return
 	}
 	hash, _ := params["fseqContentHash"].(string)
+	if hash == "" {
+		logger.Warn("persisted render assignment has a fseqFilename with no fseqContentHash; withholding this surface's content identity",
+			"surface_id", a.SurfaceID)
+		rep.ContentIdentityReason = "persisted assignment has a fseqFilename but no fseqContentHash (hand-edited or pre-content-identity-contract assignments.json); content identity withheld"
+		return
+	}
 
 	rep.FSEQFilename = filename
 	rep.FSEQContentHash = hash
