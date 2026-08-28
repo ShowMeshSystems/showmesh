@@ -4,6 +4,14 @@ When creating or updating ShowMesh issues, follow
 [`docs/ISSUE-TRACKING.md`](docs/ISSUE-TRACKING.md). That guide is canonical;
 do not copy its templates into agent-specific instructions.
 
+File at most one follow-up issue per task, and only when the thing you found
+breaks the work you were assigned. Everything else goes in your response as a
+sentence for Eric to rule on. Never open an issue to record a review pass, a
+retry, a plan, or something you noticed while you were in the file.
+
+Keep a comment to one screen. Gate output goes in a fenced block or a link,
+never as prose.
+
 Before creating an issue:
 
 1. Search Linear for a duplicate.
