@@ -754,6 +754,21 @@ on the same rule the gain rows above follow. Either shape changes what
 `audio_session.state` can report, so it is an API change and is recorded on
 SM-310.
 
+**Lane 18b coordinator reservation, 2026-08-28.** A coordinator that cannot
+decode its stored `audio.settings` stops pushing audio configuration to every
+node and says so only in one Warn line. Making that legible needs a name, and
+the shape is the builder's call: a coordinator-level signal, a readiness
+condition, or a refusal surfaced through the API. The signal pair is reserved
+here so the choice does not also mint a spelling.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `coordinator.audio.config.push.state` | reserved | Lane 18b SM-357 (whether the coordinator can use its stored `audio.settings` to configure nodes) |
+| `coordinator.audio.config.push.reason` | reserved | Lane 18b SM-357 (why it cannot; required whenever the state is not usable) |
+
+If the builder takes the readiness-condition or API-refusal shape instead,
+both rows stay reserved and unshipped rather than being released.
+
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
 signal exists so the threshold can be set from measurement, and a future
