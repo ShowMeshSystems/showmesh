@@ -670,24 +670,29 @@ whole value of the signal is that a green alignment light means measured
 rather than configured, and only the hardware work can make it say
 anything else.
 
-**Five more node-level `node.audio.engine.*` signals, proposed but NOT
-owner-confirmed, added on the real-node audio acceptance bench review
-fold.** They carry gstengine's bus-level glitch evidence (ALSA
+**Seven node-level `node.audio.engine.*` signals, owner-confirmed
+2026-08-26.** Five of them were added on the real-node audio acceptance
+bench review fold and carry gstengine's bus-level glitch evidence (ALSA
 xrun/underrun-class and clock-drift WARNING messages, bucketed by GError
 domain, and QOS-class dropped-buffer counts) into an observation for the
 first time; before this they were counted in the agent process and
-discarded before reaching the coordinator. The spellings below are the
-builder's own naming, not the owner's: flagged for confirmation rather
-than reserved, per this section's no-additions-without-the-owner rule for
-the sibling LTC block above.
+discarded before reaching the coordinator. The spellings were the
+builder's own naming and were flagged for confirmation, per this section's
+no-additions-without-the-owner rule for the sibling LTC block above. The
+owner confirmed all five as they stand and ruled that further
+`node.audio.engine.*` signals may be added later without another ruling.
+`state` and `reason` shipped with the same collector and are recorded here
+alongside them.
 
 | Signal | Status | Owner |
 |---|---|---|
-| `node.audio.engine.started_at` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.stream` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.resource` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.other` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.qos_drops` | proposed, unconfirmed | flagged for Eric |
+| `node.audio.engine.state` | shipped | C6/C7 |
+| `node.audio.engine.reason` | shipped | C6/C7 |
+| `node.audio.engine.started_at` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.stream` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.resource` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.other` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.qos_drops` | shipped | owner-confirmed 2026-08-26 |
 
 **None of the five is confirmed to identify an ALSA xrun/underrun
 specifically.** alsasink logs a recovered xrun via `GST_WARNING_OBJECT`,
@@ -697,6 +702,26 @@ closest-available bucket, not verified evidence. `qos_drops` is live
 evidence once the sink's `qos` property is enabled (done as part of this
 change), independent of the xrun question. See gstengine's own
 `classifyWarningDomain` doc comment.
+
+**Lane 18a signal reservations, 2026-08-28.** Reserved by the lane before
+its builders start, so that two branches cannot mint two spellings for the
+same fact. A builder ships the rows its chosen shape needs and leaves the
+rest reserved rather than released.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.gain.effective_db` | reserved | Lane 18a (dB companion to `audio_session.gain.effective`) |
+| `audio_session.gain.ceiling_db` | reserved | Lane 18a (dB companion to `audio_session.gain.ceiling`) |
+| `audio_session.ltc.claim.state` | reserved | Lane 18a (`held`, `refused` or `none`: whether this session drives the node's one LTC run) |
+| `audio_session.ltc.claim.reason` | reserved | Lane 18a (why a claim was refused; required whenever the state is `refused`) |
+| `node.audio.ltc.owner_session_id` | reserved | Lane 18a (which session holds the node's single LTC run, so a mismatch is legible from node-level evidence) |
+
+**The two gain rows are companions, not replacements.** Operators enter
+gain in decibels, so the observation must read in decibels; whether that
+is a new pair beside the linear values or a conversion of the existing two
+signals is the builder's call. If the existing signals are converted in
+place, these two rows stay reserved and unshipped, because releasing a
+name only to re-mint it later is how a spelling drifts.
 
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
