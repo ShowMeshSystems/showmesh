@@ -47,7 +47,7 @@ function permissionStateBlock(
   if (signInState.kind === 'signed_out') {
     return <UnavailableBlock title="Signed out" reason="This device is not signed in, so it cannot edit these settings." />
   }
-  if (sessionFetchFailed || session.scopesState !== 'current') {
+  if (sessionFetchFailed || signInState.session.scopesState !== 'current') {
     return <StaleBlock title="Stale permission evidence" reason="Settings remain unavailable until the coordinator can confirm this device’s current permissions." />
   }
   if (insufficientPermissionReason) {
