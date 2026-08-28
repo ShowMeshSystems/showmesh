@@ -798,6 +798,23 @@ type RenderSurfaceReport struct {
 	// persist" ordering). "" exactly when FSEQFilename is "".
 	FSEQContentHash string `json:"fseqContentHash"`
 
+	// ContentIdentityReason states why this surface's six content-identity
+	// fields (FSEQFilename/FSEQContentHash/CueID/CatalogRevision/Show/
+	// Generation) are all empty even though this surface holds a persisted
+	// assignment: the apply path (renderops.go) always persists a
+	// non-empty fseqContentHash alongside a non-empty fseqFilename, so this
+	// only fires against a hand-edited or pre-content-identity-contract
+	// assignments.json. "" whenever this surface holds no assignment at
+	// all (a genuine absence, not a degradation) or a genuine identity was
+	// applied. internal/agent/renderreport.go's applyContentIdentity
+	// withholds the whole identity rather than publish an unverified
+	// filename with no hash to back it — see that function's doc comment.
+	// Not enforced as required by Validate, matching ContentObservedAt's
+	// identical additive-compatibility reasoning: this field is added
+	// after RenderSurfaceReport first shipped, and a hard requirement here
+	// would reject every fixture and payload built before it existed.
+	ContentIdentityReason string `json:"contentIdentityReason"`
+
 	// CueID is the Cue that authorized this surface's current assignment
 	// ([cueactivation.Activation.CueID], carried on
 	// [pipeline.AssignmentAuth.CueID]): "" whenever the current

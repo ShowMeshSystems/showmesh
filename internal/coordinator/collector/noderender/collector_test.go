@@ -928,6 +928,43 @@ func TestPollNoContentIdentityIsNotCollected(t *testing.T) {
 	}
 }
 
+// TestPollWithheldContentIdentityStatesTheNodesReasonNotNoAssignment proves
+// that a surface whose node withheld a real but malformed persisted
+// assignment (mqttproto.RenderSurfaceReport.ContentIdentityReason set,
+// FSEQFilename left empty by internal/agent/renderreport.go's
+// applyContentIdentity) reports the node's own reason on all six
+// content-identity signals, never the "this surface holds no render
+// assignment" text that TestPollNoContentIdentityIsNotCollected's true
+// no-assignment case gets — that text would tell an operator this surface
+// holds no assignment when it actually holds a broken one.
+func TestPollWithheldContentIdentityStatesTheNodesReasonNotNoAssignment(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	const withheldReason = "persisted assignment has a fseqFilename but no fseqContentHash (hand-edited or pre-content-identity-contract assignments.json); content identity withheld"
+	payload.Surfaces[0].ContentIdentityReason = withheldReason
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceContentFSEQFilename,
+		SignalSurfaceContentFSEQContentHash,
+		SignalSurfaceContentCueID,
+		SignalSurfaceContentCatalogRevision,
+		SignalSurfaceContentShow,
+		SignalSurfaceContentGeneration,
+	} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s: Absence = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+		if o.Reason != withheldReason {
+			t.Errorf("%s: Reason = %q, want the node's own withheld-identity reason %q", sig, o.Reason, withheldReason)
+		}
+	}
+}
+
 // TestPollContentIdentityWithoutCueLeavesCueIDNotCollected proves a
 // surface carrying real content (a filename, hash, and catalog revision)
 // but no cue id (a direct render.surface.apply with no cue activation
