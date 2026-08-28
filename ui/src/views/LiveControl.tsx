@@ -6,6 +6,7 @@ import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope } from '../app/session'
 import { useResolumeComposition, resolumeCompositionOrNull } from '../app/useResolumeComposition'
 import { AudioSessionPanel } from '../components/AudioSessionPanel'
+import { ActionInvokeButton } from '../components/ActionInvokeButton'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import {
   FPPNextPlaylistItemControl,
@@ -22,7 +23,8 @@ import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
 import { ResolumeActionController } from '../components/ResolumeActionController'
 import { RunMacroButton } from '../components/RunMacroButton'
-import { CommandGroup, OperatorPageHeader, OperatorSection, StatusStrip, StatusStripItem, UnavailableBlock } from '../components/SharedLayouts'
+import { ShowModePanel } from '../components/ShowModePanel'
+import { CommandGroup, OperatorPageHeader, OperatorSection, StatusStrip, StatusStripItem, UnavailableBlock, UnobservedBlock } from '../components/SharedLayouts'
 import '../styles/operator-pages.css'
 
 type LoadState<T> = { kind: 'loading' } | { kind: 'loaded'; value: T } | { kind: 'error'; message: string }
@@ -36,6 +38,28 @@ function useMacroObjects(allowed: boolean): LoadState<ConfigObjectSummary[]> {
     let cancelled = false
     setState({ kind: 'loading' })
     listConfigObjects('show.macro')
+      .then((response) => {
+        if (!cancelled) setState({ kind: 'loaded', value: response.objects })
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setState({ kind: 'error', message: describeApiError(error) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [allowed])
+  return state
+}
+
+function useShowActionObjects(allowed: boolean): LoadState<ConfigObjectSummary[]> {
+  const [state, setState] = useState<LoadState<ConfigObjectSummary[]>>({
+    kind: 'loading',
+  })
+  useEffect(() => {
+    if (!allowed) return
+    let cancelled = false
+    setState({ kind: 'loading' })
+    listConfigObjects('show.action')
       .then((response) => {
         if (!cancelled) setState({ kind: 'loaded', value: response.objects })
       })
@@ -75,6 +99,7 @@ export function LiveControl() {
   const model = useModelContext()
   const macroRead = evaluateAnyScope(model.session, model.sessionFetchFailed, ['show:macro:run', 'config:write'])
   const macros = useMacroObjects(macroRead.allowed)
+  const actions = useShowActionObjects(macroRead.allowed)
   const resolume = model.resolume[0]
   const resolumeActions = useResolumeActions(resolume !== undefined)
   const compositionState = useResolumeComposition(resolume?.composition?.name ?? null, resolume !== undefined)
@@ -82,6 +107,13 @@ export function LiveControl() {
   const fppStatus = fppControlStatus(model)
   const audioStatus = audioControlStatus(model)
   const resolumeStatus = resolumeControlStatus(model)
+  const macroActionLoadError = macros.kind === 'error'
+    ? macros.message
+    : actions.kind === 'error'
+      ? actions.message
+      : null
+  const macroObjects = macros.kind === 'loaded' ? macros.value : []
+  const actionObjects = actions.kind === 'loaded' ? actions.value : []
 
   return (
     <div className="operator-page live-control-page">
@@ -128,7 +160,7 @@ export function LiveControl() {
           <p>Selection authority</p>
         </div>
         <p className="section-notice">
-          Active-show evidence comes from the coordinator&apos;s current-runs projection. Mode selection remains a configuration write and is opened in Settings.
+          Active-show evidence comes from the coordinator&apos;s current-runs projection. Mode selection is installation-wide and scope-gated here.
         </p>
         <div className="live-control-groups">
           <article className="live-control-group">
@@ -137,9 +169,7 @@ export function LiveControl() {
             <Link className="button button--secondary" to="/config/show.active">Select active show</Link>
           </article>
           <article className="live-control-group">
-            <h3>Operating Mode</h3>
-            <p className="text-muted">The current Mode remains visible in the application footer. Its selection is installation-wide and scope-gated.</p>
-            <Link className="button button--secondary" to="/config#show-mode">Open Mode selection</Link>
+            <ShowModePanel headingLevel={3} />
           </article>
         </div>
       </section>
@@ -170,7 +200,9 @@ export function LiveControl() {
           <h2 id="fpp-controls">Runner playback</h2>
           <p>FPP controls when configured</p>
         </div>
-        {model.fpp.length === 0 ? (
+        {model.snapshotReceivedAt === null ? (
+          <Unobserved title="Runner playback" reason="No coordinator snapshot has been received, so FPP playback capability is not yet observed." />
+        ) : model.fpp.length === 0 ? (
           <Unavailable title="Runner playback" reason="No FPP instance is configured on this coordinator." />
         ) : (
           <div className="live-control-groups">
@@ -200,7 +232,9 @@ export function LiveControl() {
             <h2 id="node-controls">Audio and render-node controls</h2>
             <p>Observed node sessions</p>
           </div>
-          {model.nodes.length === 0 ? (
+          {model.snapshotReceivedAt === null ? (
+            <Unobserved title="Audio and render-node controls" reason="No coordinator snapshot has been received, so node control capability is not yet observed." />
+          ) : model.nodes.length === 0 ? (
             <Unavailable title="Audio and render-node controls" reason="No nodes are currently observed." />
           ) : (
             <div className="live-control-groups">
@@ -223,7 +257,9 @@ export function LiveControl() {
             <h2 id="resolume-controls">Resolume controls</h2>
             <p>Composition actions</p>
           </div>
-          {resolume === undefined ? (
+          {model.snapshotReceivedAt === null ? (
+            <Unobserved title="Resolume controls" reason="No coordinator snapshot has been received, so Resolume capability is not yet observed." />
+          ) : resolume === undefined ? (
             <Unavailable title="Resolume controls" reason="Resolume is not configured on this coordinator." />
           ) : resolumeActions.kind === 'error' ? (
             <p className="section-notice notice--error" role="alert">
@@ -254,24 +290,32 @@ export function LiveControl() {
         </div>
         {!macroRead.allowed ? (
           <Unavailable title="Macros and exposed Actions" reason={macroRead.reason} />
-        ) : macros.kind === 'loading' ? (
+        ) : macros.kind === 'loading' || actions.kind === 'loading' ? (
           <p className="text-muted" role="status">
             Loading configured macros and exposed Actions…
           </p>
-        ) : macros.kind === 'error' ? (
+        ) : macroActionLoadError !== null ? (
           <p className="section-notice notice--error" role="alert">
-            {macros.message}
+            {macroActionLoadError}
           </p>
-        ) : macros.value.length === 0 ? (
-          <Unavailable title="Macros and exposed Actions" reason="No configured macro is intentionally exposed here." />
+        ) : macroObjects.length === 0 && actionObjects.length === 0 ? (
+          <Unavailable title="Macros and exposed Actions" reason="No configured macro or coordinator-exposed Action is available here." />
         ) : (
           <div className="live-control-groups">
-            {macros.value.map((macro) => (
+            {macroObjects.map((macro) => (
               <article key={macro.id} className="live-control-group">
                 <h3>{macro.label || macro.id}</h3>
                 <span className="operator-list__meta">Revision {macro.currentRevision}</span>
                 <p className="text-muted">Capability: configured macro. Freshness: configuration revision shown. Permission and outcome are reported by this action.</p>
                 <RunMacroButton macroId={macro.id} />
+              </article>
+            ))}
+            {actionObjects.map((action) => (
+              <article key={action.id} className="live-control-group">
+                <h3>{action.label || action.id}</h3>
+                <span className="operator-list__meta">Revision {action.currentRevision}</span>
+                <p className="text-muted">Capability: coordinator-exposed stored Action. Its permission and authoritative outcome are reported by this action.</p>
+                <ActionInvokeButton actionId={action.id} label="Invoke" />
               </article>
             ))}
           </div>
@@ -317,7 +361,13 @@ function activeShowDetail(model: ReturnType<typeof useModelContext>): string {
   if (!model.currentRuns.activeShow.configured || model.currentRuns.activeShow.show === null) {
     return 'No active show is configured in the current coordinator projection.'
   }
-  return `Active: ${model.currentRuns.activeShow.show} (generation ${model.currentRuns.activeShow.generation ?? 'not reported'}). Freshness: current-runs projection.`
+  return `Active: ${model.currentRuns.activeShow.show} (generation ${model.currentRuns.activeShow.generation ?? 'not reported'}). Evidence: ${currentRunsEvidenceDetail(model)}.`
+}
+
+function currentRunsEvidenceDetail(model: ReturnType<typeof useModelContext>): string {
+  if (model.connection.kind !== 'live') return `last known current-runs projection while the browser is ${model.connection.kind}`
+  if (model.currentRunsReceivedAt === null) return 'current-runs projection with no browser receipt time recorded'
+  return 'current-runs projection received by this browser'
 }
 
 function snapshotStatus(model: ReturnType<typeof useModelContext>): 'unobserved' | 'stale' | 'live' {
@@ -326,8 +376,8 @@ function snapshotStatus(model: ReturnType<typeof useModelContext>): 'unobserved'
 }
 
 function fppControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
-  if (model.fpp.length === 0) return { value: 'Unavailable', detail: 'No FPP instance is configured', tone: 'unknown' }
   if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
+  if (model.fpp.length === 0) return { value: 'Unavailable', detail: 'No FPP instance is configured', tone: 'unknown' }
   if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known FPP evidence', tone: 'unknown' }
   if (model.fpp.some((instance) => instance.health === 'failed')) return { value: 'Failed', detail: 'An FPP instance has failed', tone: 'bad' }
   if (model.fpp.some((instance) => instance.health !== 'healthy' && instance.health !== 'suppressed')) {
@@ -346,8 +396,8 @@ function audioControlStatus(model: ReturnType<typeof useModelContext>): ControlS
 
 function resolumeControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
   const resolume = model.resolume[0]
-  if (resolume === undefined) return { value: 'Unavailable', detail: 'Not configured on this coordinator', tone: 'unknown' }
   if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
+  if (resolume === undefined) return { value: 'Unavailable', detail: 'Not configured on this coordinator', tone: 'unknown' }
   if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known Resolume evidence', tone: 'unknown' }
   if (resolume.health === 'failed') return { value: 'Failed', detail: 'The Resolume instance has failed', tone: 'bad' }
   if (resolume.health !== 'healthy' && resolume.health !== 'suppressed') {
@@ -358,4 +408,8 @@ function resolumeControlStatus(model: ReturnType<typeof useModelContext>): Contr
 
 function Unavailable({ title, reason }: { title: string; reason: string }) {
   return <UnavailableBlock title={title} reason={<>Unavailable: {reason}</>} headingLevel={3} />
+}
+
+function Unobserved({ title, reason }: { title: string; reason: string }) {
+  return <UnobservedBlock title={title} reason={<>Unobserved: {reason}</>} headingLevel={3} />
 }

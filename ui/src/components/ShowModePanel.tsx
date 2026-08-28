@@ -40,7 +40,11 @@ type LoadState =
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; config: ShowModeConfigResponse; revisions: ConfigRevisionMeta[] }
 
-export function ShowModePanel() {
+export interface ShowModePanelProps {
+  headingLevel?: 2 | 3
+}
+
+export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
@@ -103,7 +107,7 @@ export function ShowModePanel() {
 
   return (
     <div>
-      <h2 className="panel__title">Show mode</h2>
+      {headingLevel === 3 ? <h3 className="panel__title">Show mode</h3> : <h2 className="panel__title">Show mode</h2>}
       <p className="text-muted">
         One operating mode for the whole installation: <code>program</code> while it is being set up
         or programmed, <code>show</code> while a show is running. Not per-node, not per-device, and

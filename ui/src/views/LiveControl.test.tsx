@@ -4,19 +4,27 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LiveControl } from './LiveControl'
 import { ModelContext } from '../app/ModelContext'
-import { makeCurrentRuns, makeEvidence, makeFPPInstance, makeModel, makeNode, makeResolumeInstance } from '../app/test-support/fixtures'
+import { makeConfigObjectSummary, makeCurrentRuns, makeEvidence, makeFPPInstance, makeModel, makeNode, makeResolumeInstance } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 
-const { dispatchNightCommand } = vi.hoisted(() => ({
+const { dispatchNightCommand, invokeAction, listConfigObjects, getShowModeConfig, getShowModeConfigRevisions } = vi.hoisted(() => ({
   dispatchNightCommand: vi.fn(),
+  invokeAction: vi.fn(),
+  listConfigObjects: vi.fn(),
+  getShowModeConfig: vi.fn(),
+  getShowModeConfigRevisions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, dispatchNightCommand }
+  return { ...actual, dispatchNightCommand, invokeAction, listConfigObjects, getShowModeConfig, getShowModeConfigRevisions }
 })
 
 afterEach(cleanup)
 afterEach(() => dispatchNightCommand.mockReset())
+afterEach(() => invokeAction.mockReset())
+afterEach(() => listConfigObjects.mockReset())
+afterEach(() => getShowModeConfig.mockReset())
+afterEach(() => getShowModeConfigRevisions.mockReset())
 
 function renderView(overrides: Parameters<typeof makeModel>[0] = {}) {
   return render(
@@ -95,6 +103,25 @@ describe('LiveControl', () => {
     }
   })
 
+  it('keeps empty FPP, node, and Resolume groups unobserved before the first coordinator snapshot', () => {
+    renderView({
+      connection: { kind: 'connecting' },
+      snapshotReceivedAt: null,
+      fpp: [],
+      nodes: [],
+      resolume: [],
+    })
+
+    for (const title of ['Runner playback', 'Audio and render-node controls', 'Resolume controls']) {
+      const state = screen.getByRole('status', { name: `${title}: unobserved` })
+      expect(state).toHaveTextContent('Unobserved: No coordinator snapshot has been received')
+      expect(state).not.toHaveClass('shared-state-block--unavailable')
+    }
+    for (const label of ['FPP', 'Audio', 'Resolume']) {
+      expect(screen.getByText(label).closest('.shared-status-strip__item')).toHaveTextContent('Unobserved')
+    }
+  })
+
   it('keeps failed live evidence distinct from unavailable and unknown states', () => {
     renderView({
       fpp: [makeFPPInstance('fpp-main', { health: 'failed' })],
@@ -126,12 +153,58 @@ describe('LiveControl', () => {
     expect(await screen.findByText('Start night accepted and applied.')).toBeInTheDocument()
   })
 
-  it('keeps operator task groups in command order and reaches Active Show and Mode selection without placing configuration writes here', () => {
-    renderView({ currentRuns: makeCurrentRuns() })
+  it('lists coordinator-exposed stored Actions and preserves their literal invoke scope and outcome handling', async () => {
+    listConfigObjects.mockImplementation((kind: string) => Promise.resolve({
+      objects: kind === 'show.action' ? [makeConfigObjectSummary({ id: 'blackout', label: 'Blackout', currentRevision: 4 })] : [],
+    }))
+    invokeAction.mockResolvedValue({
+      id: 'invocation-1', idempotencyKey: 'key-1', actionId: 'blackout', revision: 4,
+      replay: false, state: 'resolved', outcome: 'refused', outcomeReason: 'interlock active',
+      dispatchAttribution: 'complete', dispatchAttributionReason: 'recorded',
+      outcomeAttribution: 'complete', outcomeAttributionReason: 'recorded',
+      attributionDegraded: false, dispatchedAt: '2026-08-27T00:00:00Z', resolvedAt: '2026-08-27T00:00:01Z',
+    })
+    const user = userEvent.setup()
+    renderView({ session: makeAuthenticatedSession({ scopes: ['show:macro:run', 'show:action:invoke'] }) })
 
-    expect(screen.getByText('Active: halloween-2026 (generation 7). Freshness: current-runs projection.')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Blackout', level: 3 })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Invoke' }))
+    expect(invokeAction).toHaveBeenCalledWith('blackout')
+    expect(await screen.findByText('Refused, nothing was dispatched: interlock active')).toBeInTheDocument()
+  })
+
+  it('keeps a listed Action visible but disabled when its literal invoke scope is absent', async () => {
+    listConfigObjects.mockImplementation((kind: string) => Promise.resolve({
+      objects: kind === 'show.action' ? [makeConfigObjectSummary({ id: 'blackout', label: 'Blackout' })] : [],
+    }))
+    renderView({ session: makeAuthenticatedSession({ scopes: ['show:macro:run'] }) })
+
+    expect(await screen.findByRole('heading', { name: 'Blackout', level: 3 })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Invoke' })).toBeDisabled()
+    expect(screen.getByText(/does not include "show:action:invoke"/)).toBeInTheDocument()
+    expect(invokeAction).not.toHaveBeenCalled()
+  })
+
+  it('puts the existing direct Mode selection on Live Control instead of linking to Settings', async () => {
+    getShowModeConfig.mockResolvedValue({
+      serverTime: '2026-08-27T00:00:00Z', kind: 'show.mode', revision: 0, payload: { mode: 'program' },
+      updatedAt: '2026-08-27T00:00:00Z', createdByPrincipalId: null, createdByPrincipalName: null,
+      source: 'default', resolumeWebSocketEffect: 'program mode: the Resolume WebSocket wake-up channel is held OPEN.',
+    })
+    getShowModeConfigRevisions.mockResolvedValue({ serverTime: '2026-08-27T00:00:00Z', kind: 'show.mode', revisions: [] })
+    listConfigObjects.mockResolvedValue({ objects: [] })
+    renderView({ session: makeAuthenticatedSession({ scopes: ['config:write'] }) })
+
+    expect(await screen.findByLabelText('Operating mode')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save show mode' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Open Mode selection' })).not.toBeInTheDocument()
+  })
+
+  it('keeps operator task groups in command order and reaches Active Show and Mode selection without placing configuration writes here', () => {
+    renderView({ currentRuns: makeCurrentRuns(), currentRunsReceivedAt: 0 })
+
+    expect(screen.getByText('Active: halloween-2026 (generation 7). Evidence: current-runs projection received by this browser.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Select active show' })).toHaveAttribute('href', '/config/show.active')
-    expect(screen.getByRole('link', { name: 'Open Mode selection' })).toHaveAttribute('href', '/config#show-mode')
     expect(screen.queryByRole('button', { name: /save show mode/i })).not.toBeInTheDocument()
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)
@@ -157,5 +230,16 @@ describe('LiveControl', () => {
       </ModelContext.Provider>,
     )
     expect(screen.getByText('Unavailable: the coordinator current-runs projection could not be read.')).toBeInTheDocument()
+  })
+
+  it('marks retained current-runs evidence as last known while disconnected', () => {
+    renderView({
+      connection: { kind: 'reconnecting', attempt: 1, nextAttemptAt: 1, lastError: 'network lost' },
+      currentRuns: makeCurrentRuns(),
+      currentRunsReceivedAt: 0,
+    })
+
+    expect(screen.getByText('Active: halloween-2026 (generation 7). Evidence: last known current-runs projection while the browser is reconnecting.')).toBeInTheDocument()
+    expect(screen.queryByText(/Freshness: current-runs projection/)).not.toBeInTheDocument()
   })
 })
