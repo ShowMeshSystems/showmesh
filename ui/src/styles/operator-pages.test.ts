@@ -32,6 +32,28 @@ describe('Live Control layout constraints', () => {
     expect(cell).toMatch(/align-content:\s*start/)
   })
 
+  it('reserves full operator targets for Live Control fields without changing compact forms elsewhere', () => {
+    const select = ruleBodyFor(css, '.live-control-page select')
+    const textFieldLabel = ruleBodyFor(
+      css,
+      ".live-control-page .fpp-command-control > label:not(:has(> input[type='checkbox'])):not(:has(> input[type='radio']))",
+    )
+
+    expect(css).toMatch(
+      /\.live-control-page input:not\(\[type='checkbox'\]\):not\(\[type='radio'\]\),\s*\.live-control-page select\s*\{[^}]*min-height:\s*var\(--touch-target-min\)/,
+    )
+    expect(select).toMatch(/min-height:\s*var\(--touch-target-min\)/)
+    expect(textFieldLabel).toMatch(/display:\s*grid/)
+    expect(textFieldLabel).toMatch(/min-width:\s*0/)
+  })
+
+  it('keeps checkbox and radio label targets centered and able to wrap on Live Control only', () => {
+    expect(css).toMatch(
+      /\.live-control-page label:has\(> input\[type='checkbox'\]\),\s*\.live-control-page label:has\(> input\[type='radio'\]\)\s*\{[^}]*align-items:\s*center[^}]*flex-wrap:\s*wrap[^}]*min-height:\s*var\(--touch-target-min\)/,
+    )
+    expect(css).not.toMatch(/(^|\n)input:not\(\[type='checkbox'\]\):not\(\[type='radio'\]\),\s*\nselect\s*\{[^}]*--touch-target-min/)
+  })
+
   it('does not restore multi-column controls below the narrow breakpoint', () => {
     const narrow = css.slice(css.indexOf('@media (max-width: 620px)'))
 

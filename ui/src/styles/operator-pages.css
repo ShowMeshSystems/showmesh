@@ -184,6 +184,38 @@
   min-width: 0;
 }
 
+.live-control-page input:not([type='checkbox']):not([type='radio']),
+.live-control-page select {
+  min-height: var(--touch-target-min);
+}
+
+/* FPP's playlist and volume fields use inline labels in their shared
+ * components. Give those labels a bounded field layout only on this operator
+ * page so their 48px controls can grow and wrap inside a command card. */
+.live-control-page .fpp-command-control > label:not(:has(> input[type='checkbox'])):not(:has(> input[type='radio'])) {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Native checks stay visually compact, while the associated label is the
+ * full operator target. This also covers the checkbox and radio choices
+ * surfaced by the Resolume controller without changing compact forms on
+ * other pages. */
+.live-control-page label:has(> input[type='checkbox']),
+.live-control-page label:has(> input[type='radio']) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-height: var(--touch-target-min);
+  padding: 0 var(--space-2);
+}
+
+.live-control-page .form-field {
+  min-width: 0;
+}
+
 .live-control-command-rack p {
   overflow-wrap: anywhere;
 }
