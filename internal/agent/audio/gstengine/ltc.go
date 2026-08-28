@@ -59,23 +59,9 @@ const ltcAppSrcLeadSeconds = 0.2
 const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
 
 // ltcTransitionGuardDuration bounds [ltcChannel.beginTransition]'s guard
-// window only when no stronger evidence ends it sooner (see
-// [ltcChannel.observe]): appsink measurement of the real tail after a
-// Stop or Start swap (loopback, no flush) showed real audio on the wire
-// for close to 0.29s on one dev machine, but a CI runner measured as high
-// as 316ms in the same suite -- real-world downstream latency varies more
-// than a single dev-machine measurement suggested, so this stays at 2x
-// ltcAppSrcLeadDuration's nominal queue depth rather than being trimmed
-// to the smaller measurement. StartLTC's own realignment path ends the
-// guard as soon as the feeder confirms the incoming run's first emission
-// (see below), typically well before this bound is ever reached; StopLTC
-// has no future confirmation to wait for (the incoming "run" is silence,
-// and nothing about it ever reports LTCRunning), so this fixed bound is
-// what actually governs how long that path's guard lasts. Erring toward
-// reporting the outgoing run's evidence a little longer than necessary is
-// the safe direction: claiming the run stopped while it is still on the
-// wire is the defect this guards against, and a CI-measured 316ms tail
-// against a trimmed 310ms bound reproduced exactly that regression.
+// only for StopLTC, which has no future confirmation to end it on sooner
+// (see [ltcChannel.observe]); erring long is the safe direction, since
+// claiming stopped while still audible is the defect this guards against.
 const ltcTransitionGuardDuration = 2 * ltcAppSrcLeadDuration
 
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
@@ -253,14 +239,9 @@ func (ch *ltcChannel) observe(now time.Time) agentaudio.LTCObservation {
 	lastConfirmed := ch.lastConfirmed
 	if !ch.transitionDeadline.IsZero() {
 		if o.State == agentaudio.LTCRunning {
-			// The feeder has already confirmed the incoming run's first
-			// emission (ch.obs is only ever set to LTCRunning for the
-			// current generation, under this same lock): that is real
-			// evidence the swap landed, so end the guard on it now
-			// rather than waiting out ltcTransitionGuardDuration
-			// regardless. StopLTC's incoming "run" is silence and never
-			// reports LTCRunning, so this never fires for that path;
-			// the fixed bound below is what ends it there.
+			// ch.obs only ever reaches LTCRunning for the current
+			// generation (same lock): end the guard on that evidence
+			// rather than waiting out ltcTransitionGuardDuration.
 			ch.transitionDeadline = time.Time{}
 		} else if now.Before(ch.transitionDeadline) {
 			o = ch.preTransitionObs

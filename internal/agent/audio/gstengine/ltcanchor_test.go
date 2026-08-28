@@ -213,14 +213,10 @@ func TestObserveEndsGuardAsSoonAsIncomingRunIsConfirmed(t *testing.T) {
 	}
 }
 
-// TestLTCTransitionGuardDurationCoversTheMeasuredTail is a guard on
-// ltcTransitionGuardDuration's own value: StopLTC's path has no further
-// evidence to end the guard on (see [ltcChannel.observe]) and relies on
-// this fixed bound alone, so it must stay at or above the worst measured
-// real tail with real margin -- a dev machine measured about 290ms, a CI
-// runner measured as high as 316ms in the same suite. A shorter bound
-// risks claiming LTCStopped while the wire is still audible, exactly the
-// regression a CI run reproduced against a bound trimmed to 310ms.
+// TestLTCTransitionGuardDurationCoversTheMeasuredTail guards
+// ltcTransitionGuardDuration's own value: StopLTC's path relies on this
+// fixed bound alone (see [ltcChannel.observe]), so it must stay at or
+// above the worst measured real tail (see the PR record for the numbers).
 func TestLTCTransitionGuardDurationCoversTheMeasuredTail(t *testing.T) {
 	const worstMeasuredTail = 320 * time.Millisecond
 	if ltcTransitionGuardDuration < worstMeasuredTail {
