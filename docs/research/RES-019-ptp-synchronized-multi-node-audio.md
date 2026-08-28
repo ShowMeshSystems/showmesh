@@ -287,7 +287,7 @@ Owner brainstorm, 2026-08-28. The idea: when FPP 10 sends its program audio as A
 
 ADR-017 decides that audio nodes play local media, that "real-time audio streaming may exist later as a separate input/output capability" and "is not the synchronized show-audio architecture", and it rejected "streaming PCM from the coordinator or from FPP to audio nodes" because it puts the network in the real-time path and makes every dropout a network event. AUDIO-ENGINE §8 lists stream inputs and outputs as secondary and "never required for basic show playback". ADR-017 also requires FPP's audience audio output to be disabled or unused, and the AES67 sender is fed by FPP actively playing media through its PipeWire graph.
 
-Making AES67 the *preferred* program source with local playback as fallback is therefore a narrowing of ADR-017, not an implementation detail. This section records the research; it does not adopt the model. An owner decision and a superseding or narrowing ADR are required before any seam builds toward it.
+Making AES67 the *preferred* program source with local playback as fallback is therefore a narrowing of ADR-017, not an implementation detail. The owner adopted the model in §15.3 on 2026-08-28. A narrowing ADR against ADR-017 is owed and must land before any seam builds toward it; the failover research in §15.3 and questions Q6 to Q10 stay open regardless.
 
 ### 15.2 What the FPP source actually establishes
 
@@ -297,13 +297,33 @@ Making AES67 the *preferred* program source with local playback as fallback is t
 - **FPP's pixel output is not PTP scheduled** (§4.1 item 14). The channel-output thread runs on `GetTimeMS()` and the servo above; PTP in FPP is AES67-only today.
 - **FPP's AES67 receive path is not a model for ours.** It runs on GStreamer's default clock behind a jitter buffer (§4.1 item 13). ShowMesh receiving would use the PipeWire direct-timestamp path (§4.5: `module-rtp-source` "assumes that a graph driver is used whose time is somehow synchronized to the sender's", "useful for when receivers shall play in sync with each other", "AES67 sessions use this mode") under the same PTP node-driver candidate A proposes for local playback. The clock subsystem in §5 is unchanged by this idea; it is the prerequisite for it.
 
-### 15.3 Source redundancy, not two authorities
+### 15.3 Source redundancy, not two authorities (owner target model, ruled 2026-08-28)
 
-If adopted, the model is one program bus with two selectable sources and one policy:
+The owner adopted the following as the audio node's target model on 2026-08-28. It narrows ADR-017 (§15.1) and the narrowing ADR is owed before a seam builds toward it; the vocabulary below reuses AUDIO-ENGINE §6 (program bus, sources mixed into program) and §8 (the three output adapter classes).
 
-- **Preferred source**: the FPP AES67 stream for the current show item, played in direct-timestamp mode against the node's PTP clock, with the per-output static offset (§8) applied.
-- **Fallback source**: the node's local copy of the same media, started at `expected = media_now - T0` from §6's schedule, where `T0` for an FPP-originated item is derived from the stream (first RTP timestamp of the item plus the measured decoder-to-packet offset) rather than chosen by the coordinator.
-- **ShowMesh-owned sources** (announcements, night bed, fault and shutdown messages, maintenance tone) always come from the local engine and mix over whichever program source is active. A site-power loss with nodes on UPS is the motivating case: FPP is gone, the node announces the display is down, transitions, and shuts down without the upstream system.
+```text
+Program source, one bus, priority order
+  primary:  FPP AES67 stream for the current show item
+  standby:  the local synchronized copy of the same asset
+
+ShowMesh-owned sources, always local, mixed into the program bus
+  background and resting music
+  announcements
+  alerts and failure messages
+  test audio
+
+Output backends, fed from the program bus
+  local hardware interface        (PCM output)
+  FM transmitter feed             (PCM output; a routing of the same bus)
+  third-party listener system     (synchronized remote output, RES-016)
+  AES67 send, future              (stream output, §11)
+```
+
+Rules that follow:
+
+- **Primary source**: the FPP AES67 stream for the current show item, played in direct-timestamp mode against the node's PTP clock, with the per-output static offset (§8) applied.
+- **Standby source**: the node's local copy of the same media, started at `expected = media_now - T0` from §6's schedule, where `T0` for an FPP-originated item is derived from the stream (first RTP timestamp of the item plus the measured decoder-to-packet offset) rather than chosen by the coordinator.
+- **ShowMesh-owned sources** always come from the local engine and mix over whichever program source is active, so ducking, announcements, alerts, and test audio behave identically whether the program bus is carrying the stream or the local asset. A site-power loss with nodes on UPS is the motivating case: FPP is gone, the node announces the display is down, transitions, and shuts down without the upstream system.
 
 What the failover research must settle before anything is built (do not guess these): stream health definition (packet gap, timestamp discontinuity, SAP withdrawal, grandmaster loss); media identity matching between the SAP session or FPP's playlist status and the local asset (content hash, not filename); the switch itself (gain crossfade at the matched position, and how long silence is tolerated before switching); return-to-preferred behavior (never mid-item, or only at a measured position match); and what the node does when the stream is present but its timestamps and sample count disagree beyond a threshold (that is FPP drifting, and the honest answer may be to prefer local).
 
