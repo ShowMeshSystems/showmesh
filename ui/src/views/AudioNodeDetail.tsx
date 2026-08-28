@@ -206,7 +206,7 @@ export interface AudioNodeDetailProps {
 }
 
 export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('audio-node-detail')
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
   const model = useModelContext()
@@ -325,7 +325,7 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
   )
 
   return (
-    <div className="operator-page audio-node-detail-page" data-unsaved-form>
+    <div className="operator-page audio-node-detail-page" data-unsaved-form="audio-node-detail">
       <p className="settings-breadcrumb">
         <a href="/config">Settings</a> / <a href="/config/audio.node">Audio routing</a>
       </p>

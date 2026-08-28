@@ -45,7 +45,7 @@ type LoadState =
   | { kind: 'loaded'; principals: PrincipalObject[] }
 
 export function Access() {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('access-principals')
   const model = useModelContext()
   // Same posture as Configuration.tsx's own scopeGate: every request this
   // page could make (including the list read) is refused identically
@@ -83,7 +83,7 @@ export function Access() {
   }
 
   return (
-    <div data-unsaved-form>
+    <div data-unsaved-form="access-principals">
       <h2 className="panel__title">Access</h2>
       <p className="text-muted">
         Principals, their role and enabled state, their passwords, and their API tokens. Reads

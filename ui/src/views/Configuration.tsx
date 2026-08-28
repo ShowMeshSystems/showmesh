@@ -134,7 +134,7 @@ export function Configuration() {
 // alongside it without the two sharing load/save state that belongs to
 // two entirely different configuration kinds.
 export function FPPEndpointsSection() {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('connections-fpp-endpoints')
   const [state, setState] = useState<FPPLoadState>({ kind: 'loading' })
   const [rows, setRows] = useState<ConfigFPPEndpoint[]>([])
   const [saving, setSaving] = useState(false)
@@ -237,7 +237,7 @@ export function FPPEndpointsSection() {
   }
 
   return (
-    <section id="fpp-endpoints" className="panel config-section" data-unsaved-form>
+    <section id="fpp-endpoints" className="panel config-section" data-unsaved-form="connections-fpp-endpoints">
       <h3 className="panel__title">FPP endpoints</h3>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
@@ -362,7 +362,7 @@ export function FPPEndpointsSection() {
 // browser may only mirror" server-side validation), so this renders one
 // (id, url) pair, not a table of rows.
 export function ResolumeInstancesSection() {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('connections-resolume-instances')
   const [state, setState] = useState<ResolumeLoadState>({ kind: 'loading' })
   const [id, setId] = useState('')
   const [url, setUrl] = useState('')
@@ -430,7 +430,7 @@ export function ResolumeInstancesSection() {
   }
 
   return (
-    <section id="resolume-instances" className="panel config-section" data-unsaved-form>
+    <section id="resolume-instances" className="panel config-section" data-unsaved-form="connections-resolume-instances">
       <h3 className="panel__title">Resolume</h3>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
@@ -542,7 +542,7 @@ type HostRow = { id: string; hostName: string }
 // "password" key at all — sending "" would explicitly clear a credential
 // the operator never touched.
 export function FPPMQTTSection() {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('connections-fpp-mqtt')
   const [state, setState] = useState<FPPMQTTLoadState>({ kind: 'loading' })
   const [brokerURL, setBrokerURL] = useState('')
   const [username, setUsername] = useState('')
@@ -666,7 +666,7 @@ export function FPPMQTTSection() {
   }
 
   return (
-    <section id="fpp-mqtt" className="panel config-section" data-unsaved-form>
+    <section id="fpp-mqtt" className="panel config-section" data-unsaved-form="connections-fpp-mqtt">
       <h3 className="panel__title">FPP MQTT</h3>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
@@ -844,7 +844,7 @@ export function FPPMQTTSection() {
 // starts blank (ADR-030: "the UI holds no authoring logic; validation
 // is server-side").
 export function AssetsSettingsSection() {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('content-delivery-assets')
   const [state, setState] = useState<AssetSettingsLoadState>({ kind: 'loading' })
   const [contentBaseURL, setContentBaseURL] = useState('')
   const [maxUploadBytes, setMaxUploadBytes] = useState('')
@@ -923,7 +923,7 @@ export function AssetsSettingsSection() {
   }
 
   return (
-    <section id="assets-settings" className="panel config-section" data-unsaved-form>
+    <section id="assets-settings" className="panel config-section" data-unsaved-form="content-delivery-assets">
       <h3 className="panel__title">Asset store settings</h3>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}

@@ -46,7 +46,7 @@ export interface ShowModePanelProps {
 }
 
 export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('show-mode')
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
@@ -114,7 +114,7 @@ export function ShowModePanel({ headingLevel = 2 }: ShowModePanelProps) {
   }
 
   return (
-    <div data-unsaved-form>
+    <div data-unsaved-form="show-mode">
       {headingLevel === 3 ? <h3 className="panel__title">Show mode</h3> : <h2 className="panel__title">Show mode</h2>}
       <p className="text-muted">
         One operating mode for the whole installation: <code>program</code> while it is being set up

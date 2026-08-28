@@ -34,7 +34,7 @@ type LoadState =
   | { kind: 'loaded'; config: RenderSettingsConfigResponse; revisions: ConfigRevisionMeta[] }
 
 export function RenderSettingsPanel() {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('render-recovery')
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
@@ -112,7 +112,7 @@ export function RenderSettingsPanel() {
   }
 
   return (
-    <div data-unsaved-form>
+    <div data-unsaved-form="render-recovery">
       <h2 className="panel__title">Render settings</h2>
       <p className="text-muted">
         What a render surface draws while its MultiSync timeline is stopped, opened, or unknown

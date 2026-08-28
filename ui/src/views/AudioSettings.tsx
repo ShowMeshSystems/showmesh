@@ -133,7 +133,7 @@ type LoadState =
   | { kind: 'loaded'; config: AudioSettingsConfigResponse; revisions: ConfigRevisionMeta[] }
 
 export function AudioSettings() {
-  const { clearUnsavedChanges } = useUnsavedChanges()
+  const { clearUnsavedChanges } = useUnsavedChanges('audio-defaults')
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
 
@@ -208,7 +208,7 @@ export function AudioSettings() {
   }
 
   return (
-    <div className="operator-page audio-settings-page" data-unsaved-form>
+    <div className="operator-page audio-settings-page" data-unsaved-form="audio-defaults">
       <OperatorPageHeader
         eyebrow="Settings / Audio defaults"
         title="Audio settings"
