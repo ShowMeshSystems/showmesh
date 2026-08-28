@@ -24,7 +24,7 @@ import { describeApiError } from '../app/session'
 // a mode here would be the UI asserting a system state from no evidence.
 //
 // Operator-reported: this reads as a clickable affordance but was a plain
-// <span>, so clicking it did nothing. It is now a link to /config, the
+// <span>, so clicking it did nothing. It is now a link to /config/mode, the
 // route holding ShowModePanel -- the config:write-gated control that
 // actually changes the mode. It stays a link to that page, never the
 // switch itself: changing the installation-wide operating mode from a
@@ -82,7 +82,7 @@ export function ShowModeIndicator() {
   if (state.kind === 'loading') {
     return (
       <>
-        <Link to="/config#show-mode" className="show-mode show-mode--unknown" aria-label="Show mode">
+        <Link to="/config/mode" className="show-mode show-mode--unknown" aria-label="Show mode">
           Mode: loading…
         </Link>
         <span role="status" className="visually-hidden">
@@ -96,7 +96,7 @@ export function ShowModeIndicator() {
     return (
       <>
         <Link
-          to="/config#show-mode"
+          to="/config/mode"
           className="show-mode show-mode--unknown"
           aria-label="Show mode"
           title={state.message}
@@ -116,7 +116,7 @@ export function ShowModeIndicator() {
   return (
     <>
       <Link
-        to="/config#show-mode"
+        to="/config/mode"
         className={`show-mode show-mode--${mode}`}
         aria-label="Show mode"
         // ADR-033 decision 3: a behaviour caused by the mode states the mode

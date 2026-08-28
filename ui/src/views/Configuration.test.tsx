@@ -1,8 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Configuration } from './Configuration'
+import { ConnectionsSettings } from './SettingsPages'
+import { ConfigurationRoute } from '../app/App'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
@@ -201,7 +204,7 @@ afterEach(() => {
 function renderConfiguration(model: Model) {
   return render(
     <ModelContext.Provider value={model}>
-      <Configuration />
+      <ConnectionsSettings />
     </ModelContext.Provider>,
   )
 }
@@ -487,18 +490,7 @@ describe('Configuration', () => {
     expect(getFPPEndpointsConfig).toHaveBeenCalledTimes(1)
   })
 
-  // This test pins a defect found only by hand-testing a real, live
-  // transition in a real browser (CLAUDE.md's standing lesson: a suite
-  // that renders one fixed session per test cannot see this). The bug: an
-  // earlier version stored the not-permitted REASON in React state, set by
-  // an effect keyed on `scopeGate.allowed` — a boolean that is FALSE both
-  // signed-out ("sign in to use this control") and signed-in-without-the-
-  // scope ("role does not include config:write"), so the effect never
-  // re-ran across that exact transition and the page kept showing "sign
-  // in" to an operator who was, in fact, already signed in. The fix reads
-  // the not-permitted reason straight from `scopeGate` on every render
-  // instead of capturing it into state.
-  it('updates the not-permitted reason on a live sign-in as a principal without config:write, without remounting', async () => {
+  it('keeps the directory available without config:write and does not fetch an editor', async () => {
     function Harness() {
       const [session, setSession] = useState<Model['session']>(null)
       const model = makeModel({ session })
@@ -511,19 +503,18 @@ describe('Configuration', () => {
           }))}>
             sign in as viewer
           </button>
-          <Configuration />
+          <MemoryRouter><Configuration /></MemoryRouter>
         </ModelContext.Provider>
       )
     }
     render(<Harness />)
 
-    expect(screen.getByText(/waiting to hear/i)).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: /settings directory/i })).toBeInTheDocument()
 
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /sign in as viewer/i }))
 
-    expect(screen.queryByText(/waiting to hear/i)).not.toBeInTheDocument()
-    expect(await screen.findByText(/does not include "config:write"/)).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: /settings directory/i })).toBeInTheDocument()
     expect(getFPPEndpointsConfig).not.toHaveBeenCalled()
   })
 
@@ -542,40 +533,29 @@ describe('Configuration', () => {
     expect(screen.queryByDisplayValue('player-01')).not.toBeInTheDocument()
   })
 
-  // Readability seam: a section index at the top of the page links to
-  // every top-level section (the four configuration kinds plus render,
-  // show-mode, and audio settings destinations), so reaching one no longer
-  // requires scrolling past the others or opening another navigation column.
-  it('renders a section index linking to every top-level section', () => {
-    renderConfiguration(makeModel({ session: adminSession }))
+  it('renders a compact settings directory with direct destinations', () => {
+    render(
+      <MemoryRouter><ModelContext.Provider value={makeModel({ session: adminSession })}>
+        <Configuration />
+      </ModelContext.Provider></MemoryRouter>,
+    )
 
-    const nav = screen.getByRole('navigation', { name: /configuration sections/i })
-    expect(within(nav).getByRole('link', { name: 'FPP endpoints' })).toHaveAttribute(
-      'href',
-      '#fpp-endpoints',
-    )
-    expect(within(nav).getByRole('link', { name: 'Resolume' })).toHaveAttribute(
-      'href',
-      '#resolume-instances',
-    )
-    expect(within(nav).getByRole('link', { name: 'FPP MQTT' })).toHaveAttribute('href', '#fpp-mqtt')
-    expect(within(nav).getByRole('link', { name: 'Asset store settings' })).toHaveAttribute(
-      'href',
-      '#assets-settings',
-    )
-    expect(within(nav).getByRole('link', { name: 'Render settings' })).toHaveAttribute(
-      'href',
-      '#render-settings',
-    )
-    expect(within(nav).getByRole('link', { name: 'Show mode' })).toHaveAttribute('href', '#show-mode')
-    expect(within(nav).getByRole('link', { name: 'Audio defaults' })).toHaveAttribute(
-      'href',
-      '/config/audio.settings',
-    )
-    expect(within(nav).getByRole('link', { name: 'Audio routing' })).toHaveAttribute(
-      'href',
-      '/config/audio.node',
-    )
+    const nav = screen.getByRole('navigation', { name: /settings directory/i })
+    expect(within(nav).getByRole('link', { name: 'Connections' })).toHaveAttribute('href', '/config/connections')
+    expect(within(nav).getByRole('link', { name: 'Content delivery' })).toHaveAttribute('href', '/config/content-delivery')
+    expect(within(nav).getByRole('link', { name: 'Render recovery' })).toHaveAttribute('href', '/config/render-recovery')
+    expect(within(nav).getByRole('link', { name: 'Mode' })).toHaveAttribute('href', '/config/mode')
+  })
+
+  it('keeps the historical show-mode hash link compatible with the direct Mode page', async () => {
+    function LocationProbe() {
+      const location = useLocation()
+      return <output>{`${location.pathname}${location.hash}`}</output>
+    }
+
+    render(<MemoryRouter initialEntries={['/config#show-mode']}><ConfigurationRoute /><LocationProbe /></MemoryRouter>)
+
+    expect(await screen.findByText('/config/mode')).toBeInTheDocument()
   })
 
   // Readability seam: the restart-required notice (currently always "no

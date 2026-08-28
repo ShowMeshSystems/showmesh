@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigationType, useParams } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom'
 // Seam B's public surface (spec sections 5.4-5.6): the `useModel()` hook
 // and a way to submit an operator-supplied API token. `ui/src/api` does
 // not exist in this working tree yet -- seam B is building it
@@ -23,6 +23,15 @@ import { FPPDetail } from '../views/FPPDetail'
 import { Capabilities } from '../views/Capabilities'
 import { Events } from '../views/Events'
 import { Configuration } from '../views/Configuration'
+import {
+  AccessSettings,
+  AppearanceSettings,
+  AudioSettingsDirectory,
+  ConnectionsSettings,
+  ContentDeliverySettings,
+  ModeSettings,
+  RenderRecoverySettings,
+} from '../views/SettingsPages'
 // ADR-039/ADR-018: the audio.settings engine-wide singleton and audio.node
 // per-node object, the last two configuration kinds that shipped with a
 // full API path/showmeshctl coverage and no Operator UI control.
@@ -167,6 +176,17 @@ function ShowWorkspaceOverviewRoute() {
   return <ShowWorkspaceOverview showId={id} />
 }
 
+export function ConfigurationRoute() {
+  const { hash } = useLocation()
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (hash === '#show-mode') navigate('/config/mode', { replace: true })
+  }, [hash, navigate])
+
+  return <Configuration />
+}
+
 function ShowWorkspaceRedirect({ destination }: { destination: 'playlists' | 'cues' | 'assets' | 'actions' | 'surfaces' | 'night' | 'readiness' }) {
   const { id = '' } = useParams()
   const query = `?show=${encodeURIComponent(id)}`
@@ -203,7 +223,14 @@ export default function App() {
             <Route path="events" element={<Events />} />
             {/* Track D seam D-4: the Resolume observability/control view. */}
             <Route path="resolume" element={<ResolumeView />} />
-            <Route path="config" element={<Configuration />} />
+            <Route path="config" element={<ConfigurationRoute />} />
+            <Route path="config/connections" element={<ConnectionsSettings />} />
+            <Route path="config/content-delivery" element={<ContentDeliverySettings />} />
+            <Route path="config/render-recovery" element={<RenderRecoverySettings />} />
+            <Route path="config/access" element={<AccessSettings />} />
+            <Route path="config/appearance" element={<AppearanceSettings />} />
+            <Route path="config/audio" element={<AudioSettingsDirectory />} />
+            <Route path="config/mode" element={<ModeSettings />} />
             {/* Step 9 (STEP-9-SPEC.md section 9): the macro list/run/run-view
                 surfaces plus authoring for both show.macro and show.action.
                 "/macros/new" and "/actions/new" are listed BEFORE their

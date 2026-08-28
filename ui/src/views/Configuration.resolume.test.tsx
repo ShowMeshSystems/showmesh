@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Configuration } from './Configuration'
+import { ConnectionsSettings } from './SettingsPages'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
@@ -78,7 +78,7 @@ const adminSession = makeAuthenticatedSession({
 function renderConfiguration(model: Model) {
   return render(
     <ModelContext.Provider value={model}>
-      <Configuration />
+      <ConnectionsSettings />
     </ModelContext.Provider>,
   )
 }

@@ -76,7 +76,7 @@ const NAV_GROUPS: NavGroup[] = [
     heading: 'System',
     primary: [
       { to: '/monitor', label: 'Monitor', end: true },
-      { to: '/config', label: 'Settings', end: true },
+      { to: '/config', label: 'Settings', end: false },
     ],
     secondary: [
       { to: '/nodes', label: 'Nodes', end: false },

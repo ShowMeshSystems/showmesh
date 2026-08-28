@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   ApiError,
   getFPPEndpointsConfig,
@@ -22,12 +23,9 @@ import {
   type FPPMQTTConfigResponse,
   type ResolumeInstancesConfigResponse,
 } from '../api'
-import { describeApiError, evaluateScope } from '../app/session'
-import { useModelContext } from '../app/ModelContext'
+import { describeApiError } from '../app/session'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
-import { RenderSettingsPanel } from '../components/RenderSettingsPanel'
-import { ShowModePanel } from '../components/ShowModePanel'
 
 // Step 7 seam A (RES-008 D1): the configuration write surface's own view —
 // the active `fpp.endpoints` configuration, its revision history, and an
@@ -104,78 +102,27 @@ type AssetSettingsLoadState =
   | { kind: 'loaded'; config: AssetsSettingsConfigResponse; revisions: ConfigRevisionMeta[] }
 
 export function Configuration() {
-  const model = useModelContext()
-  const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-
   return (
     <div className="configuration-page">
       <h2 className="panel__title">Settings</h2>
       <p className="text-muted">
-        Global coordinator settings live here. Audio defaults and per-node routing are separate
-        settings sections, reached from this page without adding another persistent navigation
-        column. Requires the <code>config:write</code> scope (admin only); there is no read-only
-        scope for this page.
+        Choose a focused settings page. Each editor keeps its own coordinator-backed permissions,
+        validation, revision history, conflict handling, and retry states.
       </p>
-
-      {!scopeGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {scopeGate.reason}
-        </p>
-      )}
-
-      {scopeGate.allowed && (
-        <>
-          {/* A jump list to every top-level section below, so reaching one
-              does not require scrolling past the others - the readability
-              defect report's own "unrelated kinds stacked on one page"
-              complaint. Plain links, not a tab component. Render settings
-              and Show mode are included alongside the four configuration
-              kinds because they are sections of this same page too; the
-              show-mode indicator in the app header links straight to
-              #show-mode, so that id is load-bearing beyond this list. */}
-          <nav aria-label="Configuration sections" className="config-index">
-            <ul className="config-index__list">
-              <li>
-                <a href="#fpp-endpoints">FPP endpoints</a>
-              </li>
-              <li>
-                <a href="#resolume-instances">Resolume</a>
-              </li>
-              <li>
-                <a href="#fpp-mqtt">FPP MQTT</a>
-              </li>
-              <li>
-                <a href="#assets-settings">Asset store settings</a>
-              </li>
-              <li>
-                <a href="#render-settings">Render settings</a>
-              </li>
-              <li>
-                <a href="#show-mode">Show mode</a>
-              </li>
-              <li>
-                <a href="/config/audio.settings">Audio defaults</a>
-              </li>
-              <li>
-                <a href="/config/audio.node">Audio routing</a>
-              </li>
-            </ul>
-          </nav>
-
-          <div className="configuration-sections">
-            <FPPEndpointsSection />
-            <ResolumeInstancesSection />
-            <FPPMQTTSection />
-            <AssetsSettingsSection />
-          <div id="render-settings" className="panel config-section">
-            <RenderSettingsPanel />
-          </div>
-          <div id="show-mode" className="panel config-section">
-            <ShowModePanel />
-          </div>
-          </div>
-        </>
-      )}
+      <nav aria-label="Settings directory" className="config-index">
+        <ul className="config-index__list">
+          <li><Link to="/config/connections">Connections</Link></li>
+          <li><Link to="/config/content-delivery">Content delivery</Link></li>
+          <li><Link to="/config/render-recovery">Render recovery</Link></li>
+          <li><Link to="/config/access">Access</Link></li>
+          <li><Link to="/config/appearance">Appearance</Link></li>
+          <li><Link to="/config/audio">Audio</Link></li>
+          <li><Link to="/config/mode">Mode</Link></li>
+          <li><Link to="/config/show">Show authoring</Link></li>
+          <li><Link to="/config/night.session">Show Night</Link></li>
+          <li><Link to="/config/fpp-playlist-definitions">FPP playlist definitions</Link></li>
+        </ul>
+      </nav>
     </div>
   )
 }
@@ -185,7 +132,7 @@ export function Configuration() {
 // independent section (ResolumeInstancesSection, below) could be added
 // alongside it without the two sharing load/save state that belongs to
 // two entirely different configuration kinds.
-function FPPEndpointsSection() {
+export function FPPEndpointsSection() {
   const [state, setState] = useState<FPPLoadState>({ kind: 'loading' })
   const [rows, setRows] = useState<ConfigFPPEndpoint[]>([])
   const [saving, setSaving] = useState(false)
@@ -410,7 +357,7 @@ function FPPEndpointsSection() {
 // that limit rather than enforcing its own copy of it, per ADR-030: "the
 // browser may only mirror" server-side validation), so this renders one
 // (id, url) pair, not a table of rows.
-function ResolumeInstancesSection() {
+export function ResolumeInstancesSection() {
   const [state, setState] = useState<ResolumeLoadState>({ kind: 'loading' })
   const [id, setId] = useState('')
   const [url, setUrl] = useState('')
@@ -587,7 +534,7 @@ type HostRow = { id: string; hostName: string }
 // input always starts blank, and leaving it blank on Save must send NO
 // "password" key at all — sending "" would explicitly clear a credential
 // the operator never touched.
-function FPPMQTTSection() {
+export function FPPMQTTSection() {
   const [state, setState] = useState<FPPMQTTLoadState>({ kind: 'loading' })
   const [brokerURL, setBrokerURL] = useState('')
   const [username, setUsername] = useState('')
@@ -886,7 +833,7 @@ function FPPMQTTSection() {
 // matters in the first-time zero-to-one setup path where every field
 // starts blank (ADR-030: "the UI holds no authoring logic; validation
 // is server-side").
-function AssetsSettingsSection() {
+export function AssetsSettingsSection() {
   const [state, setState] = useState<AssetSettingsLoadState>({ kind: 'loading' })
   const [contentBaseURL, setContentBaseURL] = useState('')
   const [maxUploadBytes, setMaxUploadBytes] = useState('')

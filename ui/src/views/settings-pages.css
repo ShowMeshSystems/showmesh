@@ -1,0 +1,17 @@
+.settings-direct-page {
+  max-width: 72rem;
+}
+
+.settings-direct-page__editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.settings-direct-page__editor > .config-section {
+  margin-bottom: 0;
+}
+
+.settings-direct-page__appearance {
+  max-width: 42rem;
+}
