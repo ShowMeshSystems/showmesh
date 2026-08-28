@@ -143,6 +143,26 @@ describe('AudioSessionPanel', () => {
     expect(screen.queryByText('node.audio.engine.state')).not.toBeInTheDocument()
   })
 
+  // Reproduces the two-units defect: an operator types dB into the Gain
+  // control (label: "Gain (dB, 0 is unity)"), and the observation table on
+  // this same panel must show that same unit, never a linear multiplier
+  // this component would have to convert. This panel does no conversion of
+  // its own (EvidenceValue renders entry.value verbatim) -- the fix lives
+  // entirely on the coordinator's collector, so this test's only job is to
+  // pin that the panel keeps passing the value through untouched.
+  it('shows the gain observations in decibels, the same unit the Gain control takes', () => {
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [
+      entry({ signal: 'audio_session.gain.effective', value: -6.02 }),
+      entry({ signal: 'audio_session.gain.ceiling', value: 3 }),
+    ])
+    expect(screen.getByText('-6.02')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+    // Never the linear multiplier -6.02 dB and 3 dB would produce.
+    expect(screen.queryByText('0.5011872336272722')).not.toBeInTheDocument()
+    expect(screen.queryByText('1.4125375446227544')).not.toBeInTheDocument()
+  })
+
   it('renders every control disabled, never enabled, without audio:command', async () => {
     const model = makeModel({ session: signedIn({ scopes: ['node:read'] }) })
     renderPanel(model, [entry()])

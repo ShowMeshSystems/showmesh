@@ -11,6 +11,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
@@ -308,12 +309,14 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 	obs = append(obs, buildSessionValue(res, source, SignalSessionDesiredRevision, int64(sess.DesiredRevision), sessionAt, rep))
 
 	if sess.HasGain {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionGain, sess.Gain, sessionAt, rep))
+		gainDb := pkgaudio.GainToDb(pkgaudio.Gain(sess.Gain))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGain, gainDb, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionGain, source, "session has no gain set", rep.receivedAt))
 	}
 	if sess.HasCeiling {
-		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, sess.Ceiling, sessionAt, rep))
+		ceilingDb := pkgaudio.CeilingToDb(pkgaudio.Ceiling(sess.Ceiling))
+		obs = append(obs, buildSessionValue(res, source, SignalSessionGainCeiling, ceilingDb, sessionAt, rep))
 	} else {
 		obs = append(obs, notCollected(res, SignalSessionGainCeiling, source, "session has no gain ceiling set", rep.receivedAt))
 	}
