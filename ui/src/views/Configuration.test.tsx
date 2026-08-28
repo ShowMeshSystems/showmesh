@@ -232,10 +232,10 @@ const adminSession = makeAuthenticatedSession({
 })
 
 describe('Configuration', () => {
-  it('renders "waiting" and does not fetch when no session has arrived yet', () => {
+  it('renders Loading permissions and does not fetch when no session has arrived yet', () => {
     renderConfiguration(makeModel({ session: null }))
 
-    expect(screen.getByText(/waiting to hear/i)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Loading permissions' })).toBeInTheDocument()
     expect(getFPPEndpointsConfig).not.toHaveBeenCalled()
   })
 
@@ -256,7 +256,7 @@ describe('Configuration', () => {
   // available — verified against a real browser separately (BUILD-PLAN
   // Step 7 acceptance criteria are "verified against the running stack,
   // not only in the suite").
-  it('treats scopesState "unknown" as not-permitted, never as permissive, and does not fetch', () => {
+  it('renders Stale permission evidence when scopesState is unknown and does not fetch', () => {
     const staleSession = makeAuthenticatedSession({
       principal: { id: 'p-1', name: 'admin-1', kind: 'human', role: 'admin' },
       scopes: ['config:write'],
@@ -264,15 +264,15 @@ describe('Configuration', () => {
     })
     renderConfiguration(makeModel({ session: staleSession }))
 
-    expect(screen.getByText(/permissions are unknown right now/i)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Stale permission evidence' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /save configuration/i })).not.toBeInTheDocument()
     expect(getFPPEndpointsConfig).not.toHaveBeenCalled()
   })
 
-  it('treats a failed session refresh as not-permitted, never as permissive, and does not fetch', () => {
+  it('renders Stale permission evidence after a failed session refresh and does not fetch', () => {
     renderConfiguration(makeModel({ session: adminSession, sessionFetchFailed: true }))
 
-    expect(screen.getByText(/could not be confirmed/i)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Stale permission evidence' })).toBeInTheDocument()
     expect(getFPPEndpointsConfig).not.toHaveBeenCalled()
   })
 

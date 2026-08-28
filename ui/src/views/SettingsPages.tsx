@@ -4,7 +4,7 @@ import { evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { RenderSettingsPanel } from '../components/RenderSettingsPanel'
 import { ShowModePanel } from '../components/ShowModePanel'
-import { OperatorPageHeader } from '../components/SharedLayouts'
+import { LoadingBlock, OperatorPageHeader, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
 import { Access } from './Access'
 import { AssetsSettingsSection, FPPMQTTSection, FPPEndpointsSection, ResolumeInstancesSection } from './Configuration'
 import './settings-pages.css'
@@ -14,12 +14,13 @@ const CONFIG_WRITE_SCOPE = 'config:write'
 function ConfigEditorPage({ title, lede, children }: { title: string; lede: ReactNode; children: ReactNode }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
+  const permissionState = permissionStateBlock(model.session, model.sessionFetchFailed, gate.allowed ? null : gate.reason)
 
   return (
     <div className="settings-direct-page">
       <OperatorPageHeader title={title} eyebrow="Settings" lede={lede} />
-      {!gate.allowed ? (
-        <p className="panel panel--error" role="status">{gate.reason}</p>
+      {permissionState ? (
+        permissionState
       ) : (
         <section className="settings-direct-page__editor">
           <h2 className="visually-hidden">{title} settings editor</h2>
@@ -28,6 +29,26 @@ function ConfigEditorPage({ title, lede, children }: { title: string; lede: Reac
       )}
     </div>
   )
+}
+
+function permissionStateBlock(
+  session: ReturnType<typeof useModelContext>['session'],
+  sessionFetchFailed: boolean,
+  insufficientPermissionReason: string | null,
+) {
+  if (session === null) {
+    return <LoadingBlock title="Loading permissions" reason="Waiting for the coordinator to report what this device may do." />
+  }
+  if (!session.authenticated) {
+    return <UnavailableBlock title="Signed out" reason="This device is not signed in, so it cannot edit these settings." />
+  }
+  if (sessionFetchFailed || session.scopesState !== 'current') {
+    return <StaleBlock title="Stale permission evidence" reason="Settings remain unavailable until the coordinator can confirm this device’s current permissions." />
+  }
+  if (insufficientPermissionReason) {
+    return <UnavailableBlock title="Insufficient permission" reason={insufficientPermissionReason} />
+  }
+  return null
 }
 
 export function ConnectionsSettings() {
