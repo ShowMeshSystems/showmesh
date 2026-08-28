@@ -61,9 +61,7 @@ export function RenderRecoverySettings() {
 export function ModeSettings() {
   return (
     <ConfigEditorPage title="Mode" lede="Choose the installation-wide operating mode.">
-      <div id="show-mode">
-        <ShowModePanel />
-      </div>
+      <ShowModePanel />
     </ConfigEditorPage>
   )
 }

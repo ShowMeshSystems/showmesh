@@ -561,7 +561,7 @@ describe('Configuration', () => {
     }
   })
 
-  it('renders stable targets for direct Settings editors without duplicating the global contrast control', () => {
+  it('renders stable targets for direct Settings editors without duplicating the global contrast control', async () => {
     render(
       <ModelContext.Provider value={makeModel({ session: adminSession })}>
         <ConnectionsSettings />
@@ -572,9 +572,11 @@ describe('Configuration', () => {
       </ModelContext.Provider>,
     )
 
-    for (const id of ['fpp-endpoints', 'resolume-instances', 'fpp-mqtt', 'assets-settings', 'render-settings', 'show-mode']) {
+    for (const id of ['fpp-endpoints', 'resolume-instances', 'fpp-mqtt', 'assets-settings', 'render-settings']) {
       expect(document.getElementById(id)).not.toBeNull()
     }
+    await waitFor(() => expect(document.querySelectorAll('#show-mode')).toHaveLength(1))
+    expect(screen.getByLabelText('Operating mode')).toHaveAttribute('id', 'show-mode')
     expect(screen.getByRole('heading', { level: 2, name: 'Connections settings editor' })).toHaveClass('visually-hidden')
     expect(screen.getByRole('heading', { level: 2, name: 'Content delivery settings editor' })).toHaveClass('visually-hidden')
     expect(screen.getByText(/persistent High contrast control in the sidebar footer/i)).toBeInTheDocument()
