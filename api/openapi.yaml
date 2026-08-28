@@ -8846,7 +8846,7 @@ components:
       type: object
       required:
         [serverTime, latestEventSeq, nodes, fpp, collectors, macroRuns,
-         resolume]
+         resolume, audioConfigPush]
       properties:
         serverTime:
           type: string
@@ -8896,6 +8896,38 @@ components:
             coordinator reports an empty array.
           items:
             $ref: "#/components/schemas/ResolumeInstance"
+        audioConfigPush:
+          $ref: "#/components/schemas/AudioConfigPushStatus"
+    AudioConfigPushStatus:
+      type: object
+      description: >-
+        Whether the coordinator can decode its stored, engine-wide
+        audio.settings revision right now. Coordinator-wide, not per-node
+        or per-collector: audio.settings is a singleton (ADR-039), so
+        there is exactly one current revision to decode. Computed fresh
+        from the same decode a real push performs on that revision, so
+        this always reflects the revision currently active. Deliberately
+        narrow: this reports only whether the audio.settings singleton
+        itself decodes, never whether any one node's own separate
+        audio.node binding does or whether that node is reachable — a
+        node can still be stranded by a broken audio.node revision, or by
+        being unreachable, while this reads "usable".
+      required: [state, reason]
+      properties:
+        state:
+          type: string
+          enum: [usable, unusable, unknown]
+          description: >-
+            "usable": the stored audio.settings revision (or the built-in
+            default, when nothing has ever been written) decodes.
+            "unusable": it does not, and every node is stranded on
+            whatever audio.settings it last successfully received.
+            "unknown": a genuine config-store failure, not a decode
+            failure, kept the coordinator from reading its own revision
+            just now — the revision itself may be perfectly usable.
+        reason:
+          type: [string, "null"]
+          description: Set whenever state is not "usable", null otherwise.
     PrincipalSummary:
       type: object
       description: A principal's own non-secret identity (ADR-024).
