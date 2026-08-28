@@ -117,6 +117,74 @@ func TestSessionFaultNoneReportsReasonNotCollected(t *testing.T) {
 	}
 }
 
+// TestSessionLTCClaimRefusedCarriesItsReason proves the surface this
+// package exists to add: a session whose claim on its node's LTC run was
+// refused reports SignalSessionLTCClaimState "refused" with
+// SignalSessionLTCClaimReason present and non-empty — legible from the
+// refused session's own evidence, never only from the node's log.
+func TestSessionLTCClaimRefusedCarriesItsReason(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "show-b", State: "playing", Fault: "none",
+		LTCClaimState: "refused", LTCClaimReason: "this node's one LTC run is held by session show-a",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findSessionObs(t, obs, SignalSessionLTCClaimState)
+	if state.Value != "refused" {
+		t.Errorf("ltc claim state = %v, want %q", state.Value, "refused")
+	}
+	reason := findSessionObs(t, obs, SignalSessionLTCClaimReason)
+	if reason.Absence != "" {
+		t.Errorf("ltc claim reason absence = %q, want a real value since the claim was refused", reason.Absence)
+	}
+	if reason.Value != "this node's one LTC run is held by session show-a" {
+		t.Errorf("ltc claim reason = %v, want the stated refusal reason naming the holder", reason.Value)
+	}
+}
+
+// TestSessionLTCClaimHeldReasonNotCollected proves the converse: a
+// session that holds the run reports state "held" and its reason as
+// not_collected, never an empty string masquerading as "no reason to
+// give."
+func TestSessionLTCClaimHeldReasonNotCollected(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "show-a", State: "playing", Fault: "none",
+		LTCClaimState: "held",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findSessionObs(t, obs, SignalSessionLTCClaimState)
+	if state.Value != "held" {
+		t.Errorf("ltc claim state = %v, want %q", state.Value, "held")
+	}
+	reason := findSessionObs(t, obs, SignalSessionLTCClaimReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("ltc claim reason absence = %q, want %q", reason.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestSessionLTCClaimStateDefaultsToNone proves a session that never sent
+// LTCClaimState (a node predating this signal, or a non-show session that
+// never attempted a claim) reports the literal "none" -- never an empty
+// string, matching SignalSessionFaultKind's identical zero-value rule.
+func TestSessionLTCClaimStateDefaultsToNone(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "bg-1", State: "playing", Fault: "none",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findSessionObs(t, obs, SignalSessionLTCClaimState)
+	if state.Value != "none" {
+		t.Errorf("ltc claim state = %v, want %q", state.Value, "none")
+	}
+}
+
 // TestSessionPositionUnknownIsNotCollectedNeverStale proves a
 // mid-discontinuity session (PositionKnown=false) reports position as
 // not_collected — never a stale prior reading presented as current, and

@@ -236,6 +236,15 @@ type Session struct {
 	faultAt     time.Time
 	lastProbe   MediaItemResult
 
+	// ltcClaimState and ltcClaimReason are this session's own standing
+	// relationship to this node's one LTC run (audio_session.ltc.claim.
+	// state/.reason) — set only by [Manager.startLTCLocked]'s and
+	// [Manager.stopLTCLocked]'s own claim/release calls, never inferred
+	// from Fault or State. See [LTCClaimState]'s own doc comment for why
+	// this exists.
+	ltcClaimState  LTCClaimState
+	ltcClaimReason string
+
 	// lastObservedAt is when [Engine.Observe] (or an equivalent
 	// state-changing call) last returned a genuine reading, engine-clock
 	// time — never the coordinator's or this process's own wall-clock
@@ -890,6 +899,14 @@ type SessionSnapshot struct {
 	Fault       pkgaudio.SessionFault
 	FaultReason string
 
+	// LTCClaimState and LTCClaimReason are this session's own standing
+	// relationship to this node's one LTC run
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.ltc.claim.state
+	// / .reason) — see [LTCClaimState]'s own doc comment. LTCClaimReason
+	// is only ever meaningful when LTCClaimState is [LTCClaimRefused].
+	LTCClaimState  LTCClaimState
+	LTCClaimReason string
+
 	// GapKnown, Gap, GapReason, and GapObservedAt are the measured
 	// interval between the previous playlist item's natural completion
 	// and this item's confirmed start (docs/build/IDENTIFIER-REGISTER.md
@@ -937,6 +954,7 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	snap := SessionSnapshot{
 		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
 		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
+		LTCClaimState: s.ltcClaimState, LTCClaimReason: s.ltcClaimReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
 		CollectedAt: s.mgr.now(),
 	}
