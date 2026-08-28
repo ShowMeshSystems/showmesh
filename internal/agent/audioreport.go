@@ -256,6 +256,7 @@ func sessionReportFromSnapshot(s audio.SessionSnapshot) mqttproto.AudioSessionRe
 		FaultReason:          s.FaultReason,
 		LTCClaimState:        string(s.LTCClaimState),
 		LTCClaimReason:       s.LTCClaimReason,
+		RestorePending:       s.RestorePending,
 		RestoreAttempts:      int64(s.RestoreAttempts),
 		RestoreNextAttemptMs: s.RestoreNextAttempt.Milliseconds(),
 		RestoreLastReason:    s.RestoreLastReason,

@@ -919,12 +919,24 @@ type SessionSnapshot struct {
 	GapReason     string
 	GapObservedAt time.Time
 
+	// RestorePending is [Manager.sessionPendingRestore]'s own verbatim
+	// answer: this session currently has a restore queued
+	// (m.pendingEngineRestore), whether or not the automatic retry
+	// driver has made an attempt on its behalf yet. This is the
+	// authoritative gate for the three fields below — RestoreAttempts
+	// starting at 0 is genuinely ambiguous between "nothing queued" and
+	// "queued, no attempt yet", and only RestorePending resolves that.
+	RestorePending bool
+
 	// RestoreAttempts, RestoreNextAttempt, and RestoreLastReason are
-	// internal/agent's own automatic restore-retry driver's status
-	// (docs/build/IDENTIFIER-REGISTER.md audio_session.restore.attempts/
-	// .next_attempt_ms/.last_reason) — meaningful only while this
-	// session has a restore queued ([Manager.sessionPendingRestore]),
-	// zero otherwise. See snapshotLocked's own gate.
+	// internal/agent's own automatic restore-retry driver's status for
+	// this specific session (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.restore.attempts/.next_attempt_ms/.last_reason) —
+	// only ever populated while RestorePending is true, zero otherwise.
+	// RestoreNextAttempt is zero both before the driver's first attempt
+	// and after its bounded schedule is exhausted; RestoreAttempts alone
+	// does not distinguish those two — see the driver's own doc comment
+	// (internal/agent/audiorestoreretry.go) for how it marks exhaustion.
 	RestoreAttempts    int
 	RestoreNextAttempt time.Duration
 	RestoreLastReason  string
@@ -975,8 +987,9 @@ func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
 	// on a State value that PR alone introduces. Once both land, a
 	// pending session satisfies both this check and that PR's own
 	// State == RestorePending.
-	if s.mgr.sessionPendingRestore(s.id) {
-		snap.RestoreAttempts, snap.RestoreNextAttempt, snap.RestoreLastReason = s.mgr.RestoreRetryStatus(snap.CollectedAt)
+	snap.RestorePending = s.mgr.sessionPendingRestore(s.id)
+	if snap.RestorePending {
+		snap.RestoreAttempts, snap.RestoreNextAttempt, snap.RestoreLastReason = s.mgr.RestoreRetryStatus(s.id, snap.CollectedAt)
 	}
 
 	if s.desired.SourceRole != nil {
