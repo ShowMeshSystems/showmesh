@@ -46,6 +46,9 @@ describe('LiveControl', () => {
     expect(screen.getByText('Unavailable: No nodes are currently observed.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: Resolume is not configured on this coordinator.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: No brightness control capability is advertised.')).toBeInTheDocument()
+    for (const title of ['FPP transport', 'Node controls', 'Resolume controls', 'Brightness ceiling', 'Site control', 'Interlocks', 'Global emergency stop']) {
+      expect(screen.getByRole('heading', { name: title, level: 3 })).toBeVisible()
+    }
   })
 
   it('keeps lifecycle controls visible and explicitly permission-gated when the session is unknown', () => {

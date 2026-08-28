@@ -2,6 +2,8 @@ import type { HTMLAttributes, ReactNode } from 'react'
 import '../styles/operator-pages.css'
 
 type Children = { children: ReactNode }
+type StateBlockHeadingLevel = 2 | 3
+type StateBlockOptions = { headingLevel?: StateBlockHeadingLevel | undefined }
 
 export function OperatorPageHeader({ title, eyebrow, lede, actions }: { title: string; eyebrow?: string; lede?: ReactNode; actions?: ReactNode }) {
   return (
@@ -70,13 +72,13 @@ export function EvidenceTable({ label, children }: { label: string } & Children)
   return <div className="shared-evidence-table" role="region" aria-label={label} tabIndex={0}>{children}</div>
 }
 
-function StateBlock({ state, title, reason, role = 'status' }: { state: string; title: string; reason: ReactNode; role?: 'status' | 'alert' }) {
-  return <section className={`shared-state-block shared-state-block--${state}`} role={role} aria-label={`${title}: ${state}`}><h2>{title}</h2><p>{reason}</p></section>
+function StateBlock({ state, title, reason, role = 'status', headingLevel = 2 }: { state: string; title: string; reason: ReactNode; role?: 'status' | 'alert' } & StateBlockOptions) {
+  return <section className={`shared-state-block shared-state-block--${state}`} role={role} aria-label={`${title}: ${state}`}>{headingLevel === 3 ? <h3>{title}</h3> : <h2>{title}</h2>}<p>{reason}</p></section>
 }
 
-export function LoadingBlock({ title = 'Loading', reason = 'Waiting for coordinator data.' }: { title?: string; reason?: ReactNode }) { return <StateBlock state="loading" title={title} reason={reason} /> }
-export function EmptyBlock({ title, reason, children }: { title: string; reason: ReactNode } & Partial<Children>) { return <StateBlock state="empty" title={title} reason={<>{reason}{children}</>} /> }
-export function UnavailableBlock({ title, reason }: { title: string; reason: ReactNode }) { return <StateBlock state="unavailable" title={title} reason={reason} /> }
-export function FailedBlock({ title, reason }: { title: string; reason: ReactNode }) { return <StateBlock state="failed" title={title} reason={reason} role="alert" /> }
-export function StaleBlock({ title, reason }: { title: string; reason: ReactNode }) { return <StateBlock state="stale" title={title} reason={reason} /> }
-export function UnobservedBlock({ title, reason }: { title: string; reason: ReactNode }) { return <StateBlock state="unobserved" title={title} reason={reason} /> }
+export function LoadingBlock({ title = 'Loading', reason = 'Waiting for coordinator data.', headingLevel }: { title?: string; reason?: ReactNode } & StateBlockOptions) { return <StateBlock state="loading" title={title} reason={reason} headingLevel={headingLevel} /> }
+export function EmptyBlock({ title, reason, children, headingLevel }: { title: string; reason: ReactNode } & Partial<Children> & StateBlockOptions) { return <StateBlock state="empty" title={title} reason={<>{reason}{children}</>} headingLevel={headingLevel} /> }
+export function UnavailableBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="unavailable" title={title} reason={reason} headingLevel={headingLevel} /> }
+export function FailedBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="failed" title={title} reason={reason} role="alert" headingLevel={headingLevel} /> }
+export function StaleBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="stale" title={title} reason={reason} headingLevel={headingLevel} /> }
+export function UnobservedBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="unobserved" title={title} reason={reason} headingLevel={headingLevel} /> }

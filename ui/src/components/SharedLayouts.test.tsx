@@ -34,5 +34,8 @@ describe('SharedLayouts', () => {
     expect(screen.getByRole('alert', { name: 'Presentation failed: failed' })).toHaveTextContent('The coordinator reported a failed render.')
     expect(screen.getByText('Evidence is stale')).toBeVisible()
     expect(screen.getByText('Audio unobserved')).toBeVisible()
+    for (const title of ['Loading Run of Show', 'No Transition Steps', 'FPP controls unavailable', 'Presentation failed', 'Evidence is stale', 'Audio unobserved']) {
+      expect(screen.getByRole('heading', { name: title, level: 2 })).toBeVisible()
+    }
   })
 })

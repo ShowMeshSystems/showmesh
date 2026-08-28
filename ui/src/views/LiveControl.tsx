@@ -309,5 +309,5 @@ function resolumeControlStatus(model: ReturnType<typeof useModelContext>): Contr
 }
 
 function Unavailable({ title, reason }: { title: string; reason: string }) {
-  return <UnavailableBlock title={title} reason={<>Unavailable: {reason}</>} />
+  return <UnavailableBlock title={title} reason={<>Unavailable: {reason}</>} headingLevel={3} />
 }
