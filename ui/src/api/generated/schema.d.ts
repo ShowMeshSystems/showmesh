@@ -458,7 +458,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.gain.set to a node's playback session
-         * @description Behind `audio:command`. Sets the session's CONFIGURED gain, clamped to its ceiling (`params.gain` is linear, not dB - see AUDIO-ENGINE.md). The ceiling is enforced at the point a gain takes effect, not only at validation, and a clamp is reported as evidence rather than silently applied. While the session is muted or ducked by a higher-priority announcement, this configured gain is what the node returns to once every such reason releases; it does not reach the output immediately in that case, because a mute or a duck must never be bypassed by an operator's own gain change. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Sets the session's CONFIGURED gain, clamped to its ceiling. `params.gainDb` is in DECIBELS: `0` is unity, `-6.02` is half amplitude, `-60` and below is silence, and `+12` is the most this accepts. The coordinator converts it to the engine's linear amplitude multiplier once, at its own boundary; the node and the engine below it stay linear (AUDIO-ENGINE.md). The pre-decibel `params.gain` is refused by name, naming `params.gainDb` as its replacement, because the two units share a number range and a `0.5` meant for a halving would otherwise dispatch as a half-decibel lift. The ceiling is enforced at the point a gain takes effect, not only at validation, and a clamp is reported as evidence rather than silently applied. While the session is muted or ducked by a higher-priority announcement, this configured gain is what the node returns to once every such reason releases; it does not reach the output immediately in that case, because a mute or a duck must never be bypassed by an operator's own gain change. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioGainSet"];
         delete?: never;
@@ -478,7 +478,7 @@ export interface paths {
         put?: never;
         /**
          * Dispatch audio.gain.fade to a node's playback session
-         * @description Behind `audio:command`. Sets the session's CONFIGURED gain to `params.targetGain` (linear, not dB) immediately, clamped to the session's ceiling, and schedules a fade toward it over `params.durationMs` along `params.curve` (only `"linear"` ships). While the session is muted or ducked, the ramp actually dispatched to the output targets that suppression's own level, not `params.targetGain`: the configured gain this call records is what the node returns to once every such reason releases, but the fade itself never bypasses an active mute or duck. This response reports the fade as DISPATCHED, never as complete - `fade_complete` is an outcome the engine reports only once it observes the gain it was actually dispatched toward reached, never inferred from the requested duration having elapsed, because Track F's transition barrier is built on that distinction. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
+         * @description Behind `audio:command`. Sets the session's CONFIGURED gain to `params.targetGainDb` immediately, clamped to the session's ceiling, and schedules a fade toward it over `params.durationMs` along `params.curve` (only `"linear"` ships - that names the fade SHAPE, not the gain unit). `params.targetGainDb` is in DECIBELS: `0` is unity, `-6.02` is half amplitude, `-60` and below is silence, and `+12` is the most this accepts. The coordinator converts it to the engine's linear amplitude multiplier once, at its own boundary. The pre-decibel `params.targetGain` is refused by name, naming `params.targetGainDb` as its replacement. While the session is muted or ducked, the ramp actually dispatched to the output targets that suppression's own level, not `params.targetGainDb`: the configured gain this call records is what the node returns to once every such reason releases, but the fade itself never bypasses an active mute or duck. This response reports the fade as DISPATCHED, never as complete - `fade_complete` is an outcome the engine reports only once it observes the gain it was actually dispatched toward reached, never inferred from the requested duration having elapsed, because Track F's transition barrier is built on that distinction. A `200` response is never itself success: `command.outcome` is the only place that is decided, and it is commonly `"unconfirmable"` today because the pipeline backend behind this seam's session engine is an open owner decision - every dispatch against the shipped agent reports `"unconfirmable"` with a reason, which is a real, expected outcome and not a transport failure. See AudioSessionCommandResult.outcome.
          */
         post: operations["dispatchAudioGainFade"];
         delete?: never;
@@ -697,6 +697,9 @@ export interface paths {
         /**
          * Audit log (ADR-024 decision 11)
          * @description Append-only. Always requires `audit:read`, regardless of whether reads are otherwise open - this is not one of the four pre-existing read resources the open-reads posture covers. Not carried on the SSE change stream.
+         *     Pages in both directions, over ONE cursor: every entry carries its own `id` (`AuditEntry.id`), and both `since` and `before` are expressed in that id. `order=asc` (the default) walks forward from `since`, oldest first. `order=desc` walks backward from `before`, newest first, and `before` omitted means "start at the newest retained entry" - which is how a client opens on the most recent activity in one request instead of walking up to the whole retained log to reach the end of it.
+         *     An id is NOT a position in the result. Retention prunes from the oldest end and ids are never reused, so the lowest retained id is normally greater than zero; a client that advanced a cursor by counting the entries it received would re-read the same page indefinitely. Advance `since` to the LAST entry's id of an ascending page, and `before` to the LAST entry's id of a descending page.
+         *     `AuditResponse.oldestRetainedId` is what makes the backward walk honest at its far end: a descending client has reached the true beginning of retained history when it has returned that id, not merely when a page comes back short - retention can trim below the cursor between two pages. This endpoint still reports no `gap` flag: ADR-024 promises no "no gap and no duplicate" guarantee across a prune the way ADR-020's events contract does, and `oldestRetainedId` reports what the audit service can actually establish rather than a guarantee it cannot.
          */
         get: operations["listAudit"];
         put?: never;
@@ -2332,7 +2335,7 @@ export interface paths {
         };
         /**
          * Report whether one FPP-backed Playlist is ready (TRACK-H-H2-SPEC.md §6)
-         * @description Open under `observation:read`, matching the reconciliation route above. Reports whether every one of §6's five ordered conditions holds (a definition is stored for the binding's (instanceUuid, playlistHash), every entry's (section, position) exists in that definition with matching filenames, every referenced Cue exists and belongs to the same Show, and the latest accepted observation (when one exists) carries the same playlistHash), and the exact failing one when it does not. Refuses with `400` for a playlist whose runner is not `fpp`: §6 readiness is an FPP-specific concept. Read-only: this route never activates anything.
+         * @description Open under `observation:read`, matching the reconciliation route above. Reports whether every one of §6's ordered conditions holds, and the exact failing one when it does not. §6 originally specified five and closed the vocabulary; it has since been opened, and the `failingCondition` enum below is the authoritative list of what this route currently checks. In order: a definition is stored for the binding's (instanceUuid, playlistHash); no newer definition is stored for the same instance and playlist name under a different hash; every entry's (section, position) exists in that definition with matching filenames; every referenced Cue exists and belongs to the same Show; the latest accepted observation, when one exists, either carries the same playlistHash or, if it could not establish identity at all, fails as `evidence-unavailable` rather than warning; when a referenced Cue declares a render output, every node holding a show.surface object for this Playlist's Show currently holds a render assignment for it; no two Cues the Show can run concurrently hold a colliding exclusive claim; and every node participating in the Show's catalog has acknowledged the revision the active show requires. Refuses with `400` for a playlist whose runner is not `fpp`: §6 readiness is an FPP-specific concept. Read-only: this route never activates anything.
          */
         get: operations["getFPPPlaylistReadiness"];
         put?: never;
@@ -2585,7 +2588,11 @@ export interface components {
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
             declaration: components["schemas"]["NodeDeclaration"];
-            /** @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent. */
+            /**
+             * @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent.
+             *
+             *     `surface.pipeline.state`'s open vocabulary includes `superseded`: a surface holding its previous render across an active-show switch reports this instead of `running` - the coordinator's own verdict, compared against its current show resolution, never a claim the node makes about itself. `surface.content.show` and `surface.content.generation` name the show and generation that authorized what is currently held, present exactly when `surface.content.catalog_revision` is.
+             */
             render: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.audio.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published an audio discovery report. */
             audio: components["schemas"]["ObservationEntry"][];
@@ -3077,6 +3084,8 @@ export interface components {
         };
         /** @description One element of GET /audit (ADR-024 decision 11). params is never null (an entry with none still reports an empty object). */
         AuditEntry: {
+            /** @description This entry's append-only row id: strictly increasing, never reused, and the value BOTH of this endpoint's cursors are expressed in (`since` forward, `before` backward). Not a position in the result - see this operation's own description for why counting entries is not a cursor. */
+            id: number;
             /** Format: date-time */
             timestamp: string;
             principalId: string;
@@ -3102,10 +3111,13 @@ export interface components {
             outcomeState: "current" | "stale" | "unknown_age" | "not_collected" | "collection_failed" | "unsupported" | "";
             outcomeReason: string;
         };
-        /** @description The body of GET /audit. Unlike EventsResponse, this carries no gap/oldestRetainedSeq-shaped fields: the coordinator's audit service currently exposes no oldest-retained cursor for this endpoint to report one honestly. */
+        /** @description The body of GET /audit. `order` is the ordering the entries are actually in, echoed rather than inferred. `oldestRetainedId` is the lowest id still retained, or null when the log retains nothing at all; it mirrors EventsResponse.oldestRetainedSeq and is what lets a client paging backward tell the beginning of retained history from a page boundary. Unlike EventsResponse there is still no `gap` flag, and that absence is deliberate rather than unreported - see this operation's description. */
         AuditResponse: {
             /** Format: date-time */
             serverTime: string;
+            /** @enum {string} */
+            order: "asc" | "desc";
+            oldestRetainedId: number | null;
             entries: components["schemas"]["AuditEntry"][];
         };
         /** @description One principal as Track G seam G-5's admin surface renders it. Distinct from PrincipalSummary (SessionResponse's own narrower "who am I" shape): this is the full object GET/POST /principals and its sub-resources return. hasPassword and reserved are booleans, never a password hash or any other secret - reserved is true only for the built-in Resolume recovery principal, which is visible wherever principals are listed but cannot be created, disabled, renamed, re-roled, or re-credentialed through this surface. */
@@ -3740,15 +3752,16 @@ export interface components {
             /** @description What the CURRENT mode does to the only behaviour that reads the mode in this build: the Resolume WebSocket footprint switch (ADR-033 decision 2), held open in `program` and closed in `show`. Names the mode as the reason, which is ADR-033 decision 3's requirement that a behaviour caused by the mode says so where the operator can see it. Always non-empty. */
             resolumeWebSocketEffect: string;
         };
-        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGain` is a linear amplitude multiplier - 1.0 is unity gain - applied as the default ceiling on a background bed. `duckTargetGain` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), in that same linear unit: `0` is full silence, and a value of `1` or more is refused because it would not duck anything. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
+        /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
             /** @enum {string} */
             defaultFadeCurve: "linear";
             defaultFadeDurationMs: number;
-            defaultMaxBackgroundGain: number;
-            /** @description Linear multiplier a ducked session is driven to. Provisional value, not measured. */
-            duckTargetGain: number;
+            /** @description Decibels. 0 dB is unity gain; +12 dB is the typo guard, not a tuned headroom figure. -60 dB is the same silence floor duckTargetGainDb bounds against. */
+            defaultMaxBackgroundGainDb: number;
+            /** @description Decibels a ducked session is driven to. Must be negative; -60 dB is silence. Provisional value, not measured. */
+            duckTargetGainDb: number;
             /** @enum {string} */
             ltcFrameRate: "24" | "25" | "29.97" | "30";
             /** @description HH:MM:SS:FF, non-drop-frame. */
@@ -3788,12 +3801,18 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
-        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. */
+        /**
+         * @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every required field non-null and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and, when both are given, MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`.
+         *
+         *     `ltcRoute` and `ltcChannel` are the one optional pair, and they are optional TOGETHER: omitting both declares a program-only node that emits no LTC at all, and giving one without the other is refused rather than half-honoured. A program-only declaration is the only way to place a two-output interface, whose LTC-capable route list is correctly empty because ADR-018 requires LTC on a channel discrete from the program pair. Every LTC refusal is unchanged for a declaration that DOES name an LTC route, including the check that the route is one the node advertised as LTC-capable. ADR-042 section 5 already treats losing LTC as costing timecode and never the audience's program audio.
+         *
+         *     `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the routes run on, never inferred, and are required on a program-only node too.
+         */
         ConfigAudioNode: {
             programRoute: string;
-            ltcRoute: string;
+            ltcRoute?: string;
             programChannels: number[];
-            ltcChannel: number;
+            ltcChannel?: number;
             clockDomain: string;
             clockDomainProvenance: string;
         };
@@ -3952,7 +3971,7 @@ export interface components {
             audioNodeId?: string;
             /** @description audio-only: the target pkg/audio session id. */
             audioSessionId?: string;
-            /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. */
+            /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. `params` is otherwise opaque here and validated by the node, with one exception: `audio.gain.set` requires `params.gainDb` and `audio.gain.fade` requires `params.targetGainDb`, both in DECIBELS on the same scale as the gain endpoints (0 dB unity, -60 dB silence, +12 dB the most accepted). The pre-decibel `params.gain`/`params.targetGain` are refused here at authoring time, naming the replacement, rather than discovered when the Cue fires mid-show. */
             audioAction?: string;
         };
         /** @description The WRITE shape of show.action.target. Identical to ConfigShowActionTarget except that publish, when present, is ConfigShowActionMQTTPublishWrite, which allows retain to be absent. The response to a successful write is always the resolved ConfigShowActionTarget shape, never this one. */
@@ -4375,12 +4394,12 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set only for the non-fatal form of the observation-hash check (no observation received yet, "the normal afternoon state, not a fault"), never alongside a non-empty `failingCondition`. */
+        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6, whose vocabulary has since been opened -- see docs/build/TRACK-H-cues-and-playlists.md section H6 for the full account of what was added and why): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set when a condition did not fail readiness outright but is still worth surfacing: either the non-fatal form of the observation-hash check (no observation received at all yet, "the normal afternoon state, not a fault"), or `exclusive-claim-conflict`'s own inconclusive form (a stored Cue elsewhere could not be decoded, so the check could not be verified). `warning` is never set alongside a non-empty `failingCondition` equal to `observation-hash-mismatch`. An observation that WAS received but could not establish identity is the `evidence-unavailable` failing condition, not a warning: readiness never returns `ready: true` for a check it could not evaluate. `definition-superseded` detects an edited-but-never- played FPP playlist directly from the definition store, so it does not require FPP to have played anything since the edit. `node-render-unassigned`, `node-catalog-stale` and `exclusive-claim-conflict` are evaluated against every node participating in this Playlist's own Show's resolved Cue catalog, reusing the same resolution `GET /nodes/{nodeId}/cue-catalog` and the cue-catalog deploy path already use -- never a second one. */
         FPPPlaylistReadinessResponse: {
             playlistId: string;
             ready: boolean;
             /** @enum {string} */
-            failingCondition?: "definition-missing" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "observation-hash-mismatch";
+            failingCondition?: "definition-missing" | "definition-superseded" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "evidence-unavailable" | "observation-hash-mismatch" | "node-render-unassigned" | "exclusive-claim-conflict" | "node-catalog-stale";
             reason?: string;
             warning?: string;
             /** Format: date-time */
@@ -5196,7 +5215,7 @@ export interface components {
             cueRevision: number;
             outputs: components["schemas"]["CueCatalogOutputs"];
         };
-        /** @description The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3). */
+        /** @description The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3, plus its read-only acknowledgement projection). acknowledgedStatus is always present: "catalog-unacknowledged" when this node has never acknowledged a cue catalog, "catalog-current" when its last acknowledged revision equals `revision` above, and "catalog-stale" otherwise (including when no active show is configured at all, so there is nothing to be current with). acknowledgedRevision and acknowledgedAt are both absent exactly when acknowledgedStatus is "catalog-unacknowledged" - a caller must read acknowledgedStatus, never infer "never acknowledged" from their absence. */
         CueCatalogResponse: {
             /** Format: date-time */
             serverTime: string;
@@ -5206,6 +5225,11 @@ export interface components {
             generation?: number;
             revision?: string;
             entries: components["schemas"]["CueCatalogEntry"][];
+            /** @enum {string} */
+            acknowledgedStatus: "catalog-current" | "catalog-stale" | "catalog-unacknowledged";
+            acknowledgedRevision?: string;
+            /** Format: date-time */
+            acknowledgedAt?: string;
         };
         /** @description The body of POST /nodes/{nodeId}/cue-catalog/acknowledge. */
         CueCatalogAcknowledgeRequest: {
@@ -6715,8 +6739,12 @@ export interface operations {
     listAudit: {
         parameters: {
             query?: {
-                /** @description An opaque cursor: return entries after this value. 0 (the default) means "from the beginning of retained history". */
+                /** @description `asc` (the default, and the behaviour before this parameter existed) returns entries oldest first and pages with `since`. `desc` returns entries newest first and pages with `before`. The ordering actually used is echoed as `AuditResponse.order`. */
+                order?: "asc" | "desc";
+                /** @description Exclusive lower bound: return entries whose `id` is strictly greater than this value, oldest first. 0 (the default) means "from the beginning of retained history". Valid only with `order=asc`; sending it with `order=desc`, or alongside `before`, is a `400` rather than a silently ignored parameter. */
                 since?: number;
+                /** @description Exclusive upper bound: return entries whose `id` is strictly less than this value, newest first. 0 (the default) means "from the newest retained entry". Requires `order=desc`; sending it with `order=asc`, or alongside `since`, is a `400`. */
+                before?: number;
                 /** @description Maximum number of entries to return. Defaults to 100; values above 500 are silently clamped to 500. */
                 limit?: number;
             };

@@ -58,5 +58,11 @@ bench/node-install/
   run_install_proof.sh     Builds the agent, runs install.sh twice
                            (idempotency + sentinel check), preflight.sh,
                            systemd-analyze verify, and a negative check
-                           proving that verification can fail
+                           proving that verification can fail.
+                           Step 6 invokes ./preflight.sh with NO
+                           arguments, which is the BUILD-host branch.
+                           install.sh itself always takes the
+                           --runtime-only branch, so that branch is
+                           exercised here only as install.sh's own
+                           precondition, and never unprivileged.
 ```

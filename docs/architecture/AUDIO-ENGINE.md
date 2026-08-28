@@ -74,15 +74,17 @@ Continuous PCM streaming would put the network and the coordinator inside the re
 
 ### 4.2 Drift policy
 
-The Audio Engine must not continuously discipline its audio clock against show timing. Policy:
+The Audio Engine must not continuously discipline its audio clock against show timing. Show timing here means the FPP show timeline position; [ADR-046](../decisions/ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md) separately permits a bounded rate trim against a locked shared PTP clock, see below. Policy:
 
 - align accurately at playback start;
 - measure drift continuously and report it;
 - ignore drift below a configurable threshold;
 - prefer correction at track boundaries;
 - allow a discrete seek when drift becomes operationally significant;
-- avoid audible playback-rate manipulation;
-- never chase small timing differences continuously.
+- avoid slews and seeks as ordinary correction, which are audible;
+- never chase the show timeline position continuously.
+
+Rate trim is a different operation and is permitted under ADR-046: when the node's clock provider reports a locked shared PTP clock, the whole interface output may be rate-matched to that clock at ppm scale through a variable-ratio resampler (in PipeWire or in the pipeline), clamped, slew-limited, frozen on a clock step or loss of lock, and reported as telemetry. The set point is the clock, never the FPP position feed. A node without a locked provider runs no trim and follows the list above unchanged. [RES-019](../research/RES-019-ptp-synchronized-multi-node-audio.md) owns the mechanism, the scheduled-start model, and the measurements.
 
 This is a deliberate divergence from the FPP remote sync semantics that `pkg/multisync` implements for the lighting timeline. Those semantics slew by up to four frames and jump beyond half a second, which is correct for pixels and wrong for program audio, where rate manipulation is audible and a seek is a defect the audience hears. The two models are not required to match, and the divergence must not be "fixed" by making audio behave like a MultiSync remote.
 
@@ -320,7 +322,7 @@ This feeds the desired-versus-observed model directly. Two rules from [ADR-011](
 
 **After the core session engine, not a Day-0 gate:** the generic synchronized-remote-output contract exercised against a deterministic mock destination, including advance provisioning and absent-readiness behavior. A real third-party adapter, its upload protocol, remote processing status, and phone playback are integration research and do not block the local/FM/LTC show path.
 
-Deferred beyond the initial release: Dante as a required transport, real-time PCM streaming between ShowMesh nodes (including the Windows Dante bridge in §12), sample-transparent node failover, multi-zone audio, and dynamic clock-rate correction.
+Deferred beyond the initial release: Dante as a required transport, real-time PCM streaming between ShowMesh nodes (including the Windows Dante bridge in §12), sample-transparent node failover, and multi-zone audio. Rate-locking to a shared PTP clock is permitted by ADR-046 and staged in RES-019; it is not part of the initial release.
 
 ## 17. Open questions
 

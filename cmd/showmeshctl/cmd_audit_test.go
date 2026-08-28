@@ -140,26 +140,25 @@ func TestCmdAuditNoEntries(t *testing.T) {
 	if !strings.Contains(stdout.String(), "no audit entries") {
 		t.Errorf("stdout = %q, want an explicit empty message", stdout.String())
 	}
-	if strings.Contains(stderr.String(), "this page returned") {
+	if strings.Contains(stderr.String(), "continue with") {
 		t.Errorf("stderr = %q, must not warn about a possibly-incomplete page when there were zero entries", stderr.String())
 	}
 }
 
-// TestCmdAuditWarnsWhenPageMayBeIncomplete is the load-bearing test for
+// TestCmdAuditNamesTheNextPageFromARealID is the load-bearing test for
 // this command's honesty requirement: when a page comes back exactly as
-// full as what was requested, this CLI cannot know whether more entries
-// exist (an auditEntry carries no row id — see cmd_audit.go's doc
-// comment), and it must say so rather than silently presenting a partial
-// log as complete.
-func TestCmdAuditWarnsWhenPageMayBeIncomplete(t *testing.T) {
+// full as what was requested, more entries may exist, and this CLI now
+// names the exact next invocation computed from the last entry's own id
+// rather than reporting that it cannot compute one.
+func TestCmdAuditNamesTheNextPageFromARealID(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","entries":[
-			{"timestamp":"2026-08-10T20:00:00Z","principalId":"p-1","principalName":"eric","form":"token",
+			{"id":31,"timestamp":"2026-08-10T20:00:00Z","principalId":"p-1","principalName":"eric","form":"token",
 			 "credentialId":"tok-1","clientAddr":"","action":"session.create","target":"sess-1","params":{},
 			 "idempotencyKey":"","kind":"dispatch","commandId":"","outcome":"","outcomeState":"","outcomeReason":""},
-			{"timestamp":"2026-08-10T20:01:00Z","principalId":"p-1","principalName":"eric","form":"token",
+			{"id":32,"timestamp":"2026-08-10T20:01:00Z","principalId":"p-1","principalName":"eric","form":"token",
 			 "credentialId":"tok-1","clientAddr":"","action":"session.create","target":"sess-2","params":{},
 			 "idempotencyKey":"","kind":"dispatch","commandId":"","outcome":"","outcomeState":"","outcomeReason":""}
 		]}`)
@@ -171,8 +170,8 @@ func TestCmdAuditWarnsWhenPageMayBeIncomplete(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "row id") {
-		t.Errorf("stderr = %q, want an honest note that this CLI cannot compute the next page's cursor", stderr.String())
+	if !strings.Contains(stderr.String(), "--since 32") {
+		t.Errorf("stderr = %q, want the next page named from the last entry's own id (32)", stderr.String())
 	}
 }
 
@@ -198,8 +197,8 @@ func TestCmdAuditNoWarningWhenPageIsShortOfLimit(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	if strings.Contains(stderr.String(), "row id") {
-		t.Errorf("stderr = %q, must not warn about incompleteness when the page came back short of --limit", stderr.String())
+	if strings.Contains(stderr.String(), "continue with") {
+		t.Errorf("stderr = %q, must not offer a next page when the page came back short of --limit", stderr.String())
 	}
 }
 
@@ -218,5 +217,137 @@ func TestEffectiveAuditLimit(t *testing.T) {
 		if got := effectiveAuditLimit(tc.requested); got != tc.want {
 			t.Errorf("effectiveAuditLimit(%d) = %d, want %d", tc.requested, got, tc.want)
 		}
+	}
+}
+
+// TestCmdAuditNewestFirstAsksForOneDescendingPage proves the parity this
+// command gained with the endpoint: --order desc sends order=desc with no
+// cursor, which is the single request that opens on the most recent
+// activity.
+func TestCmdAuditNewestFirstAsksForOneDescendingPage(t *testing.T) {
+	var calls int
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","order":"desc","oldestRetainedId":9001,"entries":[]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudit([]string{"--server", ts.URL, "--token", "t", "--order", "desc"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if calls != 1 {
+		t.Errorf("requests = %d, want exactly 1", calls)
+	}
+	if !strings.Contains(gotQuery, "order=desc") || strings.Contains(gotQuery, "before=") {
+		t.Errorf("query = %q, want order=desc and no before cursor", gotQuery)
+	}
+}
+
+// TestCmdAuditDescendingPageNamesTheBeforeCursor proves the backward walk
+// advances on a real id, which is what the abandoned counting cursor got
+// wrong: the lowest retained id here is 9001, far above zero, and the next
+// page's cursor is the last entry's id rather than any count.
+func TestCmdAuditDescendingPageNamesTheBeforeCursor(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","order":"desc","oldestRetainedId":9001,"entries":[
+			{"id":9100,"timestamp":"2026-08-10T20:01:00Z","principalId":"p-1","principalName":"eric","form":"token",
+			 "credentialId":"tok-1","clientAddr":"","action":"session.create","target":"sess-2","params":{},
+			 "idempotencyKey":"","kind":"dispatch","commandId":"","outcome":"","outcomeState":"","outcomeReason":""},
+			{"id":9099,"timestamp":"2026-08-10T20:00:00Z","principalId":"p-1","principalName":"eric","form":"token",
+			 "credentialId":"tok-1","clientAddr":"","action":"session.create","target":"sess-1","params":{},
+			 "idempotencyKey":"","kind":"dispatch","commandId":"","outcome":"","outcomeState":"","outcomeReason":""}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudit([]string{"--server", ts.URL, "--token", "t", "--order", "desc", "--limit", "2"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--before 9099") {
+		t.Errorf("stderr = %q, want the next page named as --before 9099", stderr.String())
+	}
+}
+
+// TestCmdAuditDescendingSaysWhenHistoryBegins is the honesty case at the
+// far end: a full page whose last entry IS the oldest retained one must
+// report the beginning of retained history, not offer another page.
+func TestCmdAuditDescendingSaysWhenHistoryBegins(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","order":"desc","oldestRetainedId":9099,"entries":[
+			{"id":9100,"timestamp":"2026-08-10T20:01:00Z","principalId":"p-1","principalName":"eric","form":"token",
+			 "credentialId":"tok-1","clientAddr":"","action":"session.create","target":"sess-2","params":{},
+			 "idempotencyKey":"","kind":"dispatch","commandId":"","outcome":"","outcomeState":"","outcomeReason":""},
+			{"id":9099,"timestamp":"2026-08-10T20:00:00Z","principalId":"p-1","principalName":"eric","form":"token",
+			 "credentialId":"tok-1","clientAddr":"","action":"session.create","target":"sess-1","params":{},
+			 "idempotencyKey":"","kind":"dispatch","commandId":"","outcome":"","outcomeState":"","outcomeReason":""}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudit([]string{"--server", ts.URL, "--token", "t", "--order", "desc", "--limit", "2"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "oldest entry the coordinator still retains") {
+		t.Errorf("stderr = %q, want it to say the log's beginning has been reached", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "continue with") {
+		t.Errorf("stderr = %q, must not offer another page past the oldest retained entry", stderr.String())
+	}
+}
+
+// TestCmdAuditRejectsContradictoryCursorFlags pins that the two directions
+// of one cursor are never silently reconciled locally.
+func TestCmdAuditRejectsContradictoryCursorFlags(t *testing.T) {
+	cases := [][]string{
+		{"--since", "5", "--before", "9"},
+		{"--order", "desc", "--since", "5"},
+		{"--before", "9"},
+		{"--order", "sideways"},
+		{"--order", "desc", "--before", "nope"},
+	}
+	for _, args := range cases {
+		var stdout, stderr bytes.Buffer
+		if code := cmdAudit(args, &stdout, &stderr, time.Now); code != exitUsage {
+			t.Errorf("cmdAudit(%v) = %d, want exitUsage (%d); stderr=%s", args, code, exitUsage, stderr.String())
+		}
+	}
+}
+
+// TestCmdAuditPrintsEntryIDs proves the id reaches the operator's screen:
+// without it, an operator reading the table has nothing to put in --since
+// or --before.
+func TestCmdAuditPrintsEntryIDs(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-10T21:00:00Z","order":"desc","oldestRetainedId":9001,"entries":[
+			{"id":9100,"timestamp":"2026-08-10T20:01:00Z","principalId":"p-1","principalName":"eric","form":"token",
+			 "credentialId":"tok-1","clientAddr":"","action":"session.create","target":"sess-2","params":{},
+			 "idempotencyKey":"","kind":"dispatch","commandId":"","outcome":"","outcomeState":"","outcomeReason":""}
+		]}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudit([]string{"--server", ts.URL, "--token", "t", "--order", "desc"}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "ID") || !strings.Contains(stdout.String(), "9100") {
+		t.Errorf("stdout = %q, want an ID column carrying 9100", stdout.String())
 	}
 }

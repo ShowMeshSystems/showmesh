@@ -342,7 +342,7 @@ export function NightCueOutcomeBadge({ outcome }: { outcome: NightCueOutcome }) 
 // TRACK-H-H2-SPEC.md §6: FPPPlaylistReadinessResponse.ready is a bare
 // boolean, not an enum: this badge is the one place that boolean gets a
 // tone+icon+label triple, same "never color alone" rule as every badge
-// above. The failing CONDITION (which of §6's five checks failed) gets
+// above. The failing CONDITION (which of §6's eight checks failed) gets
 // its own badge below; this one only ever says ready or not.
 export function FPPPlaylistReadinessBadge({ ready }: { ready: boolean }) {
   return ready ? (
@@ -357,17 +357,28 @@ const FPP_PLAYLIST_READINESS_FAILING_CONDITION: Record<
   { tone: StatusTone; icon: string; label: string }
 > = {
   'definition-missing': { tone: 'bad', icon: '✕', label: 'definition missing' },
+  // Detected directly from the definition store (the plugin's periodic
+  // re-scan/re-post), never requires FPP to have played anything since
+  // the edit — see this condition's own doc comment in
+  // fppreconcile/readiness.go.
+  'definition-superseded': { tone: 'bad', icon: '✕', label: 'definition superseded' },
   'entry-not-in-definition': { tone: 'bad', icon: '✕', label: 'entry not in definition' },
   'entry-filename-mismatch': { tone: 'bad', icon: '✕', label: 'entry filename mismatch' },
   'cue-not-ready': { tone: 'bad', icon: '✕', label: 'cue not ready' },
+  // An observation was received but could not establish identity — a
+  // required check that ran and could not conclude anything, never
+  // rendered as "ready" with a warning.
+  'evidence-unavailable': { tone: 'bad', icon: '✕', label: 'evidence unavailable' },
   'observation-hash-mismatch': { tone: 'bad', icon: '✕', label: 'observation hash mismatch' },
+  'node-render-unassigned': { tone: 'bad', icon: '✕', label: 'node render unassigned' },
+  'exclusive-claim-conflict': { tone: 'bad', icon: '✕', label: 'exclusive claim conflict' },
+  'node-catalog-stale': { tone: 'bad', icon: '✕', label: 'node catalog stale' },
 }
 
-// Only rendered once `ready` is false: every one of §6's five failing
-// conditions is its own distinguishable label, never collapsed into one
-// generic "not ready" (task instruction: "a stale import, a missing
-// asset, an unresolved reference and an unbound playlist must be
-// distinguishable from each other").
+// Only rendered once `ready` is false: every failing condition gets its
+// own distinguishable label, never collapsed into one generic "not
+// ready". A stale import, a missing asset, an unresolved reference and an
+// unbound playlist must each be tellable apart on sight.
 export function FPPPlaylistReadinessFailingConditionBadge({
   condition,
 }: {

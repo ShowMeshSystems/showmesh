@@ -5,6 +5,7 @@ import { describeApiError } from '../app/session'
 import { findObservation } from '../app/fppSignals'
 import {
   ambiguousClips,
+  groupClipObservations,
   resolumeObservationLabel,
   sanitizeResolumeEvidence,
   sanitizeResolumeValueString,
@@ -96,11 +97,11 @@ function RestoreReportView({
               <td>
                 <ResolumeRestoreResultBadge result={layer.result} />
               </td>
-              <td>{layer.clip ?? '—'}</td>
-              <td>{layer.actionOutcome ?? '—'}</td>
+              <td>{layer.clip ?? '-'}</td>
+              <td>{layer.actionOutcome ?? '-'}</td>
               {/* Review finding 3: reason is server-built free text and can
                   embed a raw Arena object id — sanitize before rendering. */}
-              <td>{layer.reason === undefined ? '—' : sanitizeResolumeValueString(layer.reason, composition)}</td>
+              <td>{layer.reason === undefined ? '-' : sanitizeResolumeValueString(layer.reason, composition)}</td>
             </tr>
           ))}
         </tbody>
@@ -156,6 +157,7 @@ export function ResolumeView() {
   }
 
   const ambiguous = ambiguousClips(composition)
+  const groupedObservations = groupClipObservations(instance?.observations ?? [], composition)
 
   return (
     <div>
@@ -196,16 +198,80 @@ export function ResolumeView() {
               {instance.observations.length === 0 ? (
                 <p className="text-muted">This instance has no recorded observations.</p>
               ) : (
-                instance.observations.map((observation) => (
-                  <EvidenceValue
-                    key={observation.signal}
-                    label={resolumeObservationLabel(observation.signal, composition)}
-                    evidence={sanitizeResolumeEvidence(observation, composition)}
-                    serverTime={model.serverTime}
-                    serverTimeReceivedAt={model.serverTimeReceivedAt}
-                    connected={connected}
-                  />
-                ))
+                <>
+                  {/* Observations that are not per-clip (e.g. resolume.reachable) are
+                      not part of the clip grouping below; rendered here exactly as
+                      every observation used to be, so none of them is lost. */}
+                  {groupedObservations.other.map((observation) => (
+                    <EvidenceValue
+                      key={observation.signal}
+                      label={resolumeObservationLabel(observation.signal, composition)}
+                      evidence={sanitizeResolumeEvidence(observation, composition)}
+                      serverTime={model.serverTime}
+                      serverTimeReceivedAt={model.serverTimeReceivedAt}
+                      connected={connected}
+                    />
+                  ))}
+                  {groupedObservations.clips.length > 0 && (
+                    // Thirty-three aligned rows instead of sixty-six stacked
+                    // blocks: each clip's two signals (connected, transport
+                    // type) become columns on the clip's own row. ADR-011
+                    // still holds per cell -- EvidenceValue renders each one
+                    // exactly as it would standalone, so a stale signal is
+                    // still loud; only the layout is denser, nothing is hidden.
+                    <div className="table-scroll">
+                      <table className="config-table" aria-label="Clip observations">
+                        <thead>
+                          <tr>
+                            <th scope="col">Clip</th>
+                            <th scope="col">Connected</th>
+                            <th scope="col">Transport type</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupedObservations.clips.map((row) => (
+                            <tr key={row.clipId}>
+                              <th scope="row">{row.label}</th>
+                              <td>
+                                {row.connected === null ? (
+                                  // No Evidence envelope exists at all for this
+                                  // clip's connected signal (groupClipObservations
+                                  // leaves the field null when the flat
+                                  // observation list never carried it) -- this is
+                                  // not a value to hand EvidenceValue, which
+                                  // renders a coordinator-reported state/reason
+                                  // this clip never sent. Say plainly that the
+                                  // signal was never reported, not that it is
+                                  // merely blank.
+                                  <span className="text-muted">not reported</span>
+                                ) : (
+                                  <EvidenceValue
+                                    evidence={sanitizeResolumeEvidence(row.connected, composition)}
+                                    serverTime={model.serverTime}
+                                    serverTimeReceivedAt={model.serverTimeReceivedAt}
+                                    connected={connected}
+                                  />
+                                )}
+                              </td>
+                              <td>
+                                {row.transportType === null ? (
+                                  <span className="text-muted">not reported</span>
+                                ) : (
+                                  <EvidenceValue
+                                    evidence={sanitizeResolumeEvidence(row.transportType, composition)}
+                                    serverTime={model.serverTime}
+                                    serverTimeReceivedAt={model.serverTimeReceivedAt}
+                                    connected={connected}
+                                  />
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
               )}
             </section>
           </PanelErrorBoundary>
@@ -435,9 +501,9 @@ export function ResolumeView() {
                               </div>
                             )}
                           </td>
-                          <td>{entry.clip ?? '—'}</td>
+                          <td>{entry.clip ?? '-'}</td>
                           <td>{entry.establishedAt ?? 'never established'}</td>
-                          <td>{entry.source ?? '—'}</td>
+                          <td>{entry.source ?? '-'}</td>
                         </tr>
                       ))}
                     </tbody>

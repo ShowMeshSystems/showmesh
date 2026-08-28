@@ -132,6 +132,74 @@ export function resolumeObservationLabel(signal: string, composition: ResolumeCo
   return signal
 }
 
+/** One clip's per-clip observations, grouped by the clip id embedded in their signal names. */
+export interface ClipObservationGroup {
+  clipId: string
+  /** This clip's resolved row label, in the same "clip "<name>"" / not-in-composition form resolumeObservationLabel uses. */
+  label: string
+  connected: Evidence | null
+  transportType: Evidence | null
+}
+
+export interface GroupedResolumeObservations {
+  /** One entry per distinct clip id seen, in first-seen order. */
+  clips: ClipObservationGroup[]
+  /** Every observation whose signal is not one of the two per-clip shapes above, in original order, unmodified. */
+  other: Evidence[]
+}
+
+/**
+ * Groups an instance's flat observation list by the clip id embedded in
+ * `resolume.clip.<id>.connected`/`.transporttype` signals, so a caller can
+ * render one row per clip (both signals as columns) instead of stacking
+ * every signal as its own block — an operator-reported readability defect
+ * when a composition holds many clips, each surfacing two signals. A clip
+ * missing one of its two signals still gets a row, with that field left
+ * `null` (rendered as absent, never skipped). Every other observation
+ * (e.g. `resolume.reachable`) is returned separately, unmodified and never
+ * dropped — it is not part of this grouping.
+ */
+export function groupClipObservations(
+  observations: readonly Evidence[],
+  composition: ResolumeCompositionResponse | null,
+): GroupedResolumeObservations {
+  const order: string[] = []
+  const byClip = new Map<string, ClipObservationGroup>()
+  const other: Evidence[] = []
+
+  function rowFor(clipId: string): ClipObservationGroup {
+    let row = byClip.get(clipId)
+    if (row === undefined) {
+      const name = clipNameById(composition, clipId)
+      row = {
+        clipId,
+        label: name === null ? 'clip not in the stored composition' : `clip "${name}"`,
+        connected: null,
+        transportType: null,
+      }
+      byClip.set(clipId, row)
+      order.push(clipId)
+    }
+    return row
+  }
+
+  for (const observation of observations) {
+    const connected = CLIP_CONNECTED_RE.exec(observation.signal)
+    if (connected !== null) {
+      rowFor(connected[1] as string).connected = observation
+      continue
+    }
+    const transportType = CLIP_TRANSPORT_TYPE_RE.exec(observation.signal)
+    if (transportType !== null) {
+      rowFor(transportType[1] as string).transportType = observation
+      continue
+    }
+    other.push(observation)
+  }
+
+  return { clips: order.map((id) => byClip.get(id) as ClipObservationGroup), other }
+}
+
 // ---------------------------------------------------------------------
 // Picker option lists (build contract §2.3): decks, layers, columns, and
 // clips scoped to a deck or persistent, each disambiguated before

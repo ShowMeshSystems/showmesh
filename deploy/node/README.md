@@ -73,7 +73,8 @@ release:
 apt-get update && apt-get install -y \
   build-essential pkg-config \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libltc-dev \
-  golang-go   # or install Go by hand; see go.mod for the minimum version
+  # Go: install by hand from https://go.dev/dl/ and put it on PATH.
+  # Debian 13's golang-go is older than the version go.mod requires.
 
 git clone https://github.com/ShowMeshSystems/showmesh.git
 cd showmesh
@@ -84,6 +85,11 @@ This produces `bin/showmesh-agent-native`. `make package-node-agent`
 (see the repository root `Makefile`) instead builds a distributable
 tarball containing this binary plus everything in this directory, see
 that target's own comment for the reproducibility discipline it follows.
+The tarball is named for the platform it was built on
+(`..._linux_amd64.tar.gz`, `..._linux_arm64.tar.gz`): this is a cgo
+build linking host C libraries, so it can only ever target its own
+platform. To package for a Raspberry Pi class node, run that target on
+an arm64 Debian 13 host or in an arm64 `debian:13` container.
 
 ### 3. Install the runtime packages
 
@@ -106,8 +112,11 @@ sudo ./install.sh /path/to/showmesh-agent-native
 
 This is idempotent. On a fresh host it:
 
-- runs `preflight.sh` and refuses to continue if anything is missing (it
-  names the exact apt package to install);
+- runs `preflight.sh --runtime-only` and refuses to continue if anything
+  is missing (it names the exact apt package to install). It checks only
+  what the agent needs to RUN, because it installs an already-built
+  binary; run `./preflight.sh` with no arguments to also check the
+  build-time toolchain on a host that will build the agent itself;
 - creates the `showmesh` system user/group;
 - creates `/etc/showmesh` (0755) and `/etc/showmesh/agent.env` (0600,
   root:root) from `agent.env.example`, **only if that file does not

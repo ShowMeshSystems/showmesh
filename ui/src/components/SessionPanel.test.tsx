@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SessionPanel } from './SessionPanel'
+import { SessionPanel, SessionIdentity } from './SessionPanel'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import type { Model, SessionResponse } from '../app/types'
@@ -78,6 +78,19 @@ function renderPanel(model: Model) {
   )
 }
 
+// SessionIdentity is SessionPanel's signed-in case, moved out for
+// Layout.tsx's header (Operator-reported: it used to render inline here,
+// as a full-width band). Its own render helper, since SessionPanel now
+// renders nothing at all for the signed-in state -- see the two tests
+// below that use it instead of renderPanel.
+function renderIdentity(model: Model) {
+  return render(
+    <ModelContext.Provider value={model}>
+      <SessionIdentity />
+    </ModelContext.Provider>,
+  )
+}
+
 describe('SessionPanel', () => {
   it('renders nothing before the first /session response (never guesses signed-in or signed-out)', () => {
     const { container } = renderPanel(makeModel({ session: null }))
@@ -150,10 +163,17 @@ describe('SessionPanel', () => {
     expect(clearToken).toHaveBeenCalledTimes(1)
   })
 
+  // Signed-in identity now renders via SessionIdentity (Layout.tsx's
+  // header), not inline in SessionPanel's own band -- Operator-reported.
+  it('renders nothing for the signed-in state; SessionIdentity renders it instead', () => {
+    const { container } = renderPanel(makeModel({ session: signedIn() }))
+    expect(container).toBeEmptyDOMElement()
+  })
+
   it('renders signed-in state with the principal name and role, and a working sign-out button', async () => {
     const user = userEvent.setup()
     logout.mockResolvedValue(undefined)
-    renderPanel(makeModel({ session: signedIn() }))
+    renderIdentity(makeModel({ session: signedIn() }))
 
     expect(screen.getByText(/Signed in as alice/)).toHaveTextContent('operator')
     await user.click(screen.getByRole('button', { name: /Sign out/ }))
@@ -163,7 +183,7 @@ describe('SessionPanel', () => {
   it('shows the CSRF-rejection explanation, not a silent failure, when sign-out is rejected', async () => {
     const user = userEvent.setup()
     logout.mockRejectedValue(new CSRFRejectedError('missing header'))
-    renderPanel(makeModel({ session: signedIn() }))
+    renderIdentity(makeModel({ session: signedIn() }))
 
     await user.click(screen.getByRole('button', { name: /Sign out/ }))
     // Asserts the panel surfaces describeApiError's CSRF text at all, keyed

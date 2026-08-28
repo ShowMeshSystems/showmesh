@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -45,6 +47,9 @@ const SERVICE_DESCRIPTOR = {
 }
 
 beforeEach(() => {
+  // Each nav-group collapse test starts from a clean slate: no test in
+  // this file relies on a preference persisted by an earlier one.
+  window.localStorage.clear()
   getServiceDescriptor.mockResolvedValue(SERVICE_DESCRIPTOR)
   // Otherwise a `waitFor` anywhere in this file gives ShowModeIndicator's
   // own unrelated fetch-on-mount enough time to resolve to `undefined`
@@ -78,6 +83,7 @@ function model(
     macroRuns: [],
     resolume: [],
     nightSession: null,
+    fppPlaylistEntryObservations: [],
     events: [],
     eventsGap: false,
     oldestRetainedSeq: null,
@@ -101,13 +107,14 @@ const SIGNED_OUT_SESSION: SessionResponse = {
   bootstrapRequired: false,
 }
 
-function renderLayout(m: Model) {
+function renderLayout(m: Model, initialPath = '/') {
   return render(
     <ModelContext.Provider value={m}>
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={[initialPath]}>
         <Routes>
           <Route element={<Layout onSubmitToken={() => {}} />}>
             <Route index element={<p>underlying view marker</p>} />
+            <Route path="*" element={<p>underlying view marker</p>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -247,5 +254,203 @@ describe('Layout', () => {
       expect(screen.getByText(/network unreachable/)).toBeInTheDocument()
       expect(screen.queryByText(/^Coordinator 1\.2\.3/)).not.toBeInTheDocument()
     })
+  })
+
+  // Operator-reported: at the sidebar breakpoint (>=768px), .app-nav had
+  // scrollHeight 1228px against a clientHeight of 753px with no
+  // overflow rule, so 475px of links were clipped below the viewport and
+  // unreachable, while the document itself scrolled instead (because
+  // nothing else contained that height) -- and the nav's own background
+  // stopped at the viewport edge while links kept going underneath it
+  // against the page background. jsdom does not run a real layout engine
+  // or load global.css, so scrollHeight/clientHeight/computed overflow are
+  // not observable from a render here -- this reads the actual rule from
+  // the stylesheet instead, which is what this codebase's own
+  // fppCommandCopyGuard.test.ts precedent does for the same reason.
+  it('gives the sidebar its own internal scroll at the sidebar breakpoint, instead of clipping', () => {
+    const css = readFileSync(path.resolve(__dirname, '../styles/global.css'), 'utf-8')
+    const desktopBlock = css.match(/@media \(min-width: 768px\) \{([\s\S]*?)\n\}\n\n\.app-header/)
+    expect(desktopBlock).not.toBeNull()
+    const desktopBlockBody = desktopBlock?.[1] ?? ''
+    const navRule = desktopBlockBody.match(/\.app-nav \{([\s\S]*?)\}/)
+    expect(navRule).not.toBeNull()
+    expect(navRule?.[1] ?? '').toMatch(/overflow-y:\s*auto/)
+    // The phone (unqualified, mobile-first) rule must stay exactly as it
+    // was -- a fixed bottom tab bar with no overflow rule of its own.
+    const phoneRule = css.match(/\.app-nav \{([\s\S]*?)\}/)
+    expect(phoneRule).not.toBeNull()
+    expect(phoneRule?.[1] ?? '').not.toMatch(/overflow-y/)
+  })
+
+  // Operator-reported: the signed-in identity ("Signed in as eric
+  // (admin)") and Sign out used to render as a full-width band in the
+  // main column. It now renders in the header alongside the title, mode
+  // indicator, and coordinator build line.
+  it('renders the signed-in identity and sign-out control in the header, not as a full-width band', () => {
+    const SIGNED_IN_SESSION: SessionResponse = {
+      serverTime: '2026-08-11T12:00:00.000Z',
+      authenticated: true,
+      principal: { id: 'p1', name: 'eric', kind: 'human', role: 'admin' },
+      session: { id: 's1', deviceLabel: 'console', createdAt: '2026-08-11T12:00:00.000Z' },
+      credentialForm: 'session',
+      scopes: [],
+      scopesState: 'current',
+      bootstrapRequired: false,
+    }
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345, SIGNED_IN_SESSION))
+
+    const identity = screen.getByText(/Signed in as eric/)
+    const header = document.querySelector('.app-header')
+    expect(header).not.toBeNull()
+    expect(header!.contains(identity)).toBe(true)
+    expect(screen.getByRole('button', { name: /Sign out/ })).toBeInTheDocument()
+  })
+})
+
+// The full set of every top-level nav link's href, per NAV_GROUPS in
+// Layout.tsx -- kept here (rather than importing NAV_GROUPS, which is not
+// exported) so a future change to that list must touch this assertion
+// deliberately, the same way Layout.tsx's own "labels the single
+// Configure nav entry" test above pins one entry directly.
+const ALL_NAV_HREFS = [
+  // Show night
+  '/night',
+  '/config/show.active',
+  '/playlists/readiness',
+  '/',
+  // Monitor
+  '/nodes',
+  '/fpp',
+  '/resolume',
+  '/events',
+  // Diagnostics
+  '/capabilities',
+  '/assets/manifest',
+  '/audit',
+  // Control
+  '/macros',
+  // Configure
+  '/config',
+  '/actions',
+  '/access',
+  '/config/show',
+  '/config/show.surface',
+  '/config/show.cue',
+  '/config/audio.settings',
+  '/config/audio.node',
+  '/config/show.playlist',
+  '/config/fpp-playlist-definitions',
+  '/config/night.session',
+  '/config/night.session.active',
+  '/assets',
+]
+
+// Requirement: each of the 5 groups collapses/expands, the group holding
+// the current route is always open regardless of stored state, a stored
+// preference is otherwise honoured, a throwing localStorage never breaks
+// rendering, and none of this touches what actually renders on the phone
+// tab bar (collapsing is a sidebar-only CSS affordance -- see the
+// "gives the sidebar its own internal scroll" test above for why jsdom
+// cannot observe the CSS itself, and the stylesheet assertion below for
+// the collapse rule's own equivalent).
+describe('collapsible nav groups', () => {
+  it('always reports the active route\'s group expanded, even when storage says it is collapsed', () => {
+    window.localStorage.setItem('showmesh-ui-nav-groups', JSON.stringify({ Monitor: false }))
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/nodes')
+
+    const monitorHeading = screen.getByRole('button', { name: /Monitor/ })
+    expect(monitorHeading).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('honours a stored collapsed/expanded preference for a group that does not hold the current route', () => {
+    window.localStorage.setItem(
+      'showmesh-ui-nav-groups',
+      JSON.stringify({ 'Show night': false, Diagnostics: true }),
+    )
+    // /macros is Control's own route, so Control is the active group here
+    // and Show night/Diagnostics are free to reflect their stored values.
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/macros')
+
+    expect(screen.getByRole('button', { name: /Show night/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    expect(screen.getByRole('button', { name: /Diagnostics/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+  })
+
+  it('opens Show night by default on a first visit, with no stored preference at all', () => {
+    // /macros keeps Show night out of the active group so its default,
+    // not the active-route override, is what this observes.
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/macros')
+
+    expect(screen.getByRole('button', { name: /Show night/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: /Monitor/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+  })
+
+  it('shows a link count on a collapsed group', () => {
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345), '/macros')
+
+    // Monitor is collapsed by default on this route (Control is active).
+    const monitorHeading = screen.getByRole('button', { name: /Monitor/ })
+    expect(monitorHeading).toHaveTextContent('4')
+  })
+
+  it('does not break rendering when localStorage throws on both read and write', () => {
+    const storageProto = Object.getPrototypeOf(window.localStorage) as Storage
+    const getItemSpy = vi.spyOn(storageProto, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled')
+    })
+    const setItemSpy = vi.spyOn(storageProto, 'setItem').mockImplementation(() => {
+      throw new Error('storage disabled')
+    })
+
+    expect(() => renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))).not.toThrow()
+
+    // The nav still renders normally -- Show night's own default applies
+    // (its group holds the active '/' route here too, so it is open
+    // either way) and every link is still reachable.
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Macros' })).toBeInTheDocument()
+
+    getItemSpy.mockRestore()
+    setItemSpy.mockRestore()
+  })
+
+  it('keeps every one of the 25 nav links present in the DOM, which is what the phone tab bar renders directly', () => {
+    renderLayout(model({ kind: 'live', connectedAt: 0 }, 12345))
+
+    for (const href of ALL_NAV_HREFS) {
+      expect(document.querySelector(`a.app-nav__link[href="${href}"]`)).not.toBeNull()
+    }
+    expect(document.querySelectorAll('a.app-nav__link')).toHaveLength(ALL_NAV_HREFS.length)
+  })
+
+  // jsdom does not run layout or load global.css (see the sidebar-scroll
+  // test above for the same caveat), so this reads the collapse rule
+  // straight from the stylesheet: it must exist only inside the sidebar
+  // (min-width: 768px) block, never in the phone-first, unqualified
+  // rules, which is what keeps the phone tab bar untouched.
+  it('confines the collapsed-group hiding rule to the sidebar breakpoint only', () => {
+    const css = readFileSync(path.resolve(__dirname, '../styles/global.css'), 'utf-8')
+    const desktopBlock = css.match(/@media \(min-width: 768px\) \{([\s\S]*?)\n\}\n\n\.app-header/)
+    expect(desktopBlock).not.toBeNull()
+    const desktopBlockBody = desktopBlock?.[1] ?? ''
+    expect(desktopBlockBody).toMatch(/\.app-nav__group\[data-open='false'\]\s*\.app-nav__group-links\s*\{[\s\S]*?display:\s*none/)
+
+    const phoneOnly = css.slice(0, css.indexOf('@media (min-width: 768px)'))
+    expect(phoneOnly).not.toMatch(/data-open/)
+    // The phone rule for the group and its links wrapper both stay
+    // `display: contents`, exactly as #114 shipped for the group alone.
+    expect(phoneOnly).toMatch(/\.app-nav__group\s*\{\s*display:\s*contents;\s*\}/)
+    expect(phoneOnly).toMatch(/\.app-nav__group-links\s*\{\s*display:\s*contents;\s*\}/)
   })
 })

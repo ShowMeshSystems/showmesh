@@ -180,7 +180,7 @@ Before a live set, the platform should verify media presence, renderer readiness
 
 The show timeline clock, a node's audio playback and device clock, and any network audio clock are distinct and must never be assumed identical. Signals whose phase relationship matters must originate in one domain: program audio and LTC always qualify, and [ADR-018](../decisions/ADR-018-program-and-ltc-share-a-clock-domain.md) makes sharing a domain a requirement rather than a preference.
 
-Timing coupling is not one policy across the system. The lighting timeline follows FPP remote semantics, correcting continuously by slew and jump; program audio aligns at start and is corrected discretely, because rate manipulation is audible ([ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md)). Both satisfy §5.1 — neither runs unbounded and unmeasured — and the difference between them is deliberate.
+Timing coupling is not one policy across the system. The lighting timeline follows FPP remote semantics, correcting continuously by slew and jump; program audio aligns at start and is corrected discretely, because slews and seeks are audible ([ADR-017](../decisions/ADR-017-showmesh-owns-audience-audio.md)); an audio interface whose node holds a locked shared PTP clock may additionally be rate-trimmed at ppm scale to that clock, never to the position feed ([ADR-046](../decisions/ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md)). Both satisfy §5.1 — neither runs unbounded and unmeasured — and the difference between them is deliberate.
 
 ## 6. Node capabilities
 

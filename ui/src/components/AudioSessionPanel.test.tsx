@@ -180,6 +180,31 @@ describe('AudioSessionPanel', () => {
     expect(await screen.findByText('Confirmed: position')).toBeInTheDocument()
   })
 
+  it('surfaces attributionDegraded as its own note, even on a confirmed outcome', async () => {
+    pauseAudioSession.mockResolvedValue(
+      commandResult({ action: 'audio.session.pause', outcome: 'position', attributionDegraded: true }),
+    )
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 4 })])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause' }))
+
+    expect(await screen.findByText(/could not record this command in its audit log/)).toBeInTheDocument()
+  })
+
+  it('does not render the attribution note when attributionDegraded is false', async () => {
+    resumeAudioSession.mockResolvedValue(
+      commandResult({ action: 'audio.session.resume', outcome: 'started', attributionDegraded: false }),
+    )
+    const model = makeModel({ session: signedIn() })
+    renderPanel(model, [entry({ signal: 'audio_session.state', value: 'paused' })])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Resume' }))
+
+    await screen.findByText('Confirmed: started')
+    expect(screen.queryByText(/could not record this command in its audit log/)).not.toBeInTheDocument()
+  })
+
   it('defaults the revision to 1 when no desired-revision evidence has ever been observed', async () => {
     resumeAudioSession.mockResolvedValue(commandResult({ action: 'audio.session.resume', outcome: 'started' }))
     const model = makeModel({ session: signedIn() })
@@ -317,19 +342,19 @@ describe('AudioSessionPanel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Position must be a whole number of milliseconds, 0 or greater.')
   })
 
-  it('gain refuses an empty value before dispatching, then sends the entered linear value', async () => {
+  it('gain refuses an empty value before dispatching, then sends the entered dB value', async () => {
     setAudioSessionGain.mockResolvedValue(commandResult({ action: 'audio.gain.set', outcome: 'position' }))
     const model = makeModel({ session: signedIn() })
     renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 1 })])
 
     await userEvent.click(screen.getByRole('button', { name: 'Set gain' }))
     expect(setAudioSessionGain).not.toHaveBeenCalled()
-    expect(screen.getByText('Enter a gain value (linear, not dB).')).toBeInTheDocument()
+    expect(screen.getByText('Enter a gain in dB (0 dB is unity).')).toBeInTheDocument()
 
-    await userEvent.type(screen.getByLabelText('Gain (linear, not dB)'), '0.75')
+    await userEvent.type(screen.getByLabelText('Gain (dB, 0 is unity)'), '-6.02')
     await userEvent.click(screen.getByRole('button', { name: 'Set gain' }))
 
-    expect(setAudioSessionGain).toHaveBeenCalledWith('media-01', 'session-1', 2, 0.75)
+    expect(setAudioSessionGain).toHaveBeenCalledWith('media-01', 'session-1', 2, -6.02)
     expect(await screen.findByText('Confirmed: position')).toBeInTheDocument()
   })
 
@@ -338,7 +363,7 @@ describe('AudioSessionPanel', () => {
     const model = makeModel({ session: signedIn() })
     renderPanel(model, [entry({ signal: 'audio_session.desired_revision', value: 9 })])
 
-    await userEvent.type(screen.getByLabelText('Target gain (linear, not dB)'), '0.5')
+    await userEvent.type(screen.getByLabelText('Target gain (dB, 0 is unity)'), '-12')
     await userEvent.click(screen.getByRole('button', { name: 'Fade' }))
     expect(fadeAudioSessionGain).not.toHaveBeenCalled()
     expect(screen.getByText('Enter a fade duration in milliseconds.')).toBeInTheDocument()
@@ -346,7 +371,7 @@ describe('AudioSessionPanel', () => {
     await userEvent.type(screen.getByLabelText('Duration (ms)'), '2000')
     await userEvent.click(screen.getByRole('button', { name: 'Fade' }))
 
-    expect(fadeAudioSessionGain).toHaveBeenCalledWith('media-01', 'session-1', 10, 0.5, 2000)
+    expect(fadeAudioSessionGain).toHaveBeenCalledWith('media-01', 'session-1', 10, -12, 2000)
     expect(await screen.findByText('Unconfirmed: no pipeline backend')).toBeInTheDocument()
   })
 

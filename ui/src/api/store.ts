@@ -80,6 +80,7 @@ import {
   type EventSeq,
   type FPPCommandResult,
   type FPPInstance,
+  type FPPPlaylistEntryObservation,
   type Model,
   type NightCommandName,
   type RenderCommandResult,
@@ -136,6 +137,7 @@ type SchemaFPPCommandRequest = components['schemas']['FPPCommandRequest']
 // TRACK-H-H2-SPEC.md §5.1: the stored playlist-entry observation surface,
 // the recovery path for a wedged sequence anchor.
 type SchemaFPPPlaylistEntryObservationsResponse = components['schemas']['FPPPlaylistEntryObservationsResponse']
+type SchemaFPPPlaylistEntryObservation = components['schemas']['FPPPlaylistEntryObservation']
 // TRACK-H-H2-SPEC.md §5/§6: the two read-only show-night verdicts:
 // whether a Playlist is ready, and whether an instance's latest accepted
 // observation still matches the show's bindings.
@@ -662,7 +664,7 @@ export class ApiStore {
   /**
    * `GET /api/v1/integrations/fpp/playlists/{playlistId}/readiness`
    * (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is ready to
-   * run, and the first of §6's five conditions that fails when it is not.
+   * run, and the first of §6's seven conditions that fails when it is not.
    * Open under `observation:read`, same posture as
    * [listFPPPlaylistEntryObservations] above. Throws (400) for a
    * non-fpp-runner playlist and (404) for a playlist with no active
@@ -1402,14 +1404,14 @@ export class ApiStore {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'seek', revision, { positionMs })
   }
 
-  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain`. Requires audio:command. params.gain is linear, not dB (openapi.yaml), clamped server-side to the session's own ceiling. */
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain`. Requires audio:command. params.gainDb is in decibels: 0 dB is unity, -60 dB and below is silence. The coordinator converts it to the engine's linear multiplier and clamps it to the session's own ceiling. */
   async setAudioSessionGain(
     nodeId: string,
     sessionId: string,
     revision: number,
-    gain: number,
+    gainDb: number,
   ): Promise<AudioSessionCommandResult> {
-    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gain })
+    return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain', revision, { gainDb })
   }
 
   /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/apply`. Requires audio:command. params is the same opaque, node-validated session definition (sourceRole/media/playlist/outputs/mixPolicy) `showmeshctl audio session apply` takes as its params-json argument; omitted entirely (not sent as `{}`) when the caller supplies none, matching that CLI's own optional positional argument. */
@@ -1422,16 +1424,16 @@ export class ApiStore {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'apply', revision, params)
   }
 
-  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade`. Requires audio:command. params.targetGain is linear, not dB; params.durationMs is the fade duration in milliseconds; params.curve is fixed to "linear", the only curve the node ships. */
+  /** `POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade`. Requires audio:command. params.targetGainDb is in decibels, like setAudioSessionGain's own gainDb; params.durationMs is the fade duration in milliseconds; params.curve is fixed to "linear", which names the fade SHAPE and not the gain unit. */
   async fadeAudioSessionGain(
     nodeId: string,
     sessionId: string,
     revision: number,
-    targetGain: number,
+    targetGainDb: number,
     durationMs: number,
   ): Promise<AudioSessionCommandResult> {
     return this.dispatchAudioSessionCommand(nodeId, sessionId, 'gain/fade', revision, {
-      targetGain,
+      targetGainDb,
       durationMs,
       curve: 'linear',
     })
@@ -2560,11 +2562,18 @@ export class ApiStore {
    * always — this is not one of the four pre-existing open-by-default
    * reads (api/openapi.yaml's own description of this route).
    */
-  async listAudit(filter?: { since?: number; limit?: number }): Promise<SchemaAuditResponse> {
+  async listAudit(filter?: {
+    order?: 'asc' | 'desc'
+    since?: number
+    before?: number
+    limit?: number
+  }): Promise<SchemaAuditResponse> {
     const controller = this.beginSideCall()
     try {
       const params = new URLSearchParams()
+      if (filter?.order !== undefined) params.set('order', filter.order)
       if (filter?.since !== undefined) params.set('since', String(filter.since))
+      if (filter?.before !== undefined) params.set('before', String(filter.before))
       if (filter?.limit !== undefined) params.set('limit', String(filter.limit))
       const query = params.toString()
       return await this.client.getJson<SchemaAuditResponse>(
@@ -3253,6 +3262,20 @@ export class ApiStore {
         this.applyNightSessionChanged(payload)
         return
       }
+      case 'fppPlaylistEntry.changed': {
+        // Mirrors `fpp.changed`/`node.changed`'s own shape, a
+        // `serverTime` wrapper around one full-frame value (`observation`
+        // here, `instance`/`node` there), not `macroRun.changed`'s
+        // flattened-top-level shape. This frame's own `seq` field is
+        // per-connection only (api/openapi.yaml's FPPPlaylistEntryChangedEvent),
+        // never a durable cursor, so it is deliberately not read here.
+        const payload = tryParse<{ serverTime: string; observation: SchemaFPPPlaylistEntryObservation }>(
+          frame.data,
+        )
+        if (payload === null || gen !== this.generation) return
+        this.applyFppPlaylistEntryChanged(payload.observation, payload.serverTime)
+        return
+      }
       default:
         // Unknown event: name — ignored, not an error. v1 is
         // additive-only (api/openapi.yaml's /stream description).
@@ -3366,6 +3389,13 @@ export class ApiStore {
       // re-establish ground truth rather than trusting a value this
       // connection has no evidence still holds.
       nightSession: null,
+      // Same "invalidate, do not carry forward" posture as
+      // `nightSession` immediately above, and for the identical reason:
+      // this is not part of `Snapshot` either (Model.fppPlaylistEntryObservations's
+      // own comment), so a stale entry from before a reconnect must not
+      // keep rendering as current across a generation boundary this
+      // connection cannot vouch for.
+      fppPlaylistEntryObservations: [],
     })
   }
 
@@ -3542,6 +3572,37 @@ export class ApiStore {
       clockSkewMs: this.computeClockSkewMs(event.serverTime, receivedAt),
       serverTimeReceivedAt: receivedAt,
       nightSession: event.session,
+    })
+  }
+
+  /**
+   * `fppPlaylistEntry.changed` carries one instance's
+   * COMPLETE latest observation (api/openapi.yaml's
+   * FPPPlaylistEntryChangedEvent: "full-frame only - no ADR-023 delta
+   * narrowing exists for this resource"), matching [applyResolumeChanged]'s
+   * exact same whole-object-replace-by-key posture. Unlike `resolume`,
+   * this array is not seeded from `Snapshot` at all (see
+   * `Model.fppPlaylistEntryObservations`'s own comment): a connection
+   * that has never heard a live frame for a given `instanceUuid` simply
+   * has no entry here yet, which is correct: there is nothing to render
+   * eagerly, and `views/PlaylistReadiness.tsx`'s own fetch of the
+   * reconciliation endpoint is what establishes ground truth on mount.
+   */
+  private applyFppPlaylistEntryChanged(observation: SchemaFPPPlaylistEntryObservation, serverTime: string): void {
+    const idx = this.model.fppPlaylistEntryObservations.findIndex(
+      (o) => o.instanceUuid === observation.instanceUuid,
+    )
+    const fppPlaylistEntryObservations: FPPPlaylistEntryObservation[] =
+      idx === -1
+        ? [...this.model.fppPlaylistEntryObservations, observation]
+        : replaceAt(this.model.fppPlaylistEntryObservations, idx, observation)
+    const receivedAt = this.now()
+    this.setModel({
+      ...this.model,
+      serverTime,
+      clockSkewMs: this.computeClockSkewMs(serverTime, receivedAt),
+      serverTimeReceivedAt: receivedAt,
+      fppPlaylistEntryObservations,
     })
   }
 

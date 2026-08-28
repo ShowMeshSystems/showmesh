@@ -8,12 +8,14 @@ Docker Compose bundle for the coordinator and its Mosquitto broker (ADR-008), su
 cd deploy
 cp .env.example .env   # edit as needed, especially before exposing beyond an isolated show VLAN
 ./mosquitto/generate-credentials.sh   # REQUIRED, once, before the first `up` — see below
-docker compose up -d --build
+make -C .. deploy-up
 ```
 
 This builds the coordinator image from the repo root Dockerfile, the Operator UI image from `../ui/Dockerfile`, and starts both alongside the bundled Mosquitto broker. Check status with `docker compose ps` and `curl -fsS localhost:8080/healthz`.
 
-The `generate-credentials.sh` step is not optional: the bundled Mosquitto now requires authentication (`allow_anonymous false`), and it will not start with a usable password file until that script has run at least once. If you skip it, `docker compose ps` will show the `mosquitto` service crash-looping and its own log will say plainly why (`Error: /mosquitto/config/passwd is not a file.`) — run the script and `docker compose up -d` again.
+`make -C .. deploy-up` (and `make -C .. deploy-build`, if you only want the image without starting the stack) pass this repository's own `VERSION`/`COMMIT`/`BUILD_DATE` — the same values `make build` stamps into the native binaries — as the coordinator image's build args, so `curl -fsS localhost:8080/version` and the coordinator's own startup log report the commit actually running. Running `docker compose up -d --build` directly instead, bypassing those make targets, now **refuses to start**: `docker-compose.yml` requires all three variables and names `make deploy-up`/`make deploy-build` in the error, because a deployed coordinator that cannot say which commit it is running is not a safe default to fall back to.
+
+The `generate-credentials.sh` step is not optional: the bundled Mosquitto now requires authentication (`allow_anonymous false`), and it will not start with a usable password file until that script has run at least once. If you skip it, `docker compose ps` will show the `mosquitto` service crash-looping and its own log will say plainly why (`Error: /mosquitto/config/passwd is not a file.`) — run the script and `make -C .. deploy-up` again.
 
 ## MQTT broker credentials (ADR-024)
 
@@ -163,28 +165,26 @@ Prefer the coordinator's own YAML export (ADR-009) for reviewable, secret-free c
 
 ## Upgrade and rollback
 
-No images are published yet (see ADR-012's consequences), so this bundle only ever builds the coordinator from source; `SHOWMESH_VERSION` currently does nothing but stamp the build's `-ldflags` version string, it does not select what gets built. Concretely, today, "upgrading" or "rolling back" means checking out the corresponding git ref and rebuilding:
+No images are published yet (see ADR-012's consequences), so this bundle only ever builds the coordinator from source; `SHOWMESH_VERSION` currently does nothing but stamp the build's `-ldflags` version string, it does not select what gets built. `SHOWMESH_COMMIT` and `SHOWMESH_BUILD_DATE` are not meant to be set by hand at all: `make deploy-build`/`make deploy-up` (see Bring the stack up, above) derive them from the checked-out git ref automatically. Concretely, today, "upgrading" or "rolling back" means checking out the corresponding git ref and rebuilding:
 
 ```sh
 git checkout <ref>          # the version you want running
-cd deploy
-docker compose up -d --build
+make deploy-up
 ```
 
 The named data volume persists across this untouched. SQLite schema migrations in ADR-009 are forward-only and refuse to downgrade, so rolling back to an older git ref against a database that a newer ref has already migrated forward is not supported without restoring a pre-upgrade volume backup (see Backup, above).
 
-Do not set `SHOWMESH_VERSION` expecting it to select which code runs; it only labels whatever is in the working tree at build time, and `/version` will report that label even if it does not match the tree.
+Do not set `SHOWMESH_VERSION` expecting it to select which code runs; it only labels whatever is in the working tree at build time, and `/version` will report that label even if it does not match the tree. `/version`'s `commit` field is not a label: `make deploy-build`/`make deploy-up` set it to the actual checked-out git ref, so it always matches the tree that was built.
 
 **Once published images exist** (not yet available), the intended workflow is a pure image-tag change: set `SHOWMESH_VERSION` in `.env` to the desired published tag, uncomment the `image:` line and remove/comment the `build:` block in `docker-compose.yml`, and run `docker compose up -d`. Rollback becomes setting `SHOWMESH_VERSION` back to the previous known-good tag and re-running the same command, still subject to the same forward-only migration constraint above. This paragraph describes intent, not current behavior; do not follow it until images are actually published.
 
 ## Preparing for an offline install
 
-ADR-012 requires the stack to start and run with no internet access once images are present, and [ADR-015](../docs/decisions/ADR-015-typescript-spa-frontend.md) extends the same requirement to the Operator UI: no CDN fonts, scripts, or stylesheets fetched at runtime, everything shipped in the image. Neither the bring-up path in this document (`docker compose up -d --build`) nor the UI build is offline-capable *as written*, though: the coordinator build needs the Go module proxy, the UI build needs the npm registry (`npm ci` in `../ui/Dockerfile`), and the backup commands above pull the `alpine` image. Genuinely offline installation is possible today only by preparing the bundle on a connected machine first:
+ADR-012 requires the stack to start and run with no internet access once images are present, and [ADR-015](../docs/decisions/ADR-015-typescript-spa-frontend.md) extends the same requirement to the Operator UI: no CDN fonts, scripts, or stylesheets fetched at runtime, everything shipped in the image. Neither the bring-up path in this document (`make -C .. deploy-up`) nor the UI build is offline-capable *as written*, though: the coordinator build needs the Go module proxy, the UI build needs the npm registry (`npm ci` in `../ui/Dockerfile`), and the backup commands above pull the `alpine` image. Genuinely offline installation is possible today only by preparing the bundle on a connected machine first:
 
 ```sh
 # On a connected machine:
-docker build -t showmesh-coordinator:offline ..
-docker build -t showmesh-operator-ui:offline ../ui
+make -C .. docker-build IMAGE=showmesh-coordinator UI_IMAGE=showmesh-operator-ui VERSION=offline
 docker save showmesh-coordinator:offline showmesh-operator-ui:offline eclipse-mosquitto:2.0.22 -o showmesh-bundle.tar
 
 # Transfer showmesh-bundle.tar to the offline host, then:

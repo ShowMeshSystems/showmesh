@@ -23,6 +23,15 @@ var sampleObservedAt = time.Unix(2000, 0).UTC()
 // sampleObservedAt.
 var sampleFramesObservedAt = time.Unix(2200, 0).UTC()
 
+// sampleContentObservedAt is samplePayload's content-identity evidence
+// timestamp — deliberately distinct from both sampleObservedAt (pipeline
+// lifecycle) and sampleFramesObservedAt (frame counters), so a test that
+// mixes any of the three up fails loudly. This is the timestamp behind the
+// content-signal regression fixed below: a cue activation swaps the frame
+// writer without transitioning PipelineState, so sampleObservedAt alone
+// cannot prove the content signals are fresh.
+var sampleContentObservedAt = time.Unix(2400, 0).UTC()
+
 func samplePayload(state string) mqttproto.RenderPayload {
 	return mqttproto.RenderPayload{
 		GstLaunchPath:      "/usr/bin/gst-launch-1.0",
@@ -774,5 +783,305 @@ func TestPollIdleDrawingLeavesFailureOutputNotCollected(t *testing.T) {
 	idle := findObs(t, obs, SignalSurfaceOutputIdleMode)
 	if v, ok := idle.Value.(string); !ok || v != mqttproto.RenderIdleOutputBlack {
 		t.Errorf("surface.output.idle_mode while idle: Value = %v, want %q", idle.Value, mqttproto.RenderIdleOutputBlack)
+	}
+}
+
+// TestPollContentIdentityProducesAllFourSignals proves a surface reporting
+// full content identity (an assignment applied by a cue activation, with a
+// catalog authorization tuple) renders all four surface.content.* signals
+// as real values, the whole point: a content swap provable from the
+// node's own evidence, not inferred from pipelineState or frame counters.
+func TestPollContentIdentityProducesAllFourSignals(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].FSEQFilename = "halloween-01.fseq"
+	payload.Surfaces[0].FSEQContentHash = "sha256:deadbeef"
+	payload.Surfaces[0].CueID = "cue-42"
+	payload.Surfaces[0].CatalogRevision = "rev-7"
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	filename := findObs(t, obs, SignalSurfaceContentFSEQFilename)
+	if filename.Absence != "" {
+		t.Errorf("surface.content.fseq_filename: Absence = %q, want empty", filename.Absence)
+	}
+	if v, ok := filename.Value.(string); !ok || v != "halloween-01.fseq" {
+		t.Errorf("surface.content.fseq_filename: Value = %v, want %q", filename.Value, "halloween-01.fseq")
+	}
+
+	hash := findObs(t, obs, SignalSurfaceContentFSEQContentHash)
+	if hash.Absence != "" {
+		t.Errorf("surface.content.fseq_content_hash: Absence = %q, want empty", hash.Absence)
+	}
+	if v, ok := hash.Value.(string); !ok || v != "sha256:deadbeef" {
+		t.Errorf("surface.content.fseq_content_hash: Value = %v, want %q", hash.Value, "sha256:deadbeef")
+	}
+
+	cueID := findObs(t, obs, SignalSurfaceContentCueID)
+	if cueID.Absence != "" {
+		t.Errorf("surface.content.cue_id: Absence = %q, want empty", cueID.Absence)
+	}
+	if v, ok := cueID.Value.(string); !ok || v != "cue-42" {
+		t.Errorf("surface.content.cue_id: Value = %v, want %q", cueID.Value, "cue-42")
+	}
+
+	revision := findObs(t, obs, SignalSurfaceContentCatalogRevision)
+	if revision.Absence != "" {
+		t.Errorf("surface.content.catalog_revision: Absence = %q, want empty", revision.Absence)
+	}
+	if v, ok := revision.Value.(string); !ok || v != "rev-7" {
+		t.Errorf("surface.content.catalog_revision: Value = %v, want %q", revision.Value, "rev-7")
+	}
+}
+
+// TestPollContentIdentityProducesShowAndGeneration proves: a surface
+// reporting a full authorization tuple emits surface.content.show
+// and surface.content.generation too, stamped from the same
+// ContentObservedAt evidence time as the other four content signals.
+func TestPollContentIdentityProducesShowAndGeneration(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].FSEQFilename = "halloween-01.fseq"
+	payload.Surfaces[0].FSEQContentHash = "sha256:deadbeef"
+	payload.Surfaces[0].CueID = "cue-42"
+	payload.Surfaces[0].CatalogRevision = "rev-7"
+	payload.Surfaces[0].Show = "halloween-2026"
+	payload.Surfaces[0].Generation = 1
+	payload.Surfaces[0].ContentObservedAt = sampleContentObservedAt
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	show := findObs(t, obs, SignalSurfaceContentShow)
+	if show.Absence != "" {
+		t.Errorf("surface.content.show: Absence = %q, want empty", show.Absence)
+	}
+	if v, ok := show.Value.(string); !ok || v != "halloween-2026" {
+		t.Errorf("surface.content.show: Value = %v, want %q", show.Value, "halloween-2026")
+	}
+	if show.ObservedAt == nil || !show.ObservedAt.Equal(sampleContentObservedAt) {
+		t.Errorf("surface.content.show: ObservedAt = %v, want %v (content evidence time, not pipeline state's)", show.ObservedAt, sampleContentObservedAt)
+	}
+
+	generation := findObs(t, obs, SignalSurfaceContentGeneration)
+	if generation.Absence != "" {
+		t.Errorf("surface.content.generation: Absence = %q, want empty", generation.Absence)
+	}
+	if v, ok := generation.Value.(int64); !ok || v != 1 {
+		t.Errorf("surface.content.generation: Value = %v, want 1", generation.Value)
+	}
+}
+
+// TestPollNoContentIdentityLeavesShowAndGenerationNotCollected extends
+// TestPollNoContentIdentityIsNotCollected to the Show/generation signals: a
+// surface holding no assignment at all must state absence for these too,
+// never a fabricated "" or 0.
+func TestPollNoContentIdentityLeavesShowAndGenerationNotCollected(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalSurfaceContentShow, SignalSurfaceContentGeneration} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s: Absence = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+		if o.Reason == "" {
+			t.Errorf("%s: Reason is empty, want a stated reason", sig)
+		}
+	}
+}
+
+// TestPollNoContentIdentityIsNotCollected proves a surface reporting no
+// FSEQ at all (the field mqttproto's own doc comment states means "no
+// assignment held") renders all four content signals as an explicit
+// NotCollected absence, never a fabricated or stale value.
+func TestPollNoContentIdentityIsNotCollected(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	// samplePayload's surface already carries no FSEQFilename/CueID/etc:
+	// this is the zero-value "no assignment held" case.
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceContentFSEQFilename,
+		SignalSurfaceContentFSEQContentHash,
+		SignalSurfaceContentCueID,
+		SignalSurfaceContentCatalogRevision,
+	} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s: Absence = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+		if o.Reason == "" {
+			t.Errorf("%s: Reason is empty, want a stated reason", sig)
+		}
+	}
+}
+
+// TestPollContentIdentityWithoutCueLeavesCueIDNotCollected proves a
+// surface carrying real content (a filename, hash, and catalog revision)
+// but no cue id (a direct render.surface.apply with no cue activation
+// involved) reports the filename/hash/catalog revision as real values
+// while stating cue_id as not applicable, mirroring
+// SignalSurfaceOutputIdleMode's identical "only meaningful when a
+// condition holds" pattern one signal family over.
+func TestPollContentIdentityWithoutCueLeavesCueIDNotCollected(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].FSEQFilename = "test-pattern-01.fseq"
+	payload.Surfaces[0].FSEQContentHash = "sha256:cafef00d"
+	// CueID and CatalogRevision left "": a direct apply with no cue and no
+	// authorization tuple.
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	filename := findObs(t, obs, SignalSurfaceContentFSEQFilename)
+	if filename.Absence != "" {
+		t.Errorf("surface.content.fseq_filename: Absence = %q, want empty", filename.Absence)
+	}
+
+	cueID := findObs(t, obs, SignalSurfaceContentCueID)
+	if cueID.Absence != observation.StateNotCollected {
+		t.Errorf("surface.content.cue_id without a cue activation: Absence = %q, want %q", cueID.Absence, observation.StateNotCollected)
+	}
+
+	revision := findObs(t, obs, SignalSurfaceContentCatalogRevision)
+	if revision.Absence != observation.StateNotCollected {
+		t.Errorf("surface.content.catalog_revision without an auth tuple: Absence = %q, want %q", revision.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestPollContentSignalsAgeFromTheirOwnObservedAtNotPipelineState is
+// this issue's own regression test. Before the fix, the four surface.content.*
+// signals were stamped with sf.ObservedAt — the pipeline-lifecycle
+// timestamp, which only moves when PipelineState transitions
+// (pipeline.runner.setState). A cue activation swaps the frame writer
+// WITHOUT transitioning pipeline state, so the content identity changes
+// while sf.ObservedAt sits frozen at whatever it was before the swap: on a
+// bench run this reported a content signal with an evidence time 1m41s
+// BEFORE the node's own appliedAt for that content, and every healthy
+// surface read stale because the 45s validity window was measured from
+// that unrelated timestamp.
+//
+// samplePayload gives sampleObservedAt and sampleContentObservedAt
+// deliberately different values, with sampleObservedAt the OLDER of the
+// two by more than DefaultValidFor (45s): a surface whose pipeline-state
+// evidence is stale but whose content was read fresh must still report its
+// four content signals as CURRENT. This must fail against unmodified code,
+// where the content signals are judged against sf.ObservedAt (already
+// stale by construction here) instead of sf.ContentObservedAt.
+func TestPollContentSignalsAgeFromTheirOwnObservedAtNotPipelineState(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].FSEQFilename = "halloween-01.fseq"
+	payload.Surfaces[0].FSEQContentHash = "sha256:deadbeef"
+	payload.Surfaces[0].CueID = "cue-42"
+	payload.Surfaces[0].CatalogRevision = "rev-7"
+	payload.Surfaces[0].ContentObservedAt = sampleContentObservedAt
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	// checkAt is chosen so it is PAST sampleObservedAt+DefaultValidFor (the
+	// pipeline-lifecycle evidence has gone stale) but still BEFORE
+	// sampleContentObservedAt+DefaultValidFor (the content evidence is
+	// still fresh) — exactly the "old ObservedAt, fresh content read"
+	// scenario this issue describes.
+	checkAt := sampleObservedAt.Add(DefaultValidFor + time.Minute)
+	if !checkAt.Before(sampleContentObservedAt.Add(DefaultValidFor)) {
+		t.Fatalf("test fixture bug: checkAt %s is not before sampleContentObservedAt+DefaultValidFor %s",
+			checkAt, sampleContentObservedAt.Add(DefaultValidFor))
+	}
+
+	pipelineState := findObs(t, obs, SignalSurfacePipelineState)
+	if pipelineState.StateAt(checkAt) != observation.StateStale {
+		t.Fatalf("test fixture bug: surface.pipeline_state at checkAt (%s) = %s, want stale (sampleObservedAt must have aged out)",
+			checkAt, pipelineState.StateAt(checkAt))
+	}
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceContentFSEQFilename,
+		SignalSurfaceContentFSEQContentHash,
+		SignalSurfaceContentCueID,
+		SignalSurfaceContentCatalogRevision,
+	} {
+		o := findObs(t, obs, sig)
+		if o.StateAt(checkAt) != observation.StateCurrent {
+			t.Errorf("%s at checkAt (%s), with pipeline-state evidence stale but content read fresh: StateAt = %s, want current — this signal must age from its own ContentObservedAt, not sf.ObservedAt",
+				sig, checkAt, o.StateAt(checkAt))
+		}
+
+		if o.ObservedAt == nil {
+			t.Fatalf("%s: ObservedAt is nil, want %s", sig, sampleContentObservedAt)
+		}
+		if !o.ObservedAt.Equal(sampleContentObservedAt) {
+			t.Errorf("%s: ObservedAt = %s, want the node-reported sampleContentObservedAt %s (not sampleObservedAt %s)",
+				sig, o.ObservedAt, sampleContentObservedAt, sampleObservedAt)
+		}
+	}
+}
+
+// TestPollContentObservedAtPostDatesAContentChange proves the content
+// signal's ObservedAt tracks a genuine content change (a cue activation
+// applying a new FSEQ) rather than predating it: this issue's own defect
+// was a content signal reporting an evidence time BEFORE the node's
+// appliedAt for that content. Two consecutive polls simulate a cue
+// activation between them; the second poll's content signals must carry an
+// ObservedAt no earlier than the moment the new content was reported.
+func TestPollContentObservedAtPostDatesAContentChange(t *testing.T) {
+	st := NewStore()
+
+	before := samplePayload(mqttproto.RenderPipelineStateRunning)
+	before.Surfaces[0].FSEQFilename = "pre-show-loop.fseq"
+	before.Surfaces[0].FSEQContentHash = "sha256:aaaa"
+	before.Surfaces[0].ContentObservedAt = time.Unix(1000, 0).UTC()
+	st.Put("render-01", before, false, time.Now())
+
+	c := New(st)
+	firstObs, _ := c.Poll(context.Background())
+	firstFilename := findObs(t, firstObs, SignalSurfaceContentFSEQFilename)
+	if firstFilename.ObservedAt == nil || !firstFilename.ObservedAt.Equal(time.Unix(1000, 0).UTC()) {
+		t.Fatalf("pre-activation: ObservedAt = %v, want %s", firstFilename.ObservedAt, time.Unix(1000, 0).UTC())
+	}
+
+	// The cue activation itself: PipelineState does NOT transition (still
+	// running), only the content identity changes — this is exactly the
+	// case that produced the defect, since sf.ObservedAt alone would never
+	// move here.
+	activatedAt := time.Unix(1200, 0).UTC()
+	after := samplePayload(mqttproto.RenderPipelineStateRunning)
+	after.Surfaces[0].FSEQFilename = "halloween-01.fseq"
+	after.Surfaces[0].FSEQContentHash = "sha256:deadbeef"
+	after.Surfaces[0].CueID = "cue-42"
+	after.Surfaces[0].ContentObservedAt = activatedAt
+	st.Put("render-01", after, false, time.Now())
+
+	secondObs, _ := c.Poll(context.Background())
+	secondFilename := findObs(t, secondObs, SignalSurfaceContentFSEQFilename)
+	if secondFilename.Value != "halloween-01.fseq" {
+		t.Fatalf("post-activation: Value = %v, want %q", secondFilename.Value, "halloween-01.fseq")
+	}
+	if secondFilename.ObservedAt == nil {
+		t.Fatalf("post-activation: ObservedAt is nil, want %s", activatedAt)
+	}
+	if secondFilename.ObservedAt.Before(activatedAt) {
+		t.Errorf("post-activation: ObservedAt = %s predates the content change at %s, want it to post-date the change",
+			secondFilename.ObservedAt, activatedAt)
+	}
+	if !secondFilename.ObservedAt.Equal(activatedAt) {
+		t.Errorf("post-activation: ObservedAt = %s, want %s (the node's own content-identity read time)", secondFilename.ObservedAt, activatedAt)
 	}
 }

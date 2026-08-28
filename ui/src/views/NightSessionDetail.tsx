@@ -11,6 +11,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { ShowSelect } from '../components/ShowSelect'
 import type {
   ConfigNightSession,
   ConfigNightSessionBackgroundAudioItem,
@@ -461,10 +462,9 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
       )}
 
       <fieldset disabled={!editable}>
-        <label className="form-field">
-          Show
-          <input type="text" value={form.show} onChange={(e) => setForm({ ...form, show: e.target.value })} />
-        </label>
+        <div className="form-field">
+          <ShowSelect label="Show" value={form.show} onChange={(show) => setForm({ ...form, show })} />
+        </div>
         <label className="form-field">
           Label
           <input type="text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
@@ -520,14 +520,13 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         </label>
 
         <h4 className="panel__title">Resting timeline asset</h4>
-        <label className="form-field">
-          Show
-          <input
-            type="text"
+        <div className="form-field">
+          <ShowSelect
+            label="Show"
             value={form.restingTimelineShow}
-            onChange={(e) => setForm({ ...form, restingTimelineShow: e.target.value })}
+            onChange={(restingTimelineShow) => setForm({ ...form, restingTimelineShow })}
           />
-        </label>
+        </div>
         <label className="form-field">
           Sequence
           <input
@@ -564,11 +563,10 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
                   value={item.itemId}
                   onChange={(e) => updateBackgroundAudioItem(i, { itemId: e.target.value })}
                 />
-                <input
-                  type="text"
-                  placeholder="show"
+                <ShowSelect
+                  ariaLabel="Show"
                   value={item.show}
-                  onChange={(e) => updateBackgroundAudioItem(i, { show: e.target.value })}
+                  onChange={(show) => updateBackgroundAudioItem(i, { show })}
                 />
                 <input
                   type="text"
@@ -738,7 +736,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
                       <td>{rev.revision}</td>
                       <td>{rev.active ? 'active' : ''}</td>
                       <td>{formatAbsolute(rev.createdAt)}</td>
-                      <td>{rev.createdByPrincipalName ?? '—'}</td>
+                      <td>{rev.createdByPrincipalName ?? '-'}</td>
                       <td>
                         <button type="button" onClick={() => void viewRevision(rev.revision)}>
                           View payload

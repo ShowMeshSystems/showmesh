@@ -334,8 +334,10 @@ describe('Configuration', () => {
     // Scoped to the FPP section specifically: the Resolume section below it
     // (Track G seam G-2) renders the identically-worded "configuration has
     // been created yet" reason for its OWN default-mocked 404, so an
-    // unscoped query would match both.
-    const fppSection = (await screen.findByText(/FPP endpoints/)).closest('section')!
+    // unscoped query would match both. Queried as a heading rather than by
+    // plain text, since the section index at the top of the page also links
+    // to a "FPP endpoints" text node.
+    const fppSection = (await screen.findByRole('heading', { name: /FPP endpoints/ })).closest('section')!
     expect(await within(fppSection).findByText(/configuration has been created yet/i)).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
@@ -537,5 +539,64 @@ describe('Configuration', () => {
 
     await user.click(screen.getByRole('button', { name: /remove instance 1/i }))
     expect(screen.queryByDisplayValue('player-01')).not.toBeInTheDocument()
+  })
+
+  // Readability seam: a section index at the top of the page links to
+  // every top-level section (the four configuration kinds plus render
+  // settings and show mode), so reaching one no longer requires scrolling
+  // past the others.
+  it('renders a section index linking to every top-level section', () => {
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    const nav = screen.getByRole('navigation', { name: /configuration sections/i })
+    expect(within(nav).getByRole('link', { name: 'FPP endpoints' })).toHaveAttribute(
+      'href',
+      '#fpp-endpoints',
+    )
+    expect(within(nav).getByRole('link', { name: 'Resolume' })).toHaveAttribute(
+      'href',
+      '#resolume-instances',
+    )
+    expect(within(nav).getByRole('link', { name: 'FPP MQTT' })).toHaveAttribute('href', '#fpp-mqtt')
+    expect(within(nav).getByRole('link', { name: 'Asset store settings' })).toHaveAttribute(
+      'href',
+      '#assets-settings',
+    )
+    expect(within(nav).getByRole('link', { name: 'Render settings' })).toHaveAttribute(
+      'href',
+      '#render-settings',
+    )
+    expect(within(nav).getByRole('link', { name: 'Show mode' })).toHaveAttribute('href', '#show-mode')
+  })
+
+  // Readability seam: the restart-required notice (currently always "no
+  // restart needed", per every FPPLoadState-shaped kind's own contract)
+  // must stay visible and immediately reachable, never collapsed behind a
+  // <details> the way the revision history is.
+  it('renders the restart-required notice prominently, outside any collapsed disclosure', async () => {
+    getFPPEndpointsConfig.mockResolvedValue(activeConfig)
+    getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    const notice = await screen.findByText(activeConfig.restartRequiredReason)
+    expect(notice).toBeVisible()
+    expect(notice.closest('details')).toBeNull()
+    expect(notice.tagName).toBe('STRONG')
+  })
+
+  // Defect follow-up to #116: `.config-status` (styles/global.css) defines
+  // only margins, so the active-revision block lost its bordered callout
+  // treatment when it moved off `<p className="panel" role="status">`.
+  // Pairing the existing `.panel` class back onto it restores that
+  // treatment from existing design tokens, with no new colour values.
+  it('renders the active-revision block with the shared bordered callout treatment', async () => {
+    getFPPEndpointsConfig.mockResolvedValue(activeConfig)
+    getFPPEndpointsConfigRevisions.mockResolvedValue(emptyRevisions)
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    const notice = await screen.findByText(activeConfig.restartRequiredReason)
+    const callout = notice.closest('.config-status') as HTMLElement
+    expect(callout).not.toBeNull()
+    expect(callout.classList.contains('panel')).toBe(true)
   })
 })

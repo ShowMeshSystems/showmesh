@@ -34,7 +34,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.settings","revision":0,
-			"payload":{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGain":0.6,"duckTargetGain":0.25},
+			"payload":{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,"defaultMaxBackgroundGainDb":-4.44,"duckTargetGainDb":-12.04},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":null,"createdByPrincipalName":null,"source":"default"}`)
 	}))
 	defer ts.Close()
@@ -45,7 +45,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"revision 0", "source default", "built-in default", "driftIgnoreThresholdMs:   20", "defaultFadeCurve:         linear", "duckTargetGain:           0.25"} {
+	for _, want := range []string{"revision 0", "source default", "built-in default", "driftIgnoreThresholdMs:     20", "defaultFadeCurve:           linear", "duckTargetGainDb:           -12.04 dB", "defaultMaxBackgroundGainDb: -4.44 dB"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -54,7 +54,7 @@ func TestCmdAudioSettingsGetPrintsDefault(t *testing.T) {
 
 // TestCmdAudioSettingsSetPutsTheFileContents proves `audio settings set
 // --file` issues a real PUT carrying the file's contents unmodified, even
-// when the file is INCOMPLETE (omits defaultMaxBackgroundGain): the CLI
+// when the file is INCOMPLETE (omits defaultMaxBackgroundGainDb): the CLI
 // must never reshape the payload through a typed struct, because doing so
 // would silently turn the omitted field into an explicit 0.0 the server
 // would accept, making the server's own field_required refusal
@@ -68,7 +68,7 @@ func TestCmdAudioSettingsSetPutsTheFileContents(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("ShowMesh-API-Version", "1")
 		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.settings","revision":1,
-			"payload":{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGain":0.4},
+			"payload":{"driftIgnoreThresholdMs":30,"defaultFadeCurve":"linear","defaultFadeDurationMs":2000,"defaultMaxBackgroundGainDb":-7.96},
 			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
 	}))
 	defer ts.Close()
@@ -208,6 +208,123 @@ func TestCmdAudioNodeSetLTCChannelZeroReachesServer(t *testing.T) {
 	}, &stdout, &stderr, time.Now)
 	if !requestSeen {
 		t.Fatal("--ltc-channel=0 was refused locally instead of being sent to the coordinator")
+	}
+}
+
+// TestCmdAudioNodeSetProgramOnlyOmitsBothLTCKeys is the CLI half of a
+// program-only declaration. Omitting --ltc-route and --ltc-channel together must send a
+// body with NEITHER key present, not an empty ltcRoute and a zero
+// ltcChannel: the coordinator refuses an ltcRoute that is present but
+// empty as field-empty, so sending the keys would make a program-only
+// node undeclarable from the CLI even with the flag check relaxed. A
+// headless operator has no other path to a two-output interface.
+func TestCmdAudioNodeSetProgramOnlyOmitsBothLTCKeys(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
+			"payload":{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"two-output interface"},
+			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:CARD=USB,DEV=0",
+		"--program-channels", "1,2",
+		"--clock-domain", "solo", "--clock-domain-provenance", "two-output interface",
+		"--server", ts.URL, "--token", "t",
+		"pi-audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	for _, unwanted := range []string{`"ltcRoute"`, `"ltcChannel"`} {
+		if strings.Contains(string(gotBody), unwanted) {
+			t.Errorf("PUT body contains %s for a program-only node; both keys must be absent, not empty. body: %s", unwanted, gotBody)
+		}
+	}
+	if !strings.Contains(string(gotBody), `"programRoute":"hw:CARD=USB,DEV=0"`) {
+		t.Errorf("PUT body missing the program route; body: %s", gotBody)
+	}
+}
+
+// TestCmdAudioNodeSetPrintsProgramOnlyPlainly proves the detail render
+// says the node emits no LTC rather than printing a blank "LTC route:"
+// and "LTC channel: 0", which reads as a real channel zero.
+func TestCmdAudioNodeSetPrintsProgramOnlyPlainly(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-17T00:00:00Z","kind":"audio.node","id":"pi-audio-01","revision":1,
+			"payload":{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"two-output interface"},
+			"updatedAt":"2026-08-17T00:00:00Z","createdByPrincipalId":"p1","createdByPrincipalName":"admin","source":"api"}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdAudio([]string{
+		"node", "set",
+		"--program-route", "hw:CARD=USB,DEV=0",
+		"--program-channels", "1,2",
+		"--clock-domain", "solo", "--clock-domain-provenance", "two-output interface",
+		"--server", ts.URL, "--token", "t",
+		"pi-audio-01",
+	}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "LTC:                    none (program-only node)") {
+		t.Errorf("detail does not say the node is program-only:\n%s", out)
+	}
+	if strings.Contains(out, "LTC channel:            0") {
+		t.Errorf("detail printed a misleading channel zero:\n%s", out)
+	}
+}
+
+// TestCmdAudioNodeSetRefusesHalfAnLTCPair proves the CLI fails fast on
+// one LTC flag without the other rather than spending a round trip to
+// earn a worse error from the coordinator.
+func TestCmdAudioNodeSetRefusesHalfAnLTCPair(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"route without channel", []string{"--ltc-route", "hw:0,0"}},
+		{"channel without route", []string{"--ltc-channel", "3"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var requestSeen bool
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestSeen = true
+			}))
+			defer ts.Close()
+
+			args := append([]string{
+				"node", "set",
+				"--program-route", "hw:0,0",
+				"--program-channels", "1,2",
+				"--clock-domain", "d", "--clock-domain-provenance", "p",
+			}, tc.args...)
+			args = append(args, "--server", ts.URL, "--token", "t", "render-01")
+
+			var stdout, stderr bytes.Buffer
+			code := cmdAudio(args, &stdout, &stderr, time.Now)
+			if code != exitUsage {
+				t.Fatalf("exit code = %d, want exitUsage", code)
+			}
+			if requestSeen {
+				t.Fatal("half an LTC pair was sent to the coordinator instead of refused locally")
+			}
+			if !strings.Contains(stderr.String(), "omit both to declare a program-only node") {
+				t.Errorf("refusal does not tell the operator how to declare a program-only node:\n%s", stderr.String())
+			}
+		})
 	}
 }
 

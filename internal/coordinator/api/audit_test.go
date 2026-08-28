@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -101,6 +102,202 @@ func TestAuditSucceedsForAdminAndListsAWrite(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no session.create entry attributed to %s found in: %s", operator.ID, body)
+	}
+}
+
+// writeAuditEntries appends n admin-kind audit entries.
+func writeAuditEntries(t *testing.T, svc identity.Service, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if err := svc.WriteAudit(context.Background(), identity.AuditEntry{
+			Timestamp: testNow,
+			Action:    fmt.Sprintf("test.action-%02d", i),
+			Kind:      identity.AuditAdmin,
+		}); err != nil {
+			t.Fatalf("write audit %d: %v", i, err)
+		}
+	}
+}
+
+// auditGET issues one authenticated GET /api/v1/audit and decodes it.
+func auditGET(t *testing.T, h http.Handler, token, query string) (int, map[string]any) {
+	t.Helper()
+	resp, body := doRequest(t, h, "GET", "/api/v1/audit"+query, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	return resp.StatusCode, decodeMap(t, body)
+}
+
+// auditIDs pulls the entry ids out of a decoded audit body, in wire order.
+func auditIDs(t *testing.T, m map[string]any) []int64 {
+	t.Helper()
+	raw, _ := m["entries"].([]any)
+	out := make([]int64, 0, len(raw))
+	for _, e := range raw {
+		entry, _ := e.(map[string]any)
+		id, ok := entry["id"].(float64)
+		if !ok {
+			t.Fatalf("entry has no numeric id: %+v", entry)
+		}
+		out = append(out, int64(id))
+	}
+	return out
+}
+
+// TestAuditEntriesCarryTheirID is what makes any cursor on this endpoint
+// honest: without an id per entry, a client has nothing to advance either
+// cursor with.
+func TestAuditEntriesCarryTheirID(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	writeAuditEntries(t, svc, 3)
+
+	_, m := auditGET(t, api.Handler, mustIssueToken(t, svc, admin.ID), "")
+	ids := auditIDs(t, m)
+	if len(ids) < 3 {
+		t.Fatalf("ids = %v, want at least the three written entries", ids)
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i] <= ids[i-1] {
+			t.Fatalf("ids = %v, want strictly increasing on an ascending page", ids)
+		}
+	}
+	if m["order"] != "asc" {
+		t.Errorf("order = %v, want \"asc\" echoed on the default page", m["order"])
+	}
+	if _, present := m["oldestRetainedId"]; !present {
+		t.Error("oldestRetainedId missing; the response must report it, never leave it to be inferred")
+	}
+}
+
+// TestAuditNewestFirstReturnsTheMostRecentPageInOneRequest is the
+// operator-facing point of the whole change: the newest entry is on the
+// first page, without walking retained history.
+func TestAuditNewestFirstReturnsTheMostRecentPageInOneRequest(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	writeAuditEntries(t, svc, 25)
+	token := mustIssueToken(t, svc, admin.ID)
+
+	_, asc := auditGET(t, api.Handler, token, "?limit=500")
+	ascIDs := auditIDs(t, asc)
+	newest := ascIDs[len(ascIDs)-1]
+
+	_, desc := auditGET(t, api.Handler, token, "?order=desc&limit=3")
+	descIDs := auditIDs(t, desc)
+	if len(descIDs) != 3 {
+		t.Fatalf("descending page had %d entries, want 3", len(descIDs))
+	}
+	if descIDs[0] != newest {
+		t.Errorf("first descending id = %d, want the newest retained id %d", descIDs[0], newest)
+	}
+	for i := 1; i < len(descIDs); i++ {
+		if descIDs[i] >= descIDs[i-1] {
+			t.Fatalf("ids = %v, want strictly decreasing on a descending page", descIDs)
+		}
+	}
+	if desc["order"] != "desc" {
+		t.Errorf("order = %v, want \"desc\" echoed", desc["order"])
+	}
+}
+
+// TestAuditNewestFirstWalksBackwardWithoutDuplicatesOrSkips walks the
+// whole log backward through the HTTP surface, on real ids, and proves the
+// walk covers retained history exactly once and ends at oldestRetainedId.
+func TestAuditNewestFirstWalksBackwardWithoutDuplicatesOrSkips(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	writeAuditEntries(t, svc, 20)
+	token := mustIssueToken(t, svc, admin.ID)
+
+	_, asc := auditGET(t, api.Handler, token, "?limit=500")
+	ascIDs := auditIDs(t, asc)
+
+	seen := map[int64]bool{}
+	var walked []int64
+	query := "?order=desc&limit=6"
+	var oldestRetained float64
+	for page := 0; ; page++ {
+		if page > 20 {
+			t.Fatalf("backward walk did not terminate after %d pages", page)
+		}
+		_, m := auditGET(t, api.Handler, token, query)
+		if v, ok := m["oldestRetainedId"].(float64); ok {
+			oldestRetained = v
+		}
+		ids := auditIDs(t, m)
+		if len(ids) == 0 {
+			break
+		}
+		for _, id := range ids {
+			if seen[id] {
+				t.Fatalf("id %d returned twice across pages: %v", id, walked)
+			}
+			seen[id] = true
+			walked = append(walked, id)
+		}
+		query = fmt.Sprintf("?order=desc&limit=6&before=%d", ids[len(ids)-1])
+	}
+
+	if len(walked) != len(ascIDs) {
+		t.Fatalf("walked %d ids, want %d: the backward walk skipped or duplicated", len(walked), len(ascIDs))
+	}
+	for i, id := range walked {
+		if want := ascIDs[len(ascIDs)-1-i]; id != want {
+			t.Fatalf("walked[%d] = %d, want %d", i, id, want)
+		}
+	}
+	if int64(oldestRetained) != walked[len(walked)-1] {
+		t.Errorf("walk ended at %d, want the reported oldestRetainedId %d", walked[len(walked)-1], int64(oldestRetained))
+	}
+}
+
+// TestAuditRefusesContradictoryCursorParameters proves neither cursor is
+// ever silently ignored: naming both, or naming the one the chosen order
+// does not use, is a 400.
+func TestAuditRefusesContradictoryCursorParameters(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	token := mustIssueToken(t, svc, admin.ID)
+
+	for _, query := range []string{
+		"?since=1&before=9",
+		"?order=desc&since=1",
+		"?before=9",
+		"?order=sideways",
+		"?order=desc&before=-1",
+	} {
+		resp, body := doRequest(t, api.Handler, "GET", "/api/v1/audit"+query, map[string]string{
+			"Authorization": "Bearer " + token,
+		})
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET /api/v1/audit%s status = %d, want 400; body: %s", query, resp.StatusCode, body)
+		}
+	}
+}
+
+// TestAuditReportsOldestRetainedIDAsARealNumber keeps the two ends of the
+// backward walk distinguishable: a log that retains entries reports the
+// lowest id it holds, never null and never a placeholder zero.
+func TestAuditReportsOldestRetainedIDAsARealNumber(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	api := New(authTestDeps(svc), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	writeAuditEntries(t, svc, 2)
+	token := mustIssueToken(t, svc, admin.ID)
+
+	_, m := auditGET(t, api.Handler, token, "?order=desc")
+	oldest, ok := m["oldestRetainedId"].(float64)
+	if !ok || oldest < 1 {
+		t.Fatalf("oldestRetainedId = %v, want the lowest retained id", m["oldestRetainedId"])
+	}
+	ids := auditIDs(t, m)
+	if int64(oldest) > ids[len(ids)-1] {
+		t.Errorf("oldestRetainedId %d is above the oldest id on this page (%d)", int64(oldest), ids[len(ids)-1])
 	}
 }
 

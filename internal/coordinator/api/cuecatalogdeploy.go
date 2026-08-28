@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -366,6 +367,15 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		// already succeeded regardless of whether this follow-on apply
 		// does.
 		h.applyShowmeshAudioPlaylistIfAny(ctx, h.now(), nodeID, active)
+
+		// A node that just proved it holds the active Show's authorized
+		// Cue catalog is exactly the node whose show.surface objects
+		// should hold SOME render assignment — see
+		// establishRenderAssignments' own doc comment for the defect this
+		// closes. Best-effort, matching the two calls above it: the
+		// deploy itself already succeeded regardless of whether this
+		// follow-on establishment does.
+		h.establishRenderAssignments(ctx, h.now(), nodeID, catalog)
 	}
 
 	resolvedFmt := formatTime(resolvedAt)
@@ -476,4 +486,167 @@ func (h *handlers) writeCueCatalogDeployAudit(ctx context.Context, now time.Time
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("cue catalog deploy audit write failed", "commandId", commandID, "error", err)
 	}
+}
+
+// renderEstablishIssuerPrincipalID attributes an establishment dispatch to
+// the deploy that triggered it, not to whichever human or automation
+// happened to POST the deploy — mirrors showmeshAudioIssuerPrincipalID's
+// identical reasoning one file over (showmeshaudiodispatch.go): this is an
+// autonomous coordinator action, one HTTP request can fan out into several
+// of these across several surfaces, and none of them is itself something
+// an operator directly asked for.
+const renderEstablishIssuerPrincipalID = "system:cuecatalog-deploy"
+
+// establishRenderAssignments closes a gap in the Track H render pipeline
+// (see TRACK-H-cues-and-playlists.md): nothing ever created a node's
+// persisted render assignment except an operator dispatching
+// render.surface.apply by hand,
+// and ADR-043's H0.7 clears assignments at boot — together, a render node
+// that reboots mid-show never renders again on its own, forever, until
+// somebody remembers to run a manual apply. A confirmed cuecatalog.deploy
+// is exactly the moment this coordinator already knows the node holds
+// (asset store, own manifest evidence) the active Show's authorized
+// catalog and every asset it targets, so it is also the moment to
+// establish every one of that Show's show.surface objects on this node
+// with NO sequence selected — resolveRenderEstablishParams
+// (renderdispatch.go) — so the FIRST cue activation has something for
+// activateSurfaceRender (internal/agent/cueactivationrender.go) to swap an
+// FSEQ onto, rather than refusing outright because the node holds no
+// assignment at all.
+//
+// Mirrors applyShowmeshAudioPlaylistIfAny's identical shape and posture
+// one call site above: best-effort per surface. A refused or unconfirmed
+// establishment on ONE surface must never prevent the deploy's own
+// already-succeeded outcome from being reported, and must never stop this
+// loop from still establishing every OTHER surface on this node.
+func (h *handlers) establishRenderAssignments(ctx context.Context, now time.Time, nodeID string, catalog assetsync.Catalog) {
+	if h.deps.Config == nil || h.deps.Commands == nil || h.deps.RenderPublisher == nil {
+		return
+	}
+	surfaces, err := h.listShowSurfaceSummaries(ctx, catalog.Show, nodeID)
+	if err != nil {
+		h.logWarn("render assignment establishment: list show.surface objects failed", "node", nodeID, "show", catalog.Show, "error", err)
+		return
+	}
+	for _, surface := range surfaces {
+		h.establishRenderAssignment(ctx, now, nodeID, surface.ID, catalog)
+	}
+}
+
+// establishRenderAssignment establishes exactly one surface, skipping it
+// outright when the node already holds a current render assignment for it
+// AND that assignment is real content — see
+// [handlers.renderSurfaceAssignmentEvidence]'s own doc comment for why that
+// guard exists: this call must only ever fill the gap
+// [ReadinessNodeRenderUnassigned] reports, or refresh its own earlier
+// no-sequence placeholder's H3 authorization tuple, never disturb a
+// surface that is already rendering real content.
+//
+// A surface reported assigned but holding NO real content (
+// [handlers.renderSurfaceHasRealContent] false — this call's own prior
+// no-sequence establishment, never touched by a cue activation since) is
+// re-established on every redeploy whose catalog identity differs from the
+// one last stamped onto it: skipping it forever, the way the earlier
+// "assigned means skip" guard did, left every established-but-never-
+// activated surface's H3 authorization tuple pinned to whatever generation
+// established it first — stale at the very next generation bump, and
+// therefore guaranteed to boot-clear at the node's next reboot regardless
+// of how current its catalog actually was. renderEstablishIdempotencyKey's
+// own catalog-identity component already makes this a no-op replay when
+// the catalog is redeployed unchanged, so this never spams a redundant
+// dispatch (and its accompanying brief pipeline restart) on an idle
+// surface that does not need one.
+func (h *handlers) establishRenderAssignment(ctx context.Context, now time.Time, nodeID, surfaceID string, catalog assetsync.Catalog) {
+	assigned, witness, err := h.renderSurfaceAssignmentEvidence(ctx, nodeID, surfaceID)
+	if err != nil {
+		h.logWarn("render assignment establishment: check current assignment failed", "node", nodeID, "surface", surfaceID, "error", err)
+		return
+	}
+	idempotencyWitness := ""
+	if assigned {
+		hasContent, err := h.renderSurfaceHasRealContent(ctx, nodeID, surfaceID)
+		if err != nil {
+			h.logWarn("render assignment establishment: check current content failed", "node", nodeID, "surface", surfaceID, "error", err)
+			return
+		}
+		if hasContent {
+			return
+		}
+		// Assigned, but only ever this call's own no-sequence placeholder:
+		// fall through and re-establish so a stale H3 tuple gets refreshed.
+	} else {
+		// Not assigned at all right now — including a node that just
+		// boot-cleared and reported StateFailed, or genuinely lost the
+		// assignment (re-imaged hardware, a corrupt held-catalog file, an
+		// operator clear). A plain catalog-identity key would collide with
+		// whatever CONFIRMED establishment command this exact (node,
+		// surface, show, generation, revision) tuple produced the FIRST
+		// time it succeeded, even though the node no longer holds it —
+		// see renderEstablishIdempotencyKey's own doc comment for the
+		// defect that produces. Folding in a witness of the CURRENT loss
+		// evidence keys this attempt distinctly from that earlier one.
+		idempotencyWitness = witness
+	}
+
+	params, problem, err := h.resolveRenderEstablishParams(ctx, nodeID, surfaceID, catalog.Generation, catalog.Revision)
+	if err != nil {
+		h.logWarn("render assignment establishment: resolve failed", "node", nodeID, "surface", surfaceID, "error", err)
+		return
+	}
+	if problem != nil {
+		h.logWarn("render assignment establishment: refused", "node", nodeID, "surface", surfaceID, "detail", problem.Detail)
+		return
+	}
+
+	in := renderDispatchInput{
+		Action: "render.surface.apply", NodeID: nodeID, SurfaceID: surfaceID,
+		IdempotencyKey: renderEstablishIdempotencyKey(nodeID, surfaceID, catalog.Show, catalog.Generation, catalog.Revision, idempotencyWitness),
+		DesiredState:   "running",
+		IssuerID:       renderEstablishIssuerPrincipalID, IssuerName: "cuecatalog.deploy",
+		Params: params,
+	}
+	_, problem, err = h.executeRenderDispatch(ctx, now, in)
+	if err != nil {
+		h.logWarn("render assignment establishment: dispatch failed", "node", nodeID, "surface", surfaceID, "error", err)
+		return
+	}
+	if problem != nil {
+		h.logWarn("render assignment establishment: refused by dispatch", "node", nodeID, "surface", surfaceID, "detail", problem.Detail)
+	}
+}
+
+// renderEstablishIdempotencyKey derives one surface's establishment
+// idempotency key from nodeID, surfaceID, the deployed catalog's own
+// (show, generation, revision) identity, and — ONLY when
+// establishRenderAssignment is establishing a surface it currently holds
+// NO assignment for — witness, a value identifying the specific loss
+// evidence behind that (see [handlers.renderSurfaceAssignmentEvidence]).
+// Empty witness mirrors showmeshAudioIdempotencyKey's identical "keyed on
+// content, not a bare counter" reasoning one file over
+// (showmeshaudiodispatch.go): a repeated deploy of the SAME catalog
+// against a surface that is still holding its own prior no-sequence
+// placeholder must replay the same establishment (no second, redundant
+// MQTT publish and its accompanying pipeline restart), while a genuinely
+// new generation or revision is still free to establish again because it
+// changes this key on its own.
+//
+// Content ALONE is not enough once a node can go from holding an
+// assignment to holding none WITHOUT any catalog identity changing at all
+// — a reboot's boot-clear, a re-imaged node, a corrupt held-catalog file,
+// or an operator's own render.surface.clear. Without witness, redeploying
+// that exact unchanged catalog reproduces the SAME key a PRIOR, already-
+// CONFIRMED establishment used, so InsertCommand's own idempotency
+// dedup (store.DuplicateCommandError) silently replays that stale
+// confirmation and never re-dispatches — proven by unit probe
+// (TestEstablishRenderAssignmentReestablishesAfterAssignmentIsLost). A
+// non-empty witness — sourced from the CURRENT loss evidence, not a random
+// value, so the SAME still-unresolved loss does not spam a fresh dispatch
+// every redeploy either — keys this attempt distinctly from that earlier
+// success and lets a genuine re-establishment actually happen.
+func renderEstablishIdempotencyKey(nodeID, surfaceID, show string, generation int64, revision, witness string) string {
+	key := fmt.Sprintf("render-establish-%s-%s-%s-%d-%s", nodeID, surfaceID, show, generation, revision)
+	if witness != "" {
+		key += "-" + witness
+	}
+	return key
 }

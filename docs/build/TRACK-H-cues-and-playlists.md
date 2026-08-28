@@ -289,7 +289,34 @@ Add Show-scoped Playlist and Cue authoring after API and CLI parity exists. The 
 
 Readiness refuses stale FPP imports, unresolved or cross-show references, missing assets, nodes without the authorized catalog revision, unsupported output policy, conflicting exclusive claims, and a required SM-63 plugin capability that has not passed its compatibility gate.
 
+**SM-285's status against this list (2026-08-26).** Two of these seven were
+already built (stale imports, and cross-show/unresolved references folded
+into `cue-not-ready`). SM-285 built two more, both by reusing an existing
+resolver rather than deriving a second one: `node-catalog-stale` (SM-282's
+own cue-catalog acknowledgement resolution, `internal/coordinator/api/
+cuecatalog.go`, extracted into `internal/coordinator/fppreconcile.
+NodeCatalogAckStatus` so the read route and this readiness condition
+compute the identical answer) and `exclusive-claim-conflict`
+(`assetsync.ResolveCueCatalog`'s own `Catalog.Conflicts`, the same
+computation the cue-catalog deploy path already refuses a deploy on).
+`assets-missing` builds on `assetsync.ExpectedAssetsForNode` once SM-287's
+concurrent narrowing of that function lands on `main`.
+
+**`output-policy-unsupported` and `plugin-capability-ungated` are
+explicitly out of scope for this season**, not half-built. Neither has any
+representation in this codebase — no field, no validation rule, no route —
+and H0.6 ("Where these decisions are enforced," above) never assigns
+either one to Authoring, Readiness, Activation, or Dispatch: only this
+section's own aspirational list and the track's acceptance criterion 7
+name them. Building either honestly first requires deciding WHERE it is
+enforced (H0.6's own boundary), which is design work this Lane's readiness
+seam did not scope and is not itself a readiness-shaped change. See
+this file's own "Out of scope" list below.
 ### H7. Integrated and failure verification
+
+The bench that runs this path, and the record of what a first assembled run
+actually showed, are [bench/track-h-chain](../../bench/track-h-chain/README.md)
+and [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md).
 
 Prove the complete path with running binaries, not only unit tests:
 
@@ -348,3 +375,17 @@ Real FPP, audio hardware, and Resolume gates remain explicit where the developme
 - Cross-show Cue, Playlist, Action, Macro, Surface, or asset fallback.
 - Persisting random UUIDs inside FPP playlist entries before FPP editor/API survival is proven.
 - Treating the Audio Engine's internal `PlaylistRef` as the show-level authoring model.
+- **`output-policy-unsupported` as a readiness condition (SM-285).** There
+  is no stored rule anywhere naming which output policies a given node or
+  runner combination supports, so there is nothing for readiness to check
+  yet; deciding that rule is H0.6-shaped design work, not a readiness-seam
+  change. Building this later starts by deciding H0.6's enforcement point
+  for it (Authoring, most likely, alongside its sibling authoring
+  refusals), then adding a readiness condition only if runtime state can
+  still diverge from that authoring-time check.
+- **`plugin-capability-ungated` as a readiness condition (SM-285).** The
+  SM-63 native FPP plugin capability and its compatibility gate have no
+  representation in this codebase at all — no stored capability record, no
+  gate result, no route. Building this starts with that plugin-side
+  representation (RES-015/RES-018's own territory), which readiness would
+  then read; it cannot be built from the readiness side alone.

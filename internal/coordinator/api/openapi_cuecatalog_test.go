@@ -158,12 +158,15 @@ type cueCatalogEntryForTest struct {
 	Outputs     cueCatalogOutputsForTest `json:"outputs"`
 }
 type cueCatalogResponseForTest struct {
-	Node       string                   `json:"node"`
-	Configured bool                     `json:"configured"`
-	Show       string                   `json:"show"`
-	Generation *int64                   `json:"generation"`
-	Revision   string                   `json:"revision"`
-	Entries    []cueCatalogEntryForTest `json:"entries"`
+	Node                 string                   `json:"node"`
+	Configured           bool                     `json:"configured"`
+	Show                 string                   `json:"show"`
+	Generation           *int64                   `json:"generation"`
+	Revision             string                   `json:"revision"`
+	Entries              []cueCatalogEntryForTest `json:"entries"`
+	AcknowledgedStatus   string                   `json:"acknowledgedStatus"`
+	AcknowledgedRevision *string                  `json:"acknowledgedRevision"`
+	AcknowledgedAt       *string                  `json:"acknowledgedAt"`
 }
 type cueCatalogAcknowledgeResponseForTest struct {
 	Node                 string `json:"node"`
@@ -200,6 +203,15 @@ func TestOpenAPICueCatalogResponsesMatchRealResponses(t *testing.T) {
 	}
 	if len(unconfigured.Entries) != 0 {
 		t.Fatalf("GET cue-catalog before show.active is configured: Entries = %v, want empty", unconfigured.Entries)
+	}
+	// A node that has never acknowledged anything must read as
+	// never-acknowledged, never as absent-therefore-fine and never as
+	// stale (there is nothing yet to be stale against).
+	if unconfigured.AcknowledgedStatus != "catalog-unacknowledged" {
+		t.Fatalf("GET cue-catalog before show.active is configured: AcknowledgedStatus = %q, want catalog-unacknowledged", unconfigured.AcknowledgedStatus)
+	}
+	if unconfigured.AcknowledgedRevision != nil || unconfigured.AcknowledgedAt != nil {
+		t.Fatalf("GET cue-catalog before show.active is configured: AcknowledgedRevision/AcknowledgedAt = %v/%v, want both nil", unconfigured.AcknowledgedRevision, unconfigured.AcknowledgedAt)
 	}
 
 	mustPutShowActive(t, api, token, "halloween-2026")
@@ -286,6 +298,24 @@ func TestOpenAPICueCatalogResponsesMatchRealResponses(t *testing.T) {
 		t.Fatalf("acknowledge (current) response CurrentRevision = %q, want %q", ackCurrent.CurrentRevision, node1.Revision)
 	}
 
+	// GET now reports the SAME acknowledgement, read-only, with no
+	// further write performed.
+	_, node1AfterAckBody := doRequest(t, api.Handler, "GET", "/api/v1/nodes/render-01/cue-catalog", auth)
+	assertMatchesSchema(t, c, "CueCatalogResponse", node1AfterAckBody)
+	var node1AfterAck cueCatalogResponseForTest
+	if err := json.Unmarshal(node1AfterAckBody, &node1AfterAck); err != nil {
+		t.Fatalf("decode render-01 cue-catalog response after a current acknowledgement: %v", err)
+	}
+	if node1AfterAck.AcknowledgedStatus != "catalog-current" {
+		t.Fatalf("GET cue-catalog after a current acknowledgement: AcknowledgedStatus = %q, want catalog-current", node1AfterAck.AcknowledgedStatus)
+	}
+	if node1AfterAck.AcknowledgedRevision == nil || *node1AfterAck.AcknowledgedRevision != node1.Revision {
+		t.Fatalf("GET cue-catalog after a current acknowledgement: AcknowledgedRevision = %v, want %q", node1AfterAck.AcknowledgedRevision, node1.Revision)
+	}
+	if node1AfterAck.AcknowledgedAt == nil {
+		t.Fatalf("GET cue-catalog after a current acknowledgement: AcknowledgedAt = nil, want a timestamp")
+	}
+
 	// Acknowledge with a stale revision: catalog-stale, naming both.
 	ackStaleReq := newJSONRequest(t, http.MethodPost, "/api/v1/nodes/render-01/cue-catalog/acknowledge",
 		`{"revision":"stale-revision-value","show":"halloween-2026","generation":`+strconv.FormatInt(*node1.Generation, 10)+`}`, auth)
@@ -303,6 +333,25 @@ func TestOpenAPICueCatalogResponsesMatchRealResponses(t *testing.T) {
 	}
 	if ackStale.AcknowledgedRevision != "stale-revision-value" || ackStale.CurrentRevision != node1.Revision {
 		t.Fatalf("acknowledge (stale) response = %+v, want acknowledgedRevision=stale-revision-value currentRevision=%q", ackStale, node1.Revision)
+	}
+
+	// GET now names both revisions: the acknowledged one (stale) and the
+	// currently required one (Revision, unchanged) - never collapsed into
+	// a single "stale" bit with no evidence of what either side is.
+	_, node1AfterStaleAckBody := doRequest(t, api.Handler, "GET", "/api/v1/nodes/render-01/cue-catalog", auth)
+	assertMatchesSchema(t, c, "CueCatalogResponse", node1AfterStaleAckBody)
+	var node1AfterStaleAck cueCatalogResponseForTest
+	if err := json.Unmarshal(node1AfterStaleAckBody, &node1AfterStaleAck); err != nil {
+		t.Fatalf("decode render-01 cue-catalog response after a stale acknowledgement: %v", err)
+	}
+	if node1AfterStaleAck.AcknowledgedStatus != "catalog-stale" {
+		t.Fatalf("GET cue-catalog after a stale acknowledgement: AcknowledgedStatus = %q, want catalog-stale", node1AfterStaleAck.AcknowledgedStatus)
+	}
+	if node1AfterStaleAck.AcknowledgedRevision == nil || *node1AfterStaleAck.AcknowledgedRevision != "stale-revision-value" {
+		t.Fatalf("GET cue-catalog after a stale acknowledgement: AcknowledgedRevision = %v, want stale-revision-value", node1AfterStaleAck.AcknowledgedRevision)
+	}
+	if node1AfterStaleAck.Revision != node1.Revision {
+		t.Fatalf("GET cue-catalog after a stale acknowledgement: Revision = %q, want the still-current %q", node1AfterStaleAck.Revision, node1.Revision)
 	}
 
 	// A validation-error sample on the acknowledge route, to prove the

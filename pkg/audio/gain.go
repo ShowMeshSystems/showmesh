@@ -93,3 +93,82 @@ func (f Fade) Validate() error {
 	}
 	return f.TargetGain.Validate()
 }
+
+// SilenceFloorDb is the decibel value at or below which an
+// operator-entered gain means silence rather than an inaudibly small
+// multiplier. It is the same floor show.cue's outputs.announcement
+// duckGainDb already bounds against, reused here so one operator meets
+// one floor on every surface.
+const SilenceFloorDb = -60.0
+
+// UnityDb is the decibel value that leaves a signal unchanged: 0 dB is a
+// linear multiplier of 1.0.
+const UnityDb = 0.0
+
+// MaxOperatorGainDb is the ceiling every operator-facing gain shares: a
+// typo guard, not a tuned headroom figure. Above +12 dB a number is far
+// more likely to be a mistake (a millisecond count, a percentage) than an
+// intended level. Defined once here so the API boundary, the
+// audio.settings validator, and show.action authoring all refuse at the
+// same bound rather than at three drifting copies of the number.
+const MaxOperatorGainDb = 12.0
+
+// linearFromDb is THIS PROJECT'S ONLY decibel-to-amplitude conversion.
+// Amplitude (not power) decibels, so the exponent divides by 20: -6.02 dB
+// halves the amplitude, +6.02 dB doubles it. Every operator-facing gain
+// arrives in dB and is converted here exactly once, at the coordinator's
+// own boundary; the coordinator-to-agent wire, [Gain], [Ceiling], and the
+// engine below them stay linear.
+func linearFromDb(db float64) float64 {
+	return math.Pow(10, db/20)
+}
+
+// GainFromDb converts an operator-entered decibel value to the linear
+// [Gain] the engine uses. At or below [SilenceFloorDb] the result is
+// exactly 0: an operator who asks for silence gets silence, not a
+// multiplier small enough to be inaudible but not zero. A NaN input
+// converts to silence for the same reason a NaN gain is refused
+// elsewhere: it is never a level anyone meant.
+func GainFromDb(db float64) Gain {
+	if math.IsNaN(db) || db <= SilenceFloorDb {
+		return 0
+	}
+	return Gain(linearFromDb(db))
+}
+
+// GainToDb is [GainFromDb]'s inverse for reporting a stored linear gain
+// back to an operator. Zero (and any non-positive value, which Validate
+// refuses anyway) reports [SilenceFloorDb], so a round trip through
+// GainFromDb returns silence rather than negative infinity.
+func GainToDb(g Gain) float64 {
+	f := float64(g)
+	if math.IsNaN(f) || f <= 0 {
+		return SilenceFloorDb
+	}
+	db := 20 * math.Log10(f)
+	if db <= SilenceFloorDb {
+		return SilenceFloorDb
+	}
+	return db
+}
+
+// CeilingFromDb converts an operator-entered decibel value to a linear
+// [Ceiling]. Unlike [GainFromDb] it applies no silence floor: a Ceiling
+// of zero is refused by [Ceiling.Validate] on purpose, because a ceiling
+// that clamps everything to silence is indistinguishable from a
+// deliberate mute. A ceiling at or below the silence floor stays a very
+// small positive number and the session's own Gain is what expresses
+// silence.
+func CeilingFromDb(db float64) Ceiling {
+	return Ceiling(linearFromDb(db))
+}
+
+// CeilingToDb reports a stored linear [Ceiling] back to an operator in
+// decibels, [CeilingFromDb]'s inverse.
+func CeilingToDb(c Ceiling) float64 {
+	f := float64(c)
+	if math.IsNaN(f) || f <= 0 {
+		return SilenceFloorDb
+	}
+	return 20 * math.Log10(f)
+}

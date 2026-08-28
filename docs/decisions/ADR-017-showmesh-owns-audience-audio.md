@@ -1,7 +1,8 @@
 # ADR-017: ShowMesh Owns Audience-Facing Audio, and Audio Nodes Play Local Media
 
 Status: Accepted  
-Date: 2026-08-10
+Date: 2026-08-10  
+Amended: 2026-08-28, [ADR-046](ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md) narrows "playback-rate manipulation is avoided" to slews and seeks; a bounded ppm-scale rate trim against a locked shared PTP clock is permitted. Following a position feed remains rejected. [ADR-047](ADR-047-fpp-aes67-is-the-primary-program-source.md) narrows the local-playback and unused-FPP-output decisions: FPP's AES67 stream is the primary program source, local playback is the standby and the engine for every ShowMesh-owned source, and FPP's output may feed an AES67-only output group.
 
 ## Context
 
@@ -21,7 +22,7 @@ The reference installation makes the stakes concrete. Program audio drives an FM
 
 **The active audio node is authoritative for its own playback clock, PCM rendering, and local device state.** Show synchronization and audio clock synchronization are separate problems.
 
-**Drift is measured, not chased.** Alignment is accurate at start; drift below a configured threshold is ignored; correction is preferred at track boundaries and applied as a discrete seek when operationally significant; playback-rate manipulation is avoided. The Audio Engine does not continuously discipline its clock with MultiSync-style corrections.
+**Drift is measured, not chased.** Alignment is accurate at start; drift below a configured threshold is ignored; correction is preferred at track boundaries and applied as a discrete seek when operationally significant; playback-rate manipulation is avoided. The Audio Engine does not continuously discipline its clock with MultiSync-style corrections. (ADR-046: a ppm-scale rate trim of the whole interface against a locked shared PTP clock is not such a correction; slews and seeks still are.)
 
 Real-time audio streaming may exist later as a separate input/output capability. It is not the synchronized show-audio architecture.
 
@@ -41,7 +42,7 @@ Real-time audio streaming may exist later as a separate input/output capability.
 
 **Streaming PCM from the coordinator or from FPP to audio nodes** was rejected because it puts the network and the coordinator inside the real-time audio path, makes every audio dropout a network event, imports MultiSync-rate correction artifacts into program audio, and removes the failure isolation that local playback provides. It also contradicts the standing constraint that a running show survives coordinator loss.
 
-**Following a continuous time-position feed with rate correction**, the way an FPP remote follows MultiSync, was rejected for program audio specifically: continuous rate manipulation is audible, and continuous position chasing produces repeated small seeks. The correct behavior for pixels is the wrong behavior for sound.
+**Following a continuous time-position feed with rate correction**, the way an FPP remote follows MultiSync, was rejected for program audio specifically: continuous rate manipulation is audible, and continuous position chasing produces repeated small seeks. The correct behavior for pixels is the wrong behavior for sound. This rejection is about chasing a position feed with frame-scale slews; ADR-046 distinguishes it from rate-locking to a shared clock.
 
 ## Related research
 

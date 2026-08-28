@@ -134,7 +134,9 @@ value this feature needs is in the kind above.
 **Track C's two kinds split engine-wide defaults from per-node physical
 binding.** `audio.settings` holds what is engine-wide and operator-settable
 (drift ignore threshold, LTC frame rate, default fade curve and duration,
-default background gain ceiling). `audio.node` holds what is true of one
+default background gain ceiling; the two gain fields are decibels on the
+operator surface and are converted to the engine's linear multiplier at
+the coordinator's own boundary). `audio.node` holds what is true of one
 node's installed interface: which discovered output route carries program,
 which carries LTC, and the declared clock domain. Both are store-backed
 because ADR-039's test is temporal — the coordinator reads them from its own
@@ -518,8 +520,16 @@ listed because the last row was minted after the others had shipped:
 | `surface.output.mode` | shipped | Track B review fix, finding 7 |
 | `surface.output.idle_mode` | shipped | Track B review fix, finding 7 |
 | `surface.output.failure` | shipped | Owner ruling: a broken assignment must not look like a healthy idle |
+| `surface.content.fseq_filename` | shipped | Track H (node's own evidence for the FSEQ it is actually rendering) |
+| `surface.content.fseq_content_hash` | shipped | Track H |
+| `surface.content.cue_id` | shipped | Track H |
+| `surface.content.catalog_revision` | shipped | Track H |
+| `surface.content.show` | reserved | Lane 16, SM-289 (the show that authorized the held render) |
+| `surface.content.generation` | reserved | Lane 16, SM-289 |
 | `node.multisync.listening` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
+| `node.fppconnect.channel_range.state` | reserved | Lane 16, SM-294 (node-level; one push per node) |
+| `node.fppconnect.channel_range.reason` | reserved | Lane 16, SM-294 |
 
 **Track C's `audio_session.*` signals, as shipped by seams C6/C7 on
 2026-08-18.** They were reserved before C3 and C4 were written; the table
@@ -682,6 +692,19 @@ this signal says which fallback that failure actually put on the wire:
 `alert` in Program Mode, `black` in Show Mode. It is `not_collected` with a
 stated reason for every other drawing state.
 
+**`surface.pipeline.state` gains a `superseded` member, and that is a
+value not a signal.** ADR-043's H0.7 transition policy says a render held
+across a show switch "is never reported as current or healthy". SM-289 adds
+`superseded` to the existing state vocabulary rather than minting a parallel
+signal, and adds the two `surface.content.*` rows above so the report names
+the show and generation that authorized what is still on the wall.
+`surface.content.catalog_revision` already exists and is not duplicated.
+
+**The two `node.fppconnect.channel_range.*` rows are node-level on the
+`node.multisync.*` precedent.** One `fppconnect.configure` push carries one
+channel-range string per node, so attributing a dropped range to a surface
+would report the same fact once per surface and imply that many faults.
+
 **`surface.frames.rate` is what ADR-040 costs.** That record makes matrix
 size a performance parameter rather than an architectural boundary, so
 nothing refuses a large surface; the achieved frame rate at the configured
@@ -690,6 +713,71 @@ authors a matrix the hardware cannot sustain finds out from the wall rather
 than from the dashboard. It is a measured rate: where no measurement exists
 it is `not_collected` with a stated reason, never a plausible-looking zero
 and never the configured target rate echoed back.
+
+## Playlist readiness conditions
+
+`ReadinessCondition` in `internal/coordinator/fppreconcile/readiness.go`,
+returned as `failingCondition` on the playlist readiness route and rendered
+as a badge in the Operator UI. TRACK-H-H2-SPEC.md section 6 fixed the first
+five as a closed vocabulary; Lane 16 opens it, so it needs a register.
+
+An operator and a script both branch on these strings, so a reused or
+renamed value is a wrong branch taken silently, exactly like an exit code.
+
+| Condition | Status | Owner |
+|---|---|---|
+| `definition-missing` | shipped | Track H seam H2 |
+| `entry-not-in-definition` | shipped | Track H seam H2 |
+| `entry-filename-mismatch` | shipped | Track H seam H2 |
+| `cue-not-ready` | shipped | Track H seam H2 |
+| `observation-hash-mismatch` | shipped | Track H seam H2 |
+| `definition-superseded` | reserved | Lane 16, SM-290 |
+| `evidence-unavailable` | reserved | Lane 16, SM-290 |
+| `node-render-unassigned` | shipped | Lane 16, SM-281 (merged `main` at `533bbf2`, PR #156) |
+| `assets-missing` | reserved | Lane 16, SM-285 |
+| `node-catalog-stale` | reserved | Lane 16, SM-285 |
+| `output-policy-unsupported` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
+| `exclusive-claim-conflict` | reserved | Lane 16, SM-285 |
+| `plugin-capability-ungated` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
+
+**`definition-superseded` and `observation-hash-mismatch` answer different
+questions and must not be merged.** The shipped condition compares the
+binding's hash against the latest accepted observation, which requires FPP
+to have played the playlist. SM-290's condition compares the binding's hash
+against the newest stored playlist definition for the same instance and
+playlist name, which needs no playback at all and is therefore the one that
+works in the afternoon.
+
+**`evidence-unavailable` exists because `ready: true` with a warning is the
+wrong shape.** SM-290's own words: "if the check cannot run, readiness does
+not know, and 'I could not check' should not read the same as 'I checked and
+it is fine'." This condition is how readiness says it could not evaluate a
+required check, and it is a failing condition rather than a warning.
+
+**`node-render-unassigned` shipped; the rest of Lane 16's rows above have
+not, because their branches have not merged to `main`.** SM-281 merged as
+`533bbf2` (PR #156); `internal/coordinator/fppreconcile/readiness.go` on
+`main` declares `ReadinessNodeRenderUnassigned ReadinessCondition =
+"node-render-unassigned"`. SM-285's own branch, which builds
+`node-catalog-stale` and `exclusive-claim-conflict`, has not merged, so both
+stay reserved.
+
+**`output-policy-unsupported` and `plugin-capability-ungated` are reserved
+names recorded out of scope for this season, not pending work.** SM-285's
+acceptance lets a condition be recorded as explicitly out of scope instead
+of built, and neither name has any representation in this codebase: H0.6's
+enforcement-boundary section in
+[TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) never
+assigns either one to Authoring, Readiness, Activation or Dispatch. The
+reservation stands so the name is not minted differently by Lane 20's
+SM-314, which shares the per-node readiness resolution.
+
+**`assets-missing` is reserved and not built, for a different reason: its
+dependency merged after SM-285 was cut.** The condition needs SM-287's
+narrowing of `ExpectedAssetsForNode` (`NodeCueSequenceIDs`), which reached
+`main` at `f6923ed` (PR #158) roughly ninety minutes after SM-285's last
+commit — there was nothing to build the readiness condition against at the
+time SM-285 was written.
 
 ## MQTT topics
 
@@ -749,7 +837,9 @@ The store schema version, bumped by migrations in
 | v16 | shipped | per-endpoint observed FPP instance uuid history (`fpp_instance_uuid_observations`), closing the gap FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5 recorded between `fpp.endpoints`, the plugin's `instanceUuid`, and `node_declarations` |
 | v17 | shipped | Track H seam H3: per-node cue-catalog acknowledgement storage (TRACK-H-H3-SPEC.md §4) |
 | v18 | shipped | Track H seam H4 defect fix: `entry_occurrence_sequence` on `fpp_playlist_entry_observations`, the entry-start identity a looping FPP playlist needs to re-activate its Cues |
-| v19+ | unallocated | free |
+| v19 | shipped | operator-facing audio gain moves to decibels: every stored `audio.settings` revision's `defaultMaxBackgroundGain`/`duckTargetGain` is rewritten to `defaultMaxBackgroundGainDb`/`duckTargetGainDb` so an existing revision reads back at the same audible level |
+| v20 | reserved | Lane 20 seam SM-312 on `dev/multi-audio`: re-key `audio_sessions` from `id` alone to `(node_id, id)` so two nodes dispatching the same session id keep separate desired state and revision; existing rows migrated in place. Reserved here so Lanes 16 and 17 cannot mint it; the migration lands with the SM-312 fold |
+| v21+ | unallocated | free |
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are
@@ -845,7 +935,8 @@ sessions running.
 |---|---|---|
 | RES-001 to RES-017 | shipped | see the research tracker |
 | RES-018 | issued | FPP brightness, ADR-043 playlist identity, and the three-repository plugin runtime (Tracks F/H) |
-| RES-019+ | unallocated | free |
+| RES-019 | issued | PTP-synchronized multi-node audio: clock provider, scheduled start, rate lock, output latency |
+| RES-020+ | unallocated | free |
 
 ## API paths
 

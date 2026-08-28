@@ -72,11 +72,17 @@ input {
   z-index: 20;
 }
 
-/* Phone: the group wrapper vanishes from the box tree so its links remain
-   direct flex children of the bottom tab bar, and the heading is hidden.
-   The tab bar's layout is therefore exactly what it was before grouping
-   was introduced. */
+/* Phone: the group wrapper AND its links list both vanish from the box
+   tree (nested `display: contents`) so links remain direct flex children
+   of the bottom tab bar, and the heading control is hidden. Collapsing is
+   a sidebar-only affordance -- this layout is exactly what it was before
+   collapsible groups (and before grouping) were introduced, and `[data-
+   open]` is never read here. */
 .app-nav__group {
+  display: contents;
+}
+
+.app-nav__group-links {
   display: contents;
 }
 
@@ -117,6 +123,16 @@ input {
     flex-direction: column;
     width: 12rem;
     height: 100vh;
+    /* Operator-reported: at this width the column held more links than
+       100vh of vertical space, so the last group was clipped below the
+       viewport with no way to reach it, and the sidebar's own background
+       stopped at the viewport edge while links kept going underneath it
+       against the page background. Scrolling the nav internally keeps
+       every link reachable and keeps the background covering exactly the
+       column that is actually visible, while the column itself stays
+       pinned (`position: sticky` above) so the main content is what
+       scrolls, not the nav. */
+    overflow-y: auto;
     border-top: none;
     border-right: 1px solid var(--color-border);
     align-items: stretch;
@@ -132,18 +148,63 @@ input {
   .app-nav__group {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
     padding: var(--space-3) var(--space-2);
   }
 
+  /* Each group's heading is now a real toggle control (a <button
+     aria-expanded>, not a div with a click handler -- see Layout.tsx),
+     so this resets it back to reading like the plain heading label it
+     replaced rather than a browser button. */
   .app-nav__group-heading {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    width: 100%;
     margin: 0 0 var(--space-1);
-    padding: 0 var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    min-height: var(--touch-target-min);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
     font-size: var(--font-size-sm);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
+  .app-nav__group-heading:hover {
+    color: var(--color-text);
+  }
+
+  /* Owner-reported density fix: 25 links across 5 groups (13 alone in
+     Configure) sat below the fold with only #114's internal scroll to
+     reach them, which macOS's auto-hiding scrollbar made read as
+     truncated rather than scrollable. Collapsing groups the operator is
+     not using keeps the column short; `.app-nav__group[data-open='true']`
+     needs no rule of its own because `.app-nav__group-links`'s own
+     `display: flex` above already applies whenever this `display: none`
+     override does not. */
+  .app-nav__group[data-open='false'] .app-nav__group-links {
+    display: none;
+  }
+
+  .app-nav__group-links {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  /* A collapsed group still shows how many links it holds, so it never
+     reads as empty. Hidden while expanded, where the links themselves
+     already answer that question. */
+  .app-nav__group-count {
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
     color: var(--color-text-muted);
   }
 
@@ -174,6 +235,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
@@ -207,6 +269,10 @@ input {
   color: var(--color-text);
   font-weight: 700;
   white-space: nowrap;
+  /* The indicator is a link to the mode switch (config/show.mode); it must
+     keep reading as the same badge, not gain the page's default link
+     underline/colour. */
+  text-decoration: none;
 }
 
 .show-mode--show {
@@ -232,6 +298,45 @@ input {
 .show-mode__note {
   font-weight: 400;
   margin-left: var(--space-1);
+}
+
+/* Operator-reported: the signed-in identity/sign-out control used to take
+   a full-width band across the top of every page (SessionPanel's own
+   signed-in state). It now renders in the header instead (Layout.tsx),
+   compact rather than banded -- signed-out/bootstrap keep the band because
+   those need room for the Sign in / Use a token forms a header cannot fit.
+   Selector specificity (two classes) beats status.css's `.session-panel`
+   rules regardless of import order, so this does not depend on the two
+   files loading in a particular sequence. */
+/* CoordinatorBuildNotice folded into the header (Layout.tsx): a bare <p>
+   otherwise carries the browser default block margin, which would reopen
+   the vertical space this fold is meant to remove. */
+.app-header .coordinator-build-notice {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.app-header .session-panel--signed-in {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border-bottom: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  flex-wrap: wrap;
+}
+
+.app-header .session-panel--signed-in button {
+  min-height: var(--touch-target-min);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: var(--font-weight-medium);
 }
 
 .icon-button {
@@ -362,6 +467,68 @@ input {
 
 .details-section[open] > .details-section__summary {
   margin-bottom: var(--space-3);
+}
+
+/* views/Configuration.tsx: the four configuration kinds (FPP endpoints,
+   Resolume, FPP MQTT, asset store settings) are unrelated objects that
+   each get their own revision history, so each renders as its own
+   `.panel` (this file's existing bounded-section treatment) rather than
+   running together on one page with no visual boundary between them.
+   `.config-section` only adds the scroll offset an in-page jump link
+   needs to clear the sticky `.app-header`; the border/background/padding
+   come from `.panel` itself. */
+.config-section {
+  scroll-margin-top: var(--space-6);
+}
+
+/* The section index at the top of Configuration.tsx: a plain in-page
+   jump list, not a tab component (none is permitted here) - four links
+   to the four `.config-section` panels below, wrapping on a narrow
+   phone viewport rather than overflowing it. */
+.config-index__list {
+  list-style: none;
+  margin: 0 0 var(--space-4) 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.config-index__list a {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-decoration: none;
+  color: var(--color-link);
+  min-height: var(--touch-target-min);
+  box-sizing: border-box;
+}
+
+.config-index__list a:hover {
+  border-color: var(--color-accent);
+}
+
+/* The compact active-revision callout (views/Configuration.tsx): the
+   revision/source/creator fact (operator-relevant, plain weight) and the
+   restart-required fact (the one notice an operator must not miss,
+   staying bold and on its own line) as two short lines instead of one
+   run-on sentence mixing both - CLAUDE.md's readability defect report's
+   own complaint. Neither line is collapsible: ADR-011 forbids collapsing
+   anything that is not superseded/historical, and both lines describe
+   the currently active revision. */
+.config-status {
+  margin: 0 0 var(--space-3) 0;
+}
+
+.config-status p {
+  margin: 0 0 var(--space-1) 0;
+}
+
+.config-status p:last-child {
+  margin-bottom: 0;
 }
 
 /* FPPDetail.tsx's "Commands" panel: the transport commands (Stop, Stop

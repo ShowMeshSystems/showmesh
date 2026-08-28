@@ -27,10 +27,13 @@ import (
 // coordinator dependency, matching every other wire boundary in this
 // codebase.
 type audioNodeConfig struct {
-	ProgramRoute          string `json:"programRoute"`
-	LTCRoute              string `json:"ltcRoute"`
+	ProgramRoute string `json:"programRoute"`
+	// LTCRoute and LTCChannel are empty/zero on a program-only node that
+	// emits no LTC. gstengine.Config already accepts LTCChannel 0 and
+	// wires every unclaimed channel to silence.
+	LTCRoute              string `json:"ltcRoute,omitempty"`
 	ProgramChannels       []int  `json:"programChannels"`
-	LTCChannel            int    `json:"ltcChannel"`
+	LTCChannel            int    `json:"ltcChannel,omitempty"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
 	Revision              int64  `json:"revision"`
@@ -183,10 +186,21 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 	if err := rejectUnknownKeys(action, params, audioNodeConfigureKnownKeys); err != nil {
 		return audioNodeConfig{}, err
 	}
-	for _, field := range []string{"programRoute", "ltcRoute", "programChannels", "ltcChannel", "clockDomain", "clockDomainProvenance", "revision"} {
+	for _, field := range []string{"programRoute", "programChannels", "clockDomain", "clockDomainProvenance", "revision"} {
 		if _, ok := params[field]; !ok {
 			return audioNodeConfig{}, fmt.Errorf("%s: params.%s is required", action, field)
 		}
+	}
+	// ltcRoute and ltcChannel are the one optional pair: both absent
+	// declares a program-only node that emits no LTC (a two-output
+	// interface has no discrete channel to carry it). Either alone is an
+	// operator mistake with two plausible readings, so it is refused
+	// rather than half-honoured, matching the coordinator's own decode.
+	_, haveLTCRoute := params["ltcRoute"]
+	_, haveLTCChannel := params["ltcChannel"]
+	if haveLTCRoute != haveLTCChannel {
+		return audioNodeConfig{}, fmt.Errorf(
+			"%s: params.ltcRoute and params.ltcChannel must be given together; omit both for a program-only node", action)
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
@@ -199,7 +213,7 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 	if p.ProgramRoute == "" {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.programRoute must be a non-empty string", action)
 	}
-	if p.LTCRoute == "" {
+	if haveLTCRoute && p.LTCRoute == "" {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.ltcRoute must be a non-empty string", action)
 	}
 	if len(p.ProgramChannels) == 0 {
@@ -210,7 +224,7 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 			return audioNodeConfig{}, fmt.Errorf("%s: every programChannels index must be positive, got %d", action, ch)
 		}
 	}
-	if p.LTCChannel < 1 {
+	if haveLTCChannel && p.LTCChannel < 1 {
 		return audioNodeConfig{}, fmt.Errorf("%s: params.ltcChannel must be a positive channel index", action)
 	}
 	if p.ClockDomain == "" {

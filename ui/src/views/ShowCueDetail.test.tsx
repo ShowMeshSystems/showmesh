@@ -1,22 +1,27 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ShowCueDetail } from './ShowCueDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel } from '../app/test-support/fixtures'
+import { makeModel, makeShowList } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import { ApiError } from '../api/errors'
 import type { Model } from '../app/types'
 
-const { getShowCue, getShowCueRevisions, putShowCue } = vi.hoisted(() => ({
+const { getShowCue, getShowCueRevisions, putShowCue, listConfigObjects } = vi.hoisted(() => ({
   getShowCue: vi.fn(),
   getShowCueRevisions: vi.fn(),
   putShowCue: vi.fn(),
+  listConfigObjects: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getShowCue, getShowCueRevisions, putShowCue }
+  return { ...actual, getShowCue, getShowCueRevisions, putShowCue, listConfigObjects }
+})
+
+beforeEach(() => {
+  listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
 })
 
 afterEach(() => {
@@ -24,6 +29,7 @@ afterEach(() => {
   getShowCue.mockReset()
   getShowCueRevisions.mockReset()
   putShowCue.mockReset()
+  listConfigObjects.mockReset()
 })
 
 const adminSession = makeAuthenticatedSession({
@@ -140,7 +146,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByRole('button', { name: 'Create cue' }))
 
@@ -153,7 +159,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     // The LTC checkbox itself is disabled until audio is enabled, so the
     // real control cannot reach this state: this proves buildPayload's own
@@ -172,7 +178,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Render'))
     await user.type(screen.getByLabelText(/Sequence/), 'opening-sequence')
@@ -189,12 +195,65 @@ describe('ShowCueDetail (new cue authoring)', () => {
     )
   })
 
+  it('refuses a blank audio start offset instead of coercing it to zero', async () => {
+    const user = userEvent.setup()
+    renderNew()
+
+    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Name'), 'Opening number')
+    await user.click(screen.getByLabelText('Audio'))
+    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
+    // Start offset deliberately left blank.
+    await user.click(screen.getByRole('button', { name: 'Create cue' }))
+
+    expect(await screen.findByText(/Audio start offset must be a whole number/)).toBeVisible()
+    expect(putShowCue).not.toHaveBeenCalled()
+  })
+
+  it('refuses a blank LTC start offset instead of coercing it to zero', async () => {
+    const user = userEvent.setup()
+    renderNew()
+
+    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Name'), 'Opening number')
+    await user.click(screen.getByLabelText('Audio'))
+    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
+    await user.type(screen.getByLabelText(/^Start offset \(milliseconds\)$/), '0')
+    await user.click(screen.getByLabelText(/^LTC/))
+    // LTC start offset deliberately left blank.
+    await user.click(screen.getByRole('button', { name: 'Create cue' }))
+
+    expect(await screen.findByText(/LTC start offset must be a whole number/)).toBeVisible()
+    expect(putShowCue).not.toHaveBeenCalled()
+  })
+
+  it('refuses a blank announcement fade instead of coercing it to zero (an audible hard cut)', async () => {
+    const user = userEvent.setup()
+    renderNew()
+
+    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Name'), 'Opening number')
+    await user.click(screen.getByLabelText('Audio'))
+    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
+    await user.type(screen.getByLabelText(/^Start offset \(milliseconds\)$/), '0')
+    await user.click(screen.getByLabelText(/^Announcement/))
+    await user.selectOptions(screen.getByLabelText('Policy'), 'mix')
+    // Fade deliberately left blank.
+    await user.click(screen.getByRole('button', { name: 'Create cue' }))
+
+    expect(await screen.findByText(/Announcement fade must be a whole number/)).toBeVisible()
+    expect(putShowCue).not.toHaveBeenCalled()
+  })
+
   it('requires a duck gain when the announcement policy is "duck"', async () => {
     const user = userEvent.setup()
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Audio'))
     await user.type(screen.getByLabelText('Asset'), 'opening-audio')
@@ -226,7 +285,7 @@ describe('ShowCueDetail (new cue authoring)', () => {
     renderNew()
 
     await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByLabelText('Audio'))
     await user.type(screen.getByLabelText('Asset'), 'opening-audio')

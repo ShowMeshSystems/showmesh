@@ -17,6 +17,14 @@ import { TokenPrompt } from './TokenPrompt'
 // is a bar, and the sign-in/bootstrap forms it can reveal push the rest
 // of the page down rather than covering it, so an operator who is only
 // here to look at the dashboard is never interrupted by it.
+//
+// Operator-reported: the signed-in case used to render here too, spending
+// a full-width band on every page on "Signed in as X" and Sign out. That
+// case now renders from SessionIdentity below, in Layout.tsx's header,
+// where a name and one button fit without a band. Signed-out and
+// bootstrap-required keep the band here because each reveals a form
+// (Sign in / Use a token instead, or the bootstrap claim form) that a
+// header has no room for.
 export function SessionPanel() {
   const model = useModelContext()
   const state = describeSignInState(model.session)
@@ -24,7 +32,23 @@ export function SessionPanel() {
   if (state.kind === 'loading') return null
   if (state.kind === 'bootstrap_required') return <BootstrapBanner />
   if (state.kind === 'signed_out') return <SignedOutBanner />
-  return <SignedInBanner name={state.session.principal?.name ?? null} role={state.session.principal?.role ?? null} />
+  return null
+}
+
+// The signed-in identity and its sign-out control, for Layout.tsx's header.
+// Same `describeSignInState` and same non-gating on `blockContent` as
+// SessionPanel above, for the same reason: an operator must be able to see
+// who they are signed in as, and sign out, even while the rest of the page
+// is showing "no data yet". Renders nothing for every other state -- those
+// stay SessionPanel's band, above.
+export function SessionIdentity() {
+  const model = useModelContext()
+  const state = describeSignInState(model.session)
+
+  if (state.kind !== 'signed_in') return null
+  return (
+    <SignedInBanner name={state.session.principal?.name ?? null} role={state.session.principal?.role ?? null} />
+  )
 }
 
 function BootstrapBanner() {

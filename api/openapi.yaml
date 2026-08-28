@@ -1341,8 +1341,15 @@ paths:
       summary: Dispatch audio.gain.set to a node's playback session
       description: >-
         Behind `audio:command`. Sets the session's CONFIGURED gain,
-        clamped to its ceiling (`params.gain` is linear, not dB - see
-        AUDIO-ENGINE.md). The ceiling is enforced at the point a gain
+        clamped to its ceiling. `params.gainDb` is in DECIBELS: `0` is
+        unity, `-6.02` is half amplitude, `-60` and below is silence, and
+        `+12` is the most this accepts. The coordinator converts it to
+        the engine's linear amplitude multiplier once, at its own
+        boundary; the node and the engine below it stay linear
+        (AUDIO-ENGINE.md). The pre-decibel `params.gain` is refused by
+        name, naming `params.gainDb` as its replacement, because the two
+        units share a number range and a `0.5` meant for a halving would
+        otherwise dispatch as a half-decibel lift. The ceiling is enforced at the point a gain
         takes effect, not only at validation, and a clamp is reported as
         evidence rather than silently applied. While the session is
         muted or ducked by a higher-priority announcement, this
@@ -1417,12 +1424,19 @@ paths:
       summary: Dispatch audio.gain.fade to a node's playback session
       description: >-
         Behind `audio:command`. Sets the session's CONFIGURED gain to
-        `params.targetGain` (linear, not dB) immediately, clamped to the
+        `params.targetGainDb` immediately, clamped to the
         session's ceiling, and schedules a fade toward it over
         `params.durationMs` along `params.curve` (only `"linear"`
-        ships). While the session is muted or ducked, the ramp actually
+        ships - that names the fade SHAPE, not the gain unit).
+        `params.targetGainDb` is in DECIBELS: `0` is unity, `-6.02` is
+        half amplitude, `-60` and below is silence, and `+12` is the most
+        this accepts. The coordinator converts it to the engine's linear
+        amplitude multiplier once, at its own boundary. The pre-decibel
+        `params.targetGain` is refused by name, naming
+        `params.targetGainDb` as its replacement.
+        While the session is muted or ducked, the ramp actually
         dispatched to the output targets that suppression's own level,
-        not `params.targetGain`: the configured gain this call records
+        not `params.targetGainDb`: the configured gain this call records
         is what the node returns to once every such reason releases, but
         the fade itself never bypasses an active mute or duck. This
         response reports the fade as DISPATCHED, never as complete -
@@ -2204,7 +2218,46 @@ paths:
         reads are otherwise open - this is not one of the four
         pre-existing read resources the open-reads posture covers. Not
         carried on the SSE change stream.
+
+        Pages in both directions, over ONE cursor: every entry carries its
+        own `id` (`AuditEntry.id`), and both `since` and `before` are
+        expressed in that id. `order=asc` (the default) walks forward from
+        `since`, oldest first. `order=desc` walks backward from `before`,
+        newest first, and `before` omitted means "start at the newest
+        retained entry" - which is how a client opens on the most recent
+        activity in one request instead of walking up to the whole
+        retained log to reach the end of it.
+
+        An id is NOT a position in the result. Retention prunes from the
+        oldest end and ids are never reused, so the lowest retained id is
+        normally greater than zero; a client that advanced a cursor by
+        counting the entries it received would re-read the same page
+        indefinitely. Advance `since` to the LAST entry's id of an
+        ascending page, and `before` to the LAST entry's id of a
+        descending page.
+
+        `AuditResponse.oldestRetainedId` is what makes the backward walk
+        honest at its far end: a descending client has reached the true
+        beginning of retained history when it has returned that id, not
+        merely when a page comes back short - retention can trim below the
+        cursor between two pages. This endpoint still reports no `gap`
+        flag: ADR-024 promises no "no gap and no duplicate" guarantee
+        across a prune the way ADR-020's events contract does, and
+        `oldestRetainedId` reports what the audit service can actually
+        establish rather than a guarantee it cannot.
       parameters:
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+          description: >-
+            `asc` (the default, and the behaviour before this parameter
+            existed) returns entries oldest first and pages with `since`.
+            `desc` returns entries newest first and pages with `before`.
+            The ordering actually used is echoed as `AuditResponse.order`.
         - name: since
           in: query
           required: false
@@ -2213,8 +2266,23 @@ paths:
             minimum: 0
             default: 0
           description: >-
-            An opaque cursor: return entries after this value. 0 (the
-            default) means "from the beginning of retained history".
+            Exclusive lower bound: return entries whose `id` is strictly
+            greater than this value, oldest first. 0 (the default) means
+            "from the beginning of retained history". Valid only with
+            `order=asc`; sending it with `order=desc`, or alongside
+            `before`, is a `400` rather than a silently ignored parameter.
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: >-
+            Exclusive upper bound: return entries whose `id` is strictly
+            less than this value, newest first. 0 (the default) means
+            "from the newest retained entry". Requires `order=desc`;
+            sending it with `order=asc`, or alongside `since`, is a `400`.
         - name: limit
           in: query
           required: false
@@ -6531,15 +6599,26 @@ paths:
       summary: Report whether one FPP-backed Playlist is ready (TRACK-H-H2-SPEC.md §6)
       description: >-
         Open under `observation:read`, matching the reconciliation route
-        above. Reports whether every one of §6's five ordered conditions
-        holds (a definition is stored for the binding's
-        (instanceUuid, playlistHash), every entry's (section, position)
-        exists in that definition with matching filenames, every
-        referenced Cue exists and belongs to the same Show, and the
-        latest accepted observation (when one exists) carries the same
-        playlistHash), and the exact failing one when it does not. Refuses
-        with `400` for a playlist whose runner is not `fpp`: §6 readiness
-        is an FPP-specific concept. Read-only: this route never activates
+        above. Reports whether every one of §6's ordered conditions holds,
+        and the exact failing one when it does not. §6 originally specified
+        five and closed the vocabulary; it has since been opened, and the
+        `failingCondition` enum below is the authoritative list of what
+        this route currently checks. In order: a definition is stored for
+        the binding's (instanceUuid, playlistHash); no newer definition is
+        stored for the same instance and playlist name under a different
+        hash; every entry's (section, position) exists in that definition
+        with matching filenames; every referenced Cue exists and belongs
+        to the same Show; the latest accepted observation, when one
+        exists, either carries the same playlistHash or, if it could not
+        establish identity at all, fails as `evidence-unavailable` rather
+        than warning; when a referenced Cue declares a render output,
+        every node holding a show.surface object for this Playlist's Show
+        currently holds a render assignment for it; no two Cues the Show
+        can run concurrently hold a colliding exclusive claim; and every
+        node participating in the Show's catalog has acknowledged the
+        revision the active show requires. Refuses with `400` for a
+        playlist whose runner is not `fpp`: §6 readiness is an
+        FPP-specific concept. Read-only: this route never activates
         anything.
       parameters:
         - name: playlistId
@@ -7532,6 +7611,16 @@ components:
             surface a node supervises and attributing its status to a
             surface would report one fact once per surface as though each
             were independent.
+
+
+            `surface.pipeline.state`'s open vocabulary includes `superseded`:
+            a surface holding its previous render across an active-show
+            switch reports this instead of `running` - the coordinator's own
+            verdict, compared against its current show resolution, never a
+            claim the node makes about itself. `surface.content.show` and
+            `surface.content.generation` name the show and generation that
+            authorized what is currently held, present exactly when
+            `surface.content.catalog_revision` is.
           items:
             $ref: "#/components/schemas/ObservationEntry"
         audio:
@@ -8935,10 +9024,18 @@ components:
         One element of GET /audit (ADR-024 decision 11). params is never
         null (an entry with none still reports an empty object).
       required:
-        [timestamp, principalId, principalName, form, credentialId,
+        [id, timestamp, principalId, principalName, form, credentialId,
          clientAddr, action, target, params, idempotencyKey, kind,
          commandId, outcome, outcomeState, outcomeReason]
       properties:
+        id:
+          type: integer
+          description: >-
+            This entry's append-only row id: strictly increasing, never
+            reused, and the value BOTH of this endpoint's cursors are
+            expressed in (`since` forward, `before` backward). Not a
+            position in the result - see this operation's own description
+            for why counting entries is not a cursor.
         timestamp:
           type: string
           format: date-time
@@ -8999,15 +9096,24 @@ components:
     AuditResponse:
       type: object
       description: >-
-        The body of GET /audit. Unlike EventsResponse, this carries no
-        gap/oldestRetainedSeq-shaped fields: the coordinator's audit
-        service currently exposes no oldest-retained cursor for this
-        endpoint to report one honestly.
-      required: [serverTime, entries]
+        The body of GET /audit. `order` is the ordering the entries are
+        actually in, echoed rather than inferred. `oldestRetainedId` is
+        the lowest id still retained, or null when the log retains nothing
+        at all; it mirrors EventsResponse.oldestRetainedSeq and is what
+        lets a client paging backward tell the beginning of retained
+        history from a page boundary. Unlike EventsResponse there is still
+        no `gap` flag, and that absence is deliberate rather than
+        unreported - see this operation's description.
+      required: [serverTime, order, oldestRetainedId, entries]
       properties:
         serverTime:
           type: string
           format: date-time
+        order:
+          type: string
+          enum: [asc, desc]
+        oldestRetainedId:
+          type: [integer, "null"]
         entries:
           type: array
           items:
@@ -10585,13 +10691,20 @@ components:
         playback; its default is a starting point, not a tuned value.
         `defaultFadeCurve` must be a member of the audio engine's own
         closed fade-curve vocabulary (only "linear" ships today).
-        `defaultMaxBackgroundGain` is a linear amplitude multiplier - 1.0
-        is unity gain - applied as the default ceiling on a background bed.
-        `duckTargetGain` is how far a node lowers a session while a
+        `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain,
+        `+12` is the most accepted - applied as the default ceiling on a
+        background bed.
+        `duckTargetGainDb` is how far a node lowers a session while a
         higher-priority session ducks it (an announcement over a resting
-        background bed), in that same linear unit: `0` is full silence,
-        and a value of `1` or more is refused because it would not duck
-        anything. THE SHIPPED VALUE IS PROVISIONAL: it has never been
+        background bed), also in decibels: it must be negative and at
+        least `-60`, where `-60` is full silence, and `0` or louder is
+        refused because it would not duck anything. Both are converted to
+        the engine's linear amplitude multiplier once, at the
+        coordinator's own boundary, before anything reaches a node. The
+        pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are
+        refused by name, each naming its replacement, because the two
+        units share a number range.
+        THE SHIPPED VALUE IS PROVISIONAL: it has never been
         heard on the installation's speakers, and the owner picks the
         real one by ear (RES-007). A muted session is unaffected;
         mute silences unconditionally.
@@ -10603,7 +10716,7 @@ components:
         point when its own audio.session.apply carries no override.
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
-         defaultMaxBackgroundGain, duckTargetGain, ltcFrameRate,
+         defaultMaxBackgroundGainDb, duckTargetGainDb, ltcFrameRate,
          ltcDefaultStartOffset]
       properties:
         driftIgnoreThresholdMs:
@@ -10613,15 +10726,21 @@ components:
           enum: [linear]
         defaultFadeDurationMs:
           type: integer
-        defaultMaxBackgroundGain:
+        defaultMaxBackgroundGainDb:
           type: number
-        duckTargetGain:
-          type: number
-          minimum: 0
-          exclusiveMaximum: 1
+          minimum: -60
+          maximum: 12
           description: >-
-            Linear multiplier a ducked session is driven to. Provisional
-            value, not measured.
+            Decibels. 0 dB is unity gain; +12 dB is the typo guard, not a
+            tuned headroom figure. -60 dB is the same silence floor
+            duckTargetGainDb bounds against.
+        duckTargetGainDb:
+          type: number
+          minimum: -60
+          exclusiveMaximum: 0
+          description: >-
+            Decibels a ducked session is driven to. Must be negative;
+            -60 dB is silence. Provisional value, not measured.
         ltcFrameRate:
           type: string
           enum: ["24", "25", "29.97", "30"]
@@ -10716,22 +10835,40 @@ components:
       description: >-
         The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039):
         the body PUT /config/audio.node/{id}
-        accepts (a full replacement - every field required, non-null, and
+        accepts (a full replacement - every required field non-null and
         non-empty), and the "payload" member of GET
         /config/audio.node/{id}'s response. `programRoute` and `ltcRoute`
         name discovered output routes (device identities the node itself
-        reported) and MUST name the same route: program and LTC leave
-        through one interface in one clock domain, so two different route
-        names are refused. `programChannels` is the ordered, distinct,
-        1-based channel indices on that route carrying program audio
-        ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the
-        1-based index carrying LTC and must not appear in `programChannels`.
+        reported) and, when both are given, MUST name the same route:
+        program and LTC leave through one interface in one clock domain,
+        so two different route names are refused. `programChannels` is
+        the ordered, distinct, 1-based channel indices on that route
+        carrying program audio ([1, 2] for reference stereo, [1] for
+        mono); `ltcChannel` is the 1-based index carrying LTC and must
+        not appear in `programChannels`.
+
+
+        `ltcRoute` and `ltcChannel` are the one optional pair, and they
+        are optional TOGETHER: omitting both declares a program-only node
+        that emits no LTC at all, and giving one without the other is
+        refused rather than half-honoured. A program-only declaration is
+        the only way to place a two-output interface, whose LTC-capable
+        route list is correctly empty because ADR-018 requires LTC on a
+        channel discrete from the program pair. Every LTC refusal is
+        unchanged for a declaration that DOES name an LTC route,
+        including the check that the route is one the node advertised as
+        LTC-capable. ADR-042 section 5 already treats losing LTC as
+        costing timecode and never the audience's program audio.
+
+
         `clockDomain` and `clockDomainProvenance` are the operator's own
-        declaration of which hardware clock the two routes share, never
-        inferred.
+        declaration of which hardware clock the routes run on, never
+        inferred, and are required on a program-only node too.
       required:
-        [programRoute, ltcRoute, programChannels, ltcChannel, clockDomain,
-         clockDomainProvenance]
+        [programRoute, programChannels, clockDomain, clockDomainProvenance]
+      dependentRequired:
+        ltcRoute: [ltcChannel]
+        ltcChannel: [ltcRoute]
       properties:
         programRoute:
           type: string
@@ -11287,6 +11424,14 @@ components:
             audio-only: one of the reserved audio.session.*/audio.gain.*/
             audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's
             "Agent operation names" table) - never a new operation name.
+            `params` is otherwise opaque here and validated by the node,
+            with one exception: `audio.gain.set` requires `params.gainDb`
+            and `audio.gain.fade` requires `params.targetGainDb`, both in
+            DECIBELS on the same scale as the gain endpoints (0 dB unity,
+            -60 dB silence, +12 dB the most accepted). The pre-decibel
+            `params.gain`/`params.targetGain` are refused here at
+            authoring time, naming the replacement, rather than
+            discovered when the Cue fires mid-show.
           minLength: 1
     ConfigShowActionTargetWrite:
       type: object
@@ -12260,12 +12405,29 @@ components:
       type: object
       description: >-
         The body of GET /integrations/fpp/playlists/{playlistId}/readiness
-        (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is
-        ready, and which condition fails first when it is not.
-        `warning` is set only for the non-fatal form of the
-        observation-hash check (no observation received yet, "the
-        normal afternoon state, not a fault"), never alongside a
-        non-empty `failingCondition`.
+        (TRACK-H-H2-SPEC.md §6, whose vocabulary has since been opened --
+        see docs/build/TRACK-H-cues-and-playlists.md section H6 for the
+        full account of what was added and why): whether one FPP-backed
+        Playlist is ready, and which condition fails first when it is not.
+        `warning` is set when a condition did not fail readiness outright
+        but is still worth surfacing: either the non-fatal form of the
+        observation-hash check (no observation received at all yet, "the
+        normal afternoon state, not a fault"), or
+        `exclusive-claim-conflict`'s own inconclusive form (a stored Cue
+        elsewhere could not be decoded, so the check could not be
+        verified). `warning` is never set alongside a non-empty
+        `failingCondition` equal to `observation-hash-mismatch`. An
+        observation that WAS received but could not establish identity is
+        the `evidence-unavailable` failing condition, not a warning:
+        readiness never returns `ready: true` for a check it could not
+        evaluate. `definition-superseded` detects an edited-but-never-
+        played FPP playlist directly from the definition store, so it does
+        not require FPP to have played anything since the edit.
+        `node-render-unassigned`, `node-catalog-stale` and
+        `exclusive-claim-conflict` are evaluated against every node
+        participating in this Playlist's own Show's resolved Cue catalog,
+        reusing the same resolution `GET /nodes/{nodeId}/cue-catalog` and
+        the cue-catalog deploy path already use -- never a second one.
       required: [playlistId, ready, serverTime]
       properties:
         playlistId:
@@ -12276,10 +12438,15 @@ components:
           type: string
           enum:
             - definition-missing
+            - definition-superseded
             - entry-not-in-definition
             - entry-filename-mismatch
             - cue-not-ready
+            - evidence-unavailable
             - observation-hash-mismatch
+            - node-render-unassigned
+            - exclusive-claim-conflict
+            - node-catalog-stale
         reason:
           type: string
         warning:
@@ -14289,9 +14456,20 @@ components:
           $ref: "#/components/schemas/CueCatalogOutputs"
     CueCatalogResponse:
       type: object
-      description: The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3).
+      description: >-
+        The body of GET /nodes/{nodeId}/cue-catalog (Track H seam H3, plus
+        its read-only acknowledgement projection). acknowledgedStatus
+        is always present: "catalog-unacknowledged" when this node has
+        never acknowledged a cue catalog, "catalog-current" when its last
+        acknowledged revision equals `revision` above, and
+        "catalog-stale" otherwise (including when no active show is
+        configured at all, so there is nothing to be current with).
+        acknowledgedRevision and acknowledgedAt are both absent exactly
+        when acknowledgedStatus is "catalog-unacknowledged" - a caller
+        must read acknowledgedStatus, never infer "never acknowledged"
+        from their absence.
       additionalProperties: false
-      required: [serverTime, node, configured, entries]
+      required: [serverTime, node, configured, entries, acknowledgedStatus]
       properties:
         serverTime:
           type: string
@@ -14310,6 +14488,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CueCatalogEntry"
+        acknowledgedStatus:
+          type: string
+          enum: [catalog-current, catalog-stale, catalog-unacknowledged]
+        acknowledgedRevision:
+          type: string
+        acknowledgedAt:
+          type: string
+          format: date-time
     CueCatalogAcknowledgeRequest:
       type: object
       description: The body of POST /nodes/{nodeId}/cue-catalog/acknowledge.

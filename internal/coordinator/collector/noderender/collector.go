@@ -222,7 +222,94 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 		)
 	}
 
+	// contentObservedAt is the node's OWN evidence timestamp for the content
+	// identity fields (sf.ContentObservedAt, carried over the wire from
+	// internal/agent/renderreport.go's applyContentIdentity), deliberately
+	// not observedAt/sf.ObservedAt. A cue activation swaps the frame writer
+	// without transitioning PipelineState, so sf.ObservedAt does not move
+	// even though the content identity just changed — judging the four
+	// content signals' freshness against it made a fresh cue swap read as
+	// arbitrarily stale evidence from before the change, and a surface
+	// rendering the same content steadily read stale 45s after any prior
+	// apply. The node re-reads its persisted assignment fresh on every
+	// report tick, so this is a real, continuously refreshed observation —
+	// framesObservedAt's identical reasoning two lines up, applied here to
+	// content identity instead of frame counters.
+	contentObservedAt := sf.ContentObservedAt
+
 	obs = append(obs, surfaceDrawStateObservations(nodeID, res, sf, observedAt, rep)...)
+	obs = append(obs, surfaceContentObservations(nodeID, res, sf, contentObservedAt, rep)...)
+
+	return obs
+}
+
+// surfaceContentObservations renders the six content-identity
+// signals: the FSEQ this surface's frame writer actually applied, plus the
+// cue, catalog revision, Show and generation that authorized it, from the
+// node's own persisted evidence (mqttproto.RenderSurfaceReport.FSEQFilename
+// etc, internal/agent/renderreport.go's applyContentIdentity). sf.FSEQFilename
+// == "" means this surface holds no assignment at all: never a stale
+// filename left over from a previous one, so all six signals are
+// NotCollected together with one reason, mirroring
+// surfaceDrawStateObservations' identical "no active writer" grouping.
+//
+// observedAt is sf.ContentObservedAt (the node's own content-identity read
+// time), NOT sf.ObservedAt — see surfaceReportObservations' contentObservedAt
+// comment for why the two must stay independent.
+func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
+	if sf.FSEQFilename == "" {
+		reason := "this surface holds no render assignment"
+		return []observation.Observation{
+			notCollected(res, SignalSurfaceContentFSEQFilename, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentFSEQContentHash, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentCueID, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentCatalogRevision, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentShow, SourceFor(nodeID), reason, rep.receivedAt),
+			notCollected(res, SignalSurfaceContentGeneration, SourceFor(nodeID), reason, rep.receivedAt),
+		}
+	}
+
+	obs := []observation.Observation{
+		buildValue(nodeID, res, SignalSurfaceContentFSEQFilename, sf.FSEQFilename, observedAt, rep),
+		buildValue(nodeID, res, SignalSurfaceContentFSEQContentHash, sf.FSEQContentHash, observedAt, rep),
+	}
+
+	// CueID is only meaningful when the current assignment was applied by
+	// a cue activation: a direct render.surface.apply assignment has no
+	// cue at all, stated as not applicable rather than fabricated as "".
+	if sf.CueID == "" {
+		obs = append(obs, notCollected(res, SignalSurfaceContentCueID, SourceFor(nodeID),
+			"this surface's current assignment was not applied by a cue activation", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceContentCueID, sf.CueID, observedAt, rep))
+	}
+
+	// CatalogRevision is only meaningful when the persisted assignment
+	// carries an authorization tuple (TRACK-H-H3-SPEC.md section 5),
+	// absent for a legacy assignment persisted before that tuple existed.
+	if sf.CatalogRevision == "" {
+		obs = append(obs, notCollected(res, SignalSurfaceContentCatalogRevision, SourceFor(nodeID),
+			"this surface's current assignment carries no catalog authorization tuple", rep.receivedAt))
+	} else {
+		obs = append(obs, buildValue(nodeID, res, SignalSurfaceContentCatalogRevision, sf.CatalogRevision, observedAt, rep))
+	}
+
+	// Show/Generation come from the identical authorization tuple
+	// CatalogRevision does, and are present or absent together — see
+	// mqttproto.RenderSurfaceReport.Show's own doc comment.
+	if sf.Show == "" {
+		obs = append(obs,
+			notCollected(res, SignalSurfaceContentShow, SourceFor(nodeID),
+				"this surface's current assignment carries no catalog authorization tuple", rep.receivedAt),
+			notCollected(res, SignalSurfaceContentGeneration, SourceFor(nodeID),
+				"this surface's current assignment carries no catalog authorization tuple", rep.receivedAt),
+		)
+	} else {
+		obs = append(obs,
+			buildValue(nodeID, res, SignalSurfaceContentShow, sf.Show, observedAt, rep),
+			buildValue(nodeID, res, SignalSurfaceContentGeneration, sf.Generation, observedAt, rep),
+		)
+	}
 
 	return obs
 }

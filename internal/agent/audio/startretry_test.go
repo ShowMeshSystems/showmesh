@@ -281,3 +281,74 @@ func TestExplicitPrepareRecoversAfterFailedStart(t *testing.T) {
 		t.Fatalf("Start after explicit Prepare: state = %v, want Playing", stateAfterStart)
 	}
 }
+
+// TestOrdinaryRetryRecoversAfterRebindWhilePlaying pins that a session
+// playing when a second audio.node revision rebinds the engine is
+// invalidated to Failed/FaultRouteChanged, and that the ordinary start
+// retry, with no explicit Prepare, recovers it. Driving RebindEngine
+// directly is the faithful reproduction at this package's level: it is
+// the only thing audioEngineRebuilder.rebuild ever does to a Manager.
+func TestOrdinaryRetryRecoversAfterRebindWhilePlaying(t *testing.T) {
+	ctx := context.Background()
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	switchable := NewSwitchableEngine()
+	m := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+
+	id := pkgaudio.SessionID("rebind-while-playing")
+	first := NewFakeEngine(c.now)
+	switchable.Set(first)
+
+	ref := writeTestAsset(t, dir, "rebind.wav", "rebind-asset", []byte("content"))
+	m.Apply(ctx, id, pkgaudio.InvocationID(id+"-apply"), 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r := m.Start(ctx, id, pkgaudio.InvocationID(id+"-start"), 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("setup Start: unexpectedly refused: %+v", r)
+	}
+
+	s, ok := m.get(id)
+	if !ok {
+		t.Fatalf("session %s was not created", id)
+	}
+	s.mu.Lock()
+	stateBeforeRebind := s.state
+	s.mu.Unlock()
+	if stateBeforeRebind != pkgaudio.StatePlaying {
+		t.Fatalf("setup Start: state = %v, want Playing", stateBeforeRebind)
+	}
+
+	// A second audio.node revision, same route, LTC moved to a different
+	// channel: at this package's own level that is exactly one more
+	// RebindEngine call, the only thing audioEngineRebuilder.rebuild ever
+	// does to a Manager.
+	second := NewFakeEngine(c.now)
+	m.RebindEngine(ctx, switchable, second, RebindReasonEngineRebind)
+
+	s.mu.Lock()
+	stateAfterRebind, faultAfterRebind := s.state, s.fault
+	s.mu.Unlock()
+	if stateAfterRebind != pkgaudio.StateFailed || faultAfterRebind != pkgaudio.FaultRouteChanged {
+		t.Fatalf("state after rebind-while-playing = (state=%s fault=%s), want (Failed, %s)", stateAfterRebind, faultAfterRebind, pkgaudio.FaultRouteChanged)
+	}
+
+	// The ordinary operator retry: audio.session.start, no explicit
+	// Prepare.
+	retry := m.Start(ctx, id, pkgaudio.InvocationID(id+"-start-retry"), 3)
+
+	s.mu.Lock()
+	stateAfterRetry, faultAfterRetry := s.state, s.fault
+	s.mu.Unlock()
+
+	t.Logf("ordinary retry after rebind-while-playing: outcome=%v reason=%q state=%v fault=%v", retry.Outcome, retry.Reason, stateAfterRetry, faultAfterRetry)
+
+	// The retry's reported outcome must never claim success while the
+	// session did not actually recover: a Started/Playing claim next to
+	// a Failed session is a desired-versus-observed separation defect in
+	// its own right, distinct from whether the session recovers at all.
+	if stateAfterRetry != pkgaudio.StatePlaying {
+		t.Fatalf("ordinary audio.session.start retry after a rebind-while-playing did not recover: outcome=%v (reason %q), state=%v, fault=%v, want state Playing", retry.Outcome, retry.Reason, stateAfterRetry, faultAfterRetry)
+	}
+	if retry.Outcome == pkgaudio.OutcomeFailed || retry.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("ordinary retry outcome = %v (reason %q) while the session recovered to Playing: the outcome must not report failure for a retry that actually succeeded", retry.Outcome, retry.Reason)
+	}
+}

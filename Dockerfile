@@ -40,9 +40,22 @@ COPY pkg/ ./pkg/
 
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=dev
-ARG COMMIT=none
-ARG BUILD_DATE=unknown
+ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
+
+# These three build args have no defaults on purpose: a build that supplied
+# nothing would otherwise produce a binary claiming a version it does not
+# have. There is no legitimate build path that needs a default:
+# CI's docker job, `make docker-build`, and `make deploy-build`/`deploy-up`
+# all pass real values (see their own definitions), so refuse instead of
+# silently stamping an empty ldflag, which would read as absent rather
+# than as unset.
+RUN if [ -z "$VERSION" ] || [ -z "$COMMIT" ] || [ -z "$BUILD_DATE" ]; then \
+      echo "error: VERSION, COMMIT, and BUILD_DATE build args are required and must be non-empty." >&2; \
+      echo "Build with 'make docker-build' (plain image), or 'make deploy-build'/'make deploy-up' (deploy/ Compose bundle), which supply real values automatically." >&2; \
+      exit 1; \
+    fi
 
 # CGO_ENABLED=0 keeps the binary static so it runs unmodified on the
 # distroless runtime image, which has no libc shared objects to link

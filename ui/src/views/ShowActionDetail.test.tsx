@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ShowActionDetail } from './ShowActionDetail'
 import { ModelContext } from '../app/ModelContext'
 import {
@@ -10,21 +10,36 @@ import {
   makeResolumeCompositionDeck,
   makeResolumeCompositionLayer,
   makeResolumeCompositionResponse,
+  makeShowList,
 } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import { ForbiddenError } from '../api/errors'
 import type { Model } from '../app/types'
 
-const { putShowAction, getResolumeComposition, getShowAction, getShowActionRevisions, getActionBinding } = vi.hoisted(() => ({
-  putShowAction: vi.fn(),
-  getResolumeComposition: vi.fn(),
-  getShowAction: vi.fn(),
-  getShowActionRevisions: vi.fn(),
-  getActionBinding: vi.fn(),
-}))
+const { putShowAction, getResolumeComposition, getShowAction, getShowActionRevisions, getActionBinding, listConfigObjects } =
+  vi.hoisted(() => ({
+    putShowAction: vi.fn(),
+    getResolumeComposition: vi.fn(),
+    getShowAction: vi.fn(),
+    getShowActionRevisions: vi.fn(),
+    getActionBinding: vi.fn(),
+    listConfigObjects: vi.fn(),
+  }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, putShowAction, getResolumeComposition, getShowAction, getShowActionRevisions, getActionBinding }
+  return {
+    ...actual,
+    putShowAction,
+    getResolumeComposition,
+    getShowAction,
+    getShowActionRevisions,
+    getActionBinding,
+    listConfigObjects,
+  }
+})
+
+beforeEach(() => {
+  listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
 })
 
 afterEach(() => {
@@ -34,6 +49,7 @@ afterEach(() => {
   getShowAction.mockReset()
   getShowActionRevisions.mockReset()
   getActionBinding.mockReset()
+  listConfigObjects.mockReset()
 })
 
 function renderNewAction(model: Model) {
@@ -79,7 +95,7 @@ describe('ShowActionDetail (new action authoring)', () => {
     renderNewAction(makeModel({ session: adminSession }))
 
     await user.type(screen.getByLabelText('Action id'), 'projectors-on')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Label'), 'Projectors on')
     await user.type(screen.getByLabelText('FPP instance id'), 'fpp-main')
     await user.selectOptions(screen.getByLabelText('Primitive'), 'startPlaylist')
@@ -94,7 +110,7 @@ describe('ShowActionDetail (new action authoring)', () => {
     renderNewAction(makeModel({ session: adminSession }))
 
     await user.type(screen.getByLabelText('Action id'), 'projectors-on')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Label'), 'Projectors on')
     await user.selectOptions(screen.getByLabelText('Safety class'), 'powerOff')
     await user.selectOptions(screen.getByLabelText('Integration'), 'mqtt')
@@ -129,7 +145,7 @@ describe('ShowActionDetail (new action authoring)', () => {
     renderNewAction(makeModel({ session: adminSession }))
 
     await user.type(screen.getByLabelText('Action id'), 'projectors-on')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Label'), 'Projectors on')
     await user.selectOptions(screen.getByLabelText('Safety class'), 'powerOff')
     await user.selectOptions(screen.getByLabelText('Integration'), 'mqtt')
@@ -181,7 +197,7 @@ describe('ShowActionDetail (new action authoring)', () => {
     renderNewAction(makeModel({ session: adminSession }))
 
     await user.type(screen.getByLabelText('Action id'), 'projectors-on')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Label'), 'Projectors on')
     await user.selectOptions(screen.getByLabelText('Safety class'), 'powerOff')
     await user.selectOptions(screen.getByLabelText('Integration'), 'mqtt')
@@ -286,7 +302,7 @@ describe('ShowActionDetail (Resolume authoring)', () => {
     renderNewAction(makeModel({ session: adminSession }))
 
     await user.type(screen.getByLabelText('Action id'), 'launch-snow')
-    await user.type(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Label'), 'Launch snow')
     await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
     await user.selectOptions(screen.getByLabelText('Integration'), 'resolume')

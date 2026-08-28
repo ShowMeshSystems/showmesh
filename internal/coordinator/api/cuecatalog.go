@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fppreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
@@ -67,7 +69,14 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 	if h.deps.AssetManifests == nil {
 		jsonWrite(w, v1.CueCatalogResponse{
 			ServerTime: formatTime(now), Node: nodeID, Configured: false, Entries: []v1.CueCatalogEntry{},
+			AcknowledgedStatus: v1.CueCatalogStatusNeverAcknowledged,
 		})
+		return
+	}
+
+	ackStatus, ackRevision, ackAt, err := h.resolveCueCatalogAcknowledgedFields(ctx, nodeID, "")
+	if err != nil {
+		h.writeInternalError(w, now, "get node cue catalog acknowledgement", err)
 		return
 	}
 
@@ -79,6 +88,7 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 	if !active.Configured {
 		jsonWrite(w, v1.CueCatalogResponse{
 			ServerTime: formatTime(now), Node: nodeID, Configured: false, Entries: []v1.CueCatalogEntry{},
+			AcknowledgedStatus: ackStatus, AcknowledgedRevision: ackRevision, AcknowledgedAt: ackAt,
 		})
 		return
 	}
@@ -89,11 +99,47 @@ func (h *handlers) handleGetNodeCueCatalog(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	generation := catalog.Generation
+
+	// Recomputed against catalog.Revision now that it is known. The
+	// no-active-show lookup above deliberately never treats a stored
+	// acknowledgement as "current" (mirrors
+	// handlePostNodeCueCatalogAcknowledge's own "no current to match"
+	// rule), so a real active show's revision must be resolved first.
+	ackStatus, ackRevision, ackAt, err = h.resolveCueCatalogAcknowledgedFields(ctx, nodeID, catalog.Revision)
+	if err != nil {
+		h.writeInternalError(w, now, "get node cue catalog acknowledgement", err)
+		return
+	}
+
 	jsonWrite(w, v1.CueCatalogResponse{
 		ServerTime: formatTime(now), Node: catalog.Node, Configured: true,
 		Show: catalog.Show, Generation: &generation, Revision: catalog.Revision,
-		Entries: mapCueCatalogEntries(catalog.Entries),
+		Entries:              mapCueCatalogEntries(catalog.Entries),
+		AcknowledgedStatus:   ackStatus,
+		AcknowledgedRevision: ackRevision,
+		AcknowledgedAt:       ackAt,
 	})
+}
+
+// resolveCueCatalogAcknowledgedFields turns [fppreconcile.NodeCatalogAckStatus]'s
+// answer into CueCatalogResponse's three-way verdict: the returned
+// revision/timestamp pointers are both nil exactly when the status is
+// [v1.CueCatalogStatusNeverAcknowledged]. This is a thin wire-formatting
+// wrapper, never a second resolution: see that function's own doc comment
+// for the acknowledgement semantics, shared with this package's
+// node-catalog-stale readiness condition and the per-node readiness
+// resolution any later caller needs.
+func (h *handlers) resolveCueCatalogAcknowledgedFields(ctx context.Context, nodeID, currentRevision string) (status string, revision, acknowledgedAt *string, err error) {
+	status, ackRevision, ackAt, err := fppreconcile.NodeCatalogAckStatus(ctx, h.deps.AssetManifests, nodeID, currentRevision)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if status == v1.CueCatalogStatusNeverAcknowledged {
+		return status, nil, nil, nil
+	}
+	rev := ackRevision
+	at := formatTime(ackAt)
+	return status, &rev, &at, nil
 }
 
 // --- POST /nodes/{nodeId}/cue-catalog/acknowledge ---

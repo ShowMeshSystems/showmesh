@@ -42,7 +42,7 @@ function outcomeBadge(outcome: MacroRunStep['outcome']): { tone: StatusTone; ico
       // that the show did the wrong thing.
       return { tone: 'warn', icon: '?', label: 'Unconfirmed' }
     case 'unconfirmable':
-      return { tone: 'warn', icon: '—', label: 'Unconfirmable (no response was ever expected)' }
+      return { tone: 'warn', icon: '-', label: 'Unconfirmable (no response was ever expected)' }
     case 'failed':
       return { tone: 'bad', icon: '✕', label: 'Failed' }
     case 'skipped':

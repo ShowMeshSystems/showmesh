@@ -350,34 +350,75 @@ func resolveActivationsForCue(ctx context.Context, st *store.Store, active asset
 
 // Authorize is TRACK-H-H3-SPEC.md section 6's coordinator-side refusal
 // check, run INDEPENDENTLY of [Decide]: it re-resolves the active show and
-// nodeID's own Cue catalog FRESH, right now, and calls [cueauth.Check]
+// nodeID's own Cue catalog FRESH, right now, and calls [cueauth.CheckLazy]
 // against act.Tuple() — never against anything [Decide] computed earlier.
 // A caller MUST call this once per node, immediately before dispatching
 // that node's own Activation, and must not dispatch when ok is false: H3
 // spec section 6's "a refusal is a state with evidence, never a silent
 // no-op, and never a fallback to a different Cue, Playlist, or Show."
-func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation) (outcome cueauth.Outcome, ok bool, err error) {
+//
+// reason is populated ONLY when outcome is [cueauth.OutcomeAssetMissing].
+// The asset check [cueauth.CheckLazy] runs (via [cueAssetsPresent]) is
+// scoped to act.CueID's own resolved outputs alone, never nodeID's whole
+// asset manifest ([assetsync.ComputeNodeManifest]) — an asset belonging to
+// a Cue nobody asked for must never refuse a DIFFERENT Cue whose own
+// assets are present and verified — and reason names the sequence, the
+// asset, and the Cue the missing asset belongs to, so a refusal is never
+// silent about what is actually missing.
+//
+// outputs is act.CueID's own resolved [cuecatalog.Outputs] for nodeID —
+// populated whenever the catalog holds an entry for act.CueID at all,
+// regardless of outcome/ok — the zero value only when act.CueID is not in
+// nodeID's catalog (OutcomeUnknownCue, or the cross-show/no-active-show
+// early returns below). A caller that must fail a REFUSED cue to black
+// (never the whole node — Eric's ruling) needs to know which outputs this
+// specific Cue actually declares for this node: an audio-only refusal
+// (outputs.Render nil) must never clear a render surface, and a
+// render-only refusal must never stop the background or announcement
+// audio session, neither of which this Cue's own outputs touch.
+func Authorize(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, act cueactivation.Activation) (outcome cueauth.Outcome, reason string, outputs cuecatalog.Outputs, ok bool, err error) {
 	active, err := assetsync.ResolveActiveShow(ctx, st)
 	if err != nil {
-		return "", false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
+		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve active show: %w", err)
 	}
 	if !active.Configured {
-		return cueauth.OutcomeCrossShow, false, nil
+		return cueauth.OutcomeCrossShow, "", cuecatalog.Outputs{}, false, nil
 	}
 	catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, nodeID)
 	if err != nil {
-		return "", false, fmt.Errorf("cueactivate: authorize: resolve cue catalog for node %q: %w", nodeID, err)
-	}
-	ready, err := nodeAssetsReady(ctx, st, now, inventoryInterval, nodeID)
-	if err != nil {
-		return "", false, fmt.Errorf("cueactivate: authorize: resolve asset readiness for node %q: %w", nodeID, err)
+		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve cue catalog for node %q: %w", nodeID, err)
 	}
 	held := cueauth.HeldState{
 		Show: active.ShowID, Generation: active.Generation, CatalogRevision: catalog.Revision,
-		KnownCueRevisions: knownCueRevisions(catalog), AssetsPresent: ready,
+		KnownCueRevisions: knownCueRevisions(catalog),
 	}
-	outcome, ok = cueauth.Check(act.Tuple(), held)
-	return outcome, ok, nil
+
+	entry, participates := catalogEntry(catalog, act.CueID)
+	if participates {
+		outputs = entry.Outputs
+	}
+
+	var assetReason string
+	var assetErr error
+	outcome, ok = cueauth.CheckLazy(act.Tuple(), held, func() bool {
+		if !participates {
+			// Unreachable in practice: CheckLazy only reaches this closure
+			// once OutcomeUnknownCue has already passed, which means
+			// held.KnownCueRevisions — built from this SAME catalog —
+			// already contains act.CueID, so catalogEntry must find it too.
+			return false
+		}
+		var present bool
+		present, assetReason, assetErr = cueAssetsPresent(ctx, st, now, inventoryInterval, nodeID, entry)
+		return present
+	})
+	if assetErr != nil {
+		return "", "", cuecatalog.Outputs{}, false, fmt.Errorf("cueactivate: authorize: resolve asset presence for node %q cue %q: %w", nodeID, act.CueID, assetErr)
+	}
+	if outcome == cueauth.OutcomeAssetMissing {
+		reason = assetReason
+	}
+	return outcome, reason, outputs, ok, nil
 }
 
 // catalogEntry returns catalog's entry for cueID, if any.
@@ -409,18 +450,89 @@ func knownCueRevisions(catalog assetsync.Catalog) map[string]int64 {
 	return out
 }
 
-// nodeAssetsReady reports whether nodeID's asset manifest is Ready, the
-// [cueauth.HeldState.AssetsPresent] input — see [assetsync.
-// ComputeNodeManifest]'s own three-state vocabulary; anything other than
-// Ready (NotReady or Unknown) is treated as "not present", matching H3
-// spec section 6's "a present file is never a reason to execute" posture
-// the other direction: an UNKNOWN state must never read as present either.
-func nodeAssetsReady(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string) (bool, error) {
-	m, err := assetsync.BuildNodeManifest(ctx, st, now, inventoryInterval, nodeID)
-	if err != nil {
-		return false, err
+// cueAssetsPresent reports whether every asset entry's own resolved
+// outputs (render and/or audio — the only two an [cuecatalog.Entry] ever
+// carries an AssetHashes list for; LTC and Announcement declare no asset
+// of their own, config.ShowCuePayload's own "outputs.ltc/announcement
+// requires outputs.audio" authoring-time rule) declares is present in
+// nodeID's own currently-held, fresh, complete inventory. This is
+// deliberately scoped to entry's OWN declared outputs, never nodeID's
+// whole asset manifest ([assetsync.ComputeNodeManifest], what this
+// function replaced here): an asset belonging to a Cue nobody asked for
+// must never refuse a Cue whose own assets are all present.
+//
+// An unknown state (never reported, stale, or incomplete — see
+// [assetsync.ComputeNodeManifest]'s identical evaluation order) is treated
+// as "not present", matching H3 spec section 6's "a present file is never
+// a reason to execute" posture the other direction: an UNKNOWN state must
+// never read as present either.
+//
+// A declared output whose AssetHashes is empty (nothing has been uploaded
+// for that sequence at all — [cuecatalog.RenderOutput.Filename]'s own doc
+// comment) is NOT treated as missing here, matching [assetsync.
+// ComputeNodeManifest]'s existing Missing computation, which only ever
+// names an asset a [store.AssetRecord] actually exists for: an unauthored
+// sequence is a separate, out-of-scope authoring gap, not evidence this
+// node failed to sync something that exists.
+//
+// reason names entry's Cue, the sequence, and the missing content hash and
+// filename — TRACK-H-H3-SPEC.md section 6's "a refusal is a state with
+// evidence, never a silent no-op" applied to WHICH asset is missing, never
+// left for an operator to guess at. Empty when present is true.
+func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, entry cuecatalog.Entry) (present bool, reason string, err error) {
+	report, err := st.GetNodeAssetReport(ctx, nodeID)
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrNodeAssetReportNotFound):
+		return false, fmt.Sprintf("cue %q: node %q has never reported its asset inventory, so it cannot be trusted to hold anything", entry.CueID, nodeID), nil
+	default:
+		return false, "", fmt.Errorf("get node asset report: %w", err)
 	}
-	return m.State == assetsync.ManifestReady, nil
+	if now.After(report.ReportedAt.Add(assetsync.StalenessWindow(inventoryInterval))) {
+		return false, fmt.Sprintf("cue %q: node %q's last asset inventory report (%s) is older than the staleness window; a stale report is not evidence of what the node currently holds",
+			entry.CueID, nodeID, report.ReportedAt.Format(time.RFC3339)), nil
+	}
+	if !report.Complete {
+		return false, fmt.Sprintf("cue %q: node %q's last asset inventory report could not fully enumerate its own asset directory: %s", entry.CueID, nodeID, report.Reason), nil
+	}
+
+	inventory, err := st.GetNodeAssetInventory(ctx, nodeID)
+	if err != nil {
+		return false, "", fmt.Errorf("get node asset inventory: %w", err)
+	}
+	held := make(map[string]bool, len(inventory))
+	for _, item := range inventory {
+		held[item.ContentHash] = true
+	}
+
+	if entry.Outputs.Render != nil {
+		if ok, missing := firstMissingHash(held, entry.Outputs.Render.AssetHashes); !ok {
+			return false, fmt.Sprintf("cue %q: render sequence %q asset %s (file %q) is not present on node %q",
+				entry.CueID, entry.Outputs.Render.Sequence, missing, entry.Outputs.Render.Filename, nodeID), nil
+		}
+	}
+	if entry.Outputs.Audio != nil {
+		if ok, missing := firstMissingHash(held, entry.Outputs.Audio.AssetHashes); !ok {
+			return false, fmt.Sprintf("cue %q: audio sequence %q asset %s (file %q) is not present on node %q",
+				entry.CueID, entry.Outputs.Audio.Asset, missing, entry.Outputs.Audio.Filename, nodeID), nil
+		}
+	}
+	return true, "", nil
+}
+
+// firstMissingHash reports whether every one of hashes is in held —
+// [cuecatalog.RenderOutput.AssetHashes]'s own doc comment: empty means
+// nothing was ever uploaded for this sequence, which [cueAssetsPresent]'s
+// own doc comment states is never a reason to refuse — and, when not,
+// returns the first hash held lacks, for [cueAssetsPresent]'s own reason
+// text.
+func firstMissingHash(held map[string]bool, hashes []string) (ok bool, missing string) {
+	for _, h := range hashes {
+		if !held[h] {
+			return false, h
+		}
+	}
+	return true, ""
 }
 
 // activationID is a deterministic, stable id for one logical activation:

@@ -82,8 +82,22 @@ func mapEvidence(o observation.Observation, now time.Time) v1.Evidence {
 		ev.ValidForSeconds = &secs
 	}
 
-	if state != observation.StateCurrent {
-		reason := evidenceReason(o, state, now)
+	reason := ""
+	switch {
+	case state != observation.StateCurrent:
+		reason = evidenceReason(o, state, now)
+	case o.Reason != "":
+		// A state can be "current" (fresh evidence, per o.StateAt's own
+		// freshness clock) while o.Reason still carries an authored
+		// explanation of what the VALUE means — e.g.
+		// applySupersededVerdict's superseded relabeling in
+		// rendersuperseded.go, which never touches ObservedAt/ValidFor and
+		// so never changes this freshness state. Dropping Reason here
+		// because state reads "current" silently discarded that
+		// explanation on the wire.
+		reason = o.Reason
+	}
+	if reason != "" {
 		ev.Reason = &reason
 	}
 

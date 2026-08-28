@@ -33,7 +33,7 @@ const (
 
 // Bounds on audio.settings' numeric fields. Sanity bounds catching a typo (a
 // duration entered in seconds instead of milliseconds, a gain entered as a
-// percentage instead of a linear multiplier), not tuned ceilings — the
+// percentage instead of decibels), not tuned ceilings. The
 // drift threshold in particular has never been measured (see
 // AudioSettingsDefaultPayload's own doc comment).
 const (
@@ -43,16 +43,36 @@ const (
 	minFadeDurationMs = 1
 	maxFadeDurationMs = 600000
 
-	// maxDefaultMaxBackgroundGain bounds defaultMaxBackgroundGain at 4.0
-	// (12 dB of amplification above unity) purely to catch a typo; it is
-	// not a tuned headroom figure.
-	maxDefaultMaxBackgroundGain = 4.0
+	// maxDefaultMaxBackgroundGainDb is [audio.MaxOperatorGainDb], the
+	// typo guard every operator-facing gain shares.
+	maxDefaultMaxBackgroundGainDb = audio.MaxOperatorGainDb
 
-	// maxDuckTargetGain is exclusive: a duck lowers a session, so unity
-	// (or more) is not a duck at all. Zero remains expressible and means
-	// the bed goes fully silent under an announcement.
-	maxDuckTargetGain = 1.0
+	// minDefaultMaxBackgroundGainDb is audio.SilenceFloorDb, the same
+	// floor duckTargetGainDb already bounds against: without it an
+	// operator reaching for the same number as the duck field gets a
+	// ceiling low enough that every background bed goes inaudible.
+	minDefaultMaxBackgroundGainDb = audio.SilenceFloorDb
+
+	// maxDuckTargetGainDb is exclusive: a duck lowers a session, so unity
+	// (0 dB) or louder is not a duck at all. The silence floor remains
+	// expressible and means the bed goes fully silent under an
+	// announcement.
+	maxDuckTargetGainDb = 0.0
+
+	// minDuckTargetGainDb is audio.SilenceFloorDb, the same floor
+	// show.cue's outputs.announcement duckGainDb already bounds against.
+	minDuckTargetGainDb = audio.SilenceFloorDb
 )
+
+// audioSettingsRenamedGainFields maps every pre-dB field name to its
+// replacement. A payload still carrying an old name is refused by name
+// rather than reinterpreted: the numbers meant a linear multiplier and
+// mean decibels now, so silently accepting 0.5 would turn a halving into
+// a barely audible half-decibel lift.
+var audioSettingsRenamedGainFields = map[string]string{
+	"defaultMaxBackgroundGain": "defaultMaxBackgroundGainDb",
+	"duckTargetGain":           "duckTargetGainDb",
+}
 
 // AudioSettingsPayload is config_revisions.payload_json's decoded,
 // VALIDATED shape for [AudioSettingsConfigKind].
@@ -74,19 +94,20 @@ type AudioSettingsPayload struct {
 	// DefaultFadeDurationMs is the fade duration used the same way.
 	DefaultFadeDurationMs int `json:"defaultFadeDurationMs"`
 
-	// DefaultMaxBackgroundGain is the default [audio.Ceiling] applied to a
-	// background bed, in the same linear-multiplier unit as
-	// [audio.Gain] — 1.0 is unity gain.
-	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
+	// DefaultMaxBackgroundGainDb is the default ceiling applied to a
+	// background bed, in decibels: 0 dB is unity gain, and the
+	// coordinator converts it to [audio.Ceiling]'s linear multiplier once,
+	// at its own boundary, before anything reaches a node.
+	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
 
-	// DuckTargetGain is how far a node lowers a session while a
+	// DuckTargetGainDb is how far a node lowers a session while a
 	// higher-priority session ducks it (an announcement over a resting
-	// background bed), in the same linear-multiplier unit as
-	// DefaultMaxBackgroundGain: 0.0 is silence, 1.0 would be no duck at
-	// all and is refused. PROVISIONAL, NOT MEASURED — the shipped value
+	// background bed), in decibels: it must be negative (0 dB would be no
+	// duck at all) and at or above [audio.SilenceFloorDb], where the bed
+	// goes fully silent. PROVISIONAL, NOT MEASURED: the shipped value
 	// has never been heard on the installation's speakers (RES-007). A muted session is unaffected: mute silences
 	// unconditionally.
-	DuckTargetGain float64 `json:"duckTargetGain"`
+	DuckTargetGainDb float64 `json:"duckTargetGainDb"`
 
 	// LTCFrameRate is the closed vocabulary Resolume's timecode input
 	// supports ([audio.LTCFrameRate]): 24, 25, 29.97, or 30. This ships
@@ -109,19 +130,19 @@ type AudioSettingsPayload struct {
 // real playback (RES-007 is the work queue), so 20ms is a guess labelled
 // as one, not a result.
 var AudioSettingsDefaultPayload = AudioSettingsPayload{
-	DriftIgnoreThresholdMs:   20,
-	DefaultFadeCurve:         string(audio.FadeCurveLinear),
-	DefaultFadeDurationMs:    1000,
-	DefaultMaxBackgroundGain: 0.6,
-	DuckTargetGain:           0.25,
-	LTCFrameRate:             string(audio.LTCFrameRate30),
-	LTCDefaultStartOffset:    "00:00:00:00",
+	DriftIgnoreThresholdMs:     20,
+	DefaultFadeCurve:           string(audio.FadeCurveLinear),
+	DefaultFadeDurationMs:      1000,
+	DefaultMaxBackgroundGainDb: -4.44,
+	DuckTargetGainDb:           -12.04,
+	LTCFrameRate:               string(audio.LTCFrameRate30),
+	LTCDefaultStartOffset:      "00:00:00:00",
 }
 
 var audioSettingsTopLevelKeys = map[string]bool{
 	"driftIgnoreThresholdMs": true, "defaultFadeCurve": true,
-	"defaultFadeDurationMs": true, "defaultMaxBackgroundGain": true,
-	"duckTargetGain": true, "ltcFrameRate": true, "ltcDefaultStartOffset": true,
+	"defaultFadeDurationMs": true, "defaultMaxBackgroundGainDb": true,
+	"duckTargetGainDb": true, "ltcFrameRate": true, "ltcDefaultStartOffset": true,
 }
 
 // EncodeAudioSettingsPayload marshals p into config_revisions.payload_json's
@@ -148,6 +169,14 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 	top, verr := decodeTopLevelObject(raw)
 	if verr != nil {
 		return AudioSettingsPayload{}, verr
+	}
+	for old, replacement := range audioSettingsRenamedGainFields {
+		if _, present := top[old]; present {
+			return AudioSettingsPayload{}, &ValidationError{
+				Code: ValidationCodeFieldInvalid, Field: old,
+				Detail: fmt.Sprintf("%s was a linear amplitude multiplier and no longer exists; use %s, which is in decibels (0 dB is unity)", old, replacement),
+			}
+		}
 	}
 	if verr := rejectUnknownTopLevelKeys(top, audioSettingsTopLevelKeys); verr != nil {
 		return AudioSettingsPayload{}, verr
@@ -186,37 +215,37 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 		}
 	}
 
-	maxGain, verr := decodeRequiredFloat(top, "defaultMaxBackgroundGain", "defaultMaxBackgroundGain")
+	maxGainDb, verr := decodeRequiredFloat(top, "defaultMaxBackgroundGainDb", "defaultMaxBackgroundGainDb")
 	if verr != nil {
 		return AudioSettingsPayload{}, verr
 	}
-	if err := audio.Ceiling(maxGain).Validate(); err != nil {
+	if err := audio.CeilingFromDb(maxGainDb).Validate(); err != nil {
 		return AudioSettingsPayload{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "defaultMaxBackgroundGain",
+			Code: ValidationCodeFieldInvalid, Field: "defaultMaxBackgroundGainDb",
 			Detail: err.Error(),
 		}
 	}
-	if maxGain > maxDefaultMaxBackgroundGain {
+	if maxGainDb > maxDefaultMaxBackgroundGainDb {
 		return AudioSettingsPayload{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "defaultMaxBackgroundGain",
-			Detail: fmt.Sprintf("defaultMaxBackgroundGain must not exceed %v", maxDefaultMaxBackgroundGain),
+			Code: ValidationCodeFieldInvalid, Field: "defaultMaxBackgroundGainDb",
+			Detail: fmt.Sprintf("defaultMaxBackgroundGainDb is in decibels (0 dB is unity) and must not exceed %v dB", maxDefaultMaxBackgroundGainDb),
+		}
+	}
+	if maxGainDb < minDefaultMaxBackgroundGainDb {
+		return AudioSettingsPayload{}, &ValidationError{
+			Code: ValidationCodeFieldInvalid, Field: "defaultMaxBackgroundGainDb",
+			Detail: fmt.Sprintf("defaultMaxBackgroundGainDb is in decibels (0 dB is unity) and must not be below %v dB", minDefaultMaxBackgroundGainDb),
 		}
 	}
 
-	duckGain, verr := decodeRequiredFloat(top, "duckTargetGain", "duckTargetGain")
+	duckGainDb, verr := decodeRequiredFloat(top, "duckTargetGainDb", "duckTargetGainDb")
 	if verr != nil {
 		return AudioSettingsPayload{}, verr
 	}
-	if err := audio.Gain(duckGain).Validate(); err != nil {
+	if duckGainDb >= maxDuckTargetGainDb || duckGainDb < minDuckTargetGainDb {
 		return AudioSettingsPayload{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "duckTargetGain",
-			Detail: err.Error(),
-		}
-	}
-	if duckGain >= maxDuckTargetGain {
-		return AudioSettingsPayload{}, &ValidationError{
-			Code: ValidationCodeFieldInvalid, Field: "duckTargetGain",
-			Detail: fmt.Sprintf("duckTargetGain must be below %v: a gain of %v or more does not duck anything", maxDuckTargetGain, maxDuckTargetGain),
+			Code: ValidationCodeFieldInvalid, Field: "duckTargetGainDb",
+			Detail: fmt.Sprintf("duckTargetGainDb is in decibels and must be negative and at least %v dB: 0 dB or louder does not duck anything, and %v dB is already silence", minDuckTargetGainDb, minDuckTargetGainDb),
 		}
 	}
 
@@ -243,13 +272,13 @@ func DecodeAudioSettingsPayload(raw string) (AudioSettingsPayload, *ValidationEr
 	}
 
 	return AudioSettingsPayload{
-		DriftIgnoreThresholdMs:   driftMs,
-		DefaultFadeCurve:         fadeCurve,
-		DefaultFadeDurationMs:    fadeDurationMs,
-		DefaultMaxBackgroundGain: maxGain,
-		DuckTargetGain:           duckGain,
-		LTCFrameRate:             ltcFrameRate,
-		LTCDefaultStartOffset:    ltcOffset,
+		DriftIgnoreThresholdMs:     driftMs,
+		DefaultFadeCurve:           fadeCurve,
+		DefaultFadeDurationMs:      fadeDurationMs,
+		DefaultMaxBackgroundGainDb: maxGainDb,
+		DuckTargetGainDb:           duckGainDb,
+		LTCFrameRate:               ltcFrameRate,
+		LTCDefaultStartOffset:      ltcOffset,
 	}, nil
 }
 

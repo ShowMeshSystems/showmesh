@@ -22,6 +22,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -92,10 +93,17 @@ func pushNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() tim
 	}
 
 	params := map[string]any{
-		"programRoute": payload.ProgramRoute, "ltcRoute": payload.LTCRoute,
-		"programChannels": payload.ProgramChannels, "ltcChannel": payload.LTCChannel,
-		"clockDomain": payload.ClockDomain, "clockDomainProvenance": payload.ClockDomainProvenance,
+		"programRoute":    payload.ProgramRoute,
+		"programChannels": payload.ProgramChannels,
+		"clockDomain":     payload.ClockDomain, "clockDomainProvenance": payload.ClockDomainProvenance,
 		"revision": obj.CurrentRevision,
+	}
+	// A program-only node's stored payload carries no LTC route or
+	// channel, and the agent refuses one of the pair without the other,
+	// so omit both rather than pushing an empty route and a zero channel.
+	if payload.LTCRoute != "" {
+		params["ltcRoute"] = payload.LTCRoute
+		params["ltcChannel"] = payload.LTCChannel
 	}
 	idempotencyKey := fmt.Sprintf("audio.node.configure/%s/rev-%d", nodeID, obj.CurrentRevision)
 	return publish(ctx, pub, now, nodeID, "audio.node.configure", idempotencyKey, params)
@@ -127,11 +135,15 @@ func pushSettings(ctx context.Context, cs ConfigStore, pub Publisher, now func()
 	}
 
 	params := map[string]any{
-		"driftIgnoreThresholdMs":   payload.DriftIgnoreThresholdMs,
-		"defaultFadeCurve":         payload.DefaultFadeCurve,
-		"defaultFadeDurationMs":    payload.DefaultFadeDurationMs,
-		"defaultMaxBackgroundGain": payload.DefaultMaxBackgroundGain,
-		"duckTargetGain":           payload.DuckTargetGain,
+		"driftIgnoreThresholdMs": payload.DriftIgnoreThresholdMs,
+		"defaultFadeCurve":       payload.DefaultFadeCurve,
+		"defaultFadeDurationMs":  payload.DefaultFadeDurationMs,
+		// The coordinator-to-agent wire stays LINEAR: the
+		// stored operator values are decibels and are converted here, at
+		// the coordinator's own boundary, so the agent and the engine
+		// below it never see a decibel.
+		"defaultMaxBackgroundGain": float64(pkgaudio.CeilingFromDb(payload.DefaultMaxBackgroundGainDb)),
+		"duckTargetGain":           float64(pkgaudio.GainFromDb(payload.DuckTargetGainDb)),
 		"ltcFrameRate":             payload.LTCFrameRate,
 		"ltcDefaultStartOffset":    payload.LTCDefaultStartOffset,
 		"revision":                 revision,

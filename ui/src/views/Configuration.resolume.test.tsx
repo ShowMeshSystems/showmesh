@@ -84,7 +84,9 @@ function renderConfiguration(model: Model) {
 }
 
 async function resolumeSection() {
-  const heading = await screen.findByText('Resolume')
+  // Queried as a heading, not plain text: the section index at the top of
+  // the page also links to a "Resolume" text node.
+  const heading = await screen.findByRole('heading', { name: 'Resolume' })
   return heading.closest('section')!
 }
 

@@ -2,12 +2,28 @@
 
 [RES-018](../research/RES-018-fpp-brightness-control.md) · [ADR-043](../decisions/ADR-043-show-scoped-cues-and-playlist-authority.md) · [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) · [Track F](TRACK-F-resting-mode.md) · [Track H](TRACK-H-cues-and-playlists.md) · [SM-63 handoff](SM-63-FPP-PLUGIN-HANDOFF.md)
 
-Status: frozen 2026-08-21, extended 2026-08-22, corrected 2026-08-23. This
-record fixes the wire contracts the ShowMesh FPP plugin runtime shares with
-the coordinator: playlist-entry observation ingestion, the coordinator-owned
-brightness transition gain, and playlist definition publication.
-RES-018 decided the design; this file fixes the exact bytes so the plugin and
-the coordinator can be built independently and still meet.
+Status: frozen 2026-08-21, extended 2026-08-22, corrected 2026-08-23,
+corrected 2026-08-26. This record fixes the wire contracts the ShowMesh FPP
+plugin runtime shares with the coordinator: playlist-entry observation
+ingestion, the coordinator-owned brightness transition gain, and playlist
+definition publication. RES-018 decided the design; this file fixes the
+exact bytes so the plugin and the coordinator can be built independently and
+still meet.
+
+**2026-08-26 correction:** sections 1.2 and 1.3 left the canonical spelling
+of `section` implicit — described as "FPP playlist section" with no fixed
+vocabulary. Two independently correct implementations each read that as a
+different, defensible spelling: the plugin hashed FPP's own runtime section
+string (`LeadIn`, `MainPlaylist`, `LeadOut`, `New`), the coordinator derived
+from the playlist definition's JSON member names (`leadIn`, `mainPlaylist`,
+`leadOut`). The shared fixtures could not catch it, because `entry-key.json`
+supplies an already-canonical `section` and checks only derivation. Section
+1.2 now names the canonical spelling explicitly and gives the mapping table
+from FPP's runtime strings; section 1.3 states that `entryKey`'s `section`
+input is that same canonical value. `test/fixtures/fpp/section-mapping.json`
+pins the mapping itself. See [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md) for
+the failure this closes; the plugin fix that shipped first is SM-275, and
+this correction is SM-278.
 
 **2026-08-23 correction:** section 3.1 previously claimed the plugin "has no
 HTTP server and deliberately registers no route" and cited ADR-013 for that
@@ -68,7 +84,7 @@ generous for every legitimate observation.
 | `instanceUuid` | string | yes | Persistent FPP UUID, from FPP's `SystemUUID` setting. |
 | `playlistName` | string | when available | FPP playlist name. |
 | `playlistHash` | string | when available | SHA-256, lowercase hex. See §1.3. |
-| `section` | string | when available | FPP playlist section. May be empty. |
+| `section` | string | when available | Canonical section: the playlist definition's member name (`leadIn`, `mainPlaylist`, `leadOut`) for those three, or FPP's own runtime string unchanged for any other value. May be empty. See below. |
 | `position` | integer | when available | Zero-based position within the section. |
 | `entryKey` | string | when available | SHA-256, lowercase hex. See §1.3. |
 | `sequenceFilename` | string | no | Absent when the entry has none. |
@@ -100,6 +116,35 @@ The identity fields divide into two groups, and the split is load bearing:
 "Permitted to be absent" never means "permitted to be arbitrary". Every field
 present on the wire is validated whether or not `unavailable` is set.
 
+**The canonical spelling of `section`.** The wire value of `section` is the
+playlist definition's own section member name — `leadIn`, `mainPlaylist`, or
+`leadOut` — for any of the three sections FPP's playlist callback has a
+known runtime spelling for, and is FPP's own runtime string, passed through
+**unchanged**, for any other value FPP might report. It is never FPP's
+runtime spelling for those three known sections specifically: the plugin
+maps it **before** placing it in this field or hashing it into `entryKey`
+(§1.3), and only for a runtime string it does not recognize does the runtime
+spelling itself reach the wire. This was previously left implicit, and the
+two sides read it two different, individually defensible ways, which is the
+failure [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md) records. FPP 10.0's
+runtime strings, and what each maps to on the wire:
+
+| FPP runtime section string | Canonical wire value |
+|---|---|
+| `LeadIn` | `leadIn` |
+| `MainPlaylist` | `mainPlaylist` |
+| `LeadOut` | `leadOut` |
+
+Any runtime section string outside this table — including FPP's `New`, which
+names no member of the playlist definition — is passed through **unchanged**.
+It is not mapped to a fourth canonical spelling and it does not become an
+§1.4 `unavailable` reason: minting either would be a new wire value this
+contract does not otherwise need. An entry key built from it will not match
+any entry the coordinator parsed out of `leadIn`, `mainPlaylist`, or
+`leadOut`, so the visible failure is the coordinator's existing
+unknown-entry outcome, on the observation carrying that section, not a
+protocol-level refusal.
+
 ### 1.3 The two hashes
 
 These are not negotiable and are not reinterpreted by either side. The
@@ -123,6 +168,16 @@ units, so the canonical member order is:
 `position` is a JSON number, not a string. The key is an object rather than a
 delimited string specifically so a playlist name or section containing a
 separator character cannot collide with a different entry.
+
+The `section` member is the same canonical value §1.2 fixes — the playlist
+definition's member name, or an unrecognized runtime string passed through
+unchanged — never FPP's runtime spelling for a section §1.2's table maps. An
+implementation that hashes FPP's runtime string here instead produces an
+`entryKey` that never matches the coordinator's, which is the failure
+[TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md) records; `entry-key.json`'s cases
+alone could not catch it, because they start from an already-canonical
+`section` rather than from FPP's runtime spelling. `test/fixtures/fpp/`'s
+`section-mapping.json` pins the mapping itself for exactly this reason.
 
 The canonicalization rules both sides implement:
 

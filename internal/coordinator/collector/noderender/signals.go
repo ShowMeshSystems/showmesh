@@ -64,6 +64,49 @@ const (
 	// mode is why the same failure looks different on two nights, so the
 	// report has to say which one the operator is looking at.
 	SignalSurfaceOutputFailure observation.SignalID = "surface.output.failure"
+
+	// Four signals minted for the node content-identity build item
+	// (docs/build/IDENTIFIER-REGISTER.md):
+	// the content identity this surface's frame writer actually applied:
+	// the node's own evidence for which FSEQ it is rendering, so a content
+	// swap can be proven from the node's own report rather than inferred
+	// from pipelineState/frame counters alone (which read identically
+	// whether the surface is rendering the right sequence or the wrong
+	// one). One [mqttproto.RenderSurfaceReport] field each.
+	SignalSurfaceContentFSEQFilename    observation.SignalID = "surface.content.fseq_filename"
+	SignalSurfaceContentFSEQContentHash observation.SignalID = "surface.content.fseq_content_hash"
+	// SignalSurfaceContentCueID is only ever emitted (never
+	// [observation.StateNotCollected] alongside a real filename) when the
+	// current assignment was applied by a cue activation; a direct
+	// render.surface.apply with no cue involved reports this one signal as
+	// not collected while still reporting the filename/hash/catalog
+	// revision, mirroring SignalSurfaceOutputIdleMode's identical
+	// conditional pattern.
+	SignalSurfaceContentCueID observation.SignalID = "surface.content.cue_id"
+	// SignalSurfaceContentCatalogRevision is only ever emitted alongside a
+	// real filename when the persisted assignment carries an authorization
+	// tuple (TRACK-H-H3-SPEC.md section 5); absent for a legacy assignment
+	// or one applied before the tuple existed.
+	SignalSurfaceContentCatalogRevision observation.SignalID = "surface.content.catalog_revision"
+
+	// SignalSurfaceContentShow and SignalSurfaceContentGeneration name
+	// the Show and generation that authorized this
+	// surface's held assignment (mqttproto.RenderSurfaceReport.Show/
+	// Generation, [pipeline.AssignmentAuth.Show]/Generation), rendered as
+	// their own signals rather than folded into SignalSurfacePipelineState
+	// itself — IDENTIFIER-REGISTER.md's own ruling: superseded is a new
+	// MEMBER of that signal's existing state vocabulary, not a reason to
+	// mint a second parallel signal. This package never derives the
+	// superseded verdict itself (these two signals, plus
+	// SignalSurfaceContentCatalogRevision and SignalSurfaceContentCueID
+	// above, are ALL a node ever states about what it holds); the
+	// coordinator's API/readiness layer is the only place that compares
+	// them against its own active-show resolution — see that layer's own
+	// doc comment for why this package must not make that comparison.
+	// Present/absent together, mirroring SignalSurfaceContentCatalogRevision's
+	// identical "no authorization tuple" absence rule one signal up.
+	SignalSurfaceContentShow       observation.SignalID = "surface.content.show"
+	SignalSurfaceContentGeneration observation.SignalID = "surface.content.generation"
 )
 
 // Two more signals minted alongside the four above, but under the "node"
@@ -98,6 +141,12 @@ var AllSignalIDs = []observation.SignalID{
 	SignalSurfaceOutputMode,
 	SignalSurfaceOutputIdleMode,
 	SignalSurfaceOutputFailure,
+	SignalSurfaceContentFSEQFilename,
+	SignalSurfaceContentFSEQContentHash,
+	SignalSurfaceContentCueID,
+	SignalSurfaceContentCatalogRevision,
+	SignalSurfaceContentShow,
+	SignalSurfaceContentGeneration,
 }
 
 // AllNodeSignalIDs is every NODE-resource signal this package emits, in the

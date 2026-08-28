@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { deployNodeCueCatalog, getNodeCueCatalog } from '../api'
 import type { CueCatalogDeployResult, CueCatalogResponse } from '../api'
+import { useModelContext } from '../app/ModelContext'
 import { describeApiError } from '../app/session'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from './ScopedButton'
@@ -24,7 +25,7 @@ type CatalogState =
   | { kind: 'loaded'; response: CueCatalogResponse }
   | { kind: 'error'; message: string }
 
-function useNodeCueCatalog(nodeId: string, refreshToken: number): CatalogState {
+function useNodeCueCatalog(nodeId: string, refreshToken: number, snapshotReceivedAt: number | null): CatalogState {
   const [state, setState] = useState<CatalogState>({ kind: 'loading' })
 
   useEffect(() => {
@@ -42,7 +43,9 @@ function useNodeCueCatalog(nodeId: string, refreshToken: number): CatalogState {
     return () => {
       cancelled = true
     }
-  }, [nodeId, refreshToken])
+    // Refetches on reconnect and on an explicit Reload, the same shape
+    // PlaylistReadiness.tsx uses and for the same reason.
+  }, [nodeId, refreshToken, snapshotReceivedAt])
 
   return state
 }
@@ -54,11 +57,16 @@ type DeployState =
   | { kind: 'error'; message: string }
 
 export function CueCatalogPanel({ nodeId }: CueCatalogPanelProps) {
+  const model = useModelContext()
   // Bumped after a deploy resolves so the "required" side re-fetches —
   // the desired-versus-observed rule cuts both ways: a deploy can also
   // reveal that the active show moved again while it was in flight.
+  // Also bumped by the explicit "Reload" control below: this is a
+  // one-shot fetch with no polling precedent in this seam, so a manual
+  // recheck plus the reconnect-triggered refetch in useNodeCueCatalog
+  // are preferred over inventing an interval.
   const [refreshToken, setRefreshToken] = useState(0)
-  const catalog = useNodeCueCatalog(nodeId, refreshToken)
+  const catalog = useNodeCueCatalog(nodeId, refreshToken, model.snapshotReceivedAt)
   const [deploy, setDeploy] = useState<DeployState>({ kind: 'idle' })
 
   async function runDeploy(): Promise<void> {
@@ -85,9 +93,22 @@ export function CueCatalogPanel({ nodeId }: CueCatalogPanelProps) {
           Could not read this node's Cue catalog: {catalog.message}
         </p>
       )}
-      {catalog.kind === 'loaded' && <RequiredCatalog response={catalog.response} deploy={deploy} />}
+      {catalog.kind === 'loaded' && (
+        <>
+          {/* ADR-011: every observation carries freshness. `serverTime`
+              is required on this response and is the coordinator's own
+              clock at the moment it resolved THIS catalog, not the
+              browser's: the only way an operator can tell a catalog
+              read minutes ago from one read just now. */}
+          <p className="text-muted">As of {formatAbsolute(catalog.response.serverTime)}.</p>
+          <RequiredCatalog response={catalog.response} deploy={deploy} />
+        </>
+      )}
 
       <div className="render-surface__controls">
+        <button type="button" onClick={() => setRefreshToken((n) => n + 1)}>
+          Reload
+        </button>
         <ScopedButton
           requiredScope="cuecatalog:deploy"
           onClick={() => void runDeploy()}
@@ -107,13 +128,12 @@ export function CueCatalogPanel({ nodeId }: CueCatalogPanelProps) {
   )
 }
 
-// RequiredCatalog renders exactly what GET /nodes/{nodeId}/cue-catalog
-// carries: the coordinator's OWN live resolution for this node, recomputed
-// on every call — never a persisted acknowledgement (CueCatalogResponse
-// has no such field; TRACK-H-H3-SPEC.md section 4 stores that beside the
-// node's asset report instead, reachable only through the acknowledge and
-// deploy routes). "configured: false" is the honest-absence case the spec
-// names, never a fabricated generation.
+// RequiredCatalog renders what GET /nodes/{nodeId}/cue-catalog carries:
+// the coordinator's OWN live resolution for this node, recomputed on
+// every call, plus (via HeldCatalog below) the persisted acknowledgement
+// it now also reports read-only alongside that resolution.
+// "configured: false" is the honest-absence case the spec names, never a
+// fabricated generation.
 function RequiredCatalog({ response, deploy }: { response: CueCatalogResponse; deploy: DeployState }) {
   if (!response.configured) {
     return (
@@ -140,32 +160,48 @@ function RequiredCatalog({ response, deploy }: { response: CueCatalogResponse; d
 }
 
 // HeldCatalog is the "what does this node actually hold" half of the
-// panel. There is no route that reads a node's persisted acknowledgement
-// on demand (only POST .../acknowledge, which is the node's own report,
-// and POST .../deploy's own result) — so before this panel's own deploy
-// resolves, the honest answer is "not observed from here", stated plainly
-// rather than guessed, matching this codebase's ADR-020 absence-is-stated
-// convention (NodeAssetManifest.observedAt's identical null case).
+// panel. GET /nodes/{nodeId}/cue-catalog now carries this node's
+// persisted acknowledgement directly (response.acknowledgedStatus/
+// acknowledgedRevision/acknowledgedAt), so this reads current or stale on
+// first load, before any deploy runs. A deploy result that just confirmed
+// is preferred once one exists in this session: it is fresher than the
+// GET this panel loaded with, and it also carries the generation the GET
+// response omits.
 function HeldCatalog({ response, deploy }: { response: CueCatalogResponse; deploy: DeployState }) {
-  if (deploy.kind !== 'result' || deploy.result.outcome !== 'confirmed' || deploy.result.acknowledgedRevision === undefined) {
+  if (deploy.kind === 'result' && deploy.result.outcome === 'confirmed' && deploy.result.acknowledgedRevision !== undefined) {
+    const held = deploy.result
+    const current = held.acknowledgedRevision === response.revision && held.generation === response.generation
     return (
-      <p className="text-muted" role="status">
-        Held revision: not observed from this panel yet. Deploy to confirm what this node currently holds.
+      <p className={current ? 'render-surface__confirmed' : 'render-surface__unconfirmed'} role={current ? 'status' : 'alert'}>
+        Held revision <code>{held.acknowledgedRevision}</code> (generation {held.generation}), acknowledged{' '}
+        {formatAbsolute(held.resolvedAt ?? null)}:{' '}
+        {current
+          ? 'current: matches what the active show requires now.'
+          : `stale: the active show now requires revision ${response.revision ?? 'unknown'} (generation ${response.generation ?? 'unknown'}).`}
       </p>
     )
   }
 
-  const held = deploy.result
-  const current =
-    held.acknowledgedRevision === response.revision && held.generation === response.generation
+  // response.acknowledgedStatus is always present and distinguishes
+  // "never acknowledged anything" from "acknowledged something, but it
+  // matches" or "acknowledged something, but it does not" - a caller must
+  // never guess never-acknowledged from a missing revision.
+  if (response.acknowledgedStatus === 'catalog-unacknowledged') {
+    return (
+      <p className="text-muted" role="status">
+        Held revision: never acknowledged by this node. Deploy to confirm what this node currently holds.
+      </p>
+    )
+  }
 
+  const current = response.acknowledgedStatus === 'catalog-current'
   return (
     <p className={current ? 'render-surface__confirmed' : 'render-surface__unconfirmed'} role={current ? 'status' : 'alert'}>
-      Held revision <code>{held.acknowledgedRevision}</code> (generation {held.generation}), acknowledged{' '}
-      {formatAbsolute(held.resolvedAt ?? null)}:{' '}
+      Held revision <code>{response.acknowledgedRevision}</code>, acknowledged{' '}
+      {formatAbsolute(response.acknowledgedAt ?? null)}:{' '}
       {current
         ? 'current: matches what the active show requires now.'
-        : `stale: the active show now requires revision ${response.revision ?? 'unknown'} (generation ${response.generation ?? 'unknown'}).`}
+        : `stale: the active show now requires revision ${response.revision ?? 'unknown'}.`}
     </p>
   )
 }

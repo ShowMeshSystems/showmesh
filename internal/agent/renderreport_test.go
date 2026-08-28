@@ -211,6 +211,57 @@ func TestToRenderSurfaceReportCarriesRealFrameCounters(t *testing.T) {
 	}
 }
 
+// TestApplyContentIdentityStampsContentObservedAtFromTheReadTimeNotAppliedAt
+// is this issue's agent-side regression test. The rejected fix (using
+// Assignment.AppliedAt) ages exactly like the defect it's meant to fix: a
+// one-shot stamp written when the writer was swapped, which a surface
+// rendering steadily for ten minutes would still be stuck behind. The
+// correct fix stamps ContentObservedAt from the caller's own read time
+// (now(), passed in), which is deliberately far LATER than AppliedAt here —
+// proving the two are not conflated.
+func TestApplyContentIdentityStampsContentObservedAtFromTheReadTimeNotAppliedAt(t *testing.T) {
+	appliedAt := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	readAt := appliedAt.Add(10 * time.Minute) // a steady render, read fresh on a later report tick
+
+	a := pipeline.Assignment{
+		SurfaceID: "wall-1",
+		RawParams: []byte(`{"fseqFilename":"halloween-01.fseq","fseqContentHash":"sha256:deadbeef"}`),
+		AppliedAt: appliedAt,
+		CueID:     "cue-42",
+	}
+
+	var rep mqttproto.RenderSurfaceReport
+	applyContentIdentity(&rep, a, readAt)
+
+	if rep.FSEQFilename != "halloween-01.fseq" {
+		t.Errorf("FSEQFilename = %q, want %q", rep.FSEQFilename, "halloween-01.fseq")
+	}
+	if rep.FSEQContentHash != "sha256:deadbeef" {
+		t.Errorf("FSEQContentHash = %q, want %q", rep.FSEQContentHash, "sha256:deadbeef")
+	}
+	if !rep.ContentObservedAt.Equal(readAt) {
+		t.Errorf("ContentObservedAt = %v, want the caller's read time %v (not AppliedAt %v — a one-shot apply stamp ages exactly like this issue's defect)",
+			rep.ContentObservedAt, readAt, appliedAt)
+	}
+}
+
+// TestApplyContentIdentityLeavesContentObservedAtZeroWhenNoContent proves
+// applyContentIdentity does not stamp ContentObservedAt for an assignment
+// whose params carry no fseqFilename: no content identity was actually
+// applied to rep, so there is nothing to date.
+func TestApplyContentIdentityLeavesContentObservedAtZeroWhenNoContent(t *testing.T) {
+	a := pipeline.Assignment{
+		SurfaceID: "wall-1",
+		RawParams: []byte(`{}`),
+	}
+	var rep mqttproto.RenderSurfaceReport
+	applyContentIdentity(&rep, a, time.Now())
+
+	if !rep.ContentObservedAt.IsZero() {
+		t.Errorf("ContentObservedAt = %v, want zero (no content identity was applied)", rep.ContentObservedAt)
+	}
+}
+
 // TestRunRenderReportPublishesOnTick proves a tick produces a retained
 // publish on the node's observed/render topic reflecting the supervisor's
 // real state, following runAssetInventory's identical test shape.
@@ -241,7 +292,7 @@ func TestRunRenderReportPublishesOnTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -325,7 +376,7 @@ func TestRunRenderReportIncludesHeldFilesAndEvents(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -435,7 +486,7 @@ func TestRunRenderReportSetsFPPConnectHeldEventsTotalWhenEventsAreDroppedForSize
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -529,7 +580,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithAnOversizedPlaylistPost(t *te
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -602,7 +653,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithASingleOversizedEntry(t *test
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -691,7 +742,7 @@ func TestRunRenderReportStaysUnderEnvelopeLimitWithManyBadNameRefusals(t *testin
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), held, time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {
@@ -738,7 +789,7 @@ func TestRunRenderReportPublishesOnTrigger(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, nil, triggered, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, nil, triggered, discardLogger())
 	}()
 
 	select {
@@ -795,7 +846,7 @@ func TestRunRenderReportStartingStateDecodes(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runRenderReport(ctx, pub, "media-03", sup, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
+		runRenderReport(ctx, pub, "media-03", sup, pipeline.NewAssignmentStore(t.TempDir()), newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, ticks, nil, discardLogger())
 	}()
 
 	select {

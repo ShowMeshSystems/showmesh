@@ -194,6 +194,21 @@ func surfacePipelineStateObs(nodeID, surfaceID, state string, observedAt, collec
 	))
 }
 
+// surfaceContentFSEQFilenameObs builds the surface.content.fseq_filename
+// evidence noderender.Collector.Poll emits whenever a node's persisted
+// assignment for surfaceID carries a real fseqFilename (internal/agent/
+// renderreport.go's applyContentIdentity) — i.e. the surface is rendering
+// REAL content, not establishRenderAssignment's own no-sequence
+// placeholder. Tests use this to distinguish the two "currently assigned"
+// cases renderSurfaceHasRealContent exists to tell apart.
+func surfaceContentFSEQFilenameObs(nodeID, surfaceID, filename string, observedAt, collectedAt time.Time) observation.Observation {
+	return mustObs(observation.Measured(
+		observation.ResourceRef{Kind: observation.ResourceSurface, ID: surfaceID},
+		noderender.SignalSurfaceContentFSEQFilename, filename, observedAt,
+		observation.WithValidFor(time.Hour), observation.WithCollectedAt(collectedAt), observation.WithSource(noderender.SourceFor(nodeID)),
+	))
+}
+
 // surfaceDroppedAbsenceObs builds the exact absence evidence
 // noderender.Collector.Poll emits for a surface a node stops reporting —
 // see that package's Poll doc comment — so this file's tests can prove the

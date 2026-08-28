@@ -15,6 +15,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
 	"github.com/showmeshsystems/showmesh/pkg/cueauth"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
 )
 
@@ -96,6 +97,27 @@ type cueActivationDispatchOutcome struct {
 	// this node.
 	AuthorizeOutcome cueauth.Outcome
 
+	// AuthorizeReason is [cueactivate.Authorize]'s own detail text,
+	// populated only when AuthorizeOutcome is [cueauth.OutcomeAssetMissing]:
+	// names the sequence and the asset the refusal is actually about,
+	// never just the bare outcome string.
+	AuthorizeReason string
+
+	// RefusedCueOutputs is [cueactivate.Authorize]'s own resolved
+	// [cuecatalog.Outputs] for the Activation's CueID on this node —
+	// populated whenever Authorize found the Cue in nodeID's catalog at
+	// all, regardless of whether it authorized or refused. A scoped
+	// fail-to-black (see assetMissingFailToBlackTargets) reads this to
+	// clear only the outputs this specific Cue actually declares, never
+	// every surface or audio session on the node: an audio-only Cue's
+	// refusal must never touch a render surface, and vice versa. Set for
+	// BOTH kinds of asset-missing refusal this seam can see — this
+	// coordinator's own pre-dispatch AuthorizeOutcome refusal, and the
+	// node's own post-dispatch NodeOutcome refusal, since Authorize runs
+	// (and resolves this) on every dispatch attempt regardless of which
+	// side ultimately refuses.
+	RefusedCueOutputs cuecatalog.Outputs
+
 	// NodeOutcome is set once a result was actually received from the
 	// node (or replayed from one previously received): either
 	// [cueActivationNodeOutcomeAuthorized] or one of [cueauth.Outcome]'s
@@ -127,13 +149,13 @@ func (h *handlers) dispatchCueActivations(ctx context.Context, now time.Time, ac
 
 func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer) cueActivationDispatchOutcome {
 	inventoryInterval := h.deps.AssetSettings.InventoryInterval()
-	refusalOutcome, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act)
+	refusalOutcome, refusalReason, cueOutputs, ok, err := cueactivate.Authorize(ctx, h.deps.AssetManifests, now, inventoryInterval, nodeID, act)
 	if err != nil {
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("authorize cue activation for node %q: %w", nodeID, err)}
 	}
 	if !ok {
-		h.writeCueActivationRefusalAudit(ctx, now, nodeID, act, issuer, refusalOutcome)
-		return cueActivationDispatchOutcome{NodeID: nodeID, AuthorizeOutcome: refusalOutcome}
+		h.writeCueActivationRefusalAudit(ctx, now, nodeID, act, issuer, refusalOutcome, refusalReason)
+		return cueActivationDispatchOutcome{NodeID: nodeID, AuthorizeOutcome: refusalOutcome, AuthorizeReason: refusalReason, RefusedCueOutputs: cueOutputs}
 	}
 
 	raw, err := json.Marshal(act)
@@ -169,8 +191,15 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 			// Already dispatched for this exact activation: a replay, not
 			// a second activation. Nothing new is published — answer from
 			// the ALREADY-RECORDED outcome, which may itself be a node
-			// refusal, never a bare "Dispatched: true".
-			return cueActivationOutcomeFromRecord(nodeID, dup.Existing)
+			// refusal, never a bare "Dispatched: true". cueOutputs is
+			// still this FRESH Authorize call's own resolution (run above,
+			// unconditionally, before this duplicate-command branch was
+			// ever reached) — attached here so a continuing node-side
+			// refusal keeps re-scoping fail-to-black correctly on every
+			// replay tick, not just the first.
+			replayed := cueActivationOutcomeFromRecord(nodeID, dup.Existing)
+			replayed.RefusedCueOutputs = cueOutputs
+			return replayed
 		}
 		return cueActivationDispatchOutcome{NodeID: nodeID, Err: fmt.Errorf("insert cue.activate command for node %q: %w", nodeID, err)}
 	}
@@ -276,7 +305,7 @@ func (h *handlers) dispatchOneCueActivation(ctx context.Context, now time.Time, 
 		h.writeCueActivationOutcomeAudit(ctx, now, nodeID, act, issuer, "refused", reason)
 	}
 
-	return cueActivationDispatchOutcome{NodeID: nodeID, Dispatched: true, Confirmed: confirmed, NodeOutcome: nodeOutcome}
+	return cueActivationDispatchOutcome{NodeID: nodeID, Dispatched: true, Confirmed: confirmed, NodeOutcome: nodeOutcome, RefusedCueOutputs: cueOutputs}
 }
 
 // cueActivationResultPayload is the JSON this file persists into
@@ -400,16 +429,28 @@ func (h *handlers) writeCueActivationOutcomeAudit(ctx context.Context, now time.
 // silent skip, per H3 spec section 6. Nothing was ever published for this
 // node when this is called; see writeCueActivationOutcomeAudit for the
 // node's own post-dispatch refusal.
-func (h *handlers) writeCueActivationRefusalAudit(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, outcome cueauth.Outcome) {
+//
+// reason is [cueactivate.Authorize]'s own detail text, non-empty only for
+// an asset-missing refusal: the audit's OutcomeReason carries it in place
+// of the bare outcome string, so an operator reading the audit log sees
+// which sequence and asset are actually missing, never just
+// "asset-missing" naming nothing. Every other refusal outcome carries no
+// extra detail yet, so OutcomeReason falls back to the outcome string
+// itself, exactly as before this fix.
+func (h *handlers) writeCueActivationRefusalAudit(ctx context.Context, now time.Time, nodeID string, act cueactivation.Activation, issuer cueActivationIssuer, outcome cueauth.Outcome, reason string) {
 	if h.deps.Identity == nil {
 		return
+	}
+	outcomeReason := reason
+	if outcomeReason == "" {
+		outcomeReason = string(outcome)
 	}
 	entry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: issuer.PrincipalID, PrincipalName: issuer.PrincipalName,
 		Form: issuer.Form, CredentialID: issuer.CredentialID,
 		Action: "cue.activate", Target: "node:" + nodeID,
 		Params: cueActivationAuditParams(act), IdempotencyKey: act.ActivationID,
-		Kind: identity.AuditOutcome, Outcome: "refused", OutcomeReason: string(outcome),
+		Kind: identity.AuditOutcome, Outcome: "refused", OutcomeReason: outcomeReason,
 	}
 	if err := h.deps.Identity.WriteAudit(ctx, entry); err != nil {
 		h.logWarn("cue activation refusal audit write failed", "nodeId", nodeID, "error", err)

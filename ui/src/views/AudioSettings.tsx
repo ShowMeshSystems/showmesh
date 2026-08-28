@@ -31,12 +31,18 @@ const LTC_FRAME_RATES: ConfigAudioSettingsPayload['ltcFrameRate'][] = ['24', '25
 // ltcFrameRate.
 const LTC_OFFSET_PATTERN = /^\d{2}:\d{2}:\d{2}:\d{2}$/
 
+// The decibel bounds openapi.yaml gives the two gain fields. 0 dB is
+// unity, -60 dB is the silence floor show.cue's duckGainDb already uses,
+// and +12 dB is a typo guard rather than a tuned headroom figure.
+const SILENCE_FLOOR_DB = -60
+const MAX_BACKGROUND_GAIN_DB = 12
+
 interface FormState {
   driftIgnoreThresholdMs: string
   defaultFadeCurve: ConfigAudioSettingsPayload['defaultFadeCurve'] | ''
   defaultFadeDurationMs: string
-  defaultMaxBackgroundGain: string
-  duckTargetGain: string
+  defaultMaxBackgroundGainDb: string
+  duckTargetGainDb: string
   ltcFrameRate: ConfigAudioSettingsPayload['ltcFrameRate'] | ''
   ltcDefaultStartOffset: string
 }
@@ -46,8 +52,8 @@ function formFromPayload(payload: ConfigAudioSettingsPayload): FormState {
     driftIgnoreThresholdMs: String(payload.driftIgnoreThresholdMs),
     defaultFadeCurve: payload.defaultFadeCurve,
     defaultFadeDurationMs: String(payload.defaultFadeDurationMs),
-    defaultMaxBackgroundGain: String(payload.defaultMaxBackgroundGain),
-    duckTargetGain: String(payload.duckTargetGain),
+    defaultMaxBackgroundGainDb: String(payload.defaultMaxBackgroundGainDb),
+    duckTargetGainDb: String(payload.duckTargetGainDb),
     ltcFrameRate: payload.ltcFrameRate,
     ltcDefaultStartOffset: payload.ltcDefaultStartOffset,
   }
@@ -74,16 +80,27 @@ function buildPayload(form: FormState): { payload: ConfigAudioSettingsPayload } 
     return { error: 'Default fade duration must be a whole number of milliseconds, zero or greater.' }
   }
 
-  const defaultMaxBackgroundGain = Number(form.defaultMaxBackgroundGain)
-  if (form.defaultMaxBackgroundGain.trim() === '' || !Number.isFinite(defaultMaxBackgroundGain) || defaultMaxBackgroundGain < 0) {
-    return { error: 'Default maximum background gain must be a linear amplitude multiplier, zero or greater (not a dB value).' }
+  const defaultMaxBackgroundGainDb = Number(form.defaultMaxBackgroundGainDb)
+  if (
+    form.defaultMaxBackgroundGainDb.trim() === '' ||
+    !Number.isFinite(defaultMaxBackgroundGainDb) ||
+    defaultMaxBackgroundGainDb > MAX_BACKGROUND_GAIN_DB ||
+    defaultMaxBackgroundGainDb < SILENCE_FLOOR_DB
+  ) {
+    return {
+      error: `Default maximum background gain is in dB (0 dB is unity) and must be between ${SILENCE_FLOOR_DB} and ${MAX_BACKGROUND_GAIN_DB} dB.`,
+    }
   }
 
-  const duckTargetGain = Number(form.duckTargetGain)
-  if (form.duckTargetGain.trim() === '' || !Number.isFinite(duckTargetGain) || duckTargetGain < 0 || duckTargetGain >= 1) {
+  const duckTargetGainDb = Number(form.duckTargetGainDb)
+  if (
+    form.duckTargetGainDb.trim() === '' ||
+    !Number.isFinite(duckTargetGainDb) ||
+    duckTargetGainDb >= 0 ||
+    duckTargetGainDb < SILENCE_FLOOR_DB
+  ) {
     return {
-      error:
-        'Duck target gain must be a linear amplitude multiplier (not a dB value) from 0 up to but not including 1: a value of 1 or more would not duck anything.',
+      error: `Duck target gain is in dB and must be negative and at least ${SILENCE_FLOOR_DB} dB: 0 dB or louder would not duck anything, and ${SILENCE_FLOOR_DB} dB is already silence.`,
     }
   }
 
@@ -100,8 +117,8 @@ function buildPayload(form: FormState): { payload: ConfigAudioSettingsPayload } 
       driftIgnoreThresholdMs,
       defaultFadeCurve: form.defaultFadeCurve,
       defaultFadeDurationMs,
-      defaultMaxBackgroundGain,
-      duckTargetGain,
+      defaultMaxBackgroundGainDb,
+      duckTargetGainDb,
       ltcFrameRate: form.ltcFrameRate,
       ltcDefaultStartOffset: form.ltcDefaultStartOffset.trim(),
     },
@@ -122,8 +139,8 @@ export function AudioSettings() {
     driftIgnoreThresholdMs: '',
     defaultFadeCurve: '',
     defaultFadeDurationMs: '',
-    defaultMaxBackgroundGain: '',
-    duckTargetGain: '',
+    defaultMaxBackgroundGainDb: '',
+    duckTargetGainDb: '',
     ltcFrameRate: '',
     ltcDefaultStartOffset: '',
   })
@@ -259,29 +276,28 @@ export function AudioSettings() {
           </label>
 
           <label className="form-field">
-            Default maximum background gain (linear amplitude multiplier, not dB - 1.0 is unity
-            gain)
+            Default maximum background gain (dB - 0 dB is unity gain, -60 to +12 dB)
             <input
               type="number"
-              min={0}
+              min={SILENCE_FLOOR_DB}
+              max={MAX_BACKGROUND_GAIN_DB}
               step="any"
-              aria-label="Default maximum background gain, linear"
-              value={form.defaultMaxBackgroundGain}
-              onChange={(e) => setForm({ ...form, defaultMaxBackgroundGain: e.target.value })}
+              aria-label="Default maximum background gain in dB"
+              value={form.defaultMaxBackgroundGainDb}
+              onChange={(e) => setForm({ ...form, defaultMaxBackgroundGainDb: e.target.value })}
             />
           </label>
 
           <label className="form-field">
-            Duck target gain (linear amplitude multiplier, not dB - 0 is full silence, must be
-            below 1)
+            Duck target gain (dB - must be negative, and -60 dB is full silence)
             <input
               type="number"
-              min={0}
-              max={0.999999}
+              min={SILENCE_FLOOR_DB}
+              max={-0.000001}
               step="any"
-              aria-label="Duck target gain, linear"
-              value={form.duckTargetGain}
-              onChange={(e) => setForm({ ...form, duckTargetGain: e.target.value })}
+              aria-label="Duck target gain in dB"
+              value={form.duckTargetGainDb}
+              onChange={(e) => setForm({ ...form, duckTargetGainDb: e.target.value })}
             />
           </label>
           <p className="text-muted">

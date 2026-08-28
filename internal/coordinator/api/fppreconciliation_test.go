@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -528,6 +529,143 @@ func TestGetFPPPlaylistReadinessReady(t *testing.T) {
 	}
 	if warning, _ := body["warning"].(string); warning == "" {
 		t.Fatalf("warning is empty, want the no-observation-yet warning (H2 spec §6: \"the normal afternoon state, not a fault\"); body: %v", body)
+	}
+}
+
+// TestGetFPPPlaylistReadinessDetectsEditedPlaylistWhileFPPIdle is the
+// acceptance case at the HTTP layer: a newer definition is on file for
+// the same instance/playlist name under a different hash, and NO
+// observation exists at all (FPP has never played since the edit). The
+// route must report not ready from the definition store alone.
+func TestGetFPPPlaylistReadinessDetectsEditedPlaylistWhileFPPIdle(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.depsWithStore(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	c := newOpenAPICompiler(t)
+
+	putShowForTest(t, setup.st, "show-1", "Show One")
+	cuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: "show-1", Name: "cue-1",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "seq-1"}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, "cue-1", cuePayload)
+
+	playlistPayload := config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "instance-1", PlaylistName: "Main", PlaylistHash: playlistHash64},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: "cue-1",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	playlistJSON, err := config.EncodeShowPlaylistPayload(playlistPayload)
+	if err != nil {
+		t.Fatalf("encode show.playlist payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowPlaylistConfigKind, "playlist-1", playlistJSON)
+
+	if _, err := setup.st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: "instance-1", PlaylistHash: playlistHash64, PlaylistName: "Main",
+		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"}],"leadOut":[]}`,
+		CapturedAt:     testNow.Add(-time.Hour), ReceivedAt: testNow.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("put bound fpp playlist definition: %v", err)
+	}
+	newerHash := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := setup.st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: "instance-1", PlaylistHash: newerHash, PlaylistName: "Main",
+		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"},{"type":"sequence"},{"type":"sequence"}],"leadOut":[]}`,
+		CapturedAt:     testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("put newer fpp playlist definition: %v", err)
+	}
+	// Deliberately no observation stored: FPP has never played since the
+	// edit — the exact acceptance case, "without anything having to be
+	// played first."
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/fpp/playlists/playlist-1/readiness", nil)
+	resp, raw := doRawRequest(t, api.Handler, req)
+	body := decodeMap(t, raw)
+	assertMatchesSchema(t, c, "FPPPlaylistReadinessResponse", raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, body)
+	}
+	if ready, _ := body["ready"].(bool); ready {
+		t.Fatalf("ready = true, want false: a newer definition is stored for this instance/playlist name and nothing has played since the edit; body: %v", body)
+	}
+	if cond, _ := body["failingCondition"].(string); cond != "definition-superseded" {
+		t.Fatalf("failingCondition = %q, want %q; body: %v", cond, "definition-superseded", body)
+	}
+}
+
+// TestGetFPPPlaylistReadinessObservationUnavailableIsFailureNotWarning is
+// the issue's own literal reproduction, reported as a bug against
+// unmodified code: an observation exists (FPP played the edited playlist,
+// then went idle) but could not establish identity. Readiness must report
+// not ready, never ready:true with a warning.
+func TestGetFPPPlaylistReadinessObservationUnavailableIsFailureNotWarning(t *testing.T) {
+	setup := newFPPObservationTestSetup(t, fixedClock(testNow))
+	api := New(setup.depsWithStore(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	c := newOpenAPICompiler(t)
+
+	putShowForTest(t, setup.st, "show-1", "Show One")
+	cuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: "show-1", Name: "cue-1",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "seq-1"}},
+	})
+	if err != nil {
+		t.Fatalf("encode show.cue payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowCueConfigKind, "cue-1", cuePayload)
+
+	playlistPayload := config.ShowPlaylistPayload{
+		Show: "show-1", Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		MismatchPolicy: config.ShowPlaylistMismatchPolicyHold,
+		FPP:            &config.ShowPlaylistFPPBinding{InstanceUUID: "instance-1", PlaylistName: "Main", PlaylistHash: playlistHash64},
+		Entries: []config.ShowPlaylistEntry{{
+			ID: "entry-1", Cue: "cue-1",
+			FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0},
+		}},
+	}
+	playlistJSON, err := config.EncodeShowPlaylistPayload(playlistPayload)
+	if err != nil {
+		t.Fatalf("encode show.playlist payload: %v", err)
+	}
+	putConfigForTest(t, setup.st, config.ShowPlaylistConfigKind, "playlist-1", playlistJSON)
+
+	if _, err := setup.st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: "instance-1", PlaylistHash: playlistHash64, PlaylistName: "Main",
+		DefinitionJSON: `{"leadIn":[],"mainPlaylist":[{"type":"sequence"}],"leadOut":[]}`,
+		CapturedAt:     testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("put fpp playlist definition: %v", err)
+	}
+	if err := setup.st.PutFPPPlaylistEntryObservation(context.Background(), store.FPPPlaylistEntryObservationRecord{
+		InstanceUUID: "instance-1", SchemaVersion: 1, Sequence: 1,
+		Action: "idle", Unavailable: "missing_playlist_name",
+		ObservedAt: testNow, ReceivedAt: testNow,
+	}); err != nil {
+		t.Fatalf("put fpp playlist entry observation: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/fpp/playlists/playlist-1/readiness", nil)
+	resp, raw := doRawRequest(t, api.Handler, req)
+	body := decodeMap(t, raw)
+	assertMatchesSchema(t, c, "FPPPlaylistReadinessResponse", raw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %v", resp.StatusCode, body)
+	}
+	if ready, _ := body["ready"].(bool); ready {
+		t.Fatalf("ready = true, want false: the latest observation could not establish identity, so this check could not run; body: %v", body)
+	}
+	if cond, _ := body["failingCondition"].(string); cond != "evidence-unavailable" {
+		t.Fatalf("failingCondition = %q, want %q; body: %v", cond, "evidence-unavailable", body)
+	}
+	if warning, _ := body["warning"].(string); warning != "" {
+		t.Fatalf("warning = %q, want empty: this is a failing condition, not a warning; body: %v", warning, body)
 	}
 }
 

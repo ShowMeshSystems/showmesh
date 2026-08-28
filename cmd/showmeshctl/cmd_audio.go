@@ -24,13 +24,13 @@ import (
 
 // configAudioSettingsPayload mirrors v1.ConfigAudioSettingsPayload.
 type configAudioSettingsPayload struct {
-	DriftIgnoreThresholdMs   int     `json:"driftIgnoreThresholdMs"`
-	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
-	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
-	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
-	DuckTargetGain           float64 `json:"duckTargetGain"`
-	LTCFrameRate             string  `json:"ltcFrameRate"`
-	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
+	DriftIgnoreThresholdMs     int     `json:"driftIgnoreThresholdMs"`
+	DefaultFadeCurve           string  `json:"defaultFadeCurve"`
+	DefaultFadeDurationMs      int     `json:"defaultFadeDurationMs"`
+	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
+	DuckTargetGainDb           float64 `json:"duckTargetGainDb"`
+	LTCFrameRate               string  `json:"ltcFrameRate"`
+	LTCDefaultStartOffset      string  `json:"ltcDefaultStartOffset"`
 }
 
 type audioSettingsConfigResponse struct {
@@ -44,12 +44,16 @@ type audioSettingsConfigResponse struct {
 	Source                 string                     `json:"source"`
 }
 
-// configAudioNode mirrors v1.ConfigAudioNode.
+// configAudioNode mirrors v1.ConfigAudioNode. LTCRoute and LTCChannel
+// carry omitempty for the same reason the server side does: a
+// program-only node declares neither, and the API refuses an ltcRoute
+// present but empty. Omitting the pair is how "this node emits no LTC"
+// is expressed on the wire.
 type configAudioNode struct {
 	ProgramRoute          string `json:"programRoute"`
-	LTCRoute              string `json:"ltcRoute"`
+	LTCRoute              string `json:"ltcRoute,omitempty"`
 	ProgramChannels       []int  `json:"programChannels"`
-	LTCChannel            int    `json:"ltcChannel"`
+	LTCChannel            int    `json:"ltcChannel,omitempty"`
 	ClockDomain           string `json:"clockDomain"`
 	ClockDomainProvenance string `json:"clockDomainProvenance"`
 }
@@ -153,10 +157,13 @@ func printAudioSettingsUsage(w io.Writer) {
 Read or write the coordinator's audio.settings configuration (ADR-039):
 driftIgnoreThresholdMs (never measured — a starting point, not a tuned
 value), defaultFadeCurve (only "linear" ships today), defaultFadeDurationMs,
-defaultMaxBackgroundGain (a linear multiplier, 1.0 is unity gain),
-duckTargetGain (how far a bed drops under an announcement, same linear
-unit, below 1.0 — the shipped value is PROVISIONAL and has never been
-heard on real speakers),
+defaultMaxBackgroundGainDb (DECIBELS: 0 dB is unity gain, at most +12 dB;
+a linear-looking 0.5 here is only half a decibel, not a halving, so enter
+-6.02 if you meant half amplitude),
+duckTargetGainDb (how far a bed drops under an announcement, also in
+decibels: must be negative and at least -60 dB, where -60 dB is silence.
+The shipped value is PROVISIONAL and has never been heard on real
+speakers),
 ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
 and ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
 ltcStartOffset overrides this).
@@ -496,20 +503,24 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	var programRoute, ltcRoute, programChannels, clockDomain, clockDomainProvenance string
 	var ltcChannel int
 	fs.StringVar(&programRoute, "program-route", "", "the advertised output route to carry program audio (required)")
-	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC (required, must equal --program-route)")
+	fs.StringVar(&ltcRoute, "ltc-route", "", "the advertised output route to carry LTC, must equal --program-route (omit with --ltc-channel for a program-only node)")
 	fs.StringVar(&programChannels, "program-channels", "", "comma-separated, ordered, distinct 1-based channel indices carrying program audio, e.g. 1,2 (required)")
-	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (required)")
+	fs.IntVar(&ltcChannel, "ltc-channel", 0, "1-based channel index carrying LTC, distinct from --program-channels (omit with --ltc-route for a program-only node)")
 	fs.StringVar(&clockDomain, "clock-domain", "", "the operator's own name for the shared clock domain (required)")
 	fs.StringVar(&clockDomainProvenance, "clock-domain-provenance", "", "the stated basis for the clock domain declaration (required)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "usage: showmeshctl audio node set [flags] <node-id>")
 		_, _ = fmt.Fprintln(stderr, "\nWrite a new audio.node revision (PUT /api/v1/config/audio.node/{id}).")
 		_, _ = fmt.Fprintln(stderr, "Requires config:write, admin only.")
-		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: all six flags are required on every call and")
-		_, _ = fmt.Fprintln(stderr, "this command never reads the node's current definition first. Refused")
-		_, _ = fmt.Fprintln(stderr, "unless the node has already advertised both routes in its own capability")
-		_, _ = fmt.Fprintln(stderr, "report — never accepted on the operator's claim alone. --program-route and")
-		_, _ = fmt.Fprintln(stderr, "--ltc-route must name the same route.")
+		_, _ = fmt.Fprintln(stderr, "\nThis is a FULL REPLACEMENT: this command never reads the node's current")
+		_, _ = fmt.Fprintln(stderr, "definition first. Refused unless the node has already advertised the")
+		_, _ = fmt.Fprintln(stderr, "routes in its own capability report — never accepted on the operator's")
+		_, _ = fmt.Fprintln(stderr, "claim alone. --program-route and --ltc-route must name the same route.")
+		_, _ = fmt.Fprintln(stderr, "\n--ltc-route and --ltc-channel are the one OPTIONAL pair, and they are")
+		_, _ = fmt.Fprintln(stderr, "optional TOGETHER: omit both to declare a program-only node that emits")
+		_, _ = fmt.Fprintln(stderr, "no LTC. That is the only way to declare a two-output interface, which")
+		_, _ = fmt.Fprintln(stderr, "has no channel to spare for a discrete LTC signal. Passing one without")
+		_, _ = fmt.Fprintln(stderr, "the other is refused here rather than sent. Every other flag is required.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -536,8 +547,23 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 			ltcChannelSet = true
 		}
 	})
-	if programRoute == "" || ltcRoute == "" || programChannels == "" || !ltcChannelSet || clockDomain == "" || clockDomainProvenance == "" {
-		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --program-route, --ltc-route, --program-channels, --ltc-channel, --clock-domain, and --clock-domain-provenance are all required")
+	if programRoute == "" || programChannels == "" || clockDomain == "" || clockDomainProvenance == "" {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --program-route, --program-channels, --clock-domain, and --clock-domain-provenance are all required")
+		return exitUsage
+	}
+	// --ltc-route and --ltc-channel are optional TOGETHER: omitting both
+	// declares a program-only node that emits no LTC, which is the only
+	// shape a two-output interface can be declared in. Half a pair is
+	// refused here rather than sent: the API refuses an empty ltcRoute as
+	// field-empty, so passing --ltc-channel alone would otherwise cost a
+	// round trip to earn a worse error message.
+	wantLTC := ltcRoute != "" || ltcChannelSet
+	if wantLTC && ltcRoute == "" {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --ltc-route is required when --ltc-channel is given; omit both to declare a program-only node that emits no LTC")
+		return exitUsage
+	}
+	if wantLTC && !ltcChannelSet {
+		_, _ = fmt.Fprintln(stderr, "showmeshctl audio node set: --ltc-channel is required when --ltc-route is given; omit both to declare a program-only node that emits no LTC")
 		return exitUsage
 	}
 	channels, err := parseChannelList(programChannels)
@@ -554,9 +580,12 @@ func cmdAudioNodeSet(args []string, stdout, stderr io.Writer, clock func() time.
 	defer cancel()
 
 	body := configAudioNode{
-		ProgramRoute: programRoute, LTCRoute: ltcRoute,
-		ProgramChannels: channels, LTCChannel: ltcChannel,
-		ClockDomain: clockDomain, ClockDomainProvenance: clockDomainProvenance,
+		ProgramRoute:    programRoute,
+		ProgramChannels: channels,
+		ClockDomain:     clockDomain, ClockDomainProvenance: clockDomainProvenance,
+	}
+	if wantLTC {
+		body.LTCRoute, body.LTCChannel = ltcRoute, ltcChannel
 	}
 	var resp audioNodeConfigResponse
 	if err := c.putJSON(ctx, "/api/v1/config/audio.node/"+url.PathEscape(id), body, &resp); err != nil {
@@ -626,22 +655,29 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 		by = "by " + *resp.CreatedByPrincipalName
 	}
 	_, _ = fmt.Fprintf(w, "audio.settings revision %d (source %s, %s):\n", resp.Revision, resp.Source, by)
-	_, _ = fmt.Fprintf(w, "  driftIgnoreThresholdMs:   %d\n", resp.Payload.DriftIgnoreThresholdMs)
-	_, _ = fmt.Fprintf(w, "  defaultFadeCurve:         %s\n", resp.Payload.DefaultFadeCurve)
-	_, _ = fmt.Fprintf(w, "  defaultFadeDurationMs:    %d\n", resp.Payload.DefaultFadeDurationMs)
-	_, _ = fmt.Fprintf(w, "  defaultMaxBackgroundGain: %v\n", resp.Payload.DefaultMaxBackgroundGain)
-	_, _ = fmt.Fprintf(w, "  duckTargetGain:           %v\n", resp.Payload.DuckTargetGain)
-	_, _ = fmt.Fprintf(w, "  ltcFrameRate:             %s\n", resp.Payload.LTCFrameRate)
-	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:    %s\n", resp.Payload.LTCDefaultStartOffset)
+	_, _ = fmt.Fprintf(w, "  driftIgnoreThresholdMs:     %d\n", resp.Payload.DriftIgnoreThresholdMs)
+	_, _ = fmt.Fprintf(w, "  defaultFadeCurve:           %s\n", resp.Payload.DefaultFadeCurve)
+	_, _ = fmt.Fprintf(w, "  defaultFadeDurationMs:      %d\n", resp.Payload.DefaultFadeDurationMs)
+	_, _ = fmt.Fprintf(w, "  defaultMaxBackgroundGainDb: %v dB\n", resp.Payload.DefaultMaxBackgroundGainDb)
+	_, _ = fmt.Fprintf(w, "  duckTargetGainDb:           %v dB\n", resp.Payload.DuckTargetGainDb)
+	_, _ = fmt.Fprintf(w, "  ltcFrameRate:               %s\n", resp.Payload.LTCFrameRate)
+	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
 }
 
 func printAudioNodeDetail(w io.Writer, resp audioNodeConfigResponse) {
 	p := resp.Payload
 	_, _ = fmt.Fprintf(w, "Node ID:                %s\n", resp.ID)
 	_, _ = fmt.Fprintf(w, "Program route:          %s\n", p.ProgramRoute)
-	_, _ = fmt.Fprintf(w, "LTC route:              %s\n", p.LTCRoute)
 	_, _ = fmt.Fprintf(w, "Program channels:       %v\n", p.ProgramChannels)
-	_, _ = fmt.Fprintf(w, "LTC channel:            %d\n", p.LTCChannel)
+	// A program-only node carries neither LTC field. Say that outright
+	// rather than rendering a blank route and "LTC channel: 0", which
+	// reads as a real channel zero.
+	if p.LTCRoute == "" && p.LTCChannel == 0 {
+		_, _ = fmt.Fprintln(w, "LTC:                    none (program-only node)")
+	} else {
+		_, _ = fmt.Fprintf(w, "LTC route:              %s\n", p.LTCRoute)
+		_, _ = fmt.Fprintf(w, "LTC channel:            %d\n", p.LTCChannel)
+	}
 	_, _ = fmt.Fprintf(w, "Clock domain:           %s\n", p.ClockDomain)
 	_, _ = fmt.Fprintf(w, "Clock domain provenance: %s\n", p.ClockDomainProvenance)
 	_, _ = fmt.Fprintf(w, "Revision:               %d\n", resp.Revision)

@@ -60,6 +60,22 @@ type CueCatalogEntry struct {
 // case (H3 spec section 2): show, generation, and revision are all absent
 // (the JSON zero value / omitted) and entries is an empty array, never a
 // fabricated generation of 0 that could be mistaken for a real grant.
+//
+// AcknowledgedStatus/AcknowledgedRevision/AcknowledgedAt project
+// [github.com/showmeshsystems/showmesh/internal/coordinator/store.NodeCueCatalogAckRecord],
+// the SAME persisted acknowledgement CueCatalogAcknowledgeResponse and
+// CueCatalogDeployResult already record, now made readable without
+// performing either write. AcknowledgedStatus is one of the
+// three [CueCatalogStatusCurrent]/[CueCatalogStatusStale]/
+// [CueCatalogStatusNeverAcknowledged] values below and is always present;
+// AcknowledgedRevision and AcknowledgedAt are both null exactly when
+// AcknowledgedStatus is CueCatalogStatusNeverAcknowledged (the node has
+// never acknowledged anything): a caller must read the status, never
+// infer "never acknowledged" from a missing revision, matching this
+// package's CueCatalogAcknowledgeResponse.CurrentRevision precedent for
+// the identical class of mistake. Stale names both revisions: the
+// acknowledged one here, and the currently required one in Revision
+// above.
 type CueCatalogResponse struct {
 	ServerTime string            `json:"serverTime"`
 	Node       string            `json:"node"`
@@ -68,6 +84,10 @@ type CueCatalogResponse struct {
 	Generation *int64            `json:"generation,omitempty"`
 	Revision   string            `json:"revision,omitempty"`
 	Entries    []CueCatalogEntry `json:"entries"`
+
+	AcknowledgedStatus   string  `json:"acknowledgedStatus"`
+	AcknowledgedRevision *string `json:"acknowledgedRevision,omitempty"`
+	AcknowledgedAt       *string `json:"acknowledgedAt,omitempty"`
 }
 
 // CueCatalogAcknowledgeRequest is POST
@@ -105,10 +125,15 @@ type CueCatalogAcknowledgeResponse struct {
 	AcknowledgedAt       string `json:"acknowledgedAt"`
 }
 
-// The two members of CueCatalogAcknowledgeResponse.Status.
+// The members of CueCatalogAcknowledgeResponse.Status. CueCatalogResponse
+// .AcknowledgedStatus reuses the same two for a node that has
+// acknowledged something, and adds CueCatalogStatusNeverAcknowledged for
+// one that never has, a state CueCatalogAcknowledgeResponse never needs
+// since making that request IS an acknowledgement.
 const (
-	CueCatalogStatusCurrent = "catalog-current"
-	CueCatalogStatusStale   = "catalog-stale"
+	CueCatalogStatusCurrent           = "catalog-current"
+	CueCatalogStatusStale             = "catalog-stale"
+	CueCatalogStatusNeverAcknowledged = "catalog-unacknowledged"
 )
 
 // CueCatalogDeployResult is the outcome of dispatching cuecatalog.deploy

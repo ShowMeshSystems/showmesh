@@ -27,9 +27,17 @@ var ErrSchemaTooNew = errors.New("store: database schema version is newer than t
 // entries whose versions are 1..8,10 has length 9 but maximum 10, and only
 // the maximum is safe to stamp — see [migrate]'s own doc comment for what
 // goes wrong if a count is stamped instead.
+//
+// A migration carries EITHER sql or fn, never both. fn exists for the one
+// class of change SQL cannot express here: rewriting a stored JSON
+// payload through a conversion that must stay identical to the one the
+// running code uses. Doing that arithmetic in SQL would be a second
+// implementation of a conversion this project deliberately keeps in
+// exactly one place, and the two would drift.
 type migration struct {
 	version int
 	sql     string
+	fn      func(ctx context.Context, tx *sql.Tx) error
 }
 
 // migrations is the full ordered history of this package's schema. Append,
@@ -53,6 +61,7 @@ var migrations = []migration{
 	{version: 16, sql: schemaV16},
 	{version: 17, sql: schemaV17},
 	{version: 18, sql: schemaV18},
+	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1377,6 +1386,12 @@ func migrate(ctx context.Context, db *sql.DB) error {
 
 	for _, m := range migrations {
 		if m.version <= current {
+			continue
+		}
+		if m.fn != nil {
+			if err := m.fn(ctx, tx); err != nil {
+				return fmt.Errorf("store: apply migration %d: %w", m.version, err)
+			}
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, m.sql); err != nil {

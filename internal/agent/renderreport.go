@@ -32,7 +32,7 @@ const renderReportPublishTimeout = 5 * time.Second
 // runRenderReport returns only when ctx is done; a publish failure never
 // causes it to return early, matching runHeartbeat's and
 // runAssetInventory's identical contract.
-func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
+func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pipeline.Supervisor, store *pipeline.AssignmentStore, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, ticks <-chan time.Time, triggered <-chan struct{}, logger *slog.Logger) {
 	topic, err := mqttproto.ObservedTopic(nodeID, "render")
 	if err != nil {
 		// nodeID is validated at config load, matching runHeartbeat's and
@@ -50,29 +50,45 @@ func runRenderReport(ctx context.Context, pub Publisher, nodeID string, sup *pip
 			if !ok {
 				return
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, fcHeld, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, store, msStatus, fcStatus, fcHeld, now, logger)
 		case _, ok := <-triggered:
 			if !ok {
 				triggered = nil
 				continue
 			}
-			publishOneRenderReport(ctx, pub, topic, nodeID, sup, msStatus, fcStatus, fcHeld, now, logger)
+			publishOneRenderReport(ctx, pub, topic, nodeID, sup, store, msStatus, fcStatus, fcHeld, now, logger)
 		}
 	}
 }
 
 // publishOneRenderReport snapshots every surface sup currently supervises,
-// plus msStatus's current MultiSync bind evidence (finding 7), fcStatus's
-// current FPP Connect HTTP listener evidence (ADR-044), and fcHeld's
-// currently held files and bounded evidence log, and publishes a single
-// render report.
-func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, logger *slog.Logger) {
+// plus store's persisted content identity for each surface, msStatus's
+// current MultiSync bind evidence (finding 7), fcStatus's current FPP
+// Connect HTTP listener evidence (ADR-044), and fcHeld's currently held
+// files and bounded evidence log, and publishes a single render report.
+func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID string, sup *pipeline.Supervisor, store *pipeline.AssignmentStore, msStatus *multiSyncStatus, fcStatus *fppConnectHTTPStatus, fcHeld *fppConnectHeldStore, now func() time.Time, logger *slog.Logger) {
 	pubCtx, cancel := context.WithTimeout(ctx, renderReportPublishTimeout)
 	defer cancel()
 
 	gstPath, gstOK, _ := pipeline.ResolveGstLaunch()
 	msListening, msReason, msObservedAt := msStatus.get()
 	fcListening, fcReason, fcObservedAt := fcStatus.get()
+
+	// assignments is re-read fresh from disk on every report tick, keyed by
+	// surface id, so the report carries what this node actually PERSISTED
+	// for that surface rather than anything the coordinator most
+	// recently asked for. A read failure is logged and treated as "no
+	// assignment known" for this tick: a report with a stale or fabricated
+	// filename would be worse than one that states absence and recovers on
+	// the next tick.
+	assignments := map[string]pipeline.Assignment{}
+	if loaded, err := store.Load(); err != nil {
+		logger.Warn("failed to load persisted render assignments for report", "error", err)
+	} else {
+		for _, a := range loaded {
+			assignments[a.SurfaceID] = a
+		}
+	}
 
 	snapshots := sup.SnapshotAll()
 	// Surfaces is built as a non-nil, possibly-empty slice regardless of
@@ -81,7 +97,11 @@ func publishOneRenderReport(ctx context.Context, pub Publisher, topic, nodeID st
 	// Assets's identical no-omitempty rule.
 	surfaces := make([]mqttproto.RenderSurfaceReport, 0, len(snapshots))
 	for _, s := range snapshots {
-		surfaces = append(surfaces, toRenderSurfaceReport(s))
+		rep := toRenderSurfaceReport(s)
+		if a, ok := assignments[s.SurfaceID]; ok {
+			applyContentIdentity(&rep, a, now())
+		}
+		surfaces = append(surfaces, rep)
 	}
 
 	// heldRecords is the true total; held is what actually rides the wire,
@@ -188,6 +208,46 @@ func toRenderSurfaceReport(s pipeline.Snapshot) mqttproto.RenderSurfaceReport {
 		IdleMode:            s.IdleMode,
 		FailureOutput:       s.FailureOutput,
 	}
+}
+
+// applyContentIdentity stamps rep's six content-identity fields (the
+// original four, plus Show/Generation) from a, the assignment this
+// node actually PERSISTED for this surface, the same record
+// cueactivationrender.go and renderops.go read back at boot to resume
+// rendering, never from anything the coordinator most recently requested.
+// Leaves every field "" or 0 (already rep's zero value) when a's params
+// carry no fseqFilename, so an undecodable or content-less assignment
+// reports absence rather than propagating a decode failure into a
+// fabricated identity.
+//
+// observedAt is this node's own read time for a — the caller's now() at
+// the moment it re-read the persisted assignment store, stamped onto
+// rep.ContentObservedAt only when a genuine identity is actually applied.
+// The store is re-read fresh on every report tick (publishOneRenderReport's
+// doc comment), so "when I read this" is a real, continuously refreshed
+// observation: a cue activation swaps the frame writer without
+// transitioning PipelineState, and a surface rendering the same content
+// steadily must not read stale merely because ObservedAt never moves.
+func applyContentIdentity(rep *mqttproto.RenderSurfaceReport, a pipeline.Assignment, observedAt time.Time) {
+	var params map[string]any
+	if err := json.Unmarshal(a.RawParams, &params); err != nil {
+		return
+	}
+	filename, _ := params["fseqFilename"].(string)
+	if filename == "" {
+		return
+	}
+	hash, _ := params["fseqContentHash"].(string)
+
+	rep.FSEQFilename = filename
+	rep.FSEQContentHash = hash
+	rep.CueID = a.CueID
+	if a.Auth != nil {
+		rep.CatalogRevision = a.Auth.CatalogRevision
+		rep.Show = a.Auth.Show
+		rep.Generation = a.Auth.Generation
+	}
+	rep.ContentObservedAt = observedAt
 }
 
 // toRenderFPPConnectHeldFile converts one fppConnectHeldRecord

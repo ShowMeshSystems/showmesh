@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { FPPDetail } from './FPPDetail'
 import { ModelContext } from '../app/ModelContext'
+import { formatAbsolute } from '../app/time'
 import { makeEvidence, makeFPPInstance, makeModel } from '../app/test-support/fixtures'
 import {
   makeGhostFpp01Instance,
@@ -27,14 +28,23 @@ type SchemaObservation = components['schemas']['FPPPlaylistEntryObservation']
 // inside FPPDetail directly) is mocked here for the identical reason: this
 // view's own job is rendering the pending change and the observed
 // post-acknowledge state, not exercising the real network path.
+// The "Current playback" panel fetches through
+// getFPPPlaylistEntryReconciliation the same way PlaylistReadiness.test.tsx
+// mocks it, for the identical reason: isolating this view's own rendering
+// from store.ts's real network behavior. Given a default resolved value
+// below so the many pre-existing tests above that set a real instanceUuid
+// (for FPPResetObservationSequenceControl / FPPInstanceUuidChangeNotice)
+// do not each need their own opinion about this unrelated panel.
 const {
   listFPPPlaylistEntryObservations,
   deleteFPPPlaylistEntryObservation,
   acknowledgeFPPInstanceUUIDChange,
+  getFPPPlaylistEntryReconciliation,
 } = vi.hoisted(() => ({
   listFPPPlaylistEntryObservations: vi.fn(),
   deleteFPPPlaylistEntryObservation: vi.fn(),
   acknowledgeFPPInstanceUUIDChange: vi.fn(),
+  getFPPPlaylistEntryReconciliation: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -43,7 +53,18 @@ vi.mock('../api', async (importOriginal) => {
     listFPPPlaylistEntryObservations,
     deleteFPPPlaylistEntryObservation,
     acknowledgeFPPInstanceUUIDChange,
+    getFPPPlaylistEntryReconciliation,
   }
+})
+
+beforeEach(() => {
+  getFPPPlaylistEntryReconciliation.mockResolvedValue({
+    instanceUuid: 'uuid-fpp-1',
+    outcome: 'unbound',
+    reason: 'no binding is configured for this instance',
+    definitionAvailable: false,
+    serverTime: '2026-08-11T12:00:00.000Z',
+  })
 })
 
 afterEach(() => {
@@ -51,6 +72,7 @@ afterEach(() => {
   listFPPPlaylistEntryObservations.mockReset()
   deleteFPPPlaylistEntryObservation.mockReset()
   acknowledgeFPPInstanceUUIDChange.mockReset()
+  getFPPPlaylistEntryReconciliation.mockReset()
 })
 
 function renderFPPDetail(instanceId: string, model: Model) {
@@ -459,5 +481,156 @@ describe("FPPDetail's pending instance uuid change notice", () => {
     const button = within(section).getByRole('button', { name: 'Acknowledge: this hardware was replaced' })
     expect(button).toBeDisabled()
     expect(acknowledgeFPPInstanceUUIDChange).not.toHaveBeenCalled()
+  })
+})
+
+// The resolved answer previously only reachable from
+// views/PlaylistReadiness.tsx, now placed on this page too, outside the
+// Recovery panel (FPPResetObservationSequenceControl.tsx's own section).
+describe("FPPDetail's current playback panel", () => {
+  // Every fixture below except the first sets a non-null instanceUuid,
+  // which also makes FPPResetObservationSequenceControl (the Recovery
+  // panel) fetch its own stored observation -- resolved trivially empty
+  // here since that control's own behaviour is not what these tests are
+  // about, same posture as the pending-uuid-change describe block above.
+  beforeEach(() => {
+    listFPPPlaylistEntryObservations.mockResolvedValue({ observations: [], serverTime: RECOVERY_NOW })
+  })
+
+  it('renders nothing distinctive for an instance with no reported instance uuid', () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: null })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
+
+    expect(screen.getByText(/no reconciliation verdict can exist for it yet/)).toBeInTheDocument()
+    expect(getFPPPlaylistEntryReconciliation).not.toHaveBeenCalled()
+  })
+
+  it('renders the current entry, outcome badge, and reason for a non-resolved outcome, without an entry id or cue id', async () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-fpp-1',
+      outcome: 'unknown-entry',
+      reason: 'no entry in the bound Playlist matches this observation',
+      observedEntryKey: 'section1_1',
+      definitionAvailable: true,
+      serverTime: '2026-08-11T12:00:00.000Z',
+    })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
+
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledWith('uuid-fpp-1'))
+    expect(await screen.findByText('section1_1')).toBeInTheDocument()
+    expect(screen.getByText('no entry in the bound Playlist matches this observation')).toBeInTheDocument()
+    expect(screen.getByText('unknown entry')).toBeInTheDocument()
+    expect(screen.queryByText('Entry id')).not.toBeInTheDocument()
+    expect(screen.queryByText('Cue id')).not.toBeInTheDocument()
+  })
+
+  it('renders the entry id and cue id on a resolved outcome', async () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-fpp-1',
+      outcome: 'resolved',
+      reason: 'matches the current binding',
+      observedEntryKey: 'section1_2',
+      playlistId: 'opener',
+      playlistRevision: 3,
+      entryId: 'entry-two',
+      cueId: 'cue-two',
+      cueRevision: 1,
+      definitionAvailable: true,
+      serverTime: '2026-08-11T12:00:00.000Z',
+    })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
+
+    expect(await screen.findByText('entry-two')).toBeInTheDocument()
+    expect(screen.getByText('cue-two')).toBeInTheDocument()
+    expect(screen.getByText('resolved')).toBeInTheDocument()
+  })
+
+  it('renders a fetch failure as a failure to check, distinct from any outcome', async () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    getFPPPlaylistEntryReconciliation.mockRejectedValue(new Error('network error'))
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not check')
+  })
+
+  it('renders the verdict\'s own serverTime as the fetch time, so a stale verdict is dated', async () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-fpp-1',
+      outcome: 'unbound',
+      reason: 'no binding is configured for this instance',
+      definitionAvailable: false,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
+
+    expect(await screen.findByText(formatAbsolute('2026-08-25T18:40:00Z'))).toBeInTheDocument()
+  })
+
+  // The defect this task closes: the effect's deps were
+  // [instanceUuid, snapshotReceivedAt] only, so a fresh
+  // fppPlaylistEntry.changed observation for this instance never
+  // retriggered the fetch -- only a reconnect did. Asserting the fetch
+  // COUNT, not just that a fetch happened, so a broken fix that
+  // refetches on every render (or on an object identity that changes
+  // every snapshot) cannot pass this by accident.
+  it('refetches when this instance\'s latest observation sequence advances, with no reconnect', async () => {
+    const instance = makeFPPInstance('fpp-1', { instanceUuid: 'uuid-fpp-1' })
+    getFPPPlaylistEntryReconciliation.mockResolvedValue({
+      instanceUuid: 'uuid-fpp-1',
+      outcome: 'unbound',
+      reason: 'no binding is configured for this instance',
+      definitionAvailable: false,
+      serverTime: '2026-08-25T18:40:00Z',
+    })
+    const observation: SchemaObservation = {
+      instanceUuid: 'uuid-fpp-1',
+      endpointId: 'fpp-1',
+      schemaVersion: 1,
+      sequence: 1,
+      action: 'playing',
+      observedAt: '2026-08-25T18:39:00Z',
+      coalescedSincePreviousAcknowledged: 0,
+      receivedAt: '2026-08-25T18:39:00Z',
+    }
+    const { rerender } = renderFPPDetail(
+      'fpp-1',
+      makeModel({ fpp: [instance], fppPlaylistEntryObservations: [observation] }),
+    )
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(1))
+
+    // Same snapshot, same instance, re-rendering with an unchanged model:
+    // must NOT refetch merely from rendering again.
+    rerender(
+      <ModelContext.Provider
+        value={makeModel({ fpp: [instance], fppPlaylistEntryObservations: [observation] })}
+      >
+        <MemoryRouter initialEntries={['/fpp/fpp-1']}>
+          <Routes>
+            <Route path="/fpp/:instanceId" element={<FPPDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(1)
+
+    // FPP reports a new entry: sequence advances, snapshot is unchanged.
+    rerender(
+      <ModelContext.Provider
+        value={makeModel({
+          fpp: [instance],
+          fppPlaylistEntryObservations: [{ ...observation, sequence: 2 }],
+        })}
+      >
+        <MemoryRouter initialEntries={['/fpp/fpp-1']}>
+          <Routes>
+            <Route path="/fpp/:instanceId" element={<FPPDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    await waitFor(() => expect(getFPPPlaylistEntryReconciliation).toHaveBeenCalledTimes(2))
   })
 })

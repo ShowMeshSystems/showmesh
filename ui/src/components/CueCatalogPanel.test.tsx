@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CueCatalogPanel } from './CueCatalogPanel'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
+import { formatAbsolute } from '../app/time'
 import type { CueCatalogDeployResult, CueCatalogResponse, Model, SessionResponse } from '../app/types'
 
 // Mirrors RenderSurfacePanel.test.tsx's own mocking shape: mocked at the
@@ -55,6 +56,7 @@ function catalog(overrides: Partial<CueCatalogResponse> = {}): CueCatalogRespons
     generation: 3,
     revision: 'sha256:current',
     entries: [{ cueId: 'opener', cueRevision: 1, outputs: {} }],
+    acknowledgedStatus: 'catalog-unacknowledged',
     ...overrides,
   }
 }
@@ -98,7 +100,7 @@ function unconfirmedDeployResult(overrides: Partial<CueCatalogDeployResult> = {}
 }
 
 function renderPanel(model: Model) {
-  render(
+  return render(
     <ModelContext.Provider value={model}>
       <CueCatalogPanel nodeId="media-01" />
     </ModelContext.Provider>,
@@ -106,13 +108,44 @@ function renderPanel(model: Model) {
 }
 
 describe('CueCatalogPanel', () => {
-  it('renders the required revision, generation and show, and the held state as not yet observed', async () => {
-    getNodeCueCatalog.mockResolvedValue(catalog())
+  it('renders the required revision, generation and show, and the held state as never acknowledged', async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ acknowledgedStatus: 'catalog-unacknowledged' }))
     renderPanel(makeModel({ session: signedIn() }))
 
     expect(await screen.findByText(/show halloween · generation 3 · revision/)).toBeInTheDocument()
-    expect(screen.getByText(/Held revision: not observed from this panel yet/)).toBeInTheDocument()
+    expect(screen.getByText(/Held revision: never acknowledged by this node/)).toBeInTheDocument()
     expect(getNodeCueCatalog).toHaveBeenCalledWith('media-01')
+  })
+
+  it('renders a current acknowledgement on first load, before any deploy', async () => {
+    getNodeCueCatalog.mockResolvedValue(
+      catalog({
+        acknowledgedStatus: 'catalog-current',
+        acknowledgedRevision: 'sha256:current',
+        acknowledgedAt: '2026-08-25T18:00:00Z',
+      }),
+    )
+    renderPanel(makeModel({ session: signedIn() }))
+
+    const held = await screen.findByText(/Held revision/)
+    expect(held).toHaveTextContent('sha256:current')
+    expect(held).toHaveTextContent('current: matches what the active show requires now.')
+  })
+
+  it('renders a stale acknowledgement on first load, naming both revisions', async () => {
+    getNodeCueCatalog.mockResolvedValue(
+      catalog({
+        revision: 'sha256:newer',
+        acknowledgedStatus: 'catalog-stale',
+        acknowledgedRevision: 'sha256:older',
+        acknowledgedAt: '2026-08-25T18:00:00Z',
+      }),
+    )
+    renderPanel(makeModel({ session: signedIn() }))
+
+    const held = await screen.findByText(/Held revision/)
+    expect(held).toHaveTextContent('sha256:older')
+    expect(held).toHaveTextContent('stale: the active show now requires revision sha256:newer.')
   })
 
   it('renders a node with no active show as sensible honest absence, not a broken panel', async () => {
@@ -120,6 +153,48 @@ describe('CueCatalogPanel', () => {
     renderPanel(makeModel({ session: signedIn() }))
 
     expect(await screen.findByText(/No active show is configured/)).toBeInTheDocument()
+  })
+
+  it("renders the catalog's own serverTime, so a stale-looking catalog is dated", async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ serverTime: '2026-08-25T18:40:00Z' }))
+    renderPanel(makeModel({ session: signedIn() }))
+
+    await screen.findByText(/show halloween/)
+    expect(screen.getByText(`As of ${formatAbsolute('2026-08-25T18:40:00Z')}.`)).toBeInTheDocument()
+  })
+
+  it('refetches the catalog on reconnect, so a re-import while the panel is open is caught', async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ serverTime: '2026-08-25T18:40:00Z' }))
+    const view = renderPanel(makeModel({ session: signedIn(), snapshotReceivedAt: 1000 }))
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(1))
+
+    // A later resnapshot (store.ts's own applySnapshot: initial connect,
+    // every reconnect, every stream.reset) bumps `snapshotReceivedAt` --
+    // simulated here as a changed `model.snapshotReceivedAt` prop.
+    getNodeCueCatalog.mockResolvedValue(catalog({ generation: 4, revision: 'sha256:newer', serverTime: '2026-08-25T21:15:00Z' }))
+    view.rerender(
+      <ModelContext.Provider value={makeModel({ session: signedIn(), snapshotReceivedAt: 2000 })}>
+        <CueCatalogPanel nodeId="media-01" />
+      </ModelContext.Provider>,
+    )
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(`As of ${formatAbsolute('2026-08-25T21:15:00Z')}.`)).toBeInTheDocument()
+    expect(screen.getByText(/generation 4/)).toBeInTheDocument()
+  })
+
+  it('refetches the catalog when the operator clicks Reload', async () => {
+    getNodeCueCatalog.mockResolvedValue(catalog({ serverTime: '2026-08-25T18:40:00Z' }))
+    renderPanel(makeModel({ session: signedIn() }))
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(1))
+
+    getNodeCueCatalog.mockResolvedValue(catalog({ generation: 4, revision: 'sha256:newer', serverTime: '2026-08-25T21:15:00Z' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Reload' }))
+
+    await waitFor(() => expect(getNodeCueCatalog).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(/generation 4/)).toBeInTheDocument()
   })
 
   it('renders a fetch error distinctly rather than a blank panel', async () => {
