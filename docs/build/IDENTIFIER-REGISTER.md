@@ -370,6 +370,7 @@ after shipping a breaking change to stored history.
 | `audio.media.probe` | reserved | Track C seam C2 |
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
+| `node.clock.configure` | reserved | Track I seam I1: the coordinator pushing the node's `node.clock` object over the existing MQTT command path, on write and on hello, exactly as `audio.node.configure` does. Payload schema string `showmesh.node.clock.config/v1` (ADR-044); the retained `observed/clock` payload is `showmesh.node.clock/v1` |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | reserved | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
