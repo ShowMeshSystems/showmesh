@@ -320,6 +320,39 @@ func TestApplyContentIdentityWithholdsIdentityForAnEmptyHash(t *testing.T) {
 // any publish at all. After the fix, the healthy surface's content
 // identity survives intact and the malformed surface is named with a
 // reason, in the same published report.
+// TestApplyContentIdentityWithholdsIdentityForAnEmptyHashLogsAWarning proves
+// the operator-visible half of TestApplyContentIdentityWithholdsIdentityForAnEmptyHash's
+// case: a persisted assignment carrying a filename with no hash is not just
+// silently withheld from the wire, it is also logged at Warn with the
+// surface id, so this failure mode shows up in the node's own logs without
+// waiting for a coordinator round trip. Deleting the logger.Warn call in
+// applyContentIdentity (keeping everything else) must fail this test even
+// though the wire-level withholding test above stays green.
+func TestApplyContentIdentityWithholdsIdentityForAnEmptyHashLogsAWarning(t *testing.T) {
+	a := pipeline.Assignment{
+		SurfaceID: "wall-1",
+		RawParams: []byte(`{"fseqFilename":"halloween-01.fseq","fseqContentHash":""}`),
+		CueID:     "cue-42",
+	}
+	rep := mqttproto.RenderSurfaceReport{
+		SurfaceID:     "wall-1",
+		PipelineState: mqttproto.RenderPipelineStateRunning,
+	}
+	logger, logs := capturingLogger()
+	applyContentIdentity(&rep, a, time.Now(), logger)
+
+	got := logs.String()
+	if !strings.Contains(got, "level=WARN") {
+		t.Errorf("log output = %q, want a WARN-level entry", got)
+	}
+	if !strings.Contains(got, "fseqFilename with no fseqContentHash") {
+		t.Errorf("log output = %q, want it to name the fseqFilename-with-no-fseqContentHash failure", got)
+	}
+	if !strings.Contains(got, "surface_id=wall-1") {
+		t.Errorf("log output = %q, want it to name the surface id wall-1", got)
+	}
+}
+
 func TestRunRenderReportPublishesRemainingSurfacesWhenOneAssignmentHasAnEmptyHash(t *testing.T) {
 	clock := newTestClock()
 	fs := &fakeRenderStarter{}
