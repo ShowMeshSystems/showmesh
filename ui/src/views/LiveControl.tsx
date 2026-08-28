@@ -122,18 +122,61 @@ export function LiveControl() {
         </div>
       </OperatorSection>
 
+      <section className="live-control-section" aria-labelledby="show-selection-controls">
+        <div className="live-control-section__heading">
+          <h2 id="show-selection-controls">Active Show and Mode</h2>
+          <p>Selection authority</p>
+        </div>
+        <p className="section-notice">
+          Active-show evidence comes from the coordinator&apos;s current-runs projection. Mode selection remains a configuration write and is opened in Settings.
+        </p>
+        <div className="live-control-groups">
+          <article className="live-control-group">
+            <h3>Active Show</h3>
+            <p className="text-muted">{activeShowDetail(model)}</p>
+            <Link className="button button--secondary" to="/config/show.active">Select active show</Link>
+          </article>
+          <article className="live-control-group">
+            <h3>Operating Mode</h3>
+            <p className="text-muted">The current Mode remains visible in the application footer. Its selection is installation-wide and scope-gated.</p>
+            <Link className="button button--secondary" to="/config#show-mode">Open Mode selection</Link>
+          </article>
+        </div>
+      </section>
+
+      <section className="live-control-section" aria-labelledby="night-controls">
+        <div className="live-control-section__heading">
+          <h2 id="night-controls">Show Night lifecycle</h2>
+          <p>Lifecycle controls</p>
+        </div>
+        <p className="section-notice">
+          Capability: Show Night lifecycle. Freshness and permission are shown by each command; accepted, refused, timed-out, and unobserved results stay with that command.
+        </p>
+        <div className="live-control-command-area" aria-label="Show Night lifecycle controls and outcomes">
+          <div className="live-control-command-rack" aria-label="Show Night lifecycle actions">
+            <NightCommandButton command="prepare-site" label="Prepare site" />
+            <NightCommandButton command="run-readiness" label="Run readiness" />
+            <NightCommandButton command="start-preshow" label="Start preshow" />
+            <NightCommandButton command="start-night" label="Start night" />
+            <NightCommandButton command="request-final-show" label="Request final show" />
+            <NightCommandButton command="fade-out-night" label="Fade out night" />
+            <NightCommandButton command="power-down-presentation" label="Power down presentation" />
+          </div>
+        </div>
+      </section>
+
       <section className="live-control-section" aria-labelledby="fpp-controls">
         <div className="live-control-section__heading">
-          <h2 id="fpp-controls">FPP transport</h2>
-          <p>Playlist and output controls</p>
+          <h2 id="fpp-controls">Runner playback</h2>
+          <p>FPP controls when configured</p>
         </div>
         {model.fpp.length === 0 ? (
-          <Unavailable title="FPP transport" reason="No FPP instance is configured on this coordinator." />
+          <Unavailable title="Runner playback" reason="No FPP instance is configured on this coordinator." />
         ) : (
           <div className="live-control-groups">
             {model.fpp.map((instance) => (
               <PanelErrorBoundary key={instance.instanceId} panelLabel={`FPP controls for ${instance.instanceId}`}>
-                <CommandGroup title={instance.instanceId} detail="Commands remain scope-gated and report confirmation below each control.">
+                <CommandGroup title={instance.instanceId} detail={`Capability: FPP playlist transport. Freshness: ${fppGroupFreshness(model)}. Permission and outcomes are reported by each command.`}>
                   <div className="live-control-command-rack" aria-label={`FPP commands for ${instance.instanceId}`}>
                     <FPPStartPlaylistControl instanceId={instance.instanceId} />
                     <FPPStopPlaylistControl instanceId={instance.instanceId} />
@@ -151,39 +194,21 @@ export function LiveControl() {
         )}
       </section>
 
-      <section className="live-control-section" aria-labelledby="night-controls">
-        <div className="live-control-section__heading">
-          <h2 id="night-controls">Show Night controls</h2>
-          <p>Lifecycle controls</p>
-        </div>
-        <p className="section-notice">
-          Lifecycle controls are always visible. They are disabled with a reason when permission or current evidence is insufficient.
-        </p>
-        <div className="live-control-command-rack" aria-label="Show Night lifecycle actions">
-          <NightCommandButton command="prepare-site" label="Prepare site" />
-          <NightCommandButton command="run-readiness" label="Run readiness" />
-          <NightCommandButton command="start-preshow" label="Start preshow" />
-          <NightCommandButton command="start-night" label="Start night" />
-          <NightCommandButton command="request-final-show" label="Request final show" />
-          <NightCommandButton command="fade-out-night" label="Fade out night" />
-          <NightCommandButton command="power-down-presentation" label="Power down presentation" />
-        </div>
-      </section>
-
       <div className="live-control-columns">
         <section className="live-control-section" aria-labelledby="node-controls">
           <div className="live-control-section__heading">
-            <h2 id="node-controls">Node controls</h2>
-            <p>Audio and rendering sessions</p>
+            <h2 id="node-controls">Audio and render-node controls</h2>
+            <p>Observed node sessions</p>
           </div>
           {model.nodes.length === 0 ? (
-            <Unavailable title="Node controls" reason="No nodes are currently observed." />
+            <Unavailable title="Audio and render-node controls" reason="No nodes are currently observed." />
           ) : (
             <div className="live-control-groups">
               {model.nodes.map((node) => (
                 <PanelErrorBoundary key={node.nodeId} panelLabel={`Controls for ${node.label ?? node.nodeId}`}>
                   <article className="live-control-group">
                     <h3>{node.label ?? node.nodeId}</h3>
+                    <p className="text-muted">Capability: advertised audio and render sessions. Freshness: {snapshotFreshness(model)}. Permission and command outcomes are shown by the session controls.</p>
                     <AudioSessionPanel nodeId={node.nodeId} entries={node.audio} />
                     <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
                   </article>
@@ -215,7 +240,7 @@ export function LiveControl() {
             />
           ) : (
             <div className="live-control-group">
-              <p className="text-muted">Available actions are populated from the stored composition.</p>
+              <p className="text-muted">Capability: stored composition actions. Freshness: {snapshotFreshness(model)}. Permission and command outcomes are shown by the action controller.</p>
               <ResolumeActionController actions={resolumeActions.value} composition={composition} />
             </div>
           )}
@@ -224,27 +249,28 @@ export function LiveControl() {
 
       <section className="live-control-section" aria-labelledby="macro-controls">
         <div className="live-control-section__heading">
-          <h2 id="macro-controls">Show actions</h2>
-          <p>Configured macros</p>
+          <h2 id="macro-controls">Macros and exposed Actions</h2>
+          <p>Configured and intentionally exposed</p>
         </div>
         {!macroRead.allowed ? (
-          <Unavailable title="Show actions" reason={macroRead.reason} />
+          <Unavailable title="Macros and exposed Actions" reason={macroRead.reason} />
         ) : macros.kind === 'loading' ? (
           <p className="text-muted" role="status">
-            Loading available show actions…
+            Loading configured macros and exposed Actions…
           </p>
         ) : macros.kind === 'error' ? (
           <p className="section-notice notice--error" role="alert">
             {macros.message}
           </p>
         ) : macros.value.length === 0 ? (
-          <Unavailable title="Show actions" reason="No show macros are configured yet." />
+          <Unavailable title="Macros and exposed Actions" reason="No configured macro is intentionally exposed here." />
         ) : (
           <div className="live-control-groups">
             {macros.value.map((macro) => (
               <article key={macro.id} className="live-control-group">
                 <h3>{macro.label || macro.id}</h3>
                 <span className="operator-list__meta">Revision {macro.currentRevision}</span>
+                <p className="text-muted">Capability: configured macro. Freshness: configuration revision shown. Permission and outcome are reported by this action.</p>
                 <RunMacroButton macroId={macro.id} />
               </article>
             ))}
@@ -271,6 +297,28 @@ export function LiveControl() {
 type StatusTone = 'good' | 'unknown' | 'bad'
 
 type ControlStatus = { value: string; detail: string; tone: StatusTone }
+
+function snapshotFreshness(model: ReturnType<typeof useModelContext>): string {
+  if (model.snapshotReceivedAt === null) return 'unobserved, no coordinator snapshot received'
+  if (model.connection.kind !== 'live') return 'stale, showing last known coordinator evidence'
+  return 'current coordinator snapshot'
+}
+
+function fppGroupFreshness(model: ReturnType<typeof useModelContext>): string {
+  return snapshotFreshness(model)
+}
+
+function activeShowDetail(model: ReturnType<typeof useModelContext>): string {
+  if (model.currentRuns === null) {
+    return model.currentRunsFetchFailed
+      ? 'Unavailable: the coordinator current-runs projection could not be read.'
+      : 'Unobserved: waiting for the coordinator current-runs projection.'
+  }
+  if (!model.currentRuns.activeShow.configured || model.currentRuns.activeShow.show === null) {
+    return 'No active show is configured in the current coordinator projection.'
+  }
+  return `Active: ${model.currentRuns.activeShow.show} (generation ${model.currentRuns.activeShow.generation ?? 'not reported'}). Freshness: current-runs projection.`
+}
 
 function snapshotStatus(model: ReturnType<typeof useModelContext>): 'unobserved' | 'stale' | 'live' {
   if (model.snapshotReceivedAt === null) return 'unobserved'

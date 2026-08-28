@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LiveControl } from './LiveControl'
 import { ModelContext } from '../app/ModelContext'
-import { makeEvidence, makeFPPInstance, makeModel, makeNode, makeResolumeInstance } from '../app/test-support/fixtures'
+import { makeCurrentRuns, makeEvidence, makeFPPInstance, makeModel, makeNode, makeResolumeInstance } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 
 const { dispatchNightCommand } = vi.hoisted(() => ({
@@ -39,14 +39,14 @@ describe('LiveControl', () => {
     expect(statusStrip).toHaveClass('shared-status-strip')
     expect(statusStrip.parentElement).toHaveClass('live-control-status-region')
     expect(screen.getByText('Coordinator').closest('.shared-status-strip__item')).toHaveClass('shared-status-strip__item--good')
-    const fppUnavailable = screen.getByText('Unavailable: No FPP instance is configured on this coordinator.')
-    expect(fppUnavailable).toBeInTheDocument()
-    expect(fppUnavailable.closest('.shared-state-block')).toHaveClass('shared-state-block--unavailable')
-    expect(fppUnavailable.closest('.shared-state-block')?.parentElement?.closest('section')).toHaveAttribute('aria-labelledby', 'fpp-controls')
+    const runnerUnavailable = screen.getByText('Unavailable: No FPP instance is configured on this coordinator.')
+    expect(runnerUnavailable).toBeInTheDocument()
+    expect(runnerUnavailable.closest('.shared-state-block')).toHaveClass('shared-state-block--unavailable')
+    expect(runnerUnavailable.closest('.shared-state-block')?.parentElement?.closest('section')).toHaveAttribute('aria-labelledby', 'fpp-controls')
     expect(screen.getByText('Unavailable: No nodes are currently observed.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: Resolume is not configured on this coordinator.')).toBeInTheDocument()
     expect(screen.getByText('Unavailable: No brightness control capability is advertised.')).toBeInTheDocument()
-    for (const title of ['FPP transport', 'Node controls', 'Resolume controls', 'Brightness ceiling', 'Site control', 'Interlocks', 'Global emergency stop']) {
+    for (const title of ['Runner playback', 'Audio and render-node controls', 'Resolume controls', 'Brightness ceiling', 'Site control', 'Interlocks', 'Global emergency stop']) {
       expect(screen.getByRole('heading', { name: title, level: 3 })).toBeVisible()
     }
   })
@@ -54,7 +54,7 @@ describe('LiveControl', () => {
   it('keeps lifecycle controls visible and explicitly permission-gated when the session is unknown', () => {
     renderView()
 
-    expect(screen.getByRole('heading', { name: 'Show Night controls' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Show Night lifecycle' })).toBeInTheDocument()
     const prepare = screen.getByRole('button', { name: 'Prepare site' })
     expect(prepare).toBeDisabled()
     expect(screen.getAllByText(/Waiting to hear from the coordinator what this device may do/).length).toBeGreaterThan(0)
@@ -124,5 +124,38 @@ describe('LiveControl', () => {
 
     await user.click(screen.getByRole('button', { name: 'Start night' }))
     expect(await screen.findByText('Start night accepted and applied.')).toBeInTheDocument()
+  })
+
+  it('keeps operator task groups in command order and reaches Active Show and Mode selection without placing configuration writes here', () => {
+    renderView({ currentRuns: makeCurrentRuns() })
+
+    expect(screen.getByText('Active: halloween-2026 (generation 7). Freshness: current-runs projection.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Select active show' })).toHaveAttribute('href', '/config/show.active')
+    expect(screen.getByRole('link', { name: 'Open Mode selection' })).toHaveAttribute('href', '/config#show-mode')
+    expect(screen.queryByRole('button', { name: /save show mode/i })).not.toBeInTheDocument()
+
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)
+    expect(headings.slice(headings.indexOf('Control status'), headings.indexOf('Not available on this coordinator') + 1)).toEqual([
+      'Control status',
+      'Active Show and Mode',
+      'Show Night lifecycle',
+      'Runner playback',
+      'Audio and render-node controls',
+      'Resolume controls',
+      'Macros and exposed Actions',
+      'Not available on this coordinator',
+    ])
+  })
+
+  it('keeps an unavailable active-show projection distinct from an unobserved one', () => {
+    const { rerender } = renderView({ currentRuns: null, currentRunsFetchFailed: false })
+    expect(screen.getByText('Unobserved: waiting for the coordinator current-runs projection.')).toBeInTheDocument()
+
+    rerender(
+      <ModelContext.Provider value={makeModel({ currentRuns: null, currentRunsFetchFailed: true })}>
+        <MemoryRouter><LiveControl /></MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    expect(screen.getByText('Unavailable: the coordinator current-runs projection could not be read.')).toBeInTheDocument()
   })
 })

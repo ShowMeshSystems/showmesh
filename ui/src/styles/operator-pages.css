@@ -270,6 +270,14 @@
   min-width: 0;
 }
 
+/* Command cards own their acknowledgement or refusal. The surrounding area
+ * establishes a separate bounded outcome region, so a long result remains in
+ * the task group instead of widening a neighboring group or the page. */
+.live-control-command-area {
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* A command and the evidence it returns are one operable unit. Keeping them
  * in their own grid cell prevents a long refusal or confirmation from
  * overlapping the next control or forcing the page itself wider. */

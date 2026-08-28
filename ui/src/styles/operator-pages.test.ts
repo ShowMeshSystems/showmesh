@@ -24,12 +24,15 @@ describe('Live Control layout constraints', () => {
   it('keeps each command and its outcome in a bounded, wrapping rack', () => {
     const rack = ruleBodyFor(css, '.live-control-command-rack')
     const cell = ruleBodyFor(css, '.live-control-command-rack > *')
+    const outcomeArea = ruleBodyFor(css, '.live-control-command-area')
 
     expect(rack).toMatch(/display:\s*grid/)
     expect(rack).toMatch(/grid-template-columns:\s*repeat\(auto-fit, minmax\(min\(100%, 14rem\), 1fr\)\)/)
     expect(rack).toMatch(/min-width:\s*0/)
     expect(cell).toMatch(/min-width:\s*0/)
     expect(cell).toMatch(/align-content:\s*start/)
+    expect(outcomeArea).toMatch(/min-width:\s*0/)
+    expect(outcomeArea).toMatch(/max-width:\s*100%/)
   })
 
   it('bounds the shared status grid inside the Live Control section instead of letting its intrinsic width widen the page', () => {
