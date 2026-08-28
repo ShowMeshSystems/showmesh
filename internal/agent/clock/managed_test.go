@@ -43,7 +43,7 @@ func TestWritePTP4LConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ptp4l.conf")
 	cfg := ManagedConfig{Interface: "lo", Domain: 24, Priority1: 248, ClientOnly: true, HardwareTimestamping: false}
-	if err := writePTP4LConfig(path, cfg, "/run/x-rw", "/run/x-ro"); err != nil {
+	if err := writePTP4LConfig(path, cfg, false, "/run/x-rw", "/run/x-ro"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -62,7 +62,7 @@ func TestWritePTP4LConfigHardwareTimestamping(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ptp4l.conf")
 	cfg := ManagedConfig{Interface: "eth0", Domain: 0, HardwareTimestamping: true}
-	if err := writePTP4LConfig(path, cfg, "/run/x-rw", "/run/x-ro"); err != nil {
+	if err := writePTP4LConfig(path, cfg, true, "/run/x-rw", "/run/x-ro"); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
@@ -202,5 +202,293 @@ func TestManagedProviderRefusesSecondInstanceSameInterfaceDomain(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "refusing to start") {
 		t.Fatalf("refusal error does not explain why: %v", err)
+	}
+}
+
+// --- fake ptp4l helper process, for testing the hardware-timestamping
+// fallback without a real ptp4l or root — the standard os/exec
+// "TestMain re-exec" pattern (see e.g. os/exec_test.go's own
+// TestHelperProcess). Requires none of requirePTP4L's dependencies: the
+// fake process never binds a raw PTP socket, so every test below runs
+// unprivileged and unconditionally.
+
+const (
+	// fakePTP4LMarkerEnv, when set in THIS test binary's own environment,
+	// makes a re-exec of it (superviseLoop's exec.Command inherits the
+	// parent's environment, since it sets no Env of its own) behave as a
+	// fake ptp4l instead of running the normal test suite — see TestMain.
+	fakePTP4LMarkerEnv = "SHOWMESH_CLOCK_TEST_FAKE_PTP4L"
+
+	// fakePTP4LHardwareOKEnv, when set, makes a fake ptp4l invocation
+	// requesting hardware timestamping succeed (block until killed)
+	// instead of exiting immediately. Unset in every test below: this
+	// seam has no real hardware timestamping to fake succeeding, and the
+	// whole point of these tests is the FALLBACK path.
+	fakePTP4LHardwareOKEnv = "SHOWMESH_CLOCK_TEST_FAKE_PTP4L_HARDWARE_OK"
+
+	// fakePTP4LLogEnv names a file a fake ptp4l invocation appends one
+	// line to per attempt ("hardware" or "software", whichever its own
+	// -f config requested), so a test can assert the exact sequence of
+	// modes superviseLoop actually attempted.
+	fakePTP4LLogEnv = "SHOWMESH_CLOCK_TEST_FAKE_PTP4L_LOG"
+)
+
+// TestMain intercepts a re-exec of this test binary standing in for
+// ptp4l, before the normal `go test` machinery (which would otherwise
+// choke on runFakePTP4L's own "-f"/"-i"/"-m" arguments) ever runs.
+func TestMain(m *testing.M) {
+	if os.Getenv(fakePTP4LMarkerEnv) != "" {
+		os.Exit(runFakePTP4L())
+	}
+	os.Exit(m.Run())
+}
+
+// runFakePTP4L behaves like ptp4l just enough to test managed.go's
+// hardware-timestamping fallback: it reads the "-f" config file's own
+// "time_stamping" line and, when it says "hardware" (and
+// fakePTP4LHardwareOKEnv is not set), exits immediately with a nonzero
+// status — mimicking a driver that does not support hardware
+// timestamping, the exact failure this seam's own bench observed
+// starting a real ptp4l against a real NIC lacking PHC support.
+// Otherwise it blocks until killed, like a real ptp4l that reached its
+// requested mode. time.Sleep, not select{}, is what blocks: an empty
+// select in a process with no other goroutines is a Go runtime
+// deadlock, not a wait, and a real SIGKILL (superviseLoop's own Stop
+// path) ends the sleep long before it would ever fire on its own.
+func runFakePTP4L() int {
+	var confPath string
+	args := os.Args[1:]
+	for i, a := range args {
+		if a == "-f" && i+1 < len(args) {
+			confPath = args[i+1]
+		}
+	}
+	raw, err := os.ReadFile(confPath)
+	if err != nil {
+		return 2
+	}
+	mode := "software"
+	if strings.Contains(string(raw), "time_stamping hardware") {
+		mode = "hardware"
+	}
+	if logPath := os.Getenv(fakePTP4LLogEnv); logPath != "" {
+		if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			_, _ = f.WriteString(mode + "\n")
+			_ = f.Close()
+		}
+	}
+	if mode == "hardware" && os.Getenv(fakePTP4LHardwareOKEnv) == "" {
+		return 1
+	}
+	time.Sleep(24 * time.Hour)
+	return 0
+}
+
+// fakePTP4LSetup points ptp4lBinary at this test binary itself (marked
+// via fakePTP4LMarkerEnv) and shrinks the probe window/backoff so a test
+// does not wait on production timing, all restored via t.Cleanup/
+// t.Setenv's own automatic restoration.
+func fakePTP4LSetup(t *testing.T) (logPath string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve this test binary's own path: %v", err)
+	}
+	origPTP4L := ptp4lBinary
+	ptp4lBinary = exe
+	t.Cleanup(func() { ptp4lBinary = origPTP4L })
+
+	origProbe := hardwareTimestampingProbeWindow
+	hardwareTimestampingProbeWindow = 200 * time.Millisecond
+	t.Cleanup(func() { hardwareTimestampingProbeWindow = origProbe })
+
+	origBackoff := managedRestartBackoff
+	managedRestartBackoff = 50 * time.Millisecond
+	t.Cleanup(func() { managedRestartBackoff = origBackoff })
+
+	t.Setenv(fakePTP4LMarkerEnv, "1")
+	logPath = filepath.Join(t.TempDir(), "fake-ptp4l.log")
+	t.Setenv(fakePTP4LLogEnv, logPath)
+	return logPath
+}
+
+func waitReachedTimestamping(t *testing.T, p *ManagedProvider, timeout time.Duration) (Timestamping, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if reached, known := p.reachedTimestampingMode(); known {
+			return reached, true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return "", false
+}
+
+func readFakePTP4LLog(t *testing.T, logPath string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake ptp4l log %s: %v", logPath, err)
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+// TestManagedProviderFallsBackToSoftwareTimestampingOnEarlyExit proves
+// both halves of the defect this test file exists for: a hardware
+// timestamping request that fails its startup probe falls back to
+// software (never loops forever reporting failed), and every subsequent
+// consumer of this provider — the config file on disk, [ManagedProvider.
+// reachedTimestampingMode], and [ManagedProvider.Now] — reports the mode
+// ACTUALLY REACHED, never the mode originally requested.
+func TestManagedProviderFallsBackToSoftwareTimestampingOnEarlyExit(t *testing.T) {
+	logPath := fakePTP4LSetup(t)
+
+	dir := t.TempDir()
+	cfg := ManagedConfig{Interface: "showmesh-fake0", Domain: 30, HardwareTimestamping: true, RunDir: dir}
+	p, err := NewManagedProvider(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewManagedProvider: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	// Before anything has run long enough to confirm a mode, Now() must
+	// not guess — never a fabricated PHC or CLOCK_REALTIME reading.
+	if mt := p.Now(context.Background()); mt.Valid {
+		t.Fatalf("Now() before Start reported Valid=true unexpectedly: %+v", mt)
+	}
+
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Between the early exit and the software retry reaching running,
+	// Poll must be Reachable=false with a reason naming the fallback —
+	// "the reason says a fallback happened when it did." Polled tightly
+	// (not merely inferred from the log) because this window is real but
+	// brief: the retry itself starts immediately (see superviseLoop's own
+	// backoff.Reset(0) comment) and only needs to survive the shrunk
+	// probe window from fakePTP4LSetup before reaching running.
+	sawFallbackReason := false
+	fallbackDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(fallbackDeadline) {
+		raw := p.Poll(context.Background())
+		if !raw.Reachable && strings.Contains(raw.Reason, "falling back to software timestamping") {
+			sawFallbackReason = true
+			break
+		}
+		if raw.Reachable {
+			break // already past the fallback window
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sawFallbackReason {
+		t.Fatalf("never observed Poll() reporting the fallback reason before the software retry reached running")
+	}
+
+	reached, known := waitReachedTimestamping(t, p, 5*time.Second)
+	if !known {
+		t.Fatalf("timestamping mode never confirmed reached")
+	}
+	if reached != TimestampingSoftware {
+		t.Fatalf("reached = %q, want %q (the hardware attempt should have fallen back)", reached, TimestampingSoftware)
+	}
+
+	raw, err := os.ReadFile(p.confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "time_stamping software") {
+		t.Errorf("config was not rewritten to software after the fallback:\n%s", raw)
+	}
+	if strings.Contains(string(raw), "time_stamping hardware") {
+		t.Errorf("config still requests hardware after the fallback:\n%s", raw)
+	}
+
+	// Now() must select CLOCK_REALTIME, never attempt a PHC read, once
+	// the reached mode is software — this is RES-019 §4.1 item 6's own
+	// hazard: reading a PHC ptp4l fell back away from disciplining would
+	// report a locked clock with the wrong time.
+	mt := p.Now(context.Background())
+	if !mt.Valid {
+		t.Fatalf("Now() invalid after falling back to software: %s", mt.Reason)
+	}
+	if !strings.Contains(mt.Reason, "software timestamping") {
+		t.Errorf("Now() reason does not name software timestamping: %q", mt.Reason)
+	}
+
+	// Exactly one hardware attempt, ever, within this Start.
+	lines := readFakePTP4LLog(t, logPath)
+	if len(lines) != 2 || lines[0] != "hardware" || lines[1] != "software" {
+		t.Fatalf("fake ptp4l attempt sequence = %v, want exactly [hardware software]", lines)
+	}
+}
+
+// TestManagedProviderDoesNotRetryHardwareAfterFallbackWithinOneStart
+// proves the other explicit requirement: a crash-restart AFTER a
+// fallback has already happened must retry software again, never
+// hardware, for the rest of that one Start — but a fresh Start (Stop,
+// then Start again) is a new capability probe and may attempt hardware
+// again.
+func TestManagedProviderDoesNotRetryHardwareAfterFallbackWithinOneStart(t *testing.T) {
+	logPath := fakePTP4LSetup(t)
+
+	dir := t.TempDir()
+	cfg := ManagedConfig{Interface: "showmesh-fake1", Domain: 31, HardwareTimestamping: true, RunDir: dir}
+	p, err := NewManagedProvider(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewManagedProvider: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, known := waitReachedTimestamping(t, p, 5*time.Second); !known {
+		t.Fatalf("timestamping mode never confirmed reached after the first fallback")
+	}
+	if lines := readFakePTP4LLog(t, logPath); len(lines) != 2 || lines[0] != "hardware" || lines[1] != "software" {
+		t.Fatalf("attempt sequence after the first fallback = %v, want [hardware software]", lines)
+	}
+
+	// Simulate an unrelated crash of the now-running (software) process
+	// and confirm the restart retries software, not hardware.
+	p.mu.Lock()
+	cmd := p.cmd
+	p.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		t.Fatalf("no running process to crash")
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatalf("kill the running fake ptp4l: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if lines := readFakePTP4LLog(t, logPath); len(lines) >= 3 {
+			if lines[2] != "software" {
+				t.Fatalf("attempt after a post-fallback crash = %q, want software (never hardware again within one Start)", lines[2])
+			}
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if lines := readFakePTP4LLog(t, logPath); len(lines) < 3 {
+		t.Fatalf("no restart attempt observed after the crash; log = %v", lines)
+	}
+
+	// A fresh Start (Stop, then Start again) is a new capability probe:
+	// it may attempt hardware again.
+	p.Stop()
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatalf("truncate fake ptp4l log for the second Start: %v", err)
+	}
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	if _, known := waitReachedTimestamping(t, p, 5*time.Second); !known {
+		t.Fatalf("timestamping mode never confirmed reached after the second Start's own fallback")
+	}
+	if lines := readFakePTP4LLog(t, logPath); len(lines) != 2 || lines[0] != "hardware" || lines[1] != "software" {
+		t.Fatalf("attempt sequence after a fresh Start = %v, want [hardware software] (a fresh Start may attempt hardware again)", lines)
 	}
 }

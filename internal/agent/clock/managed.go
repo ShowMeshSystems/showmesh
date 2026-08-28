@@ -36,10 +36,15 @@ type ManagedConfig struct {
 	// internal/coordinator/config/nodeclock.go).
 	Priority1 int
 
-	// HardwareTimestamping requests hardware timestamping with a
-	// software fallback attempt (RES-019 §1). Whether the interface
-	// actually has PHC support is [PHCIndexForInterface]'s own evidence,
-	// checked at Start, not assumed from this flag.
+	// HardwareTimestamping requests hardware timestamping (RES-019 §1).
+	// [ManagedProvider.superviseLoop] attempts it first; if ptp4l exits
+	// within its own startup probe window — the real, observed failure
+	// mode of a driver with no hardware timestamping support, not a
+	// hypothetical — it falls back to software and retries, exactly once
+	// per Start. Whether the mode actually reached is hardware or
+	// software is never assumed from this flag: read it from
+	// [ManagedProvider.reachedTimestampingMode] (which
+	// [ManagedProvider.Now] and [ManagedProvider.Poll] already do).
 	HardwareTimestamping bool
 
 	// RunDir is the base directory this provider writes its ptp4l config
@@ -79,6 +84,18 @@ type ManagedProvider struct {
 	cmd      *exec.Cmd
 	running  bool
 	lastExit string // human-readable reason the last run ended, "" while running or never started
+
+	// reached/reachedKnown are the timestamping mode this provider's
+	// CURRENT ptp4l attempt has actually confirmed running past its
+	// startup probe window — never the requested cfg.HardwareTimestamping.
+	// RES-019 §4.1 item 6 names the hazard directly: reading a PHC that
+	// ptp4l is not actually disciplining (because it silently fell back,
+	// or because it never started at all) reports a locked clock whose
+	// time is wrong, which is worse than reporting none. Set only by
+	// [ManagedProvider.superviseLoop], read by [ManagedProvider.Now] and
+	// [ManagedProvider.Poll] under mu.
+	reached      Timestamping
+	reachedKnown bool
 
 	stop   chan struct{}
 	done   chan struct{}
@@ -124,7 +141,7 @@ func NewManagedProvider(cfg ManagedConfig, logger Logger) (*ManagedProvider, err
 	}
 
 	confPath := filepath.Join(cfg.RunDir, fmt.Sprintf("ptp4l-%s-%d.conf", strings.NewReplacer("/", "_", " ", "_").Replace(cfg.Interface), cfg.Domain))
-	if err := writePTP4LConfig(confPath, cfg, rwSocket, roSocket); err != nil {
+	if err := writePTP4LConfig(confPath, cfg, cfg.HardwareTimestamping, rwSocket, roSocket); err != nil {
 		return nil, fmt.Errorf("clock: write ptp4l config: %w", err)
 	}
 
@@ -132,7 +149,13 @@ func NewManagedProvider(cfg ManagedConfig, logger Logger) (*ManagedProvider, err
 }
 
 // writePTP4LConfig renders cfg into ptp4l's [global] config file syntax.
-func writePTP4LConfig(path string, cfg ManagedConfig, rwSocket, roSocket string) error {
+// hardware selects the "time_stamping" line WRITTEN, deliberately separate
+// from cfg.HardwareTimestamping (the operator's own REQUESTED mode): the
+// supervise loop rewrites this file to request software after a hardware
+// attempt fails its startup probe (see [ManagedProvider.superviseLoop]),
+// and that rewrite must not be able to silently un-request client-only or
+// any other cfg-derived line by reconstructing cfg from scratch.
+func writePTP4LConfig(path string, cfg ManagedConfig, hardware bool, rwSocket, roSocket string) error {
 	var b strings.Builder
 	fmt.Fprintln(&b, "[global]")
 	fmt.Fprintf(&b, "domainNumber %d\n", cfg.Domain)
@@ -141,7 +164,7 @@ func writePTP4LConfig(path string, cfg ManagedConfig, rwSocket, roSocket string)
 	if cfg.ClientOnly {
 		fmt.Fprintln(&b, "clientOnly 1")
 	}
-	if cfg.HardwareTimestamping {
+	if hardware {
 		fmt.Fprintln(&b, "time_stamping hardware")
 	} else {
 		fmt.Fprintln(&b, "time_stamping software")
@@ -210,13 +233,39 @@ func findRunningPTP4L(iface string) (pid int, cmdline string, ok bool) {
 func (p *ManagedProvider) Kind() ProviderKind { return ProviderManaged }
 func (p *ManagedProvider) Interface() string  { return p.cfg.Interface }
 
-// Now reads the PHC associated with this provider's interface, when
-// hardware timestamping actually negotiated a PHC (RES-019 §1's
-// ETHTOOL_GET_TS_INFO lookup), falling back to CLOCK_REALTIME when this
-// provider's ptp4l instance runs in software timestamping mode (RES-019
-// §1: "software-timestamped ptp4l disciplines CLOCK_REALTIME itself").
+// reachedTimestampingMode reports the timestamping mode CURRENTLY IN
+// EFFECT: the mode this provider's ptp4l confirmed running past its
+// startup probe window, AND that same process is still running right
+// now. known is false whenever either half is not true — before any
+// attempt has run long enough to confirm a mode, and again the instant
+// that process is no longer running (a crash, or a Stop): a confirmation
+// from a process that already exited is exactly the "ptp4l is not
+// actually disciplining this" hazard [ManagedProvider.reached]'s own doc
+// comment names, so it must not outlive the process it describes.
+func (p *ManagedProvider) reachedTimestampingMode() (Timestamping, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.running {
+		return "", false
+	}
+	return p.reached, p.reachedKnown
+}
+
+// Now reads the PHC associated with this provider's interface when
+// hardware timestamping is the mode THIS PROVIDER'S PTP4L HAS ACTUALLY
+// REACHED (never the requested [ManagedConfig.HardwareTimestamping]: a
+// request that fails its startup probe falls back to software within
+// [ManagedProvider.superviseLoop], and reading a PHC ptp4l is not
+// disciplining reports a locked clock with the wrong time — RES-019 §4.1
+// item 6 names this exact hazard in FPP's own code), falling back to
+// CLOCK_REALTIME when the reached mode is software (RES-019 §1:
+// "software-timestamped ptp4l disciplines CLOCK_REALTIME itself").
 func (p *ManagedProvider) Now(ctx context.Context) MediaTime {
-	if !p.cfg.HardwareTimestamping {
+	reached, known := p.reachedTimestampingMode()
+	if !known {
+		return MediaTime{Valid: false, Reason: "no timestamping mode confirmed yet: this node's managed ptp4l has not been observed running past its startup probe"}
+	}
+	if reached != TimestampingHardware {
 		return MediaTime{Time: time.Now(), Valid: true, Reason: "software timestamping: reading CLOCK_REALTIME, which this node's ptp4l disciplines directly"}
 	}
 	index, ok, err := PHCIndexForInterface(p.cfg.Interface)
@@ -224,7 +273,7 @@ func (p *ManagedProvider) Now(ctx context.Context) MediaTime {
 		return MediaTime{Valid: false, Reason: fmt.Sprintf("PHC lookup for %s failed: %v", p.cfg.Interface, err)}
 	}
 	if !ok {
-		return MediaTime{Valid: false, Reason: fmt.Sprintf("interface %s has no associated PHC despite hardware timestamping being requested", p.cfg.Interface)}
+		return MediaTime{Valid: false, Reason: fmt.Sprintf("interface %s has no associated PHC despite hardware timestamping being reached", p.cfg.Interface)}
 	}
 	t, err := ReadPHC(index)
 	if err != nil {
@@ -253,8 +302,33 @@ func (p *ManagedProvider) Start(ctx context.Context) error {
 	return nil
 }
 
-const managedRestartBackoff = 5 * time.Second
+// managedRestartBackoff and hardwareTimestampingProbeWindow are package
+// vars (not consts), matching [ptp4lBinary]/[pmcBinary]'s own override
+// convention, so a test can shrink both rather than waiting on production
+// timing.
+var (
+	managedRestartBackoff           = 5 * time.Second
+	hardwareTimestampingProbeWindow = 2 * time.Second
+)
 
+// superviseLoop is this provider's entire process-supervision state
+// machine, running on its own goroutine for the life of one Start call.
+//
+// When ManagedConfig.HardwareTimestamping is set, the FIRST attempt
+// requests hardware; every attempt after a fallback, and every attempt
+// when hardware was never requested, requests software — RES-019 §1's
+// "hardware timestamping with a software fallback attempt" (FPP itself
+// makes the analogous attempt: hardware+DSCP, software+DSCP, software).
+// "Exits early" is judged against hardwareTimestampingProbeWindow, an
+// explicit bounded startup window, not a guess: a driver that cannot
+// timestamp in hardware fails ptp4l's own clock-creation call within
+// milliseconds (confirmed against a real NIC while building this seam),
+// so a process still alive past this window has genuinely reached the
+// mode it was started with. fellBack is scoped to ONE Start call (a local
+// variable in this function, reset by construction on every fresh
+// superviseLoop goroutine) so a later explicit restart may attempt
+// hardware again, but a fallback already taken within this Start is never
+// undone by a subsequent crash-restart.
 func (p *ManagedProvider) superviseLoop() {
 	// stop and done are captured once, locally, right after Start()
 	// already set them (happens-before via the goroutine's own creation)
@@ -267,6 +341,13 @@ func (p *ManagedProvider) superviseLoop() {
 	p.mu.Unlock()
 
 	defer close(done)
+
+	mode := TimestampingSoftware
+	if p.cfg.HardwareTimestamping {
+		mode = TimestampingHardware
+	}
+	fellBack := false
+
 	backoff := time.NewTimer(0)
 	defer backoff.Stop()
 	for {
@@ -274,6 +355,13 @@ func (p *ManagedProvider) superviseLoop() {
 		case <-stop:
 			return
 		case <-backoff.C:
+		}
+
+		attemptingHardware := mode == TimestampingHardware
+		if err := writePTP4LConfig(p.confPath, p.cfg, attemptingHardware, p.rwSocket, p.roSocket); err != nil {
+			p.setRunResult(false, fmt.Sprintf("failed to write ptp4l config for a %s timestamping attempt: %v", mode, err))
+			backoff.Reset(managedRestartBackoff)
+			continue
 		}
 
 		cmd := exec.Command(ptp4lBinary, "-f", p.confPath, "-i", p.cfg.Interface, "-m")
@@ -285,11 +373,97 @@ func (p *ManagedProvider) superviseLoop() {
 
 		p.mu.Lock()
 		p.cmd = cmd
-		p.running = true
-		p.lastExit = ""
 		p.mu.Unlock()
 
-		err := cmd.Wait()
+		exitCh := make(chan error, 1)
+		go func() { exitCh <- cmd.Wait() }()
+
+		probeTimer := time.NewTimer(hardwareTimestampingProbeWindow)
+		var exitErr error
+		exitedEarly := false
+		stoppedDuringProbe := false
+		select {
+		case exitErr = <-exitCh:
+			exitedEarly = true
+			probeTimer.Stop()
+		case <-probeTimer.C:
+		case <-stop:
+			stoppedDuringProbe = true
+			probeTimer.Stop()
+		}
+
+		if stoppedDuringProbe {
+			_ = cmd.Process.Kill()
+			<-exitCh
+			return
+		}
+
+		if exitedEarly {
+			p.mu.Lock()
+			reallyStopping := p.stop == nil
+			p.mu.Unlock()
+			if reallyStopping {
+				// Lost the race against Stop() closing stop and killing
+				// this process: exitCh fired for that reason, not a
+				// genuine early exit — see this file's own doc comment on
+				// why this defensive re-check exists alongside the <-stop
+				// select arm above.
+				return
+			}
+		}
+
+		if exitedEarly && attemptingHardware && !fellBack {
+			fellBack = true
+			mode = TimestampingSoftware
+			reason := "ptp4l exited immediately while attempting hardware timestamping"
+			if exitErr != nil {
+				reason = fmt.Sprintf("%s: %v", reason, exitErr)
+			}
+			reason += "; falling back to software timestamping and retrying"
+			p.setRunResult(false, reason)
+			if p.logger != nil {
+				p.logger.Warn("managed ptp4l fell back to software timestamping", "interface", p.cfg.Interface, "domain", p.cfg.Domain, "reason", reason)
+			}
+			p.mu.Lock()
+			p.cmd = nil
+			p.mu.Unlock()
+			// Retry immediately: this is a one-time capability probe, not
+			// a crash, so the ordinary restart backoff does not apply.
+			// backoff already fired once (for THIS attempt) and, being a
+			// time.Timer, never fires again on its own without a Reset —
+			// without this, the loop's own top-of-iteration select would
+			// block forever on backoff.C and the fallback would never
+			// actually retry.
+			backoff.Reset(0)
+			continue
+		}
+
+		if exitedEarly {
+			// A software attempt that failed outright, or a hardware
+			// attempt that already fell back once this Start and failed
+			// again — an ordinary crash from here on.
+			reason := "ptp4l exited"
+			if exitErr != nil {
+				reason = fmt.Sprintf("ptp4l exited: %v", exitErr)
+			}
+			p.setRunResult(false, reason)
+			if p.logger != nil {
+				p.logger.Warn("managed ptp4l exited; restarting after backoff", "interface", p.cfg.Interface, "domain", p.cfg.Domain, "reason", reason)
+			}
+			backoff.Reset(managedRestartBackoff)
+			continue
+		}
+
+		// Ran past the probe window: this attempt's mode is confirmed
+		// reached — see [ManagedProvider.reached]'s own doc comment.
+		p.mu.Lock()
+		p.running = true
+		p.lastExit = ""
+		p.reached = mode
+		p.reachedKnown = true
+		p.mu.Unlock()
+
+		err := <-exitCh
 
 		p.mu.Lock()
 		alreadyStopping := p.stop == nil
@@ -310,6 +484,13 @@ func (p *ManagedProvider) superviseLoop() {
 	}
 }
 
+// setRunResult records that this provider is not (or is once again)
+// confirmed running. reached/reachedKnown are left untouched here on
+// purpose — they still name the mode the LAST run reached, for logging
+// and debugging — but [ManagedProvider.reachedTimestampingMode] never
+// reports them while running is false, which is what actually keeps
+// [ManagedProvider.Now] from reading a PHC nothing is disciplining
+// anymore.
 func (p *ManagedProvider) setRunResult(running bool, reason string) {
 	p.mu.Lock()
 	p.running = running
@@ -344,16 +525,18 @@ func (p *ManagedProvider) Poll(ctx context.Context) RawStatus {
 
 	raw := pollViaUDS(ctx, p.roSocket, p.cfg.Domain, ManagedOwner)
 	if raw.Reachable {
-		raw.Timestamping, raw.TimestampingKnown = timestampingFromConfig(p.cfg), true
+		// The REACHED mode, never the requested ManagedConfig.
+		// HardwareTimestamping — see [ManagedProvider.reached]'s own doc
+		// comment. running is already true here (checked above), so
+		// reachedTimestampingMode's "known" should always be true too;
+		// TimestampingKnown still tracks it explicitly rather than
+		// assuming, matching this package's "never fabricate a Known flag"
+		// rule everywhere else.
+		if reached, known := p.reachedTimestampingMode(); known {
+			raw.Timestamping, raw.TimestampingKnown = reached, true
+		}
 	}
 	return raw
-}
-
-func timestampingFromConfig(cfg ManagedConfig) Timestamping {
-	if cfg.HardwareTimestamping {
-		return TimestampingHardware
-	}
-	return TimestampingSoftware
 }
 
 // Stop signals the supervise loop to stop restarting and kills the
