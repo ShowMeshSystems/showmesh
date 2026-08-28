@@ -168,17 +168,17 @@ export function parseNonNegativeInt(value: string, fieldLabel: string): { value:
 export function buildCues(cues: CueForm[], label: string): { cues: ConfigNightSessionCueWrite[] } | { error: string } {
   const built: ConfigNightSessionCueWrite[] = []
   for (const [index, cue] of cues.entries()) {
-    if (cue.name.trim() === '') return { error: `${label} cue ${index + 1} needs a name.` }
-    if (cue.action.trim() === '') return { error: `${label} cue "${cue.name.trim()}" needs an action.` }
+    if (cue.name.trim() === '') return { error: `${label} Transition Step ${index + 1} needs a name.` }
+    if (cue.action.trim() === '') return { error: `${label} Transition Step "${cue.name.trim()}" needs an action.` }
     const offsetTrimmed = cue.offsetMs.trim()
-    if (offsetTrimmed === '') return { error: `${label} cue "${cue.name.trim()}" needs an offset (may be negative).` }
+    if (offsetTrimmed === '') return { error: `${label} Transition Step "${cue.name.trim()}" needs an offset (may be negative).` }
     const offsetMs = Number(offsetTrimmed)
     if (!Number.isInteger(offsetMs)) {
-      return { error: `${label} cue "${cue.name.trim()}"'s offset must be a whole number of milliseconds.` }
+      return { error: `${label} Transition Step "${cue.name.trim()}"'s offset must be a whole number of milliseconds.` }
     }
     let fadeDurationMs: number | undefined
     if (cue.fadeDurationMs.trim() !== '') {
-      const parsed = parseNonNegativeInt(cue.fadeDurationMs, `${label} cue "${cue.name.trim()}"'s fade duration`)
+      const parsed = parseNonNegativeInt(cue.fadeDurationMs, `${label} Transition Step "${cue.name.trim()}"'s fade duration`)
       if ('error' in parsed) return parsed
       fadeDurationMs = parsed.value
     }
@@ -211,9 +211,9 @@ export function buildPayload(form: FormState): { payload: ConfigNightSessionWrit
   const blackoutAfterShow = parseNonNegativeInt(form.enterRestingBlackoutAfterShowMs, 'enterResting blackout-after-show')
   if ('error' in blackoutAfterShow) return blackoutAfterShow
 
-  const enterShowCues = buildCues(form.enterShowCues, 'enterShow')
+  const enterShowCues = buildCues(form.enterShowCues, 'Enter-show')
   if ('error' in enterShowCues) return enterShowCues
-  const enterRestingCues = buildCues(form.enterRestingCues, 'enterResting')
+  const enterRestingCues = buildCues(form.enterRestingCues, 'Enter-resting')
   if ('error' in enterRestingCues) return enterRestingCues
 
   let backgroundAudio: ConfigNightSessionWrite['resting']['backgroundAudio']
@@ -449,8 +449,8 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
         <Link className="button" to="/night">View live Show Night</Link>
       </header>
       <p className="text-muted">
-        The authored definition a night session pins. FPP alone authorizes and
-        schedules a night session; this form never accepts a calendar field or a rest-duration
+        This is the explicit full-page editing route for the authored Show Night definition. FPP alone authorizes and
+        schedules Show Night; this form never accepts a calendar field or a rest-duration
         field, and the server rejects one outright if it ever appears. <code>siteControl</code>{' '}
         and <code>interlocks</code> are specified but not implemented in this seam, so this form
         never offers them either.
@@ -464,7 +464,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
 
       {isNew && (
         <label className="form-field">
-          Night session id
+          Show Night id
           <input type="text" value={newId} disabled={!editable} onChange={(e) => setNewId(e.target.value)} />
         </label>
       )}
@@ -704,9 +704,9 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
             requiredScope={CONFIG_WRITE_SCOPE}
             onClick={() => void handleSave()}
             busy={saving}
-            busyReason="Saving this night session revision…"
+            busyReason="Saving this Show Night revision…"
           >
-            {saving ? 'Saving…' : isNew ? 'Create night session' : 'Save night session'}
+            {saving ? 'Saving…' : isNew ? 'Create Show Night' : 'Save Show Night'}
           </ScopedButton>
         </div>
       )}

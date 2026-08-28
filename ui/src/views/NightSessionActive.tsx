@@ -168,9 +168,9 @@ export function NightSessionActive() {
         <Link className="button" to="/night">View live Show Night</Link>
       </header>
       <p className="text-muted">
-        The night session the coordinator is currently running. Activating a different session, or
+        The Show Night definition the coordinator is currently using. Activating a different definition, or
         clearing the pointer, is revisioned and audited like every other configuration write here.
-        See <Link to="/night">the night session</Link> for the currently running lifecycle state.
+        See <Link to="/night">Show Night</Link> for the currently running lifecycle state.
       </p>
 
       {!readGate.allowed && (
@@ -179,7 +179,7 @@ export function NightSessionActive() {
         </p>
       )}
 
-      {readGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading the active night session…</p>}
+      {readGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading the active Show Night…</p>}
       {readGate.allowed && state.kind === 'error' && (
         <p className="panel panel--error" role="alert">
           {state.message}
@@ -223,7 +223,7 @@ export function NightSessionActive() {
 
       {readGate.allowed && (
         <>
-          <h3 className="panel__title">Activate a different night session</h3>
+          <h3 className="panel__title">Activate a different Show Night</h3>
           {!writeGate.allowed && (
             <p className="text-muted" role="status">
               Requires the <code>config:write</code> scope. {writeGate.reason}
@@ -241,7 +241,7 @@ export function NightSessionActive() {
               link/disabled-span precedent for the identical situation. */}
           {armedTarget === null && (
             <div>
-              {sessionsState.kind === 'loading' && <p className="text-muted">Loading night sessions…</p>}
+              {sessionsState.kind === 'loading' && <p className="text-muted">Loading Show Nights…</p>}
               {sessionsState.kind === 'error' && (
                 <p className="panel panel--error" role="alert">
                   {sessionsState.message}
@@ -251,15 +251,15 @@ export function NightSessionActive() {
                 <>
                   {sessionsState.sessions.length === 0 ? (
                     <p className="text-muted">
-                      No night sessions are configured yet. <Link to="/config/night.session/new">Create one</Link> first.
+                      No Show Nights are configured yet. <Link to="/config/night.session/new">Create one</Link> first.
                     </p>
                   ) : (
                     <>
                       <label className="form-field" style={{ maxWidth: '20rem' }}>
-                        Night session to activate
+                        Show Night to activate
                         <select value={selectedSession} onChange={(e) => setSelectedSession(e.target.value)}>
                           <option value="" disabled>
-                            Choose a night session
+                            Choose a Show Night
                           </option>
                           {sessionsState.sessions.map((s) => (
                             <option key={s.id} value={s.id}>
@@ -321,11 +321,11 @@ export function NightSessionActive() {
               scope-gated via ScopedButton; Cancel must always be
               reachable regardless of scope. */}
           {armedTarget !== null && (
-            <div className="panel panel--warning" role="alertdialog" aria-label="Confirm night session activation">
+            <div className="panel panel--warning" role="alertdialog" aria-label="Confirm Show Night activation">
               {armedTarget === '' ? (
                 <p>
-                  <strong>About to clear the active night session pointer.</strong> The
-                  coordinator will run no night session at all until a new one is activated.
+                  <strong>About to clear the active Show Night pointer.</strong> The
+                  coordinator will run no Show Night until a new one is activated.
                 </p>
               ) : (
                 <p>

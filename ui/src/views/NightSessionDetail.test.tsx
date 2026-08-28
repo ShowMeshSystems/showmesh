@@ -91,7 +91,7 @@ function renderExisting(model: Model, id: string) {
  * `getAllByLabelText`, matching field ORDER in the rendered form.
  */
 async function fillMinimalValidForm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.type(screen.getByLabelText('Night session id'), 'halloween-night')
+  await user.type(screen.getByLabelText('Show Night id'), 'halloween-night')
 
   await waitForShowSelectsLoaded()
   const showInputs = screen.getAllByLabelText('Show')
@@ -128,7 +128,7 @@ describe('NightSessionDetail (new night session authoring)', () => {
     const user = userEvent.setup()
     renderNew()
     await fillMinimalValidForm(user)
-    await user.click(screen.getByRole('button', { name: 'Create night session' }))
+    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
     await waitFor(() => expect(putNightSessionConfig).toHaveBeenCalledTimes(1))
     const [, payload] = putNightSessionConfig.mock.calls[0] as [string, Record<string, unknown>]
     expect(payload.resting).toMatchObject({ fppInstanceId: 'fpp-main', playlist: 'resting-playlist' })
@@ -161,7 +161,7 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await user.clear(screen.getByLabelText(/Max gain/))
     await user.type(screen.getByLabelText(/Max gain/), '-6')
 
-    await user.click(screen.getByRole('button', { name: 'Create night session' }))
+    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
     await waitFor(() =>
       expect(screen.getByText(/used more than once/)).toBeVisible(),
     )
@@ -185,7 +185,7 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await user.type(screen.getByLabelText(/Max gain/), '-6')
     // Crossfade duration deliberately left blank.
 
-    await user.click(screen.getByRole('button', { name: 'Create night session' }))
+    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
     await waitFor(() => expect(screen.getByText(/crossfade duration is required/i)).toBeVisible())
     expect(putNightSessionConfig).not.toHaveBeenCalled()
   })
@@ -213,7 +213,7 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await user.type(screen.getByLabelText(/Crossfade duration/), '250')
     await user.selectOptions(screen.getByLabelText('Item transition'), 'sequential')
 
-    await user.click(screen.getByRole('button', { name: 'Create night session' }))
+    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
     await waitFor(() => expect(screen.getByText(/only applies when item transition is "crossfade"/)).toBeVisible())
     expect(putNightSessionConfig).not.toHaveBeenCalled()
   })
@@ -248,7 +248,7 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await user.clear(maxGainInput)
     await user.type(maxGainInput, '5')
 
-    await user.click(screen.getByRole('button', { name: 'Create night session' }))
+    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
     await waitFor(() => expect(screen.getByText(/max gain must be a number, 0 dB or lower/i)).toBeVisible())
     expect(putNightSessionConfig).not.toHaveBeenCalled()
   })
@@ -279,7 +279,7 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await user.clear(maxGainInput)
     await user.type(maxGainInput, '0')
 
-    await user.click(screen.getByRole('button', { name: 'Create night session' }))
+    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
     await waitFor(() => expect(putNightSessionConfig).toHaveBeenCalledTimes(1))
     const [, payload] = putNightSessionConfig.mock.calls[0] as [string, { resting: { backgroundAudio?: { maxGainDb: number } } }]
     expect(payload.resting.backgroundAudio?.maxGainDb).toBe(0)
@@ -311,18 +311,18 @@ describe('parseNonNegativeInt (pure)', () => {
 describe('buildCues (pure)', () => {
   it('rejects a cue with no name', () => {
     const cue = { ...newCueForm(), action: 'a1' }
-    expect(buildCues([cue], 'enterShow')).toEqual({ error: 'enterShow cue 1 needs a name.' })
+    expect(buildCues([cue], 'enterShow')).toEqual({ error: 'enterShow Transition Step 1 needs a name.' })
   })
 
   it('rejects a cue with no action', () => {
     const cue = { ...newCueForm(), name: 'lights-down' }
-    expect(buildCues([cue], 'enterShow')).toEqual({ error: 'enterShow cue "lights-down" needs an action.' })
+    expect(buildCues([cue], 'enterShow')).toEqual({ error: 'enterShow Transition Step "lights-down" needs an action.' })
   })
 
   it('rejects a non-integer offset', () => {
     const cue = { ...newCueForm(), name: 'lights-down', action: 'a1', offsetMs: '1.5' }
     expect(buildCues([cue], 'enterShow')).toEqual({
-      error: 'enterShow cue "lights-down"\'s offset must be a whole number of milliseconds.',
+      error: 'enterShow Transition Step "lights-down"\'s offset must be a whole number of milliseconds.',
     })
   })
 

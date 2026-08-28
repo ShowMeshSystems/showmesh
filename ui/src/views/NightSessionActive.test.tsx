@@ -112,12 +112,12 @@ describe('NightSessionActive', () => {
     renderView()
     await waitFor(() => expect(screen.getByText('halloween-night')).toBeVisible())
 
-    await user.selectOptions(screen.getByLabelText('Night session to activate'), 'christmas-2026')
+    await user.selectOptions(screen.getByLabelText('Show Night to activate'), 'christmas-2026')
     await user.click(screen.getByRole('button', { name: 'Activate this session…' }))
 
     // Armed, not yet submitted.
     expect(putNightSessionActiveConfig).not.toHaveBeenCalled()
-    expect(screen.getByRole('alertdialog', { name: /confirm night session activation/i })).toBeVisible()
+    expect(screen.getByRole('alertdialog', { name: /confirm Show Night activation/i })).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: 'Confirm: activate "christmas-2026"' }))
     await waitFor(() => expect(putNightSessionActiveConfig).toHaveBeenCalledWith({ session: 'christmas-2026' }))
@@ -143,7 +143,7 @@ describe('NightSessionActive', () => {
 
     await user.click(screen.getByRole('button', { name: 'Clear the pointer…' }))
     expect(putNightSessionActiveConfig).not.toHaveBeenCalled()
-    expect(screen.getByText(/about to clear the active night session pointer/i)).toBeVisible()
+    expect(screen.getByText(/about to clear the active Show Night pointer/i)).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: 'Confirm: clear the pointer' }))
     await waitFor(() => expect(putNightSessionActiveConfig).toHaveBeenCalledWith({ session: '' }))
@@ -168,14 +168,14 @@ describe('NightSessionActive', () => {
     renderView()
     await waitFor(() => expect(screen.getByText('halloween-night')).toBeVisible())
 
-    await user.selectOptions(screen.getByLabelText('Night session to activate'), 'christmas-2026')
+    await user.selectOptions(screen.getByLabelText('Show Night to activate'), 'christmas-2026')
     await user.click(screen.getByRole('button', { name: 'Activate this session…' }))
     await user.click(screen.getByRole('button', { name: 'Confirm: activate "christmas-2026"' }))
 
     await waitFor(() => expect(screen.getByText('christmas-2026 has no active revision')).toBeVisible())
     // Still armed — the operator asked to activate THIS target, and a
     // refusal is about that request, not a reason to make them re-pick it.
-    expect(screen.getByRole('alertdialog', { name: /confirm night session activation/i })).toBeVisible()
+    expect(screen.getByRole('alertdialog', { name: /confirm Show Night activation/i })).toBeVisible()
   })
 
   // Review finding 12: the arm buttons must render disabled with a

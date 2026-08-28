@@ -7,19 +7,19 @@ import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession, makeNightSessionState } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
-const { getCurrentNightSession, dispatchNightCommand } = vi.hoisted(() => ({
+const { getCurrentNightSession, getNightSessionConfigRevision } = vi.hoisted(() => ({
   getCurrentNightSession: vi.fn(),
-  dispatchNightCommand: vi.fn(),
+  getNightSessionConfigRevision: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getCurrentNightSession, dispatchNightCommand }
+  return { ...actual, getCurrentNightSession, getNightSessionConfigRevision }
 })
 
 afterEach(() => {
   cleanup()
   getCurrentNightSession.mockReset()
-  dispatchNightCommand.mockReset()
+  getNightSessionConfigRevision.mockReset()
 })
 
 function renderView(model: Model) {
@@ -40,8 +40,6 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
   })
   return { promise, resolve, reject }
 }
-
-const commandScopedSession = makeAuthenticatedSession({ scopes: ['night:command'] })
 
 describe('NightSession', () => {
   // GET /night/session answers 200 with state "inactive" rather than 404
@@ -93,51 +91,6 @@ describe('NightSession', () => {
     await new Promise((r) => setTimeout(r, 10))
     expect(screen.getByText('live')).toBeVisible()
     expect(screen.queryByText('inactive')).toBeNull()
-  })
-
-  // Review finding 1's "the same class applies to handleApplied": a
-  // command's own response is not immune to a live frame having already
-  // landed with a newer updatedAt in the meantime.
-  it('does not let a command response roll back a live frame that already landed with a newer updatedAt', async () => {
-    getCurrentNightSession.mockResolvedValue({
-      serverTime: '2026-08-22T00:00:00Z',
-      session: makeNightSessionState({ state: 'inactive', updatedAt: '2026-08-22T00:00:00.000Z' }),
-    })
-    const commandResult = deferred<{
-      serverTime: string
-      command: { command: string; outcome: string; attributionDegraded: boolean }
-      session: ReturnType<typeof makeNightSessionState>
-    }>()
-    dispatchNightCommand.mockReturnValue(commandResult.promise)
-
-    const { rerender } = renderView(makeModel({ session: commandScopedSession }))
-    await waitFor(() => expect(screen.getByText('inactive')).toBeVisible())
-
-    const button = screen.getByRole('button', { name: 'Start night' })
-    const user = userEvent.setup()
-    await user.click(button)
-
-    // A live frame lands, newer than what is on screen, WHILE the
-    // command's own response is still in flight.
-    const newerSession = makeNightSessionState({ state: 'live', updatedAt: '2026-08-22T00:10:00.000Z' })
-    rerender(
-      <ModelContext.Provider value={makeModel({ session: commandScopedSession, nightSession: newerSession })}>
-        <NightSession />
-      </ModelContext.Provider>,
-    )
-    await waitFor(() => expect(screen.getByText('live')).toBeVisible())
-
-    // The command's own response now resolves with an OLDER session
-    // (e.g. the state it observed before its own effect committed). It
-    // must not roll the view back.
-    commandResult.resolve({
-      serverTime: '2026-08-22T00:00:01Z',
-      command: { command: 'start-night', outcome: 'applied', attributionDegraded: false },
-      session: makeNightSessionState({ state: 'preshow', updatedAt: '2026-08-22T00:00:01.000Z' }),
-    })
-    await new Promise((r) => setTimeout(r, 10))
-    expect(screen.getByText('live')).toBeVisible()
-    expect(screen.queryByText('preshow')).toBeNull()
   })
 
   // Review finding 2 (ADR-024 constraint 23): a transient read failure
@@ -306,9 +259,31 @@ describe('NightSession', () => {
     // so this asserts presence via getAllByText rather than requiring a
     // single match.
     expect(screen.getAllByText('not dispatched').length).toBeGreaterThan(0)
-    expect(screen.getByText('not resolved')).toBeVisible()
+    expect(screen.getByText('Not confirmed: not dispatched')).toBeVisible()
     expect(screen.getByRole('columnheader', { name: 'Target / action' })).toBeVisible()
     expect(screen.getByText('a2').closest('tr')).toHaveClass('show-night__row--current')
+  })
+
+  it('keeps configured Transition Steps separate from runtime executions, with state and confirmation time beside each', async () => {
+    getCurrentNightSession.mockResolvedValue({
+      serverTime: '2026-08-22T00:00:00Z',
+      session: makeNightSessionState({
+        state: 'live',
+        configObjectId: 'halloween-night',
+        configRevision: 7,
+        cues: { state: 'recorded', reason: '', cues: [{ name: 'fade-surfaces', phase: 'enterShow', role: 'projection', action: 'fade', actionRevision: 4, state: 'resolved', outcome: 'confirmed', dispatchedAt: '2026-08-22T00:00:01Z', resolvedAt: '2026-08-22T00:00:03Z' }] },
+      }),
+    })
+    getNightSessionConfigRevision.mockResolvedValue({
+      id: 'halloween-night', revision: 7, updatedAt: '2026-08-22T00:00:00Z',
+      payload: { show: 'halloween', label: 'Halloween', showPlaylist: { fppInstanceId: 'fpp-1', playlist: 'show' }, resting: { fppInstanceId: 'fpp-1', playlist: 'rest', endOfNightPlaylist: 'rest', endOfNightRepeat: false, timelineAsset: { show: 'halloween', sequence: 'rest', target: 'front' } }, enterShow: { cues: [{ name: 'fade-surfaces', role: 'projection', action: 'fade', offsetMs: -12000, barrier: false, onFailure: 'continue' }], blackoutHoldMs: 0 }, enterResting: { cues: [], blackoutAfterShowMs: 0 } },
+    })
+    renderView(makeModel({ session: makeAuthenticatedSession({ scopes: ['config:write'] }) }))
+    const configured = await screen.findByRole('region', { name: 'Configured Transition Steps' })
+    expect(getNightSessionConfigRevision).toHaveBeenCalledWith('halloween-night', 7)
+    expect(configured).toHaveTextContent('Configured')
+    expect(screen.getByRole('region', { name: 'Run of Show runtime executions' })).toHaveTextContent('resolved')
+    expect(screen.getAllByText('Last confirmed').length).toBe(2)
   })
 
   // Review finding 7: a "not_configured" (or any non-recorded) state must
@@ -476,14 +451,14 @@ describe('NightSession', () => {
     await waitFor(() => expect(screen.getByText('the outbox store could not be read')).toBeVisible())
   })
 
-  it('renders the lifecycle command buttons, disabled with a stated reason when night:command is not held', async () => {
+  it('keeps operational commands out of Show Night, where Live Control owns them', async () => {
     getCurrentNightSession.mockResolvedValue({
       serverTime: '2026-08-22T00:00:00Z',
       session: makeNightSessionState(),
     })
     renderView(makeModel({ session: makeAuthenticatedSession({ scopes: ['node:read'] }) }))
-    const button = await screen.findByRole('button', { name: 'Prepare site' })
-    expect(button).toBeDisabled()
-    expect(button).toBeVisible()
+    await waitFor(() => expect(screen.getByText('FPP boundary')).toBeVisible())
+    expect(screen.queryByRole('button', { name: 'Prepare site' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Start night' })).toBeNull()
   })
 })

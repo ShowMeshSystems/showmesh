@@ -134,3 +134,23 @@ describe('Dashboard layout constraints', () => {
     expect(focus).toMatch(/outline:\s*2px solid var\(--color-focus-ring\)/)
   })
 })
+
+describe('Show Night layout constraints', () => {
+  const css = readFileSync(CSS_PATH, 'utf8')
+
+  it('keeps configured and runtime Transition Step tables in keyboard-focusable local scroll regions', () => {
+    const evidence = ruleBodyFor(css, '.shared-evidence-table')
+    const table = ruleBodyFor(css, '.show-night__table')
+
+    expect(evidence).toMatch(/overflow-x:\s*auto/)
+    expect(evidence).toMatch(/max-width:\s*100%/)
+    expect(table).toMatch(/min-width:\s*48rem/)
+  })
+
+  it('stacks the Show Night runtime summary and reduces table width on narrow layouts', () => {
+    const narrow = css.slice(css.indexOf('@media (max-width: 700px)'))
+
+    expect(narrow).toMatch(/\.show-night__runhead\s*\{\s*grid-template-columns:\s*1fr/)
+    expect(narrow).toMatch(/\.show-night__table\s*\{\s*min-width:\s*40rem/)
+  })
+})

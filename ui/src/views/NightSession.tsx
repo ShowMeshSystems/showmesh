@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { getCurrentNightSession } from '../api'
-import { describeApiError } from '../app/session'
+import { getCurrentNightSession, getNightSessionConfigRevision } from '../api'
+import { describeApiError, evaluateAnyScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import {
@@ -11,9 +11,9 @@ import {
   NightReadinessCheckBadge,
   NightReadinessOutcomeBadge,
 } from '../components/DomainBadges'
-import { NightCommandButton } from '../components/NightCommandButton'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
-import type { NightBackgroundAudioStep, NightCue, NightSessionState } from '../app/types'
+import { EvidenceTable, OperatorPageHeader, OperatorSection, StatusStrip, StatusStripItem, UnavailableBlock } from '../components/SharedLayouts'
+import type { ConfigNightSession, NightBackgroundAudioStep, NightCue, NightSessionState } from '../app/types'
 import '../styles/operator-pages.css'
 
 // Track F seam F2 (RESTING-MODE.md, ADR-038): the night-session operating
@@ -68,6 +68,14 @@ type LoadState =
       stale: boolean
       staleError: string | null
     }
+
+type ConfiguredStepsState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'unavailable'; reason: string }
+  | { kind: 'loaded'; payload: ConfigNightSession; revision: number; updatedAt: string }
+
+const CONFIG_READ_SCOPES = ['show:macro:run', 'config:write']
 
 function findNextCue(cues: NightCue[]): NightCue | null {
   return cues.find((c) => c.state === 'not_dispatched' || c.state === 'pending' || c.state === 'dispatched') ?? null
@@ -130,9 +138,11 @@ function ShowNightRunHeader({ session }: { session: NightSessionState }) {
 
 export function NightSession() {
   const model = useModelContext()
+  const configReadGate = evaluateAnyScope(model.session, model.sessionFetchFailed, CONFIG_READ_SCOPES)
+  const configUnavailableReason = configReadGate.allowed ? '' : configReadGate.reason
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [reloadGeneration, setReloadGeneration] = useState(0)
-  const [armEndSession, setArmEndSession] = useState(false)
+  const [configuredSteps, setConfiguredSteps] = useState<ConfiguredStepsState>({ kind: 'idle' })
 
   // The one place `state` is asked to adopt a NEW session, from any
   // source (initial GET, a reload's GET, a live stream frame, or a
@@ -188,30 +198,45 @@ export function NightSession() {
     adoptSession(model.nightSession)
   }, [model.nightSession])
 
-  // Also routed through [adoptSession]: the command response is the
-  // freshest evidence at the moment it arrives, but is not IMMUNE to a
-  // live frame having already landed first (review finding 1's "the same
-  // class applies to handleApplied").
-  function handleApplied(session: NightSessionState): void {
-    adoptSession(session)
-    setArmEndSession(false)
-  }
+  const configId = state.kind === 'loaded' ? state.session.configObjectId : ''
+  const configRevision = state.kind === 'loaded' ? state.session.configRevision : 0
+  useEffect(() => {
+    if (configId === '') {
+      setConfiguredSteps({ kind: 'idle' })
+      return
+    }
+    if (!configReadGate.allowed) {
+      setConfiguredSteps({ kind: 'unavailable', reason: configUnavailableReason })
+      return
+    }
+    let cancelled = false
+    setConfiguredSteps({ kind: 'loading' })
+    getNightSessionConfigRevision(configId, configRevision)
+      .then((config) => {
+        if (!cancelled) setConfiguredSteps({ kind: 'loaded', payload: config.payload, revision: config.revision, updatedAt: config.updatedAt })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setConfiguredSteps({ kind: 'unavailable', reason: describeApiError(err) })
+      })
+    return () => { cancelled = true }
+  }, [configId, configRevision, configReadGate.allowed, configUnavailableReason])
 
   return (
     <div className="operator-page show-night-page">
-      <header className="operator-page__header show-night-page__header">
-        <div>
-          <p className="show-night-page__kicker">Show Night{state.kind === 'loaded' && state.session.configObjectId !== '' ? ` / ${state.session.configObjectId}` : ''}</p>
-          <h1 className="operator-page__title">Show Night</h1>
-          <p className="operator-page__lede text-muted">The coordinator&rsquo;s current Run of Show, with FPP retaining scheduling and playback authority.</p>
-        </div>
-        {state.kind === 'loaded' && state.session.configObjectId !== '' && (
-          <a className="button" href={`/config/night.session/${encodeURIComponent(state.session.configObjectId)}`}>
-            Edit Show Night
-          </a>
-        )}
-      </header>
+      <OperatorPageHeader
+        eyebrow={state.kind === 'loaded' && state.session.configObjectId !== '' ? `Show Night / ${state.session.configObjectId}` : 'Show Night'}
+        title="Show Night"
+        lede="The coordinator’s current Run of Show, with FPP retaining scheduling and playback authority."
+        actions={state.kind === 'loaded' && state.session.configObjectId !== '' ? (
+          <a className="button" href={`/config/night.session/${encodeURIComponent(state.session.configObjectId)}`}>Edit Show Night</a>
+        ) : undefined}
+      />
       <p className="show-night-page__contract text-muted">The lifecycle controller&rsquo;s own state is separate from observed playback evidence. The authored definition is pinned by the <code>night.session</code> configuration.</p>
+      <OperatorSection title="FPP boundary" detail="Authority and unavailable evidence are shown literally.">
+        <p className="show-night__fpp-boundary">
+          FPP owns the night schedule, playlist selection, and playback progression. ShowMesh records lifecycle and plugin evidence; it does not infer an FPP playhead, schedule, or plugin result when that evidence is unavailable.
+        </p>
+      </OperatorSection>
 
       {state.kind === 'loading' && <p className="text-muted">Loading the night session…</p>}
       {state.kind === 'error' && (
@@ -232,70 +257,13 @@ export function NightSession() {
       {state.kind === 'loaded' && <ShowNightRunHeader session={state.session} />}
 
       {state.kind === 'loaded' && (
-        <NightSessionDetail session={state.session} onReload={() => setReloadGeneration((g) => g + 1)} />
+        <NightSessionDetail session={state.session} configuredSteps={configuredSteps} onReload={() => setReloadGeneration((g) => g + 1)} />
       )}
-
-      <h2 className="show-night-page__section-title">Lifecycle commands</h2>
-      <PanelErrorBoundary panelLabel="Night lifecycle commands">
-        <section className="show-night__commands">
-          <p className="text-muted">
-            Each control is shown disabled with a stated reason when this device may not use it,
-            never hidden. A refusal names one of three distinct causes:
-            not yet ready, rejected by the session&rsquo;s current state, or the session is
-            degraded and ambiguous, or, for the first four commands only, that the audit store
-            is unavailable.
-          </p>
-          <div className="show-night__command-list">
-            <NightCommandButton command="prepare-site" label="Prepare site" onApplied={handleApplied} />
-            <NightCommandButton command="run-readiness" label="Run readiness" onApplied={handleApplied} />
-            <NightCommandButton command="start-preshow" label="Start preshow" onApplied={handleApplied} />
-            <NightCommandButton command="start-night" label="Start night" onApplied={handleApplied} />
-            {/* Exempt from the degraded-session gate (ADR-024 decision 11):
-                these four are direction-safe and stay reachable even when
-                the session is degraded, so one coordinator restart cannot
-                brick the night. */}
-            <NightCommandButton command="request-final-show" label="Request final show" onApplied={handleApplied} />
-            <NightCommandButton command="fade-out-night" label="Fade out night" onApplied={handleApplied} />
-            <NightCommandButton
-              command="power-down-presentation"
-              label="Power down presentation"
-              onApplied={handleApplied}
-            />
-
-            {/* end-session abandons the session outright — arm-then-confirm,
-                on ShowActive.tsx's precedent, rather than firing from a bare
-                click. */}
-            {!armEndSession && (
-              <button type="button" onClick={() => setArmEndSession(true)}>
-                End session…
-              </button>
-            )}
-            {armEndSession && (
-              <div className="show-night__confirm panel--warning" role="alertdialog" aria-label="Confirm end session">
-                <p>
-                  <strong>About to end this session.</strong>
-                </p>
-                <p>
-                  This abandons the current night session outright. It is the operator-recovery
-                  path out of a degraded, ambiguous session, and is provisional, not yet part of
-                  the closed lifecycle-command vocabulary.
-                </p>
-                <div className="show-night__confirm-actions">
-                  <NightCommandButton command="end-session" label="Confirm: end session" onApplied={handleApplied} />
-                  <button type="button" onClick={() => setArmEndSession(false)}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-      </PanelErrorBoundary>
     </div>
   )
 }
 
-function NightSessionDetail({ session, onReload }: { session: NightSessionState; onReload: () => void }) {
+function NightSessionDetail({ session, configuredSteps, onReload }: { session: NightSessionState; configuredSteps: ConfiguredStepsState; onReload: () => void }) {
   const nextCue = session.cues.state === 'recorded' ? findNextCue(session.cues.cues) : null
   const currentCueIndex = session.cues.state === 'recorded'
     ? session.cues.cues.findIndex((cue) => cue.state === 'pending' || cue.state === 'dispatched' || cue.state === 'ambiguous' || cue.state === 'not_dispatched')
@@ -396,7 +364,54 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
         </section>
       </PanelErrorBoundary>
 
+      <OperatorSection
+        title="Configured Transition Steps"
+        detail="Authored work pinned for this Show Night. These are not runtime executions."
+      >
+        {configuredSteps.kind === 'idle' && <p className="text-muted">No Show Night configuration is pinned for this session.</p>}
+        {configuredSteps.kind === 'loading' && <p className="text-muted">Loading configured Transition Steps…</p>}
+        {configuredSteps.kind === 'unavailable' && (
+          <UnavailableBlock title="Configured Transition Steps unavailable" reason={configuredSteps.reason} headingLevel={3} />
+        )}
+        {configuredSteps.kind === 'loaded' && (
+          <>
+            <StatusStrip label="Configured Transition Step evidence">
+              <StatusStripItem label="Configuration" detail={`Last confirmed ${formatAbsolute(configuredSteps.updatedAt)}`}>
+                Revision {configuredSteps.revision}
+              </StatusStripItem>
+              <StatusStripItem label="Enter show" detail="Configured, not executed">
+                {configuredSteps.payload.enterShow.cues.length} Transition Steps
+              </StatusStripItem>
+              <StatusStripItem label="Enter resting" detail="Configured, not executed">
+                {configuredSteps.payload.enterResting.cues.length} Transition Steps
+              </StatusStripItem>
+            </StatusStrip>
+            <EvidenceTable label="Configured Transition Steps">
+              <table className="show-night__table">
+                <thead><tr><th>Phase</th><th>Transition Step</th><th>Target / action</th><th>Configured state</th><th>Last confirmed</th></tr></thead>
+                <tbody>
+                  {[
+                    ...configuredSteps.payload.enterShow.cues.map((step) => ({ phase: 'Enter show', step })),
+                    ...configuredSteps.payload.enterResting.cues.map((step) => ({ phase: 'Enter resting', step })),
+                  ].map(({ phase, step }, index) => (
+                    <tr key={`${phase}-${step.name}-${index}`}>
+                      <td>{phase}</td><td><strong>{step.name}</strong><small>{step.offsetMs >= 0 ? '+' : ''}{step.offsetMs} ms, {step.onFailure} on failure</small></td>
+                      <td><strong>{step.role}</strong><small>{step.action}</small></td>
+                      <td>Configured</td><td>{formatAbsolute(configuredSteps.updatedAt)}</td>
+                    </tr>
+                  ))}
+                  {configuredSteps.payload.enterShow.cues.length + configuredSteps.payload.enterResting.cues.length === 0 && (
+                    <tr><td colSpan={5}>No Transition Steps are configured for this Show Night.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </EvidenceTable>
+          </>
+        )}
+      </OperatorSection>
+
       <h2 className="show-night__board-title">Run of Show</h2>
+      <p className="show-night__board-detail text-muted">Runtime executions from the current lifecycle. State and confirmation time belong to each item.</p>
       {/* Review finding 6: this list is every cue in the current cycle's
           outbox across all three phases, not scoped to any one of them —
           the heading no longer claims a filter this table does not apply.
@@ -413,7 +428,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
             (session.cues.cues.length === 0 ? (
               <p className="text-muted">No Transition Steps recorded for this cycle yet.</p>
             ) : (
-              <div className="show-night__table-scroll">
+              <EvidenceTable label="Run of Show runtime executions">
                 <table className="show-night__table">
                   <thead>
                     <tr>
@@ -421,7 +436,8 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                       <th>Transition Step</th>
                       <th>Phase</th>
                       <th>Target / action</th>
-                      <th>Status</th>
+                      <th>Runtime state</th>
+                      <th>Last confirmed</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -430,16 +446,17 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                       return (
                       <tr className={current ? 'show-night__row--current' : undefined} aria-current={current ? 'step' : undefined} key={`${cue.phase}-${cue.name}-${i}`}>
                         <td className="show-night__when">{current ? 'NOW' : `STEP ${i + 1}`}</td>
-                        <td><strong>{cue.name}</strong><small>{cue.actionRevision === null ? 'Revision unavailable' : `Pinned revision ${cue.actionRevision}`}</small>{cue.reason !== undefined && <small>{cue.reason}</small>}<small>{cue.dispatchedAt === null ? 'not dispatched' : `dispatched ${formatAbsolute(cue.dispatchedAt)}`}</small><small>{cue.resolvedAt === null ? 'not resolved' : `resolved ${formatAbsolute(cue.resolvedAt)}`}</small></td>
+                        <td><strong>{cue.name}</strong><small>{cue.actionRevision === null ? 'Revision unavailable' : `Pinned revision ${cue.actionRevision}`}</small>{cue.reason !== undefined && <small>{cue.reason}</small>}</td>
                         <td>{cue.phase}</td>
                         <td><strong>{cue.role}</strong><small>{cue.action}</small></td>
                         <td><NightCueStateBadge state={cue.state} />{cue.outcome !== undefined && <span className="show-night__outcome"><NightCueOutcomeBadge outcome={cue.outcome} /></span>}</td>
+                        <td>{cue.resolvedAt === null ? (cue.dispatchedAt === null ? 'Not confirmed: not dispatched' : `Dispatched ${formatAbsolute(cue.dispatchedAt)}, not confirmed`) : formatAbsolute(cue.resolvedAt)}</td>
                       </tr>
                       )
                     })}
                   </tbody>
                 </table>
-              </div>
+              </EvidenceTable>
             ))}
         </section>
       </PanelErrorBoundary>
