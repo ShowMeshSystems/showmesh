@@ -307,6 +307,8 @@ describe('NightSession', () => {
     // single match.
     expect(screen.getAllByText('not dispatched').length).toBeGreaterThan(0)
     expect(screen.getByText('not resolved')).toBeVisible()
+    expect(screen.getByRole('columnheader', { name: 'Target / action' })).toBeVisible()
+    expect(screen.getByText('a2').closest('tr')).toHaveClass('show-night__row--current')
   })
 
   // Review finding 7: a "not_configured" (or any non-recorded) state must

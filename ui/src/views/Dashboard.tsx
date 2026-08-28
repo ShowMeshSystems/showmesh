@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import { useModelContext } from '../app/ModelContext'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
 import { ClockSkewWarning } from '../components/ClockSkewWarning'
-import { SeverityBadge, CollectorStatusBadge } from '../components/DomainBadges'
+import { ControlPlaneBadge, FPPHealthBadge, ResolumeHealthBadge, SeverityBadge, CollectorStatusBadge } from '../components/DomainBadges'
 import { StatusBadge, type StatusTone } from '../components/StatusBadge'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { ResolumeRecoveryToggle } from '../components/ResolumeRecoveryToggle'
@@ -164,13 +164,23 @@ function readiness(model: ReturnType<typeof useModelContext>): { label: string; 
   if (model.connection.kind !== 'live') {
     return { label: 'Stale', detail: 'Last known data is shown while disconnected.', tone: 'unknown', icon: '!' }
   }
-  if (model.fpp.length === 0 && model.nodes.length === 0) {
-    return { label: 'Unknown', detail: 'No playback or node evidence is configured.', tone: 'unknown', icon: '?' }
+  if (model.fpp.length === 0 && model.nodes.length === 0 && model.resolume.length === 0) {
+    return { label: 'Unknown', detail: 'No presentation evidence is configured.', tone: 'unknown', icon: '?' }
   }
-  if (model.fpp.some((instance) => instance.health === 'failed')) {
-    return { label: 'Not ready', detail: 'An FPP instance has failed.', tone: 'bad', icon: '✕' }
+  const renderEntries = model.nodes.flatMap((node) => node.render.filter((entry) => entry.signal === 'surface.pipeline.state'))
+  if (
+    model.fpp.some((instance) => instance.health === 'failed') ||
+    model.resolume.some((instance) => instance.health === 'failed') ||
+    renderEntries.some((entry) => entry.state === 'current' && entry.value === 'failed')
+  ) {
+    return { label: 'Not ready', detail: 'A presentation resource has failed.', tone: 'bad', icon: '✕' }
   }
-  if (model.fpp.some((instance) => instance.health === 'degraded' || instance.health === 'unknown') || model.nodes.some((node) => node.controlPlane.state !== 'online')) {
+  if (
+    model.fpp.some((instance) => instance.health === 'degraded' || instance.health === 'unknown') ||
+    model.resolume.some((instance) => instance.health === 'degraded' || instance.health === 'unknown') ||
+    model.nodes.some((node) => node.controlPlane.state !== 'online') ||
+    renderEntries.some((entry) => entry.state !== 'current' || entry.value === 'restarting' || entry.value === 'superseded')
+  ) {
     return { label: 'Needs attention', detail: 'One or more resources are degraded or unobserved.', tone: 'warn', icon: '⚠' }
   }
   return { label: 'Ready', detail: 'Current resource evidence is healthy.', tone: 'good', icon: '✓' }
@@ -245,453 +255,350 @@ function CurrentRunRow({ run }: { run: CurrentRun }) {
   )
 }
 
-function Overview({ model, attention }: { model: ReturnType<typeof useModelContext>; attention: AttentionItem[] }) {
-  const currentRuns = model.currentRuns?.runs ?? []
-  const ready = readiness(model)
-  const presentation = [
-    ...model.fpp.map((instance) => `FPP: ${instance.instanceId}`),
-    ...model.nodes.map((node) => `Node: ${node.label ?? node.nodeId}`),
-    ...model.resolume.map((instance) => `Resolume: ${instance.instanceId}`),
-  ]
+function ConnectionLabel({ model }: { model: ReturnType<typeof useModelContext> }): string {
+  if (model.connection.kind === 'live') return 'Live'
+  if (model.connection.kind === 'reconnecting') return 'Reconnecting'
+  if (model.connection.kind === 'connecting') return 'Connecting'
+  if (model.connection.kind === 'failed') return 'Failed'
+  if (model.connection.kind === 'unauthorized') return 'Unauthorized'
+  if (model.connection.kind === 'incompatible') return 'Incompatible'
+  return 'Unknown'
+}
+
+function renderCount(model: ReturnType<typeof useModelContext>): { value: string; detail: string } {
+  const entries = model.nodes.flatMap((node) => node.render.filter((entry) => entry.signal === 'surface.pipeline.state'))
+  const current = entries.filter((entry) => entry.state === 'current').length
+  if (entries.length === 0) return { value: 'Unknown', detail: 'No render evidence observed.' }
+  return { value: `${current} / ${entries.length}`, detail: current === entries.length ? 'Current evidence' : 'Some evidence is not current' }
+}
+
+function attentionSummary(attention: AttentionItem[]): string {
+  if (attention.length === 0) return 'No attention items are reported.'
+  return `${attention.length} attention item${attention.length === 1 ? '' : 's'} reported.`
+}
+
+function PresentationPath({ model }: { model: ReturnType<typeof useModelContext> }) {
+  const fppRows = model.fpp.map((instance) => ({
+    key: `fpp-${instance.instanceId}`,
+    to: `/fpp/${instance.instanceId}`,
+    icon: 'FPP',
+    name: instance.instanceId,
+    detail: (
+      <>
+        <span>FPP instance</span>{' '}
+        <FleetSignalBadge label="playback" evidence={findObservation(instance.observations, 'fpp.status')} />
+      </>
+    ),
+    status: <FPPHealthBadge health={instance.health} />,
+  }))
+  const nodeRows = model.nodes.map((node) => {
+    const renderEntries = node.render.filter((entry) => entry.signal === 'surface.pipeline.state')
+    return {
+      key: `node-${node.nodeId}`,
+      to: `/nodes/${node.nodeId}`,
+      icon: 'NODE',
+      name: node.label ?? node.nodeId,
+      detail: (
+        <>
+          <span>{renderEntries.length === 0 ? 'No render endpoint observed' : `${renderEntries.length} render endpoint${renderEntries.length === 1 ? '' : 's'}`}</span>
+          {' · '}
+          <span>control plane</span>
+        </>
+      ),
+      status: <ControlPlaneBadge state={node.controlPlane.state} />,
+    }
+  })
+  const resolumeRows = model.resolume.map((instance) => ({
+    key: `resolume-${instance.instanceId}`,
+    to: '/resolume',
+    icon: 'RES',
+    name: instance.instanceId,
+    detail: <span>{instance.composition === null ? 'No composition uploaded' : `Composition · ${instance.composition.name}`}</span>,
+    status: <ResolumeHealthBadge health={instance.health} />,
+  }))
+  const rows = [...fppRows, ...nodeRows, ...resolumeRows]
+
   return (
-    <section className="operator-page" aria-labelledby="dashboard-title">
-      <header className="operator-page__header">
+    <section className="dashboard-section dashboard-section--path" aria-labelledby="dashboard-presentation">
+      <div className="dashboard-section__heading">
         <div>
-          <h1 id="dashboard-title" className="operator-page__title">Dashboard</h1>
-          <p className="operator-page__lede text-muted">A shallow operator overview of readiness, the current run, and the presentation path.</p>
+          <h2 id="dashboard-presentation">Presentation path</h2>
+          <p className="text-muted">Current evidence only</p>
         </div>
-        <Link className="button" to="/control">Open Live Control</Link>
-      </header>
-      <div className="operator-status-strip" aria-label="Dashboard status">
-        <div className="operator-status-card">
-          <span className="operator-status-card__label">Readiness</span>
-          <StatusBadge tone={ready.tone} icon={ready.icon} label={ready.label} />
-          <span className="operator-status-card__detail">{ready.detail}</span>
-        </div>
-        <div className="operator-status-card">
-          <span className="operator-status-card__label">Current run</span>
-          <span className="operator-status-card__value">{model.currentRuns === null ? 'Unknown' : currentRuns.length === 0 ? 'None observed' : `${currentRuns.length} reported`}</span>
-          <span className="operator-status-card__detail">{model.currentRuns === null ? 'Authoritative current playback is not available.' : currentRuns.length === 0 ? 'No runner currently reports a run.' : currentRuns.map((run) => `${run.runner}: ${run.show}`).join(', ')}</span>
-        </div>
-        <div className="operator-status-card">
-          <span className="operator-status-card__label">Connection</span>
-          <span className="operator-status-card__value">{model.connection.kind === 'live' ? 'Live' : model.connection.kind}</span>
-          <span className="operator-status-card__detail">{attention.length === 0 ? 'No attention items are reported.' : `${attention.length} attention item${attention.length === 1 ? '' : 's'} reported.`}</span>
-        </div>
-        <div className="operator-status-card">
-          <span className="operator-status-card__label">Presentation path</span>
-          <span className="operator-status-card__value">{presentation.length}</span>
-          <span className="operator-status-card__detail">{presentation.length === 0 ? 'No presentation endpoints observed.' : presentation.join(' · ')}</span>
-        </div>
+        <span className="dashboard-section__meta">{rows.length} observed endpoint{rows.length === 1 ? '' : 's'}</span>
       </div>
-      <div className="operator-page__columns">
-        <section className="panel" aria-labelledby="dashboard-current-run">
-          <h2 id="dashboard-current-run" className="panel__title">Current run</h2>
-          {model.currentRuns === null ? (
-            <p className="text-muted" role="status">Authoritative current playback is unavailable{model.currentRunsFetchFailed ? ': the coordinator could not be read.' : ' while the coordinator response is pending.'}</p>
-          ) : currentRuns.length === 0 ? (
-            <p className="text-muted">No runner currently reports a run. This is not a claim that no external process is running.</p>
-          ) : (
-            <ul className="operator-list">
-              {currentRuns.map((run) => <CurrentRunRow key={run.id} run={run} />)}
-            </ul>
-          )}
-        </section>
-        <section className="panel" aria-labelledby="dashboard-presentation">
-          <h2 id="dashboard-presentation" className="panel__title">Presentation path</h2>
-          {presentation.length === 0 ? <p className="text-muted">No presentation endpoint is observed.</p> : <ul className="operator-list">{presentation.map((item) => <li className="operator-list__item" key={item}><span>{item}</span><span className="operator-list__meta">Observed</span></li>)}</ul>}
-        </section>
-      </div>
+      {rows.length === 0 ? (
+        <p className="dashboard-empty text-muted">No presentation endpoints are observed.</p>
+      ) : (
+        <ul className="dashboard-path-list">
+          {rows.map((row) => (
+            <li key={row.key} className="dashboard-path-row">
+              <span className="dashboard-path-row__icon" aria-hidden="true">{row.icon}</span>
+              <Link className="dashboard-path-row__name" to={row.to}>
+                <strong>{row.name}</strong>
+                <span>{row.detail}</span>
+              </Link>
+              <span className="dashboard-path-row__status">{row.status}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
+  )
+}
+
+function CurrentRunsSection({ model }: { model: ReturnType<typeof useModelContext> }) {
+  if (model.currentRuns === null) {
+    return (
+      <section className="dashboard-section dashboard-section--runs" aria-labelledby="dashboard-current-run">
+        <div className="dashboard-section__heading">
+          <div>
+            <h2 id="dashboard-current-run">Current run</h2>
+            <p className="text-muted">Authoritative playback evidence</p>
+          </div>
+          <StatusBadge tone="unknown" icon="?" label="unavailable" />
+        </div>
+        <p className="dashboard-empty text-muted" role="status">
+          Authoritative current playback is unavailable{model.currentRunsFetchFailed ? ': the coordinator could not be read.' : ' while the coordinator response is pending.'}
+        </p>
+      </section>
+    )
+  }
+
+  const runs = model.currentRuns.runs
+  return (
+    <section className="dashboard-section dashboard-section--runs" aria-labelledby="dashboard-current-run">
+      <div className="dashboard-section__heading">
+        <div>
+          <h2 id="dashboard-current-run">Current run</h2>
+          <p className="text-muted">Authoritative playback evidence</p>
+        </div>
+        <span className="dashboard-section__meta">{runs.length === 0 ? 'None observed' : `${runs.length} active runner${runs.length === 1 ? '' : 's'}`}</span>
+      </div>
+      {runs.length === 0 ? (
+        <p className="dashboard-empty text-muted">No runner currently reports a run. This is not a claim that no external process is running.</p>
+      ) : (
+        <ul className="operator-list">
+          {runs.map((run) => <CurrentRunRow key={run.id} run={run} />)}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function AttentionSection({ attention }: { attention: AttentionItem[] }) {
+  return (
+    <section className="dashboard-section dashboard-section--attention" aria-labelledby="dashboard-attention">
+      <div className="dashboard-section__heading">
+        <div>
+          <h2 id="dashboard-attention">Attention</h2>
+          <p className="text-muted">Conditions that may need an operator</p>
+        </div>
+        <span className="dashboard-section__meta">{attentionSummary(attention)}</span>
+      </div>
+      {attention.length === 0 ? (
+        <p className="dashboard-empty text-muted">Nothing needs attention: no active critical or warning conditions, and no instances with unknown health, in nodes or FPP instances right now.</p>
+      ) : (
+        <ul className="dashboard-attention-list">
+          {attention.map((item) => (
+            <li key={item.to + item.text}>
+              <Link className="dashboard-attention-row" to={item.to}>
+                <StatusBadge tone={ATTENTION_BADGE[item.tone].tone} icon={ATTENTION_BADGE[item.tone].icon} label={item.tone} />
+                <span>{item.text}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function RecentActivity({ model }: { model: ReturnType<typeof useModelContext> }) {
+  const recentEvents = model.events.slice(0, 5)
+  return (
+    <section className="dashboard-section dashboard-section--activity" aria-labelledby="dashboard-activity">
+      <div className="dashboard-section__heading">
+        <div>
+          <h2 id="dashboard-activity">Recent activity</h2>
+          <p className="text-muted">Latest recorded events</p>
+        </div>
+        <Link to="/events">View all events →</Link>
+      </div>
+      {model.eventsGap && (
+        <p className="evidence__reason" role="status">Some event history has been permanently lost to retention; this list does not reach back to the beginning.</p>
+      )}
+      {recentEvents.length === 0 ? (
+        <p className="dashboard-empty text-muted">No events recorded yet.</p>
+      ) : (
+        <div className="dashboard-activity-table-scroll">
+          <table className="dashboard-activity-table">
+            <thead><tr><th>Event</th><th>Source</th><th>Time</th></tr></thead>
+            <tbody>
+              {recentEvents.map((event) => (
+                <tr key={event.seq}>
+                  <td><Link to="/events"><SeverityBadge severity={event.severity} /> {event.summary}</Link></td>
+                  <td>{event.resource.id}</td>
+                  <td>{event.occurredAt ?? event.recordedAt}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function AdditionalEvidence({ model }: { model: ReturnType<typeof useModelContext> }) {
+  const resolumeInstance = model.resolume[0]
+  const onlineNodes = model.nodes.filter((node) => node.controlPlane.state === 'online').length
+  const offlineNodes = model.nodes.filter((node) => node.controlPlane.state === 'offline').length
+  const unknownNodes = model.nodes.length - onlineNodes - offlineNodes
+  const fppUnknownHealth = model.fpp.filter((instance) => instance.health === 'unknown').length
+  const fppSuppressed = model.fpp.filter((instance) => instance.health === 'suppressed').length
+  const warningsTotal = summarizeFleetWarnings(model.fpp)
+  const portsTotal = summarizeFleetPorts(model.fpp)
+
+  return (
+    <details className="dashboard-evidence">
+      <summary>System evidence details</summary>
+      <div className="dashboard-evidence__content">
+        <section className="dashboard-evidence__section" aria-labelledby="dashboard-inventory">
+          <h2 id="dashboard-inventory">Inventory</h2>
+          <dl className="field-list">
+            <dt>Nodes with control-plane connected</dt><dd>{onlineNodes}</dd>
+            <dt>Nodes with control-plane connection lost</dt><dd>{offlineNodes}</dd>
+            <dt>Nodes with control-plane state unknown</dt><dd>{unknownNodes}</dd>
+            <dt>FPP instances configured</dt><dd>{model.fpp.length}</dd>
+            <dt>FPP instances with health unknown</dt><dd>{fppUnknownHealth}</dd>
+            <dt>FPP instances suppressed</dt><dd>{fppSuppressed}</dd>
+            <dt>FPP warnings across fleet</dt>
+            <dd>
+              {warningsTotal.instancesReporting === 0 ? <span className="text-muted">not collected</span> : <>{warningsTotal.total}
+                {warningsTotal.instancesStaleOrUnknownAge > 0 && <span className="text-muted"> ({warningsTotal.instancesStaleOrUnknownAge} instance{warningsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} stale or age unknown)</span>}
+                {warningsTotal.instancesUnknown > 0 && <span className="text-muted"> ({warningsTotal.instancesUnknown} instance{warningsTotal.instancesUnknown === 1 ? '' : 's'} not reporting)</span>}
+              </>}
+            </dd>
+            <dt>Collectors</dt>
+            <dd>{model.collectors.length === 0 ? 'none configured' : <ul className="list-plain">{model.collectors.map((collector) => <li key={collector.id}><CollectorStatusBadge state={collector.state} /> <span className="text-muted">{collector.id}</span>{collector.reason !== null && <div className="evidence__reason">{collector.reason}</div>}</li>)}</ul>}</dd>
+          </dl>
+        </section>
+
+        <section className="dashboard-evidence__section" aria-labelledby="dashboard-resolume">
+          <h2 id="dashboard-resolume">Resolume</h2>
+          {resolumeInstance === undefined ? <p className="text-muted">Resolume is not configured on this coordinator.</p> : <>
+            <Link className="entity-link" to="/resolume"><strong>{resolumeInstance.instanceId}</strong></Link>
+            <EvidenceValue label="reachable" evidence={findObservation(resolumeInstance.observations, 'resolume.reachable') ?? { signal: 'resolume.reachable', value: null, unit: null, state: 'not_collected', reason: 'never collected', observedAt: null, collectedAt: null, source: 'resolume', quality: 'direct', validForSeconds: null }} serverTime={model.serverTime} serverTimeReceivedAt={model.serverTimeReceivedAt} connected={model.connection.kind === 'live'} />
+            <p className="text-muted">{resolumeInstance.composition === null ? 'No composition uploaded.' : `Loaded composition: ${resolumeInstance.composition.name}`}</p>
+          </>}
+        </section>
+
+        <section className="dashboard-evidence__section" aria-labelledby="dashboard-playback-state">
+          <h2 id="dashboard-playback-state">Playback state</h2>
+          {model.fpp.length === 0 ? <p className="text-muted">No FPP instances are configured on this coordinator.</p> : <ul className="list-plain">{model.fpp.map((instance) => <li key={instance.instanceId}><Link className="entity-link" to={`/fpp/${instance.instanceId}`}><strong>{instance.instanceId}</strong>{' '}<FleetSignalBadge evidence={findObservation(instance.observations, 'fpp.status')} /><div className="text-muted"><FleetSignalBadge label="playlist" evidence={findObservation(instance.observations, 'fpp.playlist.name')} /></div></Link></li>)}</ul>}
+        </section>
+        <section className="dashboard-evidence__section" aria-labelledby="dashboard-controller-health">
+          <h2 id="dashboard-controller-health">Controller health</h2>
+          {model.fpp.length === 0 ? <p className="text-muted">No FPP instances are configured on this coordinator.</p> : <ul className="list-plain">{model.fpp.map((instance) => <li key={instance.instanceId}><Link className="entity-link" to={`/fpp/${instance.instanceId}`}><strong>{instance.instanceId}</strong>{' '}<FleetSignalBadge label="fppd" evidence={findObservation(instance.observations, 'fpp.fppd.state')} />{' '}<FleetSignalBadge label="power bad" evidence={findObservation(instance.observations, 'fpp.power.bad')} /></Link></li>)}</ul>}
+        </section>
+        <section className="dashboard-evidence__section" aria-labelledby="dashboard-pixel-current">
+          <h2 id="dashboard-pixel-current">Pixel current</h2>
+          {model.fpp.length === 0 ? <p className="text-muted">No FPP instances are configured on this coordinator.</p> : <><p className="text-muted">{portsTotal.instancesReporting === 0 ? 'Port inventory not collected for any instance yet.' : `${portsTotal.totalPorts} port element(s) across ${portsTotal.instancesReporting} reporting instance(s), ${portsTotal.totalBlind} of which are smart-receiver blind spots.`}{portsTotal.instancesStaleOrUnknownAge > 0 && <> {portsTotal.instancesStaleOrUnknownAge} instance{portsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} contributing port counts that are stale or of unknown age.</>}{portsTotal.instancesBlindCountUnknown > 0 && <> Blind-spot count not reported by {portsTotal.instancesBlindCountUnknown} instance{portsTotal.instancesBlindCountUnknown === 1 ? '' : 's'}, so the blind-spot total above may be incomplete.</>}{portsTotal.instancesUnknown > 0 && <> {portsTotal.instancesUnknown} instance{portsTotal.instancesUnknown === 1 ? '' : 's'} not reporting port inventory.</>}</p><ul className="list-plain">{model.fpp.map((instance) => { const count = findObservation(instance.observations, 'fpp.ports.count'); return <li key={instance.instanceId}><Link className="entity-link" to={`/fpp/${instance.instanceId}`}><strong>{instance.instanceId}</strong>{' '}{typeof count?.value === 'number' && count.value === 0 ? <StatusBadge tone={STATE_TONE[count.state]} icon={STATE_ICON[count.state]} label="reports no pixel output ports" /> : <FleetSignalBadge label="ports" evidence={count} />}</Link></li> })}</ul></>}
+        </section>
+        <section className="dashboard-evidence__section" aria-labelledby="dashboard-network-state">
+          <h2 id="dashboard-network-state">Network / MQTT state</h2>
+          {model.fpp.length === 0 ? <p className="text-muted">No FPP instances are configured on this coordinator.</p> : <ul className="list-plain">{model.fpp.map((instance) => <li key={instance.instanceId}><Link className="entity-link" to={`/fpp/${instance.instanceId}`}><strong>{instance.instanceId}</strong>{' '}<FleetSignalBadge label="MQTT configured" evidence={findObservation(instance.observations, 'fpp.mqtt.configured')} />{' '}<FleetSignalBadge label="MQTT connected" evidence={findObservation(instance.observations, 'fpp.mqtt.connected')} /></Link></li>)}</ul>}
+        </section>
+        <section className="dashboard-evidence__section" aria-labelledby="dashboard-recovery">
+          <h2 id="dashboard-recovery">Resolume crash recovery</h2>
+          <PanelErrorBoundary panelLabel="Resolume crash recovery"><ResolumeRecoveryToggle /></PanelErrorBoundary>
+        </section>
+      </div>
+    </details>
   )
 }
 
 export function Dashboard() {
   const model = useModelContext()
-
-  const attention = sortByTone([
-    ...attentionFromFPP(model.fpp),
-    ...attentionFromResolume(model.resolume),
-    ...attentionFromNodes(model.nodes),
-    ...attentionFromRender(model.nodes),
-  ])
-  const resolumeInstance = model.resolume[0]
-
-  const onlineNodes = model.nodes.filter((node) => node.controlPlane.state === 'online').length
-  const offlineNodes = model.nodes.filter((node) => node.controlPlane.state === 'offline').length
-  const unknownNodes = model.nodes.length - onlineNodes - offlineNodes
-
-  // D2: a bare "FPP instances configured: N" said nothing about whether
-  // the coordinator actually knows those instances' health. Mirrors the
-  // node online/offline/unknown breakdown immediately above.
-  const fppUnknownHealth = model.fpp.filter((instance) => instance.health === 'unknown').length
-  const fppSuppressed = model.fpp.filter((instance) => instance.health === 'suppressed').length
-
-  // Fleet-wide counts for the four newly modeled signal groups (spec
-  // section 6 "Dashboard"). Counted, never verdict-ed: see
-  // fppDashboard.ts's header comment.
-  const warningsTotal = summarizeFleetWarnings(model.fpp)
-  const portsTotal = summarizeFleetPorts(model.fpp)
-
-  const recentEvents = model.events.slice(0, 5)
+  const attention = sortByTone([...attentionFromFPP(model.fpp), ...attentionFromResolume(model.resolume), ...attentionFromNodes(model.nodes), ...attentionFromRender(model.nodes)])
+  const ready = readiness(model)
+  const currentRunCount = model.currentRuns?.runs.length ?? null
+  const render = renderCount(model)
+  const fppHealthy = model.fpp.filter((instance) => instance.health === 'healthy').length
+  const nodesOnline = model.nodes.filter((node) => node.controlPlane.state === 'online').length
+  const renderEntries = model.nodes.flatMap((node) => node.render.filter((entry) => entry.signal === 'surface.pipeline.state'))
+  const fppStatTone: StatusTone = model.fpp.length === 0
+    ? 'unknown'
+    : model.fpp.some((instance) => instance.health === 'failed')
+      ? 'bad'
+      : model.fpp.some((instance) => instance.health === 'degraded' || instance.health === 'unknown')
+        ? 'warn'
+        : 'good'
+  const renderStatTone: StatusTone = renderEntries.length === 0
+    ? 'unknown'
+    : renderEntries.some((entry) => entry.state === 'current' && entry.value === 'failed')
+      ? 'bad'
+      : renderEntries.some((entry) => entry.state !== 'current' || entry.value === 'restarting' || entry.value === 'superseded')
+        ? 'warn'
+        : 'good'
+  const nodeStatTone: StatusTone = model.nodes.length === 0
+    ? 'unknown'
+    : model.nodes.some((node) => node.controlPlane.state === 'unknown')
+      ? 'unknown'
+      : model.nodes.some((node) => node.controlPlane.state === 'offline')
+        ? 'warn'
+        : 'good'
+  const currentRunTones = model.currentRuns?.runs.map(currentRunStatusTone) ?? []
+  const currentRunStatTone: StatusTone = currentRunCount === null || currentRunCount === 0
+    ? 'unknown'
+    : currentRunTones.some((tone) => tone === 'bad')
+      ? 'bad'
+      : currentRunTones.some((tone) => tone === 'warn')
+        ? 'warn'
+        : currentRunTones.some((tone) => tone === 'unknown')
+          ? 'unknown'
+          : 'good'
 
   return (
-    <div>
-      <Overview model={model} attention={attention} />
+    <div className="operator-page dashboard-page">
+      <header className="operator-page__header dashboard-page__header">
+        <div>
+          <p className="dashboard-page__kicker">Operator overview</p>
+          <h1 id="dashboard-title" className="operator-page__title">Dashboard</h1>
+          <p className="operator-page__lede text-muted">Readiness, current playback, and the presentation path at a glance.</p>
+        </div>
+        <div className="dashboard-page__actions">
+          <Link className="button" to="/night">Open Show Night</Link>
+          <Link className="button button--secondary" to="/control">Live Control</Link>
+        </div>
+      </header>
+
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
       <ClockSkewWarning clockSkewMs={model.clockSkewMs} />
 
-      <PanelErrorBoundary panelLabel="Attention">
-        <section className="panel">
-          <h2 className="panel__title">Attention</h2>
-          {attention.length === 0 ? (
-            <p className="text-muted">
-              Nothing needs attention: no active critical or warning conditions, and no
-              instances with unknown health, in nodes or FPP instances right now.
-            </p>
-          ) : (
-            <ul className="list-plain">
-              {attention.map((item) => (
-                <li key={item.to + item.text}>
-                  <Link className="entity-link" to={item.to}>
-                    <StatusBadge
-                      tone={ATTENTION_BADGE[item.tone].tone}
-                      icon={ATTENTION_BADGE[item.tone].icon}
-                      label={item.tone}
-                    />{' '}
-                    {item.text}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </PanelErrorBoundary>
+      <section className={`dashboard-readiness dashboard-readiness--${ready.tone}`} aria-label="Show path readiness">
+        <div>
+          <strong><StatusBadge tone={ready.tone} icon={ready.icon} label={ready.label} /></strong>
+          <span>{ready.detail}</span>
+        </div>
+        <span className="dashboard-readiness__meta">{ConnectionLabel({ model })} · {attentionSummary(attention)}</span>
+      </section>
 
-      {/* Attention stays full width above: it is the page's banner-like
-          surfacing of critical/warning conditions, not a peer data panel.
-          Everything below is a genuine peer, so it can share the wide-display
-          two-column grid (.panel-grid, global.css). */}
-      <div className="panel-grid">
-        <PanelErrorBoundary panelLabel="Inventory summary">
-          <section className="panel">
-            <h2 className="panel__title">Inventory</h2>
-            <dl className="field-list">
-              <dt>Nodes with control-plane connected</dt>
-              <dd>{onlineNodes}</dd>
-              <dt>Nodes with control-plane connection lost</dt>
-              <dd>{offlineNodes}</dd>
-              <dt>Nodes with control-plane state unknown</dt>
-              <dd>{unknownNodes}</dd>
-              <dt>FPP instances configured</dt>
-              <dd>{model.fpp.length}</dd>
-              <dt>FPP instances with health unknown</dt>
-              <dd>{fppUnknownHealth}</dd>
-              <dt>FPP instances suppressed</dt>
-              <dd>{fppSuppressed}</dd>
-              <dt>FPP warnings across fleet</dt>
-              <dd>
-                {warningsTotal.instancesReporting === 0 ? (
-                  <span className="text-muted">not collected</span>
-                ) : (
-                  <>
-                    {warningsTotal.total}
-                    {/* Step 5 review finding 6: a total built partly from
-                        stale/unknown_age evidence must say so -- it is still
-                        a legitimate value (EvidenceValue.tsx's contract), not
-                        folded into instancesUnknown, but it must not read as
-                        equally fresh as a total built entirely from current
-                        evidence. */}
-                    {warningsTotal.instancesStaleOrUnknownAge > 0 && (
-                      <span className="text-muted">
-                        {' '}
-                        ({warningsTotal.instancesStaleOrUnknownAge} instance
-                        {warningsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} stale or age unknown)
-                      </span>
-                    )}
-                    {warningsTotal.instancesUnknown > 0 && (
-                      <span className="text-muted">
-                        {' '}
-                        ({warningsTotal.instancesUnknown} instance
-                        {warningsTotal.instancesUnknown === 1 ? '' : 's'} not reporting)
-                      </span>
-                    )}
-                  </>
-                )}
-              </dd>
-              <dt>Collectors</dt>
-              <dd>
-                {/* D1: a collector's state and reason previously never reached
-                    the operator at all -- this rendered as the bare count
-                    `model.collectors.length`, so a collector reporting a
-                    failure state and a reason explaining it looked identical
-                    to a healthy one. Each collector's own run state (not the
-                    health of what it collects -- see CollectorStatus's Go doc
-                    comment) is rendered with its reason alongside it. */}
-                {model.collectors.length === 0 ? (
-                  'none configured'
-                ) : (
-                  <ul className="list-plain">
-                    {model.collectors.map((collector) => (
-                      <li key={collector.id}>
-                        <CollectorStatusBadge state={collector.state} />{' '}
-                        <span className="text-muted">{collector.id}</span>
-                        {collector.reason !== null && (
-                          <div className="evidence__reason">{collector.reason}</div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </dd>
-            </dl>
-          </section>
-        </PanelErrorBoundary>
+      <section className="dashboard-stat-strip" aria-label="System summary">
+        <div className={`dashboard-stat dashboard-stat--${fppStatTone}`}><span>FPP</span><strong>{model.fpp.length === 0 ? 'Unknown' : `${fppHealthy} / ${model.fpp.length} healthy`}</strong><small>{model.fpp.length === 0 ? 'No instance evidence' : 'Instance health'}</small></div>
+        <div className={`dashboard-stat dashboard-stat--${renderStatTone}`}><span>Render</span><strong>{render.value}</strong><small>{render.detail}</small></div>
+        <div className={`dashboard-stat dashboard-stat--${nodeStatTone}`}><span>Nodes</span><strong>{model.nodes.length === 0 ? 'Unknown' : `${nodesOnline} / ${model.nodes.length} connected`}</strong><small>{model.nodes.length === 0 ? 'No node evidence' : 'Control-plane state'}</small></div>
+        <div className={`dashboard-stat dashboard-stat--${currentRunStatTone}`}><span>Current run</span><strong>{currentRunCount === null ? 'Unknown' : currentRunCount === 0 ? 'None observed' : `${currentRunCount} reported`}</strong><small>{currentRunCount === null ? 'Authoritative playback unavailable' : 'Runner projection'}</small></div>
+      </section>
 
-        {/* Track D seam D-4 (build contract §2.1): reachability with
-            provenance/freshness through the shared EvidenceValue, the loaded
-            composition's name or a stated "no composition uploaded," and an
-            "unconfigured" render rather than an error or an empty box when
-            GET /resolume/instances answers with an empty array by design. */}
-        <PanelErrorBoundary panelLabel="Resolume">
-          <section className="panel">
-            <h2 className="panel__title">Resolume</h2>
-            {resolumeInstance === undefined ? (
-              <p className="text-muted">Resolume is not configured on this coordinator.</p>
-            ) : (
-              <>
-                <Link className="entity-link" to="/resolume">
-                  <strong>{resolumeInstance.instanceId}</strong>
-                </Link>
-                <EvidenceValue
-                  label="reachable"
-                  evidence={
-                    findObservation(resolumeInstance.observations, 'resolume.reachable') ?? {
-                      signal: 'resolume.reachable',
-                      value: null,
-                      unit: null,
-                      state: 'not_collected',
-                      reason: 'never collected',
-                      observedAt: null,
-                      collectedAt: null,
-                      source: 'resolume',
-                      quality: 'direct',
-                      validForSeconds: null,
-                    }
-                  }
-                  serverTime={model.serverTime}
-                  serverTimeReceivedAt={model.serverTimeReceivedAt}
-                  connected={model.connection.kind === 'live'}
-                />
-                <p className="text-muted">
-                  {resolumeInstance.composition === null
-                    ? 'No composition uploaded.'
-                    : `Loaded composition: ${resolumeInstance.composition.name}`}
-                </p>
-              </>
-            )}
-          </section>
-        </PanelErrorBoundary>
-
-        {/* Track D seam D-3a §7.1/§2.6: the auto-restore toggle's own read
-            and write control — the one exception to "everything else of
-            Track D's UI is D-4's own work" (see ResolumeRecoveryToggle.tsx's
-            own top comment for why this ships here rather than waiting). */}
-        <PanelErrorBoundary panelLabel="Resolume crash recovery">
-          <ResolumeRecoveryToggle />
-        </PanelErrorBoundary>
-
-        {/* Step 5: four newly modeled signal groups each get a panel (spec
-            section 6 "Dashboard"). Every panel renders unconditionally when
-            FPP instances are configured -- ShowMesh models all four
-            subsystems now, so there is never a "this subsystem is not
-            modeled" reason to omit one -- and each instance row states an
-            absence via FleetSignalBadge rather than going blank when a
-            particular signal was never collected. None of these panels
-            colours or recomputes instance.health; they are the same
-            Evidence envelopes FPPDetail shows, just fleet-wide and compact. */}
-        <PanelErrorBoundary panelLabel="Playback state">
-          <section className="panel">
-            <h2 className="panel__title">Playback state</h2>
-            {model.fpp.length === 0 ? (
-              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-            ) : (
-              <ul className="list-plain">
-                {model.fpp.map((instance) => (
-                  <li key={instance.instanceId}>
-                    <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                      <strong>{instance.instanceId}</strong>{' '}
-                      <FleetSignalBadge evidence={findObservation(instance.observations, 'fpp.status')} />
-                      <div className="text-muted">
-                        <FleetSignalBadge
-                          label="playlist"
-                          evidence={findObservation(instance.observations, 'fpp.playlist.name')}
-                        />
-                      </div>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </PanelErrorBoundary>
-
-        <PanelErrorBoundary panelLabel="Controller health">
-          <section className="panel">
-            <h2 className="panel__title">Controller health</h2>
-            {model.fpp.length === 0 ? (
-              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-            ) : (
-              <ul className="list-plain">
-                {model.fpp.map((instance) => (
-                  <li key={instance.instanceId}>
-                    <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                      <strong>{instance.instanceId}</strong>{' '}
-                      <FleetSignalBadge
-                        label="fppd"
-                        evidence={findObservation(instance.observations, 'fpp.fppd.state')}
-                      />{' '}
-                      <FleetSignalBadge
-                        label="power bad"
-                        evidence={findObservation(instance.observations, 'fpp.power.bad')}
-                      />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </PanelErrorBoundary>
-
-        <PanelErrorBoundary panelLabel="Pixel current">
-          <section className="panel">
-            <h2 className="panel__title">Pixel current</h2>
-            {model.fpp.length === 0 ? (
-              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-            ) : (
-              <>
-                <p className="text-muted">
-                  {portsTotal.instancesReporting === 0
-                    ? 'Port inventory not collected for any instance yet.'
-                    : `${portsTotal.totalPorts} port element(s) across ${portsTotal.instancesReporting} reporting instance(s), ${portsTotal.totalBlind} of which are smart-receiver blind spots.`}
-                  {/* Step 5 review finding 6/7: both counts below are stated
-                      explicitly rather than silently folded into the numbers
-                      above -- a stale/unknown_age contribution is still a
-                      real value, and an unanswered blind_count means
-                      totalBlind is a partial sum, not a confirmed total. */}
-                  {portsTotal.instancesStaleOrUnknownAge > 0 && (
-                    <>
-                      {' '}
-                      {portsTotal.instancesStaleOrUnknownAge} instance{portsTotal.instancesStaleOrUnknownAge === 1 ? '' : 's'} contributing
-                      port counts that are stale or of unknown age.
-                    </>
-                  )}
-                  {portsTotal.instancesBlindCountUnknown > 0 && (
-                    <>
-                      {' '}
-                      Blind-spot count not reported by {portsTotal.instancesBlindCountUnknown} instance
-                      {portsTotal.instancesBlindCountUnknown === 1 ? '' : 's'}, so the blind-spot total above may be
-                      incomplete.
-                    </>
-                  )}
-                  {portsTotal.instancesUnknown > 0 && (
-                    <>
-                      {' '}
-                      {portsTotal.instancesUnknown} instance{portsTotal.instancesUnknown === 1 ? '' : 's'} not
-                      reporting port inventory.
-                    </>
-                  )}
-                </p>
-                <ul className="list-plain">
-                  {model.fpp.map((instance) => {
-                    const count = findObservation(instance.observations, 'fpp.ports.count')
-                    return (
-                      <li key={instance.instanceId}>
-                        <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                          <strong>{instance.instanceId}</strong>{' '}
-                          {typeof count?.value === 'number' && count.value === 0 ? (
-                            // Step 5 review finding 6: this used to be a bare
-                            // <span> with no state marker, so a zero-port
-                            // reading of unknown age (the fpp-ghost ghost shape,
-                            // one modelling decision away from this exact
-                            // signal) rendered as confidently as a fresh one.
-                            // A StatusBadge carries count.state's icon/tone
-                            // alongside the same wording, matching
-                            // FleetSignalBadge/PortGrid's established pattern
-                            // for the same distinction.
-                            <StatusBadge
-                              tone={STATE_TONE[count.state]}
-                              icon={STATE_ICON[count.state]}
-                              label="reports no pixel output ports"
-                            />
-                          ) : (
-                            <FleetSignalBadge label="ports" evidence={count} />
-                          )}
-                        </Link>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </>
-            )}
-          </section>
-        </PanelErrorBoundary>
-
-        <PanelErrorBoundary panelLabel="Network and MQTT state">
-          <section className="panel">
-            <h2 className="panel__title">Network / MQTT state</h2>
-            {model.fpp.length === 0 ? (
-              <p className="text-muted">No FPP instances are configured on this coordinator.</p>
-            ) : (
-              <ul className="list-plain">
-                {model.fpp.map((instance) => (
-                  <li key={instance.instanceId}>
-                    <Link className="entity-link" to={`/fpp/${instance.instanceId}`}>
-                      <strong>{instance.instanceId}</strong>{' '}
-                      <FleetSignalBadge
-                        label="MQTT configured"
-                        evidence={findObservation(instance.observations, 'fpp.mqtt.configured')}
-                      />{' '}
-                      <FleetSignalBadge
-                        label="MQTT connected"
-                        evidence={findObservation(instance.observations, 'fpp.mqtt.connected')}
-                      />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </PanelErrorBoundary>
-
-        <PanelErrorBoundary panelLabel="Recent activity">
-          <section className="panel">
-            <h2 className="panel__title">Recent activity</h2>
-            {model.eventsGap && (
-              <p className="evidence__reason" role="status">
-                Some event history has been permanently lost to retention; this list does
-                not reach back to the beginning.
-              </p>
-            )}
-            {recentEvents.length === 0 ? (
-              <p className="text-muted">No events recorded yet.</p>
-            ) : (
-              <ul className="list-plain">
-                {recentEvents.map((event) => (
-                  <li key={event.seq}>
-                    <Link className="entity-link" to="/events">
-                      <SeverityBadge severity={event.severity} /> {event.summary}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p>
-              <Link to="/events">View all events</Link>
-            </p>
-          </section>
-        </PanelErrorBoundary>
+      <div className="dashboard-content-grid">
+        <PresentationPath model={model} />
+        <AttentionSection attention={attention} />
+        <CurrentRunsSection model={model} />
+        <RecentActivity model={model} />
       </div>
+      <AdditionalEvidence model={model} />
     </div>
   )
 }

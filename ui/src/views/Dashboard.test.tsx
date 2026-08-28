@@ -35,6 +35,17 @@ function attentionBadgeLabels(): string[] {
 }
 
 describe('Dashboard', () => {
+  it('uses the shallow operator overview composition', () => {
+    renderDashboard(makeModel({ currentRuns: makeCurrentRuns() }))
+
+    expect(screen.getByRole('region', { name: 'Show path readiness' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Presentation path' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Attention' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Recent activity' })).toBeInTheDocument()
+    expect(document.querySelector('.panel-grid')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Open Show Night' })).toHaveAttribute('href', '/night')
+  })
+
   it('renders authoritative concurrent runner playback and keeps playback separate from macro runs', () => {
     renderDashboard(makeModel({
       macroRuns: [],
