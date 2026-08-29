@@ -112,7 +112,7 @@ describe('ShowModeIndicator', () => {
     await waitFor(() => screen.getByLabelText('Show mode'))
     const badge = screen.getByLabelText('Show mode')
     expect(badge.tagName).toBe('A')
-    expect(badge).toHaveAttribute('href', '/config/mode')
+    expect(badge).toHaveAttribute('href', '/settings/mode')
   })
 
   // Operator-reported (round two): the badge became a link but kept
@@ -126,7 +126,7 @@ describe('ShowModeIndicator', () => {
     renderIndicator()
 
     const link = await screen.findByRole('link', { name: 'Show mode' })
-    expect(link).toHaveAttribute('href', '/config/mode')
+    expect(link).toHaveAttribute('href', '/settings/mode')
   })
 
   it('still announces the mode as a live region, separate from the link', async () => {

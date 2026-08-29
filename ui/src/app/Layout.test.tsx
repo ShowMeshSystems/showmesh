@@ -117,6 +117,49 @@ const RAIL_LINKS: [string, string][] = [
   ['/settings', 'Settings'],
 ]
 
+describe('a session state replaces the routed view rather than sitting above it', () => {
+  /* Regression guard. The blanking plate first shipped rendered ABOVE the rail
+   * and grid, with the routed view still rendering underneath it, so the page
+   * said "nothing here has ever been collected" and drew a dashboard at the
+   * same time. Both the band and the plate belong in the main column, and they
+   * take the place of the routed view: a device that has read nothing must not
+   * show an empty dashboard that reads as real inventory.
+   *
+   * jsdom does no layout, so this asserts the DOM relationship, which is the
+   * part that was actually wrong. */
+  it('renders no underlying view while signed out', () => {
+    renderLayout(makeModel({ session: { ...SIGNED_IN_SESSION, authenticated: false, principal: null, session: null } }))
+
+    expect(screen.queryByText('underlying view marker')).not.toBeInTheDocument()
+    expect(screen.getByText('Signed out on this device')).toBeInTheDocument()
+  })
+
+  it('renders no underlying view while the coordinator is unclaimed', () => {
+    renderLayout(makeModel({ session: { ...SIGNED_IN_SESSION, authenticated: false, principal: null, session: null, bootstrapRequired: true } }))
+
+    expect(screen.queryByText('underlying view marker')).not.toBeInTheDocument()
+    expect(screen.getByText('No administrator exists on this coordinator')).toBeInTheDocument()
+  })
+
+  it('keeps the rail beside the session state, never above it', () => {
+    const { container } = renderLayout(makeModel({ session: { ...SIGNED_IN_SESSION, authenticated: false, principal: null, session: null } }))
+
+    const shell = container.querySelector('.shell')
+    const rail = container.querySelector('[data-rail], .rail')
+    const main = container.querySelector('main')
+    expect(shell).not.toBeNull()
+    expect(shell?.contains(rail as Node)).toBe(true)
+    expect(shell?.contains(main as Node)).toBe(true)
+    expect(main?.textContent).toContain('Signed out on this device')
+  })
+
+  it('renders the routed view normally once there is a usable session', () => {
+    renderLayout(makeModel())
+
+    expect(screen.getByText('underlying view marker')).toBeInTheDocument()
+  })
+})
+
 describe('NavRail (via Layout)', () => {
   it('renders exactly the seven destinations, grouped under real headings, and no eighth', () => {
     renderLayout(makeModel())

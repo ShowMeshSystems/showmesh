@@ -128,6 +128,22 @@ describe('ShowPlaylistDetail (viewing an existing fpp playlist)', () => {
     expect(within(table).getByText('Unbound')).toBeVisible()
   })
 
+  // PUT /config/show.playlist/{id} refuses any request that changes
+  // `show` (`show-config-cross-show-reference`; api/openapi.yaml's own
+  // `putShowPlaylist` description says so in as many words: "`show` is
+  // immutable"). No re-assignment picker is offered here because the
+  // API has no working path for it, not because the capability was
+  // overlooked.
+  it('offers no show re-assignment control: show is immutable server-side for a playlist', async () => {
+    getShowPlaylist.mockResolvedValue(storedFppPlaylist)
+    getShowPlaylistRevisions.mockResolvedValue(emptyRevisions)
+    mockWorkspaceLists()
+    renderExisting('main-run')
+
+    await waitFor(() => expect(screen.getByDisplayValue('Main run')).toBeVisible())
+    expect(screen.queryByText(/Move to another show/i)).not.toBeInTheDocument()
+  })
+
   it('renders the revision history', async () => {
     getShowPlaylist.mockResolvedValue(storedFppPlaylist)
     getShowPlaylistRevisions.mockResolvedValue({

@@ -77,7 +77,7 @@ export function AudioNodes() {
       >
         <h2 className="panel__title">Audio nodes</h2>
         {scopeGate.allowed ? (
-          <Link className="entity-link" to="/config/audio.node/new">
+          <Link className="entity-link" to="/settings/node-routing/new">
             New audio node
           </Link>
         ) : (
@@ -104,7 +104,7 @@ export function AudioNodes() {
       {scopeGate.allowed && state.kind === 'loaded' && (
         <>
           {state.objects.length === 0 ? (
-            <EmptyBlock title="No audio nodes configured" reason="No audio.node object is configured yet."><Link className="entity-link" to="/config/audio.node/new">Create an audio node</Link></EmptyBlock>
+            <EmptyBlock title="No audio nodes configured" reason="No audio.node object is configured yet."><Link className="entity-link" to="/settings/node-routing/new">Create an audio node</Link></EmptyBlock>
           ) : (
             <div className="table-scroll">
               <table className="config-table" aria-label="Configured audio nodes">

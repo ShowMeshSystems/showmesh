@@ -87,8 +87,8 @@ export function FPPPlaylistDefinitionDetail() {
   return (
     <div>
       <p>
-        <Link className="entity-link" to="/config/fpp-playlist-definitions">
-          Back to FPP playlist definitions
+        <Link className="entity-link" to="/monitor/fleet">
+          Back to Monitor, Fleet
         </Link>
       </p>
       <h2 className="panel__title">FPP playlist definition</h2>

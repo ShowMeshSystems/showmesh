@@ -120,7 +120,7 @@ const STORAGE_BACKEND_PREVIEW = (
 
 const DISK_USAGE_PREVIEW = (
   <div className="planned-preview-form">
-    <span className="t-data">&mdash; of &mdash; used by &mdash; assets</span>
+    <span className="t-data">&hellip; of &hellip; used by &hellip; assets</span>
     <div className="planned-preview-bar" />
   </div>
 )
@@ -254,8 +254,8 @@ export function AudioSettingsDirectory() {
       <OperatorPageHeader title="Audio" eyebrow="Settings" lede="Open the existing coordinator-backed editor for installation defaults or per-node routing." />
       <nav aria-label="Audio settings" className="config-index">
         <ul className="config-index__list">
-          <li><Link to="/config/audio.settings">Audio defaults</Link></li>
-          <li><Link to="/config/audio.node">Audio routing</Link></li>
+          <li><Link to="/settings/audio-defaults">Audio defaults</Link></li>
+          <li><Link to="/settings/node-routing">Audio routing</Link></li>
         </ul>
       </nav>
     </div>

@@ -168,15 +168,14 @@ describe('LiveControl', () => {
     expect(screen.queryByRole('link', { name: 'Open Mode selection' })).not.toBeInTheDocument()
   })
 
-  it('keeps operator task groups in command order and states that Select active show has no route yet', () => {
+  it('keeps operator task groups in command order and sends active-show changes to Shows', () => {
     renderView({ currentRuns: makeCurrentRuns(), currentRunsReceivedAt: 0 })
 
     expect(screen.getByText('Active: halloween-2026 (generation 7). Evidence: current-runs projection received by this browser.')).toBeInTheDocument()
-    // The old /config/show.active destination is a blocked route
-    // (ROUTE-MAP.md), not a working link: the control stays present and
-    // disabled with a stated reason rather than pointing at a 404.
-    const selectActiveShow = screen.getByRole('button', { name: 'Select active show' })
-    expect(selectActiveShow).toBeDisabled()
+    // Switching the active show is an audited change that invalidates the
+    // previous show's authority, so it is made on Shows where its consequences
+    // and its activation history are visible, not inline here.
+    expect(screen.getByRole('link', { name: 'Change the active show' })).toHaveAttribute('href', '/shows')
     expect(screen.queryByRole('button', { name: /save show mode/i })).not.toBeInTheDocument()
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)

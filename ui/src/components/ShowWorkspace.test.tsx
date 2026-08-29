@@ -56,17 +56,22 @@ describe('showWorkspacePaths', () => {
 })
 
 describe('ShowWorkspaceTabs', () => {
-  it('renders all five tabs and marks the active one current', () => {
+  it('renders all six tabs and marks the active one current', () => {
     render(
       <MemoryRouter>
-        <ShowWorkspaceTabs showId="halloween-2026" active="cues" counts={{ playlists: 2, cues: 14, assets: 22, presentation: 3, automation: 2 }} />
+        <ShowWorkspaceTabs
+          showId="halloween-2026"
+          active="cues"
+          counts={{ playlists: 2, cues: 14, assets: 22, presentation: 3, automation: 2, 'night-sessions': 3 }}
+        />
       </MemoryRouter>,
     )
-    expect(screen.getAllByRole('link')).toHaveLength(5)
+    expect(screen.getAllByRole('link')).toHaveLength(6)
     expect(screen.getByRole('link', { name: /Cues/ })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: /Automation/ })).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('link', { name: /Cues/ })).toHaveTextContent('14')
     expect(screen.getByRole('link', { name: /Cues/ })).toHaveAttribute('href', '/shows/halloween-2026/cues')
+    expect(screen.getByRole('link', { name: /Night session/ })).toHaveTextContent('3')
   })
 })
 
@@ -76,7 +81,15 @@ describe('ShowWorkspaceFrame (via useShowWorkspaceData)', () => {
     listConfigObjects.mockImplementation(async (kind: string) => ({
       serverTime: '2026-08-27T00:00:00Z',
       kind,
-      objects: kind === 'show.cue' ? [{ id: 'cue-1', label: 'Opening', show: 'halloween-2026', currentRevision: 1, updatedAt: '2026-08-27T00:00:00Z' }] : [],
+      objects:
+        kind === 'show.cue'
+          ? [{ id: 'cue-1', label: 'Opening', show: 'halloween-2026', currentRevision: 1, updatedAt: '2026-08-27T00:00:00Z' }]
+          : kind === 'night.session'
+            ? [
+                { id: 'winter-standard', label: 'Standard Night', show: 'halloween-2026', currentRevision: 12, updatedAt: '2026-08-27T00:00:00Z' },
+                { id: 'winter-weekend', label: 'Weekend Extended', show: 'halloween-2026', currentRevision: 5, updatedAt: '2026-08-27T00:00:00Z' },
+              ]
+            : [],
     }))
     listAssets.mockResolvedValue({ serverTime: '2026-08-27T00:00:00Z', assets: [] })
 
@@ -92,6 +105,7 @@ describe('ShowWorkspaceFrame (via useShowWorkspaceData)', () => {
     expect(screen.getByText('panel content')).toBeVisible()
     expect(screen.getByRole('link', { name: /Cues/ })).toHaveTextContent('1')
     expect(screen.getByRole('link', { name: /^Playlists/ })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: /Night session/ })).toHaveTextContent('2')
   })
 
   it('states the permission reason without fetching, and never claims a tab count it never read', () => {

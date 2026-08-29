@@ -12,69 +12,88 @@ import {
   type FormState,
 } from './NightSessionDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel, makeShowList } from '../app/test-support/fixtures'
+import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
-const { putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions, listConfigObjects } = vi.hoisted(
-  () => ({
-    putNightSessionConfig: vi.fn(),
-    getNightSessionConfig: vi.fn(),
-    getNightSessionConfigRevisions: vi.fn(),
-    listConfigObjects: vi.fn(),
-  }),
-)
+// The Night session editor now lives at /shows/:showId/night-sessions/new
+// and /shows/:showId/night-sessions/:id, nested in the show workspace
+// (ShowWorkspaceFrame), and the `show` field (and every asset's own
+// `show` field) is fixed from the route rather than picked with a
+// ShowSelect — the same convention ShowCueDetail.tsx and
+// ShowPlaylistDetail.tsx already established for every other tab editor
+// in this workspace.
+const {
+  getShow,
+  listAssets,
+  putNightSessionConfig,
+  getNightSessionConfig,
+  getNightSessionConfigRevisions,
+  listConfigObjects,
+} = vi.hoisted(() => ({
+  getShow: vi.fn(),
+  listAssets: vi.fn(),
+  putNightSessionConfig: vi.fn(),
+  getNightSessionConfig: vi.fn(),
+  getNightSessionConfigRevisions: vi.fn(),
+  listConfigObjects: vi.fn(),
+}))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, putNightSessionConfig, getNightSessionConfig, getNightSessionConfigRevisions, listConfigObjects }
+  return {
+    ...actual,
+    getShow,
+    listAssets,
+    putNightSessionConfig,
+    getNightSessionConfig,
+    getNightSessionConfigRevisions,
+    listConfigObjects,
+  }
 })
 
+const showResponse = {
+  serverTime: '2026-08-25T00:00:00Z',
+  kind: 'show' as const,
+  id: 'halloween-2026',
+  revision: 3,
+  payload: { name: 'Halloween 2026', notes: '' },
+  updatedAt: '2026-08-25T00:00:00Z',
+  createdByPrincipalId: 'p-1',
+  createdByPrincipalName: 'operator-1',
+  source: 'api' as const,
+}
+
 beforeEach(() => {
-  listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
+  getShow.mockResolvedValue(showResponse)
+  listAssets.mockResolvedValue({ serverTime: '2026-08-25T00:00:00Z', assets: [] })
+  listConfigObjects.mockResolvedValue({ serverTime: '2026-08-25T00:00:00Z', kind: 'show.playlist', objects: [] })
 })
 
 afterEach(() => {
   cleanup()
-  putNightSessionConfig.mockReset()
-  getNightSessionConfig.mockReset()
-  getNightSessionConfigRevisions.mockReset()
-  listConfigObjects.mockReset()
+  vi.clearAllMocks()
 })
-
-/**
- * Every `show` field on this form (three of them: the session's own,
- * the resting timeline asset's, and each background audio item's) is a
- * `ShowSelect` (components/ShowSelect.tsx) that starts disabled while
- * `GET /config/show` is in flight. Waits for all currently-rendered
- * "Show"-labelled controls to become `<select>`s before a test drives
- * them, rather than racing the mocked fetch's own microtask.
- */
-async function waitForShowSelectsLoaded(): Promise<void> {
-  await waitFor(() => {
-    const controls = screen.getAllByLabelText('Show')
-    expect(controls.length).toBeGreaterThan(0)
-    expect(controls.every((el) => el.tagName === 'SELECT')).toBe(true)
-  })
-}
 
 const writerSession = makeAuthenticatedSession({ scopes: ['config:write'] })
 
-function renderNew(model: Model = makeModel({ session: writerSession })) {
+function renderNew(model: Model = makeModel({ session: writerSession }), showId = 'halloween-2026') {
   return render(
     <ModelContext.Provider value={model}>
-      <MemoryRouter>
-        <NightSessionDetail isNew />
+      <MemoryRouter initialEntries={[`/shows/${showId}/night-sessions/new`]}>
+        <Routes>
+          <Route path="/shows/:showId/night-sessions/new" element={<NightSessionDetail isNew />} />
+        </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
   )
 }
 
-function renderExisting(model: Model, id: string) {
+function renderExisting(model: Model, showId: string, id: string) {
   return render(
     <ModelContext.Provider value={model}>
-      <MemoryRouter initialEntries={[`/config/night.session/${id}`]}>
+      <MemoryRouter initialEntries={[`/shows/${showId}/night-sessions/${id}`]}>
         <Routes>
-          <Route path="/config/night.session/:id" element={<NightSessionDetail />} />
+          <Route path="/shows/:showId/night-sessions/:id" element={<NightSessionDetail />} />
         </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
@@ -84,36 +103,23 @@ function renderExisting(model: Model, id: string) {
 /**
  * Fills every field `buildPayload` requires for an otherwise-valid
  * submission, so each test below only has to touch the ONE field its own
- * validation rule is about. Several field labels collide across sections
- * (`Show`/`Playlist`/`FPP instance id` each appear twice: once for
- * `showPlaylist`, once for `resting`) — this project has no test-id
- * convention for that, so this fills by array index over
- * `getAllByLabelText`, matching field ORDER in the rendered form.
+ * validation rule is about. `show` and every asset's `show` are fixed
+ * from the route now, so this only has to fill the fields that remain
+ * pickable.
  */
 async function fillMinimalValidForm(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.type(screen.getByLabelText('Show Night id'), 'halloween-night')
-
-  await waitForShowSelectsLoaded()
-  const showInputs = screen.getAllByLabelText('Show')
-  await user.selectOptions(showInputs[0]!, 'halloween-2026')
-  await user.selectOptions(showInputs[1]!, 'halloween-2026')
-
+  await user.type(screen.getByLabelText('Definition id'), 'halloween-night')
   await user.type(screen.getByLabelText('Label'), 'Halloween Night')
-
-  const fppInputs = screen.getAllByLabelText('FPP instance id')
-  await user.type(fppInputs[0]!, 'fpp-main')
-  await user.type(fppInputs[1]!, 'fpp-main')
-
-  const playlistInputs = screen.getAllByLabelText('Playlist')
-  await user.type(playlistInputs[0]!, 'show-playlist')
-  await user.type(playlistInputs[1]!, 'resting-playlist')
-
+  await user.type(screen.getByLabelText('Show playlist FPP instance'), 'fpp-main')
+  await user.type(screen.getByLabelText('Show playlist'), 'show-playlist')
+  await user.type(screen.getByLabelText('FPP instance'), 'fpp-main')
+  await user.type(screen.getByLabelText('Resting playlist'), 'resting-playlist')
   await user.type(screen.getByLabelText('Sequence'), 'resting-seq')
   await user.type(screen.getByLabelText('Target node'), 'node-1')
 }
 
-describe('NightSessionDetail (new night session authoring)', () => {
-  it('submits a minimal otherwise-valid form with no background audio and no cues', async () => {
+describe('NightSessionDetail (new definition authoring)', () => {
+  it('submits a minimal otherwise-valid form with no background audio and no cues, show fixed from the route', async () => {
     putNightSessionConfig.mockResolvedValue({
       serverTime: '2026-08-22T00:00:00Z',
       kind: 'night.session',
@@ -128,9 +134,10 @@ describe('NightSessionDetail (new night session authoring)', () => {
     const user = userEvent.setup()
     renderNew()
     await fillMinimalValidForm(user)
-    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
+    await user.click(screen.getByRole('button', { name: 'Create definition' }))
     await waitFor(() => expect(putNightSessionConfig).toHaveBeenCalledTimes(1))
     const [, payload] = putNightSessionConfig.mock.calls[0] as [string, Record<string, unknown>]
+    expect(payload).toMatchObject({ show: 'halloween-2026' })
     expect(payload.resting).toMatchObject({ fppInstanceId: 'fpp-main', playlist: 'resting-playlist' })
     expect(payload.resting).not.toHaveProperty('backgroundAudio')
   })
@@ -143,28 +150,20 @@ describe('NightSessionDetail (new night session authoring)', () => {
 
     await user.click(screen.getByLabelText(/Configure background audio/))
     await user.click(screen.getByRole('button', { name: 'Add background audio item' }))
-    await waitForShowSelectsLoaded()
 
-    const itemIdInputs = screen.getAllByPlaceholderText('item id')
-    // The first two "Show" controls are the session's own and the resting
-    // timeline asset's (getAllByLabelText matches DOM order); each
-    // background audio item's own "Show" select follows those.
-    const showInputs = screen.getAllByLabelText('Show').slice(2)
+    const itemIdInputs = screen.getAllByPlaceholderText(/item id/)
     const sequenceInputs = screen.getAllByPlaceholderText('sequence')
     const targetInputs = screen.getAllByPlaceholderText('target node')
     for (const [i, input] of itemIdInputs.entries()) {
       await user.type(input, 'dup-id')
-      await user.selectOptions(showInputs[i]!, 'halloween-2026')
       await user.type(sequenceInputs[i]!, `bg-seq-${i}`)
       await user.type(targetInputs[i]!, 'node-1')
     }
-    await user.clear(screen.getByLabelText(/Max gain/))
-    await user.type(screen.getByLabelText(/Max gain/), '-6')
+    await user.clear(screen.getByLabelText('Ceiling (dB)'))
+    await user.type(screen.getByLabelText('Ceiling (dB)'), '-6')
 
-    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
-    await waitFor(() =>
-      expect(screen.getByText(/used more than once/)).toBeVisible(),
-    )
+    await user.click(screen.getByRole('button', { name: 'Create definition' }))
+    await waitFor(() => expect(screen.getByText(/used more than once/)).toBeVisible())
     expect(putNightSessionConfig).not.toHaveBeenCalled()
   })
 
@@ -175,17 +174,15 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
-    await waitForShowSelectsLoaded()
-    await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
+    await user.type(screen.getByPlaceholderText(/item id/), 'item-1')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
     await user.selectOptions(screen.getByLabelText('Item transition'), 'crossfade')
-    await user.clear(screen.getByLabelText(/Max gain/))
-    await user.type(screen.getByLabelText(/Max gain/), '-6')
+    await user.clear(screen.getByLabelText('Ceiling (dB)'))
+    await user.type(screen.getByLabelText('Ceiling (dB)'), '-6')
     // Crossfade duration deliberately left blank.
 
-    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
+    await user.click(screen.getByRole('button', { name: 'Create definition' }))
     await waitFor(() => expect(screen.getByText(/crossfade duration is required/i)).toBeVisible())
     expect(putNightSessionConfig).not.toHaveBeenCalled()
   })
@@ -196,24 +193,21 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
-    await waitForShowSelectsLoaded()
-    await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
+    await user.type(screen.getByPlaceholderText(/item id/), 'item-1')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
-    // itemTransition stays at its default ("sequential"), which is not "crossfade".
-    await user.clear(screen.getByLabelText(/Max gain/))
-    await user.type(screen.getByLabelText(/Max gain/), '-6')
+    await user.clear(screen.getByLabelText('Ceiling (dB)'))
+    await user.type(screen.getByLabelText('Ceiling (dB)'), '-6')
 
-    // The crossfade-duration field only renders once itemTransition is
+    // The crossfade-ms field only renders once itemTransition is
     // "crossfade" — select it briefly to type a value, then switch away,
     // reproducing an operator who picked crossfade, entered a duration,
     // and changed their mind.
     await user.selectOptions(screen.getByLabelText('Item transition'), 'crossfade')
-    await user.type(screen.getByLabelText(/Crossfade duration/), '250')
+    await user.type(screen.getByLabelText('Crossfade (ms)'), '250')
     await user.selectOptions(screen.getByLabelText('Item transition'), 'sequential')
 
-    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
+    await user.click(screen.getByRole('button', { name: 'Create definition' }))
     await waitFor(() => expect(screen.getByText(/only applies when item transition is "crossfade"/)).toBeVisible())
     expect(putNightSessionConfig).not.toHaveBeenCalled()
   })
@@ -221,34 +215,20 @@ describe('NightSessionDetail (new night session authoring)', () => {
   // Review finding 11 / the maxGainDb <= 0 rule, including the resolved
   // suspicion: "-Infinity" must be REJECTED as a range violation, not
   // silently accepted and later serialized as `null` on the wire.
-  // Reachable through the real control: a `<input type="number">`'s own
-  // value-sanitization algorithm (enforced by jsdom exactly as it is by
-  // every real browser — verified empirically before writing this test)
-  // accepts "5" as-is, so this exercises the `maxGainDb > 0` branch
-  // through the actual rendered form. It does NOT accept "-Infinity",
-  // "not-a-number", or even a syntactically valid literal that merely
-  // OVERFLOWS to Infinity ("1e400") — every one of those sanitizes to an
-  // empty string before this component's `onChange` ever sees it, so
-  // they cannot exercise the `!Number.isFinite` branch through this
-  // control at all. Those go through `buildPayload` directly instead
-  // (below), which is also the only way to unit test the actual
-  // suspicion this seam's review raised.
   it('rejects a max gain of 5 (a positive value), through the real control', async () => {
     const user = userEvent.setup()
     renderNew()
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
-    await waitForShowSelectsLoaded()
-    await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
+    await user.type(screen.getByPlaceholderText(/item id/), 'item-1')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
-    const maxGainInput = screen.getByLabelText(/Max gain/)
+    const maxGainInput = screen.getByLabelText('Ceiling (dB)')
     await user.clear(maxGainInput)
     await user.type(maxGainInput, '5')
 
-    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
+    await user.click(screen.getByRole('button', { name: 'Create definition' }))
     await waitFor(() => expect(screen.getByText(/max gain must be a number, 0 dB or lower/i)).toBeVisible())
     expect(putNightSessionConfig).not.toHaveBeenCalled()
   })
@@ -270,19 +250,26 @@ describe('NightSessionDetail (new night session authoring)', () => {
     await fillMinimalValidForm(user)
 
     await user.click(screen.getByLabelText(/Configure background audio/))
-    await waitForShowSelectsLoaded()
-    await user.type(screen.getByPlaceholderText('item id'), 'item-1')
-    await user.selectOptions(screen.getAllByLabelText('Show')[2]!, 'halloween-2026')
+    await user.type(screen.getByPlaceholderText(/item id/), 'item-1')
     await user.type(screen.getByPlaceholderText('sequence'), 'bg-seq')
     await user.type(screen.getByPlaceholderText('target node'), 'node-1')
-    const maxGainInput = screen.getByLabelText(/Max gain/)
+    const maxGainInput = screen.getByLabelText('Ceiling (dB)')
     await user.clear(maxGainInput)
     await user.type(maxGainInput, '0')
 
-    await user.click(screen.getByRole('button', { name: 'Create Show Night' }))
+    await user.click(screen.getByRole('button', { name: 'Create definition' }))
     await waitFor(() => expect(putNightSessionConfig).toHaveBeenCalledTimes(1))
     const [, payload] = putNightSessionConfig.mock.calls[0] as [string, { resting: { backgroundAudio?: { maxGainDb: number } } }]
     expect(payload.resting.backgroundAudio?.maxGainDb).toBe(0)
+  })
+})
+
+describe('NightSessionDetail (site control and interlocks are PlannedFeature, not controls)', () => {
+  it('stamps site control and interlock authoring as not built, and never renders a working control for either', async () => {
+    renderNew()
+    expect(await screen.findByText('Site control')).toBeVisible()
+    expect(screen.getByText('Interlock authoring')).toBeVisible()
+    expect(screen.getAllByText('Not built').length).toBeGreaterThanOrEqual(2)
   })
 })
 
@@ -412,10 +399,6 @@ describe('buildPayload (pure)', () => {
   // `JSON.stringify(-Infinity)` serializes to `null`, which the wire
   // schema's non-nullable `maxGainDb: number` would have rejected as a
   // TYPE error rather than the RANGE error an operator actually caused.
-  // This is unreachable through the rendered `<input type="number">`
-  // (its own value-sanitization algorithm blanks "-Infinity" before this
-  // component ever sees it — verified in NightSessionDetail.test.tsx's
-  // own comment on this), so a direct call is the only way to prove it.
   it('rejects a max gain of -Infinity, confirming the resolved suspicion', () => {
     const form = validForm({
       backgroundAudioEnabled: true,
@@ -450,12 +433,12 @@ describe('buildPayload (pure)', () => {
   })
 })
 
-// Readability seam: this screen mixes what the
-// coordinator reports (active revision, revision history) with what the
-// operator edits (the authoring fieldset). This asserts the split exists
-// and that the status line an operator scans first is visible without
-// opening anything, while the long, rarely-consulted revision history
-// starts collapsed behind a <details>.
+// Readability seam: this screen mixes what the coordinator reports
+// (active revision, revision history) with what the operator edits (the
+// authoring fieldset). This asserts the split exists and that the status
+// line an operator scans first is visible without opening anything,
+// while the long, rarely-consulted revision history starts collapsed
+// behind a <details>.
 describe('NightSessionDetail (status split from authoring)', () => {
   const nightSessionPayload = {
     show: 'halloween-2026',
@@ -492,15 +475,14 @@ describe('NightSessionDetail (status split from authoring)', () => {
         { revision: 2, createdAt: '2026-08-20T00:00:00Z', createdByPrincipalId: 'p-1', createdByPrincipalName: 'admin-1', source: 'api', note: '', active: false },
       ],
     })
-    renderExisting(makeModel({ session: writerSession }), 'halloween-night')
+    renderExisting(makeModel({ session: writerSession }), 'halloween-2026', 'halloween-night')
 
-    const status = await screen.findByText(/Active revision 3/)
+    const status = await screen.findByText(/Active revision/)
     expect(status).toBeVisible()
+    expect(screen.getByText(/3/, { selector: '.ruled-strip__explanation' })).toBeVisible()
 
     const summary = screen.getByText('Revision history')
     expect(summary.closest('details')).not.toHaveAttribute('open')
-    // The revision row is present in the DOM (a closed <details> does not
-    // remove its content), but is not visible until opened.
     expect(screen.getByRole('heading', { name: 'Halloween Night' })).toBeVisible() // sanity: the page itself did render
     const revisionRow = screen.getAllByText('admin-1', { selector: 'td' })[0]!
     expect(revisionRow).not.toBeVisible()

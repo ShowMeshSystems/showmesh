@@ -252,7 +252,8 @@ export function Shows() {
                       </option>
                       {state.objects.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {s.label} ({s.id}){s.id === currentShowId ? ' — currently active' : ''}
+                          {s.label} ({s.id}
+                          {s.id === currentShowId ? ', currently active' : ''})
                         </option>
                       ))}
                     </select>

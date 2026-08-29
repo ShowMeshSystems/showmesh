@@ -124,9 +124,9 @@ export function Configuration() {
       </p>
       <nav aria-label="Settings directory" className="config-index">
         <ul className="config-index__list">
-          <li><Link to="/config/show">Show authoring</Link></li>
-          <li><Link to="/config/night.session">Show Night session definitions</Link></li>
-          <li><Link to="/config/fpp-playlist-definitions">FPP playlist definitions</Link></li>
+          <li><Link to="/shows">Show authoring</Link></li>
+          <li><Link to="/shows">Show Night session definitions, on each show</Link></li>
+          <li><Link to="/monitor/fleet">FPP playlist definitions, on Monitor Fleet</Link></li>
         </ul>
       </nav>
     </div>

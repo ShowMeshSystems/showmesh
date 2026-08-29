@@ -230,6 +230,48 @@
 
 .monitor-warn-border { border-color: var(--warn-border) !important; }
 
+.monitor-fpp-defs__row--unbound { background: var(--warn-bg); box-shadow: inset 2px 0 0 var(--warn-fg); }
+
+.monitor-fpp-defs__bound {
+  font: var(--t-meta);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.monitor-fpp-defs__bound--yes { color: var(--good-fg); }
+.monitor-fpp-defs__bound--no { color: var(--warn-fg); }
+
+.monitor-fpp-defs__findings {
+  display: grid;
+  gap: 10px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--raised);
+}
+
+.monitor-fpp-defs__finding {
+  display: grid;
+  grid-template-columns: 154px minmax(0, 1fr);
+  gap: 14px;
+  align-items: baseline;
+}
+
+.monitor-fpp-defs__finding p {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.monitor-fpp-defs__finding-label {
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.monitor-fpp-defs__finding-label--warn { color: var(--warn-fg); }
+
 .monitor-table-note {
   padding: 9px 14px;
   border-top: 1px solid var(--border);

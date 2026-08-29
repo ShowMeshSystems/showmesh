@@ -122,6 +122,21 @@ describe('ShowCueDetail (viewing an existing cue)', () => {
     expect(screen.getByText(/edits here apply to all of them/)).toBeVisible()
   })
 
+  // PUT /config/show.cue/{id} refuses any request that changes `show`
+  // (`show-config-cross-show-reference`; api/openapi.yaml's own
+  // `putShowCue` description says so in as many words: "`show` is
+  // immutable"). No re-assignment picker is offered here because the
+  // API has no working path for it, not because the capability was
+  // overlooked.
+  it('offers no show re-assignment control: show is immutable server-side for a cue', async () => {
+    getShowCue.mockResolvedValue(storedCue)
+    getShowCueRevisions.mockResolvedValue(emptyRevisions)
+    renderExisting('opening-number')
+
+    await waitFor(() => expect(screen.getByDisplayValue('Opening number')).toBeVisible())
+    expect(screen.queryByText(/Move to another show/i)).not.toBeInTheDocument()
+  })
+
   it('renders the revision history', async () => {
     getShowCue.mockResolvedValue(storedCue)
     getShowCueRevisions.mockResolvedValue({

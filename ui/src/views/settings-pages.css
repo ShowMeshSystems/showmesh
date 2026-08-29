@@ -109,3 +109,35 @@
   border: 1px solid var(--text-faint);
   border-radius: 2px;
 }
+
+/* Settings > Node routing, revision-1 Settings.dc.html: the declared/
+   not-declared list-then-detail pair above the routing editor. */
+.node-routing-nodes__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.node-routing-editing-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  font: var(--t-meta);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.node-routing-subhead {
+  margin: 18px 0 6px;
+  font-weight: 400;
+  color: var(--text-muted);
+}

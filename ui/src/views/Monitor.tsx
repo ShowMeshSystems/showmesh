@@ -7,6 +7,7 @@ import { StatusBadge } from '../components/StatusBadge'
 import { OperatorPageHeader } from '../components/SharedLayouts'
 import { MonitorTabs } from './monitor/MonitorTabs'
 import { buildFleetRows, buildNeedsOperatorItems, formatLastReport } from './monitor/fleetRows'
+import { PlaylistDefinitionsSection } from './monitor/PlaylistDefinitionsSection'
 import { NodeDiscoveryPanel } from './NodesList'
 import { FPPVersionSkewNotice } from './FPPList'
 import '../styles/monitor.css'
@@ -182,6 +183,8 @@ export function Monitor() {
             </div>
           )}
         </section>
+
+        <PlaylistDefinitionsSection />
       </div>
     </div>
   )

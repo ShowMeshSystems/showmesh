@@ -1192,7 +1192,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
               </label>
             )}
             <label className="form-field">
-              Other params (JSON object, optional; never <code>gain</code> or <code>targetGain</code> —
+              Other params (JSON object, optional; never <code>gain</code> or <code>targetGain</code>:
               use the decibel fields above for those)
               <textarea
                 rows={4}

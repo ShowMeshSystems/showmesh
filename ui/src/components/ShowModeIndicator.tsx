@@ -96,7 +96,7 @@ export function ShowModeIndicator() {
   if (state.kind === 'loading') {
     return (
       <>
-        <Link to="/config/mode" className="show-mode show-mode--unknown" aria-label="Show mode">
+        <Link to="/settings/mode" className="show-mode show-mode--unknown" aria-label="Show mode">
           Mode: loading…
         </Link>
         <span role="status" className="visually-hidden">
@@ -110,7 +110,7 @@ export function ShowModeIndicator() {
     return (
       <>
         <Link
-          to="/config/mode"
+          to="/settings/mode"
           className="show-mode show-mode--unknown"
           aria-label="Show mode"
           title={state.message}
@@ -130,7 +130,7 @@ export function ShowModeIndicator() {
   return (
     <>
       <Link
-        to="/config/mode"
+        to="/settings/mode"
         className={`show-mode show-mode--${mode}`}
         aria-label="Show mode"
         // ADR-033 decision 3: a behaviour caused by the mode states the mode

@@ -6,7 +6,7 @@ import { NavRail } from '../components/NavRail'
 import { ConnectionBanner } from '../components/ConnectionBanner'
 import { TokenPrompt } from '../components/TokenPrompt'
 import { SessionPanel, SessionIdentity } from '../components/SessionPanel'
-import { describeApiError } from './session'
+import { describeApiError, describeSignInState } from './session'
 import { useTheme, type Theme } from './useTheme'
 import { useModelContext } from './ModelContext'
 import type { ConnectionState } from '../api/domain'
@@ -63,6 +63,12 @@ export function Layout({ onSubmitToken }: LayoutProps) {
   // normally and each one's DataFreshnessNotice carries the staleness.
   const blockContent = model.connection.kind === 'incompatible' || model.snapshotReceivedAt === null
 
+  // `SessionPanel` renders the band and plate for the states with no usable
+  // session, and nothing at all otherwise. Layout needs to know which, because
+  // a session state replaces the routed view rather than sitting above it.
+  const signInState = describeSignInState(model.session).kind
+  const hasSessionState = signInState === 'signed_out' || signInState === 'bootstrap_required'
+
   return (
     <div>
       <ChromeBar />
@@ -70,14 +76,6 @@ export function Layout({ onSubmitToken }: LayoutProps) {
       {model.connection.kind === 'unauthorized' && (
         <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
       )}
-      {/* ADR-024: independent of `connection` above — this renders
-          whenever GET /api/v1/session has answered, regardless of
-          whether reads are open, closed, or currently interrupted. See
-          SessionPanel's own header comment for why it is not gated on
-          `blockContent` below: an operator must be able to see "you are
-          signed out" even while the rest of the page is showing "no
-          data yet". */}
-      <SessionPanel />
       <div className="shell">
         <div>
           <NavRail />
@@ -108,7 +106,19 @@ export function Layout({ onSubmitToken }: LayoutProps) {
           </footer>
         </div>
         <main>
-          {blockContent ? <FirstConnect connection={model.connection} /> : <Outlet />}
+          {/* The session band and its blanking plate live in the MAIN column,
+              beside the rail, not above it. They push the page's own content
+              down rather than covering it, and they are never modals: being
+              signed out is a readable state, not a wall.
+
+              When a session state renders, it REPLACES the routed view. A
+              signed-out device has read nothing, so rendering a dashboard
+              underneath "nothing here has ever been collected" would state
+              both at once, and the empty dashboard would read as real
+              inventory rather than as an absent read. */}
+          {hasSessionState
+            ? <SessionPanel />
+            : blockContent ? <FirstConnect connection={model.connection} /> : <Outlet />}
         </main>
       </div>
     </div>

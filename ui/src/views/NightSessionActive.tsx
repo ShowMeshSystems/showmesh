@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 import {
   ApiError,
   getNightSessionActiveConfig,
@@ -8,18 +7,35 @@ import {
   putNightSessionActiveConfig,
   type ConfigRevisionMeta,
 } from '../api'
-import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
+import { describeApiError, evaluateAnyScope, evaluateScope, type ScopeGateResult } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { showNightSessionPath, showNightSessionNewPath } from '../components/showWorkspacePaths'
 import type { ConfigObjectSummary, NightSessionActiveConfigResponse } from '../app/types'
+import { Link } from 'react-router-dom'
 
-// Track F seam F1 (ADR-039 rule 4): the night.session.active singleton
-// pointer, on ShowActive.tsx's exact precedent — "activation is the sharp
-// control," so this view never fires the PUT from a bare click. Picking
-// a session, or clearing the pointer, only ARMS a confirmation panel; a
-// second, distinct click actually submits.
 const READ_SCOPES = ['show:macro:run', 'config:write']
+const CONFIG_WRITE_SCOPE_GLOBAL = 'config:write'
+
+// Show Night Session.dc.html's list view: the "Active definition" section
+// and its "Activate a different one" flow, plus "Activation history"
+// below it. Kept as its own component (this file predates the workspace
+// tab, when it was routed at /config/night.session.active) because the
+// arm/confirm activation flow is a distinct, previously reviewed unit of
+// behavior, not because it is its own route any more: NightSessions.tsx
+// mounts it inline as the list view's active-pointer section.
+//
+// night.session.active is a SINGLETON, global across the whole
+// coordinator (schema.d.ts: GET/PUT /config/night.session.active takes
+// no `show` parameter). This tab renders it inside one show's workspace
+// because that is where an operator thinks to look for it, but the
+// pointer itself, and its revision history, are not scoped to this show:
+// the copy below says so rather than implying a per-show pointer that
+// does not exist. `sessions` is this show's own night.session list
+// (already loaded by the caller), used only to render the picker and to
+// decide whether the current pointer names one of THIS show's
+// definitions.
 const CONFIG_WRITE_SCOPE = 'config:write'
 
 type LoadState =
@@ -30,22 +46,14 @@ type LoadState =
       kind: 'loaded'
       config: NightSessionActiveConfigResponse
       revisions: ConfigRevisionMeta[]
-      // Suspicion resolved (see this file's own fetch effect): GET
-      // /config/night.session.active/revisions never 404s on its own —
-      // handleGetNightSessionActiveRevisions (nightsession.go) answers
-      // 200 with an empty list when nothing has ever been activated, and
-      // only a genuine transient/internal failure rejects it — but it CAN
-      // fail independently of the pointer read that already succeeded.
-      // That failure is carried here, alongside the pointer, rather than
-      // rejecting the whole load: a revisions-history outage must not
-      // hide the current pointer this device already confirmed.
+      // GET /config/night.session.active/revisions never 404s on its own
+      // (200 with an empty list when nothing has ever been activated) but
+      // it CAN fail independently of the pointer read that already
+      // succeeded; carried here rather than rejecting the whole load, so
+      // a revisions-history outage never hides the pointer this device
+      // already confirmed.
       revisionsError: string | null
     }
-
-type SessionsState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; sessions: ConfigObjectSummary[] }
 
 // The armed target: a picked session id, or the empty string to
 // explicitly clear the pointer (ConfigNightSessionActive's own "session
@@ -53,15 +61,24 @@ type SessionsState =
 // nothing is armed.
 type ArmedTarget = string | null
 
-export function NightSessionActive() {
-  const model = useModelContext()
-  const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
-  const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-
+export function NightSessionActivePanel({
+  showId,
+  sessions,
+  readAllowed,
+  writeGate,
+  onCurrentSessionChange,
+}: {
+  showId: string
+  sessions: ConfigObjectSummary[]
+  readAllowed: boolean
+  writeGate: ScopeGateResult
+  /** Lets the list table above mark each row Active/Inactive from the same read, rather than issuing a second fetch. */
+  onCurrentSessionChange?: (sessionId: string | null) => void
+}) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
-  const [sessionsState, setSessionsState] = useState<SessionsState>({ kind: 'loading' })
   const [reloadGeneration, setReloadGeneration] = useState(0)
 
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [armedTarget, setArmedTarget] = useState<ArmedTarget>(null)
   const [selectedSession, setSelectedSession] = useState('')
   const [activating, setActivating] = useState(false)
@@ -69,16 +86,9 @@ export function NightSessionActive() {
   const activatingRef = useRef(false)
 
   useEffect(() => {
-    if (!readGate.allowed) return
+    if (!readAllowed) return
     let cancelled = false
     setState({ kind: 'loading' })
-    // Fetched independently, not via Promise.all: the two calls have
-    // genuinely different failure shapes (the config read 404s when
-    // nothing has ever been activated; the revisions read never does —
-    // see LoadState's own comment on `revisionsError`), and a
-    // Promise.all would let an unrelated revisions-read failure reject
-    // the whole load, hiding the current pointer this device already
-    // has evidence for.
     getNightSessionActiveConfig()
       .then((config) => {
         if (cancelled) return
@@ -106,24 +116,15 @@ export function NightSessionActive() {
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed, reloadGeneration])
-
-  useEffect(() => {
-    if (!readGate.allowed) return
-    let cancelled = false
-    listConfigObjects('night.session')
-      .then((resp) => {
-        if (!cancelled) setSessionsState({ kind: 'loaded', sessions: resp.objects })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setSessionsState({ kind: 'error', message: describeApiError(err) })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [readGate.allowed])
+  }, [readAllowed, reloadGeneration])
 
   const currentSession = state.kind === 'loaded' ? state.config.payload.session : null
+  const currentIsThisShow = currentSession !== null && currentSession !== '' && sessions.some((s) => s.id === currentSession)
+
+  useEffect(() => {
+    onCurrentSessionChange?.(currentSession)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession])
 
   function arm(target: string): void {
     setActivateError(null)
@@ -135,6 +136,11 @@ export function NightSessionActive() {
     setActivateError(null)
   }
 
+  function closePicker(): void {
+    setPickerOpen(false)
+    setSelectedSession('')
+  }
+
   async function confirmActivate(): Promise<void> {
     if (activatingRef.current) return
     if (armedTarget === null) return
@@ -144,11 +150,13 @@ export function NightSessionActive() {
     try {
       await putNightSessionActiveConfig({ session: armedTarget })
       setArmedTarget(null)
+      setPickerOpen(false)
+      setSelectedSession('')
       setReloadGeneration((g) => g + 1)
     } catch (err) {
-      // Deliberately does not dismiss the confirmation panel — matching
-      // ShowActive.tsx's identical reasoning: the refusal is about THIS
-      // request, not a reason to make the operator re-pick it.
+      // Deliberately does not dismiss the confirmation panel: the
+      // refusal is about THIS request, not a reason to make the operator
+      // re-pick it.
       setActivateError(describeApiError(err))
     } finally {
       activatingRef.current = false
@@ -156,236 +164,268 @@ export function NightSessionActive() {
     }
   }
 
+  if (!readAllowed) return null
+
   return (
-    <div className="operator-page">
-      <header className="operator-page__header">
-        <div>
-          <h1 className="operator-page__title">Active Show Night</h1>
-          <p className="operator-page__lede text-muted">
-            Choose which authored Show Night is active. The live lifecycle remains on the Show Night page.
-          </p>
-        </div>
-        <Link className="button" to="/night">View live Show Night</Link>
-      </header>
-      <p className="text-muted">
-        The Show Night definition the coordinator is currently using. Activating a different definition, or
-        clearing the pointer, is revisioned and audited like every other configuration write here.
-        See <Link to="/night">Show Night</Link> for the currently running lifecycle state.
-      </p>
+    <section aria-labelledby="ns-active" className="night-section">
+      <h3 id="ns-active" className="t-meta night-eyebrow">
+        Active definition
+      </h3>
 
-      {!readGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {readGate.reason}
+      {state.kind === 'loading' && (
+        <p className="ruled-strip ruled-strip--loading" role="status">
+          <span className="ruled-strip__state t-meta">Loading</span>
+          <span className="ruled-strip__explanation">Reading the active night-session pointer.</span>
         </p>
       )}
-
-      {readGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading the active Show Night…</p>}
-      {readGate.allowed && state.kind === 'error' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
+      {state.kind === 'error' && (
+        <p className="ruled-strip ruled-strip--failed" role="alert">
+          <span className="ruled-strip__state t-meta">Failed</span>
+          <span className="ruled-strip__explanation">Could not load the active night-session pointer. {state.message}</span>
         </p>
       )}
-      {readGate.allowed && state.kind === 'not_configured' && (
-        <p className="panel" role="status">
-          {state.reason}
+      {state.kind === 'not_configured' && (
+        <p className="ruled-strip ruled-strip--empty" role="status">
+          <span className="ruled-strip__state t-meta">Cleared</span>
+          <span className="ruled-strip__explanation">No night-session definition has ever been activated. {state.reason}</span>
         </p>
       )}
-      {readGate.allowed && state.kind === 'loaded' && (
-        <div className="panel" role="status">
-          <dl className="field-list">
-            <dt>Currently active</dt>
-            <dd>
-              {state.config.payload.session === '' ? (
-                'none (the pointer is cleared)'
-              ) : (
-                <Link className="entity-link" to={`/config/night.session/${encodeURIComponent(state.config.payload.session)}`}>
-                  {state.config.payload.session}
-                </Link>
-              )}
-            </dd>
-            <dt>Revision</dt>
-            <dd>
-              {state.config.revision}
-              {state.config.createdByPrincipalName !== null && `, activated by ${state.config.createdByPrincipalName}`}
-              {' at '}
-              {formatAbsolute(state.config.updatedAt)}
-            </dd>
-          </dl>
-          {state.config.payload.session !== '' && (
-            <p>
-              <Link className="button" to={`/config/night.session/${encodeURIComponent(state.config.payload.session)}`}>
-                Edit Show Night
-              </Link>
-            </p>
-          )}
-        </div>
-      )}
-
-      {readGate.allowed && (
-        <>
-          <h3 className="panel__title">Activate a different Show Night</h3>
-          {!writeGate.allowed && (
-            <p className="text-muted" role="status">
-              Requires the <code>config:write</code> scope. {writeGate.reason}
-            </p>
-          )}
-          {/* Review finding 12: this section previously omitted entirely
-              when writeGate was not held, rather than rendering its
-              controls disabled with a stated reason (ADR-024 decision
-              12) — `writeGate` here encodes only a missing scope, never
-              a structural reason like "this is read-only history", so
-              omission was the wrong choice. The picker itself is always
-              shown (choosing is harmless); the two arm buttons below
-              render as a manually disabled span carrying `writeGate.reason`
-              when the scope is missing, on Shows.tsx's own "New show"
-              link/disabled-span precedent for the identical situation. */}
-          {armedTarget === null && (
-            <div>
-              {sessionsState.kind === 'loading' && <p className="text-muted">Loading Show Nights…</p>}
-              {sessionsState.kind === 'error' && (
-                <p className="panel panel--error" role="alert">
-                  {sessionsState.message}
+      {state.kind === 'loaded' && (
+        <div className="night-active-row">
+          {currentSession === null || currentSession === '' ? (
+            <>
+              <span className="status-pair status-pair--warn t-meta">Cleared</span>
+              <div className="night-active-row__body">
+                <p className="t-body">
+                  The pointer is cleared. The night lifecycle has nothing to run until a definition is activated.
                 </p>
-              )}
-              {sessionsState.kind === 'loaded' && (
-                <>
-                  {sessionsState.sessions.length === 0 ? (
-                    <p className="text-muted">
-                      No Show Nights are configured yet. <Link to="/config/night.session/new">Create one</Link> first.
-                    </p>
+                <p className="t-small night-muted">
+                  Cleared at {formatAbsolute(state.config.updatedAt)}
+                  {state.config.createdByPrincipalName !== null && ` by ${state.config.createdByPrincipalName}`}.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="status-pair status-pair--good t-meta">Active</span>
+              <div className="night-active-row__body">
+                <p className="t-body">
+                  {currentIsThisShow ? (
+                    <>
+                      <Link className="entity-link" to={showNightSessionPath(showId, currentSession)}>
+                        <strong>{sessions.find((s) => s.id === currentSession)?.label ?? currentSession}</strong>
+                      </Link>{' '}
+                      <span className="t-data night-faint">{currentSession}</span>
+                    </>
                   ) : (
                     <>
-                      <label className="form-field" style={{ maxWidth: '20rem' }}>
-                        Show Night to activate
-                        <select value={selectedSession} onChange={(e) => setSelectedSession(e.target.value)}>
-                          <option value="" disabled>
-                            Choose a Show Night
-                          </option>
-                          {sessionsState.sessions.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.label} ({s.id})
-                              {s.id === currentSession ? ' (currently active)' : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <div style={{ display: 'flex', gap: '0.75rem' }}>
-                        {writeGate.allowed ? (
-                          <button
-                            type="button"
-                            onClick={() => arm(selectedSession.trim())}
-                            disabled={selectedSession.trim() === '' || selectedSession.trim() === currentSession}
-                          >
-                            Activate this session…
-                          </button>
-                        ) : (
-                          <span className="scoped-button">
-                            <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
-                              Activate this session…
-                            </button>
-                            <span className="scoped-button__reason">{writeGate.reason}</span>
-                          </span>
-                        )}
-                        {currentSession !== null &&
-                          currentSession !== '' &&
-                          (writeGate.allowed ? (
-                            <button type="button" onClick={() => arm('')}>
-                              Clear the pointer…
-                            </button>
-                          ) : (
-                            <span className="scoped-button">
-                              <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
-                                Clear the pointer…
-                              </button>
-                              <span className="scoped-button__reason">{writeGate.reason}</span>
-                            </span>
-                          ))}
-                      </div>
+                      <strong className="t-data">{currentSession}</strong>
+                      <span className="t-small night-muted"> · belongs to a different show</span>
                     </>
                   )}
-                </>
-              )}
-            </div>
+                </p>
+                <p className="t-small night-muted">
+                  Pointed here at {formatAbsolute(state.config.updatedAt)}
+                  {state.config.createdByPrincipalName !== null && ` by ${state.config.createdByPrincipalName}`}. This pointer is
+                  global: one night session runs across the whole installation, not one per show.
+                </p>
+              </div>
+            </>
           )}
+          <div className="night-active-row__actions">
+            {writeGate.allowed ? (
+              <button type="button" className="btn btn--secondary" onClick={() => setPickerOpen((open) => !open)}>
+                Activate a different one
+              </button>
+            ) : (
+              <span className="scoped-button">
+                <button type="button" className="btn btn--secondary" disabled={true} aria-disabled="true" title={writeGate.reason}>
+                  Activate a different one
+                </button>
+                <span className="scoped-button__reason">{writeGate.reason}</span>
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
-          {/* The sharp control itself, matching ShowActive.tsx's identical
-              shape: this panel only exists once a target has been picked
-              (or clearing has been chosen), states what is about to
-              happen, and requires a SECOND, distinct click to actually
-              submit. */}
-          {/* Review finding 12: previously gated on `writeGate.allowed` too
-              — if the scope was lost between arming and confirming, the
-              whole panel (including Cancel) vanished with `armedTarget`
-              still set, leaving the operator stuck mid-flow with no way
-              out. The Confirm button below is already independently
-              scope-gated via ScopedButton; Cancel must always be
-              reachable regardless of scope. */}
-          {armedTarget !== null && (
-            <div className="panel panel--warning" role="alertdialog" aria-label="Confirm Show Night activation">
-              {armedTarget === '' ? (
-                <p>
-                  <strong>About to clear the active Show Night pointer.</strong> The
-                  coordinator will run no Show Night until a new one is activated.
-                </p>
-              ) : (
-                <p>
-                  <strong>About to activate &ldquo;{armedTarget}&rdquo;.</strong>
-                  {currentSession !== null && currentSession !== '' && ` This replaces the active session (currently "${currentSession}").`}
-                </p>
-              )}
-              {activateError !== null && (
-                <p role="alert" className="session-form__error">
-                  {activateError}
-                </p>
-              )}
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <ScopedButton
-                  requiredScope={CONFIG_WRITE_SCOPE}
-                  onClick={() => void confirmActivate()}
-                  busy={activating}
-                  busyReason="Activating…"
+      <p className="t-small night-muted night-lede">
+        One definition is active at a time, and the pointer is its own configuration object with its own history:
+        activating is an operational act, not an edit. Clearing it is allowed and leaves the night lifecycle with
+        nothing to run.
+      </p>
+
+      {pickerOpen && armedTarget === null && writeGate.allowed && state.kind === 'loaded' && (
+        <div className="night-activate-picker">
+          {sessions.length === 0 ? (
+            <p className="t-small night-muted">
+              No night-session definitions are authored in this show yet.{' '}
+              <Link to={showNightSessionNewPath(showId)}>Create one</Link> first.
+            </p>
+          ) : (
+            <div className="night-activate-picker__row">
+              <label className="field" style={{ maxWidth: '20rem' }}>
+                <span className="field__label t-small">Definition to activate</span>
+                <select
+                  className="field__input"
+                  value={selectedSession}
+                  onChange={(e) => setSelectedSession(e.target.value)}
                 >
-                  {activating ? 'Activating…' : armedTarget === '' ? 'Confirm: clear the pointer' : `Confirm: activate "${armedTarget}"`}
-                </ScopedButton>
-                <button type="button" onClick={cancel} disabled={activating}>
+                  <option value="" disabled>
+                    Choose a definition
+                  </option>
+                  {sessions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label} ({s.id})
+                      {s.id === currentSession ? ' — currently active' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="night-activate-picker__actions">
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => arm(selectedSession.trim())}
+                  disabled={selectedSession.trim() === '' || selectedSession.trim() === currentSession}
+                >
+                  Activate this definition…
+                </button>
+                {currentSession !== null && currentSession !== '' && (
+                  <button type="button" className="btn btn--quiet" onClick={() => arm('')}>
+                    Clear the pointer…
+                  </button>
+                )}
+                <button type="button" className="btn btn--quiet" onClick={closePicker}>
                   Cancel
                 </button>
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
 
-      {readGate.allowed && state.kind === 'loaded' && state.revisionsError !== null && (
-        <p className="panel panel--error" role="alert">
-          The activation history could not be loaded: {state.revisionsError}
+      {armedTarget !== null && (
+        <div className="night-confirm" role="alertdialog" aria-label="Confirm night-session activation">
+          {armedTarget === '' ? (
+            <p>
+              <strong>About to clear the active night-session pointer.</strong> The coordinator will run no night
+              session until a new one is activated.
+            </p>
+          ) : (
+            <p>
+              <strong>About to activate &ldquo;{armedTarget}&rdquo;.</strong>
+              {currentSession !== null && currentSession !== '' && ` This replaces the active session (currently "${currentSession}").`}
+            </p>
+          )}
+          {activateError !== null && (
+            <p role="alert" className="field__error">
+              {activateError}
+            </p>
+          )}
+          <div className="night-confirm__actions">
+            <ScopedButton
+              requiredScope={CONFIG_WRITE_SCOPE}
+              className="btn btn--primary"
+              onClick={() => void confirmActivate()}
+              busy={activating}
+              busyReason="Activating…"
+            >
+              {activating ? 'Activating…' : armedTarget === '' ? 'Confirm: clear the pointer' : `Confirm: activate "${armedTarget}"`}
+            </ScopedButton>
+            <button type="button" className="btn btn--quiet" onClick={cancel} disabled={activating}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {state.kind === 'loaded' && state.revisionsError !== null && (
+        <p className="ruled-strip ruled-strip--failed" role="alert">
+          <span className="ruled-strip__state t-meta">Failed</span>
+          <span className="ruled-strip__explanation">The activation history could not be loaded. {state.revisionsError}</span>
         </p>
       )}
-      {readGate.allowed && state.kind === 'loaded' && state.revisions.length > 0 && (
-        <>
-          <h3 className="panel__title">Activation history</h3>
-          <table className="config-table">
-            <thead>
-              <tr>
-                <th>Revision</th>
-                <th>Active</th>
-                <th>Activated at</th>
-                <th>Activated by</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.revisions.map((rev) => (
-                <tr key={rev.revision}>
-                  <td>{rev.revision}</td>
-                  <td>{rev.active ? 'active' : ''}</td>
-                  <td>{formatAbsolute(rev.createdAt)}</td>
-                  <td>{rev.createdByPrincipalName ?? '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
+      {state.kind === 'loaded' && state.revisions.length > 0 && (
+        <section aria-labelledby="ns-hist" className="night-section">
+          <h3 id="ns-hist" className="t-meta night-eyebrow">
+            Activation history
+          </h3>
+          <p className="t-small night-muted">
+            Revisions of the active pointer, newest first. This history is global, not scoped to this show: the
+            coordinator activates one night session at a time across the whole installation. A cleared pointer is a
+            real revision, not a gap; which definition an older revision pointed to is not carried in this history,
+            only the current one.
+          </p>
+          <ol className="night-history">
+            {state.revisions.map((rev) => (
+              <li key={rev.revision} className="night-history__row">
+                <span className="t-meta night-history__revision">
+                  {rev.active ? 'Active · ' : ''}
+                  {rev.revision}
+                </span>
+                <p className="t-small night-muted">
+                  {formatAbsolute(rev.createdAt)}
+                  {rev.createdByPrincipalName !== null && ` by ${rev.createdByPrincipalName}`}
+                  {rev.active &&
+                    state.kind === 'loaded' &&
+                    (currentSession === '' || currentSession === null
+                      ? ' — cleared'
+                      : ` — pointed at ${currentSession}`)}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
+    </section>
+  )
+}
+
+/**
+ * Compatibility shim for the pre-overhaul `/config/night.session.active`
+ * route, still declared in App.tsx (which this group does not edit).
+ * ROUTE-MAP.md's "old addresses, deliberately not redirected" table
+ * marks `/config/night.session*` as going away entirely once the owner
+ * wires the new `/shows/:showId/night-sessions*` routes this task adds;
+ * until then this keeps the old address compiling and minimally
+ * functional rather than crashing, by fetching every night.session
+ * object system-wide (this old route carries no show scoping at all)
+ * and reusing the same panel the new list view mounts.
+ */
+export function NightSessionActive() {
+  const model = useModelContext()
+  const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
+  const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE_GLOBAL)
+  const [sessions, setSessions] = useState<ConfigObjectSummary[]>([])
+
+  useEffect(() => {
+    if (!readGate.allowed) return
+    let cancelled = false
+    listConfigObjects('night.session')
+      .then((resp) => {
+        if (!cancelled) setSessions(resp.objects)
+      })
+      .catch(() => {
+        /* NightSessionActivePanel's own picker degrades to "none authored" on an empty list; this old route is on its way out. */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [readGate.allowed])
+
+  if (!readGate.allowed) {
+    return (
+      <p className="ruled-strip ruled-strip--no-permission" role="status">
+        <span className="ruled-strip__state t-meta">No permission</span>
+        <span className="ruled-strip__explanation">{readGate.reason}</span>
+      </p>
+    )
+  }
+
+  return (
+    <div className="operator-page">
+      <NightSessionActivePanel showId="" sessions={sessions} readAllowed={readGate.allowed} writeGate={writeGate} />
     </div>
   )
 }

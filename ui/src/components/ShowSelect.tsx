@@ -108,7 +108,7 @@ export function ShowSelect({ value, onChange, label, ariaLabel }: ShowSelectProp
         <>
           {visibleLabel}
           <p id={controlId} className="text-muted" role="status">
-            No shows are configured yet. <Link to="/config/show/new">Create a show</Link> before assigning one here.
+            No shows are configured yet. <Link to="/shows/new">Create a show</Link> before assigning one here.
           </p>
         </>
       )

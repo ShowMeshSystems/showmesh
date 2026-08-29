@@ -550,14 +550,14 @@ describe('Configuration', () => {
     expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/connections')
 
     const nav = screen.getByRole('navigation', { name: /settings directory/i })
-    expect(within(nav).getByRole('link', { name: 'Show authoring' })).toHaveAttribute('href', '/config/show')
-    expect(within(nav).getByRole('link', { name: 'Show Night session definitions' })).toHaveAttribute(
+    expect(within(nav).getByRole('link', { name: 'Show authoring' })).toHaveAttribute('href', '/shows')
+    expect(within(nav).getByRole('link', { name: 'Show Night session definitions, on each show' })).toHaveAttribute(
       'href',
-      '/config/night.session',
+      '/shows',
     )
-    expect(within(nav).getByRole('link', { name: 'FPP playlist definitions' })).toHaveAttribute(
+    expect(within(nav).getByRole('link', { name: 'FPP playlist definitions, on Monitor Fleet' })).toHaveAttribute(
       'href',
-      '/config/fpp-playlist-definitions',
+      '/monitor/fleet',
     )
     expect(within(nav).queryByRole('link', { name: 'Connections' })).not.toBeInTheDocument()
   })

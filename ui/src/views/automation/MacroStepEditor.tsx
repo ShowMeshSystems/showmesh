@@ -13,6 +13,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../../app/ses
 import { useModelContext } from '../../app/ModelContext'
 import { formatAbsolute } from '../../app/time'
 import { ScopedButton } from '../../components/ScopedButton'
+import { ShowSelect } from '../../components/ShowSelect'
 import { RunMacroButton } from '../../components/RunMacroButton'
 import { MacroRunOutcome } from '../../components/MacroRunOutcome'
 import type {
@@ -145,6 +146,12 @@ export function MacroStepEditor({ showId, macroId, isNew = false }: MacroStepEdi
   const [state, setState] = useState<LoadState>(isNew ? { kind: 'new' } : { kind: 'loading' })
   const [newId, setNewId] = useState('')
   const [form, setForm] = useState<MacroFormState>(emptyMacroForm())
+  // The macro's own show, editable only when editing an EXISTING macro
+  // (`show.macro`'s `show` field is not immutable server-side, unlike
+  // `show.cue`/`show.playlist` — see PUT /config/show.macro's own
+  // description). Starts at the route's showId, the same value a new
+  // macro is always created under.
+  const [moveToShow, setMoveToShow] = useState(showId)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const savingRef = useRef(false)
@@ -185,6 +192,10 @@ export function MacroStepEditor({ showId, macroId, isNew = false }: MacroStepEdi
   }, [showId])
 
   useEffect(() => {
+    if (isNew) setMoveToShow(showId)
+  }, [isNew, showId])
+
+  useEffect(() => {
     if (isNew || macroId === undefined || !readGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
@@ -193,6 +204,7 @@ export function MacroStepEditor({ showId, macroId, isNew = false }: MacroStepEdi
         if (cancelled) return
         setState({ kind: 'loaded', config, revisions: revisionsResp.revisions })
         setForm(formFromPayload(config.payload))
+        setMoveToShow(config.payload.show)
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ kind: 'error', message: describeApiError(err) })
@@ -257,7 +269,7 @@ export function MacroStepEditor({ showId, macroId, isNew = false }: MacroStepEdi
       setSaveError('A macro id is required.')
       return
     }
-    const built = buildPayload(showId, form)
+    const built = buildPayload(moveToShow.trim(), form)
     if ('error' in built) {
       setSaveError(built.error)
       return
@@ -269,6 +281,14 @@ export function MacroStepEditor({ showId, macroId, isNew = false }: MacroStepEdi
       const resp = await putShowMacro(id, built.payload)
       if (isNew) {
         navigate(`${showAutomationPath(showId)}/macros/${encodeURIComponent(id)}`)
+        return
+      }
+      if (built.payload.show !== showId) {
+        // Saved into a different show than the route names: this URL's
+        // :showId no longer matches the macro's own show, so land on the
+        // object at its new show-scoped address rather than leaving the
+        // operator on a stale one.
+        navigate(`${showAutomationPath(built.payload.show)}/macros/${encodeURIComponent(id)}`)
         return
       }
       setState((prev) => (prev.kind === 'loaded' ? { ...prev, config: resp } : prev))
@@ -508,6 +528,20 @@ export function MacroStepEditor({ showId, macroId, isNew = false }: MacroStepEdi
           </div>
         )}
       </div>
+
+      {!isNew && (
+        <fieldset disabled={!editable} className="automation-inspector__section" style={{ border: 0, borderTop: '1px solid var(--border)' }}>
+          <h3 id="macro-move-heading" className="t-meta automation-inspector__eyebrow">
+            Move to another show
+          </h3>
+          <ShowSelect ariaLabel="Move to another show" value={moveToShow} onChange={setMoveToShow} />
+          <p className="t-small" style={{ color: 'var(--text-muted)', marginTop: 6 }}>
+            Moving this macro out of {showId} removes it from {showId}&rsquo;s Automation list, and
+            requires every step&rsquo;s action to also exist in the destination show: a step naming
+            an action that only exists in {showId} is refused on save, naming the step.
+          </p>
+        </fieldset>
+      )}
 
       {editable && (
         <div className="automation-inspector__footer">

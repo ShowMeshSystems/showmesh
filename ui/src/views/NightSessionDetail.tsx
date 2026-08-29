@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   getNightSessionConfig,
   getNightSessionConfigRevision,
@@ -11,7 +11,11 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
-import { ShowSelect } from '../components/ShowSelect'
+import { PlannedFeature } from '../components/SharedLayouts'
+import { ShowWorkspaceFrame, useShowWorkspaceData } from '../components/ShowWorkspace'
+import { showNightSessionPath, showNightSessionsPath } from '../components/showWorkspacePaths'
+import '../styles/shows.css'
+import '../styles/night.css'
 import type {
   ConfigNightSession,
   ConfigNightSessionBackgroundAudioItem,
@@ -20,14 +24,17 @@ import type {
   NightSessionConfigResponse,
 } from '../app/types'
 
-// Track F seam F1 (RESTING-MODE.md, ADR-038, ADR-039): night.session
-// authoring, on ShowDetail.tsx/MacroDetail.tsx's shared precedent
-// ("server validates, this only mirrors" — never substitutes its own
-// judgement for a PUT rejection). Three keys the schema names explicitly
-// as rejected if present — siteControl, interlocks, and any
-// calendar/duration-named key — are never offered here at all, matching
-// this seam's own "reduced" lesson from MacroDetail.tsx: do not let an
-// operator pick something the server will only refuse.
+// Show Night Session.dc.html's `view: 'edit'` branch: the night-session
+// definition editor. On ShowDetail.tsx/MacroDetail.tsx's shared
+// precedent ("server validates, this only mirrors" — never substitutes
+// its own judgement for a PUT rejection). `siteControl` and
+// `interlocks` are specified in the schema (both a read shape and, per
+// the generated write type, a write shape) but this seam has never
+// implemented the endpoint accepting them: PUT /config/night.session
+// rejects either key outright if present. The mock draws authoring for
+// both, so both render as PlannedFeature below rather than as working
+// controls — the owner's ruling is to show the idea, loudly stamped,
+// not to silently omit what the mock drew.
 const READ_SCOPES = ['show:macro:run', 'config:write']
 const CONFIG_WRITE_SCOPE = 'config:write'
 
@@ -69,8 +76,8 @@ export interface BackgroundAudioItemForm {
   target: string
 }
 
-export function newBackgroundAudioItemForm(): BackgroundAudioItemForm {
-  return { itemId: '', show: '', sequence: '', target: '' }
+export function newBackgroundAudioItemForm(show = ''): BackgroundAudioItemForm {
+  return { itemId: '', show, sequence: '', target: '' }
 }
 
 export interface FormState {
@@ -98,9 +105,9 @@ export interface FormState {
   enterRestingBlackoutAfterShowMs: string
 }
 
-export function emptyForm(): FormState {
+export function emptyForm(show = ''): FormState {
   return {
-    show: '',
+    show,
     label: '',
     showPlaylistFppInstanceId: '',
     showPlaylistPlaylist: '',
@@ -108,11 +115,11 @@ export function emptyForm(): FormState {
     restingPlaylist: '',
     restingEndOfNightPlaylist: '',
     restingEndOfNightRepeat: false,
-    restingTimelineShow: '',
+    restingTimelineShow: show,
     restingTimelineSequence: '',
     restingTimelineTarget: '',
     backgroundAudioEnabled: false,
-    backgroundAudioItems: [newBackgroundAudioItemForm()],
+    backgroundAudioItems: [newBackgroundAudioItemForm(show)],
     backgroundAudioRepeat: 'none',
     backgroundAudioResume: 'resume',
     backgroundAudioItemTransition: 'sequential',
@@ -142,7 +149,7 @@ function formFromPayload(payload: ConfigNightSession): FormState {
     backgroundAudioItems:
       payload.resting.backgroundAudio !== undefined
         ? payload.resting.backgroundAudio.items.map((item: ConfigNightSessionBackgroundAudioItem) => ({ ...item }))
-        : [newBackgroundAudioItemForm()],
+        : [newBackgroundAudioItemForm(payload.show)],
     backgroundAudioRepeat: payload.resting.backgroundAudio?.repeat ?? 'none',
     backgroundAudioResume: payload.resting.backgroundAudio?.resume ?? 'resume',
     backgroundAudioItemTransition: payload.resting.backgroundAudio?.itemTransition ?? 'sequential',
@@ -232,13 +239,13 @@ export function buildPayload(form: FormState): { payload: ConfigNightSessionWrit
     if (items.length === 0) return { error: 'Background audio needs at least one item, or turn it off.' }
     const maxGainDbTrimmed = form.backgroundAudioMaxGainDb.trim()
     const maxGainDb = Number(maxGainDbTrimmed)
-    // Suspicion resolved: `Number('-Infinity')` is `-Infinity`, which is
-    // neither NaN nor greater than 0, so a NaN-only check let it through.
-    // `JSON.stringify(-Infinity)` serializes to `null`, and the wire
-    // schema's `maxGainDb` is `type: number` (not nullable), so this
-    // would have come back from the coordinator as a type error rather
-    // than the range error an operator typing garbage here actually
-    // needs to see. `Number.isFinite` excludes NaN AND both infinities.
+    // `Number('-Infinity')` is `-Infinity`, which is neither NaN nor
+    // greater than 0, so a NaN-only check let it through, and
+    // `JSON.stringify(-Infinity)` serializes to `null`, which the wire
+    // schema's non-nullable `maxGainDb: number` would reject as a type
+    // error rather than the range error an operator typing garbage here
+    // actually needs to see. `Number.isFinite` excludes NaN AND both
+    // infinities.
     if (maxGainDbTrimmed === '' || !Number.isFinite(maxGainDb) || maxGainDb > 0) {
       return { error: 'Background audio max gain must be a number, 0 dB or lower.' }
     }
@@ -285,6 +292,14 @@ export function buildPayload(form: FormState): { payload: ConfigNightSessionWrit
   return { payload }
 }
 
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 type LoadState =
   | { kind: 'new' }
   | { kind: 'loading' }
@@ -296,23 +311,37 @@ export interface NightSessionDetailProps {
 }
 
 export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
-  const params = useParams<{ id: string }>()
+  const params = useParams<{ showId: string; id: string }>()
+  const showId = params.showId ?? ''
   const navigate = useNavigate()
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
   const existingId = isNew ? undefined : params.id
+  const workspaceData = useShowWorkspaceData(showId)
 
   const [state, setState] = useState<LoadState>(isNew ? { kind: 'new' } : { kind: 'loading' })
   const [newId, setNewId] = useState('')
-  const [form, setForm] = useState<FormState>(emptyForm())
+  const [idManuallyEdited, setIdManuallyEdited] = useState(false)
+  const [form, setForm] = useState<FormState>(emptyForm(showId))
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const savingRef = useRef(false)
 
   const [revisionView, setRevisionView] = useState<
-    { kind: 'idle' } | { kind: 'loading'; revision: number } | { kind: 'error'; revision: number; message: string } | { kind: 'loaded'; revision: number; config: NightSessionConfigResponse }
+    | { kind: 'idle' }
+    | { kind: 'loading'; revision: number }
+    | { kind: 'error'; revision: number; message: string }
+    | { kind: 'loaded'; revision: number; config: NightSessionConfigResponse }
   >({ kind: 'idle' })
+
+  useEffect(() => {
+    if (isNew) setForm((f) => ({ ...f, show: showId, restingTimelineShow: showId }))
+  }, [isNew, showId])
+
+  useEffect(() => {
+    if (isNew && !idManuallyEdited) setNewId(slugify(form.label))
+  }, [isNew, idManuallyEdited, form.label])
 
   useEffect(() => {
     if (isNew) return
@@ -355,7 +384,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
   }
 
   function addBackgroundAudioItem(): void {
-    setForm((f) => ({ ...f, backgroundAudioItems: [...f.backgroundAudioItems, newBackgroundAudioItemForm()] }))
+    setForm((f) => ({ ...f, backgroundAudioItems: [...f.backgroundAudioItems, newBackgroundAudioItemForm(showId)] }))
   }
 
   function removeBackgroundAudioItem(index: number): void {
@@ -366,7 +395,7 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
     if (savingRef.current) return
     const id = isNew ? newId.trim() : existingId
     if (id === undefined || id === '') {
-      setSaveError('A night session id is required.')
+      setSaveError('A definition id is required.')
       return
     }
     const built = buildPayload(form)
@@ -380,16 +409,16 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
     try {
       const resp = await putNightSessionConfig(id, built.payload)
       if (isNew) {
-        navigate(`/config/night.session/${encodeURIComponent(id)}`)
+        navigate(showNightSessionPath(showId, id))
         return
       }
       setState((prev) => (prev.kind === 'loaded' ? { ...prev, config: resp } : prev))
-      // Review finding 10: the server resolves defaults on write
-      // (endOfNightPlaylist, endOfNightRepeat, every cue's barrier/
-      // onFailure) that this form's own optimistic `built.payload` never
-      // set explicitly — re-seeding from the response is what makes the
-      // resolved values visible immediately rather than only after a
-      // full page reload re-fetches this same object.
+      // The server resolves defaults on write (endOfNightPlaylist,
+      // endOfNightRepeat, every cue's barrier/onFailure) that this
+      // form's own optimistic `built.payload` never set explicitly;
+      // re-seeding from the response makes the resolved values visible
+      // immediately rather than only after a full page reload re-fetches
+      // this same object.
       setForm(formFromPayload(resp.payload))
       const revisionsResp = await getNightSessionConfigRevisions(id)
       setState((prev) => (prev.kind === 'loaded' ? { ...prev, revisions: revisionsResp.revisions } : prev))
@@ -413,435 +442,652 @@ export function NightSessionDetail({ isNew = false }: NightSessionDetailProps) {
   }
 
   const pageGate = isNew ? writeGate : readGate
-  if (!pageGate.allowed) {
-    return (
-      <div>
-        <h2 className="panel__title">{isNew ? 'New night session' : 'Night session configuration'}</h2>
-        <p className="panel panel--error" role="status">
-          {pageGate.reason}
-        </p>
-      </div>
-    )
-  }
-
-  if (!isNew && state.kind === 'loading') {
-    return <p className="text-muted">Loading night session configuration…</p>
-  }
-  if (!isNew && state.kind === 'error') {
-    return (
-      <p className="panel panel--error" role="alert">
-        {state.message}
-      </p>
-    )
-  }
-
   const editable = writeGate.allowed
 
-  return (
-    <div className="operator-page">
-      <header className="operator-page__header">
-        <div>
-          <h1 className="operator-page__title">{isNew ? 'New Show Night' : form.label || existingId}</h1>
-          <p className="operator-page__lede text-muted">
-            Edit the authored Show Night definition. Changes create a revision; the live controller pins one revision for its run.
-          </p>
-        </div>
-        <Link className="button" to="/night">View live Show Night</Link>
-      </header>
-      <p className="text-muted">
-        This is the explicit full-page editing route for the authored Show Night definition. FPP alone authorizes and
-        schedules Show Night; this form never accepts a calendar field or a rest-duration
-        field, and the server rejects one outright if it ever appears. <code>siteControl</code>{' '}
-        and <code>interlocks</code> are specified but not implemented in this seam, so this form
-        never offers them either.
-      </p>
-
-      {!editable && (
-        <p className="text-muted" role="status">
-          Viewing only: editing requires the <code>config:write</code> scope.
+  const content = (() => {
+    if (!pageGate.allowed) {
+      return (
+        <p className="ruled-strip ruled-strip--no-permission" role="status">
+          <span className="ruled-strip__state t-meta">No permission</span>
+          <span className="ruled-strip__explanation">{pageGate.reason}</span>
         </p>
-      )}
+      )
+    }
+    if (!isNew && state.kind === 'loading') {
+      return (
+        <p className="ruled-strip ruled-strip--loading" role="status">
+          <span className="ruled-strip__state t-meta">Loading</span>
+          <span className="ruled-strip__explanation">Reading this night-session definition.</span>
+        </p>
+      )
+    }
+    if (!isNew && state.kind === 'error') {
+      return (
+        <p className="ruled-strip ruled-strip--failed" role="alert">
+          <span className="ruled-strip__state t-meta">Failed</span>
+          <span className="ruled-strip__explanation">{state.message}</span>
+        </p>
+      )
+    }
 
-      {isNew && (
-        <label className="form-field">
-          Show Night id
-          <input type="text" value={newId} disabled={!editable} onChange={(e) => setNewId(e.target.value)} />
-        </label>
-      )}
-
-      <fieldset disabled={!editable}>
-        <div className="form-field">
-          <ShowSelect label="Show" value={form.show} onChange={(show) => setForm({ ...form, show })} />
+    return (
+      <>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <p className="t-meta night-eyebrow">{isNew ? 'New definition' : 'Editing definition'}</p>
+            <h2 className="t-heading">{isNew ? 'New night session' : form.label || existingId}</h2>
+            {!isNew && state.kind === 'loaded' && (
+              <p className="t-small night-muted">
+                <span className="t-data">{existingId}</span> · revision <span className="t-data">{state.config.revision}</span>
+                {' · saving takes effect on the next cycle, not this one'}
+              </p>
+            )}
+          </div>
+          <button type="button" className="btn btn--secondary" onClick={() => navigate(showNightSessionsPath(showId))}>
+            All definitions
+          </button>
         </div>
-        <label className="form-field">
-          Label
-          <input type="text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
-        </label>
 
-        <h3 className="panel__title">Show playlist</h3>
-        <p className="text-muted">Names an FPP-owned playlist: referenced, never created.</p>
-        <label className="form-field">
-          FPP instance id
-          <input
-            type="text"
-            value={form.showPlaylistFppInstanceId}
-            onChange={(e) => setForm({ ...form, showPlaylistFppInstanceId: e.target.value })}
-          />
-        </label>
-        <label className="form-field">
-          Playlist
-          <input
-            type="text"
-            value={form.showPlaylistPlaylist}
-            onChange={(e) => setForm({ ...form, showPlaylistPlaylist: e.target.value })}
-          />
-        </label>
+        {!editable && (
+          <p className="t-small night-muted" role="status">
+            Viewing only: editing requires the <code>config:write</code> scope.
+          </p>
+        )}
 
-        <h3 className="panel__title">Resting</h3>
-        <label className="form-field">
-          FPP instance id
-          <input
-            type="text"
-            value={form.restingFppInstanceId}
-            onChange={(e) => setForm({ ...form, restingFppInstanceId: e.target.value })}
-          />
-        </label>
-        <label className="form-field">
-          Playlist
-          <input type="text" value={form.restingPlaylist} onChange={(e) => setForm({ ...form, restingPlaylist: e.target.value })} />
-        </label>
-        <label className="form-field">
-          End-of-night playlist (blank defaults to the resting playlist above)
-          <input
-            type="text"
-            value={form.restingEndOfNightPlaylist}
-            onChange={(e) => setForm({ ...form, restingEndOfNightPlaylist: e.target.value })}
-          />
-        </label>
-        <label className="form-field form-field--checkbox">
-          <input
-            type="checkbox"
-            checked={form.restingEndOfNightRepeat}
-            onChange={(e) => setForm({ ...form, restingEndOfNightRepeat: e.target.checked })}
-          />
-          Repeat the end-of-night playlist
-        </label>
-
-        <h4 className="panel__title">Resting timeline asset</h4>
-        <div className="form-field">
-          <ShowSelect
-            label="Show"
-            value={form.restingTimelineShow}
-            onChange={(restingTimelineShow) => setForm({ ...form, restingTimelineShow })}
-          />
-        </div>
-        <label className="form-field">
-          Sequence
-          <input
-            type="text"
-            value={form.restingTimelineSequence}
-            onChange={(e) => setForm({ ...form, restingTimelineSequence: e.target.value })}
-          />
-        </label>
-        <label className="form-field">
-          Target node
-          <input
-            type="text"
-            value={form.restingTimelineTarget}
-            onChange={(e) => setForm({ ...form, restingTimelineTarget: e.target.value })}
-          />
-        </label>
-
-        <h4 className="panel__title">Background audio</h4>
-        <label className="form-field form-field--checkbox">
-          <input
-            type="checkbox"
-            checked={form.backgroundAudioEnabled}
-            onChange={(e) => setForm({ ...form, backgroundAudioEnabled: e.target.checked })}
-          />
-          Configure background audio (its absence is valid and is not degraded)
-        </label>
-        {form.backgroundAudioEnabled && (
-          <div className="panel">
-            {form.backgroundAudioItems.map((item, i) => (
-              <div key={i} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+        <fieldset disabled={!editable} style={{ border: 0, padding: 0, margin: 0 }}>
+          <section aria-labelledby="ns-id" className="night-section">
+            <h3 id="ns-id" className="t-meta night-eyebrow">
+              Identity &amp; show playlist
+            </h3>
+            <div className="night-field-grid">
+              {isNew && (
+                <label className="field">
+                  <span className="field__label">Definition id</span>
+                  <input
+                    className="field__input field__input--data"
+                    type="text"
+                    value={newId}
+                    onChange={(e) => {
+                      setIdManuallyEdited(true)
+                      setNewId(e.target.value)
+                    }}
+                  />
+                </label>
+              )}
+              <label className="field">
+                <span className="field__label">Label</span>
+                <input className="field__input" type="text" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
+              </label>
+              <label className="field">
+                <span className="field__label">Show playlist FPP instance</span>
                 <input
+                  className="field__input field__input--data"
                   type="text"
-                  placeholder="item id"
-                  value={item.itemId}
-                  onChange={(e) => updateBackgroundAudioItem(i, { itemId: e.target.value })}
-                />
-                <ShowSelect
-                  ariaLabel="Show"
-                  value={item.show}
-                  onChange={(show) => updateBackgroundAudioItem(i, { show })}
-                />
-                <input
-                  type="text"
-                  placeholder="sequence"
-                  value={item.sequence}
-                  onChange={(e) => updateBackgroundAudioItem(i, { sequence: e.target.value })}
-                />
-                <input
-                  type="text"
-                  placeholder="target node"
-                  value={item.target}
-                  onChange={(e) => updateBackgroundAudioItem(i, { target: e.target.value })}
-                />
-                {/* Review finding 12: `editable` here encodes only whether this
-                    principal holds config:write (`const editable =
-                    writeGate.allowed`) — never a structural reason like
-                    "this is a read-only historical revision". ADR-024
-                    decision 12 requires that case to render disabled with
-                    the reason, not be omitted, so this is a ScopedButton
-                    (always rendered) rather than an `editable &&` guard. */}
-                <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={() => removeBackgroundAudioItem(i)}>
-                  Remove
-                </ScopedButton>
-              </div>
-            ))}
-            {/* Review finding 12: see the identical comment on the Remove
-                button above. */}
-            <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={addBackgroundAudioItem}>
-              Add background audio item
-            </ScopedButton>
-            <label className="form-field">
-              Repeat
-              <select
-                value={form.backgroundAudioRepeat}
-                onChange={(e) => setForm({ ...form, backgroundAudioRepeat: e.target.value as FormState['backgroundAudioRepeat'] })}
-              >
-                <option value="none">none</option>
-                <option value="item">item</option>
-                <option value="playlist">playlist</option>
-              </select>
-            </label>
-            <label className="form-field">
-              Resume
-              <select
-                value={form.backgroundAudioResume}
-                onChange={(e) => setForm({ ...form, backgroundAudioResume: e.target.value as FormState['backgroundAudioResume'] })}
-              >
-                <option value="resume">resume</option>
-                <option value="restart">restart</option>
-              </select>
-            </label>
-            <label className="form-field">
-              Item transition
-              <select
-                value={form.backgroundAudioItemTransition}
-                onChange={(e) =>
-                  setForm({ ...form, backgroundAudioItemTransition: e.target.value as FormState['backgroundAudioItemTransition'] })
-                }
-              >
-                <option value="sequential">sequential</option>
-                <option value="gapless">gapless</option>
-                <option value="crossfade">crossfade</option>
-              </select>
-            </label>
-            {form.backgroundAudioItemTransition === 'crossfade' && (
-              <label className="form-field">
-                Crossfade duration (ms)
-                <input
-                  type="number"
-                  value={form.backgroundAudioCrossfadeMs}
-                  onChange={(e) => setForm({ ...form, backgroundAudioCrossfadeMs: e.target.value })}
+                  value={form.showPlaylistFppInstanceId}
+                  onChange={(e) => setForm({ ...form, showPlaylistFppInstanceId: e.target.value })}
                 />
               </label>
+              <div className="field">
+                <label className="field">
+                  <span className="field__label">Show playlist</span>
+                  <input
+                    className="field__input field__input--data"
+                    type="text"
+                    value={form.showPlaylistPlaylist}
+                    onChange={(e) => setForm({ ...form, showPlaylistPlaylist: e.target.value })}
+                  />
+                </label>
+                <span className="field__help">Referenced, never created: FPP owns this playlist.</span>
+              </div>
+            </div>
+          </section>
+
+          <section aria-labelledby="ns-rest" className="night-section">
+            <h3 id="ns-rest" className="t-meta night-eyebrow">
+              Resting
+            </h3>
+            <p className="t-small night-muted" style={{ maxWidth: '74ch' }}>
+              The loop that runs between cycles. Its own sequence decides how long a rest lasts; this definition
+              holds no duration for it.
+            </p>
+            <div className="night-field-grid">
+              <label className="field">
+                <span className="field__label">FPP instance</span>
+                <input
+                  className="field__input field__input--data"
+                  type="text"
+                  value={form.restingFppInstanceId}
+                  onChange={(e) => setForm({ ...form, restingFppInstanceId: e.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span className="field__label">Resting playlist</span>
+                <input
+                  className="field__input field__input--data"
+                  type="text"
+                  value={form.restingPlaylist}
+                  onChange={(e) => setForm({ ...form, restingPlaylist: e.target.value })}
+                />
+              </label>
+              <div className="field">
+                <label className="field">
+                  <span className="field__label">End-of-night playlist</span>
+                  <input
+                    className="field__input field__input--data"
+                    type="text"
+                    value={form.restingEndOfNightPlaylist}
+                    onChange={(e) => setForm({ ...form, restingEndOfNightPlaylist: e.target.value })}
+                  />
+                </label>
+                <span className="field__help">Left unset it is the resting playlist above.</span>
+              </div>
+              <div className="field">
+                <span className="field__label">Repeat after the last show</span>
+                <div className="segmented" style={{ width: 'max-content' }}>
+                  <button
+                    type="button"
+                    className="segmented__option"
+                    aria-pressed={!form.restingEndOfNightRepeat}
+                    disabled={!editable}
+                    onClick={() => setForm({ ...form, restingEndOfNightRepeat: false })}
+                  >
+                    Play once
+                  </button>
+                  <button
+                    type="button"
+                    className="segmented__option"
+                    aria-pressed={form.restingEndOfNightRepeat}
+                    disabled={!editable}
+                    onClick={() => setForm({ ...form, restingEndOfNightRepeat: true })}
+                  >
+                    Repeat
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="card night-card">
+              <p className="t-body" style={{ fontWeight: 500, margin: 0 }}>
+                Resting timeline asset
+              </p>
+              <p className="t-small night-muted">
+                One asset, named the way every asset is named: show, sequence, and the node that renders it. In{' '}
+                <span className="t-data">{showId}</span>.
+              </p>
+              <div className="night-field-grid">
+                <label className="field">
+                  <span className="field__label">Sequence</span>
+                  <input
+                    className="field__input field__input--data"
+                    type="text"
+                    value={form.restingTimelineSequence}
+                    onChange={(e) => setForm({ ...form, restingTimelineSequence: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span className="field__label">Target node</span>
+                  <input
+                    className="field__input field__input--data"
+                    type="text"
+                    value={form.restingTimelineTarget}
+                    onChange={(e) => setForm({ ...form, restingTimelineTarget: e.target.value })}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="card night-card">
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+                <div>
+                  <p className="t-body" style={{ fontWeight: 500, margin: 0 }}>
+                    Background audio
+                  </p>
+                  <p className="t-small night-muted">
+                    A ShowMesh background session, played over the resting loop. Configured here; a definition
+                    without it is complete, not degraded.
+                  </p>
+                </div>
+                <label className="field__check">
+                  <input
+                    type="checkbox"
+                    checked={form.backgroundAudioEnabled}
+                    onChange={(e) => setForm({ ...form, backgroundAudioEnabled: e.target.checked })}
+                  />
+                  Configure background audio
+                </label>
+              </div>
+              {form.backgroundAudioEnabled && (
+                <>
+                  <ol className="night-bg-list">
+                    {form.backgroundAudioItems.map((item, i) => (
+                      <li key={i} className="night-bg-list__row">
+                        <span className="t-data night-faint" aria-hidden="true">
+                          &#10303; {i + 1}
+                        </span>
+                        <input
+                          className="field__input field__input--data"
+                          type="text"
+                          placeholder="item id (stable, survives a reorder)"
+                          value={item.itemId}
+                          onChange={(e) => updateBackgroundAudioItem(i, { itemId: e.target.value })}
+                        />
+                        <input
+                          className="field__input field__input--data"
+                          type="text"
+                          placeholder="sequence"
+                          value={item.sequence}
+                          onChange={(e) => updateBackgroundAudioItem(i, { sequence: e.target.value })}
+                        />
+                        <input
+                          className="field__input field__input--data"
+                          type="text"
+                          placeholder="target node"
+                          value={item.target}
+                          onChange={(e) => updateBackgroundAudioItem(i, { target: e.target.value })}
+                        />
+                        <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} className="btn btn--quiet" onClick={() => removeBackgroundAudioItem(i)}>
+                          Remove
+                        </ScopedButton>
+                      </li>
+                    ))}
+                  </ol>
+                  <p className="t-small night-faint">
+                    Drag order is not yet editable here; add and remove items above. Item ids are stable and survive
+                    a reorder: a run refers to an item id, never to &ldquo;the second item&rdquo;.
+                  </p>
+                  <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} className="btn btn--secondary" onClick={addBackgroundAudioItem}>
+                    Add background audio item
+                  </ScopedButton>
+
+                  <div className="night-field-grid" style={{ marginTop: 12 }}>
+                    <label className="field">
+                      <span className="field__label">Repeat</span>
+                      <select
+                        className="field__input"
+                        value={form.backgroundAudioRepeat}
+                        onChange={(e) => setForm({ ...form, backgroundAudioRepeat: e.target.value as FormState['backgroundAudioRepeat'] })}
+                      >
+                        <option value="playlist">playlist</option>
+                        <option value="item">item</option>
+                        <option value="none">none</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span className="field__label">After an interruption</span>
+                      <select
+                        className="field__input"
+                        value={form.backgroundAudioResume}
+                        onChange={(e) => setForm({ ...form, backgroundAudioResume: e.target.value as FormState['backgroundAudioResume'] })}
+                      >
+                        <option value="resume">resume</option>
+                        <option value="restart">restart</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span className="field__label">Item transition</span>
+                      <select
+                        className="field__input"
+                        value={form.backgroundAudioItemTransition}
+                        onChange={(e) =>
+                          setForm({ ...form, backgroundAudioItemTransition: e.target.value as FormState['backgroundAudioItemTransition'] })
+                        }
+                      >
+                        <option value="crossfade">crossfade</option>
+                        <option value="gapless">gapless</option>
+                        <option value="sequential">sequential</option>
+                      </select>
+                    </label>
+                    {form.backgroundAudioItemTransition === 'crossfade' && (
+                      <div className="field">
+                        <label className="field">
+                          <span className="field__label">Crossfade (ms)</span>
+                          <input
+                            className="field__input field__input--data"
+                            type="number"
+                            value={form.backgroundAudioCrossfadeMs}
+                            onChange={(e) => setForm({ ...form, backgroundAudioCrossfadeMs: e.target.value })}
+                          />
+                        </label>
+                        <span className="field__help">Required for crossfade, refused for the other two.</span>
+                      </div>
+                    )}
+                    <div className="field">
+                      <label className="field">
+                        <span className="field__label">Ceiling (dB)</span>
+                        <input
+                          className="field__input field__input--data"
+                          type="number"
+                          value={form.backgroundAudioMaxGainDb}
+                          onChange={(e) => setForm({ ...form, backgroundAudioMaxGainDb: e.target.value })}
+                        />
+                      </label>
+                      <span className="field__help">0 dB or quieter.</span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+
+          <CueListEditor
+            id="ns-enter"
+            heading="Enter show"
+            offsetHelp="Offsets are relative to the show start. Negative runs before it."
+            cues={form.enterShowCues}
+            onUpdate={(i, patch) => updateCue('enterShowCues', i, patch)}
+            onAdd={() => addCue('enterShowCues')}
+            onRemove={(i) => removeCue('enterShowCues', i)}
+            blackoutLabel="Blackout hold (ms)"
+            blackoutHelp="Dark between the resting loop stopping and the show starting."
+            blackoutValue={form.enterShowBlackoutHoldMs}
+            onBlackoutChange={(v) => setForm({ ...form, enterShowBlackoutHoldMs: v })}
+          />
+
+          <CueListEditor
+            id="ns-return"
+            heading="Enter resting"
+            offsetHelp="Offsets are relative to the show ending."
+            cues={form.enterRestingCues}
+            onUpdate={(i, patch) => updateCue('enterRestingCues', i, patch)}
+            onAdd={() => addCue('enterRestingCues')}
+            onRemove={(i) => removeCue('enterRestingCues', i)}
+            blackoutLabel="Blackout after the show (ms)"
+            blackoutHelp="Dark before the resting loop picks up."
+            blackoutValue={form.enterRestingBlackoutAfterShowMs}
+            onBlackoutChange={(v) => setForm({ ...form, enterRestingBlackoutAfterShowMs: v })}
+          />
+
+          <section aria-labelledby="ns-site" className="night-section">
+            <h3 id="ns-site" className="t-meta night-eyebrow">
+              Site control &amp; interlocks
+            </h3>
+            <p className="t-small night-muted" style={{ maxWidth: '74ch' }}>
+              Both are optional in full. A definition that omits them runs the whole night loop unchanged.
+            </p>
+            <PlannedFeature
+              title="Site control"
+              why="night.session.siteControl (the presentation power-off binding and its prerequisites) is specified in the schema, but the endpoint that saves a night-session definition rejects the key if it is present. There is nowhere to send this yet, so it cannot be authored from here."
+            />
+            <PlannedFeature
+              title="Interlock authoring"
+              why="night.session.interlocks can be read back from a saved definition, but the save endpoint refuses the key outright, so there is no way to author, change, or remove an interlock rule from this form. A rule already stored by another means would still show up wherever the coordinator reports it; it just cannot be created or edited here."
+            />
+          </section>
+        </fieldset>
+
+        {editable && (
+          <div className="night-save-row">
+            {saveError !== null && (
+              <p role="alert" className="field__error">
+                {saveError}
+              </p>
             )}
-            <label className="form-field">
-              Max gain (dB, 0 or lower)
-              <input
-                type="number"
-                value={form.backgroundAudioMaxGainDb}
-                onChange={(e) => setForm({ ...form, backgroundAudioMaxGainDb: e.target.value })}
-              />
-            </label>
+            <ScopedButton
+              requiredScope={CONFIG_WRITE_SCOPE}
+              className="btn btn--primary"
+              onClick={() => void handleSave()}
+              busy={saving}
+              busyReason="Saving this definition…"
+            >
+              {saving ? 'Saving…' : isNew ? 'Create definition' : 'Save definition'}
+            </ScopedButton>
+            <button type="button" className="btn btn--quiet" onClick={() => navigate(showNightSessionsPath(showId))} disabled={saving}>
+              Discard changes
+            </button>
+            {!isNew && state.kind === 'loaded' && (
+              <span className="t-small night-muted night-save-row__revision">
+                Saving creates revision <span className="t-data">{state.config.revision + 1}</span>
+              </span>
+            )}
           </div>
         )}
 
-        <CueListEditor
-          heading="Enter-show Transition Steps"
-          cues={form.enterShowCues}
-          onUpdate={(i, patch) => updateCue('enterShowCues', i, patch)}
-          onAdd={() => addCue('enterShowCues')}
-          onRemove={(i) => removeCue('enterShowCues', i)}
-        />
-        <label className="form-field">
-          Blackout hold (ms)
-          <input
-            type="number"
-            value={form.enterShowBlackoutHoldMs}
-            onChange={(e) => setForm({ ...form, enterShowBlackoutHoldMs: e.target.value })}
-          />
-        </label>
-
-        <CueListEditor
-          heading="Enter-resting Transition Steps"
-          cues={form.enterRestingCues}
-          onUpdate={(i, patch) => updateCue('enterRestingCues', i, patch)}
-          onAdd={() => addCue('enterRestingCues')}
-          onRemove={(i) => removeCue('enterRestingCues', i)}
-        />
-        <label className="form-field">
-          Blackout-after-show (ms)
-          <input
-            type="number"
-            value={form.enterRestingBlackoutAfterShowMs}
-            onChange={(e) => setForm({ ...form, enterRestingBlackoutAfterShowMs: e.target.value })}
-          />
-        </label>
-      </fieldset>
-
-      {editable && (
-        <div style={{ marginTop: '1rem' }}>
-          {saveError !== null && (
-            <p role="alert" className="session-form__error">
-              {saveError}
+        {!isNew && state.kind === 'loaded' && (
+          <section aria-label="Status" className="night-section">
+            <p className="ruled-strip" role="status">
+              <span className="ruled-strip__state t-meta">Active revision</span>
+              <span className="ruled-strip__explanation">
+                {state.config.revision}
+                {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}.
+              </span>
             </p>
-          )}
-          <ScopedButton
-            requiredScope={CONFIG_WRITE_SCOPE}
-            onClick={() => void handleSave()}
-            busy={saving}
-            busyReason="Saving this Show Night revision…"
-          >
-            {saving ? 'Saving…' : isNew ? 'Create Show Night' : 'Save Show Night'}
-          </ScopedButton>
-        </div>
-      )}
-
-      {/* Status: what the coordinator currently reports about this night
-          session's stored configuration, kept apart from the authoring
-          fieldset above. The active-revision line stays outside any
-          <details>: it is short and always relevant, never a candidate
-          for hiding. Revision history is a long, rarely-consulted list,
-          a reasonable thing to start collapsed (per this seam's own
-          rule, nothing here can be stale/failed evidence; it is a plain
-          fetched list, not an EvidenceValue). */}
-      {!isNew && state.kind === 'loaded' && (
-        <section aria-label="Status">
-          <p className="panel" role="status">
-            Active revision {state.config.revision}
-            {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}.
-          </p>
-          {state.revisions.length > 0 && (
-            <details className="details-section">
-              <summary className="details-section__summary">Revision history</summary>
-              <table className="config-table">
-                <thead>
-                  <tr>
-                    <th>Revision</th>
-                    <th>Active</th>
-                    <th>Created at</th>
-                    <th>Created by</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.revisions.map((rev) => (
-                    <tr key={rev.revision}>
-                      <td>{rev.revision}</td>
-                      <td>{rev.active ? 'active' : ''}</td>
-                      <td>{formatAbsolute(rev.createdAt)}</td>
-                      <td>{rev.createdByPrincipalName ?? '-'}</td>
-                      <td>
-                        <button type="button" onClick={() => void viewRevision(rev.revision)}>
-                          View payload
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {revisionView.kind === 'loading' && <p className="text-muted">Loading revision {revisionView.revision}…</p>}
-              {revisionView.kind === 'error' && (
-                <p className="panel panel--error" role="alert">
-                  {revisionView.message}
-                </p>
-              )}
-              {revisionView.kind === 'loaded' && (
-                <div className="panel">
-                  <h4 className="panel__title">Revision {revisionView.revision} (immutable, may not be the active one)</h4>
-                  <pre className="table-scroll">{JSON.stringify(revisionView.config.payload, null, 2)}</pre>
+            {state.revisions.length > 0 && (
+              <details className="details-section">
+                <summary className="details-section__summary">Revision history</summary>
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Revision</th>
+                        <th>Active</th>
+                        <th>Created at</th>
+                        <th>Created by</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {state.revisions.map((rev) => (
+                        <tr key={rev.revision}>
+                          <td className="t-data">{rev.revision}</td>
+                          <td>{rev.active ? 'active' : ''}</td>
+                          <td className="t-data">{formatAbsolute(rev.createdAt)}</td>
+                          <td>{rev.createdByPrincipalName ?? '-'}</td>
+                          <td>
+                            <button type="button" className="btn btn--quiet" onClick={() => void viewRevision(rev.revision)}>
+                              View payload
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              )}
-            </details>
-          )}
-        </section>
-      )}
+                {revisionView.kind === 'loading' && (
+                  <p className="t-small night-muted">Loading revision {revisionView.revision}…</p>
+                )}
+                {revisionView.kind === 'error' && (
+                  <p className="ruled-strip ruled-strip--failed" role="alert">
+                    <span className="ruled-strip__state t-meta">Failed</span>
+                    <span className="ruled-strip__explanation">{revisionView.message}</span>
+                  </p>
+                )}
+                {revisionView.kind === 'loaded' && (
+                  <div className="card night-card">
+                    <p className="t-subhead" style={{ margin: 0 }}>
+                      Revision {revisionView.revision} (immutable, may not be the active one)
+                    </p>
+                    <pre className="table-wrap">{JSON.stringify(revisionView.config.payload, null, 2)}</pre>
+                  </div>
+                )}
+              </details>
+            )}
+          </section>
+        )}
 
-      <p className="text-muted">
-      See <Link to="/config/night.session.active">the active Show Night</Link> to change which
-        session the coordinator is currently running.
-      </p>
-    </div>
+        <p className="t-small night-muted">
+          Some phases refuse a new block interlock while the night is in them. If a save is withheld, the
+          coordinator names the phase and the rule.
+        </p>
+      </>
+    )
+  })()
+
+  return (
+    <ShowWorkspaceFrame showId={showId} active="night-sessions" data={workspaceData}>
+      {content}
+    </ShowWorkspaceFrame>
   )
 }
 
 function CueListEditor({
+  id,
   heading,
+  offsetHelp,
   cues,
   onUpdate,
   onAdd,
   onRemove,
+  blackoutLabel,
+  blackoutHelp,
+  blackoutValue,
+  onBlackoutChange,
 }: {
+  id: string
   heading: string
+  offsetHelp: string
   cues: CueForm[]
   onUpdate: (index: number, patch: Partial<CueForm>) => void
   onAdd: () => void
   onRemove: (index: number) => void
+  blackoutLabel: string
+  blackoutHelp: string
+  blackoutValue: string
+  onBlackoutChange: (v: string) => void
 }) {
+  const offsets = cues.map((c) => Number(c.offsetMs)).filter((n) => Number.isFinite(n))
+  const min = offsets.length > 0 ? Math.min(0, ...offsets) : 0
+  const max = offsets.length > 0 ? Math.max(0, ...offsets) : 0
+  const span = max - min || 1
+
   return (
-    <div>
-      <h3 className="panel__title">{heading}</h3>
-      {cues.length === 0 && <p className="text-muted">No Transition Steps yet.</p>}
-      {cues.map((cue, i) => (
-        <div key={i} className="panel" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-          <input type="text" placeholder="name" value={cue.name} onChange={(e) => onUpdate(i, { name: e.target.value })} />
-          <select value={cue.role} onChange={(e) => onUpdate(i, { role: e.target.value as CueRole })}>
-            {CUE_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-          <input type="text" placeholder="action id" value={cue.action} onChange={(e) => onUpdate(i, { action: e.target.value })} />
-          <input
-            type="number"
-            placeholder="offset ms (signed)"
-            value={cue.offsetMs}
-            onChange={(e) => onUpdate(i, { offsetMs: e.target.value })}
-          />
-          <input
-            type="number"
-            placeholder="fade duration ms (optional)"
-            value={cue.fadeDurationMs}
-            onChange={(e) => onUpdate(i, { fadeDurationMs: e.target.value })}
-          />
-          <label className="form-field--checkbox">
-            <input type="checkbox" checked={cue.barrier} onChange={(e) => onUpdate(i, { barrier: e.target.checked })} />
-            Barrier
-          </label>
-          <select value={cue.onFailure} onChange={(e) => onUpdate(i, { onFailure: e.target.value as CueOnFailure })}>
-            {CUE_ON_FAILURE.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-          {/* Review finding 12: `editable` (the caller's writeGate.allowed)
-              is a missing-scope reason, not a structural one — this is a
-              ScopedButton, always rendered, rather than an omitted
-              control (ADR-024 decision 12). */}
-          <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={() => onRemove(i)}>
-            Remove
-          </ScopedButton>
+    <section aria-labelledby={id} className="night-section">
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+        <h3 id={id} className="t-meta night-eyebrow">
+          {heading} <span className="night-muted">· {cues.length} {cues.length === 1 ? 'cue' : 'cues'}</span>
+        </h3>
+        <span className="t-small night-faint">{offsetHelp}</span>
+      </div>
+
+      {cues.length > 0 && (
+        <div className="night-timeline" role="img" aria-label={`${heading} timing, ${cues.length} cues from ${min} to ${max} milliseconds`}>
+          <div className="night-timeline__rule" aria-hidden="true" />
+          {cues.map((cue, i) => {
+            const offset = Number(cue.offsetMs)
+            const pct = Number.isFinite(offset) ? ((offset - min) / span) * 100 : 0
+            return (
+              <div
+                key={i}
+                className={`night-timeline__mark${cue.barrier ? ' night-timeline__mark--barrier' : ''}`}
+                style={{ left: `${pct}%` }}
+                aria-hidden="true"
+              >
+                <span className="night-timeline__mark-line" />
+                <span className="night-timeline__mark-label">{cue.name || `Cue ${i + 1}`}</span>
+              </div>
+            )
+          })}
         </div>
-      ))}
-      <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} onClick={onAdd}>
-        Add Transition Step
-      </ScopedButton>
-    </div>
+      )}
+
+      {cues.length === 0 && (
+        <p className="ruled-strip ruled-strip--empty" role="status">
+          <span className="ruled-strip__state t-meta">Empty</span>
+          <span className="ruled-strip__explanation">No Transition Steps yet.</span>
+        </p>
+      )}
+
+      {cues.length > 0 && (
+        <div className="table-wrap">
+          <table className="table table--full">
+            <thead>
+              <tr>
+                <th>Cue</th>
+                <th>Role</th>
+                <th>Offset</th>
+                <th>Fade</th>
+                <th>Barrier</th>
+                <th>On failure</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {cues.map((cue, i) => (
+                <tr key={i} className={cue.barrier ? 'night-row--barrier' : undefined}>
+                  <td>
+                    <input
+                      className="field__input field__input--data"
+                      type="text"
+                      placeholder="name"
+                      value={cue.name}
+                      onChange={(e) => onUpdate(i, { name: e.target.value })}
+                    />
+                    <input
+                      className="field__input field__input--data"
+                      style={{ marginTop: 4 }}
+                      type="text"
+                      placeholder="action id"
+                      value={cue.action}
+                      onChange={(e) => onUpdate(i, { action: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <select className="field__input" value={cue.role} onChange={(e) => onUpdate(i, { role: e.target.value as CueRole })}>
+                      {CUE_ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      className="field__input field__input--data"
+                      type="number"
+                      aria-label="Offset ms (signed)"
+                      placeholder="offset ms (signed)"
+                      value={cue.offsetMs}
+                      onChange={(e) => onUpdate(i, { offsetMs: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="field__input field__input--data"
+                      type="number"
+                      aria-label="Fade duration ms (optional)"
+                      placeholder="fade duration ms (optional)"
+                      value={cue.fadeDurationMs}
+                      onChange={(e) => onUpdate(i, { fadeDurationMs: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <label className="field__check">
+                      <input type="checkbox" checked={cue.barrier} onChange={(e) => onUpdate(i, { barrier: e.target.checked })} />
+                      Barrier
+                    </label>
+                  </td>
+                  <td>
+                    <select className="field__input" value={cue.onFailure} onChange={(e) => onUpdate(i, { onFailure: e.target.value as CueOnFailure })}>
+                      {CUE_ON_FAILURE.map((f) => (
+                        <option key={f} value={f}>
+                          {f}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} className="btn btn--quiet" onClick={() => onRemove(i)}>
+                      Remove
+                    </ScopedButton>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="night-blackout-row">
+        <div className="field" style={{ maxWidth: '16rem' }}>
+          <label className="field">
+            <span className="field__label">{blackoutLabel}</span>
+            <input className="field__input field__input--data" type="number" value={blackoutValue} onChange={(e) => onBlackoutChange(e.target.value)} />
+          </label>
+          <span className="field__help">{blackoutHelp}</span>
+        </div>
+        <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} className="btn btn--secondary" onClick={onAdd}>
+          Add cue
+        </ScopedButton>
+      </div>
+    </section>
   )
 }

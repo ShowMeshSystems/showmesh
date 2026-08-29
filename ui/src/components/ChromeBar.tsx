@@ -93,14 +93,14 @@ function ModeBadge() {
 
   if (state.kind === 'loading') {
     return (
-      <Link to="/config/mode" className="chrome__mode-badge t-meta" aria-label="Show mode">
+      <Link to="/settings/mode" className="chrome__mode-badge t-meta" aria-label="Show mode">
         Mode: loading…
       </Link>
     )
   }
   if (state.kind === 'error') {
     return (
-      <Link to="/config/mode" className="chrome__mode-badge t-meta" aria-label="Show mode" title={state.message}>
+      <Link to="/settings/mode" className="chrome__mode-badge t-meta" aria-label="Show mode" title={state.message}>
         Mode: cannot be read
       </Link>
     )
@@ -110,7 +110,7 @@ function ModeBadge() {
   const modeLabel = mode === 'show' ? 'Show mode' : 'Program mode'
   return (
     <Link
-      to="/config/mode"
+      to="/settings/mode"
       className="chrome__mode-badge t-meta"
       aria-label="Show mode"
       title={state.config.resolumeWebSocketEffect}

@@ -225,13 +225,16 @@ export interface ShowPlaylistDetailProps {
 }
 
 export function ShowPlaylistDetail({ isNew = false }: ShowPlaylistDetailProps) {
-  const params = useParams<{ showId: string; playlistId: string }>()
+  // App.tsx's real route is `shows/:showId/playlists/:id`; `playlistId`
+  // is kept as a fallback so an older link/test using that name still
+  // resolves.
+  const params = useParams<{ showId: string; playlistId?: string; id?: string }>()
   const showId = params.showId ?? ''
   const navigate = useNavigate()
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const existingId = isNew ? undefined : params.playlistId
+  const existingId = isNew ? undefined : (params.playlistId ?? params.id)
   const workspaceData = useShowWorkspaceData(showId)
 
   const [state, setState] = useState<LoadState>(isNew ? { kind: 'new' } : { kind: 'loading' })
@@ -684,6 +687,27 @@ export function ShowPlaylistDetail({ isNew = false }: ShowPlaylistDetailProps) {
                   LTC is emitted unless a cue declares it.
                 </span>
               </div>
+
+              {/* The settings object is optional on the payload, so this has to be
+                  clearable. Without it a playlist that once carried showmeshAudio
+                  could never have it removed again: every other control only ever
+                  sets it, and the sole workaround was switching runner away and
+                  back, which silently discards mismatch policy and safe cue too. */}
+              <label className="field__check" style={{ marginTop: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={form.showmeshAudioEnabled}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    setForm({ ...form, showmeshAudioEnabled: event.target.checked })
+                  }
+                />
+                <span>Configure showmesh-audio settings</span>
+              </label>
+              <p className="field__help" style={{ marginTop: 4 }}>
+                Cleared, this playlist is saved without a showmesh-audio settings object and the
+                coordinator's own defaults apply.
+              </p>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
                 <span className="t-meta shows-faint">Repeat</span>

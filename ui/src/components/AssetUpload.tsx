@@ -301,7 +301,7 @@ export function AssetUpload({ onUploaded, lockedShow, knownSequences, identityCa
               />
             )}
             <span className="field__error" role="alert">
-              Identity needs a target. There is no default — two targets&rsquo; files for one sequence share this filename, and picking wrong sends a node another node&rsquo;s content.
+              Identity needs a target. There is no default. Two targets&rsquo; files for one sequence share this filename, and picking wrong sends a node another node&rsquo;s content.
             </span>
           </label>
         )}

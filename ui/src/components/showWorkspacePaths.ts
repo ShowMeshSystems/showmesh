@@ -6,13 +6,15 @@
  * keeps the tab strip and the show in the breadcrumb, because the route
  * itself is nested under the show.
  *
- * Five tabs exist on the workspace (UI-DESIGN-GUIDE.md section 3):
- * Playlists, Cues, Assets, Presentation, Automation. This group (screen
- * builder C) owns Playlists, Cues and Presentation; Assets and
- * Automation are owned elsewhere and are routed to here without their
- * panels being built here.
+ * Six tabs exist on the workspace (UI-DESIGN-GUIDE.md section 3, extended
+ * by the Show Night Session mock): Playlists, Cues, Assets, Presentation,
+ * Automation, and Night session. This group (screen builder C) owns
+ * Playlists, Cues and Presentation; Assets and Automation are owned
+ * elsewhere and are routed to here without their panels being built
+ * here. Night session (the definitions list, editor, and activation) is
+ * owned by this group too.
  */
-export type ShowWorkspaceTab = 'playlists' | 'cues' | 'assets' | 'presentation' | 'automation'
+export type ShowWorkspaceTab = 'playlists' | 'cues' | 'assets' | 'presentation' | 'automation' | 'night-sessions'
 
 export function showPath(showId: string): string {
   return `/shows/${encodeURIComponent(showId)}`
@@ -72,4 +74,16 @@ export function showAssetsPath(showId: string): string {
 
 export function showAutomationPath(showId: string): string {
   return showWorkspacePath(showId, 'automation')
+}
+
+export function showNightSessionsPath(showId: string): string {
+  return showWorkspacePath(showId, 'night-sessions')
+}
+
+export function showNightSessionNewPath(showId: string): string {
+  return `${showNightSessionsPath(showId)}/new`
+}
+
+export function showNightSessionPath(showId: string, id: string): string {
+  return `${showNightSessionsPath(showId)}/${encodeURIComponent(id)}`
 }

@@ -34,8 +34,6 @@ import { NodeRoutingSettings } from '../views/settings/NodeRoutingSettings'
 // ADR-039/ADR-018: the audio.settings engine-wide singleton and audio.node
 // per-node object, the last two configuration kinds that shipped with a
 // full API path/showmeshctl coverage and no Operator UI control.
-import { AudioSettings } from '../views/AudioSettings'
-import { AudioNodes } from '../views/AudioNodes'
 import { AudioNodeDetail } from '../views/AudioNodeDetail'
 import { MacroDetail } from '../views/MacroDetail'
 import { MacroRunView } from '../views/MacroRunView'
@@ -68,7 +66,6 @@ import { AssetManifest } from '../views/AssetManifest'
 import { NightSession } from '../views/NightSession'
 import { NightSessions } from '../views/NightSessions'
 import { NightSessionDetail } from '../views/NightSessionDetail'
-import { NightSessionActive } from '../views/NightSessionActive'
 // TRACK-H-H2-SPEC.md §5/§6: the show-night Playlist readiness and FPP
 // instance reconciliation verdicts, previously reachable only from
 // `showmeshctl fpp`.
@@ -76,7 +73,6 @@ import { Readiness } from '../views/PlaylistReadiness'
 // TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
 // evidence, an authoring surface (unlike PlaylistReadiness above), so it
 // routes under Configure rather than Show night.
-import { FPPPlaylistDefinitions } from '../views/FPPPlaylistDefinitions'
 import { FPPPlaylistDefinitionDetail } from '../views/FPPPlaylistDefinitionDetail'
 import { NotFound } from '../views/NotFound'
 import '../styles/index.css'
@@ -219,20 +215,23 @@ export default function App() {
             <Route path="shows/:showId" element={<ShowDetail />} />
             <Route path="shows/:showId/playlists" element={<ShowPlaylists />} />
             <Route path="shows/:showId/playlists/new" element={<ShowPlaylistDetail isNew />} />
-            <Route path="shows/:showId/playlists/:id" element={<ShowPlaylistDetail />} />
+            <Route path="shows/:showId/playlists/:playlistId" element={<ShowPlaylistDetail />} />
             <Route path="shows/:showId/cues" element={<ShowCues />} />
             <Route path="shows/:showId/cues/new" element={<ShowCueDetail isNew />} />
-            <Route path="shows/:showId/cues/:id" element={<ShowCueDetail />} />
+            <Route path="shows/:showId/cues/:cueId" element={<ShowCueDetail />} />
             <Route path="shows/:showId/assets" element={<Assets />} />
             <Route path="shows/:showId/presentation" element={<ShowSurfaces />} />
             <Route path="shows/:showId/presentation/new" element={<ShowSurfaceDetail isNew />} />
             <Route path="shows/:showId/presentation/:id" element={<ShowSurfaceDetail />} />
+            <Route path="shows/:showId/night-sessions" element={<NightSessions />} />
+            <Route path="shows/:showId/night-sessions/new" element={<NightSessionDetail isNew />} />
+            <Route path="shows/:showId/night-sessions/:id" element={<NightSessionDetail />} />
             <Route path="shows/:showId/automation" element={<ShowActions />} />
             <Route path="shows/:showId/automation/actions/new" element={<ShowActionDetail isNew />} />
             <Route path="shows/:showId/automation/actions/:actionId" element={<ShowActionDetail />} />
             <Route path="shows/:showId/automation/macros/new" element={<MacroDetail isNew />} />
-            <Route path="shows/:showId/automation/macros/:id" element={<MacroDetail />} />
-            <Route path="shows/:showId/automation/macros/:id/runs/:runId" element={<MacroRunView />} />
+            <Route path="shows/:showId/automation/macros/:macroId" element={<MacroDetail />} />
+            <Route path="shows/:showId/automation/macros/:macroId/runs/:runId" element={<MacroRunView />} />
 
             {/* Author: Assets, cross-show. */}
             <Route path="assets" element={<Assets />} />
@@ -247,6 +246,10 @@ export default function App() {
             <Route path="monitor/fleet/fpp/:instanceId" element={<FPPDetail />} />
             <Route path="monitor/fleet/resolume" element={<ResolumeView />} />
             <Route path="monitor/fleet/resolume/:instanceId" element={<ResolumeView />} />
+            <Route
+              path="monitor/fleet/playlist-definitions/:instanceUuid/:playlistHash"
+              element={<FPPPlaylistDefinitionDetail />}
+            />
             <Route path="monitor/signals" element={<Observations />} />
             <Route path="monitor/activity" element={<Events />} />
             <Route path="monitor/capabilities" element={<Capabilities />} />
@@ -260,27 +263,19 @@ export default function App() {
             <Route path="settings/appearance" element={<AppearanceSettings />} />
             <Route path="settings/audio-defaults" element={<AudioDefaultsSettings />} />
             <Route path="settings/node-routing" element={<NodeRoutingSettings />} />
+            {/* Declaring routing for a node that has NOT advertised yet. The tab's
+                own Declare action reuses an advertising agent's node id, which is
+                the safe default; this is the escape hatch for a node that has not
+                come up, and it is the only path that accepts a typed id. */}
+            <Route path="settings/node-routing/new" element={<AudioNodeDetail isNew />} />
             <Route path="settings/mode" element={<ModeSettings />} />
             <Route path="access" element={<Access />} />
 
-            {/* Awaiting an owner ruling on where these live in the new IA.
-                They are mounted at their existing addresses so no control
-                becomes unreachable in the meantime. Nothing here is deleted
-                without the owner's explicit authorisation. */}
-            <Route path="config/night.session" element={<NightSessions />} />
-            <Route path="config/night.session/new" element={<NightSessionDetail isNew />} />
-            <Route path="config/night.session/:id" element={<NightSessionDetail />} />
-            <Route path="config/night.session.active" element={<NightSessionActive />} />
-            <Route path="config/fpp-playlist-definitions" element={<FPPPlaylistDefinitions />} />
-            <Route
-              path="config/fpp-playlist-definitions/:instanceUuid/:playlistHash"
-              element={<FPPPlaylistDefinitionDetail />}
-            />
-            <Route path="config/audio.node" element={<AudioNodes />} />
-            <Route path="config/audio.node/new" element={<AudioNodeDetail isNew />} />
-            <Route path="config/audio.node/:id" element={<AudioNodeDetail />} />
-            <Route path="config/audio.settings" element={<AudioSettings />} />
-
+            {/* Every one of these had no home when the overhaul began. All four
+                now do, so their old addresses answer with the not-found migration
+                guide like every other retired route. Nothing was deleted: the
+                night-session editor moved to the Shows workspace, playlist
+                definitions to Monitor Fleet, and audio node routing to Settings. */}
             <Route path="*" element={<NotFound />} />
           </Route>
           </Routes>

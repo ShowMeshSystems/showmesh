@@ -9,6 +9,7 @@ import type { Asset, NodeAssetManifest } from '../app/types'
 import { AssetsSequenceTable } from './assets/AssetsSequenceTable'
 import { AssetHistoryPanel } from './assets/AssetHistoryPanel'
 import { manifestByNode, showWideGapNodes, verdictForNodeTarget } from './assets/nodeVerdict'
+import { SequenceCoverageSection } from './assets/SequenceCoverageSection'
 import '../styles/assets.css'
 
 // Track G seam G-8: the asset browser (ADR-028). Show-scoped
@@ -194,6 +195,14 @@ function ShowScopedAssets({ showId }: { showId: string }) {
                 onSelectRow={(row) => setPane({ kind: 'history', row })}
               />
             </div>
+
+            <SequenceCoverageSection
+              showId={showId}
+              assets={state.assets}
+              manifestNodes={state.manifestNodes}
+              allowed={readGate.allowed}
+              onUploadFor={() => setPane({ kind: 'upload' })}
+            />
           </section>
 
           <aside>

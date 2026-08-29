@@ -179,13 +179,15 @@ export interface ShowCueDetailProps {
 }
 
 export function ShowCueDetail({ isNew = false }: ShowCueDetailProps) {
-  const params = useParams<{ showId: string; cueId: string }>()
+  // App.tsx's real route is `shows/:showId/cues/:id`; `cueId` is kept as
+  // a fallback so an older link/test using that name still resolves.
+  const params = useParams<{ showId: string; cueId?: string; id?: string }>()
   const showId = params.showId ?? ''
   const navigate = useNavigate()
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const existingId = isNew ? undefined : params.cueId
+  const existingId = isNew ? undefined : (params.cueId ?? params.id)
   const workspaceData = useShowWorkspaceData(showId)
 
   type LoadState =

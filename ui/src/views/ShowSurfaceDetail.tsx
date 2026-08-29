@@ -5,6 +5,7 @@ import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/sessio
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
+import { ShowSelect } from '../components/ShowSelect'
 import { ShowWorkspaceFrame, useShowWorkspaceData } from '../components/ShowWorkspace'
 import { showSurfacePath } from '../components/showWorkspacePaths'
 import '../styles/shows.css'
@@ -114,13 +115,16 @@ export interface ShowSurfaceDetailProps {
 }
 
 export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
-  const params = useParams<{ showId: string; surfaceId: string }>()
+  // App.tsx's route is `shows/:showId/presentation/:id` (matching
+  // showSurfacePath's own address), so the object id param is `id`, not
+  // `surfaceId`.
+  const params = useParams<{ showId: string; id: string }>()
   const showId = params.showId ?? ''
   const navigate = useNavigate()
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const existingId = isNew ? undefined : params.surfaceId
+  const existingId = isNew ? undefined : params.id
   const workspaceData = useShowWorkspaceData(showId)
 
   type LoadState =
@@ -180,6 +184,14 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
       const resp = await putShowSurface(id, built.payload)
       if (isNew) {
         navigate(showSurfacePath(showId, id))
+        return
+      }
+      if (built.payload.show !== showId) {
+        // Saved into a different show than the route names: this URL's
+        // :showId no longer matches the surface's own show, so land on
+        // the object at its new show-scoped address rather than leaving
+        // the operator on a stale one.
+        navigate(showSurfacePath(built.payload.show, id))
         return
       }
       setState((prev) => (prev.kind === 'loaded' ? { ...prev, config: resp } : prev))
@@ -310,7 +322,7 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
               <span className="t-data" style={{ color: 'var(--text)' }}>
                 {form.width || '0'} &times; {form.height || '0'} &times; {cpp} = {derivedChannelCount.toLocaleString()}
               </span>{' '}
-              &mdash; the coordinator requires the count to equal the geometry exactly, so it is
+              The coordinator requires the count to equal the geometry exactly, so it is
               derived here rather than typed.
             </p>
           </section>
@@ -368,6 +380,20 @@ export function ShowSurfaceDetail({ isNew = false }: ShowSurfaceDetailProps) {
             />
             <span className="field__help">1&ndash;120. The 40 fps NDI target is unvalidated design intent, not a supported profile.</span>
           </label>
+
+          {!isNew && (
+            <section aria-labelledby="sp-move" style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+              <h3 id="sp-move" className="t-meta shows-faint">
+                Move to another show
+              </h3>
+              <ShowSelect ariaLabel="Move to another show" value={form.show} onChange={(show) => setForm({ ...form, show })} />
+              <p className="field__help">
+                Moving this surface out of {showId} removes it from render readiness for playlists
+                there: any cue that renders on this node will no longer find a surface assignment,
+                until a new one is added in {showId}.
+              </p>
+            </section>
+          )}
         </fieldset>
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 14px', background: 'var(--raised)' }}>

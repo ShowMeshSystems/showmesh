@@ -10,12 +10,12 @@ import { showPath, showWorkspacePath, type ShowWorkspaceTab } from './showWorksp
 
 /**
  * The real nested route tree for the show authoring workspace
- * (ROUTE-MAP.md, UI-DESIGN-GUIDE.md section 3): five tabs, all under
+ * (ROUTE-MAP.md, UI-DESIGN-GUIDE.md section 3): six tabs, all under
  * `/shows/:showId/*`. No tab is a `<Navigate replace>` out to a global
  * route with a `?show=` query parameter — that scheme is gone. Screen
- * builder C (this group) owns Playlists, Cues and Presentation; Assets
- * and Automation are owned elsewhere and are only routed to here, never
- * built here.
+ * builder C (this group) owns Playlists, Cues, Presentation and Night
+ * session; Assets and Automation are owned elsewhere and are only routed
+ * to here, never built here.
  */
 const TABS: Array<{ id: ShowWorkspaceTab; label: string }> = [
   { id: 'playlists', label: 'Playlists' },
@@ -23,6 +23,7 @@ const TABS: Array<{ id: ShowWorkspaceTab; label: string }> = [
   { id: 'assets', label: 'Assets' },
   { id: 'presentation', label: 'Presentation' },
   { id: 'automation', label: 'Automation' },
+  { id: 'night-sessions', label: 'Night session' },
 ]
 
 const READ_SCOPES = ['show:macro:run', 'config:write']
@@ -33,6 +34,7 @@ export interface ShowWorkspaceCounts {
   assets: number
   presentation: number
   automation: number
+  'night-sessions': number
 }
 
 export type ShowWorkspaceDataState =
@@ -65,8 +67,9 @@ export function useShowWorkspaceData(showId: string, enabled = true): ShowWorksp
       listConfigObjects('show.surface', showId),
       listConfigObjects('show.macro', showId),
       listAssets({ show: showId }),
+      listConfigObjects('night.session', showId),
     ])
-      .then(([show, playlists, cues, surfaces, macros, assets]) => {
+      .then(([show, playlists, cues, surfaces, macros, assets, nightSessions]) => {
         if (cancelled) return
         setState({
           kind: 'loaded',
@@ -77,6 +80,7 @@ export function useShowWorkspaceData(showId: string, enabled = true): ShowWorksp
             presentation: surfaces.objects.length,
             automation: macros.objects.length,
             assets: assets.assets.length,
+            'night-sessions': nightSessions.objects.length,
           },
         })
       })

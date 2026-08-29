@@ -139,7 +139,7 @@ export function LiveControl() {
     <div className="operator-page live-control-page">
       <OperatorPageHeader
         title="Live Control"
-        lede="Acting on the show that is running now. A command is not successful because it was sent — each one reports the evidence that it took effect, or why it did not."
+        lede="Acting on the show that is running now. A command is not successful because it was sent. Each one reports the evidence that it took effect, or why it did not."
         actions={<Link className="button button--secondary" to="/">Back to dashboard</Link>}
       />
 
@@ -250,14 +250,12 @@ export function LiveControl() {
           <article className="live-control-group">
             <h3>Active show</h3>
             <p className="text-muted">{activeShowDetail(model)}</p>
-            <span className="scoped-button">
-              <button type="button" className="btn btn--secondary" disabled={true} aria-disabled="true" title="Active-show selection has no route yet; the owner is placing the night-session definition editor that will host it.">
-                Select active show
-              </button>
-              <span className="scoped-button__reason">
-                Active-show selection has no route yet; the owner is placing the night-session definition editor that will host it.
-              </span>
-            </span>
+            {/* Switching the active show is an audited change that invalidates the
+                previous show's authority, so it is made where its consequences and
+                its history are visible, on Shows, rather than inline here. */}
+            <Link to="/shows" className="btn btn--secondary">
+              Change the active show
+            </Link>
           </article>
           <article className="live-control-group">
             <ShowModePanel headingLevel={3} />

@@ -233,9 +233,19 @@ export interface AudioNodeDetailProps {
    * validation.
    */
   nodeIdOverride?: string
+  /**
+   * Settings > Node routing's "Not declared yet" group (revision-1
+   * Settings.dc.html): declaring a node reuses the agent's own reported
+   * node id, so there is nothing to type. When given, this both seeds and
+   * fixes `newId` and the id-entry controls below are not rendered --
+   * the derived group already restricted the choice to a node that
+   * advertised itself with no `audio.node` object, so retyping it would
+   * only reopen the typo class the derived list exists to close.
+   */
+  presetNewNodeId?: string
 }
 
-export function AudioNodeDetail({ isNew = false, nodeIdOverride }: AudioNodeDetailProps) {
+export function AudioNodeDetail({ isNew = false, nodeIdOverride, presetNewNodeId }: AudioNodeDetailProps) {
   const { clearUnsavedChanges } = useUnsavedChanges('audio-node-detail')
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -244,7 +254,7 @@ export function AudioNodeDetail({ isNew = false, nodeIdOverride }: AudioNodeDeta
   const existingId = isNew ? undefined : (nodeIdOverride ?? params.id)
 
   const [state, setState] = useState<LoadState>(isNew ? { kind: 'new' } : { kind: 'loading' })
-  const [newId, setNewId] = useState('')
+  const [newId, setNewId] = useState(presetNewNodeId ?? '')
   const [form, setForm] = useState<FormState>(emptyForm())
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -304,7 +314,7 @@ export function AudioNodeDetail({ isNew = false, nodeIdOverride }: AudioNodeDeta
       const resp = await putAudioNode(id, built.payload)
       clearUnsavedChanges()
       if (isNew) {
-        navigate(`/config/audio.node/${encodeURIComponent(id)}`)
+        navigate(`/settings/node-routing`)
         return
       }
       setState((prev) => (prev.kind === 'loaded' ? { ...prev, config: resp } : prev))
@@ -364,7 +374,9 @@ export function AudioNodeDetail({ isNew = false, nodeIdOverride }: AudioNodeDeta
       <p className="settings-breadcrumb">
         <a href="/config">Settings</a> / <a href="/config/audio.node">Audio routing</a>
       </p>
-      <h2 className="panel__title">{isNew ? 'New audio node' : existingId}</h2>
+      <h2 className="panel__title">
+        {isNew ? (presetNewNodeId !== undefined ? `Declare ${presetNewNodeId}` : 'New audio node') : existingId}
+      </h2>
       <p className="text-muted">
         This node&rsquo;s program and LTC output routes, channel assignment, and declared clock
         domain. <code>programRoute</code>/<code>ltcRoute</code> are cross-checked, live,
@@ -372,7 +384,14 @@ export function AudioNodeDetail({ isNew = false, nodeIdOverride }: AudioNodeDeta
         advertised is refused.
       </p>
 
-      {isNew && (
+      {isNew && presetNewNodeId !== undefined && (
+        <p className="t-small text-muted" role="note">
+          Declaring routing for <code>{presetNewNodeId}</code>, the node id this agent already
+          reports. There is nothing to type.
+        </p>
+      )}
+
+      {isNew && presetNewNodeId === undefined && (
         <>
           <label className="form-field">
             Select an observed audio node

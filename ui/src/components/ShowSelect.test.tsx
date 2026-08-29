@@ -117,7 +117,7 @@ describe('ShowSelect', () => {
     await waitFor(() => expect(screen.getByText(/No shows are configured yet/)).toBeVisible())
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Create a show' })).toHaveAttribute('href', '/config/show/new')
+    expect(screen.getByRole('link', { name: 'Create a show' })).toHaveAttribute('href', '/shows/new')
   })
 
   // The empty-list case combined with an existing value: the list is
