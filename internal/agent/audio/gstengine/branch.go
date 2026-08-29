@@ -377,6 +377,8 @@ func setElementsStateNow(b *branch, state gst.State) error {
 // a streaming task, which then races decodebin's switch to pull mode;
 // when the task wins that race its push is refused and filesrc posts
 // "Internal data stream error" against a branch that is still loading.
+// The direction is read off the target state, which is correct only
+// while NULL is the sole downward transition this package makes.
 func stateChangeOrder(els []gst.Element, state gst.State) []gst.Element {
 	if state == gst.StateNull {
 		return els
