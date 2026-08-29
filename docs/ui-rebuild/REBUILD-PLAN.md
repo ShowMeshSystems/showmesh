@@ -78,6 +78,25 @@ real component plus a real CSS class, with `/_specimen` rendering the whole kit
 in three themes and both densities. That page is the acceptance gate for the
 visual language.
 
+## Where the rebuild is
+
+| Screen | State | PR |
+|---|---|---|
+| Clear the old UI, shell, session bands, not-found | Done | on the branch, `1a1eed1` |
+| Dashboard | Done | #196 |
+| Live Control | Done | #197 |
+| Show Night | Done | #198 |
+| Monitor and its facets | Next | |
+| Shows workspace, five tabs | | |
+| Node detail | | |
+| Settings, seven tabs | | |
+| Access | | |
+| Resolume Config | | |
+| Session states | | |
+| Delete the old system | | |
+
+Each PR is stacked on the one before it, so its diff is only its own screen.
+
 ## Phase 1: rebuild screens, one screen at a time
 
 Fixed procedure. No deviation.
