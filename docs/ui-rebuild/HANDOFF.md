@@ -23,19 +23,6 @@ the session ended: check them before doing anything else.
 Nothing has been merged. Eric reviews and merges; do not merge for him unless
 he says so in that session.
 
-## The working tree is not clean
-
-Two uncommitted edits sit on `ui-rebuild/monitor`, both removing a hardcoded
-`erbartos` that was mine, not the app's:
-
-- `ui/scripts/dev-fixture-server.mjs`: the fixture principal, the night-session
-  authorization, two event sources and a config author now read
-  `fixture-operator`.
-- `ui/src/kit/Specimen.tsx`: the chrome-bar specimen now reads `operator`.
-
-Commit or discard them deliberately. The application itself never hardcoded a
-name: `app/Layout.tsx` reads `model.session?.principal?.name`.
-
 ## What to do next
 
 Eric's ruling at the end of the session: **the login screen comes before the
