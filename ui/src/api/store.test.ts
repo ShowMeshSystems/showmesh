@@ -29,7 +29,7 @@ import {
 import {
   makeRemote01Instance,
   makeRemote04Instance,
-} from '../app/test-support/fppFleetFixtures'
+} from './test-support/fppFleetFixtures'
 import type { components } from './generated/schema'
 
 type Evidence = components['schemas']['Evidence']

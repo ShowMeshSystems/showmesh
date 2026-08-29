@@ -1,4 +1,5 @@
-/* The kit. Import once. Phase 2 deletes ../../styles/index.css. */
+/* The kit. The only stylesheet tree in this app. Imported once, from App. */
+@import './fonts.css';
 @import './tokens.css';
 @import './base.css';
 @import './type.css';

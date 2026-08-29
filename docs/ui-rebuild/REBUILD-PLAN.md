@@ -44,6 +44,12 @@ A rebuilt screen is written from the mock and the API contract. It is not
 written by reading the old screen and restyling it. The old page is consulted
 once, for the control inventory in step 2 below, and then deleted.
 
+`ui/src/domain` holds the non-visual rules a screen needs: sign-in state, the
+scope gate and its wording, freshness and age, signal grouping. It started with
+`session.ts` only. A module returns to it one at a time, reviewed as it is
+restored, when the screen that needs it is rebuilt. Nothing comes back because
+it happened to be there before.
+
 **The risk I am carrying, stated once.** Some behaviour lives only in old code:
 freshness and absence classification, FPP signal lookup, the derived numbers the
 guide's §7 lists, the exact wording of scope-denial reasons. Where the rule is
@@ -91,7 +97,10 @@ Fixed procedure. No deviation.
 
 Order, as agreed:
 
-1. Dashboard (carries the app shell: chrome bar, rail, theme and density root)
+0. Clear the old UI and stand up the shell (chrome bar, rail, theme and density
+   root, session bands, not-found map, a blanking plate on every route the
+   rebuild has not reached)
+1. Dashboard
 2. Live Control
 3. Show Night, including the night-session list and detail
 4. Monitor and its facets: Fleet, Signals, Activity, Capabilities, Manifest
@@ -101,6 +110,10 @@ Order, as agreed:
 8. Access
 9. Resolume Config
 10. Session states: signed out, bootstrap, not found, connecting
+
+The chrome bar's show picker, mode badge, cycle and time to next transition
+arrive with the screens that own their data: Shows, Settings › Mode, and Show
+Night. The bar renders what the model already carries until then.
 
 `OperatorPageHeader` dies at the first screen. No mock has an eyebrow or a header
 button cluster; every mock is `h1` plus one muted subtitle line.

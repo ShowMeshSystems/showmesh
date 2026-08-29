@@ -164,12 +164,15 @@
 .sm-shell-body {
   display: grid;
   grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  min-height: calc(100vh - var(--chrome-h));
 }
 
 .sm-rail {
   position: sticky;
   top: calc(var(--chrome-h) + 1px);
   align-self: start;
+  /* The divider runs the height of the page, not the height of the links. */
+  min-height: calc(100vh - var(--chrome-h));
   padding: 10px 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
@@ -279,4 +282,33 @@
   .sm-panes {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/*
+ * Signed out and bootstrap are bands in the document flow, not a wall. The
+ * chrome and rail stay; the band pushes the page down.
+ */
+.sm-band {
+  padding: var(--s-4) var(--s-5);
+  background: var(--sunken);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-band__form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.sm-band__form + .sm-band__form {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.sm-band__error {
+  margin: var(--s-3) 0 0;
+  color: var(--bad-fg);
+  font: var(--t-small);
 }

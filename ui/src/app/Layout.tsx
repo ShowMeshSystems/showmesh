@@ -1,228 +1,99 @@
-import { useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
-import { getServiceDescriptor, type ServiceDescriptor } from '../api'
-import { ChromeBar } from '../components/ChromeBar'
-import { NavRail } from '../components/NavRail'
-import { ConnectionBanner } from '../components/ConnectionBanner'
-import { TokenPrompt } from '../components/TokenPrompt'
-import { SessionPanel, SessionIdentity } from '../components/SessionPanel'
-import { describeApiError, describeSignInState } from './session'
-import { useTheme, type Theme } from './useTheme'
+import {
+  ChromeBar,
+  ChromeProgress,
+  ConnectionPill,
+  Rail,
+  RailGroup,
+  RailLink,
+  ShellBody,
+  type Connection,
+} from '../kit'
+import type { ConnectionState, Model } from '../api'
+import { describeSignInState } from '../domain/session'
 import { useModelContext } from './ModelContext'
-import type { ConnectionState } from '../api/domain'
+import { BootstrapBand, SignedOutBand } from './SessionBand'
 
-export interface LayoutProps {
-  /** Wired to seam B's token submission (spec section 5.6); App.tsx supplies it. */
-  onSubmitToken: (token: string) => void
+const CONNECTION_LABEL: Record<Connection, string> = {
+  live: 'Live',
+  degraded: 'Degraded',
+  lost: 'Lost',
+  unknown: 'Unknown',
 }
 
-const THEME_OPTIONS: { value: Theme; label: string }[] = [
-  { value: 'system', label: 'System' },
-  { value: 'dark', label: 'Dark' },
-  { value: 'light', label: 'Light' },
-  { value: 'contrast', label: 'Contrast' },
-]
+function connectionOf(state: ConnectionState): Connection {
+  switch (state.kind) {
+    case 'live':
+      return 'live'
+    case 'connecting':
+      return 'unknown'
+    case 'reconnecting':
+      return 'degraded'
+    default:
+      return 'lost'
+  }
+}
 
 /**
- * Phase 0b: the global chrome bar and the seven-destination rail
- * (UI-DESIGN-GUIDE.md sections 2/3, README.md "Global chrome" /
- * "Information architecture"). `ChromeBar` and `NavRail` own the pixel
- * detail; this file only composes them with the load-bearing behaviour
- * that predates them and must not regress:
- *
- *  - `ConnectionBanner`, the `unauthorized` -> `TokenPrompt` path, and
- *    `SessionPanel` stay OUTSIDE `blockContent` below, same as before —
- *    sign-in state must always be visible, even while the rest of the
- *    page says "no data yet" (see each component's own header comment).
- *  - `blockContent` itself is unchanged (acceptance criterion 5).
- *  - The coordinator build string (`CoordinatorBuildNotice`, still
- *    defined below and still exported) is deliberately NOT rendered here
- *    any more — the design moved it into Settings > Appearance to pay for
- *    the chrome bar's now-playing space (README.md "The bar must not
- *    wrap"). It stays in this file, unrendered, for that seam to import.
- *  - The theme control (`useTheme`, app/useTheme.ts) also moves to
- *    Settings > Appearance later; until that lands, a working four-way
- *    picker stays reachable here so switching themes is not a dead
- *    feature in the interim.
+ * The now-playing group truncates and never wraps. Cycle and time to next
+ * transition come from the night session, so they arrive with Show Night;
+ * the show picker and mode badge arrive with Shows and Settings › Mode.
  */
-export function Layout({ onSubmitToken }: LayoutProps) {
+function NowPlaying({ model }: { model: Model }) {
+  const run = model.currentRuns?.runs[0]
+  if (run === undefined) {
+    return (
+      <>
+        <span className="sm-meta sm-faint">Now</span>
+        <span className="sm-small sm-faint">Nothing playing</span>
+      </>
+    )
+  }
+  const item = run.playback.media !== '' ? run.playback.media : run.playback.itemId
+  return (
+    <>
+      <span className="sm-meta sm-faint">Now</span>
+      <span className="sm-truncate">{item !== '' ? item : 'Item not named'}</span>
+      <span className="sm-small sm-faint sm-truncate">{run.playback.state}</span>
+    </>
+  )
+}
+
+export function Layout() {
   const model = useModelContext()
-  const [theme, setTheme] = useTheme()
-
-  // Acceptance criterion 5 (spec section 7 / OPERATOR-UI section 5.1): an
-  // incompatible coordinator "produces the explicit error, not a partial
-  // render." Rendering the normal views underneath the banner in that
-  // state would show an empty dashboard ("0 nodes") that looks like real
-  // inventory rather than like a connection this UI has refused to trust.
-  // The same reasoning covers any state before the first snapshot has
-  // ever been applied (model.snapshotReceivedAt === null) -- an empty
-  // node list before any data has arrived is not evidence there are no
-  // nodes, so it must not render as if it were. Once a snapshot has been
-  // applied at least once, spec section 5.5's "keep the last good model
-  // across a disconnection" takes over instead: the views render
-  // normally and each one's DataFreshnessNotice carries the staleness.
-  const blockContent = model.connection.kind === 'incompatible' || model.snapshotReceivedAt === null
-
-  // `SessionPanel` renders the band and plate for the states with no usable
-  // session, and nothing at all otherwise. Layout needs to know which, because
-  // a session state replaces the routed view rather than sitting above it.
-  const signInState = describeSignInState(model.session).kind
-  const hasSessionState = signInState === 'signed_out' || signInState === 'bootstrap_required'
+  const signIn = describeSignInState(model.session)
+  const connection = connectionOf(model.connection)
+  const principal = model.session?.principal?.name ?? 'Not signed in'
 
   return (
-    <div>
-      <ChromeBar />
-      <ConnectionBanner connection={model.connection} />
-      {model.connection.kind === 'unauthorized' && (
-        <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
-      )}
-      <div className="shell">
-        <div>
-          <NavRail />
-          {/* Temporary home for the theme picker and the sign-out control
-              -- see this file's header comment. Neither is one of the
-              rail's seven destinations and neither is styled as one: a
-              plain labelled utility area under the rail column.
-              `ChromeBar`'s principal name is compact and un-interactive
-              (the mock has no button there, and the bar must not wrap);
-              this is where "Signed in as X" / Sign out still lives so
-              signing out stays reachable while it does. */}
-          <footer className="rail__group" aria-label="Operator status and controls">
-            <SessionIdentity />
-            <h3 className="rail__group-label t-meta">Appearance</h3>
-            <div className="segmented" role="group" aria-label="Theme">
-              {THEME_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className="segmented__option"
-                  aria-pressed={theme === option.value}
-                  onClick={() => setTheme(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </footer>
-        </div>
-        <main>
-          {/* The session band and its blanking plate live in the MAIN column,
-              beside the rail, not above it. They push the page's own content
-              down rather than covering it, and they are never modals: being
-              signed out is a readable state, not a wall.
-
-              When a session state renders, it REPLACES the routed view. A
-              signed-out device has read nothing, so rendering a dashboard
-              underneath "nothing here has ever been collected" would state
-              both at once, and the empty dashboard would read as real
-              inventory rather than as an absent read. */}
-          {hasSessionState
-            ? <SessionPanel />
-            : blockContent ? <FirstConnect connection={model.connection} /> : <Outlet />}
+    <div className="sm-shell">
+      <ChromeBar
+        showPicker={null}
+        mode={null}
+        nowPlaying={<NowPlaying model={model} />}
+        connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
+        principal={<span className="sm-small sm-muted">{principal}</span>}
+      />
+      <ChromeProgress value={null} label="Position of the current item" />
+      {signIn.kind === 'bootstrap_required' && <BootstrapBand />}
+      {signIn.kind === 'signed_out' && <SignedOutBand />}
+      <ShellBody>
+        <Rail>
+          <RailGroup>Operate</RailGroup>
+          <RailLink to="/">Dashboard</RailLink>
+          <RailLink to="/night">Show Night</RailLink>
+          <RailLink to="/control">Live Control</RailLink>
+          <RailGroup>Author</RailGroup>
+          <RailLink to="/shows">Shows</RailLink>
+          <RailLink to="/assets">Assets</RailLink>
+          <RailGroup>System</RailGroup>
+          <RailLink to="/monitor">Monitor</RailLink>
+          <RailLink to="/settings">Settings</RailLink>
+        </Rail>
+        <main className="sm-main">
+          <Outlet />
         </main>
-      </div>
+      </ShellBody>
     </div>
-  )
-}
-
-/* The first-connect state. Nothing has been read yet, so the panel asserts
- * nothing: two ruled strips naming what is outstanding, and the line that makes
- * the distinction the four-absences rule turns on. No spinner, and no zeroed
- * numbers, because a zero here would be a claim rather than a wait. */
-function FirstConnect({ connection }: { connection: ConnectionState }) {
-  const incompatible = connection.kind === 'incompatible'
-  return (
-    <section className="page-body" aria-labelledby="first-connect-heading">
-      <h2 id="first-connect-heading" className="t-heading">
-        {incompatible ? 'This view is waiting on an API version agreement' : 'Connecting to the coordinator'}
-      </h2>
-      <div className="first-connect__strips">
-        <div className="ruled-strip ruled-strip--loading">
-          <span className="ruled-strip__state t-meta">Session</span>
-          <div>
-            <p className="ruled-strip__fact">
-              {incompatible ? 'Not read, the version check refused first' : 'Not read yet'}
-            </p>
-            <p className="ruled-strip__explanation">
-              {incompatible
-                ? 'The coordinator and this UI do not agree on an API version. The banner above names the versions.'
-                : 'Being signed out is a readable state, so this is a wait rather than a refusal.'}
-            </p>
-          </div>
-        </div>
-        <div className="ruled-strip ruled-strip--loading">
-          <span className="ruled-strip__state t-meta">Live updates</span>
-          <div>
-            <p className="ruled-strip__fact">No stream frame has arrived</p>
-            <p className="ruled-strip__explanation">The first snapshot has not been received.</p>
-          </div>
-        </div>
-      </div>
-      <p className="first-connect__note">Nothing below is stale, because nothing has been read yet.</p>
-    </section>
-  )
-}
-
-type DescriptorState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; descriptor: ServiceDescriptor }
-
-// `GET /` is "Always open, with no credential and regardless of whether
-// reads are otherwise closed" (api/openapi.yaml's own doc comment), so
-// this fetches exactly once on mount, independent of `model.connection`
-// and `model.session` above -- there is no scope to gate it on and no
-// stream frame that would ever refresh it. A failed fetch renders as a
-// stated fact, never a blank or a guessed version: the reader must be
-// able to tell "unknown" apart from "same build as before".
-//
-// No longer rendered by this file (see the header comment above) -- kept
-// and exported so the Settings > Appearance work can mount it there.
-export function CoordinatorBuildNotice() {
-  const [state, setState] = useState<DescriptorState>({ kind: 'loading' })
-
-  useEffect(() => {
-    let cancelled = false
-    async function load(): Promise<void> {
-      try {
-        const descriptor = await getServiceDescriptor()
-        if (cancelled) return
-        setState({ kind: 'loaded', descriptor })
-      } catch (err) {
-        if (cancelled) return
-        setState({ kind: 'error', message: describeApiError(err) })
-      }
-    }
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  if (state.kind === 'loading') {
-    return (
-      <p className="text-muted coordinator-build-notice" role="status">
-        Coordinator build: loading…
-      </p>
-    )
-  }
-
-  if (state.kind === 'error') {
-    return (
-      <p className="text-muted coordinator-build-notice" role="status">
-        Coordinator build: could not be read ({state.message}).
-      </p>
-    )
-  }
-
-  const { coordinator, apiVersion } = state.descriptor
-  return (
-    <p
-      className="text-muted coordinator-build-notice"
-      role="status"
-      title={`Commit ${coordinator.commit}, built ${coordinator.buildDate}, ${coordinator.goVersion}`}
-    >
-      Coordinator {coordinator.version} ({coordinator.commit.slice(0, 7)}, API v{apiVersion})
-    </p>
   )
 }

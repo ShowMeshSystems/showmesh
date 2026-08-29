@@ -1,75 +1,63 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 
-/* Three themes plus following the operating system, applied as a data-theme
- * attribute on the root element that styles/tokens.css keys its overrides off.
- *
- * 'system' deliberately writes no attribute at all, because the light palette is
- * defined under `:root:not([data-theme])` and a prefers-color-scheme query. An
- * explicit choice must therefore win over the system preference in both
- * directions, which is why 'dark' writes an attribute rather than clearing one.
- *
- * The preference is an operator setting, not a secret, so it lives in
- * localStorage. The API token does not: spec section 5.6 requires that in
- * sessionStorage so it cannot outlive the tab.
+/**
+ * Theme and density ride on the document root, where the kit's token
+ * overrides are keyed. 'system' resolves to dark or light rather than
+ * writing no attribute: the kit defines dark on bare :root, so an
+ * unresolved 'system' would ignore a light-mode operating system.
  */
 export type Theme = 'system' | 'dark' | 'light' | 'contrast'
+export type Density = 'default' | 'compact'
 
-const STORAGE_KEY = 'showmesh-ui-theme'
+const THEME_KEY = 'showmesh-ui-theme'
+const DENSITY_KEY = 'showmesh-ui-density'
 const THEMES: readonly Theme[] = ['system', 'dark', 'light', 'contrast']
 
-/* The pre-overhaul key, so a device that had high contrast turned on keeps it
- * through the upgrade instead of silently reverting on a show night. */
-const LEGACY_CONTRAST_KEY = 'showmesh-ui-contrast'
-
-function isTheme(value: string | null): value is Theme {
-  return value !== null && (THEMES as readonly string[]).includes(value)
-}
-
-function readStoredTheme(): Theme {
+function read<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY)
-    if (isTheme(stored)) return stored
-    if (window.localStorage.getItem(LEGACY_CONTRAST_KEY) === 'high') return 'contrast'
-    return 'system'
+    const stored = window.localStorage.getItem(key)
+    return stored !== null && (allowed as readonly string[]).includes(stored) ? (stored as T) : fallback
   } catch {
-    // Storage throws in a locked-down browser context. Render rather than fail.
-    return 'system'
+    return fallback
   }
 }
 
-function applyTheme(theme: Theme): void {
-  const root = document.documentElement
-  if (theme === 'system') {
-    root.removeAttribute('data-theme')
-  } else {
-    root.setAttribute('data-theme', theme)
+function write(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Locked-down browser context. The in-memory state still governs this session.
   }
-  /* Kept in step for the CSS still keyed on the old attribute. Removed with the
-   * transition alias block at the end of the overhaul. */
-  root.setAttribute('data-contrast', theme === 'contrast' ? 'high' : 'normal')
+}
+
+function prefersLight(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: light)').matches
+}
+
+export function resolveTheme(theme: Theme): Exclude<Theme, 'system'> {
+  if (theme !== 'system') return theme
+  return prefersLight() ? 'light' : 'dark'
 }
 
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(readStoredTheme)
+  const [theme, setTheme] = useState<Theme>(() => read(THEME_KEY, THEMES, 'system'))
 
   useEffect(() => {
-    applyTheme(theme)
-    try {
-      window.localStorage.setItem(STORAGE_KEY, theme)
-    } catch {
-      // Best effort; the in-memory state still governs this session.
-    }
+    document.documentElement.setAttribute('data-theme', resolveTheme(theme))
+    write(THEME_KEY, theme)
   }, [theme])
 
   return [theme, setTheme]
 }
 
-/* Retained so the rail's contrast toggle and its existing tests keep working
- * while screens migrate to the four-way picker in Settings, Appearance. */
-export function useHighContrast(): [boolean, () => void] {
-  const [theme, setTheme] = useTheme()
-  const toggle = useCallback(() => {
-    setTheme(theme === 'contrast' ? 'system' : 'contrast')
-  }, [theme, setTheme])
-  return [theme === 'contrast', toggle]
+export function useDensity(): [Density, (density: Density) => void] {
+  const densities: readonly Density[] = ['default', 'compact']
+  const [density, setDensity] = useState<Density>(() => read(DENSITY_KEY, densities, 'default'))
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-density', density)
+    write(DENSITY_KEY, density)
+  }, [density])
+
+  return [density, setDensity]
 }

@@ -1,8 +1,0 @@
-/* Entry point for this seam's styles. Imported once, from App.tsx. */
-@import './fonts.css';
-@import './tokens.css';
-@import './type.css';
-@import './primitives.css';
-@import './global.css';
-@import './status.css';
-@import './ports.css';
