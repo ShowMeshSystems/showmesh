@@ -134,6 +134,35 @@ a real operator need, so B is worth its own issue; C loses the visibility.
 
 ---
 
+### D-009 Show Night's "Tonight" rail has no per-cycle history
+
+**What.** The mock's top rail lists the whole night: Preshow 16:30, Cycle 1
+19:52, Cycle 2 20:27, Cycle 3 21:02 now. `NightSessionState` reports the cycle
+the session is in, and nothing about earlier ones. The rebuilt rail shows the
+current cycle, whether more cycles are open, and whether the end of night has
+been requested, and says in the footnote that earlier cycles are not listed.
+
+**Why now.** It is the first thing an operator looks at, and the mock's version
+reads as a timeline of the night.
+
+**Options.**
+- A. Leave as built. The rail states what the session reports.
+- B. Reconstruct earlier cycles from the event stream (`night.session` events
+  carry each state change). Possible today, but the stream is bounded by
+  retention, so an early-evening cycle can be gone by midnight and the rail
+  would silently show a partial night.
+- C. Add per-cycle history to `NightSessionState` or a `GET /night/session/
+  cycles`, and build the rail as drawn.
+
+**Recommendation.** A now. C if the timeline matters to you on the night; B
+only with the retention gap shown, never silently.
+
+**Unblocks.** Nothing. The screen shipped.
+
+**Ruling:**
+
+---
+
 ## Settled
 
 ### D-001 Density switch: ship it or drop it — 2026-08-29

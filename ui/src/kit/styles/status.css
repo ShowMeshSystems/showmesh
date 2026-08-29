@@ -46,6 +46,12 @@
   color: var(--bad-fg);
 }
 
+.sm-status--pending {
+  border-color: var(--border-strong);
+  background: var(--sunken);
+  color: var(--text-muted);
+}
+
 .sm-status--unknown {
   border-style: dashed;
   border-color: var(--unk-fg);
@@ -74,6 +80,11 @@
 .sm-evidence--bad {
   border-color: var(--bad-border);
   background: var(--bad-bg);
+}
+
+.sm-evidence--pending {
+  border-color: var(--border-strong);
+  background: var(--sunken);
 }
 
 .sm-evidence--unknown {

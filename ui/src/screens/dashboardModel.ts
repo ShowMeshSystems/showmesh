@@ -104,7 +104,7 @@ export function resolumeAttention(instances: readonly ResolumeInstance[]): Atten
   return items
 }
 
-const TONE_ORDER: Record<Tone, number> = { bad: 0, warn: 1, unknown: 2, good: 3 }
+const TONE_ORDER: Record<Tone, number> = { bad: 0, warn: 1, unknown: 2, pending: 3, good: 4 }
 
 export function attentionItems(model: Model, nowIso: string | null): AttentionItem[] {
   return [...nodeAttention(model.nodes, nowIso), ...fppAttention(model.fpp), ...resolumeAttention(model.resolume)].sort(

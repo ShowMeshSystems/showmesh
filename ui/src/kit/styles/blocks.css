@@ -284,3 +284,126 @@ a.sm-tile:hover {
   margin-top: var(--s-4);
   max-width: 320px;
 }
+
+/* Page head: title block on the left, its own actions on the right. */
+.sm-page__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-5);
+}
+
+/* The lifecycle rails: where the night is, and where this cycle is. */
+.sm-rails {
+  margin-top: var(--s-5);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.sm-rail-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex-wrap: wrap;
+}
+
+.sm-rail-strip + .sm-rail-strip {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.sm-rail-strip__title {
+  margin: 0;
+  padding: 0 14px 0 0;
+  min-width: 90px;
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  align-self: center;
+}
+
+.sm-rail-strip__step {
+  padding: 6px 14px;
+  border-left: 1px solid var(--border);
+  min-width: 118px;
+}
+
+.sm-rail-strip__label {
+  margin: 0;
+  font: var(--t-small);
+}
+
+.sm-rail-strip__detail {
+  margin: 2px 0 0;
+  font: var(--t-small);
+  color: var(--text-faint);
+}
+
+.sm-rail-strip__step--done .sm-rail-strip__label {
+  color: var(--good-fg);
+}
+
+.sm-rail-strip__step--now {
+  background: var(--accent-bg);
+}
+
+.sm-rail-strip__step--now .sm-rail-strip__label {
+  color: var(--accent);
+}
+
+.sm-rail-strip__step--ahead .sm-rail-strip__label {
+  color: var(--text-muted);
+}
+
+/* Now playing beside the next transition. */
+.sm-nownext {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  gap: var(--s-5);
+  margin-top: var(--s-5);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .sm-nownext {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.sm-nownext__title {
+  margin: 6px 0 0;
+  font: var(--t-heading);
+}
+
+/* One evidence readout: state word, then the fact. */
+.sm-readout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sm-readout:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-readout .sm-status {
+  height: auto;
+  min-height: 20px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  white-space: normal;
+}
+
+.sm-readout__fact {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+  max-width: 78ch;
+}
