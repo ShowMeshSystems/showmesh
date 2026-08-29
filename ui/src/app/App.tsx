@@ -6,6 +6,7 @@ import { Layout } from './Layout'
 import { useDensity, useTheme } from './useTheme'
 import { Dashboard } from '../screens/Dashboard'
 import { LiveControl } from '../screens/LiveControl'
+import { Monitor } from '../screens/Monitor'
 import { ShowNight } from '../screens/ShowNight'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
@@ -31,7 +32,9 @@ function ScrollToTop() {
 const QUEUE: readonly { path: string; title: string; mock: string }[] = [
   { path: '/shows/*', title: 'Shows', mock: 'Shows.dc.html' },
   { path: '/assets/*', title: 'Assets', mock: 'Show Assets.dc.html' },
-  { path: '/monitor/fleet/*', title: 'Monitor · Fleet', mock: 'Monitor.dc.html' },
+  { path: '/monitor/fleet/node/:nodeId', title: 'Node', mock: 'Node.dc.html' },
+  { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
+  { path: '/monitor/fleet/resolume/*', title: 'Resolume Config', mock: 'Resolume Config.dc.html' },
   { path: '/monitor/signals', title: 'Monitor · Signals', mock: 'Monitor.dc.html' },
   { path: '/monitor/activity', title: 'Monitor · Activity', mock: 'Monitor.dc.html' },
   { path: '/monitor/capabilities', title: 'Monitor · Capabilities', mock: 'Monitor.dc.html' },
@@ -61,6 +64,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="control" element={<LiveControl />} />
             <Route path="night" element={<ShowNight />} />
+            <Route path="monitor/fleet" element={<Monitor />} />
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />
             ))}

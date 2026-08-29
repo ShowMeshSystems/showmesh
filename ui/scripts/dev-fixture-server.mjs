@@ -87,7 +87,7 @@ const SNAPSHOT = () => ({
   },
   collectors: [],
   macroRuns: [],
-  resolume: [{ instanceId: 'arena-main', health: 'healthy', observations: signalSet(6, 'current', 'resolume.layer'), composition: null }],
+  resolume: [{ instanceId: 'arena-main', health: 'healthy', observations: signalSet(6, 'current', 'resolume.layer'), composition: { name: 'WinterRidge.avc' } }],
 })
 
 const SESSION = {
@@ -173,7 +173,13 @@ createServer((req, res) => {
     return
   }
   if (p === '/snapshot') return json(res, SNAPSHOT())
-  if (p === '/events') return json(res, { serverTime: NOW(), events: [], latestSeq: 412, gap: false, oldestRetainedSeq: 1 })
+  if (p === '/events') return json(res, { serverTime: NOW(), latestSeq: 412, gap: false, oldestRetainedSeq: 1, events: [
+    { seq: 412, recordedAt: ago(300_000), occurredAt: ago(300_000), source: 'coordinator', resource: { kind: 'node', id: 'media-garage' }, category: 'action', severity: 'critical', summary: 'Projector strike refused on media-garage - no route to host', details: {}, correlationId: null },
+    { seq: 411, recordedAt: ago(660_000), occurredAt: ago(660_000), source: 'erbartos', resource: { kind: 'coordinator', id: 'coordinator' }, category: 'night', severity: 'informational', summary: 'Night session started, cycle 3 armed', details: {}, correlationId: null },
+    { seq: 410, recordedAt: ago(780_000), occurredAt: ago(780_000), source: 'fpp', resource: { kind: 'fpp', id: 'barn-player' }, category: 'binding', severity: 'warning', summary: 'barn-player playlist definition changed - all Main Show bindings held', details: {}, correlationId: null },
+    { seq: 409, recordedAt: ago(1_560_000), occurredAt: ago(1_560_000), source: 'broker', resource: { kind: 'node', id: 'media-garage' }, category: 'lifecycle', severity: 'warning', summary: 'media-garage last will received - agent went away', details: {}, correlationId: null },
+    { seq: 408, recordedAt: ago(16_740_000), occurredAt: ago(16_740_000), source: 'erbartos', resource: { kind: 'coordinator', id: 'coordinator' }, category: 'night', severity: 'informational', summary: 'Readiness check passed - 14 of 14 checks', details: {}, correlationId: null },
+  ] })
   if (p === '/session') return json(res, { ...SESSION, serverTime: NOW() })
   if (p === '/current-runs') return json(res, CURRENT_RUNS())
   if (p === '/night/session') return json(res, NIGHT())

@@ -86,7 +86,8 @@ visual language.
 | Dashboard | Done | #196 |
 | Live Control | Done | #197 |
 | Show Night | Done | #198 |
-| Monitor and its facets | Next | |
+| Monitor · Fleet, facet tabs, inspector | Done | #199 |
+| Monitor · Signals, Activity, Capabilities, Manifest | Next | |
 | Shows workspace, five tabs | | |
 | Node detail | | |
 | Settings, seven tabs | | |

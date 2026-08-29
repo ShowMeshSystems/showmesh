@@ -407,3 +407,125 @@ a.sm-tile:hover {
   color: var(--text-muted);
   max-width: 78ch;
 }
+
+/* Facet tabs. The count is inventory, never attention. */
+.sm-facets {
+  display: flex;
+  gap: 2px;
+  margin-top: var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-facets__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--r-panel) var(--r-panel) 0 0;
+  color: var(--text-muted);
+  font: var(--t-body);
+  text-decoration: none;
+}
+
+.sm-facets__tab:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.sm-facets__tab[aria-current='page'] {
+  background: var(--accent-bg);
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+.sm-facets__count {
+  font: var(--t-data);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* A row that opens the inspector rather than navigating. */
+.sm-linkbutton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
+.sm-viewing {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-chip);
+  font: var(--t-meta);
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.sm-table__row--current {
+  background: var(--accent-bg);
+}
+
+/* The inspector pane beside a list. */
+.sm-inspector {
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.sm-inspector__title {
+  margin: 2px 0 0;
+  font: var(--t-heading);
+}
+
+.sm-inspector__group {
+  margin-top: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.sm-inspector__row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.sm-inspector__label {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.sm-inspector__value {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sm-inspector__state {
+  margin: 4px 0 0;
+}
+
+.sm-inspector__detail {
+  margin: 4px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.sm-inspector__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}

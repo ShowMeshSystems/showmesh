@@ -233,7 +233,7 @@ export function ShowNight() {
           />
         ) : (
           <>
-            <TableWrap label="Run of show">
+            <TableWrap label="Run of show steps, scrollable">
               <Table>
                 <thead>
                   <tr>

@@ -237,7 +237,7 @@ export function LiveControl() {
           />
         ) : (
           <>
-            <TableWrap label="What each output is doing">
+            <TableWrap label="Outputs, scrollable">
               <Table>
                 <thead>
                   <tr>
