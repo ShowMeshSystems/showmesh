@@ -35,7 +35,7 @@ const node = (nodeId, label, state, lastHeardMs, signals) => ({
   startedAt: ago(86_400_000),
   firstSeenAt: ago(86_400_000),
   updatedAt: ago(lastHeardMs),
-  capabilities: [],
+  capabilities: [{ id: nodeId === 'media-garage' ? 'display.hdmi' : 'transport.ndi.send', version: 1 }],
   controlPlane: { state, reason: state === 'offline' ? 'No heartbeat within the expected interval.' : null },
   evidence: {
     hello: evidence('node.hello', true, 'current', ago(86_400_000)),
@@ -48,21 +48,40 @@ const node = (nodeId, label, state, lastHeardMs, signals) => ({
   fppConnect: signals.fppConnect ?? [],
 })
 
-const signalSet = (count, state, prefix) =>
-  Array.from({ length: count }, (_, i) => evidence(`${prefix}.${i}`, 'x', state, state === 'not_collected' ? null : ago(30_000)))
+const surfaceSignals = (surfaceId, state, rate, at) => [
+  { ...evidence('surface.pipeline.state', state === 'current' ? 'running' : 'unknown', state, at), resource: { kind: 'surface', id: surfaceId } },
+  { ...evidence('surface.frames.rate', rate, state, at), resource: { kind: 'surface', id: surfaceId } },
+  { ...evidence('surface.content.fseq_filename', 'carol-of-the-bells.fseq', state, at), resource: { kind: 'surface', id: surfaceId } },
+]
+
+const signalSet = (count, state, prefix, nodeId = 'fleet') =>
+  Array.from({ length: count }, (_, i) => ({
+    ...evidence(`${prefix}.${i}`, 'x', state, state === 'not_collected' ? null : ago(30_000)),
+    resource: { kind: 'node', id: nodeId },
+  }))
 
 const SNAPSHOT = () => ({
   serverTime: NOW(),
   latestEventSeq: 412,
   nodes: [
-    node('barn-controller', 'barn-controller', 'online', 4_000, { render: signalSet(60, 'current', 'surface.pipeline'), audio: signalSet(40, 'current', 'audio.output') }),
-    node('roof-north', 'roof-north', 'online', 6_000, { render: signalSet(55, 'current', 'surface.pipeline'), audio: signalSet(35, 'current', 'audio.output') }),
-    node('media-garage', 'media-garage', 'offline', 1_560_000, { render: signalSet(47, 'stale', 'surface.pipeline'), audio: signalSet(11, 'not_collected', 'audio.output') }),
+    node('barn-controller', 'barn-controller', 'online', 4_000, { render: [...surfaceSignals('front-projection', 'current', 40, ago(1_200)), ...signalSet(57, 'current', 'surface.pipeline')], audio: signalSet(40, 'current', 'audio.output') }),
+    node('roof-north', 'roof-north', 'online', 6_000, { render: [...surfaceSignals('side-wall', 'current', 40, ago(1_200)), ...signalSet(52, 'current', 'surface.pipeline')], audio: signalSet(35, 'current', 'audio.output') }),
+    node('media-garage', 'media-garage', 'offline', 1_560_000, { render: [...surfaceSignals('garage-door', 'stale', 40, ago(1_560_000)), ...signalSet(44, 'stale', 'surface.pipeline')], audio: signalSet(11, 'not_collected', 'audio.output') }),
     node('workshop', 'workshop', 'online', 9_000, { render: signalSet(50, 'current', 'surface.pipeline'), audio: signalSet(30, 'current', 'audio.output') }),
   ],
   fpp: {
     instances: [
-      { instanceId: 'main-player', endpoint: 'http://198.51.100.11', health: 'healthy', observations: signalSet(40, 'current', 'fpp.playlist'), lastPollAt: ago(2_000), lastPollError: null, instanceUuid: 'u1', instanceUuidFirstObservedAt: ago(86_400_000), instanceUuidChange: null, duplicateInstanceUuidEndpointIds: [] },
+      { instanceId: 'main-player', endpoint: 'http://198.51.100.11', health: 'healthy', observations: [
+        ...signalSet(36, 'current', 'fpp.playlist'),
+        evidence('fpp.playlist.name', 'WinterRidge_Main', 'current', ago(2_000)),
+        evidence('fpp.playlist.index', 1, 'current', ago(2_000)),
+        evidence('fpp.playlist.count', 6, 'current', ago(2_000)),
+        evidence('fpp.status.player_state', 'playing', 'current', ago(2_000)),
+        evidence('fpp.position.elapsed.seconds', 102, 'current', ago(2_000)),
+        evidence('fpp.position.seconds', 168, 'current', ago(2_000)),
+        evidence('fpp.media.filename', 'carol-of-the-bells.fseq', 'current', ago(2_000)),
+        evidence('fpp.volume', 78, 'current', ago(2_000)),
+      ], lastPollAt: ago(2_000), lastPollError: null, instanceUuid: 'u1', instanceUuidFirstObservedAt: ago(86_400_000), instanceUuidChange: null, duplicateInstanceUuidEndpointIds: [] },
       { instanceId: 'barn-player', endpoint: 'http://198.51.100.12', health: 'healthy', observations: signalSet(38, 'current', 'fpp.playlist'), lastPollAt: ago(3_000), lastPollError: null, instanceUuid: 'u2', instanceUuidFirstObservedAt: ago(86_400_000), instanceUuidChange: { previousUuid: 'u2-old', changedAt: ago(780_000) }, duplicateInstanceUuidEndpointIds: [] },
     ],
   },
@@ -146,10 +165,32 @@ createServer((req, res) => {
     return
   }
   if (p === '/snapshot') return json(res, SNAPSHOT())
-  if (p === '/events') return json(res, { serverTime: NOW(), events: [], gap: false, oldestRetainedSeq: 1 })
+  if (p === '/events') return json(res, { serverTime: NOW(), events: [], latestSeq: 412, gap: false, oldestRetainedSeq: 1 })
   if (p === '/session') return json(res, { ...SESSION, serverTime: NOW() })
   if (p === '/current-runs') return json(res, CURRENT_RUNS())
   if (p === '/night/session') return json(res, NIGHT())
+  if (p === '/config/show.macro') return json(res, { serverTime: NOW(), kind: 'show.macro', objects: [
+    { id: 'blackout', label: 'Blackout', show: 'Winter Ridge 2026', currentRevision: 3, updatedAt: ago(86_400_000) },
+    { id: 'enter-intermission', label: 'Enter intermission', show: 'Winter Ridge 2026', currentRevision: 2, updatedAt: ago(86_400_000) },
+  ] })
+  if (p === '/config/show.action') return json(res, { serverTime: NOW(), kind: 'show.action', objects: [
+    { id: 'resting-fade-out', label: 'Resting fade-out', show: 'Winter Ridge 2026', currentRevision: 8, updatedAt: ago(86_400_000) },
+    { id: 'strike-garage-projector', label: 'Strike garage projector', show: 'Winter Ridge 2026', currentRevision: 2, updatedAt: ago(86_400_000) },
+  ] })
+  if (p === '/config/show.cue') return json(res, { serverTime: NOW(), kind: 'show.cue', objects: [
+    { id: 'sponsor-announcement', label: 'Sponsor announcement', show: 'Winter Ridge 2026', currentRevision: 1, updatedAt: ago(86_400_000) },
+    { id: 'show-starting-soon', label: 'Show starting soon', show: 'Winter Ridge 2026', currentRevision: 1, updatedAt: ago(86_400_000) },
+    { id: 'main-cue', label: 'Main cue', show: 'Winter Ridge 2026', currentRevision: 4, updatedAt: ago(86_400_000) },
+  ] })
+  if (p.startsWith('/config/show.cue/')) {
+    const id = p.split('/').pop()
+    const announcement = id === 'main-cue' ? undefined : { policy: id === 'show-starting-soon' ? 'interrupt' : 'duck', duckGainDb: -18, fadeMillis: 400 }
+    return json(res, {
+      serverTime: NOW(), kind: 'show.cue', id, revision: 1,
+      payload: { show: 'Winter Ridge 2026', name: id, outputs: announcement === undefined ? {} : { announcement } },
+      updatedAt: ago(86_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
   if (p === '/') return json(res, { name: 'showmesh-coordinator', version: '0.9.4-fixture', commit: 'a3f91c2', apiVersion: 'v1' })
   return json(res, { type: 'about:blank', title: 'Not Found', status: 404, detail: `No fixture for ${p}` }, 404)
 }).listen(PORT, () => console.log(`fixture coordinator on http://localhost:${PORT}`))

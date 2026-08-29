@@ -235,3 +235,52 @@ a.sm-tile:hover {
   color: var(--text-muted);
   max-width: 78ch;
 }
+
+/* A list of facts, not a menu: no bullets, hairline separated. */
+.sm-plain-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.sm-plain-list > li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* What a command actually did, next to the control that sent it. */
+.sm-outcome {
+  margin-top: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.sm-outcome__detail {
+  margin: 6px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+  max-width: 78ch;
+}
+
+.sm-subsection {
+  margin-top: var(--s-4);
+}
+
+.sm-subsection__title {
+  margin: 0 0 10px;
+  font: var(--t-subhead);
+}
+
+.sm-transport__now {
+  margin: 0;
+  font: var(--t-body);
+}
+
+.sm-volume {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  max-width: 320px;
+}

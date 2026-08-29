@@ -5,6 +5,7 @@ import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
 import { useDensity, useTheme } from './useTheme'
 import { Dashboard } from '../screens/Dashboard'
+import { LiveControl } from '../screens/LiveControl'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
@@ -28,7 +29,6 @@ function ScrollToTop() {
  */
 const QUEUE: readonly { path: string; title: string; mock: string }[] = [
   { path: '/night', title: 'Show Night', mock: 'Show Night.dc.html' },
-  { path: '/control', title: 'Live Control', mock: 'Live Control.dc.html' },
   { path: '/shows/*', title: 'Shows', mock: 'Shows.dc.html' },
   { path: '/assets/*', title: 'Assets', mock: 'Show Assets.dc.html' },
   { path: '/monitor/fleet/*', title: 'Monitor · Fleet', mock: 'Monitor.dc.html' },
@@ -59,6 +59,7 @@ export default function App() {
             <Route path="monitor" element={<Navigate replace to="/monitor/fleet" />} />
             <Route path="settings" element={<Navigate replace to="/settings/connections" />} />
             <Route index element={<Dashboard />} />
+            <Route path="control" element={<LiveControl />} />
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />
             ))}

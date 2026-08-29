@@ -78,6 +78,62 @@ operator".
 
 ---
 
+### D-007 Night lifecycle: the UI cannot say which command is valid
+
+**What.** The Live Control mock disables `Start preshow` and `Start night` with
+"Not valid from `live`", and disables `Power down presentation` with the
+interlock that is withholding it. The rebuilt screen leaves all of them enabled
+and reports the refusal the coordinator returns.
+
+**Why.** Predicting validity means reimplementing the coordinator's own state
+table in the browser: preparation epochs, monotonic finalization, interlock
+overrides, degraded-session ambiguity. `nightsessioncontrol.go` spreads those
+guards across many branches, and a second copy in the UI would drift. What the
+UI can honestly disable today is only what `NightSessionState` reports directly.
+
+**Options.**
+- A. Leave as built. Every command is enabled; a refusal is shown with the
+  coordinator's own reason. Honest, but the operator finds out by pressing.
+- B. Add `allowedCommands` (or per-command `withheldReason`) to
+  `NightSessionState`, and disable from that. One source of truth, and the mock
+  becomes buildable exactly as drawn. Needs a coordinator change and an
+  OpenAPI change.
+- C. Reimplement the state table client-side. Cheapest today, wrong later.
+
+**Recommendation.** A now, B when the coordinator work can be scheduled. Not C.
+
+**Unblocks.** Live Control's disabled reasons, and the same treatment on Show
+Night.
+
+**Ruling:**
+
+---
+
+### D-008 Announcements have no way to fire
+
+**What.** The mock gives each announcement cue a Fire button. The API has no
+endpoint that fires a cue outside a Show Night transition: no
+`POST /cues/{id}/fire` or equivalent in `api/openapi.yaml`. The rebuilt screen
+lists the cues with their duck or interrupt policy and states the absence.
+
+**Why now.** This is one of the mock's own controls that cannot be built. The
+previous build shipped a disabled Fire button with a "planned" stamp, which is
+the invented-design pattern you rejected.
+
+**Options.**
+- A. Ship the list plus the stated absence, as built. No control that cannot work.
+- B. Add a fire endpoint to the coordinator and build the button.
+- C. Drop the section from Live Control entirely.
+
+**Recommendation.** A until you decide on B. Firing an announcement mid-show is
+a real operator need, so B is worth its own issue; C loses the visibility.
+
+**Unblocks.** Nothing. The screen shipped.
+
+**Ruling:**
+
+---
+
 ## Settled
 
 ### D-001 Density switch: ship it or drop it — 2026-08-29
