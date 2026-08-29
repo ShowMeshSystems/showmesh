@@ -12,7 +12,69 @@ my recommendation, and what the answer unblocks. Answered entries move to
 
 ## Open
 
-(none)
+### D-005 Dashboard: the five blocks the mock does not have
+
+**What.** `Dashboard.dc.html` has three blocks: Readiness, Needs you, System
+health. The built Dashboard had five more: Presentation path, Recent activity,
+Tonight's lifecycle, a clock-skew warning, and a data-freshness notice. The
+rebuilt screen ships the mock's three. The other five are not deleted, they are
+parked here.
+
+**Why now.** The screen is shipped either way. This decides whether anything
+comes back and where.
+
+**Options, one per item.**
+
+- **Presentation path** (which surfaces are carrying the show). A. Fold into
+  System health as a fifth tile. B. Give it to Monitor › Fleet, which already
+  owns per-surface state. C. Drop it.
+- **Recent activity** (the last few events). A. Drop it here; Monitor › Activity
+  is the stream and the rail badge is the attention path. B. Fold three lines
+  into Needs you. C. Restore as a fourth block.
+- **Tonight's lifecycle** (the night session's phase strip). A. Drop it here;
+  Show Night owns the lifecycle and Readiness already names the state.
+  B. Restore as a fourth block.
+- **Clock-skew warning.** A. Move it to the chrome bar, where it affects every
+  age on every screen. B. Keep it on Dashboard. C. Monitor › Fleet.
+- **Data-freshness notice.** Already folded in: the page lede reads "Snapshot
+  1.1 s ago". No decision needed unless you want the old banner back.
+
+**Recommendation.** Presentation path B, Recent activity A, Tonight's lifecycle
+A, clock skew A. That leaves Dashboard at the mock's three blocks and puts each
+fact on the screen that owns it.
+
+**Unblocks.** Nothing. Dashboard shipped without them.
+
+**Ruling:**
+
+---
+
+### D-006 "Needs you": may the count claim an item is not stopping the show
+
+**What.** The mock's heading aside reads "2 items · neither is stopping
+tonight's show". The rebuilt screen renders "2 items" only.
+
+**Why now.** It is the most-trusted line on the most-trusted screen. To say an
+item is not stopping the show, the UI has to know which resources the running
+show depends on. The coordinator reports each resource's own health; it does not
+report that dependency, so the claim cannot be derived today.
+
+**Options.**
+- A. Keep "2 items". The caveat lives in the empty state, where it already does.
+- B. Say it only when the night session reports `degraded: false` and no item
+  names a resource the current run targets. This is derivable from
+  `CurrentRun.targets`, but only for the FPP runner, and only while a run is
+  in progress.
+- C. Say it whenever the night session is live and not degraded.
+
+**Recommendation.** A now, B when Show Night is rebuilt and the targets list has
+been read against real hardware. C is the version that lies on the night it
+matters.
+
+**Unblocks.** The Dashboard aside, and the same line on Monitor's "Needs an
+operator".
+
+**Ruling:**
 
 ---
 

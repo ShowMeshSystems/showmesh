@@ -1,0 +1,155 @@
+/*
+ * A fixture coordinator for the operator UI rebuild's visual gate. It serves
+ * one coherent scenario so a rebuilt screen can be compared against its mock
+ * with data in it. It is a development tool: it never ships, and nothing in
+ * ui/src knows it exists.
+ *
+ *   node scripts/dev-fixture-server.mjs        # listens on 8099
+ *   SHOWMESH_DEV_API=http://localhost:8099 npx vite
+ */
+import { createServer } from 'node:http'
+
+const PORT = Number(process.env.PORT ?? 8099)
+const NOW = () => new Date().toISOString()
+const ago = (ms) => new Date(Date.now() - ms).toISOString()
+
+const evidence = (signal, value, state, observedAt) => ({
+  resource: { kind: 'node', id: 'media-garage' },
+  signal,
+  value,
+  unit: null,
+  state,
+  reason: state === 'current' ? null : 'Last report is older than this signal’s freshness window.',
+  observedAt,
+  collectedAt: observedAt,
+  source: 'agent',
+  quality: 'reported',
+})
+
+const node = (nodeId, label, state, lastHeardMs, signals) => ({
+  nodeId,
+  label,
+  platform: 'linux/arm64',
+  agentVersion: '0.9.4',
+  bootId: 'b1',
+  startedAt: ago(86_400_000),
+  firstSeenAt: ago(86_400_000),
+  updatedAt: ago(lastHeardMs),
+  capabilities: [],
+  controlPlane: { state, reason: state === 'offline' ? 'No heartbeat within the expected interval.' : null },
+  evidence: {
+    hello: evidence('node.hello', true, 'current', ago(86_400_000)),
+    lastWill: evidence('node.last_will', false, 'not_collected', null),
+    heartbeat: evidence('node.heartbeat', true, state === 'offline' ? 'stale' : 'current', ago(lastHeardMs)),
+  },
+  declaration: { declared: true, discoveryState: 'present', discoveryReason: '', lastDiscoveryRunId: null, lastDiscoveredAt: ago(3_600_000), notSeenAsOfRunId: null, notSeenAsOfRunFinishedAt: null },
+  render: signals.render ?? [],
+  audio: signals.audio ?? [],
+  fppConnect: signals.fppConnect ?? [],
+})
+
+const signalSet = (count, state, prefix) =>
+  Array.from({ length: count }, (_, i) => evidence(`${prefix}.${i}`, 'x', state, state === 'not_collected' ? null : ago(30_000)))
+
+const SNAPSHOT = () => ({
+  serverTime: NOW(),
+  latestEventSeq: 412,
+  nodes: [
+    node('barn-controller', 'barn-controller', 'online', 4_000, { render: signalSet(60, 'current', 'surface.pipeline'), audio: signalSet(40, 'current', 'audio.output') }),
+    node('roof-north', 'roof-north', 'online', 6_000, { render: signalSet(55, 'current', 'surface.pipeline'), audio: signalSet(35, 'current', 'audio.output') }),
+    node('media-garage', 'media-garage', 'offline', 1_560_000, { render: signalSet(47, 'stale', 'surface.pipeline'), audio: signalSet(11, 'not_collected', 'audio.output') }),
+    node('workshop', 'workshop', 'online', 9_000, { render: signalSet(50, 'current', 'surface.pipeline'), audio: signalSet(30, 'current', 'audio.output') }),
+  ],
+  fpp: {
+    instances: [
+      { instanceId: 'main-player', endpoint: 'http://198.51.100.11', health: 'healthy', observations: signalSet(40, 'current', 'fpp.playlist'), lastPollAt: ago(2_000), lastPollError: null, instanceUuid: 'u1', instanceUuidFirstObservedAt: ago(86_400_000), instanceUuidChange: null, duplicateInstanceUuidEndpointIds: [] },
+      { instanceId: 'barn-player', endpoint: 'http://198.51.100.12', health: 'healthy', observations: signalSet(38, 'current', 'fpp.playlist'), lastPollAt: ago(3_000), lastPollError: null, instanceUuid: 'u2', instanceUuidFirstObservedAt: ago(86_400_000), instanceUuidChange: { previousUuid: 'u2-old', changedAt: ago(780_000) }, duplicateInstanceUuidEndpointIds: [] },
+    ],
+  },
+  collectors: [],
+  macroRuns: [],
+  resolume: [{ instanceId: 'arena-main', health: 'healthy', observations: signalSet(6, 'current', 'resolume.layer'), composition: null }],
+})
+
+const SESSION = {
+  serverTime: NOW(),
+  authenticated: true,
+  principal: { id: 'p1', name: 'erbartos', role: 'admin', disabled: false },
+  session: { id: 's1', createdAt: ago(3_600_000), expiresAt: null, deviceLabel: 'Operator UI' },
+  credentialForm: 'session',
+  scopes: ['config:write', 'night:command', 'fpp:command', 'principal:read', 'principal:write', 'asset:write', 'resolume:action', 'audio:command', 'audit:read'],
+  scopesState: 'current',
+  bootstrapRequired: false,
+}
+
+const NIGHT = () => ({
+  serverTime: NOW(),
+  session: {
+    id: 'winter-ridge-2026-night', configObjectId: 'night.session/winter-ridge', configRevision: 4,
+    state: 'live', stateEnteredAt: ago(2_700_000), cycle: 3,
+    finalShowRequested: false, finalShowRequestedAt: null, admissionClosed: false, admissionClosedAt: null,
+    shutdownIntent: '', armedShowId: 'winter-ridge-2026', showCommitted: true,
+    readiness: {
+      state: 'recorded', reason: '', outcome: 'ready', epochId: 'epoch-3', completedAt: ago(16_740_000),
+      sameEpoch: false, fresh: false,
+      checks: Array.from({ length: 14 }, (_, i) => ({ name: `check-${i}`, state: 'healthy', reason: 'passed' })),
+    },
+    powerPhase: { state: 'recorded', reason: 'mains up' },
+    transition: { state: 'recorded', reason: 'transition complete' },
+    cues: { entries: [] },
+    backgroundAudio: { state: 'recorded', reason: 'playing' },
+    degraded: false, attributionDegraded: false,
+    authorization: { state: 'recorded', reason: '', principalId: 'p1', principalName: 'erbartos', command: 'start-night', recordedAt: ago(2_700_000) },
+    updatedAt: NOW(),
+  },
+})
+
+const CURRENT_RUNS = () => ({
+  serverTime: NOW(),
+  activeShow: { configured: true, show: 'Winter Ridge 2026', generation: 7 },
+  runs: [{
+    id: 'run-1', runner: 'fpp', show: 'Winter Ridge 2026', generation: 7,
+    playlistId: 'main-show', playlistRevision: 3, status: 'playing', statusReason: '',
+    playback: { state: 'playing', reason: '', itemId: 'item-4', itemIndex: 4, positionMs: 102_000, media: 'Carol of the Bells', evidence: [] },
+    freshness: { state: 'current', reason: '', observedAt: ago(1_000), collectedAt: ago(1_000) },
+    reconciliation: { state: 'matched', reason: '' },
+    activation: { show: 'Winter Ridge 2026', generation: 7, playlistId: 'main-show', revision: 3, runner: 'fpp' },
+    targets: [], next: { itemId: 'item-5', itemIndex: 5, media: 'Wizards in Winter', source: 'playlist' },
+  }],
+})
+
+const json = (res, body, status = 200) => {
+  res.writeHead(status, {
+    'content-type': 'application/json',
+    'ShowMesh-API-Version': '1',
+    'access-control-allow-origin': '*',
+  })
+  res.end(JSON.stringify(body))
+}
+
+createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  console.log(req.method, url.pathname)
+  const p = url.pathname.replace(/^\/api\/v1/, '') || '/'
+
+  if (p === '/stream') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+      'ShowMesh-API-Version': '1',
+      'x-accel-buffering': 'no',
+    })
+    res.write(`event: stream.start\ndata: ${JSON.stringify({ seq: 0, serverTime: NOW() })}\n\n`)
+    const beat = setInterval(() => res.write(': keep-alive\n\n'), 15_000)
+    req.on('close', () => clearInterval(beat))
+    return
+  }
+  if (p === '/snapshot') return json(res, SNAPSHOT())
+  if (p === '/events') return json(res, { serverTime: NOW(), events: [], gap: false, oldestRetainedSeq: 1 })
+  if (p === '/session') return json(res, { ...SESSION, serverTime: NOW() })
+  if (p === '/current-runs') return json(res, CURRENT_RUNS())
+  if (p === '/night/session') return json(res, NIGHT())
+  if (p === '/') return json(res, { name: 'showmesh-coordinator', version: '0.9.4-fixture', commit: 'a3f91c2', apiVersion: 'v1' })
+  return json(res, { type: 'about:blank', title: 'Not Found', status: 404, detail: `No fixture for ${p}` }, 404)
+}).listen(PORT, () => console.log(`fixture coordinator on http://localhost:${PORT}`))

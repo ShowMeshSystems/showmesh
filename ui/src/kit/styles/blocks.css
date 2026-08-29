@@ -141,3 +141,97 @@
 .sm-grid--wide {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
+
+/* One thing asking for an operator. Used by Dashboard's "Needs you" and
+   Monitor's "Needs an operator". */
+.sm-attn {
+  display: grid;
+  grid-template-columns: 158px minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sm-attn:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-attn__fact {
+  margin: 0;
+  font: var(--t-body);
+}
+
+.sm-attn__detail {
+  margin: 4px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+  max-width: 78ch;
+}
+
+/* Counted facts that link to the screen explaining them. */
+.sm-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-tile {
+  display: block;
+  padding: 14px var(--s-4);
+  border-right: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+}
+
+.sm-tile:last-child {
+  border-right: 0;
+}
+
+a.sm-tile:hover {
+  background: var(--raised);
+  color: inherit;
+}
+
+.sm-tile__label {
+  margin: 0;
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-tile__value {
+  margin: 6px 0 0;
+  font: var(--t-heading);
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-tile__detail {
+  margin: 2px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* A verdict: the state word carries the colour, the sentence carries the fact. */
+.sm-verdict {
+  margin: 10px 0 0;
+  font: var(--t-body);
+  max-width: 68ch;
+}
+
+.sm-verdict__detail {
+  display: block;
+  margin-top: 4px;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* A footnote under a section's own content, not a caveat above it. */
+.sm-section__footnote {
+  margin: 10px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+  max-width: 78ch;
+}

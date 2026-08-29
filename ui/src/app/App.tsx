@@ -4,6 +4,7 @@ import { useModel } from '../api'
 import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
 import { useDensity, useTheme } from './useTheme'
+import { Dashboard } from '../screens/Dashboard'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
@@ -26,7 +27,6 @@ function ScrollToTop() {
  * waiting on, so the queue is readable from the running app.
  */
 const QUEUE: readonly { path: string; title: string; mock: string }[] = [
-  { path: '/', title: 'Dashboard', mock: 'Dashboard.dc.html' },
   { path: '/night', title: 'Show Night', mock: 'Show Night.dc.html' },
   { path: '/control', title: 'Live Control', mock: 'Live Control.dc.html' },
   { path: '/shows/*', title: 'Shows', mock: 'Shows.dc.html' },
@@ -58,13 +58,9 @@ export default function App() {
             <Route path="_specimen" element={<Specimen />} />
             <Route path="monitor" element={<Navigate replace to="/monitor/fleet" />} />
             <Route path="settings" element={<Navigate replace to="/settings/connections" />} />
+            <Route index element={<Dashboard />} />
             {QUEUE.map((entry) => (
-              <Route
-                key={entry.path}
-                index={entry.path === '/'}
-                path={entry.path === '/' ? undefined : entry.path}
-                element={<NotRebuilt title={entry.title} mock={entry.mock} />}
-              />
+              <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />
             ))}
             <Route path="*" element={<NotFound />} />
           </Route>
