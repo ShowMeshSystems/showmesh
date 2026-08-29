@@ -2,7 +2,7 @@
 
 Questions raised by the operator UI rebuild that I will not answer on my own.
 Answer inline under each entry, in any later session. I read this file at the
-start of every rebuild seam.
+start of every screen rebuild.
 
 Format: each entry states what is unresolved, why it matters now, the options,
 my recommendation, and what the answer unblocks. Answered entries move to
@@ -29,7 +29,7 @@ exposes it for inspection.
 
 **Ruling: A.** The guide's §2 list is the chrome bar's contents. No build string
 in the bar. It goes on Settings or the Monitor Capabilities facet, decided in
-that seam. The now-playing group keeps its horizontal room.
+that screen. The now-playing group keeps its horizontal room.
 
 ### D-003 The five routed screens with no mock — 2026-08-29
 
@@ -51,5 +51,5 @@ layout for them and do not leave them on the old stylesheets.
 
 ### D-004 Execution shape — 2026-08-29
 
-**Ruling: sequential, one PR per seam, in this worktree.** No parallel screen
-worktrees; every seam touches the route table and the shared kit.
+**Ruling: sequential, one PR per screen, in this worktree.** No parallel screen
+worktrees; every screen touches the route table and the shared kit.
