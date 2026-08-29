@@ -24,13 +24,17 @@ import { formatAbsolute } from '../app/time'
 import { findObservation, groupFppObservations } from '../app/fppSignals'
 import type { FPPInstance, FPPPlaylistEntryReconciliationResponse } from '../app/types'
 import '../styles/operator-pages.css'
+import '../styles/monitor.css'
 
-// FPP instance detail. Not named in spec section 6.4's view list, which
-// enumerates Dashboard/Nodes/Capabilities/Events, but OBSERVABILITY
-// section 6.1 requires that "every aggregate health indicator must allow
-// drill-down to its contributing evidence," and an FPPInstance's `health`
-// is exactly such an aggregate over its `observations` list -- this view
-// is that drill-down, in the same shape as the node detail view.
+// FPP instance detail (ROUTE-MAP.md: "shaped like the node page," since
+// no mock exists for it and Fleet says "select any resource for its full
+// evidence"). OBSERVABILITY section 6.1 requires that "every aggregate
+// health indicator must allow drill-down to its contributing evidence,"
+// and an FPPInstance's `health` is exactly such an aggregate over its
+// `observations` list -- this view is that drill-down. Transport
+// commands stay here (Live Control, owned by another group, is the
+// show-time control surface; this page is evidence-first) exactly as
+// they were before this restyle -- nothing here was removed.
 export function FPPDetail() {
   const { instanceId } = useParams<{ instanceId: string }>()
   const model = useModelContext()
@@ -55,10 +59,12 @@ export function FPPDetail() {
 
   return (
     <section className="monitor-detail monitor-fpp-detail" aria-labelledby="fpp-detail-title">
-      <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
-      <p>
-        <Link to="/fpp">← All FPP instances</Link>
+      <div className="page-body" style={{ padding: '22px 28px 80px', maxWidth: '1120px' }}>
+      <p className="t-small text-muted">
+        <Link to="/monitor/fleet">Monitor</Link> <span aria-hidden="true">/</span> Fleet{' '}
+        <span aria-hidden="true">/</span> {instanceId}
       </p>
+      <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
 
       {!instance ? (
         <p className="text-muted">
@@ -67,13 +73,15 @@ export function FPPDetail() {
         </p>
       ) : (
         <>
-          <header className="monitor-detail__header">
-            <div>
-              <p className="monitor-detail__eyebrow">FPP player detail</p>
-              <h1 id="fpp-detail-title">{instance.instanceId}</h1>
-              <p className="operator-page__lede text-muted">Authoritative player health, playback evidence, and existing controls.</p>
+          <div className="monitor-detail-header">
+            <div style={{ minWidth: 0 }}>
+              <div className="monitor-detail-header__title">
+                <h1 id="fpp-detail-title" className="t-display" style={{ margin: 0 }}>{instance.instanceId}</h1>
+                <FPPHealthBadge health={instance.health} />
+              </div>
+              <p className="monitor-detail-header__sub">FPP player · {instance.endpoint}</p>
             </div>
-          </header>
+          </div>
 
           <PanelErrorBoundary panelLabel="FPP instance summary">
             <section className="panel">
@@ -293,6 +301,7 @@ export function FPPDetail() {
           )}
         </>
       )}
+      </div>
     </section>
   )
 }

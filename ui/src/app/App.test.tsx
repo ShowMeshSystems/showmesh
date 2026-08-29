@@ -104,15 +104,15 @@ describe('ScrollToTop', () => {
 
 describe('RouteTitle', () => {
   it('gives deep-linked routes a useful document title without changing routing', () => {
-    useLocationMock.mockReturnValue({ pathname: '/config/show/holiday', hash: '' })
+    useLocationMock.mockReturnValue({ pathname: '/shows/holiday', hash: '' })
 
     render(<RouteTitle />)
 
     expect(document.title).toBe('Shows · ShowMesh Operator')
   })
 
-  it('uses a stable product title for legacy routes without a dedicated label', () => {
-    useLocationMock.mockReturnValue({ pathname: '/audit', hash: '' })
+  it('uses a stable product title for a route with no dedicated label', () => {
+    useLocationMock.mockReturnValue({ pathname: '/config/night.session', hash: '' })
 
     render(<RouteTitle />)
 

@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionPanel, SessionIdentity } from './SessionPanel'
@@ -100,31 +100,74 @@ describe('SessionPanel', () => {
   it('renders the loud bootstrap banner, never the ordinary sign-in banner, when bootstrapRequired is true', () => {
     renderPanel(makeModel({ session: signedOut({ bootstrapRequired: true }) }))
     expect(screen.getByRole('alert')).toHaveTextContent(/no administrator exists/i)
-    expect(screen.queryByText('Signed out on this device.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Signed out on this device')).not.toBeInTheDocument()
+  })
+
+  // The bootstrap band's claim form is always visible, never behind a
+  // toggle -- there is no ordinary use of an unclaimed coordinator for a
+  // plain page to hide underneath, unlike the signed-out band's optional
+  // sign-in form.
+  it('shows the bootstrap claim form immediately, with no expand step, and calls claimBootstrap on submit', async () => {
+    const user = userEvent.setup()
+    claimBootstrap.mockResolvedValue(undefined)
+    renderPanel(makeModel({ session: signedOut({ bootstrapRequired: true }) }))
+
+    await user.type(screen.getByLabelText('Bootstrap code'), 'abc123')
+    await user.type(screen.getByLabelText('Administrator name'), 'root')
+    await user.type(screen.getByLabelText('Password'), 'secret123')
+    await user.type(screen.getByLabelText('This device’s name'), 'install laptop')
+    await user.click(screen.getByRole('button', { name: 'Claim and sign in' }))
+
+    expect(claimBootstrap).toHaveBeenCalledWith('abc123', 'root', 'secret123', 'install laptop')
   })
 
   it('renders the persistent signed-out banner, covering a brand-new device exactly like a revoked one', () => {
     renderPanel(makeModel({ session: signedOut() }))
-    expect(screen.getByText('Signed out on this device.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Signed out on this device' })).toBeInTheDocument()
     // Both a form-based sign-in AND the break-glass token path must be
     // reachable from this one persistent state, not gated behind a modal
-    // that only appears when a control is pressed elsewhere.
-    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    // that only appears when a control is pressed elsewhere. "Sign in"
+    // appears twice by design -- once as the band's own toggle, once again
+    // as the unobserved plate's shortcut below it (Session States.dc.html)
+    // -- so this only asserts at least one of each is present.
+    expect(screen.getAllByRole('button', { name: 'Sign in' }).length).toBeGreaterThanOrEqual(2)
     expect(screen.getByRole('button', { name: 'Use a token instead' })).toBeInTheDocument()
   })
 
-  it('calls login with the form values when the sign-in form succeeds, revealing it via the "Sign in" toggle', async () => {
+  it('renders the unobserved blanking plate below the band, with its dashed "No cred" stamp', () => {
+    renderPanel(makeModel({ session: signedOut() }))
+    expect(screen.getByRole('heading', { name: 'Nothing here has ever been collected' })).toBeInTheDocument()
+    expect(screen.getByText('No cred')).toBeInTheDocument()
+  })
+
+  it('calls login with the form values when the sign-in form succeeds, revealing it via the band\'s "Sign in" toggle', async () => {
     const user = userEvent.setup()
     login.mockResolvedValue(undefined)
     renderPanel(makeModel({ session: signedOut() }))
 
-    await user.click(screen.getByRole('button', { name: 'Sign in' }))
-    await user.type(screen.getByLabelText('Name'), 'alice')
-    await user.type(screen.getByLabelText('Password'), 'secret123')
-    await user.type(screen.getByLabelText('This device’s name'), 'porch tablet')
-    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    // The band's own toggle is the first "Sign in" button in the document
+    // -- it precedes the always-present plate shortcut below it.
+    await user.click(screen.getAllByRole('button', { name: 'Sign in' })[0]!)
+
+    const form = screen.getByRole('form', { name: 'Sign in' })
+    await user.type(within(form).getByLabelText('Name'), 'alice')
+    await user.type(within(form).getByLabelText('Password'), 'secret123')
+    await user.type(within(form).getByLabelText('This device’s name'), 'porch tablet')
+    await user.click(within(form).getByRole('button', { name: 'Sign in' }))
 
     expect(login).toHaveBeenCalledWith('alice', 'secret123', 'porch tablet')
+  })
+
+  it('also reveals the sign-in form from the unobserved plate\'s own "Sign in" shortcut', async () => {
+    const user = userEvent.setup()
+    renderPanel(makeModel({ session: signedOut() }))
+
+    // Before the band's toggle is pressed, the only "Sign in" buttons are
+    // the band toggle and the plate shortcut -- the plate one is last.
+    const signInButtons = screen.getAllByRole('button', { name: 'Sign in' })
+    await user.click(signInButtons[signInButtons.length - 1]!)
+
+    expect(screen.getByRole('form', { name: 'Sign in' })).toBeInTheDocument()
   })
 
   it('calls submitToken with the pasted token via the break-glass path', async () => {
@@ -132,6 +175,17 @@ describe('SessionPanel', () => {
     renderPanel(makeModel({ session: signedOut() }))
 
     await user.click(screen.getByRole('button', { name: 'Use a token instead' }))
+    await user.type(screen.getByPlaceholderText('API token'), 'machine-token-value')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+
+    expect(submitToken).toHaveBeenCalledWith('machine-token-value')
+  })
+
+  it('also reveals the break-glass token field from the plate\'s "Paste a machine token" shortcut', async () => {
+    const user = userEvent.setup()
+    renderPanel(makeModel({ session: signedOut() }))
+
+    await user.click(screen.getByRole('button', { name: 'Paste a machine token' }))
     await user.type(screen.getByPlaceholderText('API token'), 'machine-token-value')
     await user.click(screen.getByRole('button', { name: 'Connect' }))
 

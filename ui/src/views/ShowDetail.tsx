@@ -1,16 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { getShow, getShowRevisions, putShow, type ConfigRevisionMeta } from '../api'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ApiError, getShowActive, putShow } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
-import type { ConfigShow, ConfigShowWrite, ShowConfigResponse } from '../app/types'
+import { PlannedFeature } from '../components/SharedLayouts'
+import { useShowWorkspaceData } from '../components/ShowWorkspace'
+import { showWorkspacePath } from '../components/showWorkspacePaths'
+import '../styles/shows.css'
+import type { ConfigShow, ConfigShowWrite } from '../app/types'
 
-// Track G seam G-8 (TRACK-G-surface-parity.md "G-8"): show authoring.
-// Same "server validates, this only mirrors" posture as ShowActionDetail.tsx
-// and MacroDetail.tsx (ADR-030) — this component never substitutes its own
-// judgement for a PUT rejection.
+// Shows.dc.html "detail" tweak: identity and notes only. What the show
+// CONTAINS lives in its five workspace tabs (ShowWorkspace.tsx); this
+// page states that split explicitly and links out to each tab's count
+// rather than re-deriving anything.
 const READ_SCOPES = ['show:macro:run', 'config:write']
 const CONFIG_WRITE_SCOPE = 'config:write'
 
@@ -19,12 +23,12 @@ interface FormState {
   notes: string
 }
 
-function emptyForm(): FormState {
-  return { name: '', notes: '' }
-}
-
 function formFromPayload(payload: ConfigShow): FormState {
   return { name: payload.name, notes: payload.notes }
+}
+
+function emptyForm(): FormState {
+  return { name: '', notes: '' }
 }
 
 function buildPayload(form: FormState): { payload: ConfigShowWrite } | { error: string } {
@@ -32,51 +36,45 @@ function buildPayload(form: FormState): { payload: ConfigShowWrite } | { error: 
   return { payload: { name: form.name.trim(), notes: form.notes } }
 }
 
-type LoadState =
-  | { kind: 'new' }
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; config: ShowConfigResponse; revisions: ConfigRevisionMeta[] }
-
 export interface ShowDetailProps {
   isNew?: boolean
 }
 
 export function ShowDetail({ isNew = false }: ShowDetailProps) {
-  const params = useParams<{ id: string }>()
+  const params = useParams<{ showId: string }>()
   const navigate = useNavigate()
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const existingId = isNew ? undefined : params.id
+  const existingId = isNew ? undefined : params.showId
 
-  const [state, setState] = useState<LoadState>(isNew ? { kind: 'new' } : { kind: 'loading' })
+  const workspace = useShowWorkspaceData(existingId ?? '', !isNew)
+
   const [newId, setNewId] = useState('')
   const [form, setForm] = useState<FormState>(emptyForm())
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const savingRef = useRef(false)
+  const [isActive, setIsActive] = useState<boolean | null>(null)
 
   useEffect(() => {
-    if (isNew) return
-    if (existingId === undefined) return
-    if (!readGate.allowed) return
+    if (workspace.kind === 'loaded') setForm(formFromPayload(workspace.show.payload))
+  }, [workspace])
+
+  useEffect(() => {
+    if (isNew || existingId === undefined || !readGate.allowed) return
     let cancelled = false
-    setState({ kind: 'loading' })
-    Promise.all([getShow(existingId), getShowRevisions(existingId)])
-      .then(([config, revisionsResp]) => {
-        if (cancelled) return
-        setState({ kind: 'loaded', config, revisions: revisionsResp.revisions })
-        setForm(formFromPayload(config.payload))
+    getShowActive()
+      .then((resp) => {
+        if (!cancelled) setIsActive(resp.payload.show === existingId)
       })
       .catch((err: unknown) => {
-        if (cancelled) return
-        setState({ kind: 'error', message: describeApiError(err) })
+        if (!cancelled && err instanceof ApiError && err.status === 404) setIsActive(false)
       })
     return () => {
       cancelled = true
     }
-  }, [existingId, readGate.allowed, isNew])
+  }, [isNew, existingId, readGate.allowed])
 
   async function handleSave(): Promise<void> {
     if (savingRef.current) return
@@ -94,14 +92,11 @@ export function ShowDetail({ isNew = false }: ShowDetailProps) {
     setSaving(true)
     setSaveError(null)
     try {
-      const resp = await putShow(id, built.payload)
+      await putShow(id, built.payload)
       if (isNew) {
-        navigate(`/config/show/${encodeURIComponent(id)}`)
+        navigate(`/shows/${encodeURIComponent(id)}`)
         return
       }
-      setState((prev) => (prev.kind === 'loaded' ? { ...prev, config: resp } : prev))
-      const revisionsResp = await getShowRevisions(id)
-      setState((prev) => (prev.kind === 'loaded' ? { ...prev, revisions: revisionsResp.revisions } : prev))
     } catch (err) {
       setSaveError(describeApiError(err))
     } finally {
@@ -113,107 +108,201 @@ export function ShowDetail({ isNew = false }: ShowDetailProps) {
   const pageGate = isNew ? writeGate : readGate
   if (!pageGate.allowed) {
     return (
-      <div>
-        <h2 className="panel__title">{isNew ? 'New show' : 'Show'}</h2>
-        <p className="panel panel--error" role="status">
-          {pageGate.reason}
+      <div className="operator-page page-body">
+        <h1 className="t-heading">{isNew ? 'New show' : 'Show'}</h1>
+        <p className="ruled-strip ruled-strip--no-permission" role="status">
+          <span className="ruled-strip__state t-meta">No permission</span>
+          <span className="ruled-strip__explanation">{pageGate.reason}</span>
         </p>
       </div>
     )
   }
 
-  if (!isNew && state.kind === 'loading') {
-    return <p className="text-muted">Loading show…</p>
-  }
-  if (!isNew && state.kind === 'error') {
+  if (!isNew && workspace.kind === 'loading') {
     return (
-      <p className="panel panel--error" role="alert">
-        {state.message}
-      </p>
+      <div className="operator-page page-body">
+        <p className="ruled-strip ruled-strip--loading" role="status">
+          <span className="ruled-strip__state t-meta">Loading</span>
+          <span className="ruled-strip__explanation">Reading this show.</span>
+        </p>
+      </div>
+    )
+  }
+  if (!isNew && workspace.kind === 'error') {
+    return (
+      <div className="operator-page page-body">
+        <p className="ruled-strip ruled-strip--failed" role="alert">
+          <span className="ruled-strip__state t-meta">Failed</span>
+          <span className="ruled-strip__explanation">{workspace.message}</span>
+        </p>
+      </div>
     )
   }
 
   const editable = writeGate.allowed
+  const contents = !isNew && workspace.kind === 'loaded' ? workspace.counts : undefined
 
   return (
-    <div>
-      <h2 className="panel__title">{isNew ? 'New show' : form.name || existingId}</h2>
-
-      {!editable && (
-        <p className="text-muted" role="status">
-          Viewing only: editing requires the <code>config:write</code> scope.
-        </p>
-      )}
-
-      {isNew && (
-        <label className="form-field">
-          Show id
-          <input type="text" value={newId} disabled={!editable} onChange={(e) => setNewId(e.target.value)} />
-        </label>
-      )}
-
-      <fieldset disabled={!editable}>
-        <label className="form-field">
-          Name
-          <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        </label>
-        <label className="form-field">
-          Notes
-          <textarea rows={4} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-        </label>
-      </fieldset>
-
-      {editable && (
-        <div style={{ marginTop: '1rem' }}>
-          {saveError !== null && (
-            <p role="alert" className="session-form__error">
-              {saveError}
-            </p>
-          )}
-          <ScopedButton
-            requiredScope={CONFIG_WRITE_SCOPE}
-            onClick={() => void handleSave()}
-            busy={saving}
-            busyReason="Saving this show revision…"
-          >
-            {saving ? 'Saving…' : isNew ? 'Create show' : 'Save show'}
-          </ScopedButton>
-        </div>
-      )}
-
-      {!isNew && state.kind === 'loaded' && (
-        <>
-          <p className="panel" role="status">
-            Active revision {state.config.revision}
-            {state.config.createdByPrincipalName !== null && `, by ${state.config.createdByPrincipalName}`}.
+    <div className="operator-page">
+      <header className="page-header">
+        {!isNew && (
+          <p className="page-header__breadcrumb">
+            <Link to="/shows">Shows</Link> <span aria-hidden="true">/</span> {form.name || existingId} <span aria-hidden="true">/</span> Details
           </p>
-          {state.revisions.length > 0 && (
-            <>
-              <h3 className="panel__title">Revision history</h3>
-              <table className="config-table">
-                <thead>
-                  <tr>
-                    <th>Revision</th>
-                    <th>Active</th>
-                    <th>Created at</th>
-                    <th>Created by</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.revisions.map((rev) => (
-                    <tr key={rev.revision}>
-                      <td>{rev.revision}</td>
-                      <td>{rev.active ? 'active' : ''}</td>
-                      <td>{formatAbsolute(rev.createdAt)}</td>
-                      <td>{rev.createdByPrincipalName ?? '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
+        )}
+        <div className="page-header__row">
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <h1 className="t-display page-header__title">{isNew ? 'New show' : form.name || existingId}</h1>
+              {isActive === true && <span className="status-pair status-pair--good">Active</span>}
+            </div>
+            <p className="page-header__meta">
+              Identity and notes only. What the show contains lives in its workspace tabs.
+            </p>
+          </div>
+          {!isNew && existingId !== undefined && (
+            <div className="page-header__actions">
+              <Link className="btn btn--secondary" to={showWorkspacePath(existingId, 'playlists')}>
+                Open workspace
+              </Link>
+            </div>
           )}
-        </>
-      )}
+        </div>
+      </header>
+
+      <div className="page-body">
+        {!editable && (
+          <p className="t-small shows-muted" role="status">
+            Viewing only: editing requires the <code>config:write</code> scope.
+          </p>
+        )}
+
+        <section aria-labelledby="sh-ident" className="shows-detail-section">
+          <h2 id="sh-ident" className="t-heading">
+            Identity
+          </h2>
+          <div className="shows-detail-fields">
+            {isNew && (
+              <label className="field">
+                <span className="field__label">Show id</span>
+                <input
+                  className="field__input"
+                  type="text"
+                  value={newId}
+                  disabled={!editable}
+                  onChange={(e) => setNewId(e.target.value)}
+                />
+              </label>
+            )}
+            <label className="field">
+              <span className="field__label">Name</span>
+              <input
+                className="field__input"
+                type="text"
+                value={form.name}
+                disabled={!editable}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </label>
+            {!isNew && (
+              <div className="field">
+                <span className="field__label">Id</span>
+                <p className="field__input shows-fixed-value t-data">{existingId}</p>
+                <span className="field__help">
+                  Fixed at creation. Every cue, surface and asset in this show is keyed on it, so it
+                  cannot change.
+                </span>
+              </div>
+            )}
+            <label className="field">
+              <span className="field__label">Notes</span>
+              <textarea
+                className="field__input"
+                rows={4}
+                value={form.notes}
+                disabled={!editable}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              />
+              <span className="field__help">For whoever operates this next, including you in eleven months.</span>
+            </label>
+          </div>
+        </section>
+
+        {!isNew && contents !== undefined && (
+          <section aria-labelledby="sh-contents" className="shows-detail-section">
+            <h2 id="sh-contents" className="t-heading">
+              What this show contains
+            </h2>
+            <div className="shows-contents-grid">
+              <Link className="shows-contents-card" to={showWorkspacePath(existingId!, 'playlists')}>
+                <span className="t-meta shows-faint">Playlists</span>
+                <strong className="t-heading">{contents.playlists}</strong>
+              </Link>
+              <Link className="shows-contents-card" to={showWorkspacePath(existingId!, 'cues')}>
+                <span className="t-meta shows-faint">Cues</span>
+                <strong className="t-heading">{contents.cues}</strong>
+              </Link>
+              <Link className="shows-contents-card" to={showWorkspacePath(existingId!, 'presentation')}>
+                <span className="t-meta shows-faint">Surfaces</span>
+                <strong className="t-heading">{contents.presentation}</strong>
+              </Link>
+              <Link className="shows-contents-card" to={showWorkspacePath(existingId!, 'assets')}>
+                <span className="t-meta shows-faint">Assets</span>
+                <strong className="t-heading">{contents.assets}</strong>
+              </Link>
+            </div>
+            <p className="t-small shows-muted">
+              Each of these is its own revisioned object, so editing a cue creates a cue revision,
+              not an opaque revision of the whole show.
+            </p>
+          </section>
+        )}
+
+        {editable && (
+          <div className="shows-detail-actions">
+            {saveError !== null && (
+              <p role="alert" className="field__error">
+                {saveError}
+              </p>
+            )}
+            <ScopedButton
+              requiredScope={CONFIG_WRITE_SCOPE}
+              className="btn btn--primary"
+              onClick={() => void handleSave()}
+              busy={saving}
+              busyReason="Saving this show revision…"
+            >
+              {saving ? 'Saving…' : isNew ? 'Create show' : 'Save show'}
+            </ScopedButton>
+            {!isNew && workspace.kind === 'loaded' && (
+              <span className="t-small shows-muted">
+                Active revision <span className="t-data">{workspace.show.revision}</span>
+                {workspace.show.createdByPrincipalName !== null && ` · ${workspace.show.createdByPrincipalName}`}{' '}
+                {formatAbsolute(workspace.show.updatedAt)}
+              </span>
+            )}
+          </div>
+        )}
+
+        {!isNew && (
+          <PlannedFeature
+            headingLevel={2}
+            title="Delete this show"
+            why={
+              isActive === true
+                ? `No delete endpoint exists for show configuration in this API, and this is the active show: deleting it would orphan ${
+                    contents ? `${contents.cues} cues, ${contents.playlists} playlists and ${contents.presentation} surfaces` : 'its contents'
+                  } and leave the installation with no authority for tonight regardless.`
+                : 'No delete endpoint exists for show configuration in this API. Its cues, playlists, surfaces and assets remain reachable, and assets are never removed either way, since they are content, not configuration.'
+            }
+            preview={
+              <button type="button" className="btn btn--destructive">
+                Delete show
+              </button>
+            }
+          />
+        )}
+      </div>
     </div>
   )
 }

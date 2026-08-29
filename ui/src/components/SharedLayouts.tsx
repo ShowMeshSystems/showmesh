@@ -155,3 +155,33 @@ export function BlankingPlate({ variant, stamp, eyebrow, title, explanation, act
     </section>
   )
 }
+
+/* A design idea that is drawn in the mocks but is not a working feature.
+ *
+ * Deliberately NOT one of the four absences, and it must never be mistaken for
+ * one. The absences describe data the coordinator does or does not hold. This
+ * describes a control that does not exist at all, so it takes its own visual
+ * channel and carries a stamp an operator cannot read past.
+ *
+ * `why` states plainly what is missing, so a good idea stays visible and legible
+ * as an idea without ever looking live. Anything passed as `preview` is a drawing
+ * of a control, never a control: it is inert and hidden from assistive tech. */
+export function PlannedFeature({ title, why, preview, headingLevel = 3 }: {
+  title: string
+  why: ReactNode
+  preview?: ReactNode | undefined
+} & StateBlockOptions) {
+  return (
+    <section className="planned" role="note" aria-label={`Not built: ${title}`}>
+      <div className="planned__rule" aria-hidden="true" />
+      <div className="planned__body">
+        <span className="planned__stamp t-meta">Not built</span>
+        {headingLevel === 2
+          ? <h2 className="planned__title">{title}</h2>
+          : <h3 className="planned__title">{title}</h3>}
+        <p className="planned__why">{why}</p>
+        {preview && <div className="planned__preview" aria-hidden="true" inert>{preview}</div>}
+      </div>
+    </section>
+  )
+}

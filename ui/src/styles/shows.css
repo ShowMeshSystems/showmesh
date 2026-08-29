@@ -1,0 +1,393 @@
+/*
+ * Screen builder group C: Shows destination and its Playlists, Cues and
+ * Presentation workspace tabs. Every colour, spacing and radius here is
+ * a token from tokens.css / primitives.css — nothing hard-coded. This
+ * file only adds the shapes primitives.css does not already cover
+ * (UI-DESIGN-GUIDE.md section 0: lift values, not markup, from the
+ * mocks).
+ */
+
+.shows-muted {
+  color: var(--text-muted);
+}
+
+.shows-faint {
+  color: var(--text-faint);
+}
+
+.shows-id-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.shows-active-badge {
+  margin-left: 8px;
+}
+
+/* ------------------------------------------------------------ Shows list */
+
+.shows-activate-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.shows-activate-select {
+  max-width: 22rem;
+}
+
+/* ---------------------------------------------------------- Show detail */
+
+.shows-detail-section {
+  margin-top: 26px;
+  max-width: 680px;
+}
+
+.shows-detail-fields {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.shows-fixed-value {
+  display: flex;
+  align-items: center;
+  background: var(--sunken);
+  color: var(--text-muted);
+}
+
+.shows-contents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 1px;
+  margin-top: 14px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.shows-contents-card {
+  display: block;
+  padding: 13px 15px;
+  background: var(--surface);
+  text-decoration: none;
+}
+
+.shows-contents-card:hover {
+  background: var(--raised);
+}
+
+.shows-contents-card strong {
+  display: block;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.shows-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  max-width: 680px;
+}
+
+.shows-danger-box {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--bad-border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.shows-danger-box .btn {
+  margin-top: 14px;
+}
+
+/* -------------------------------------------------------------- Playlists */
+
+.playlist-card-list {
+  display: grid;
+  gap: 1px;
+  margin-top: 12px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.playlist-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  background: var(--surface);
+  border-left: 2px solid transparent;
+  text-decoration: none;
+  color: inherit;
+}
+
+.playlist-card:hover {
+  background: var(--raised);
+  border-left-color: var(--border-strong);
+}
+
+.playlist-card[aria-current='true'] {
+  background: var(--accent-bg);
+  border-left-color: var(--accent);
+}
+
+.playlist-card__title {
+  font: var(--t-subhead);
+}
+
+.playlist-card[aria-current='true'] .playlist-card__title {
+  color: var(--accent);
+}
+
+.playlist-runner-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  font: var(--t-meta);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.playlist-card[aria-current='true'] .playlist-runner-chip {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.playlist-concurrency-note {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-left: 3px solid var(--accent-border);
+  background: var(--raised);
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.playlist-editing-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 28px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.playlist-not-wired {
+  margin-top: 6px;
+  font: var(--t-small);
+  color: var(--warn-fg);
+}
+
+.verdict-bound {
+  color: var(--good-fg);
+}
+
+.verdict-recheck {
+  color: var(--warn-fg);
+}
+
+.verdict-unbound {
+  color: var(--text-faint);
+}
+
+.playlist-row--held td {
+  background: var(--warn-bg);
+}
+
+/* ------------------------------------------------------------------ Cues */
+
+.cues-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.cues-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cues-filter-input {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-small);
+  min-width: 0;
+  max-width: 240px;
+}
+
+.cues-section-label {
+  margin: 24px 0 8px;
+  color: var(--text-faint);
+}
+
+.cues-section-label:first-of-type {
+  margin-top: 16px;
+}
+
+.output-chip-group {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.output-chip {
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  font: var(--t-meta);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.output-chip--unavailable {
+  border-style: dashed;
+  border-color: var(--text-faint);
+  color: var(--text-faint);
+}
+
+.composer-outputs {
+  display: grid;
+  gap: 1px;
+  margin-top: 12px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.composer-output-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.composer-output-option--checked {
+  background: var(--accent-bg);
+}
+
+.composer-summary {
+  margin: 14px 0 0;
+  padding: 13px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--raised);
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------- Presentation */
+
+.matrix-card {
+  margin-top: 20px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.matrix-band {
+  display: flex;
+  height: 26px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.matrix-band__segment {
+  display: grid;
+  place-items: center;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+.matrix-band__segment:last-child {
+  border-right: 0;
+}
+
+.matrix-band__segment--claimed {
+  background: var(--good-bg);
+}
+
+.matrix-band__segment--current {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.matrix-band__segment--unallocated {
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--hatch) 6px 12px);
+}
+
+.matrix-band__label {
+  font: var(--t-meta);
+  font-size: 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.transport-chip {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  font: var(--t-meta);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.transport-chip--accent {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.derived-value {
+  display: flex;
+  align-items: center;
+  height: var(--control-compact, 30px);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sunken);
+  color: var(--text-muted);
+}
+
+.derived-note {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent-border);
+  background: var(--raised);
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.unobserved-note {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--text-faint);
+  border-radius: 4px;
+}

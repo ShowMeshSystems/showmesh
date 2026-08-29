@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   createPrincipal,
   disablePrincipal,
@@ -17,7 +18,8 @@ import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
 import { useUnsavedChanges } from '../app/UnsavedChanges'
-import { EmptyBlock, FailedBlock, LoadingBlock, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
+import { EmptyBlock, FailedBlock, LoadingBlock, PlannedFeature, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
+import '../styles/session.css'
 
 // Track G seam G-5: identity administration's own view — the Access page.
 // Reads render under principal:read; every control follows ScopedButton's
@@ -29,6 +31,11 @@ import { EmptyBlock, FailedBlock, LoadingBlock, StaleBlock, UnavailableBlock } f
 // server-side with 409 (ADR-039 decision 8) — this view renders that
 // refusal exactly like every other write error, via describeApiError, and
 // never second-guesses it client-side.
+//
+// UI-DESIGN-GUIDE.md §8 / ROUTE-MAP.md: `/access` is the one Settings tab
+// that leaves the screen (marked with an arrow wherever Settings links to
+// it), rendered here with its own page header rather than the Settings
+// tab strip.
 const PRINCIPAL_READ_SCOPE = 'principal:read'
 const PRINCIPAL_WRITE_SCOPE = 'principal:write'
 
@@ -55,7 +62,11 @@ export function Access() {
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [reloadGeneration, setReloadGeneration] = useState(0)
+  const [creating, setCreating] = useState(false)
   const signInState = describeSignInState(model.session)
+  const selfPrincipalId = signInState.kind === 'signed_in' ? (signInState.session.principal?.id ?? null) : null
+  const selfScopes = signInState.kind === 'signed_in' ? signInState.session.scopes : null
+
   const permissionState = !readGate.allowed && (
     signInState.kind === 'loading' ? <LoadingBlock title="Loading permissions" reason="Waiting for the coordinator to report what this device may do." />
       : signInState.kind === 'bootstrap_required' ? <UnavailableBlock title="Setup required" reason="No administrator exists on this coordinator. Claim the bootstrap code from its data volume to create one before managing access." />
@@ -90,57 +101,146 @@ export function Access() {
   }
 
   return (
-    <div>
-      <h2 className="panel__title">Access</h2>
-      <p className="text-muted">
-        Principals, their role and enabled state, their passwords, and their API tokens. Reads
-        require <code>principal:read</code>; every write requires <code>principal:write</code>{' '}
-        and is audited. Disabling the coordinator&rsquo;s last enabled administrator, changing
-        its role away from one that holds <code>principal:write</code>, or revoking the last
-        credential able to reach that scope, is refused rather than performed.
-      </p>
+    <>
+      <section className="page-header" aria-labelledby="access-h">
+        <p className="page-header__breadcrumb">
+          <Link to="/settings">Settings</Link> <span aria-hidden="true">/</span> Access
+        </p>
+        <h1 id="access-h" className="t-display page-header__title">
+          Access
+        </h1>
+        <p className="page-header__meta" style={{ maxWidth: '80ch' }}>
+          Who can change this installation, and what each of them may change. Every write is
+          attributed to a principal; nothing here affects who can <em>see</em> the show.
+        </p>
 
-      {permissionState}
+        <div className="ruled-strip" style={{ marginTop: 20 }}>
+          <span className="ruled-strip__state t-meta">Reads are open</span>
+          <div>
+            <p className="ruled-strip__explanation" style={{ marginTop: 0 }}>
+              Anyone who can reach this coordinator can view the show without signing in. That is
+              deliberate: a credential problem must never cost an operator sight of a running show.
+              Close it with <code className="t-data">SHOWMESH_API_CLOSE_READS</code> if the port is
+              exposed beyond the show VLAN.
+            </p>
+          </div>
+        </div>
+      </section>
 
-      {readGate.allowed && (
-        <>
-          {state.kind === 'loading' && <LoadingBlock title="Loading principals" reason="Loading coordinator access records…" />}
-          {state.kind === 'error' && (
-            <FailedBlock title="Principals could not be loaded" reason={<>{state.message} <button type="button" onClick={reload}>Retry</button></>} />
-          )}
-          {state.kind === 'loaded' && (
-            <>
-              <CreatePrincipalForm onCreated={reload} />
-              <h3 className="panel__title">Principals</h3>
-              {state.principals.length === 0 ? (
-                <EmptyBlock title="No principals" reason="The coordinator returned no principals." />
-              ) : (
-                <div className="table-scroll">
-                  <table className="config-table">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Kind</th>
-                        <th>Role</th>
-                        <th>Disabled</th>
-                        <th>Has password</th>
-                        <th>Created</th>
-                        <th aria-label="Actions" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {state.principals.map((p) => (
-                        <PrincipalRow key={p.id} principal={p} onChanged={reload} />
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </>
-          )}
-        </>
-      )}
-    </div>
+      <div className="page-body">
+        {permissionState}
+
+        {readGate.allowed && (
+          <>
+            {state.kind === 'loading' && <LoadingBlock title="Loading principals" reason="Loading coordinator access records…" />}
+            {state.kind === 'error' && (
+              <FailedBlock title="Principals could not be loaded" reason={<>{state.message} <button type="button" className="btn btn--secondary btn--compact" onClick={reload}>Retry</button></>} />
+            )}
+            {state.kind === 'loaded' && (
+              <>
+                <section aria-labelledby="ac-princ" style={{ marginTop: 26 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+                    <h2 id="ac-princ" className="t-heading" style={{ margin: 0 }}>
+                      Principals
+                    </h2>
+                    <ScopedButton
+                      requiredScope={PRINCIPAL_WRITE_SCOPE}
+                      className="btn btn--primary btn--compact"
+                      onClick={() => setCreating((v) => !v)}
+                    >
+                      {creating ? 'Hide' : 'Add principal'}
+                    </ScopedButton>
+                  </div>
+                  <p className="t-small" style={{ margin: '8px 0 0', color: 'var(--text-muted)', maxWidth: '80ch' }}>
+                    Scopes are granted as bundles defined on the coordinator. Only the scopes this
+                    signed-in principal itself holds are known here: the coordinator has no read
+                    surface for another principal’s resolved scope list.
+                  </p>
+
+                  {creating && (
+                    <CreatePrincipalForm
+                      onCreated={() => {
+                        setCreating(false)
+                        reload()
+                      }}
+                    />
+                  )}
+
+                  {state.principals.length === 0 ? (
+                    <EmptyBlock title="No principals" reason="The coordinator returned no principals." />
+                  ) : (
+                    <div className="table-wrap card" style={{ marginTop: 14 }}>
+                      <table className="table table--full">
+                        <thead>
+                          <tr>
+                            <th>Principal</th>
+                            <th>Role / scopes held</th>
+                            <th>State</th>
+                            <th>Created</th>
+                            <th aria-label="Actions" />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {state.principals.map((p) => (
+                            <PrincipalRow
+                              key={p.id}
+                              principal={p}
+                              isSelf={p.id === selfPrincipalId}
+                              selfScopes={selfScopes}
+                              onChanged={reload}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                      <p className="table__footer-note">
+                        A principal with no write scopes can still read everything: that is what
+                        "reads are open" means, not a permission you granted.
+                      </p>
+                    </div>
+                  )}
+
+                  <PlannedFeature
+                    title="Scopes held, for every principal"
+                    why={
+                      <>
+                        <code className="t-data">GET /principals</code> returns no scopes field, and
+                        there is no role to scopes resolution endpoint, so a resolved scope list can
+                        only be shown for the signed-in principal, from{' '}
+                        <code className="t-data">session.scopes</code> (the real chips above, on your
+                        own row).
+                      </>
+                    }
+                    preview={
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        <span className="access-scope-chip access-scope-chip--muted">night:command</span>
+                        <span className="access-scope-chip access-scope-chip--muted">show:macro:run</span>
+                      </div>
+                    }
+                  />
+
+                  <PlannedFeature
+                    title="Last used, and a revoke suggestion built on it"
+                    why={
+                      <>
+                        <code className="t-data">PrincipalObject</code> carries no{' '}
+                        <code className="t-data">lastUsedAt</code> field (only individual tokens do),
+                        so there is nothing to roll up into "unused N days" or a suggestion to revoke
+                        a principal that has gone quiet.
+                      </>
+                    }
+                    preview={
+                      <span className="status-pair status-pair--warn">⚠ Consider revoking</span>
+                    }
+                  />
+                </section>
+
+                <AttributionSection />
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -177,28 +277,32 @@ function CreatePrincipalForm({ onCreated }: { onCreated: () => void }) {
   }
 
   return (
-    <div data-unsaved-form="access-create-principal" style={{ marginBottom: '1.5rem' }}>
-      <h3 className="panel__title">Create a principal</h3>
+    <div data-unsaved-form="access-create-principal" style={{ marginTop: 14 }}>
+      <h3 className="t-subhead" style={{ margin: 0 }}>
+        New principal
+      </h3>
       {error !== null && (
-        <p role="alert" className="session-form__error">
-          {error}
-        </p>
+        <div role="alert" className="session-form__alert" style={{ marginTop: 8 }}>
+          <p className="t-small" style={{ margin: 0 }}>
+            {error}
+          </p>
+        </div>
       )}
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'end' }}>
-        <label>
-          Name
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="access-inline-form">
+        <label className="field">
+          <span className="field__label">Name</span>
+          <input className="field__input" type="text" value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <label>
-          Kind
-          <select value={kind} onChange={(e) => setKind(e.target.value as 'human' | 'machine')}>
+        <label className="field">
+          <span className="field__label">Kind</span>
+          <select className="field__input" value={kind} onChange={(e) => setKind(e.target.value as 'human' | 'machine')}>
             <option value="human">human</option>
             <option value="machine">machine</option>
           </select>
         </label>
-        <label>
-          Role
-          <select value={role} onChange={(e) => setRole(e.target.value as (typeof ROLES)[number])}>
+        <label className="field">
+          <span className="field__label">Role</span>
+          <select className="field__input" value={role} onChange={(e) => setRole(e.target.value as (typeof ROLES)[number])}>
             {ROLES.map((r) => (
               <option key={r} value={r}>
                 {r}
@@ -206,12 +310,13 @@ function CreatePrincipalForm({ onCreated }: { onCreated: () => void }) {
             ))}
           </select>
         </label>
-        <label>
-          Password (optional for a machine principal)
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <label className="field">
+          <span className="field__label">Password (optional for a machine principal)</span>
+          <input className="field__input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         <ScopedButton
           requiredScope={PRINCIPAL_WRITE_SCOPE}
+          className="btn btn--primary"
           onClick={() => void handleCreate()}
           busy={saving}
           busyReason="Creating this principal…"
@@ -223,7 +328,17 @@ function CreatePrincipalForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
-function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; onChanged: () => void }) {
+function PrincipalRow({
+  principal,
+  isSelf,
+  selfScopes,
+  onChanged,
+}: {
+  principal: PrincipalObject
+  isSelf: boolean
+  selfScopes: string[] | null
+  onChanged: () => void
+}) {
   const { clearUnsavedChanges: clearRoleUnsavedChanges } = useUnsavedChanges(`access-principal-${principal.id}-role`)
   const { clearUnsavedChanges: clearPasswordUnsavedChanges } = useUnsavedChanges(`access-principal-${principal.id}-password`)
   const [roleDraft, setRoleDraft] = useState(principal.role)
@@ -285,26 +400,33 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
 
   return (
     <>
-      <tr>
+      <tr className={isSelf ? 'access-row--self' : undefined} aria-current={isSelf ? 'true' : undefined}>
         <td>
-          {principal.name}
-          {principal.reserved && <span className="text-muted"> (reserved)</span>}
+          <span className="t-body" style={{ fontWeight: 600 }}>
+            {principal.name}
+          </span>{' '}
+          {isSelf && <span className="access-you-badge">You</span>}
+          {principal.reserved && <span className="t-small" style={{ color: 'var(--text-faint)' }}> (reserved)</span>}
+          <br />
+          <span className="t-data t-small" style={{ color: 'var(--text-faint)' }}>
+            {principal.kind}
+          </span>
         </td>
-        <td>{principal.kind}</td>
         <td>
           {locked ? (
-            principal.role
+            <span className="t-body">{principal.role}</span>
           ) : (
-            <span data-unsaved-form={`access-principal-${principal.id}-role`}>
-              <select value={roleDraft} onChange={(e) => setRoleDraft(e.target.value as (typeof ROLES)[number])}>
+            <span data-unsaved-form={`access-principal-${principal.id}-role`} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <select className="field__input" style={{ height: 'var(--control-compact)', width: 'auto' }} value={roleDraft} onChange={(e) => setRoleDraft(e.target.value as (typeof ROLES)[number])}>
                 {ROLES.map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>
                 ))}
-              </select>{' '}
+              </select>
               <ScopedButton
                 requiredScope={PRINCIPAL_WRITE_SCOPE}
+                className="btn btn--secondary btn--compact"
                 onClick={() => void handleSetRole()}
                 busy={busyAction === 'role'}
                 busyReason="Changing this principal's role…"
@@ -313,62 +435,96 @@ function PrincipalRow({ principal, onChanged }: { principal: PrincipalObject; on
               </ScopedButton>
             </span>
           )}
+          <div style={{ marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {isSelf && selfScopes !== null ? (
+              selfScopes.length === 0 ? (
+                <span className="t-small" style={{ color: 'var(--text-faint)' }}>No write scopes</span>
+              ) : (
+                selfScopes.map((scope) => (
+                  <span key={scope} className="access-scope-chip">
+                    {scope}
+                  </span>
+                ))
+              )
+            ) : (
+              <span className="t-small" style={{ color: 'var(--text-faint)' }}>
+                Not built for another principal, see "Scopes held" below.
+              </span>
+            )}
+          </div>
         </td>
-        <td>{principal.disabled ? 'yes' : 'no'}</td>
-        <td>{principal.hasPassword ? 'yes' : 'no'}</td>
-        <td>{formatAbsolute(principal.createdAt)}</td>
         <td>
-          {!locked && (
-            <>
-              <ScopedButton
-                requiredScope={PRINCIPAL_WRITE_SCOPE}
-                onClick={() => void handleToggleDisabled()}
-                busy={busyAction === 'enable' || busyAction === 'disable'}
-                busyReason={principal.disabled ? 'Enabling…' : 'Disabling…'}
-              >
-                {principal.disabled ? 'Enable' : 'Disable'}
-              </ScopedButton>{' '}
-              <button type="button" onClick={() => setPasswordOpen((v) => !v)}>
-                {passwordOpen ? 'Cancel reset' : 'Reset password'}
-              </button>{' '}
-            </>
-          )}
-          <button type="button" onClick={() => setTokensOpen((v) => !v)}>
-            {tokensOpen ? 'Hide tokens' : 'Tokens'}
-          </button>
+          <span className={`status-pair ${principal.disabled ? 'status-pair--bad' : 'status-pair--good'}`}>
+            {principal.disabled ? 'Disabled' : 'Enabled'}
+          </span>
+          <br />
+          <span className="t-small" style={{ color: 'var(--text-faint)' }}>
+            {principal.hasPassword ? 'Password set' : 'No password'}
+          </span>
+        </td>
+        <td className="t-data t-small">{formatAbsolute(principal.createdAt)}</td>
+        <td>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {!locked && (
+              <>
+                <ScopedButton
+                  requiredScope={PRINCIPAL_WRITE_SCOPE}
+                  className="btn btn--secondary btn--compact"
+                  onClick={() => void handleToggleDisabled()}
+                  busy={busyAction === 'enable' || busyAction === 'disable'}
+                  busyReason={principal.disabled ? 'Enabling…' : 'Disabling…'}
+                >
+                  {principal.disabled ? 'Enable' : 'Disable'}
+                </ScopedButton>
+                <button type="button" className="btn btn--quiet btn--compact" onClick={() => setPasswordOpen((v) => !v)} aria-expanded={passwordOpen}>
+                  {passwordOpen ? 'Cancel reset' : 'Reset password'}
+                </button>
+              </>
+            )}
+            <button type="button" className="btn btn--quiet btn--compact" onClick={() => setTokensOpen((v) => !v)} aria-expanded={tokensOpen}>
+              {tokensOpen ? 'Hide credentials' : 'Credentials'}
+            </button>
+          </div>
         </td>
       </tr>
       {error !== null && (
         <tr>
-          <td colSpan={7}>
-            <p role="alert" className="session-form__error">
-              {error}
-            </p>
+          <td colSpan={5}>
+            <div role="alert" className="session-form__alert">
+              <p className="t-small" style={{ margin: 0 }}>
+                {error}
+              </p>
+            </div>
           </td>
         </tr>
       )}
       {passwordOpen && !locked && (
         <tr>
-          <td colSpan={7} data-unsaved-form={`access-principal-${principal.id}-password`}>
-            <label>
-              New password
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            </label>{' '}
-            <ScopedButton
-              requiredScope={PRINCIPAL_WRITE_SCOPE}
-              onClick={() => void handleResetPassword()}
-              busy={busyAction === 'password'}
-              busyReason="Resetting this principal's password…"
-            >
-              Reset password
-            </ScopedButton>
-            <p className="text-muted">Every existing session and token for this principal will be invalidated.</p>
+          <td colSpan={5} data-unsaved-form={`access-principal-${principal.id}-password`}>
+            <label className="field" style={{ maxWidth: 280 }}>
+              <span className="field__label">New password</span>
+              <input className="field__input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </label>
+            <div style={{ marginTop: 8 }}>
+              <ScopedButton
+                requiredScope={PRINCIPAL_WRITE_SCOPE}
+                className="btn btn--primary btn--compact"
+                onClick={() => void handleResetPassword()}
+                busy={busyAction === 'password'}
+                busyReason="Resetting this principal's password…"
+              >
+                Reset password
+              </ScopedButton>
+            </div>
+            <p className="t-small" style={{ color: 'var(--text-muted)', marginTop: 6 }}>
+              Every existing session and token for this principal will be invalidated.
+            </p>
           </td>
         </tr>
       )}
       {tokensOpen && (
         <tr>
-          <td colSpan={7}>
+          <td colSpan={5}>
             <TokensPanel principalID={principal.id} locked={locked} />
           </td>
         </tr>
@@ -470,27 +626,58 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
   }
 
   return (
-    <div>
+    <div style={{ padding: '10px 0' }}>
+      <h4 className="t-subhead" style={{ margin: 0 }}>
+        Credentials
+      </h4>
+      <PlannedFeature
+        title="Sessions and devices for this principal"
+        headingLevel={3}
+        why={
+          <>
+            There is no <code className="t-data">GET</code> for a principal's own sessions, only{' '}
+            <code className="t-data">DELETE /session</code> (this device's own session, or a
+            specific <code className="t-data">sessionId</code> the caller already knows). The
+            device label from sign-in has nowhere to be listed and revoked from here yet; the
+            token table below is the real, working credential path.
+          </>
+        }
+        preview={
+          <div className="ruled-strip" style={{ padding: '10px 0' }}>
+            <span className="ruled-strip__state t-meta">Device</span>
+            <div>
+              <p className="ruled-strip__fact" style={{ margin: 0 }}>porch tablet</p>
+              <p className="ruled-strip__explanation">Signed in 12 Aug 09:38</p>
+            </div>
+          </div>
+        }
+      />
+      <p className="t-small" style={{ margin: '10px 0 0', color: 'var(--text-muted)' }}>
+        A token is shown once, at the moment it is issued, and never again. If it is lost, revoke it
+        and issue another.
+      </p>
       {error !== null && (
-        <p role="alert" className="session-form__error">
-          {error}
-        </p>
+        <div role="alert" className="session-form__alert" style={{ marginTop: 8 }}>
+          <p className="t-small" style={{ margin: 0 }}>
+            {error}
+          </p>
+        </div>
       )}
       {issuedValue !== null && (
-        <p className="panel" role="status">
+        <p role="status" className="t-small" style={{ marginTop: 8 }}>
           This token is displayed exactly once and cannot be retrieved again; store it now:{' '}
-          <code>{issuedValue}</code>
+          <code className="t-data">{issuedValue}</code>
         </p>
       )}
       {loadError !== null ? (
-        <FailedBlock title="Tokens could not be loaded" reason={<>{loadError} <button type="button" onClick={retryLoad}>Retry</button></>} headingLevel={3} />
+        <FailedBlock title="Tokens could not be loaded" reason={<>{loadError} <button type="button" className="btn btn--secondary btn--compact" onClick={retryLoad}>Retry</button></>} headingLevel={3} />
       ) : tokens === null ? (
         <LoadingBlock title="Loading tokens" reason="Loading coordinator access records…" headingLevel={3} />
       ) : tokens.length === 0 ? (
         <EmptyBlock title="No tokens" reason="No tokens are currently issued for this principal." headingLevel={3} />
       ) : (
-        <div className="table-scroll">
-          <table className="config-table">
+        <div className="table-wrap card" style={{ marginTop: 10 }}>
+          <table className="table">
             <thead>
               <tr>
                 <th>Hint</th>
@@ -504,15 +691,16 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
             <tbody>
               {tokens.map((t) => (
                 <tr key={t.id}>
-                  <td>{t.hint}</td>
+                  <td className="t-data">{t.hint}</td>
                   <td>{t.label || '-'}</td>
-                  <td>{formatAbsolute(t.createdAt)}</td>
-                  <td>{t.expiresAt === null ? 'never' : formatAbsolute(t.expiresAt)}</td>
-                  <td>{t.lastUsedAt === null ? 'never' : formatAbsolute(t.lastUsedAt)}</td>
+                  <td className="t-data t-small">{formatAbsolute(t.createdAt)}</td>
+                  <td className="t-data t-small">{t.expiresAt === null ? 'never' : formatAbsolute(t.expiresAt)}</td>
+                  <td className="t-data t-small">{t.lastUsedAt === null ? 'never' : formatAbsolute(t.lastUsedAt)}</td>
                   <td>
                     {!locked && (
                       <ScopedButton
                         requiredScope={PRINCIPAL_WRITE_SCOPE}
+                        className="btn btn--destructive btn--compact"
                         onClick={() => void handleRevoke(t.id)}
                         busy={busy}
                         busyReason="Revoking this token…"
@@ -528,17 +716,18 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
         </div>
       )}
       {!locked && (
-        <div data-unsaved-form={`access-principal-${principalID}-token-issue`} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'end', marginTop: '0.5rem' }}>
-          <label>
-            Label
-            <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} />
+        <div data-unsaved-form={`access-principal-${principalID}-token-issue`} className="access-inline-form">
+          <label className="field">
+            <span className="field__label">Label</span>
+            <input className="field__input" type="text" value={label} onChange={(e) => setLabel(e.target.value)} />
           </label>
-          <label>
-            Expires (RFC3339, optional, default never)
-            <input type="text" placeholder="2027-01-15T00:00:00Z" value={expires} onChange={(e) => setExpires(e.target.value)} />
+          <label className="field">
+            <span className="field__label">Expires (RFC3339, optional, default never)</span>
+            <input className="field__input field__input--data" type="text" placeholder="2027-01-15T00:00:00Z" value={expires} onChange={(e) => setExpires(e.target.value)} />
           </label>
           <ScopedButton
             requiredScope={PRINCIPAL_WRITE_SCOPE}
+            className="btn btn--primary"
             onClick={() => void handleIssue()}
             busy={busy}
             busyReason="Issuing a new token…"
@@ -548,5 +737,83 @@ function TokensPanel({ principalID, locked }: { principalID: string; locked: boo
         </div>
       )}
     </div>
+  )
+}
+
+// The mock's Attribution section names three facts: the audit store's
+// live writability, this session's own attribution completeness, and the
+// bootstrap claim record. None of the three has a general-purpose read
+// surface from this view: audit-store writability only ever surfaces as
+// the refusal on a specific night command (503, ADR-024 decision 11);
+// per-session attribution belongs to the night session domain
+// (attributionDegraded on NightSessionState), not to Access; and no field
+// anywhere distinguishes "created by the bootstrap claim" from "created
+// later" on a PrincipalObject. OWNER RULING 2026-08-29: these are not
+// data the coordinator holds and withheld -- they are read surfaces that
+// were never built -- so they render as PlannedFeature, never
+// UnavailableBlock, and stay split into two stamps (audit-store status
+// is a coordinator-wide fact; bootstrap provenance is a per-principal
+// one) rather than folded into a single note.
+function AttributionSection() {
+  return (
+    <section aria-labelledby="ac-audit" style={{ marginTop: 26, maxWidth: 800 }}>
+      <h2 id="ac-audit" className="t-heading" style={{ margin: 0 }}>
+        Attribution
+      </h2>
+      <div className="ruled-strip" style={{ marginTop: 10 }}>
+        <span className="ruled-strip__state t-meta">Activity log</span>
+        <div>
+          <p className="ruled-strip__explanation" style={{ marginTop: 0 }}>
+            Every write here is audited. Audit rows in the activity log need an audit-read scope;
+            system events do not. <Link to="/monitor/activity">Open the log</Link>
+          </p>
+        </div>
+      </div>
+      <PlannedFeature
+        title="Audit store status, and this session's own attribution completeness"
+        why={
+          <>
+            Nothing reports whether the audit store is currently writable. It only ever shows
+            itself by refusing a night command. Whether every step a session took was recorded
+            against a principal is reported per night session, on{' '}
+            <code className="t-data">NightSessionState.attributionDegraded</code>, and not as a
+            general read here.
+          </>
+        }
+        preview={
+          <div className="ruled-strip" style={{ padding: '10px 0' }}>
+            <span className="ruled-strip__state t-meta" style={{ color: 'var(--good-fg)' }}>
+              ✓ Audit store
+            </span>
+            <div>
+              <p className="ruled-strip__fact" style={{ margin: 0 }}>Writable</p>
+              <p className="ruled-strip__explanation">
+                Four of the night commands refuse outright rather than run unattributed.
+              </p>
+            </div>
+          </div>
+        }
+      />
+      <PlannedFeature
+        title="Bootstrap claim provenance"
+        why={
+          <>
+            <code className="t-data">PrincipalObject</code> carries no field distinguishing the
+            principal a bootstrap claim created from one created later, so which principal (and
+            when) claimed the one-time code cannot be shown here.
+          </>
+        }
+        preview={
+          <div className="ruled-strip" style={{ padding: '10px 0' }}>
+            <span className="ruled-strip__state t-meta">Bootstrap</span>
+            <div>
+              <p className="ruled-strip__explanation" style={{ margin: 0 }}>
+                Claimed 12 Aug 09:38 by erbartos.
+              </p>
+            </div>
+          </div>
+        }
+      />
+    </section>
   )
 }

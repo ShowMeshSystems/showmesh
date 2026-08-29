@@ -5,26 +5,35 @@ import { useModelContext } from '../app/ModelContext'
 import { SignInForm } from './SignInForm'
 import { BootstrapClaimForm } from './BootstrapClaimForm'
 import { TokenPrompt } from './TokenPrompt'
+import { BlankingPlate } from './SharedLayouts'
+import '../styles/session.css'
 
-// ADR-024 decision 5 / OPERATOR-UI section 14: "being signed out is a
-// persistent state, never a modal at the moment of use." This renders
-// unconditionally in Layout.tsx, in the normal document flow alongside
-// ConnectionBanner, for every one of the three cases decision 5 names —
-// see app/session.ts's describeSignInState for why one boolean covers all
-// three without a "which case is this" branch anywhere in this file.
+// ADR-024 decision 5 / OPERATOR-UI section 14 / UI-DESIGN-GUIDE.md §2 and
+// "Session states are not walls": `GET /session` answers 200 with
+// `authenticated: false` — being signed out is a persistent, readable
+// state, not an error a caller must catch. This renders unconditionally in
+// Layout.tsx, in the normal document flow alongside ConnectionBanner, for
+// every one of the three cases decision 5 names — see app/session.ts's
+// describeSignInState for why one boolean covers all three without a
+// "which case is this" branch anywhere in this file.
 //
-// Deliberately not a modal, popover, or anything that steals focus: this
-// is a bar, and the sign-in/bootstrap forms it can reveal push the rest
-// of the page down rather than covering it, so an operator who is only
-// here to look at the dashboard is never interrupted by it.
+// Deliberately not a modal, popover, or anything that steals focus: these
+// are bands in the document flow that push the rest of the page down, and
+// the sign-in/bootstrap forms they reveal do the same, so an operator who
+// is only here to look at the dashboard is never interrupted by one.
+// `bootstrapRequired` outranks `signed_out` (describeSignInState's own
+// contract) because on a fresh install there is nobody to sign in as.
+//
+// `loading` (no /session response has arrived at all) renders nothing
+// here, same as before this pass: the mock's "connecting" state shows two
+// ruled strips for Session / Live updates, but that content lives in
+// Layout.tsx's `blockContent` placeholder (`model.snapshotReceivedAt ===
+// null`), a file this build does not own — see this build's own report.
 //
 // Operator-reported: the signed-in case used to render here too, spending
 // a full-width band on every page on "Signed in as X" and Sign out. That
 // case now renders from SessionIdentity below, in Layout.tsx's header,
-// where a name and one button fit without a band. Signed-out and
-// bootstrap-required keep the band here because each reveals a form
-// (Sign in / Use a token instead, or the bootstrap claim form) that a
-// header has no room for.
+// where a name and one button fit without a band.
 export function SessionPanel() {
   const model = useModelContext()
   const state = describeSignInState(model.session)
@@ -51,22 +60,54 @@ export function SessionIdentity() {
   )
 }
 
+// The "empty" absence class (a settled zero — UI-DESIGN-GUIDE.md §4),
+// never "unobserved": the coordinator answered and it holds nothing.
+//
+// Unlike the signed-out band below, the claim form here is always shown,
+// never behind a toggle: there is no ordinary use of this coordinator
+// until it is claimed, so there is nothing the form would otherwise be
+// hiding a plain page underneath.
 function BootstrapBanner() {
-  const [expanded, setExpanded] = useState(false)
   return (
-    <div className="session-panel session-panel--urgent" role="alert">
-      <span>
-        No administrator exists on this coordinator. Claim the bootstrap code from its data
-        volume to create one.
-      </span>
-      <button type="button" onClick={() => setExpanded((v) => !v)}>
-        {expanded ? 'Hide' : 'Claim bootstrap code'}
-      </button>
-      {expanded && <BootstrapClaimForm onSubmit={claimBootstrap} onSuccess={() => setExpanded(false)} />}
-    </div>
+    <>
+      <section className="session-band session-band--alert" role="alert" aria-labelledby="bootstrap-band-h">
+        <p className="t-meta" style={{ margin: 0, color: 'var(--bad-fg)' }}>
+          Unclaimed installation
+        </p>
+        <h1 id="bootstrap-band-h" className="t-display session-band__title">
+          No administrator exists on this coordinator
+        </h1>
+        <p className="session-band__body">
+          It holds zero principals, so nobody can sign in and nothing can be configured. Claim the
+          one-time code from its data volume to create the first administrator.
+        </p>
+        <BootstrapClaimForm onSubmit={claimBootstrap} />
+      </section>
+
+      <div className="session-plate-wrap">
+        <BlankingPlate
+          variant="empty"
+          stamp="Empty"
+          eyebrow="Installation · empty"
+          title="No shows, no nodes, no principals"
+          explanation={
+            <>
+              This is a settled zero, not missing evidence: the coordinator answered and it holds
+              nothing. Every destination in the rail exists and all of them are empty. The first
+              administrator creates the first show; nodes appear on their own once an agent is
+              pointed at this coordinator.
+            </>
+          }
+        />
+      </div>
+    </>
   )
 }
 
+// The "unobserved" absence class (never collected — UI-DESIGN-GUIDE.md
+// §4), never "empty": this device has never held a credential, so no read
+// has ever been made from it, and that is a different fact than the
+// coordinator holding nothing.
 function SignedOutBanner() {
   const [showSignIn, setShowSignIn] = useState(false)
   const [showBreakGlass, setShowBreakGlass] = useState(false)
@@ -83,50 +124,94 @@ function SignedOutBanner() {
   // that usually is not true.
   const storedTokenPresent = getStoredToken() !== null
 
+  function toggleSignIn(): void {
+    setShowSignIn((v) => !v)
+    setShowBreakGlass(false)
+  }
+
+  function toggleBreakGlass(): void {
+    setShowBreakGlass((v) => !v)
+    setShowSignIn(false)
+  }
+
   return (
-    <div className="session-panel" role="status">
-      <span>Signed out on this device.</span>
-      <button
-        type="button"
-        onClick={() => {
-          setShowSignIn((v) => !v)
-          setShowBreakGlass(false)
-        }}
-      >
-        {showSignIn ? 'Hide' : 'Sign in'}
-      </button>
-      {/* ADR-024 decision 5: "the bearer-paste field survives as
-          break-glass ... so a machine token can act from a phone when the
-          session path is broken." Kept reachable at any time a device is
-          signed out, not only after a 401 the read loop happens to hit —
-          the whole point is that the session path being broken (a
-          forgotten password, a corrupt principal store) must not also
-          take this affordance down with it. */}
-      <button
-        type="button"
-        onClick={() => {
-          setShowBreakGlass((v) => !v)
-          setShowSignIn(false)
-        }}
-      >
-        {showBreakGlass ? 'Hide' : 'Use a token instead'}
-      </button>
-      {storedTokenPresent && (
-        <button type="button" onClick={() => clearToken()}>
-          Clear stored token
-        </button>
-      )}
-      {showSignIn && <SignInForm onSubmit={login} onSuccess={() => setShowSignIn(false)} />}
-      {showBreakGlass && (
-        <TokenPrompt
-          reason="missing"
-          onSubmit={(token) => {
-            submitToken(token)
-            setShowBreakGlass(false)
-          }}
+    <>
+      <section className="session-band" role="status" aria-labelledby="signed-out-band-h">
+        <div className="session-band__row">
+          <div style={{ minWidth: 0 }}>
+            <h1 id="signed-out-band-h" className="t-heading session-band__title">
+              Signed out on this device
+            </h1>
+            <p className="session-band__body">
+              Reads need a credential too, not just commands. The coordinator may be running a show
+              right now, and this device simply cannot see it.
+            </p>
+          </div>
+          <div className="session-band__controls">
+            <button type="button" className="btn btn--primary" aria-expanded={showSignIn} onClick={toggleSignIn}>
+              {showSignIn ? 'Hide' : 'Sign in'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              aria-expanded={showBreakGlass}
+              onClick={toggleBreakGlass}
+            >
+              {showBreakGlass ? 'Hide' : 'Use a token instead'}
+            </button>
+            {storedTokenPresent && (
+              <button type="button" className="btn btn--quiet" onClick={() => clearToken()}>
+                Clear stored token
+              </button>
+            )}
+          </div>
+        </div>
+
+        {showSignIn && <SignInForm onSubmit={login} onSuccess={() => setShowSignIn(false)} />}
+        {/* ADR-024 decision 5: "the bearer-paste field survives as
+            break-glass ... so a machine token can act from a phone when the
+            session path is broken." Kept reachable at any time a device is
+            signed out, not only after a 401 the read loop happens to hit —
+            the whole point is that the session path being broken (a
+            forgotten password, a corrupt principal store) must not also
+            take this affordance down with it. */}
+        {showBreakGlass && (
+          <TokenPrompt
+            reason="missing"
+            onSubmit={(token) => {
+              submitToken(token)
+              setShowBreakGlass(false)
+            }}
+          />
+        )}
+      </section>
+
+      <div className="session-plate-wrap">
+        <BlankingPlate
+          variant="unobserved"
+          stamp="No cred"
+          eyebrow="This device · unobserved"
+          title="Nothing here has ever been collected"
+          explanation={
+            <>
+              No dashboard, no fleet, no now-playing, not stale, not empty. This device has never
+              held a credential, so no read has ever been made from it. Every destination in the
+              rail still works; all of them will say this until you sign in.
+            </>
+          }
+          actions={
+            <>
+              <button type="button" className="btn btn--secondary" onClick={toggleSignIn}>
+                Sign in
+              </button>
+              <button type="button" className="btn btn--quiet" onClick={toggleBreakGlass}>
+                Paste a machine token
+              </button>
+            </>
+          }
         />
-      )}
-    </div>
+      </div>
+    </>
   )
 }
 
@@ -157,16 +242,16 @@ function SignedInBanner({ name, role }: SignedInBannerProps) {
   }
 
   return (
-    <div className="session-panel session-panel--signed-in" role="status">
-      <span>
+    <div className="t-small" role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px' }}>
+      <span style={{ color: 'var(--text-muted)' }}>
         Signed in as {name ?? 'unknown principal'}
         {role !== null && ` (${role})`}
       </span>
-      <button type="button" onClick={() => void handleSignOut()} disabled={signingOut}>
+      <button type="button" className="btn btn--quiet btn--compact" onClick={() => void handleSignOut()} disabled={signingOut}>
         {signingOut ? 'Signing out…' : 'Sign out'}
       </button>
       {error !== null && (
-        <span role="alert" className="session-panel__error">
+        <span role="alert" style={{ color: 'var(--bad-fg)' }}>
           {error}
         </span>
       )}

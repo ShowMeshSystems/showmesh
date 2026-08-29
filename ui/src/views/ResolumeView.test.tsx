@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ResolumeView } from './ResolumeView'
 import { ModelContext } from '../app/ModelContext'
 import { ApiError, ForbiddenError } from '../api/errors'
@@ -17,24 +17,39 @@ import {
 } from '../app/test-support/fixtures'
 import type { Model } from '../app/types'
 
-const { getResolumeComposition, getResolumeRecovery, listResolumeActions } = vi.hoisted(() => ({
+const { getResolumeComposition, getResolumeRecovery, getResolumeRecoveryConfig, listResolumeActions } = vi.hoisted(() => ({
   getResolumeComposition: vi.fn(),
   getResolumeRecovery: vi.fn(),
+  getResolumeRecoveryConfig: vi.fn(),
   listResolumeActions: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getResolumeComposition, getResolumeRecovery, listResolumeActions }
+  return { ...actual, getResolumeComposition, getResolumeRecovery, getResolumeRecoveryConfig, listResolumeActions }
 })
 
-// This view fetches listResolumeActions unconditionally on mount,
-// regardless of whether a Resolume instance is configured — every test
-// below sets it explicitly for that reason, even the ones that do not
-// otherwise care about the controller panel.
+// This view fetches listResolumeActions and getResolumeRecoveryConfig
+// unconditionally on mount, regardless of whether a Resolume instance is
+// configured — every test relies on this default resolution unless it
+// overrides it to test the toggle itself.
+beforeEach(() => {
+  getResolumeRecoveryConfig.mockResolvedValue({
+    serverTime: '2026-08-16T00:00:00Z',
+    kind: 'resolume.recovery',
+    revision: 3,
+    payload: { autoRestoreEnabled: true },
+    updatedAt: '2026-08-16T00:00:00Z',
+    createdByPrincipalId: 'p1',
+    createdByPrincipalName: 'erbartos',
+    source: 'api',
+  })
+})
+
 afterEach(() => {
   cleanup()
   getResolumeComposition.mockReset()
   getResolumeRecovery.mockReset()
+  getResolumeRecoveryConfig.mockReset()
   listResolumeActions.mockReset()
 })
 
@@ -183,7 +198,7 @@ describe('ResolumeView', () => {
       const instance = makeResolumeInstance('resolume-1', { composition: { name: 'Christmas 25' } })
       renderView(makeModel({ resolume: [instance] }))
 
-      await screen.findByRole('heading', { name: 'Ambiguous clips' })
+      await screen.findByRole('heading', { name: 'Clips that cannot be named' })
       expect(screen.queryByText(/No ambiguous clips/i)).not.toBeInTheDocument()
     })
 
@@ -451,5 +466,47 @@ describe('ResolumeView', () => {
     renderView(makeModel({ resolume: [instance] }))
 
     await screen.findByRole('combobox', { name: 'Action' })
+  })
+
+  // Resolume Config.dc.html's "crash recovery toggle with revision":
+  // GET/PUT /config/resolume.recovery, absent from ResolumeView.tsx
+  // before this task, added per this task's own brief.
+  describe('the auto-restore toggle', () => {
+    it('renders the stored state and its active revision', async () => {
+      getResolumeComposition.mockRejectedValue(Object.assign(new Error('none stored'), { status: 404 }))
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+      getResolumeRecoveryConfig.mockResolvedValue({
+        serverTime: '2026-08-16T00:00:00Z',
+        kind: 'resolume.recovery',
+        revision: 5,
+        payload: { autoRestoreEnabled: false },
+        updatedAt: '2026-08-16T00:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+      })
+
+      const instance = makeResolumeInstance('resolume-1')
+      renderView(makeModel({ resolume: [instance] }))
+
+      await screen.findByRole('group', { name: 'Auto-restore' })
+      expect(screen.getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByText('5')).toBeInTheDocument()
+      expect(screen.getByText(/set by erbartos/)).toBeInTheDocument()
+    })
+
+    it('never fetches recovery configuration behind a scope gate: the panel renders even for a signed-out model', async () => {
+      getResolumeComposition.mockRejectedValue(Object.assign(new Error('none stored'), { status: 404 }))
+      getResolumeRecovery.mockResolvedValue(emptyRecovery)
+      listResolumeActions.mockResolvedValue({ serverTime: '2026-08-16T00:00:00Z', actions: [] })
+
+      const instance = makeResolumeInstance('resolume-1')
+      renderView(makeModel({ resolume: [instance], session: null }))
+
+      await screen.findByRole('group', { name: 'Auto-restore' })
+      expect(getResolumeRecoveryConfig).toHaveBeenCalledOnce()
+    })
   })
 })

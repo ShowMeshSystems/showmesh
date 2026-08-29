@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ContentDeliverySettings } from './SettingsPages'
 import { ModelContext } from '../app/ModelContext'
@@ -77,9 +78,11 @@ const adminSession = makeAuthenticatedSession({
 
 function renderConfiguration(model: Model) {
   return render(
-    <ModelContext.Provider value={model}>
-      <ContentDeliverySettings />
-    </ModelContext.Provider>,
+    <MemoryRouter>
+      <ModelContext.Provider value={model}>
+        <ContentDeliverySettings />
+      </ModelContext.Provider>
+    </MemoryRouter>,
   )
 }
 
@@ -289,5 +292,27 @@ describe('Configuration: assets.settings section', () => {
     const alert = await within(section).findByRole('alert')
     expect(alert).toHaveTextContent(/SHOWMESH_ASSET_CONTENT_BASE_URL/)
     expect(alert).toHaveTextContent(/restart this coordinator once/i)
+  })
+
+  // OWNER RULING 2026-08-29: the mock's Backend chooser and Disk usage
+  // readout are not silently dropped -- they render as stamped
+  // PlannedFeature notes beneath the real fields, never styled as one of
+  // the four absences.
+  it('renders the mock-only Backend chooser and Disk usage readout as stamped PlannedFeature notes, not as data', async () => {
+    getAssetsSettingsConfig.mockResolvedValue(activeAssetsSettingsConfig)
+    getAssetsSettingsConfigRevisions.mockResolvedValue(emptyAssetsSettingsRevisions)
+    renderConfiguration(makeModel({ session: adminSession }))
+
+    await screen.findByDisplayValue('https://coordinator.example')
+
+    const backendNote = screen.getByRole('note', { name: 'Not built: Storage backend' })
+    expect(backendNote).toHaveTextContent(/contentBaseUrl, maxUploadBytes, syncIntervalSeconds and inventoryIntervalSeconds only/)
+    expect(within(backendNote).queryByRole('combobox')).not.toBeInTheDocument()
+
+    const diskNote = screen.getByRole('note', { name: 'Not built: Disk usage' })
+    expect(diskNote).toHaveTextContent(/no disk telemetry/)
+    // A fabricated number is never stamped -- it is dropped. No digit
+    // appears anywhere in this note's drawn preview.
+    expect(diskNote.textContent).not.toMatch(/\d/)
   })
 })

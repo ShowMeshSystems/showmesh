@@ -13,16 +13,25 @@ function renderDashboard(model: Model) {
 }
 
 describe('Dashboard', () => {
-  it('puts readiness, authoritative runs, status, path, attention, and activity in operator reading order', () => {
+  // Rewritten for the Operator UI overhaul (Dashboard.dc.html):
+  // "readiness split in two" replaced the single readiness verdict, and
+  // the section order is now the mock's own: lifecycle double-timeline,
+  // readiness split, current runs, system health, then needs-you /
+  // presentation path / recent activity. Order is asserted by DOM
+  // position of each section's own id/class rather than by direct
+  // children, since the last three now share one grid wrapper.
+  it('puts lifecycle, readiness, authoritative runs, health, attention, path, and activity in operator reading order', () => {
     renderDashboard(makeModel({ currentRuns: makeCurrentRuns() }))
-    const ordered = Array.from(document.querySelector('.dashboard-page')?.children ?? [])
+    const all = Array.from(document.querySelectorAll('.dashboard-page *'))
+    const positionOf = (selector: string) => all.findIndex((element) => element.matches(selector))
     const positions = [
-      ordered.findIndex((element) => element.classList.contains('dashboard-readiness')),
-      ordered.findIndex((element) => element.classList.contains('dashboard-current-runs')),
-      ordered.findIndex((element) => element.classList.contains('shared-status-strip')),
-      ordered.findIndex((element) => element.querySelector('#dashboard-presentation') !== null),
-      ordered.findIndex((element) => element.querySelector('#dashboard-attention') !== null),
-      ordered.findIndex((element) => element.querySelector('#dashboard-activity') !== null),
+      positionOf('#dashboard-lifecycle'),
+      positionOf('.readiness-split'),
+      positionOf('.dashboard-current-runs'),
+      positionOf('#dashboard-health'),
+      positionOf('#dashboard-attention'),
+      positionOf('#dashboard-presentation'),
+      positionOf('#dashboard-activity'),
     ]
     expect(positions.every((position) => position >= 0)).toBe(true)
     expect(positions).toEqual([...positions].sort((a, b) => a - b))
@@ -60,7 +69,11 @@ describe('Dashboard', () => {
     expect(document.querySelector('.dashboard-current-run .status-badge')?.className).toContain('status-badge--bad')
   })
 
-  it('escalates an authoritative failed run into readiness and attention without discarding its runner or freshness evidence', () => {
+  // Rewritten: the single "Show path readiness" verdict was replaced by
+  // the "Running" / "Next start gated" split (UI-DESIGN-GUIDE.md section
+  // 8), and the attention list's accessible name changed from "Operator
+  // attention" to "Needs you" (Dashboard.dc.html's own heading).
+  it('escalates an authoritative failed run into the Running card and attention without discarding its runner or freshness evidence', () => {
     renderDashboard(makeModel({
       currentRuns: makeCurrentRuns({ runs: [makeCurrentRun({
         runner: 'showmesh-audio',
@@ -70,9 +83,10 @@ describe('Dashboard', () => {
       })] }),
     }))
 
-    expect(screen.getByLabelText('Show path readiness')).toHaveTextContent('Not ready')
-    expect(screen.getByLabelText('Show path readiness')).toHaveTextContent('1 attention item')
-    const attention = screen.getByRole('list', { name: 'Operator attention' })
+    const running = screen.getByRole('heading', { name: 'Running' }).closest('article')
+    expect(running?.className).toContain('readiness-card--bad')
+    expect(screen.getByText(/1 attention item/)).toBeVisible()
+    const attention = screen.getByRole('list', { name: 'Needs you' })
     expect(attention).toHaveTextContent('showmesh-audio runner')
     expect(attention).toHaveTextContent('source showmesh-audio')
     expect(attention).toHaveTextContent('freshness stale: runner report is old')
@@ -85,11 +99,11 @@ describe('Dashboard', () => {
       nodes: [makeNode('offline-node', { controlPlane: { state: 'offline', reason: 'lost' } })],
       resolume: [makeResolumeInstance('resolume-1', { health: 'degraded' })],
     }))
-    const attention = screen.getByRole('list', { name: 'Operator attention' })
+    const attention = screen.getByRole('list', { name: 'Needs you' })
     expect(attention.textContent).toContain('failed')
     expect(attention.textContent).toContain('control-plane connection lost')
     expect(attention.textContent).toContain('unknown')
-    expect(attention.querySelector('a[href="/fpp/failed-fpp"]')).not.toBeNull()
+    expect(attention.querySelector('a[href="/monitor/fleet/fpp/failed-fpp"]')).not.toBeNull()
   })
 
   it('keeps the presentation path shallow when evidence is dense', () => {

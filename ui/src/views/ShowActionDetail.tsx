@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { getShowAction, getShowActionRevisions, putShowAction, type ConfigRevisionMeta } from '../api'
+import { getShowAction, getShowActionRevisions, listConfigObjects, putShowAction, type ConfigRevisionMeta } from '../api'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
@@ -17,7 +17,7 @@ import { ShowSelect } from '../components/ShowSelect'
 import { ActionBindingCheck } from '../components/ActionBindingCheck'
 import { ActionInvokeButton } from '../components/ActionInvokeButton'
 import { showWorkspacePath } from '../components/showWorkspacePaths'
-import type { ActionIntegration, ConfigShowAction, SafetyClass, ShowActionConfigResponse } from '../app/types'
+import type { ActionIntegration, ConfigObjectSummary, ConfigShowAction, SafetyClass, ShowActionConfigResponse } from '../app/types'
 
 // Authoring surface #1 of 2 for this wave (STEP-9-SPEC.md section 5.3):
 // "the owner declined the cut [of the show.action authoring surface] and
@@ -65,6 +65,31 @@ const RESOLUME_ACTIONS = [
   'setLayerMaster',
 ]
 
+// The reserved audio.session.*/audio.gain.*/audio.output.* operation names
+// (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) — this
+// form never invents a ninth/new one, matching FPP_PRIMITIVES/RESOLUME_ACTIONS'
+// own "hardcoded here, resolved through the node's own registry" posture.
+const AUDIO_ACTIONS = [
+  'audio.session.apply',
+  'audio.session.prepare',
+  'audio.session.start',
+  'audio.session.pause',
+  'audio.session.resume',
+  'audio.session.seek',
+  'audio.session.advance',
+  'audio.session.stop',
+  'audio.session.clear',
+  'audio.gain.set',
+  'audio.gain.fade',
+  'audio.output.mute',
+  'audio.output.unmute',
+]
+
+// DESIGN-DECISIONS-AND-API-FACTS.md §6: the pre-decibel params.gain/
+// params.targetGain are refused at authoring time, naming the decibel
+// replacement, rather than discovered when the Cue fires mid-show.
+const PRE_DECIBEL_PARAM_KEYS = ['gain', 'targetGain']
+
 interface FormState {
   show: string
   label: string
@@ -96,6 +121,19 @@ interface FormState {
   resolumeColumn: string
   resolumeBypassed: boolean
   resolumeMaster: string
+  // audio fields (DESIGN-DECISIONS-AND-API-FACTS.md §6): audioNodeId and
+  // audioSessionId are the target, audioAction is the reserved operation
+  // name, and gainDb/targetGainDb get their own decibel fields (0 dB
+  // unity, -60 dB silence, +12 dB ceiling) since those two operations are
+  // the only ones this contract gives a required, typed param for; every
+  // other audio action's params pass through as free-form JSON, same as
+  // an FPP primitive's params.
+  audioNodeId: string
+  audioSessionId: string
+  audioAction: string
+  audioGainDb: string
+  audioTargetGainDb: string
+  audioParamsJson: string
 }
 
 function emptyForm(): FormState {
@@ -125,6 +163,12 @@ function emptyForm(): FormState {
     resolumeColumn: '',
     resolumeBypassed: false,
     resolumeMaster: '',
+    audioNodeId: '',
+    audioSessionId: '',
+    audioAction: '',
+    audioGainDb: '',
+    audioTargetGainDb: '',
+    audioParamsJson: '',
   }
 }
 
@@ -171,6 +215,16 @@ function formFromPayload(payload: ConfigShowAction): FormState {
     resolumeColumn: refString(ref, 'column'),
     resolumeBypassed: refBoolean(ref, 'bypassed'),
     resolumeMaster: refNumber(ref, 'master'),
+    audioNodeId: target.audioNodeId ?? '',
+    audioSessionId: target.audioSessionId ?? '',
+    audioAction: target.audioAction ?? '',
+    audioGainDb: typeof target.params?.gainDb === 'number' ? String(target.params.gainDb) : '',
+    audioTargetGainDb: typeof target.params?.targetGainDb === 'number' ? String(target.params.targetGainDb) : '',
+    audioParamsJson: (() => {
+      if (target.integration !== 'audio' || target.params === undefined) return ''
+      const residual = Object.fromEntries(Object.entries(target.params).filter(([k]) => k !== 'gainDb' && k !== 'targetGainDb'))
+      return Object.keys(residual).length > 0 ? JSON.stringify(residual, null, 2) : ''
+    })(),
   }
 }
 
@@ -321,6 +375,63 @@ function buildPayload(
     }
   }
 
+  if (form.integration === 'audio') {
+    if (form.audioNodeId.trim() === '') return { error: 'Audio node is required.' }
+    if (form.audioSessionId.trim() === '') return { error: 'Audio session id is required.' }
+    if (form.audioAction === '') return { error: 'Audio action is required and has no default.' }
+
+    let params: Record<string, unknown> = {}
+    if (form.audioParamsJson.trim() !== '') {
+      try {
+        const parsed: unknown = JSON.parse(form.audioParamsJson)
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          return { error: 'Params must be a JSON object.' }
+        }
+        params = parsed as Record<string, unknown>
+      } catch {
+        return { error: 'Params is not valid JSON.' }
+      }
+    }
+    for (const key of PRE_DECIBEL_PARAM_KEYS) {
+      if (key in params) {
+        const replacement = key === 'gain' ? 'gainDb' : 'targetGainDb'
+        return { error: `params.${key} is refused: use params.${replacement}, in decibels (0 dB unity, -60 dB silence, +12 dB ceiling).` }
+      }
+    }
+    if (form.audioAction === 'audio.gain.set') {
+      if (form.audioGainDb.trim() === '') return { error: 'audio.gain.set requires a gain in decibels.' }
+      const gainDb = Number(form.audioGainDb)
+      if (!Number.isFinite(gainDb) || gainDb < -60 || gainDb > 12) {
+        return { error: 'Gain must be a number from -60 dB (silence) to +12 dB (ceiling).' }
+      }
+      params = { ...params, gainDb }
+    }
+    if (form.audioAction === 'audio.gain.fade') {
+      if (form.audioTargetGainDb.trim() === '') return { error: 'audio.gain.fade requires a target gain in decibels.' }
+      const targetGainDb = Number(form.audioTargetGainDb)
+      if (!Number.isFinite(targetGainDb) || targetGainDb < -60 || targetGainDb > 12) {
+        return { error: 'Target gain must be a number from -60 dB (silence) to +12 dB (ceiling).' }
+      }
+      params = { ...params, targetGainDb }
+    }
+
+    return {
+      payload: {
+        show: form.show.trim(),
+        label: form.label.trim(),
+        description: form.description,
+        safetyClass: form.safetyClass,
+        target: {
+          integration: 'audio',
+          audioNodeId: form.audioNodeId.trim(),
+          audioSessionId: form.audioSessionId.trim(),
+          audioAction: form.audioAction,
+          ...(Object.keys(params).length > 0 ? { params } : {}),
+        },
+      },
+    }
+  }
+
   // mqtt
   if (form.broker.trim() === '') {
     return { error: 'Broker is required for an MQTT action and has no default; say which one this publishes on.' }
@@ -405,12 +516,19 @@ export interface ShowActionDetailProps {
 }
 
 export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
-  const params = useParams<{ id: string }>()
+  // Read defensively under either param name: this component is mounted
+  // both at its own legacy route (`:id`, App.tsx) and embedded as the
+  // Automation workspace's third inspector variant at
+  // `/shows/:showId/automation/actions/:actionId` (ROUTE-MAP.md) — the
+  // two routers this checkout has wired so far disagree on the param key,
+  // and a real actionId must never read as "not found" over a naming
+  // mismatch alone.
+  const params = useParams<{ id?: string; actionId?: string }>()
   const navigate = useNavigate()
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
   const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const existingId = isNew ? undefined : params.id
+  const existingId = isNew ? undefined : (params.id ?? params.actionId)
 
   const [state, setState] = useState<LoadState>(isNew ? { kind: 'new' } : { kind: 'loading' })
   const [newId, setNewId] = useState('')
@@ -430,6 +548,28 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
   const resolumeComposition = resolumeCompositionOrNull(resolumeCompositionState)
   const resolumeDecks = deckOptions(resolumeComposition)
   const resolumeLayers = layerOptions(resolumeComposition)
+
+  // Configured audio.node objects, fetched only while this form has the
+  // "audio" integration selected — same "gated request, fetched only when
+  // this branch is actually in view" posture as resolumeCompositionState
+  // above. audio.node is config:write-gated on its own GET (AudioNodes.tsx),
+  // so this degrades to the free-text id field below for a non-admin
+  // rather than erroring the whole page.
+  const [audioNodes, setAudioNodes] = useState<ConfigObjectSummary[] | null>(null)
+  useEffect(() => {
+    if (form.integration !== 'audio' || !writeGate.allowed) return
+    let cancelled = false
+    listConfigObjects('audio.node')
+      .then((resp) => {
+        if (!cancelled) setAudioNodes(resp.objects)
+      })
+      .catch(() => {
+        // Best-effort: falls back to a free-text node id field below.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [form.integration, writeGate.allowed])
 
   // Review finding 8: the deck picker's own <select> must key on the
   // deck's id, never its (possibly ambiguous) name — see
@@ -658,6 +798,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
             <option value="fpp">FPP primitive</option>
             <option value="mqtt">External MQTT command</option>
             <option value="resolume">Resolume action</option>
+            <option value="audio">Audio node command</option>
           </select>
         </label>
 
@@ -789,7 +930,7 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
               </>
             )}
           </>
-        ) : (
+        ) : form.integration === 'resolume' ? (
           <>
             <p className="text-muted">
               Every Resolume action is coordinator-required: Resolume holds no local fallback for
@@ -978,6 +1119,87 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
                 />
               </label>
             )}
+          </>
+        ) : (
+          <>
+            <label className="form-field">
+              Audio node
+              {audioNodes !== null && audioNodes.length > 0 ? (
+                <select value={form.audioNodeId} onChange={(e) => setForm({ ...form, audioNodeId: e.target.value })}>
+                  <option value="" disabled>
+                    Choose a declared audio node
+                  </option>
+                  {audioNodes.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.label} ({n.id})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="audio.node id"
+                  value={form.audioNodeId}
+                  onChange={(e) => setForm({ ...form, audioNodeId: e.target.value })}
+                />
+              )}
+            </label>
+            <label className="form-field">
+              Audio session id (this node's own pkg/audio session, assigned at runtime)
+              <input
+                type="text"
+                value={form.audioSessionId}
+                onChange={(e) => setForm({ ...form, audioSessionId: e.target.value })}
+              />
+            </label>
+            <label className="form-field">
+              Audio action
+              <select value={form.audioAction} onChange={(e) => setForm({ ...form, audioAction: e.target.value })}>
+                <option value="" disabled>
+                  Choose one, never defaulted
+                </option>
+                {AUDIO_ACTIONS.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {form.audioAction === 'audio.gain.set' && (
+              <label className="form-field">
+                Gain, in decibels (0 dB unity, -60 dB silence, +12 dB ceiling)
+                <input
+                  type="number"
+                  step="any"
+                  min={-60}
+                  max={12}
+                  value={form.audioGainDb}
+                  onChange={(e) => setForm({ ...form, audioGainDb: e.target.value })}
+                />
+              </label>
+            )}
+            {form.audioAction === 'audio.gain.fade' && (
+              <label className="form-field">
+                Target gain, in decibels (0 dB unity, -60 dB silence, +12 dB ceiling)
+                <input
+                  type="number"
+                  step="any"
+                  min={-60}
+                  max={12}
+                  value={form.audioTargetGainDb}
+                  onChange={(e) => setForm({ ...form, audioTargetGainDb: e.target.value })}
+                />
+              </label>
+            )}
+            <label className="form-field">
+              Other params (JSON object, optional; never <code>gain</code> or <code>targetGain</code> —
+              use the decibel fields above for those)
+              <textarea
+                rows={4}
+                value={form.audioParamsJson}
+                onChange={(e) => setForm({ ...form, audioParamsJson: e.target.value })}
+              />
+            </label>
           </>
         )}
       </fieldset>

@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionsSettings } from './SettingsPages'
 import { ModelContext } from '../app/ModelContext'
@@ -77,16 +78,19 @@ const adminSession = makeAuthenticatedSession({
 
 function renderConfiguration(model: Model) {
   return render(
-    <ModelContext.Provider value={model}>
-      <ConnectionsSettings />
-    </ModelContext.Provider>,
+    <MemoryRouter>
+      <ModelContext.Provider value={model}>
+        <ConnectionsSettings />
+      </ModelContext.Provider>
+    </MemoryRouter>,
   )
 }
 
 async function fppMQTTSection() {
-  // Queried as a heading, not plain text: the section index at the top of
-  // the page also links to a "FPP MQTT" text node.
-  const heading = await screen.findByRole('heading', { name: 'FPP MQTT' })
+  // Renamed to "Event feed" (Settings.dc.html's Connections tab, the
+  // FPP MQTT event feed section) -- queried as a heading, not plain text,
+  // since the surrounding copy also mentions "FPP MQTT" as prose.
+  const heading = await screen.findByRole('heading', { name: 'Event feed' })
   return heading.closest('section')!
 }
 

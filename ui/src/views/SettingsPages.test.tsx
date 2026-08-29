@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ContentDeliverySettings } from './SettingsPages'
 import { ModelContext } from '../app/ModelContext'
@@ -10,9 +11,11 @@ afterEach(cleanup)
 
 function renderSettings(model: Model) {
   return render(
-    <ModelContext.Provider value={model}>
-      <ContentDeliverySettings />
-    </ModelContext.Provider>,
+    <MemoryRouter>
+      <ModelContext.Provider value={model}>
+        <ContentDeliverySettings />
+      </ModelContext.Provider>
+    </MemoryRouter>,
   )
 }
 

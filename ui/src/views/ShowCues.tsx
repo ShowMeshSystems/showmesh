@@ -1,139 +1,285 @@
-import { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { listConfigObjects } from '../api'
-import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
-import { useModelContext } from '../app/ModelContext'
-import { formatAbsolute } from '../app/time'
-import type { ConfigObjectSummary } from '../app/types'
-import { showWorkspacePath } from '../components/showWorkspacePaths'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { getShowCue, getShowPlaylist, listConfigObjects } from '../api'
+import { ScopedButton } from '../components/ScopedButton'
+import { ShowWorkspaceFrame, useShowWorkspaceData } from '../components/ShowWorkspace'
+import { showCueNewPath, showCuePath } from '../components/showWorkspacePaths'
+import '../styles/shows.css'
+import type { ConfigObjectSummary, ConfigShowCue } from '../app/types'
 
-// Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): the show.cue list,
-// narrowable by show (?show=<id>, api/openapi.yaml's own
-// `GET /config/show.cue` parameter). Same read posture, filter shape, and
-// URL-is-state posture as ShowSurfaces.tsx: a Cue is authored the same way
-// a Surface is, one level down from the show it belongs to.
-const READ_SCOPES = ['show:macro:run', 'config:write']
+// Show Cues.dc.html: the cue library is grouped by REACHABILITY, not by
+// output kind - "In a playlist" (bound to at least one playlist entry),
+// "Not in any playlist" (authored but unreachable - a real authoring
+// mistake or a deliberate safe-cue target), "Directly activatable"
+// (announcement cues fired from Live Control, never a playlist entry).
+// Cues are SHARED across playlists: a cue used by two playlists is one
+// object, so the list states plainly that editing it changes both.
 const CONFIG_WRITE_SCOPE = 'config:write'
 
-type LoadState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; objects: ConfigObjectSummary[] }
+type OutputFilter = 'all' | 'render' | 'audio' | 'unused'
+
+interface CueRow {
+  summary: ConfigObjectSummary
+  payload: ConfigShowCue | null
+  usedByPlaylists: string[]
+}
 
 export function ShowCues() {
-  const model = useModelContext()
-  const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
-  const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const [searchParams, setSearchParams] = useSearchParams()
-  const showFilter = searchParams.get('show') ?? ''
+  const { showId = '' } = useParams<{ showId: string }>()
+  const navigate = useNavigate()
+  const data = useShowWorkspaceData(showId)
 
-  const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [rows, setRows] = useState<CueRow[] | 'loading' | 'error'>('loading')
+  const [filterText, setFilterText] = useState('')
+  const [outputFilter, setOutputFilter] = useState<OutputFilter>('all')
 
   useEffect(() => {
-    if (!readGate.allowed) return
+    if (data.kind !== 'loaded') return
     let cancelled = false
-    setState({ kind: 'loading' })
-    listConfigObjects('show.cue', showFilter === '' ? undefined : showFilter)
-      .then((resp) => {
+    setRows('loading')
+    Promise.all([listConfigObjects('show.cue', showId), listConfigObjects('show.playlist', showId)])
+      .then(async ([cueList, playlistList]) => {
+        const playlistPayloads = await Promise.all(
+          playlistList.objects.map((p) =>
+            getShowPlaylist(p.id)
+              .then((r) => ({ label: p.label, cueIds: new Set(r.payload.entries.map((e) => e.cue)) }))
+              .catch(() => ({ label: p.label, cueIds: new Set<string>() })),
+          ),
+        )
+        const cuePayloads = await Promise.all(
+          cueList.objects.map((c) =>
+            getShowCue(c.id)
+              .then((r) => r.payload)
+              .catch(() => null),
+          ),
+        )
         if (cancelled) return
-        setState({ kind: 'loaded', objects: resp.objects })
+        setRows(
+          cueList.objects.map((summary, i) => ({
+            summary,
+            payload: cuePayloads[i] ?? null,
+            usedByPlaylists: playlistPayloads.filter((p) => p.cueIds.has(summary.id)).map((p) => p.label),
+          })),
+        )
       })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setState({ kind: 'error', message: describeApiError(err) })
+      .catch(() => {
+        if (!cancelled) setRows('error')
       })
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed, showFilter])
+  }, [data.kind, showId])
+
+  const { inPlaylist, unreachable, activatable } = useMemo(() => {
+    if (!Array.isArray(rows)) return { inPlaylist: [], unreachable: [], activatable: [] }
+    const filtered = rows.filter((row) => {
+      if (filterText.trim() !== '' && !row.summary.label.toLowerCase().includes(filterText.trim().toLowerCase())) return false
+      if (outputFilter === 'render') return row.payload?.outputs.render !== undefined
+      if (outputFilter === 'audio') return row.payload?.outputs.audio !== undefined
+      if (outputFilter === 'unused') return row.usedByPlaylists.length === 0
+      return true
+    })
+    return {
+      inPlaylist: filtered.filter((r) => r.usedByPlaylists.length > 0),
+      unreachable: filtered.filter((r) => r.usedByPlaylists.length === 0 && r.payload?.outputs.announcement === undefined),
+      activatable: filtered.filter((r) => r.usedByPlaylists.length === 0 && r.payload?.outputs.announcement !== undefined),
+    }
+  }, [rows, filterText, outputFilter])
+
+  function outputChips(payload: ConfigShowCue | null): ReactNode {
+    if (payload === null) return <span className="output-chip output-chip--unavailable">?</span>
+    const chips: string[] = []
+    if (payload.outputs.render !== undefined) chips.push('RND')
+    if (payload.outputs.audio !== undefined) chips.push('AUD')
+    if (payload.outputs.ltc !== undefined) chips.push('LTC')
+    if (payload.outputs.announcement !== undefined) chips.push('ANN')
+    return (
+      <span className="output-chip-group">
+        {chips.map((c) => (
+          <span key={c} className="output-chip">
+            {c}
+          </span>
+        ))}
+      </span>
+    )
+  }
+
+  function announcementPolicySummary(payload: ConfigShowCue | null): string {
+    const ann = payload?.outputs.announcement
+    if (ann === undefined) return ''
+    if (ann.policy === 'duck') return `Duck to ${ann.duckGainDb} dB`
+    return ann.policy === 'mix' ? 'Mix' : 'Interrupt'
+  }
 
   return (
-    <div className="operator-page authoring-page">
-      <div className="operator-page__header">
-        <h2 className="panel__title">Cues</h2>
-        {writeGate.allowed ? (
-          <Link className="entity-link" to="/config/show.cue/new">
-            New cue
-          </Link>
-        ) : (
-          <span className="scoped-button">
-            <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
-              New cue
-            </button>
-            <span className="scoped-button__reason">{writeGate.reason}</span>
-          </span>
-        )}
+    <ShowWorkspaceFrame showId={showId} active="cues" data={data}>
+      <div className="cues-toolbar">
+        <div className="cues-toolbar-left">
+          <input
+            className="cues-filter-input"
+            type="text"
+            placeholder="Filter cues…"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            aria-label="Filter cues"
+          />
+          <div className="segmented" role="group" aria-label="Filter by output">
+            {(['all', 'render', 'audio', 'unused'] as OutputFilter[]).map((f) => (
+              <button
+                key={f}
+                type="button"
+                className="segmented__option"
+                aria-pressed={outputFilter === f}
+                onClick={() => setOutputFilter(f)}
+              >
+                {f === 'all' ? 'All' : f === 'render' ? 'Render' : f === 'audio' ? 'Audio' : 'Unused'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} className="btn btn--primary" onClick={() => navigate(showCueNewPath(showId))}>
+          New cue
+        </ScopedButton>
       </div>
-      {/* A Cue is the show-scoped unit render, audio, LTC and announcement
-          activation share (ADR-043, TRACK-H-cues-and-playlists.md H1/H4): a
-          Playlist's entries each name one, and never define output directly
-          themselves. */}
-      <p className="operator-page__lede text-muted">
-        A Cue declares what one activation does: a render sequence, a local
-        audio asset and its LTC offset, and an announcement policy. A
-        Playlist&rsquo;s entries each name a Cue; a Cue never appears without
-        at least one output declared.
+
+      <p className="t-small shows-muted" style={{ marginTop: 12 }}>
+        Select a cue to edit it. Editing a cue changes every playlist that uses it.
       </p>
 
-      <label className="form-field" style={{ maxWidth: '20rem' }}>
-        Narrow by show
-        <input
-          type="text"
-          placeholder="show id, or leave blank for every show"
-          value={showFilter}
-          onChange={(e) => {
-            const value = e.target.value
-            setSearchParams(value === '' ? {} : { show: value })
-          }}
-        />
-      </label>
-
-      {!readGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {readGate.reason}
+      {rows === 'loading' && (
+        <p className="ruled-strip ruled-strip--loading" role="status">
+          <span className="ruled-strip__state t-meta">Loading</span>
+          <span className="ruled-strip__explanation">Reading this show&rsquo;s cues.</span>
+        </p>
+      )}
+      {rows === 'error' && (
+        <p className="ruled-strip ruled-strip--failed" role="alert">
+          <span className="ruled-strip__state t-meta">Failed</span>
+          <span className="ruled-strip__explanation">Could not load this show&rsquo;s cues.</span>
         </p>
       )}
 
-      {readGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading cues…</p>}
-      {readGate.allowed && state.kind === 'error' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
-        </p>
-      )}
-      {readGate.allowed && state.kind === 'loaded' && (
+      {Array.isArray(rows) && (
         <>
-          {state.objects.length === 0 ? (
-            <p className="text-muted">No cues are configured yet.</p>
+          <p className="t-meta cues-section-label">
+            In a playlist <span className="shows-muted">· {inPlaylist.length}</span>
+          </p>
+          {inPlaylist.length === 0 ? (
+            <p className="t-small shows-faint">None.</p>
           ) : (
-            <div className="table-scroll">
-              <table className="config-table" aria-label="Cues">
-                <thead>
-                  <tr>
-                    <th scope="col">Name</th>
-                    <th scope="col">Show</th>
-                    <th scope="col">Revision</th>
-                    <th scope="col">Updated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.objects.map((obj) => (
-                    <tr key={obj.id}>
-                      <th scope="row">
-                        <Link className="entity-link" to={`/config/show.cue/${encodeURIComponent(obj.id)}`}>
-                          {obj.label}
-                        </Link>
-                      </th>
-                      <td><Link className="entity-link" to={showWorkspacePath(obj.show)}>{obj.show}</Link></td>
-                      <td>{obj.currentRevision}</td>
-                      <td>{formatAbsolute(obj.updatedAt)}</td>
+            <div className="card">
+              <div className="table-wrap">
+                <table className="table table--full" aria-label="Cues in a playlist">
+                  <thead>
+                    <tr>
+                      <th scope="col">Cue</th>
+                      <th scope="col">Outputs</th>
+                      <th scope="col">Used by</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {inPlaylist.map((row) => (
+                      <tr key={row.summary.id} data-clickable onClick={() => navigate(showCuePath(showId, row.summary.id))}>
+                        <td>
+                          <a className="entity-link" href={showCuePath(showId, row.summary.id)} onClick={(e) => e.preventDefault()}>
+                            {row.summary.label}
+                          </a>
+                          <br />
+                          <span className="t-data shows-id-meta">{row.summary.id}</span>
+                        </td>
+                        <td>{outputChips(row.payload)}</td>
+                        <td className="t-small shows-muted">{row.usedByPlaylists.join(', ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="table__footer-note">
+                A cue used by more than one playlist is one object, editing it changes both.
+              </div>
+            </div>
+          )}
+
+          <p className="t-meta cues-section-label">
+            Not in any playlist <span className="shows-muted">· {unreachable.length}</span>
+          </p>
+          <p className="t-small shows-muted" style={{ maxWidth: '70ch' }}>
+            Authored but unreachable. Bind it to a playlist entry, or leave it as a safe-cue target.
+          </p>
+          {unreachable.length === 0 ? (
+            <p className="t-small shows-faint">None.</p>
+          ) : (
+            <div className="card">
+              <div className="table-wrap">
+                <table className="table table--full" aria-label="Cues not in any playlist">
+                  <thead>
+                    <tr>
+                      <th scope="col">Cue</th>
+                      <th scope="col">Outputs</th>
+                      <th scope="col">State</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unreachable.map((row) => (
+                      <tr key={row.summary.id} data-clickable onClick={() => navigate(showCuePath(showId, row.summary.id))}>
+                        <td>
+                          <a className="entity-link" href={showCuePath(showId, row.summary.id)} onClick={(e) => e.preventDefault()}>
+                            {row.summary.label}
+                          </a>
+                          <br />
+                          <span className="t-data shows-id-meta">{row.summary.id}</span>
+                        </td>
+                        <td>{outputChips(row.payload)}</td>
+                        <td className="t-meta shows-faint">Unreachable</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <p className="t-meta cues-section-label">
+            Directly activatable <span className="shows-muted">· {activatable.length}</span>
+          </p>
+          <p className="t-small shows-muted" style={{ maxWidth: '70ch' }}>
+            Announcements are not playlist entries. An operator fires them from Live Control, and
+            they duck the background bed without touching FPP.
+          </p>
+          {activatable.length === 0 ? (
+            <p className="t-small shows-faint">None.</p>
+          ) : (
+            <div className="card">
+              <div className="table-wrap">
+                <table className="table table--full" aria-label="Directly activatable cues">
+                  <thead>
+                    <tr>
+                      <th scope="col">Cue</th>
+                      <th scope="col">Outputs</th>
+                      <th scope="col">Policy</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activatable.map((row) => (
+                      <tr key={row.summary.id} data-clickable onClick={() => navigate(showCuePath(showId, row.summary.id))}>
+                        <td>
+                          <a className="entity-link" href={showCuePath(showId, row.summary.id)} onClick={(e) => e.preventDefault()}>
+                            {row.summary.label}
+                          </a>
+                          <br />
+                          <span className="t-data shows-id-meta">{row.summary.id}</span>
+                        </td>
+                        <td>{outputChips(row.payload)}</td>
+                        <td className="t-small shows-muted">{announcementPolicySummary(row.payload)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
       )}
-    </div>
+    </ShowWorkspaceFrame>
   )
 }

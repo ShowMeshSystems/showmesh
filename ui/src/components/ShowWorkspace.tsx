@@ -1,136 +1,83 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { getShow, listAssets, listConfigObjects } from '../api'
 import { describeApiError, evaluateAnyScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
-import type { ConfigObjectSummary, Asset, ShowConfigResponse } from '../app/types'
-import '../styles/operator-pages.css'
-import { showWorkspacePath, type ShowWorkspaceSection } from './showWorkspacePaths'
+import { formatAbsolute } from '../app/time'
+import type { ShowConfigResponse } from '../app/types'
+import '../styles/shows.css'
+import { showPath, showWorkspacePath, type ShowWorkspaceTab } from './showWorkspacePaths'
 
 /**
- * Canonical destinations for the show authoring workspace. App.tsx owns the
- * route declarations. Keeping them here means every object list and detail
- * page uses the same show-local vocabulary while the existing global deep
- * links remain available.
+ * The real nested route tree for the show authoring workspace
+ * (ROUTE-MAP.md, UI-DESIGN-GUIDE.md section 3): five tabs, all under
+ * `/shows/:showId/*`. No tab is a `<Navigate replace>` out to a global
+ * route with a `?show=` query parameter — that scheme is gone. Screen
+ * builder C (this group) owns Playlists, Cues and Presentation; Assets
+ * and Automation are owned elsewhere and are only routed to here, never
+ * built here.
  */
-const SECTIONS: Array<{ id: ShowWorkspaceSection; label: string; description: string }> = [
-  { id: 'overview', label: 'Overview', description: 'Show identity and authoring status' },
-  { id: 'run-of-show', label: 'Run of Show', description: 'Ordered presentation plan' },
-  { id: 'cues', label: 'Cues', description: 'Render, audio, LTC, and announcements' },
-  { id: 'assets', label: 'Assets', description: 'Show-scoped media and render files' },
-  { id: 'automation', label: 'Automation', description: 'Actions and macros' },
-  { id: 'presentation', label: 'Presentation', description: 'Surfaces and output assignments' },
-  { id: 'show-night', label: 'Show Night', description: 'Transition Steps and live state' },
-  { id: 'readiness', label: 'Readiness', description: 'Evidence before starting' },
+const TABS: Array<{ id: ShowWorkspaceTab; label: string }> = [
+  { id: 'playlists', label: 'Playlists' },
+  { id: 'cues', label: 'Cues' },
+  { id: 'assets', label: 'Assets' },
+  { id: 'presentation', label: 'Presentation' },
+  { id: 'automation', label: 'Automation' },
 ]
-
-export function ShowWorkspaceTabs({ showId, active }: { showId: string; active: ShowWorkspaceSection }) {
-  return (
-    <nav className="show-workspace__nav" aria-label="Show workspace">
-      <ul>
-        {SECTIONS.map((section) => (
-          <li key={section.id}>
-            <Link
-              className="show-workspace__nav-link"
-              to={showWorkspacePath(showId, section.id)}
-              aria-current={section.id === active ? 'page' : undefined}
-            >
-              <span>
-                <strong>{section.label}</strong>
-                <span className="show-workspace__nav-detail">{section.description}</span>
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  )
-}
-
-export function ShowWorkspaceFrame({
-  showId,
-  showName,
-  active,
-  children,
-}: {
-  showId: string
-  showName?: string
-  active: ShowWorkspaceSection
-  children: ReactNode
-}) {
-  return (
-    <div className="show-workspace operator-page">
-      <header className="show-workspace__header">
-        <div>
-          <p className="settings-breadcrumb">
-            <Link to="/config/show">Shows</Link> / {showName || showId}
-          </p>
-          <h1 className="operator-page__title">{showName || showId}</h1>
-          <p className="operator-page__lede">Authoring workspace for this show. Changes create a new revision.</p>
-        </div>
-        <Link className="entity-link" to={`/config/show/${encodeURIComponent(showId)}`}>
-          Edit show details
-        </Link>
-      </header>
-      <ShowWorkspaceTabs showId={showId} active={active} />
-      <main className="show-workspace__content">{children}</main>
-    </div>
-  )
-}
-
-type WorkspaceState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | {
-      kind: 'loaded'
-      show: ShowConfigResponse
-      resources: Record<'cue' | 'playlist' | 'action' | 'surface', ConfigObjectSummary[]>
-      assets: Asset[]
-    }
 
 const READ_SCOPES = ['show:macro:run', 'config:write']
 
-const RESOURCE_CARDS: Array<{
-  key: 'cue' | 'playlist' | 'action' | 'surface'
-  label: string
-  section: ShowWorkspaceSection
-  empty: string
-}> = [
-  { key: 'cue', label: 'Cues', section: 'cues', empty: 'No Cues yet.' },
-  { key: 'playlist', label: 'Playlists', section: 'run-of-show', empty: 'No Playlists yet.' },
-  { key: 'action', label: 'Actions', section: 'automation', empty: 'No Actions yet.' },
-  { key: 'surface', label: 'Surfaces', section: 'presentation', empty: 'No Surfaces yet.' },
-]
+export interface ShowWorkspaceCounts {
+  playlists: number
+  cues: number
+  assets: number
+  presentation: number
+  automation: number
+}
 
-export function ShowWorkspaceOverview({ showId }: { showId: string }) {
+export type ShowWorkspaceDataState =
+  | { kind: 'no_permission'; reason: string }
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'loaded'; show: ShowConfigResponse; counts: ShowWorkspaceCounts }
+
+/**
+ * The one fetch every workspace tab shares: the show's identity plus the
+ * inventory count of each tab's PRIMARY object (UI-DESIGN-GUIDE.md
+ * section 3: "Tab counts are inventory... of the tab's primary object",
+ * distinct from a rail badge's attention count). Fetched once here, not
+ * once per tab, so every tab strip in the workspace renders the same
+ * numbers regardless of which tab mounted it.
+ */
+export function useShowWorkspaceData(showId: string, enabled = true): ShowWorkspaceDataState {
   const model = useModelContext()
   const gate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
-  const [state, setState] = useState<WorkspaceState>({ kind: 'loading' })
+  const [state, setState] = useState<ShowWorkspaceDataState>({ kind: 'loading' })
 
   useEffect(() => {
-    if (!gate.allowed) return
+    if (!gate.allowed || !enabled) return
     let cancelled = false
     setState({ kind: 'loading' })
     Promise.all([
       getShow(showId),
-      listConfigObjects('show.cue', showId),
       listConfigObjects('show.playlist', showId),
-      listConfigObjects('show.action', showId),
+      listConfigObjects('show.cue', showId),
       listConfigObjects('show.surface', showId),
+      listConfigObjects('show.macro', showId),
       listAssets({ show: showId }),
     ])
-      .then(([show, cues, playlists, actions, surfaces, assets]) => {
+      .then(([show, playlists, cues, surfaces, macros, assets]) => {
         if (cancelled) return
         setState({
           kind: 'loaded',
           show,
-          resources: {
-            cue: cues.objects,
-            playlist: playlists.objects,
-            action: actions.objects,
-            surface: surfaces.objects,
+          counts: {
+            playlists: playlists.objects.length,
+            cues: cues.objects.length,
+            presentation: surfaces.objects.length,
+            automation: macros.objects.length,
+            assets: assets.assets.length,
           },
-          assets: assets.assets,
         })
       })
       .catch((err: unknown) => {
@@ -139,95 +86,133 @@ export function ShowWorkspaceOverview({ showId }: { showId: string }) {
     return () => {
       cancelled = true
     }
-  }, [gate.allowed, showId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gate.allowed, showId, enabled])
 
-  if (!gate.allowed) {
-    return (
-      <ShowWorkspaceFrame showId={showId} active="overview">
-        <p className="panel panel--error" role="status">
-          {gate.reason}
-        </p>
-      </ShowWorkspaceFrame>
-    )
-  }
+  if (!gate.allowed) return { kind: 'no_permission', reason: gate.reason }
+  return state
+}
 
-  if (state.kind === 'loading') {
-    return (
-      <ShowWorkspaceFrame showId={showId} active="overview">
-        <p className="text-muted" role="status" aria-busy="true">
-          Loading show workspace…
-        </p>
-      </ShowWorkspaceFrame>
-    )
-  }
-
-  if (state.kind === 'error') {
-    return (
-      <ShowWorkspaceFrame showId={showId} active="overview">
-        <p className="panel panel--error" role="alert">
-          Could not load this show workspace. {state.message}
-        </p>
-      </ShowWorkspaceFrame>
-    )
-  }
-
+export function ShowWorkspaceTabs({
+  showId,
+  active,
+  counts,
+}: {
+  showId: string
+  active: ShowWorkspaceTab
+  counts?: ShowWorkspaceCounts | undefined
+}) {
   return (
-    <ShowWorkspaceFrame showId={showId} showName={state.show.payload.name} active="overview">
-      <section className="show-workspace__intro" aria-labelledby="show-workspace-heading">
-        <div>
-          <h2 id="show-workspace-heading">Overview</h2>
-          <p className="text-muted">
-            Revision {state.show.revision}. {state.show.payload.notes || 'Add notes from Edit show details to describe this show.'}
-          </p>
-        </div>
-        <p className="show-workspace__revision" role="status">
-          {state.show.createdByPrincipalName ? `Last saved by ${state.show.createdByPrincipalName}.` : 'Last saved by the coordinator.'}
-        </p>
-      </section>
-
-      <section aria-labelledby="show-workspace-resources">
-        <h2 id="show-workspace-resources">Authoring resources</h2>
-        <div className="show-workspace__cards">
-          {RESOURCE_CARDS.map((card) => {
-            const objects = state.resources[card.key]
-            return (
-              <Link className="show-workspace__card" key={card.key} to={showWorkspacePath(showId, card.section)}>
-                <span className="show-workspace__card-label">{card.label}</span>
-                <strong className="show-workspace__card-count">{objects.length}</strong>
-                <span className="show-workspace__card-detail">{objects.length === 0 ? card.empty : `${objects.length} configured`}</span>
-              </Link>
-            )
-          })}
-          <Link className="show-workspace__card" to={showWorkspacePath(showId, 'assets')}>
-            <span className="show-workspace__card-label">Assets</span>
-            <strong className="show-workspace__card-count">{state.assets.length}</strong>
-            <span className="show-workspace__card-detail">
-              {state.assets.length === 0 ? 'No current assets yet.' : `${state.assets.length} show-scoped assets`}
-            </span>
+    <nav className="tabs" aria-label="Show workspace">
+      {TABS.map((tab) => {
+        const isActive = tab.id === active
+        const count = counts?.[tab.id]
+        return (
+          <Link
+            key={tab.id}
+            to={showWorkspacePath(showId, tab.id)}
+            className="tabs__item"
+            aria-current={isActive ? 'page' : undefined}
+          >
+            {tab.label}
+            {count !== undefined && <span className="tabs__count">{count}</span>}
           </Link>
-        </div>
-      </section>
-
-      <section className="show-workspace__future" aria-labelledby="show-workspace-future">
-        <h2 id="show-workspace-future">Workspace modules</h2>
-        <p className="text-muted">
-          Run of Show, Show Night, and Readiness are visible here as distinct destinations. Their current live and readiness views remain available through the existing routes until the canonical show-local route wiring is added.
-        </p>
-        <div className="show-workspace__future-grid">
-          <WorkspaceFutureLink showId={showId} section="run-of-show" label="Run of Show" detail="Playlist order is authored by each Playlist; a combined run editor is not available yet." />
-          <WorkspaceFutureLink showId={showId} section="show-night" label="Show Night" detail="Live control is available at Show Night. Transition Step authoring is not available yet." />
-          <WorkspaceFutureLink showId={showId} section="readiness" label="Readiness" detail="Readiness evidence is available for FPP Playlists. A show-wide readiness summary is not available yet." />
-        </div>
-      </section>
-    </ShowWorkspaceFrame>
+        )
+      })}
+    </nav>
   )
 }
 
-function WorkspaceFutureLink({ showId, section, label, detail }: { showId: string; section: ShowWorkspaceSection; label: string; detail: string }) {
+/**
+ * The chrome every workspace tab shares: breadcrumb back to the Shows
+ * list, the show's identity, and the tab strip. `active` decides which
+ * tab reads current; `children` is the tab's own panel content. This
+ * frame stays mounted the whole time an operator works inside one show,
+ * which is the structural point of real nesting: the show and its tab
+ * strip are never left behind by a tab's own navigation.
+ */
+export function ShowWorkspaceFrame({
+  showId,
+  active,
+  data,
+  children,
+}: {
+  showId: string
+  active: ShowWorkspaceTab
+  data: ShowWorkspaceDataState
+  children: ReactNode
+}) {
+  const showName = data.kind === 'loaded' ? data.show.payload.name : showId
+
   return (
-    <Link className="show-workspace__future-link" to={showWorkspacePath(showId, section)}>
-      <strong>{label}</strong>
-      <span>{detail}</span>
-    </Link>
+    <div className="operator-page">
+      <header className="page-header">
+        <p className="page-header__breadcrumb">
+          <Link to="/shows">Shows</Link> <span aria-hidden="true">/</span> {showName}
+        </p>
+        <div className="page-header__row">
+          <div style={{ minWidth: 0 }}>
+            <h1 className="t-display page-header__title">{showName}</h1>
+            {data.kind === 'loaded' && (
+              <p className="page-header__meta">
+                Revision <span className="t-data">{data.show.revision}</span>
+                {data.show.createdByPrincipalName !== null && ` · saved by ${data.show.createdByPrincipalName}`}
+                {' at '}
+                {formatAbsolute(data.show.updatedAt)}
+              </p>
+            )}
+          </div>
+          <div className="page-header__actions">
+            <Link className="btn btn--quiet" to={showPath(showId)}>
+              Show details
+            </Link>
+            {/* Carried over control: the pre-overhaul workspace linked
+                out to readiness evidence from every tab. ROUTE-MAP.md's
+                2026-08-29 owner ruling makes Readiness a fifth Monitor
+                facet at /monitor/readiness (owned by the Monitor group,
+                not built here); this keeps the link reachable at its
+                new, ruled home instead of the old /playlists/readiness
+                address, which now 404s through NotFound's migration
+                table. */}
+            <Link className="btn btn--secondary" to={`/monitor/readiness?show=${encodeURIComponent(showId)}`}>
+              Check readiness
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <ShowWorkspaceTabs showId={showId} active={active} counts={data.kind === 'loaded' ? data.counts : undefined} />
+
+      <div className="page-body">
+        {data.kind === 'no_permission' && (
+          <p className="ruled-strip ruled-strip--no-permission" role="status">
+            <span className="ruled-strip__state t-meta">No permission</span>
+            <span className="ruled-strip__explanation">{data.reason}</span>
+          </p>
+        )}
+        {data.kind === 'error' && (
+          <p className="ruled-strip ruled-strip--failed" role="alert">
+            <span className="ruled-strip__state t-meta">Failed</span>
+            <span className="ruled-strip__explanation">Could not load this show. {data.message}</span>
+          </p>
+        )}
+        {(data.kind === 'loading' || data.kind === 'loaded') && children}
+      </div>
+    </div>
   )
+}
+
+/**
+ * Compatibility shim for the pre-overhaul `/config/show/:id/workspace`
+ * route (still declared in App.tsx, which this group does not edit -
+ * BUILDER-BRIEF.md's "Do NOT wire routes in App.tsx"). That route
+ * predates ROUTE-MAP.md and is not itself in the route map (neither the
+ * live table nor the deliberately-not-redirected old-addresses table),
+ * so it is orphaned rather than targeted for a stated destination; this
+ * sends it to the show's own identity page, the nearest equivalent to
+ * the old "overview" tab, rather than leaving a dead component mounted
+ * there or breaking the still-wired route's compilation.
+ */
+export function ShowWorkspaceOverview({ showId }: { showId: string }) {
+  return <Navigate replace to={showPath(showId)} />
 }

@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PlaylistReadiness } from './PlaylistReadiness'
+import { Readiness } from './PlaylistReadiness'
 import { ModelContext } from '../app/ModelContext'
 import { makeFPPInstance, makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
@@ -40,7 +40,7 @@ function renderView(model: Model) {
   return render(
     <ModelContext.Provider value={model}>
       <MemoryRouter>
-        <PlaylistReadiness />
+        <Readiness />
       </MemoryRouter>
     </ModelContext.Provider>,
   )
@@ -258,7 +258,7 @@ describe('PlaylistReadiness', () => {
     view.rerender(
       <ModelContext.Provider value={makeModel({ session, fpp: [instance], snapshotReceivedAt: 2000 })}>
         <MemoryRouter>
-          <PlaylistReadiness />
+          <Readiness />
         </MemoryRouter>
       </ModelContext.Provider>,
     )
@@ -335,7 +335,7 @@ describe('PlaylistReadiness', () => {
         })}
       >
         <MemoryRouter>
-          <PlaylistReadiness />
+          <Readiness />
         </MemoryRouter>
       </ModelContext.Provider>,
     )

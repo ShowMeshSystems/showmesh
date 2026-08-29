@@ -102,25 +102,30 @@ type AssetSettingsLoadState =
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; config: AssetsSettingsConfigResponse; revisions: ConfigRevisionMeta[] }
 
+// Configuration is the pre-tab-strip settings directory. The seven-tab
+// Settings screen (SettingsPages.tsx, Settings.dc.html) now owns
+// Connections/Content delivery/Render recovery/Access/Appearance/Audio
+// defaults/Node routing/Mode, so this page keeps only what the tab strip
+// does not cover: the three destinations the design guide calls
+// relocations, not deletions (BUILDER-BRIEF.md) — show authoring (its own
+// rail destination, Shows), the Show Night session definition editor, and
+// FPP playlist definitions. Both of the latter two are BLOCKED awaiting
+// an owner ruling on their new home (ROUTE-MAP.md), so their existing
+// /config/* addresses stay the only way to reach them.
 export function Configuration() {
   return (
     <div className="configuration-page">
       <h2 className="panel__title">Settings</h2>
       <p className="text-muted">
-        Choose a focused settings page. Each editor keeps its own coordinator-backed permissions,
-        validation, revision history, conflict handling, and retry states.
+        Coordinator connections, content delivery, render recovery, access, appearance, audio, and
+        mode moved to the tabbed <Link to="/settings/connections">Settings</Link> screen. The three
+        destinations below have not: show authoring lives with the show it belongs to, and the other
+        two are awaiting an owner ruling on where they land next.
       </p>
       <nav aria-label="Settings directory" className="config-index">
         <ul className="config-index__list">
-          <li><Link to="/config/connections">Connections</Link></li>
-          <li><Link to="/config/content-delivery">Content delivery</Link></li>
-          <li><Link to="/config/render-recovery">Render recovery</Link></li>
-          <li><Link to="/config/access">Access</Link></li>
-          <li><Link to="/config/appearance">Appearance</Link></li>
-          <li><Link to="/config/audio">Audio</Link></li>
-          <li><Link to="/config/mode">Mode</Link></li>
           <li><Link to="/config/show">Show authoring</Link></li>
-          <li><Link to="/config/night.session">Show Night</Link></li>
+          <li><Link to="/config/night.session">Show Night session definitions</Link></li>
           <li><Link to="/config/fpp-playlist-definitions">FPP playlist definitions</Link></li>
         </ul>
       </nav>
@@ -667,7 +672,8 @@ export function FPPMQTTSection() {
 
   return (
     <section id="fpp-mqtt" className="panel config-section" data-unsaved-form="connections-fpp-mqtt">
-      <h3 className="panel__title">FPP MQTT</h3>
+      <h3 className="panel__title">Event feed</h3>
+      <p className="text-muted">How FPP&rsquo;s plugin reaches the coordinator. Playlist-entry identity arrives here.</p>
 
       {state.kind === 'loading' && <p className="text-muted">Loading configuration…</p>}
       {state.kind === 'error' && (

@@ -47,9 +47,9 @@ export interface PresentedObservation {
 }
 
 function routeForResource(resource: ResourceRef): string | null {
-  if (resource.kind === 'node') return `/nodes/${encodeURIComponent(resource.id)}`
-  if (resource.kind === 'fpp') return `/fpp/${encodeURIComponent(resource.id)}`
-  if (resource.kind === 'resolume') return '/resolume'
+  if (resource.kind === 'node') return `/monitor/fleet/node/${encodeURIComponent(resource.id)}`
+  if (resource.kind === 'fpp') return `/monitor/fleet/fpp/${encodeURIComponent(resource.id)}`
+  if (resource.kind === 'resolume') return `/monitor/fleet/resolume/${encodeURIComponent(resource.id)}`
   return null
 }
 

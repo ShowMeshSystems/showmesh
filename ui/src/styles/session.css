@@ -1,0 +1,130 @@
+/* Group F: the four session-state bands, their forms, the not-found route
+ * mapping table and the Access screen. Everything here is additive to
+ * src/styles/primitives.css (.session-band, .plate, .ruled-strip, .btn,
+ * .field, .table) — never a competing token or control-height scale.
+ */
+
+/* ------------------------------------------------------------- session bands */
+
+/* The row of "Sign in / Use a token instead / Clear stored token" controls
+ * on the signed-out band, and the equivalent single control on the
+ * bootstrap band's header. Sits beside the h1, wraps under it on narrow
+ * widths rather than pushing the band's width out. */
+.session-band__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.session-band__controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* The server's own refusal (CSRFRejectedError, TooManyRequestsError),
+ * rendered verbatim via describeApiError — never re-authored here. Bad for
+ * the proxy/CSRF case, warn for the rate limit, since a rate limit is
+ * explicitly not a lockout (UI-DESIGN-GUIDE.md §5) and must not read as
+ * loud as a refused credential. */
+.session-form__alert {
+  padding: 11px 13px;
+  border: 1px solid var(--bad-border);
+  border-radius: 4px;
+  background: var(--bad-bg);
+  color: var(--text);
+}
+
+.session-form__alert--warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+/* A region below the band that has never held a credential, or an
+ * installation that answered and holds nothing: BlankingPlate handles the
+ * hatch/stamp/heading shape (SharedLayouts.tsx); this only sets where it
+ * sits under the band. */
+.session-plate-wrap {
+  padding: 24px 28px 0;
+}
+
+/* ---------------------------------------------------------------- not found */
+
+.not-found-path {
+  margin: 14px 0 0;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--sunken);
+  color: var(--text-muted);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.not-found-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.route-map-table tbody tr[data-current-guess] {
+  background: var(--accent-bg);
+}
+
+.route-map-table tbody tr[data-current-guess] td:first-child {
+  border-left: 2px solid var(--accent);
+}
+
+.route-map-table__note {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------------- access */
+
+.access-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border: 1px solid var(--accent-border);
+  border-radius: 2px;
+  color: var(--accent);
+  font: var(--t-meta);
+  font-size: 10px;
+}
+
+.access-scope-chip--muted {
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+}
+
+.access-you-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: var(--t-meta);
+  font-size: 10px;
+}
+
+.access-row--self td {
+  background: var(--accent-bg);
+}
+
+.access-row--self td:first-child {
+  border-left: 2px solid var(--accent);
+}
+
+.access-inline-form {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-top: 14px;
+}

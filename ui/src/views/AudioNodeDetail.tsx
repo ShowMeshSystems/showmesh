@@ -7,7 +7,8 @@ import { formatAbsolute } from '../app/time'
 import { ScopedButton } from '../components/ScopedButton'
 import { useUnsavedChanges } from '../app/UnsavedChanges'
 import type { AudioNodeConfigResponse, ConfigAudioNode, Node } from '../app/types'
-import { FailedBlock, LoadingBlock, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
+import { FailedBlock, LoadingBlock, PlannedFeature, StaleBlock, UnavailableBlock } from '../components/SharedLayouts'
+import './settings-pages.css'
 
 // ADR-018/ADR-039: one audio.node object's editor, the second of the two
 // audio configuration kinds this build closes the UI gap for. Mirrors
@@ -202,17 +203,45 @@ type LoadState =
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; config: AudioNodeConfigResponse; revisions: ConfigRevisionMeta[] }
 
+// A drawing of the picker Settings.dc.html shows once the agent advertises
+// output groups -- generic labels only, no channel numbers, since a
+// PlannedFeature preview must never present a fabricated fact about a
+// real installation (OWNER RULING 2026-08-29 rule 4).
+const OUTPUT_GROUP_PICKER_PREVIEW = (
+  <div className="planned-preview-groups">
+    <div className="planned-preview-group-row">
+      <span className="checkbox-glyph" />
+      <span>Group A</span>
+    </div>
+    <div className="planned-preview-group-row">
+      <span className="checkbox-glyph" />
+      <span>Group B</span>
+    </div>
+  </div>
+)
+
 export interface AudioNodeDetailProps {
   isNew?: boolean
+  /**
+   * Settings > Node routing (Settings.dc.html's `isAudio` branch) embeds
+   * this same editor beneath its own node picker rather than routing to
+   * `/config/audio.node/:id` — the route table has no per-node URL for
+   * that tab (ROUTE-MAP.md: `/settings/node-routing` takes no id segment).
+   * When given, this wins over the URL param so the routed page
+   * (`/config/audio.node/:id`) and the embedded tab share one
+   * implementation instead of two copies of this form's cross-checked
+   * validation.
+   */
+  nodeIdOverride?: string
 }
 
-export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
+export function AudioNodeDetail({ isNew = false, nodeIdOverride }: AudioNodeDetailProps) {
   const { clearUnsavedChanges } = useUnsavedChanges('audio-node-detail')
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
   const model = useModelContext()
   const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const existingId = isNew ? undefined : params.id
+  const existingId = isNew ? undefined : (nodeIdOverride ?? params.id)
 
   const [state, setState] = useState<LoadState>(isNew ? { kind: 'new' } : { kind: 'loading' })
   const [newId, setNewId] = useState('')
@@ -576,6 +605,15 @@ export function AudioNodeDetail({ isNew = false }: AudioNodeDetailProps) {
           <p role="note">
             The API advertises routes only, not channel inventory. No channel list is inferred.
           </p>
+          {/* OWNER RULING 2026-08-29: Settings.dc.html drew a checkbox
+              output-group picker as a labelled future state. Keep drawing
+              it -- stamped, inert -- directly beneath the manual field
+              that is the real, live path today. */}
+          <PlannedFeature
+            title="Output group picker"
+            why="The agent advertises routes only, never channel inventories, so there is nothing to populate this from. It needs an outputGroups attribute on audio.output.local, which nothing sends today. The manual field above is the live path."
+            preview={OUTPUT_GROUP_PICKER_PREVIEW}
+          />
         </div>
       )}
 

@@ -17,7 +17,7 @@ describe('BootstrapClaimForm', () => {
     await user.type(screen.getByLabelText('Administrator name'), '  root  ')
     await user.type(screen.getByLabelText('Password'), 'super-secret-value')
     await user.type(screen.getByLabelText('This device’s name'), '  porch tablet  ')
-    await user.click(screen.getByRole('button', { name: 'Create administrator' }))
+    await user.click(screen.getByRole('button', { name: 'Claim and sign in' }))
 
     expect(onSubmit).toHaveBeenCalledWith('abc123', 'root', 'super-secret-value', 'porch tablet')
     expect(onSuccess).toHaveBeenCalledOnce()
@@ -34,7 +34,7 @@ describe('BootstrapClaimForm', () => {
     await user.type(screen.getByLabelText('Administrator name'), 'root')
     await user.type(screen.getByLabelText('Password'), 'password12345')
     await user.type(screen.getByLabelText('This device’s name'), 'porch tablet')
-    await user.click(screen.getByRole('button', { name: 'Create administrator' }))
+    await user.click(screen.getByRole('button', { name: 'Claim and sign in' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/invalid, already claimed, or expired/)
   })
@@ -44,7 +44,7 @@ describe('BootstrapClaimForm', () => {
     const onSubmit = vi.fn()
     render(<BootstrapClaimForm onSubmit={onSubmit} />)
 
-    await user.click(screen.getByRole('button', { name: 'Create administrator' }))
+    await user.click(screen.getByRole('button', { name: 'Claim and sign in' }))
     expect(onSubmit).not.toHaveBeenCalled()
   })
 })

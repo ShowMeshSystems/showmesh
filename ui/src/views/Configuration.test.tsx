@@ -203,9 +203,11 @@ afterEach(() => {
 
 function renderConfiguration(model: Model) {
   return render(
-    <ModelContext.Provider value={model}>
-      <ConnectionsSettings />
-    </ModelContext.Provider>,
+    <MemoryRouter>
+      <ModelContext.Provider value={model}>
+        <ConnectionsSettings />
+      </ModelContext.Provider>
+    </MemoryRouter>,
   )
 }
 
@@ -533,18 +535,31 @@ describe('Configuration', () => {
     expect(screen.queryByDisplayValue('player-01')).not.toBeInTheDocument()
   })
 
-  it('renders a compact settings directory with direct destinations', () => {
+  // Settings.dc.html's seven-tab strip (SettingsPages.tsx/SettingsShell)
+  // now owns Connections/Content delivery/Render recovery/Access/
+  // Appearance/Audio defaults/Node routing/Mode. This directory keeps only
+  // the three destinations the tab strip does not cover — relocations
+  // (BUILDER-BRIEF.md), not deletions.
+  it('renders the reduced directory of destinations the tab strip does not cover, and links into the tab strip', () => {
     render(
       <MemoryRouter><ModelContext.Provider value={makeModel({ session: adminSession })}>
         <Configuration />
       </ModelContext.Provider></MemoryRouter>,
     )
 
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/connections')
+
     const nav = screen.getByRole('navigation', { name: /settings directory/i })
-    expect(within(nav).getByRole('link', { name: 'Connections' })).toHaveAttribute('href', '/config/connections')
-    expect(within(nav).getByRole('link', { name: 'Content delivery' })).toHaveAttribute('href', '/config/content-delivery')
-    expect(within(nav).getByRole('link', { name: 'Render recovery' })).toHaveAttribute('href', '/config/render-recovery')
-    expect(within(nav).getByRole('link', { name: 'Mode' })).toHaveAttribute('href', '/config/mode')
+    expect(within(nav).getByRole('link', { name: 'Show authoring' })).toHaveAttribute('href', '/config/show')
+    expect(within(nav).getByRole('link', { name: 'Show Night session definitions' })).toHaveAttribute(
+      'href',
+      '/config/night.session',
+    )
+    expect(within(nav).getByRole('link', { name: 'FPP playlist definitions' })).toHaveAttribute(
+      'href',
+      '/config/fpp-playlist-definitions',
+    )
+    expect(within(nav).queryByRole('link', { name: 'Connections' })).not.toBeInTheDocument()
   })
 
   it('redirects every historical Configuration fragment to its direct Settings editor', async () => {
@@ -561,15 +576,17 @@ describe('Configuration', () => {
     }
   })
 
-  it('renders stable targets for direct Settings editors without duplicating the global contrast control', async () => {
+  it('renders stable targets for direct Settings editors, each with its own working theme control', async () => {
     render(
-      <ModelContext.Provider value={makeModel({ session: adminSession })}>
-        <ConnectionsSettings />
-        <ContentDeliverySettings />
-        <RenderRecoverySettings />
-        <ModeSettings />
-        <AppearanceSettings />
-      </ModelContext.Provider>,
+      <MemoryRouter>
+        <ModelContext.Provider value={makeModel({ session: adminSession })}>
+          <ConnectionsSettings />
+          <ContentDeliverySettings />
+          <RenderRecoverySettings />
+          <ModeSettings />
+          <AppearanceSettings />
+        </ModelContext.Provider>
+      </MemoryRouter>,
     )
 
     for (const id of ['fpp-endpoints', 'resolume-instances', 'fpp-mqtt', 'assets-settings', 'render-settings']) {
@@ -579,8 +596,10 @@ describe('Configuration', () => {
     expect(screen.getByLabelText('Operating mode')).toHaveAttribute('id', 'show-mode')
     expect(screen.getByRole('heading', { level: 2, name: 'Connections settings editor' })).toHaveClass('visually-hidden')
     expect(screen.getByRole('heading', { level: 2, name: 'Content delivery settings editor' })).toHaveClass('visually-hidden')
-    expect(screen.getByText(/persistent High contrast control in the sidebar footer/i)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /high contrast/i })).not.toBeInTheDocument()
+    // Appearance moved off "use the sidebar footer" copy: it now renders
+    // its own working four-way theme control (Settings.dc.html "Theme").
+    const themeGroup = screen.getByRole('group', { name: 'Theme' })
+    expect(within(themeGroup).getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed')
   })
 
   // Readability seam: the restart-required notice (currently always "no

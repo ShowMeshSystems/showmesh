@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import '../styles/session.css'
 
 // The token prompt for ADR-022 decision 4 / spec section 5.6: on `401`
 // the UI prompts for the shared secret and hands it to seam B's token
@@ -16,6 +17,10 @@ import { useState, type FormEvent } from 'react'
 // directly rather than inferring it from local form-submission state,
 // which is what an earlier version of this component did before seam B
 // landed.
+//
+// This is the "Use a token instead" / "Paste a machine token" break-glass
+// path from the signed-out band (SessionPanel.tsx), and the same
+// component Layout.tsx mounts on `connection.kind === 'unauthorized'`.
 export interface TokenPromptProps {
   reason: 'missing' | 'rejected'
   onSubmit: (token: string) => void
@@ -33,22 +38,31 @@ export function TokenPrompt({ reason, onSubmit }: TokenPromptProps) {
   }
 
   return (
-    <form className="token-form" onSubmit={handleSubmit} aria-label="Coordinator API token">
-      <label htmlFor="showmesh-api-token" className="visually-hidden">
+    <form className="field field--gloved" onSubmit={handleSubmit} aria-label="Coordinator API token">
+      <label htmlFor="showmesh-api-token" className="visually-hidden field__label">
         API token
       </label>
       {reason === 'rejected' && (
-        <span role="alert">That token was rejected. Try again, or check the coordinator's configured secret.</span>
+        <div role="alert" className="session-form__alert">
+          <p className="t-small" style={{ margin: 0 }}>
+            That token was rejected. Try again, or check the coordinator's configured secret.
+          </p>
+        </div>
       )}
-      <input
-        id="showmesh-api-token"
-        type="password"
-        autoComplete="off"
-        placeholder="API token"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-      />
-      <button type="submit">Connect</button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          id="showmesh-api-token"
+          className="field__input"
+          type="password"
+          autoComplete="off"
+          placeholder="API token"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+        />
+        <button type="submit" className="btn btn--primary">
+          Connect
+        </button>
+      </div>
     </form>
   )
 }

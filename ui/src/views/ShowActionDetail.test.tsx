@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -413,5 +413,74 @@ describe('ShowActionDetail (status split from authoring)', () => {
 
     await user.click(summary)
     expect(revisionCell).toBeVisible()
+  })
+})
+
+describe('ShowActionDetail (audio integration wiring)', () => {
+  // DESIGN-DECISIONS-AND-API-FACTS.md §6: integration is "'fpp' | 'mqtt' |
+  // 'resolume' | 'audio'" — four members, not three. This proves the form
+  // now offers and can submit the fourth.
+  it('offers audio as an integration choice and submits gainDb, in decibels, for audio.gain.set', async () => {
+    putShowAction.mockResolvedValue({
+      serverTime: '2026-08-28T00:00:00Z',
+      kind: 'show.action',
+      id: 'lower-background',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Lower background',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'audio', audioNodeId: 'audio-node-01', audioSessionId: 'sess-1', audioAction: 'audio.gain.set', params: { gainDb: -12 } },
+      },
+      updatedAt: '2026-08-28T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.type(screen.getByLabelText('Action id'), 'lower-background')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Label'), 'Lower background')
+    await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
+    await user.selectOptions(screen.getByLabelText('Integration'), 'audio')
+    await user.type(screen.getByLabelText("Audio session id (this node's own pkg/audio session, assigned at runtime)"), 'sess-1')
+    await user.selectOptions(screen.getByLabelText('Audio action'), 'audio.gain.set')
+    await user.type(screen.getByLabelText(/Gain, in decibels/), '-12')
+    await waitFor(() => expect(screen.getByLabelText('Audio node')).toHaveTextContent('halloween-2026'))
+    await user.selectOptions(screen.getByLabelText('Audio node'), 'halloween-2026')
+    await user.click(screen.getByRole('button', { name: 'Create action' }))
+
+    await waitFor(() => expect(putShowAction).toHaveBeenCalled())
+    const [, payload] = putShowAction.mock.calls[0] as [string, { target: Record<string, unknown> }]
+    expect(payload.target).toEqual({
+      integration: 'audio',
+      audioNodeId: 'halloween-2026',
+      audioSessionId: 'sess-1',
+      audioAction: 'audio.gain.set',
+      params: { gainDb: -12 },
+    })
+  })
+
+  it('refuses the pre-decibel params.gain key at authoring time, naming the decibel replacement', async () => {
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.type(screen.getByLabelText('Action id'), 'lower-background')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Label'), 'Lower background')
+    await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
+    await user.selectOptions(screen.getByLabelText('Integration'), 'audio')
+    await waitFor(() => expect(screen.getByLabelText('Audio node')).toHaveTextContent('halloween-2026'))
+    await user.selectOptions(screen.getByLabelText('Audio node'), 'halloween-2026')
+    await user.type(screen.getByLabelText("Audio session id (this node's own pkg/audio session, assigned at runtime)"), 'sess-1')
+    await user.selectOptions(screen.getByLabelText('Audio action'), 'audio.output.mute')
+    fireEvent.change(screen.getByLabelText(/Other params/), { target: { value: '{"gain": -6}' } })
+    await user.click(screen.getByRole('button', { name: 'Create action' }))
+
+    expect(await screen.findByText(/params\.gain is refused/)).toBeVisible()
+    expect(putShowAction).not.toHaveBeenCalled()
   })
 })

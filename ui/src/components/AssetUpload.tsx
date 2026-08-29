@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   CSRFRejectedError,
@@ -11,7 +11,9 @@ import {
 import { describeApiError } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { ScopedButton } from './ScopedButton'
+import { findRollbackMatch, historyForIdentity, sha256ContentHash } from '../views/assets/assetGrouping'
 import type { AssetMediaType, AssetTargetKind } from '../app/types'
+import '../styles/assets.css'
 
 const ASSET_WRITE_SCOPE = 'asset:write'
 const MEDIA_TYPES: AssetMediaType[] = ['fseq', 'audio', 'media']
@@ -67,6 +69,22 @@ export interface AssetUploadProps {
    * before that. `rolledBack` is ADR-028 decision 10's own field.
    */
   onUploaded: (asset: Asset, rolledBack: boolean) => void
+  /** When set, Show is fixed (a workspace-tab upload into a known show) rather than typed. */
+  lockedShow?: string
+  /** Known logical sequences for this show, offered as a picker instead of a bare text field. */
+  knownSequences?: string[]
+  /**
+   * Every asset row already known for this scope (the show's own list, or
+   * whatever the cross-show list currently holds) — used ONLY to state
+   * "this will be a rollback" BEFORE the bytes are sent, by hashing the
+   * chosen file client-side and comparing it against a superseded row
+   * sharing this exact identity (ADR-028 decision 10). Never sent to the
+   * server; the coordinator makes its own authoritative rollback
+   * determination on POST.
+   */
+  identityCandidates?: Asset[]
+  /** Renders a Cancel action beside the submit button, for the inspector-pane variant. */
+  onCancel?: () => void
 }
 
 /**
@@ -79,19 +97,62 @@ export interface AssetUploadProps {
  * would produce a confidently mislabelled artifact, since the target is
  * part of the asset's own identity (ADR-028 decision 1).
  */
-export function AssetUpload({ onUploaded }: AssetUploadProps) {
+export function AssetUpload({ onUploaded, lockedShow, knownSequences, identityCandidates, onCancel }: AssetUploadProps) {
   const model = useModelContext()
-  const [show, setShow] = useState('')
+  const [show, setShow] = useState(lockedShow ?? '')
   const [sequence, setSequence] = useState('')
   const [mediaType, setMediaType] = useState<AssetMediaType | ''>('')
   const [targetKind, setTargetKind] = useState<AssetTargetKind | ''>('')
   const [target, setTarget] = useState('')
   const [uploadState, setUploadState] = useState<UploadState>({ kind: 'idle' })
   const [fieldError, setFieldError] = useState<string | null>(null)
+  const [chosenFile, setChosenFile] = useState<File | null>(null)
+  const [rollbackMatch, setRollbackMatch] = useState<Asset | null>(null)
   const uploadingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const declaredNodes = model.nodes.filter((n) => n.declaration.declared)
+
+  // Rollback is stated BEFORE the bytes are ever sent (ADR-028 decision
+  // 10 / the design's own rule): hash the chosen file locally and compare
+  // it to a superseded row sharing this exact identity. `sha256ContentHash`
+  // returns null when the browser has no SubtleCrypto (an old or
+  // non-secure context); the banner simply stays absent rather than guess.
+  useEffect(() => {
+    let cancelled = false
+    if (chosenFile === null || show.trim() === '' || sequence.trim() === '' || targetKind === '' || (identityCandidates ?? []).length === 0) {
+      setRollbackMatch(null)
+      return
+    }
+    if (targetKind === 'node' && target.trim() === '') {
+      setRollbackMatch(null)
+      return
+    }
+    sha256ContentHash(chosenFile).then((hash) => {
+      if (cancelled || hash === null) return
+      const identity: Asset = {
+        id: '',
+        show: show.trim(),
+        sequence: sequence.trim(),
+        targetKind,
+        target: targetKind === 'node' ? target.trim() : '',
+        mediaType: mediaType === '' ? 'fseq' : mediaType,
+        contentHash: hash,
+        runtimeFilename: chosenFile.name,
+        sizeBytes: chosenFile.size,
+        createdAt: '',
+        createdByPrincipalId: null,
+        createdByPrincipalName: null,
+        supersededAt: null,
+        current: false,
+      }
+      const history = historyForIdentity(identityCandidates ?? [], identity)
+      setRollbackMatch(findRollbackMatch(history, hash))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [chosenFile, show, sequence, targetKind, target, mediaType, identityCandidates])
 
   async function handleUpload(): Promise<void> {
     if (uploadingRef.current) return
@@ -129,6 +190,8 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
       // reloaded list (ADR-028 decision 10).
       setUploadState(resp.rolledBack ? { kind: 'rolledBack', assetId: resp.asset.id } : { kind: 'idle' })
       if (fileInputRef.current) fileInputRef.current.value = ''
+      setChosenFile(null)
+      setRollbackMatch(null)
       onUploaded(resp.asset, resp.rolledBack)
     } catch (err) {
       // Deliberately does not touch anything else on screen: a rejected
@@ -141,22 +204,58 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
   }
 
   const uploading = uploadState.kind === 'uploading'
+  const submitLabel = uploading ? 'Uploading…' : rollbackMatch !== null ? 'Roll back' : 'Upload asset'
 
   return (
-    <div className="panel">
-      <h3 className="panel__title">Upload an asset</h3>
-      <fieldset disabled={uploading}>
-        <label className="form-field">
-          Show
-          <input type="text" value={show} onChange={(e) => setShow(e.target.value)} />
-        </label>
-        <label className="form-field">
-          Sequence
-          <input type="text" value={sequence} onChange={(e) => setSequence(e.target.value)} />
-        </label>
-        <label className="form-field">
-          Media type
-          <select value={mediaType} onChange={(e) => setMediaType(e.target.value as AssetMediaType)}>
+    <div className="card asset-upload">
+      <div className="asset-upload__head">
+        <h3 className="t-meta asset-upload__eyebrow">Upload asset</h3>
+        {lockedShow !== undefined && <p className="t-small text-muted">Into {lockedShow}. Manual upload is a permanent path, not a stopgap.</p>}
+      </div>
+      <fieldset disabled={uploading} className="asset-upload__fields">
+        {lockedShow === undefined && (
+          <label className="field">
+            <span className="field__label">Show</span>
+            <input className="field__input" type="text" value={show} onChange={(e) => setShow(e.target.value)} />
+          </label>
+        )}
+        {knownSequences !== undefined && knownSequences.length > 0 ? (
+          <>
+            <label className="field">
+              <span className="field__label">Logical sequence</span>
+              <select
+                className="field__input"
+                value={knownSequences.includes(sequence) ? sequence : sequence === '' ? '' : '__new__'}
+                onChange={(e) => setSequence(e.target.value === '__new__' ? '' : e.target.value)}
+              >
+                <option value="" disabled>
+                  Choose one, never defaulted
+                </option>
+                {knownSequences.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+                <option value="__new__">New sequence…</option>
+              </select>
+              <span className="field__help">What the show calls this content, across every target.</span>
+            </label>
+            {!knownSequences.includes(sequence) && (
+              <label className="field">
+                <span className="field__label">New sequence id</span>
+                <input className="field__input" type="text" value={sequence} onChange={(e) => setSequence(e.target.value)} />
+              </label>
+            )}
+          </>
+        ) : (
+          <label className="field">
+            <span className="field__label">Sequence</span>
+            <input className="field__input" type="text" value={sequence} onChange={(e) => setSequence(e.target.value)} />
+          </label>
+        )}
+        <label className="field">
+          <span className="field__label">Media type</span>
+          <select className="field__input" value={mediaType} onChange={(e) => setMediaType(e.target.value as AssetMediaType)}>
             <option value="" disabled>
               Choose one, never defaulted
             </option>
@@ -167,9 +266,9 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
             ))}
           </select>
         </label>
-        <label className="form-field">
-          Target
-          <select value={targetKind} onChange={(e) => setTargetKind(e.target.value as AssetTargetKind)}>
+        <label className="field">
+          <span className="field__label">Target</span>
+          <select className="field__input" value={targetKind} onChange={(e) => setTargetKind(e.target.value as AssetTargetKind)}>
             <option value="" disabled>
               Choose one, never defaulted
             </option>
@@ -178,11 +277,11 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
           </select>
         </label>
         {targetKind === 'node' && (
-          <label className="form-field">
+          <label className="field field--invalid">
             {/* The target is part of this asset's own identity (ADR-028 decision 1) — never defaulted. */}
-            Target node (required, part of this asset&rsquo;s own identity)
+            <span className="field__label">Target node (required, part of this asset&rsquo;s own identity)</span>
             {declaredNodes.length > 0 ? (
-              <select value={target} onChange={(e) => setTarget(e.target.value)}>
+              <select className="field__input" value={target} onChange={(e) => setTarget(e.target.value)}>
                 <option value="" disabled>
                   Choose a declared node
                 </option>
@@ -194,40 +293,64 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
               </select>
             ) : (
               <input
+                className="field__input"
                 type="text"
                 placeholder="declared node id"
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
               />
             )}
+            <span className="field__error" role="alert">
+              Identity needs a target. There is no default — two targets&rsquo; files for one sequence share this filename, and picking wrong sends a node another node&rsquo;s content.
+            </span>
           </label>
         )}
-        <label htmlFor="asset-upload-file" className="form-field">
-          File
-          <input id="asset-upload-file" ref={fileInputRef} type="file" />
+        <label htmlFor="asset-upload-file" className="field">
+          <span className="field__label">File</span>
+          <input
+            id="asset-upload-file"
+            ref={fileInputRef}
+            type="file"
+            onChange={(e) => setChosenFile(e.target.files?.[0] ?? null)}
+          />
         </label>
       </fieldset>
 
+      {rollbackMatch !== null && (
+        <p className="asset-upload__rollback-banner" role="status">
+          <span className="t-meta">This will be a rollback</span>
+          <span className="t-small">
+            These exact bytes are already stored as a superseded version from {rollbackMatch.createdAt.slice(0, 10)}. Uploading makes that version
+            current again and supersedes today&rsquo;s.
+          </span>
+        </p>
+      )}
+
       {fieldError !== null && (
-        <p role="alert" className="session-form__error">
+        <p role="alert" className="field__error asset-upload__field-error">
           {fieldError}
         </p>
       )}
 
-      <div style={{ marginTop: '0.5rem' }}>
-        <ScopedButton requiredScope={ASSET_WRITE_SCOPE} onClick={() => void handleUpload()} busy={uploading}>
-          {uploading ? 'Uploading…' : 'Upload asset'}
+      <div className="asset-upload__actions">
+        {onCancel !== undefined && (
+          <button type="button" className="btn btn--quiet" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+        <ScopedButton requiredScope={ASSET_WRITE_SCOPE} onClick={() => void handleUpload()} busy={uploading} className="btn btn--primary">
+          {submitLabel}
         </ScopedButton>
       </div>
 
       {uploadState.kind === 'uploading' && (
-        <div role="status" aria-live="polite" style={{ marginTop: '0.5rem' }}>
+        <div role="status" aria-live="polite" className="asset-upload__progress">
           {uploadState.progress.total !== null ? (
             <progress value={uploadState.progress.loaded} max={uploadState.progress.total} />
           ) : (
             <progress />
           )}
-          <p className="text-muted">
+          <p className="t-small text-muted">
             {uploadState.progress.total !== null
               ? `Uploading… ${formatBytes(uploadState.progress.loaded)} of ${formatBytes(uploadState.progress.total)}`
               : `Uploading… ${formatBytes(uploadState.progress.loaded)} sent so far.`}
@@ -236,9 +359,9 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
       )}
 
       {uploadState.kind === 'rolledBack' && (
-        <p role="status" className="panel panel--warning" style={{ marginTop: '0.5rem' }}>
-          Rollback: the re-uploaded bytes matched a superseded asset. {uploadState.assetId} is current again, and the
-          asset that superseded it is now superseded.
+        <p role="status" className="asset-upload__rollback-banner">
+          Rollback: the re-uploaded bytes matched a superseded asset. {uploadState.assetId} is current again, and the asset that superseded it is
+          now superseded.
         </p>
       )}
 
@@ -247,10 +370,9 @@ export function AssetUpload({ onUploaded }: AssetUploadProps) {
           role="alert"
           className={
             uploadState.error.kind === 'forbidden' || uploadState.error.kind === 'unauthorized'
-              ? 'panel panel--warning'
-              : 'text-error'
+              ? 'asset-upload__rollback-banner'
+              : 'field__error asset-upload__field-error'
           }
-          style={{ marginTop: '0.5rem' }}
         >
           {uploadState.error.message}
         </p>

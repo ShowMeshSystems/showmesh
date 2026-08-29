@@ -5,6 +5,7 @@ import { describeApiError, evaluateAnyScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
 import { formatAbsolute } from '../app/time'
 import { DataFreshnessNotice } from '../components/DataFreshnessNotice'
+import { OperatorPageHeader } from '../components/SharedLayouts'
 import {
   FPPPlaylistReadinessBadge,
   FPPPlaylistReadinessFailingConditionBadge,
@@ -15,6 +16,18 @@ import type {
   FPPPlaylistEntryReconciliationResponse,
   FPPPlaylistReadinessResponse,
 } from '../app/types'
+import '../styles/monitor.css'
+
+// Owner ruling 2026-08-29: Monitor gained a fifth facet, Readiness, at
+// `/monitor/readiness`. This file (formerly the Show-night nav group's
+// own standalone route) is now owned by the Monitor screen-builder group
+// and mounted as that facet's content -- restyled to the design's table
+// primitive below, but its data logic (both hooks, both row components)
+// is unchanged: it was already correct and reads no invented "N of N
+// checks" figure anywhere (the mocks' "14 of 14 checks" number was
+// invented during the design session and must never be hard-coded --
+// this view already only ever renders a per-playlist/per-instance
+// verdict, never a synthesized total, so there is nothing to remove).
 
 // TRACK-H-H2-SPEC.md §5/§6: the show-night question this view exists to
 // answer: is every Playlist actually ready to run, and does an FPP
@@ -68,7 +81,7 @@ function usePlaylists(allowed: boolean): PlaylistsState {
   return state
 }
 
-export function PlaylistReadiness() {
+export function Readiness() {
   const model = useModelContext()
   const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, PLAYLIST_LIST_READ_SCOPES)
   const playlists = usePlaylists(readGate.allowed)
@@ -108,43 +121,41 @@ export function PlaylistReadiness() {
   )
 
   return (
-    <div>
+    <section className="monitor-readiness" aria-label="Readiness">
+      <OperatorPageHeader
+        eyebrow="Monitor"
+        title="Readiness"
+        lede="Whether each Playlist bound to an FPP playlist still matches what FPP is configured to play, and whether the latest accepted observation from each FPP instance still matches what the show declares. Read-only: nothing here starts, stops, or imports anything. Each verdict below is its own point-in-time answer, dated by the &ldquo;As of&rdquo; column; it does not update on its own while this tab stays open."
+      />
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
-      <h2 className="panel__title">Playlist readiness</h2>
-      <p className="text-muted">
-        Whether each Playlist bound to an FPP playlist still matches what FPP is configured to
-        play, and whether the latest accepted observation from each FPP instance still matches
-        what the show declares. Read-only: nothing here starts, stops, or imports anything.
-        Each verdict below is its own point-in-time answer, dated by the "As of" column; it does
-        not update on its own while this tab stays open.
-      </p>
 
       {!readGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {readGate.reason}
+        <p className="ruled-strip ruled-strip--no-permission" role="status">
+          <span className="ruled-strip__state t-meta">No permission</span>
+          <span className="ruled-strip__explanation">{readGate.reason}</span>
         </p>
       )}
 
       {readGate.allowed && (
-        <>
-          <h3 className="section-title">
-            Playlists{' '}
-            <button type="button" onClick={() => setReloadGeneration((g) => g + 1)}>
+        <section className="monitor-section" aria-labelledby="readiness-playlists-title">
+          <div className="monitor-section__header">
+            <h2 id="readiness-playlists-title">Playlists</h2>
+            <button type="button" className="btn btn--secondary btn--compact" onClick={() => setReloadGeneration((g) => g + 1)}>
               Recheck readiness
             </button>
-          </h3>
-          {playlists.kind === 'loading' && <p className="text-muted">Loading configured Playlists…</p>}
+          </div>
+          {playlists.kind === 'loading' && <p className="t-small text-muted">Loading configured Playlists…</p>}
           {playlists.kind === 'error' && (
-            <p className="panel panel--error" role="alert">
+            <p role="alert" className="ruled-strip ruled-strip--failed">
               Could not read the list of configured Playlists: {playlists.message}
             </p>
           )}
           {playlists.kind === 'loaded' && playlists.playlists.length === 0 && (
-            <p className="text-muted">No Playlists are configured yet.</p>
+            <p className="t-small text-muted">No Playlists are configured yet.</p>
           )}
           {playlists.kind === 'loaded' && playlists.playlists.length > 0 && (
-            <div className="table-scroll">
-              <table className="config-table" aria-label="Playlist readiness">
+            <div className="table-wrap">
+              <table className="table" aria-label="Playlist readiness">
                 <thead>
                   <tr>
                     <th scope="col">Playlist</th>
@@ -167,45 +178,47 @@ export function PlaylistReadiness() {
               </table>
             </div>
           )}
-        </>
+        </section>
       )}
 
-      <h3 className="section-title">
-        FPP instance reconciliation{' '}
-        <button type="button" onClick={() => setReloadGeneration((g) => g + 1)}>
-          Recheck reconciliation
-        </button>
-      </h3>
-      {reconcilableInstances.length === 0 ? (
-        <p className="text-muted">
-          No FPP instance has reported a SystemUUID yet, so there is nothing to reconcile.
-        </p>
-      ) : (
-        <div className="table-scroll">
-          <table className="config-table" aria-label="FPP instance reconciliation">
-            <thead>
-              <tr>
-                <th scope="col">Instance</th>
-                <th scope="col">Verdict</th>
-                <th scope="col">Detail</th>
-                <th scope="col">As of</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reconcilableInstances.map((instance) => (
-                <ReconciliationRow
-                  key={instance.instanceId}
-                  instanceId={instance.instanceId}
-                  instanceUuid={instance.instanceUuid}
-                  snapshotReceivedAt={model.snapshotReceivedAt}
-                  reloadGeneration={reloadGeneration}
-                />
-              ))}
-            </tbody>
-          </table>
+      <section className="monitor-section" aria-labelledby="readiness-fpp-title">
+        <div className="monitor-section__header">
+          <h2 id="readiness-fpp-title">FPP instance reconciliation</h2>
+          <button type="button" className="btn btn--secondary btn--compact" onClick={() => setReloadGeneration((g) => g + 1)}>
+            Recheck reconciliation
+          </button>
         </div>
-      )}
-    </div>
+        {reconcilableInstances.length === 0 ? (
+          <p className="t-small text-muted">
+            No FPP instance has reported a SystemUUID yet, so there is nothing to reconcile.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table" aria-label="FPP instance reconciliation">
+              <thead>
+                <tr>
+                  <th scope="col">Instance</th>
+                  <th scope="col">Verdict</th>
+                  <th scope="col">Detail</th>
+                  <th scope="col">As of</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reconcilableInstances.map((instance) => (
+                  <ReconciliationRow
+                    key={instance.instanceId}
+                    instanceId={instance.instanceId}
+                    instanceUuid={instance.instanceUuid}
+                    snapshotReceivedAt={model.snapshotReceivedAt}
+                    reloadGeneration={reloadGeneration}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </section>
   )
 }
 
@@ -404,7 +417,7 @@ function ReconciliationRow({
   return (
     <tr>
       <th scope="row">
-        <Link className="entity-link" to={`/fpp/${encodeURIComponent(instanceId)}`}>
+        <Link className="entity-link" to={`/monitor/fleet/fpp/${encodeURIComponent(instanceId)}`}>
           {instanceId}
         </Link>{' '}
         <span className="text-muted">({instanceUuid})</span>

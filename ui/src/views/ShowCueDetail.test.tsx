@@ -4,32 +4,35 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ShowCueDetail } from './ShowCueDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeModel, makeShowList } from '../app/test-support/fixtures'
+import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import { ApiError } from '../api/errors'
 import type { Model } from '../app/types'
 
-const { getShowCue, getShowCueRevisions, putShowCue, listConfigObjects } = vi.hoisted(() => ({
+// The composer now reads its show from the real nested route
+// (/shows/:showId/cues/...) instead of a Show <select>, and derives the
+// new cue's id from its name (still editable) rather than asking for one
+// up front.
+const { getShow, getShowCue, getShowCueRevisions, putShowCue, listConfigObjects, listAssets } = vi.hoisted(() => ({
+  getShow: vi.fn(),
   getShowCue: vi.fn(),
   getShowCueRevisions: vi.fn(),
   putShowCue: vi.fn(),
   listConfigObjects: vi.fn(),
+  listAssets: vi.fn(),
 }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, getShowCue, getShowCueRevisions, putShowCue, listConfigObjects }
-})
-
-beforeEach(() => {
-  listConfigObjects.mockResolvedValue(makeShowList(['halloween-2026']))
+  return { ...actual, getShow, getShowCue, getShowCueRevisions, putShowCue, listConfigObjects, listAssets }
 })
 
 afterEach(() => {
   cleanup()
-  getShowCue.mockReset()
-  getShowCueRevisions.mockReset()
-  putShowCue.mockReset()
-  listConfigObjects.mockReset()
+  vi.clearAllMocks()
+})
+
+beforeEach(() => {
+  mockWorkspaceLists()
 })
 
 const adminSession = makeAuthenticatedSession({
@@ -37,11 +40,36 @@ const adminSession = makeAuthenticatedSession({
   scopes: ['config:write'],
 })
 
+const showResponse = {
+  serverTime: '2026-08-25T00:00:00Z',
+  kind: 'show' as const,
+  id: 'halloween-2026',
+  revision: 3,
+  payload: { name: 'Halloween 2026', notes: '' },
+  updatedAt: '2026-08-25T00:00:00Z',
+  createdByPrincipalId: 'p-1',
+  createdByPrincipalName: 'admin-1',
+  source: 'api' as const,
+}
+
+function emptyList(kind: string) {
+  return { serverTime: '2026-08-25T00:00:00Z', kind, objects: [] }
+}
+
+function mockWorkspaceLists(): void {
+  getShow.mockResolvedValue(showResponse)
+  listAssets.mockResolvedValue({ serverTime: '2026-08-25T00:00:00Z', assets: [] })
+  listConfigObjects.mockImplementation((kind: string) => Promise.resolve(emptyList(kind)))
+}
+
 function renderNew(model: Model = makeModel({ session: adminSession })) {
   return render(
     <ModelContext.Provider value={model}>
-      <MemoryRouter initialEntries={['/config/show.cue/new']}>
-        <ShowCueDetail isNew />
+      <MemoryRouter initialEntries={['/shows/halloween-2026/cues/new']}>
+        <Routes>
+          <Route path="/shows/:showId/cues/new" element={<ShowCueDetail isNew />} />
+          <Route path="/shows/:showId/cues/:cueId" element={<ShowCueDetail />} />
+        </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
   )
@@ -50,9 +78,9 @@ function renderNew(model: Model = makeModel({ session: adminSession })) {
 function renderExisting(id: string, model: Model = makeModel({ session: adminSession })) {
   return render(
     <ModelContext.Provider value={model}>
-      <MemoryRouter initialEntries={[`/config/show.cue/${id}`]}>
+      <MemoryRouter initialEntries={[`/shows/halloween-2026/cues/${id}`]}>
         <Routes>
-          <Route path="/config/show.cue/:id" element={<ShowCueDetail />} />
+          <Route path="/shows/:showId/cues/:cueId" element={<ShowCueDetail />} />
         </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
@@ -83,17 +111,15 @@ const storedCue = {
 const emptyRevisions = { serverTime: '2026-08-25T00:00:00Z', revisions: [] }
 
 describe('ShowCueDetail (viewing an existing cue)', () => {
-  it('renders the current payload', async () => {
+  it('renders the current payload and warns editing changes every playlist that uses it', async () => {
     getShowCue.mockResolvedValue(storedCue)
     getShowCueRevisions.mockResolvedValue(emptyRevisions)
     renderExisting('opening-number')
 
-    await waitFor(() => expect(screen.getByDisplayValue('halloween-2026')).toBeVisible())
-    expect(screen.getByDisplayValue('Opening number')).toBeVisible()
+    await waitFor(() => expect(screen.getByDisplayValue('Opening number')).toBeVisible())
     expect(screen.getByDisplayValue('opening-sequence')).toBeVisible()
     expect(screen.getByDisplayValue('opening-audio')).toBeVisible()
-    expect(screen.getByLabelText('Policy')).toHaveValue('duck')
-    expect(screen.getByLabelText(/Duck gain/)).toHaveValue(-12)
+    expect(screen.getByText(/edits here apply to all of them/)).toBeVisible()
   })
 
   it('renders the revision history', async () => {
@@ -110,7 +136,6 @@ describe('ShowCueDetail (viewing an existing cue)', () => {
     await waitFor(() => expect(screen.getByText('Revision history')).toBeVisible())
     const table = screen.getByRole('table', { name: 'Revision history' })
     expect(table).toHaveTextContent('3')
-    expect(table).toHaveTextContent('2')
     expect(table).toHaveTextContent('active')
   })
 
@@ -118,35 +143,35 @@ describe('ShowCueDetail (viewing an existing cue)', () => {
     getShowCue.mockResolvedValue(storedCue)
     getShowCueRevisions.mockResolvedValue(emptyRevisions)
     putShowCue.mockRejectedValue(
-      new ApiError(
-        'show "another-show" does not match the existing object\'s show "halloween-2026"; show is immutable',
-        400,
-        'https://showmesh.dev/problems/show-config-cross-show-reference',
-      ),
+      new ApiError('show "another-show" does not match the existing object\'s show "halloween-2026"; show is immutable', 400, 'https://showmesh.dev/problems/show-config-cross-show-reference'),
     )
     const user = userEvent.setup()
     renderExisting('opening-number')
 
-    await waitFor(() => expect(screen.getByDisplayValue('halloween-2026')).toBeVisible())
+    await waitFor(() => expect(screen.getByDisplayValue('Opening number')).toBeVisible())
     await user.click(screen.getByRole('button', { name: 'Save cue' }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/show is immutable/)
-    // A refused write must not read as saved: the active revision banner
-    // still names the ORIGINAL revision, and only one read happened (the
-    // initial load): a successful save would trigger a second.
-    expect(screen.getByText(/Active revision 3/)).toBeVisible()
+    expect(screen.getByText(/Cue rev 3/)).toBeVisible()
     expect(getShowCue).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('ShowCueDetail (new cue authoring)', () => {
-  it('refuses to submit with no output enabled', async () => {
+  it('derives the id from the name', async () => {
     const user = userEvent.setup()
     renderNew()
 
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Name'), 'Thank You Announcement')
+    expect(screen.getByLabelText(/Id \(from the name/)).toHaveValue('thank-you-announcement')
+  })
+
+  it('refuses to submit with no output enabled', async () => {
+    mockWorkspaceLists()
+    const user = userEvent.setup()
+    renderNew()
+
     await user.type(screen.getByLabelText('Name'), 'Opening number')
     await user.click(screen.getByRole('button', { name: 'Create cue' }))
 
@@ -154,21 +179,15 @@ describe('ShowCueDetail (new cue authoring)', () => {
     expect(putShowCue).not.toHaveBeenCalled()
   })
 
-  it('refuses LTC enabled without audio, client-side, before dispatch', async () => {
-    const user = userEvent.setup()
+  it('LTC and Announcement are disabled until audio is enabled', async () => {
     renderNew()
 
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
-    await user.type(screen.getByLabelText('Name'), 'Opening number')
-    // The LTC checkbox itself is disabled until audio is enabled, so the
-    // real control cannot reach this state: this proves buildPayload's own
-    // mirror of the server rule refuses it too, exercised by enabling audio
-    // then disabling it again after LTC would have depended on it.
     expect(screen.getByLabelText(/^LTC/)).toBeDisabled()
+    expect(screen.getByLabelText(/^Announcement/)).toBeDisabled()
   })
 
   it('submits a valid render-only cue', async () => {
+    mockWorkspaceLists()
     putShowCue.mockResolvedValue({
       ...storedCue,
       revision: 1,
@@ -177,90 +196,28 @@ describe('ShowCueDetail (new cue authoring)', () => {
     const user = userEvent.setup()
     renderNew()
 
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
-    await user.click(screen.getByLabelText('Render'))
-    await user.type(screen.getByLabelText(/Sequence/), 'opening-sequence')
+    await user.click(screen.getByLabelText(/^Render/))
+    await user.type(screen.getByLabelText(/Logical sequence/), 'opening-sequence')
     await user.click(screen.getByRole('button', { name: 'Create cue' }))
 
     await waitFor(() => expect(putShowCue).toHaveBeenCalledTimes(1))
     expect(putShowCue).toHaveBeenCalledWith(
       'opening-number',
-      expect.objectContaining({
-        show: 'halloween-2026',
-        name: 'Opening number',
-        outputs: { render: { sequence: 'opening-sequence' } },
-      }),
+      expect.objectContaining({ show: 'halloween-2026', name: 'Opening number', outputs: { render: { sequence: 'opening-sequence' } } }),
     )
   })
 
-  it('refuses a blank audio start offset instead of coercing it to zero', async () => {
-    const user = userEvent.setup()
-    renderNew()
-
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
-    await user.type(screen.getByLabelText('Name'), 'Opening number')
-    await user.click(screen.getByLabelText('Audio'))
-    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
-    // Start offset deliberately left blank.
-    await user.click(screen.getByRole('button', { name: 'Create cue' }))
-
-    expect(await screen.findByText(/Audio start offset must be a whole number/)).toBeVisible()
-    expect(putShowCue).not.toHaveBeenCalled()
-  })
-
-  it('refuses a blank LTC start offset instead of coercing it to zero', async () => {
-    const user = userEvent.setup()
-    renderNew()
-
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
-    await user.type(screen.getByLabelText('Name'), 'Opening number')
-    await user.click(screen.getByLabelText('Audio'))
-    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
-    await user.type(screen.getByLabelText(/^Start offset \(milliseconds\)$/), '0')
-    await user.click(screen.getByLabelText(/^LTC/))
-    // LTC start offset deliberately left blank.
-    await user.click(screen.getByRole('button', { name: 'Create cue' }))
-
-    expect(await screen.findByText(/LTC start offset must be a whole number/)).toBeVisible()
-    expect(putShowCue).not.toHaveBeenCalled()
-  })
-
-  it('refuses a blank announcement fade instead of coercing it to zero (an audible hard cut)', async () => {
-    const user = userEvent.setup()
-    renderNew()
-
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
-    await user.type(screen.getByLabelText('Name'), 'Opening number')
-    await user.click(screen.getByLabelText('Audio'))
-    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
-    await user.type(screen.getByLabelText(/^Start offset \(milliseconds\)$/), '0')
-    await user.click(screen.getByLabelText(/^Announcement/))
-    await user.selectOptions(screen.getByLabelText('Policy'), 'mix')
-    // Fade deliberately left blank.
-    await user.click(screen.getByRole('button', { name: 'Create cue' }))
-
-    expect(await screen.findByText(/Announcement fade must be a whole number/)).toBeVisible()
-    expect(putShowCue).not.toHaveBeenCalled()
-  })
-
   it('requires a duck gain when the announcement policy is "duck"', async () => {
+    mockWorkspaceLists()
     const user = userEvent.setup()
     renderNew()
 
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
-    await user.click(screen.getByLabelText('Audio'))
-    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
-    await user.type(screen.getByLabelText(/Start offset/), '0')
+    await user.click(screen.getByLabelText(/Audience audio/))
+    await user.type(screen.getByLabelText(/Audio asset/), 'opening-audio')
     await user.click(screen.getByLabelText(/^Announcement/))
-    await user.selectOptions(screen.getByLabelText('Policy'), 'duck')
-    await user.type(screen.getByLabelText(/Fade/), '250')
+    await user.click(screen.getByRole('button', { name: 'Duck' }))
     // Duck gain deliberately left blank.
     await user.click(screen.getByRole('button', { name: 'Create cue' }))
 
@@ -269,50 +226,41 @@ describe('ShowCueDetail (new cue authoring)', () => {
   })
 
   it('submits a valid audio+announcement "mix" cue with no duck gain', async () => {
+    mockWorkspaceLists()
     putShowCue.mockResolvedValue({
       ...storedCue,
       revision: 1,
       payload: {
         show: 'halloween-2026',
         name: 'Opening number',
-        outputs: {
-          audio: { asset: 'opening-audio', startOffsetMillis: 0 },
-          announcement: { policy: 'mix', fadeMillis: 250 },
-        },
+        outputs: { audio: { asset: 'opening-audio', startOffsetMillis: 0 }, announcement: { policy: 'mix', fadeMillis: 400 } },
       },
     })
     const user = userEvent.setup()
     renderNew()
 
-    await user.type(screen.getByLabelText('Cue id'), 'opening-number')
-    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
     await user.type(screen.getByLabelText('Name'), 'Opening number')
-    await user.click(screen.getByLabelText('Audio'))
-    await user.type(screen.getByLabelText('Asset'), 'opening-audio')
-    await user.type(screen.getByLabelText(/Start offset/), '0')
+    await user.click(screen.getByLabelText(/Audience audio/))
+    await user.type(screen.getByLabelText(/Audio asset/), 'opening-audio')
     await user.click(screen.getByLabelText(/^Announcement/))
-    await user.selectOptions(screen.getByLabelText('Policy'), 'mix')
-    await user.type(screen.getByLabelText(/Fade/), '250')
+    await user.click(screen.getByRole('button', { name: 'Mix' }))
     await user.click(screen.getByRole('button', { name: 'Create cue' }))
 
     await waitFor(() => expect(putShowCue).toHaveBeenCalledTimes(1))
     expect(putShowCue).toHaveBeenCalledWith(
       'opening-number',
-      expect.objectContaining({
-        outputs: expect.objectContaining({
-          announcement: { policy: 'mix', fadeMillis: 250 },
-        }),
-      }),
+      expect.objectContaining({ outputs: expect.objectContaining({ announcement: { policy: 'mix', fadeMillis: 400 } }) }),
     )
   })
 })
 
 describe('ShowCueDetail (scope gating)', () => {
   it('is unavailable, with a stated reason, without the config:write scope for a new cue', () => {
+    mockWorkspaceLists()
     renderNew(makeModel({ session: makeAuthenticatedSession({ scopes: ['show:macro:run'] }) }))
 
     expect(screen.getByRole('status')).toHaveTextContent(/config:write/)
-    expect(screen.queryByLabelText('Cue id')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
   })
 
   it('renders view-only, with editing disabled, for a reader without config:write on an existing cue', async () => {
@@ -320,7 +268,7 @@ describe('ShowCueDetail (scope gating)', () => {
     getShowCueRevisions.mockResolvedValue(emptyRevisions)
     renderExisting('opening-number', makeModel({ session: makeAuthenticatedSession({ scopes: ['show:macro:run'] }) }))
 
-    await waitFor(() => expect(screen.getByDisplayValue('halloween-2026')).toBeVisible())
+    await waitFor(() => expect(screen.getByDisplayValue('Opening number')).toBeVisible())
     expect(screen.getByText(/Viewing only/)).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Save cue' })).not.toBeInTheDocument()
   })

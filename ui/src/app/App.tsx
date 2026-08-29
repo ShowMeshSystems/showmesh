@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useNavigationType } from 'react-router-dom'
 import { UnsavedChangesProvider } from './UnsavedChanges'
 // Seam B's public surface (spec sections 5.4-5.6): the `useModel()` hook
 // and a way to submit an operator-supplied API token. `ui/src/api` does
@@ -17,33 +17,29 @@ import { Layout } from './Layout'
 import { Dashboard } from '../views/Dashboard'
 import { Monitor } from '../views/Monitor'
 import { Observations } from '../views/Observations'
-import { NodesList } from '../views/NodesList'
 import { NodeDetail } from '../views/NodeDetail'
-import { FPPList } from '../views/FPPList'
 import { FPPDetail } from '../views/FPPDetail'
 import { Capabilities } from '../views/Capabilities'
 import { Events } from '../views/Events'
 import { Configuration } from '../views/Configuration'
 import {
-  AccessSettings,
   AppearanceSettings,
-  AudioSettingsDirectory,
   ConnectionsSettings,
+  AudioDefaultsSettings,
   ContentDeliverySettings,
   ModeSettings,
   RenderRecoverySettings,
 } from '../views/SettingsPages'
+import { NodeRoutingSettings } from '../views/settings/NodeRoutingSettings'
 // ADR-039/ADR-018: the audio.settings engine-wide singleton and audio.node
 // per-node object, the last two configuration kinds that shipped with a
 // full API path/showmeshctl coverage and no Operator UI control.
 import { AudioSettings } from '../views/AudioSettings'
 import { AudioNodes } from '../views/AudioNodes'
 import { AudioNodeDetail } from '../views/AudioNodeDetail'
-import { Macros } from '../views/Macros'
 import { MacroDetail } from '../views/MacroDetail'
 import { MacroRunView } from '../views/MacroRunView'
 import { LiveControl } from '../views/LiveControl'
-import { ShowWorkspaceOverview } from '../components/ShowWorkspace'
 import { ShowActions } from '../views/ShowActions'
 import { ShowActionDetail } from '../views/ShowActionDetail'
 import { ResolumeView } from '../views/ResolumeView'
@@ -65,10 +61,8 @@ import { ShowCueDetail } from '../views/ShowCueDetail'
 // the Shows/Surfaces routes just above.
 import { ShowPlaylists } from '../views/ShowPlaylists'
 import { ShowPlaylistDetail } from '../views/ShowPlaylistDetail'
-import { ShowActive } from '../views/ShowActive'
 import { Assets } from '../views/Assets'
 import { AssetManifest } from '../views/AssetManifest'
-import { Audit } from '../views/Audit'
 // Track F seam F2 (UI half): the night-session lifecycle operating view
 // and its night.session/night.session.active configuration screens.
 import { NightSession } from '../views/NightSession'
@@ -78,7 +72,7 @@ import { NightSessionActive } from '../views/NightSessionActive'
 // TRACK-H-H2-SPEC.md §5/§6: the show-night Playlist readiness and FPP
 // instance reconciliation verdicts, previously reachable only from
 // `showmeshctl fpp`.
-import { PlaylistReadiness } from '../views/PlaylistReadiness'
+import { Readiness } from '../views/PlaylistReadiness'
 // TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition import
 // evidence, an authoring surface (unlike PlaylistReadiness above), so it
 // routes under Configure rather than Show night.
@@ -150,13 +144,11 @@ const ROUTE_TITLES: Array<[string, string]> = [
   ['/', 'Dashboard'],
   ['/night', 'Show Night'],
   ['/control', 'Live Control'],
-  ['/macros', 'Macros'],
-  ['/config/show', 'Shows'],
+  ['/shows', 'Shows'],
   ['/assets', 'Assets'],
   ['/monitor', 'Monitor'],
-  ['/observations', 'Observations'],
-  ['/nodes', 'Monitor'],
-  ['/config', 'Settings'],
+  ['/settings', 'Settings'],
+  ['/access', 'Access'],
 ]
 
 export function RouteTitle() {
@@ -170,11 +162,6 @@ export function RouteTitle() {
   }, [pathname])
 
   return null
-}
-
-function ShowWorkspaceOverviewRoute() {
-  const { id = '' } = useParams()
-  return <ShowWorkspaceOverview showId={id} />
 }
 
 // The Settings directory replaced the former single long Configuration page.
@@ -201,21 +188,6 @@ export function ConfigurationRoute() {
   return <Configuration />
 }
 
-function ShowWorkspaceRedirect({ destination }: { destination: 'playlists' | 'cues' | 'assets' | 'actions' | 'surfaces' | 'night' | 'readiness' }) {
-  const { id = '' } = useParams()
-  const query = `?show=${encodeURIComponent(id)}`
-  const targets = {
-    playlists: `/config/show.playlist${query}`,
-    cues: `/config/show.cue${query}`,
-    assets: `/assets${query}`,
-    actions: `/actions${query}`,
-    surfaces: `/config/show.surface${query}`,
-    night: '/night',
-    readiness: `/playlists/readiness${query}`,
-  }
-  return <Navigate replace to={targets[destination]} />
-}
-
 export default function App() {
   const model = useModel()
 
@@ -227,106 +199,88 @@ export default function App() {
           <RouteTitle />
           <Routes>
           <Route element={<Layout onSubmitToken={submitToken} />}>
+            {/* Seven rail destinations, no eighth. UI-DESIGN-GUIDE.md section 3.
+                Old addresses are deliberately NOT redirected: the not-found page
+                maps them to their new home and says so, because eighteen routes
+                collapsed into seven and a 404 here is usually an old bookmark
+                rather than a typo. */}
+
+            {/* Operate */}
             <Route index element={<Dashboard />} />
-            <Route path="monitor" element={<Monitor />} />
-            <Route path="observations" element={<Observations />} />
-            <Route path="nodes" element={<NodesList />} />
-            <Route path="nodes/:nodeId" element={<NodeDetail />} />
-            <Route path="fpp" element={<FPPList />} />
-            <Route path="fpp/:instanceId" element={<FPPDetail />} />
-            <Route path="capabilities" element={<Capabilities />} />
-            <Route path="events" element={<Events />} />
-            {/* Track D seam D-4: the Resolume observability/control view. */}
-            <Route path="resolume" element={<ResolumeView />} />
-            <Route path="config" element={<ConfigurationRoute />} />
-            <Route path="config/connections" element={<ConnectionsSettings />} />
-            <Route path="config/content-delivery" element={<ContentDeliverySettings />} />
-            <Route path="config/render-recovery" element={<RenderRecoverySettings />} />
-            <Route path="config/access" element={<AccessSettings />} />
-            <Route path="config/appearance" element={<AppearanceSettings />} />
-            <Route path="config/audio" element={<AudioSettingsDirectory />} />
-            <Route path="config/mode" element={<ModeSettings />} />
-            {/* Step 9 (STEP-9-SPEC.md section 9): the macro list/run/run-view
-                surfaces plus authoring for both show.macro and show.action.
-                "/macros/new" and "/actions/new" are listed BEFORE their
-                ":id" siblings for readability; react-router-dom v6 ranks
-                routes by specificity regardless of declaration order, so
-                this ordering is not load-bearing, only easier to read. */}
-            <Route path="macros" element={<Macros />} />
+            <Route path="night" element={<NightSession />} />
             <Route path="control" element={<LiveControl />} />
-            <Route path="macros/new" element={<MacroDetail isNew />} />
-            <Route path="macros/:id" element={<MacroDetail />} />
-            <Route path="macros/:id/runs/:runId" element={<MacroRunView />} />
-            <Route path="actions" element={<ShowActions />} />
-            <Route path="actions/new" element={<ShowActionDetail isNew />} />
-            <Route path="actions/:id" element={<ShowActionDetail />} />
-            {/* Track G seam G-5: identity administration's own view. */}
+
+            {/* Author: Shows. Every tab is a real nested route that keeps the
+                tab strip and the show in the breadcrumb. No tab navigates out
+                of the show, which the previous ?show= redirect scheme could not
+                honour. */}
+            <Route path="shows" element={<Shows />} />
+            <Route path="shows/new" element={<ShowDetail isNew />} />
+            <Route path="shows/:showId" element={<ShowDetail />} />
+            <Route path="shows/:showId/playlists" element={<ShowPlaylists />} />
+            <Route path="shows/:showId/playlists/new" element={<ShowPlaylistDetail isNew />} />
+            <Route path="shows/:showId/playlists/:id" element={<ShowPlaylistDetail />} />
+            <Route path="shows/:showId/cues" element={<ShowCues />} />
+            <Route path="shows/:showId/cues/new" element={<ShowCueDetail isNew />} />
+            <Route path="shows/:showId/cues/:id" element={<ShowCueDetail />} />
+            <Route path="shows/:showId/assets" element={<Assets />} />
+            <Route path="shows/:showId/presentation" element={<ShowSurfaces />} />
+            <Route path="shows/:showId/presentation/new" element={<ShowSurfaceDetail isNew />} />
+            <Route path="shows/:showId/presentation/:id" element={<ShowSurfaceDetail />} />
+            <Route path="shows/:showId/automation" element={<ShowActions />} />
+            <Route path="shows/:showId/automation/actions/new" element={<ShowActionDetail isNew />} />
+            <Route path="shows/:showId/automation/actions/:actionId" element={<ShowActionDetail />} />
+            <Route path="shows/:showId/automation/macros/new" element={<MacroDetail isNew />} />
+            <Route path="shows/:showId/automation/macros/:id" element={<MacroDetail />} />
+            <Route path="shows/:showId/automation/macros/:id/runs/:runId" element={<MacroRunView />} />
+
+            {/* Author: Assets, cross-show. */}
+            <Route path="assets" element={<Assets />} />
+            <Route path="assets/manifest" element={<AssetManifest />} />
+
+            {/* System: Monitor. Five facets replacing seven old destinations,
+                organised by axis rather than by resource type. Readiness is the
+                owner's addition, holding the full view of the checks. */}
+            <Route path="monitor" element={<Navigate replace to="/monitor/fleet" />} />
+            <Route path="monitor/fleet" element={<Monitor />} />
+            <Route path="monitor/fleet/node/:nodeId" element={<NodeDetail />} />
+            <Route path="monitor/fleet/fpp/:instanceId" element={<FPPDetail />} />
+            <Route path="monitor/fleet/resolume" element={<ResolumeView />} />
+            <Route path="monitor/fleet/resolume/:instanceId" element={<ResolumeView />} />
+            <Route path="monitor/signals" element={<Observations />} />
+            <Route path="monitor/activity" element={<Events />} />
+            <Route path="monitor/capabilities" element={<Capabilities />} />
+            <Route path="monitor/readiness" element={<Readiness />} />
+
+            {/* System: Settings. Access is the one tab that leaves the screen. */}
+            <Route path="settings" element={<Navigate replace to="/settings/connections" />} />
+            <Route path="settings/connections" element={<ConnectionsSettings />} />
+            <Route path="settings/content-delivery" element={<ContentDeliverySettings />} />
+            <Route path="settings/render-recovery" element={<RenderRecoverySettings />} />
+            <Route path="settings/appearance" element={<AppearanceSettings />} />
+            <Route path="settings/audio-defaults" element={<AudioDefaultsSettings />} />
+            <Route path="settings/node-routing" element={<NodeRoutingSettings />} />
+            <Route path="settings/mode" element={<ModeSettings />} />
             <Route path="access" element={<Access />} />
-            {/* Track G seam G-8: "new" is listed before its ":id" sibling
-                for readability only, same non-load-bearing note as the
-                macro/action routes above. */}
-            <Route path="config/show" element={<Shows />} />
-            <Route path="config/show/new" element={<ShowDetail isNew />} />
-            <Route path="config/show/:id" element={<ShowDetail />} />
-            <Route path="config/show/:id/workspace" element={<ShowWorkspaceOverviewRoute />} />
-            <Route path="config/show/:id/workspace/run-of-show" element={<ShowWorkspaceRedirect destination="playlists" />} />
-            <Route path="config/show/:id/workspace/cues" element={<ShowWorkspaceRedirect destination="cues" />} />
-            <Route path="config/show/:id/workspace/assets" element={<ShowWorkspaceRedirect destination="assets" />} />
-            <Route path="config/show/:id/workspace/automation" element={<ShowWorkspaceRedirect destination="actions" />} />
-            <Route path="config/show/:id/workspace/presentation" element={<ShowWorkspaceRedirect destination="surfaces" />} />
-            <Route path="config/show/:id/workspace/show-night" element={<ShowWorkspaceRedirect destination="night" />} />
-            <Route path="config/show/:id/workspace/readiness" element={<ShowWorkspaceRedirect destination="readiness" />} />
-            <Route path="config/show.surface" element={<ShowSurfaces />} />
-            <Route path="config/show.surface/new" element={<ShowSurfaceDetail isNew />} />
-            <Route path="config/show.surface/:id" element={<ShowSurfaceDetail />} />
-            <Route path="config/show.cue" element={<ShowCues />} />
-            <Route path="config/show.cue/new" element={<ShowCueDetail isNew />} />
-            <Route path="config/show.cue/:id" element={<ShowCueDetail />} />
 
-            {/* ADR-039/ADR-018: audio.settings/audio.node, "new" listed
-                before its ":id" sibling for the same readability reason as
-                every other pair above. */}
-            <Route path="config/audio.settings" element={<AudioSettings />} />
-            <Route path="config/audio.node" element={<AudioNodes />} />
-            <Route path="config/audio.node/new" element={<AudioNodeDetail isNew />} />
-            <Route path="config/audio.node/:id" element={<AudioNodeDetail />} />
-
-            <Route path="config/show.playlist" element={<ShowPlaylists />} />
-            <Route path="config/show.playlist/new" element={<ShowPlaylistDetail isNew />} />
-            <Route path="config/show.playlist/:id" element={<ShowPlaylistDetail />} />
-            {/* TRACK-H-H2-SPEC.md §3.6/§4: the stored FPP playlist-definition
-                import evidence -- an authoring question (what has FPP
-                actually reported, and does its hash still match a
-                binding), not the show-night readiness question
-                /playlists/readiness answers, so it sits beside the other
-                Configure authoring routes instead. */}
+            {/* Awaiting an owner ruling on where these live in the new IA.
+                They are mounted at their existing addresses so no control
+                becomes unreachable in the meantime. Nothing here is deleted
+                without the owner's explicit authorisation. */}
+            <Route path="config/night.session" element={<NightSessions />} />
+            <Route path="config/night.session/new" element={<NightSessionDetail isNew />} />
+            <Route path="config/night.session/:id" element={<NightSessionDetail />} />
+            <Route path="config/night.session.active" element={<NightSessionActive />} />
             <Route path="config/fpp-playlist-definitions" element={<FPPPlaylistDefinitions />} />
             <Route
               path="config/fpp-playlist-definitions/:instanceUuid/:playlistHash"
               element={<FPPPlaylistDefinitionDetail />}
             />
-            <Route path="config/show.active" element={<ShowActive />} />
-            {/* Track F seam F2 (UI half): the night-session lifecycle
-                operating view lives under Monitor/Control (Layout.tsx),
-                not under /config — it observes and commands the RUNNING
-                controller, never the authored definition. "new" is listed
-                before its ":id" sibling for readability only, same
-                non-load-bearing note as the macro/action/show routes
-                above. */}
-            <Route path="night" element={<NightSession />} />
-            {/* TRACK-H-H2-SPEC.md §5/§6: the Playlist readiness and FPP
-                instance reconciliation verdicts. Lives in the Show night
-                nav group (Layout.tsx), same reasoning as /night just
-                above: this is a question an operator asks BEFORE a show
-                runs, never a configuration authoring surface. */}
-            <Route path="playlists/readiness" element={<PlaylistReadiness />} />
-            <Route path="config/night.session" element={<NightSessions />} />
-            <Route path="config/night.session/new" element={<NightSessionDetail isNew />} />
-            <Route path="config/night.session/:id" element={<NightSessionDetail />} />
-            <Route path="config/night.session.active" element={<NightSessionActive />} />
-            <Route path="assets" element={<Assets />} />
-            <Route path="assets/manifest" element={<AssetManifest />} />
-            <Route path="audit" element={<Audit />} />
+            <Route path="config/audio.node" element={<AudioNodes />} />
+            <Route path="config/audio.node/new" element={<AudioNodeDetail isNew />} />
+            <Route path="config/audio.node/:id" element={<AudioNodeDetail />} />
+            <Route path="config/audio.settings" element={<AudioSettings />} />
+
             <Route path="*" element={<NotFound />} />
           </Route>
           </Routes>

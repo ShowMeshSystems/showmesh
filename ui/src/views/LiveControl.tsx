@@ -14,85 +14,111 @@ import {
   FPPPrevPlaylistItemControl,
   FPPResumePlaylistControl,
 } from '../components/FPPPlaylistTransportControls'
-import { FPPStartPlaylistControl } from '../components/FPPStartPlaylistControl'
 import { FPPStopPlaylistControl } from '../components/FPPStopPlaylistControl'
 import { FPPStopPlaylistGracefullyControl } from '../components/FPPStopPlaylistGracefullyControl'
 import { FPPSetVolumeControl } from '../components/FPPSetVolumeControl'
-import { NightCommandButton } from '../components/NightCommandButton'
 import { PanelErrorBoundary } from '../components/PanelErrorBoundary'
 import { RenderSurfacePanel } from '../components/RenderSurfacePanel'
 import { ResolumeActionController } from '../components/ResolumeActionController'
 import { RunMacroButton } from '../components/RunMacroButton'
 import { ShowModePanel } from '../components/ShowModePanel'
-import { CommandGroup, OperatorPageHeader, OperatorSection, StatusStrip, StatusStripItem, UnavailableBlock, UnobservedBlock } from '../components/SharedLayouts'
+import { OperatorPageHeader, OperatorSection, PlannedFeature, UnavailableBlock, UnobservedBlock } from '../components/SharedLayouts'
+import { AnnouncementsPanel } from './operate/AnnouncementsPanel'
+import { NightLifecycleCommands } from './operate/NightLifecycleCommands'
+import { OutputsTable } from './operate/OutputsTable'
 import '../styles/operator-pages.css'
+import '../styles/operate.css'
 
 type LoadState<T> = { kind: 'loading' } | { kind: 'loaded'; value: T } | { kind: 'error'; message: string }
 
 function useMacroObjects(allowed: boolean): LoadState<ConfigObjectSummary[]> {
-  const [state, setState] = useState<LoadState<ConfigObjectSummary[]>>({
-    kind: 'loading',
-  })
+  const [state, setState] = useState<LoadState<ConfigObjectSummary[]>>({ kind: 'loading' })
   useEffect(() => {
     if (!allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
     listConfigObjects('show.macro')
-      .then((response) => {
-        if (!cancelled) setState({ kind: 'loaded', value: response.objects })
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setState({ kind: 'error', message: describeApiError(error) })
-      })
-    return () => {
-      cancelled = true
-    }
+      .then((response) => { if (!cancelled) setState({ kind: 'loaded', value: response.objects }) })
+      .catch((error: unknown) => { if (!cancelled) setState({ kind: 'error', message: describeApiError(error) }) })
+    return () => { cancelled = true }
   }, [allowed])
   return state
 }
 
 function useShowActionObjects(allowed: boolean): LoadState<ConfigObjectSummary[]> {
-  const [state, setState] = useState<LoadState<ConfigObjectSummary[]>>({
-    kind: 'loading',
-  })
+  const [state, setState] = useState<LoadState<ConfigObjectSummary[]>>({ kind: 'loading' })
   useEffect(() => {
     if (!allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
     listConfigObjects('show.action')
-      .then((response) => {
-        if (!cancelled) setState({ kind: 'loaded', value: response.objects })
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setState({ kind: 'error', message: describeApiError(error) })
-      })
-    return () => {
-      cancelled = true
-    }
+      .then((response) => { if (!cancelled) setState({ kind: 'loaded', value: response.objects }) })
+      .catch((error: unknown) => { if (!cancelled) setState({ kind: 'error', message: describeApiError(error) }) })
+    return () => { cancelled = true }
   }, [allowed])
   return state
 }
 
 function useResolumeActions(available: boolean): LoadState<ResolumeAction[]> {
-  const [state, setState] = useState<LoadState<ResolumeAction[]>>({
-    kind: 'loading',
-  })
+  const [state, setState] = useState<LoadState<ResolumeAction[]>>({ kind: 'loading' })
   useEffect(() => {
     if (!available) return
     let cancelled = false
     setState({ kind: 'loading' })
     listResolumeActions()
-      .then((response) => {
-        if (!cancelled) setState({ kind: 'loaded', value: response.actions })
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setState({ kind: 'error', message: describeApiError(error) })
-      })
-    return () => {
-      cancelled = true
-    }
+      .then((response) => { if (!cancelled) setState({ kind: 'loaded', value: response.actions }) })
+      .catch((error: unknown) => { if (!cancelled) setState({ kind: 'error', message: describeApiError(error) }) })
+    return () => { cancelled = true }
   }, [available])
   return state
+}
+
+function TransportSection({ model }: { model: ReturnType<typeof useModelContext> }) {
+  const [selected, setSelected] = useState<string | null>(null)
+  const instanceId = selected ?? model.fpp[0]?.instanceId ?? null
+
+  if (model.snapshotReceivedAt === null) {
+    return <UnobservedBlock title="Transport" reason="No coordinator snapshot has been received, so FPP playback capability is not yet observed." headingLevel={3} />
+  }
+  if (model.fpp.length === 0) {
+    return <UnavailableBlock title="Transport" reason="No FPP instance is configured on this coordinator." headingLevel={3} />
+  }
+  return (
+    <div>
+      {model.fpp.length > 1 && (
+        <div className="segmented transport-instance-tabs" role="tablist" aria-label="FPP instance">
+          {model.fpp.map((instance) => (
+            <button
+              key={instance.instanceId}
+              type="button"
+              className="segmented__option"
+              aria-pressed={instance.instanceId === instanceId}
+              onClick={() => setSelected(instance.instanceId)}
+            >
+              {instance.instanceId}
+            </button>
+          ))}
+        </div>
+      )}
+      {instanceId !== null && (
+        <PanelErrorBoundary panelLabel={`Transport for ${instanceId}`}>
+          <div className="transport-rack" aria-label={`Transport controls for ${instanceId}`}>
+            <FPPPrevPlaylistItemControl instanceId={instanceId} />
+            <FPPPausePlaylistControl instanceId={instanceId} />
+            <FPPResumePlaylistControl instanceId={instanceId} />
+            <FPPNextPlaylistItemControl instanceId={instanceId} observations={model.fpp.find((i) => i.instanceId === instanceId)?.observations ?? []} />
+            <FPPStopPlaylistGracefullyControl instanceId={instanceId} />
+            <FPPStopPlaylistControl instanceId={instanceId} />
+            <FPPSetVolumeControl instanceId={instanceId} />
+          </div>
+        </PanelErrorBoundary>
+      )}
+      <p className="absence-notice t-small">
+        This coordinator advertises no installation-wide emergency stop. Stop now above halts this player only;
+        projection and audio hold their last state until their own cues run.
+      </p>
+    </div>
+  )
 }
 
 export function LiveControl() {
@@ -104,252 +130,168 @@ export function LiveControl() {
   const resolumeActions = useResolumeActions(resolume !== undefined)
   const compositionState = useResolumeComposition(resolume?.composition?.name ?? null, resolume !== undefined)
   const composition = resolumeCompositionOrNull(compositionState)
-  const fppStatus = fppControlStatus(model)
-  const audioStatus = audioControlStatus(model)
-  const resolumeStatus = resolumeControlStatus(model)
-  const macroActionLoadError = macros.kind === 'error'
-    ? macros.message
-    : actions.kind === 'error'
-      ? actions.message
-      : null
+  const macroActionLoadError = macros.kind === 'error' ? macros.message : actions.kind === 'error' ? actions.message : null
   const macroObjects = macros.kind === 'loaded' ? macros.value : []
   const actionObjects = actions.kind === 'loaded' ? actions.value : []
+  const activeShowId = model.currentRuns?.activeShow.configured === true ? (model.currentRuns.activeShow.show ?? null) : null
 
   return (
     <div className="operator-page live-control-page">
       <OperatorPageHeader
         title="Live Control"
-        lede="Dispatch the controls that are available on this coordinator. Every command reports its own confirmation or refusal."
-        actions={<Link className="button button--secondary" to="/">
-          Back to dashboard
-        </Link>}
+        lede="Acting on the show that is running now. A command is not successful because it was sent — each one reports the evidence that it took effect, or why it did not."
+        actions={<Link className="button button--secondary" to="/">Back to dashboard</Link>}
       />
 
       <DataFreshnessNotice connection={model.connection} snapshotReceivedAt={model.snapshotReceivedAt} />
 
-      <OperatorSection title="Control status" detail="What this coordinator can currently confirm" aria-labelledby="live-control-status">
-        <div className="live-control-status-region">
-          <StatusStrip label="Control status">
-            <StatusStripItem
-              label="Coordinator"
-              detail="Connection state"
-              tone={model.connection.kind === 'live' ? 'good' : 'unknown'}
-            >{model.connection.kind === 'live' ? 'Connected' : model.connection.kind}</StatusStripItem>
-            <StatusStripItem
-              label="FPP"
-              detail={fppStatus.detail}
-              tone={fppStatus.tone === 'good' ? 'good' : fppStatus.tone === 'bad' ? 'bad' : 'unknown'}
-            >{fppStatus.value}</StatusStripItem>
-            <StatusStripItem
-              label="Audio"
-              detail={audioStatus.detail}
-              tone={audioStatus.tone === 'good' ? 'good' : audioStatus.tone === 'bad' ? 'bad' : 'unknown'}
-            >{audioStatus.value}</StatusStripItem>
-            <StatusStripItem
-              label="Resolume"
-              detail={resolumeStatus.detail}
-              tone={resolumeStatus.tone === 'good' ? 'good' : resolumeStatus.tone === 'bad' ? 'bad' : 'unknown'}
-            >{resolumeStatus.value}</StatusStripItem>
-          </StatusStrip>
-        </div>
+      <OperatorSection title="Transport" aria-labelledby="transport-controls">
+        <TransportSection model={model} />
       </OperatorSection>
 
-      <section className="live-control-section" aria-labelledby="show-selection-controls">
-        <div className="live-control-section__heading">
-          <h2 id="show-selection-controls">Active Show and Mode</h2>
-          <p>Selection authority</p>
-        </div>
-        <p className="section-notice">
-          Active-show evidence comes from the coordinator&apos;s current-runs projection. Mode selection is installation-wide and scope-gated here.
-        </p>
-        <div className="live-control-groups">
-          <article className="live-control-group">
-            <h3>Active Show</h3>
-            <p className="text-muted">{activeShowDetail(model)}</p>
-            <Link className="button button--secondary" to="/config/show.active">Select active show</Link>
-          </article>
-          <article className="live-control-group">
-            <ShowModePanel headingLevel={3} />
-          </article>
-        </div>
-      </section>
+      <OperatorSection title="What each output is doing" detail="For the cue that is playing now" aria-labelledby="outputs-status">
+        <OutputsTable nodes={model.nodes} serverTime={model.serverTime} serverTimeReceivedAt={model.serverTimeReceivedAt} snapshotReceivedAt={model.snapshotReceivedAt} />
+      </OperatorSection>
 
-      <section className="live-control-section" aria-labelledby="night-controls">
-        <div className="live-control-section__heading">
-          <h2 id="night-controls">Show Night lifecycle</h2>
-          <p>Lifecycle controls</p>
-        </div>
-        <p className="section-notice">
-          Capability: Show Night lifecycle. Freshness and permission are shown by each command; accepted, refused, timed-out, and unobserved results stay with that command.
-        </p>
-        <div className="live-control-command-area" aria-label="Show Night lifecycle controls and outcomes">
-          <div className="live-control-command-rack" aria-label="Show Night lifecycle actions">
-            <NightCommandButton command="prepare-site" label="Prepare site" />
-            <NightCommandButton command="run-readiness" label="Run readiness" />
-            <NightCommandButton command="start-preshow" label="Start preshow" />
-            <NightCommandButton command="start-night" label="Start night" />
-            <NightCommandButton command="request-final-show" label="Request final show" />
-            <NightCommandButton command="fade-out-night" label="Fade out night" />
-            <NightCommandButton command="power-down-presentation" label="Power down presentation" />
-          </div>
-        </div>
-      </section>
+      <OperatorSection title="Night lifecycle" detail={<Link to="/night">Show Night →</Link>} aria-labelledby="night-controls">
+        <NightLifecycleCommands />
+      </OperatorSection>
 
-      <section className="live-control-section" aria-labelledby="fpp-controls">
-        <div className="live-control-section__heading">
-          <h2 id="fpp-controls">Runner playback</h2>
-          <p>FPP controls when configured</p>
-        </div>
-        {model.snapshotReceivedAt === null ? (
-          <Unobserved title="Runner playback" reason="No coordinator snapshot has been received, so FPP playback capability is not yet observed." />
-        ) : model.fpp.length === 0 ? (
-          <Unavailable title="Runner playback" reason="No FPP instance is configured on this coordinator." />
-        ) : (
-          <div className="live-control-groups">
-            {model.fpp.map((instance) => (
-              <PanelErrorBoundary key={instance.instanceId} panelLabel={`FPP controls for ${instance.instanceId}`}>
-                <CommandGroup title={instance.instanceId} detail={`Capability: FPP playlist transport. Freshness: ${fppGroupFreshness(model)}. Permission and outcomes are reported by each command.`}>
-                  <div className="live-control-command-rack" aria-label={`FPP commands for ${instance.instanceId}`}>
-                    <FPPStartPlaylistControl instanceId={instance.instanceId} />
-                    <FPPStopPlaylistControl instanceId={instance.instanceId} />
-                    <FPPStopPlaylistGracefullyControl instanceId={instance.instanceId} />
-                    <FPPPausePlaylistControl instanceId={instance.instanceId} />
-                    <FPPResumePlaylistControl instanceId={instance.instanceId} />
-                    <FPPPrevPlaylistItemControl instanceId={instance.instanceId} />
-                    <FPPNextPlaylistItemControl instanceId={instance.instanceId} observations={instance.observations} />
-                    <FPPSetVolumeControl instanceId={instance.instanceId} />
-                  </div>
-                </CommandGroup>
-              </PanelErrorBoundary>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <div className="live-control-columns">
-        <section className="live-control-section" aria-labelledby="node-controls">
-          <div className="live-control-section__heading">
-            <h2 id="node-controls">Audio and render-node controls</h2>
-            <p>Observed node sessions</p>
-          </div>
-          {model.snapshotReceivedAt === null ? (
-            <Unobserved title="Audio and render-node controls" reason="No coordinator snapshot has been received, so node control capability is not yet observed." />
-          ) : model.nodes.length === 0 ? (
-            <Unavailable title="Audio and render-node controls" reason="No nodes are currently observed." />
-          ) : (
-            <div className="live-control-groups">
-              {model.nodes.map((node) => (
-                <PanelErrorBoundary key={node.nodeId} panelLabel={`Controls for ${node.label ?? node.nodeId}`}>
-                  <article className="live-control-group">
-                    <h3>{node.label ?? node.nodeId}</h3>
-                    <p className="text-muted">Capability: advertised audio and render sessions. Freshness: {snapshotFreshness(model)}. Permission and command outcomes are shown by the session controls.</p>
-                    <AudioSessionPanel nodeId={node.nodeId} entries={node.audio} />
-                    <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
-                  </article>
-                </PanelErrorBoundary>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="live-control-section" aria-labelledby="resolume-controls">
-          <div className="live-control-section__heading">
-            <h2 id="resolume-controls">Resolume controls</h2>
-            <p>Composition actions</p>
-          </div>
-          {model.snapshotReceivedAt === null ? (
-            <Unobserved title="Resolume controls" reason="No coordinator snapshot has been received, so Resolume capability is not yet observed." />
-          ) : resolume === undefined ? (
-            <Unavailable title="Resolume controls" reason="Resolume is not configured on this coordinator." />
-          ) : resolumeActions.kind === 'error' ? (
-            <p className="section-notice notice--error" role="alert">
-              {resolumeActions.message}
-            </p>
-          ) : resolumeActions.kind !== 'loaded' ? (
-            <p className="text-muted" role="status">
-              Loading Resolume actions…
-            </p>
-          ) : compositionState.kind !== 'loaded' ? (
-            <Unavailable
-              title="Resolume controls"
-              reason={compositionState.kind === 'loading' ? 'Loading the stored composition…' : 'No usable composition is available.'}
-            />
-          ) : (
-            <div className="live-control-group">
-              <p className="text-muted">Capability: stored composition actions. Freshness: {snapshotFreshness(model)}. Permission and command outcomes are shown by the action controller.</p>
-              <ResolumeActionController actions={resolumeActions.value} composition={composition} />
-            </div>
-          )}
-        </section>
-      </div>
-
-      <section className="live-control-section" aria-labelledby="macro-controls">
-        <div className="live-control-section__heading">
-          <h2 id="macro-controls">Macros and exposed Actions</h2>
-          <p>Configured and intentionally exposed</p>
-        </div>
+      <OperatorSection title="Macros" detail={`Configured show.macro objects · ${macroObjects.length}`} aria-labelledby="macro-controls">
         {!macroRead.allowed ? (
-          <Unavailable title="Macros and exposed Actions" reason={macroRead.reason} />
-        ) : macros.kind === 'loading' || actions.kind === 'loading' ? (
-          <p className="text-muted" role="status">
-            Loading configured macros and exposed Actions…
-          </p>
-        ) : macroActionLoadError !== null ? (
-          <p className="section-notice notice--error" role="alert">
-            {macroActionLoadError}
-          </p>
-        ) : macroObjects.length === 0 && actionObjects.length === 0 ? (
-          <Unavailable title="Macros and exposed Actions" reason="No configured macro or coordinator-exposed Action is available here." />
+          <UnavailableBlock title="Macros" reason={macroRead.reason} headingLevel={3} />
+        ) : macros.kind === 'loading' ? (
+          <p className="text-muted" role="status">Loading configured macros…</p>
+        ) : macros.kind === 'error' ? (
+          <p className="section-notice notice--error" role="alert">{macros.message}</p>
+        ) : macroObjects.length === 0 ? (
+          <UnavailableBlock title="Macros" reason="No configured macro is available here." headingLevel={3} />
         ) : (
           <div className="live-control-groups">
             {macroObjects.map((macro) => (
               <article key={macro.id} className="live-control-group">
                 <h3>{macro.label || macro.id}</h3>
                 <span className="operator-list__meta">Revision {macro.currentRevision}</span>
-                <p className="text-muted">Capability: configured macro. Freshness: configuration revision shown. Permission and outcome are reported by this action.</p>
                 <RunMacroButton macroId={macro.id} />
               </article>
             ))}
+          </div>
+        )}
+      </OperatorSection>
+
+      <OperatorSection
+        title="Announcements"
+        detail="Directly activatable. They duck or interrupt the background bed and leave FPP alone. Firing one does not advance the run."
+        aria-labelledby="announcement-controls"
+      >
+        <AnnouncementsPanel showId={activeShowId} />
+      </OperatorSection>
+
+      <OperatorSection title="Actions" detail={`Exposed show.action objects · ${actionObjects.length}. One integration command each; macros are built from these.`} aria-labelledby="action-controls">
+        {!macroRead.allowed ? (
+          <UnavailableBlock title="Actions" reason={macroRead.reason} headingLevel={3} />
+        ) : actions.kind === 'loading' ? (
+          <p className="text-muted" role="status">Loading exposed Actions…</p>
+        ) : actions.kind === 'error' ? (
+          <p className="section-notice notice--error" role="alert">{macroActionLoadError}</p>
+        ) : actionObjects.length === 0 ? (
+          <UnavailableBlock title="Actions" reason="No coordinator-exposed Action is available here." headingLevel={3} />
+        ) : (
+          <div className="live-control-groups">
             {actionObjects.map((action) => (
               <article key={action.id} className="live-control-group">
                 <h3>{action.label || action.id}</h3>
                 <span className="operator-list__meta">Revision {action.currentRevision}</span>
-                <p className="text-muted">Capability: coordinator-exposed stored Action. Its permission and authoritative outcome are reported by this action.</p>
                 <ActionInvokeButton actionId={action.id} label="Invoke" />
               </article>
             ))}
           </div>
         )}
-      </section>
+      </OperatorSection>
 
-      <section className="live-control-section" aria-labelledby="unavailable-controls">
-        <div className="live-control-section__heading">
-          <h2 id="unavailable-controls">Not available on this coordinator</h2>
-          <p>Capabilities not advertised here</p>
+      <OperatorSection title="Resolume" aria-labelledby="resolume-controls">
+        {model.snapshotReceivedAt === null ? (
+          <UnobservedBlock title="Resolume" reason="No coordinator snapshot has been received, so Resolume capability is not yet observed." headingLevel={3} />
+        ) : resolume === undefined ? (
+          <UnavailableBlock title="Resolume" reason="Resolume is not configured on this coordinator." headingLevel={3} />
+        ) : resolumeActions.kind === 'error' ? (
+          <p className="section-notice notice--error" role="alert">{resolumeActions.message}</p>
+        ) : resolumeActions.kind !== 'loaded' ? (
+          <p className="text-muted" role="status">Loading Resolume actions…</p>
+        ) : compositionState.kind !== 'loaded' ? (
+          <UnavailableBlock title="Resolume" reason={compositionState.kind === 'loading' ? 'Loading the stored composition…' : 'No usable composition is available.'} headingLevel={3} />
+        ) : (
+          <ResolumeActionController actions={resolumeActions.value} composition={composition} />
+        )}
+      </OperatorSection>
+
+      <OperatorSection title="Audio and render-node controls" aria-labelledby="node-controls">
+        {model.snapshotReceivedAt === null ? (
+          <UnobservedBlock title="Audio and render-node controls" reason="No coordinator snapshot has been received, so node control capability is not yet observed." headingLevel={3} />
+        ) : model.nodes.length === 0 ? (
+          <UnavailableBlock title="Audio and render-node controls" reason="No nodes are currently observed." headingLevel={3} />
+        ) : (
+          <div className="live-control-groups">
+            {model.nodes.map((node) => (
+              <PanelErrorBoundary key={node.nodeId} panelLabel={`Controls for ${node.label ?? node.nodeId}`}>
+                <article className="live-control-group">
+                  <h3>{node.label ?? node.nodeId}</h3>
+                  <AudioSessionPanel nodeId={node.nodeId} entries={node.audio} />
+                  <RenderSurfacePanel nodeId={node.nodeId} entries={node.render} />
+                </article>
+              </PanelErrorBoundary>
+            ))}
+          </div>
+        )}
+      </OperatorSection>
+
+      <OperatorSection title="Active show and mode" aria-labelledby="show-selection-controls">
+        <div className="live-control-groups">
+          <article className="live-control-group">
+            <h3>Active show</h3>
+            <p className="text-muted">{activeShowDetail(model)}</p>
+            <span className="scoped-button">
+              <button type="button" className="btn btn--secondary" disabled={true} aria-disabled="true" title="Active-show selection has no route yet; the owner is placing the night-session definition editor that will host it.">
+                Select active show
+              </button>
+              <span className="scoped-button__reason">
+                Active-show selection has no route yet; the owner is placing the night-session definition editor that will host it.
+              </span>
+            </span>
+          </article>
+          <article className="live-control-group">
+            <ShowModePanel headingLevel={3} />
+          </article>
         </div>
+      </OperatorSection>
+
+      <OperatorSection title="Not available on this coordinator" aria-labelledby="unavailable-controls">
         <div className="live-control-unavailable">
-          <Unavailable title="Brightness ceiling" reason="No brightness control capability is advertised." />
-          <Unavailable title="Site control" reason="No site-control capability is advertised." />
-          <Unavailable title="Interlocks" reason="No interlock capability is advertised." />
-          <Unavailable title="Global emergency stop" reason="No coordinator-wide stop capability is advertised." />
+          <PlannedFeature
+            title="Installation-wide emergency stop"
+            why="This coordinator advertises no installation-wide stop capability, and there is no command to send. Planned shape: in the top bar, instant, no confirmation dialog, and a double press to arm it."
+            preview={
+              <button type="button" className="btn btn--destructive btn--gloved" tabIndex={-1}>
+                EMERGENCY STOP
+              </button>
+            }
+          />
+          <PlannedFeature
+            title="Brightness ceiling"
+            why="The schema carries no brightness field at all today; no capability or config field exists to hold a ceiling or multiplier."
+          />
+          <PlannedFeature
+            title="Site control"
+            why="Site control is specified but not implemented. There is nothing to read its state from and no command to change it."
+          />
+          <PlannedFeature
+            title="Interlock authoring"
+            why="Interlocks can be read on a night session, but nothing accepts a change to them, so there is no way to author one from here."
+          />
         </div>
-      </section>
+      </OperatorSection>
     </div>
   )
-}
-
-type StatusTone = 'good' | 'unknown' | 'bad'
-
-type ControlStatus = { value: string; detail: string; tone: StatusTone }
-
-function snapshotFreshness(model: ReturnType<typeof useModelContext>): string {
-  if (model.snapshotReceivedAt === null) return 'unobserved, no coordinator snapshot received'
-  if (model.connection.kind !== 'live') return 'stale, showing last known coordinator evidence'
-  return 'current coordinator snapshot'
-}
-
-function fppGroupFreshness(model: ReturnType<typeof useModelContext>): string {
-  return snapshotFreshness(model)
 }
 
 function activeShowDetail(model: ReturnType<typeof useModelContext>): string {
@@ -368,48 +310,4 @@ function currentRunsEvidenceDetail(model: ReturnType<typeof useModelContext>): s
   if (model.connection.kind !== 'live') return `last known current-runs projection while the browser is ${model.connection.kind}`
   if (model.currentRunsReceivedAt === null) return 'current-runs projection with no browser receipt time recorded'
   return 'current-runs projection received by this browser'
-}
-
-function snapshotStatus(model: ReturnType<typeof useModelContext>): 'unobserved' | 'stale' | 'live' {
-  if (model.snapshotReceivedAt === null) return 'unobserved'
-  return model.connection.kind === 'live' ? 'live' : 'stale'
-}
-
-function fppControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
-  if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
-  if (model.fpp.length === 0) return { value: 'Unavailable', detail: 'No FPP instance is configured', tone: 'unknown' }
-  if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known FPP evidence', tone: 'unknown' }
-  if (model.fpp.some((instance) => instance.health === 'failed')) return { value: 'Failed', detail: 'An FPP instance has failed', tone: 'bad' }
-  if (model.fpp.some((instance) => instance.health !== 'healthy' && instance.health !== 'suppressed')) {
-    return { value: 'Unknown', detail: 'FPP health is not healthy', tone: 'unknown' }
-  }
-  return { value: 'Live', detail: `${model.fpp.length} configured`, tone: 'good' }
-}
-
-function audioControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
-  const hasAudioEvidence = model.nodes.some((node) => node.audio.length > 0)
-  if (!hasAudioEvidence) return { value: 'Unobserved', detail: 'Session evidence required', tone: 'unknown' }
-  if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
-  if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known audio evidence', tone: 'unknown' }
-  return { value: 'Live', detail: 'Current session evidence', tone: 'good' }
-}
-
-function resolumeControlStatus(model: ReturnType<typeof useModelContext>): ControlStatus {
-  const resolume = model.resolume[0]
-  if (snapshotStatus(model) === 'unobserved') return { value: 'Unobserved', detail: 'No coordinator snapshot received', tone: 'unknown' }
-  if (resolume === undefined) return { value: 'Unavailable', detail: 'Not configured on this coordinator', tone: 'unknown' }
-  if (snapshotStatus(model) === 'stale') return { value: 'Stale', detail: 'Last known Resolume evidence', tone: 'unknown' }
-  if (resolume.health === 'failed') return { value: 'Failed', detail: 'The Resolume instance has failed', tone: 'bad' }
-  if (resolume.health !== 'healthy' && resolume.health !== 'suppressed') {
-    return { value: 'Unknown', detail: 'Resolume health is not healthy', tone: 'unknown' }
-  }
-  return { value: 'Live', detail: 'Current coordinator evidence', tone: 'good' }
-}
-
-function Unavailable({ title, reason }: { title: string; reason: string }) {
-  return <UnavailableBlock title={title} reason={<>Unavailable: {reason}</>} headingLevel={3} />
-}
-
-function Unobserved({ title, reason }: { title: string; reason: string }) {
-  return <UnobservedBlock title={title} reason={<>Unobserved: {reason}</>} headingLevel={3} />
 }

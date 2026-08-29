@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -88,6 +88,14 @@ describe('AudioNodeDetail (viewing an existing node)', () => {
     expect(screen.getByLabelText('LTC channel')).toHaveValue(3)
     expect(screen.getByLabelText('Clock domain')).toHaveValue('onboard-clock')
     expect(screen.getByLabelText('Clock domain provenance')).toHaveValue('commissioning notes 2026-08-01')
+
+    // OWNER RULING 2026-08-29: the output-group picker Settings.dc.html
+    // drew is kept, stamped as not built, directly beneath the manual
+    // channel field that is the real, live path -- never a working
+    // control, never styled as one of the four absences.
+    const plannedNote = screen.getByRole('note', { name: 'Not built: Output group picker' })
+    expect(plannedNote).toHaveTextContent(/outputGroups attribute on audio.output.local/)
+    expect(within(plannedNote).queryByRole('checkbox')).not.toBeInTheDocument()
   })
 
   it('saves the full replacement payload and reloads on success', async () => {

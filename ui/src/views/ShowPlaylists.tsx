@@ -1,138 +1,131 @@
 import { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { listConfigObjects } from '../api'
-import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
-import { useModelContext } from '../app/ModelContext'
-import { formatAbsolute } from '../app/time'
-import type { ConfigObjectSummary } from '../app/types'
-import { showWorkspacePath } from '../components/showWorkspacePaths'
+import { useNavigate, useParams } from 'react-router-dom'
+import { getShowPlaylist, listConfigObjects } from '../api'
+import { ScopedButton } from '../components/ScopedButton'
+import { ShowWorkspaceFrame, useShowWorkspaceData } from '../components/ShowWorkspace'
+import { showPlaylistNewPath, showPlaylistPath } from '../components/showWorkspacePaths'
+import '../styles/shows.css'
+import type { ConfigObjectSummary, ConfigShowPlaylist } from '../app/types'
 
-// Track H seam H6 (TRACK-H-cues-and-playlists.md "H6"): the show.playlist
-// list, narrowable by show (?show=<id>, api/openapi.yaml's own
-// `GET /config/show.playlist` parameter). Same read posture, filter
-// shape, and URL-is-state posture as ShowSurfaces.tsx / ShowCues.tsx: a
-// Playlist is authored the same way a Surface or a Cue is, one level
-// down from the show it belongs to.
-const READ_SCOPES = ['show:macro:run', 'config:write']
+// Show Authoring.dc.html's list section: the Playlists workspace tab.
+// Playlists split by runner because the two runners behave differently
+// (fpp mirrors an imported list order it does not own; showmesh-audio is
+// authored and reorderable) - that split lives on the detail page
+// (ShowPlaylistDetail.tsx); this tab is the card list that gets you
+// there, plus New playlist.
 const CONFIG_WRITE_SCOPE = 'config:write'
 
-type LoadState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; objects: ConfigObjectSummary[] }
+type PlaylistPayloadState = ConfigShowPlaylist | 'loading' | 'error'
 
 export function ShowPlaylists() {
-  const model = useModelContext()
-  const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
-  const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const [searchParams, setSearchParams] = useSearchParams()
-  const showFilter = searchParams.get('show') ?? ''
+  const { showId = '' } = useParams<{ showId: string }>()
+  const navigate = useNavigate()
+  const data = useShowWorkspaceData(showId)
 
-  const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [list, setList] = useState<ConfigObjectSummary[] | 'loading' | 'error'>('loading')
+  const [payloads, setPayloads] = useState<Record<string, PlaylistPayloadState>>({})
 
   useEffect(() => {
-    if (!readGate.allowed) return
+    if (data.kind !== 'loaded') return
     let cancelled = false
-    setState({ kind: 'loading' })
-    listConfigObjects('show.playlist', showFilter === '' ? undefined : showFilter)
+    setList('loading')
+    listConfigObjects('show.playlist', showId)
       .then((resp) => {
         if (cancelled) return
-        setState({ kind: 'loaded', objects: resp.objects })
+        setList(resp.objects)
+        for (const obj of resp.objects) {
+          setPayloads((prev) => ({ ...prev, [obj.id]: 'loading' }))
+          getShowPlaylist(obj.id)
+            .then((full) => {
+              if (!cancelled) setPayloads((prev) => ({ ...prev, [obj.id]: full.payload }))
+            })
+            .catch(() => {
+              if (!cancelled) setPayloads((prev) => ({ ...prev, [obj.id]: 'error' }))
+            })
+        }
       })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setState({ kind: 'error', message: describeApiError(err) })
+      .catch(() => {
+        if (!cancelled) setList('error')
       })
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed, showFilter])
+  }, [data.kind, showId])
 
   return (
-    <div className="operator-page authoring-page">
-      <div className="operator-page__header">
-        <h2 className="panel__title">Playlists</h2>
-        {writeGate.allowed ? (
-          <Link className="entity-link" to="/config/show.playlist/new">
-            New playlist
-          </Link>
-        ) : (
-          <span className="scoped-button">
-            <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
-              New playlist
-            </button>
-            <span className="scoped-button__reason">{writeGate.reason}</span>
-          </span>
-        )}
+    <ShowWorkspaceFrame showId={showId} active="playlists" data={data}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <p className="t-meta shows-faint">Playlists in this show</p>
+        <ScopedButton
+          requiredScope={CONFIG_WRITE_SCOPE}
+          className="btn btn--secondary"
+          onClick={() => navigate(showPlaylistNewPath(showId))}
+        >
+          New playlist
+        </ScopedButton>
       </div>
-      {/* A Playlist is the ordered run of Cues a runner plays (ADR-043,
-          TRACK-H-cues-and-playlists.md H1/H6): each entry names one Cue,
-          and never defines output directly itself. */}
-      <p className="operator-page__lede text-muted">
-        A Playlist declares the ordered run of Cues a runner (FPP or
-        showmesh-audio) plays. Each entry names a Cue defined elsewhere; a
-        Playlist never declares an output directly itself.
-      </p>
 
-      <label className="form-field" style={{ maxWidth: '20rem' }}>
-        Narrow by show
-        <input
-          type="text"
-          placeholder="show id, or leave blank for every show"
-          value={showFilter}
-          onChange={(e) => {
-            const value = e.target.value
-            setSearchParams(value === '' ? {} : { show: value })
-          }}
-        />
-      </label>
-
-      {!readGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {readGate.reason}
+      {list === 'loading' && (
+        <p className="ruled-strip ruled-strip--loading" role="status">
+          <span className="ruled-strip__state t-meta">Loading</span>
+          <span className="ruled-strip__explanation">Reading this show&rsquo;s playlists.</span>
         </p>
       )}
-
-      {readGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading playlists…</p>}
-      {readGate.allowed && state.kind === 'error' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
+      {list === 'error' && (
+        <p className="ruled-strip ruled-strip--failed" role="alert">
+          <span className="ruled-strip__state t-meta">Failed</span>
+          <span className="ruled-strip__explanation">Could not load this show&rsquo;s playlists.</span>
         </p>
       )}
-      {readGate.allowed && state.kind === 'loaded' && (
-        <>
-          {state.objects.length === 0 ? (
-            <p className="text-muted">No playlists are configured yet.</p>
-          ) : (
-            <div className="table-scroll">
-              <table className="config-table" aria-label="Playlists">
-                <thead>
-                  <tr>
-                    <th scope="col">Name</th>
-                    <th scope="col">Show</th>
-                    <th scope="col">Revision</th>
-                    <th scope="col">Updated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.objects.map((obj) => (
-                    <tr key={obj.id}>
-                      <th scope="row">
-                        <Link className="entity-link" to={`/config/show.playlist/${encodeURIComponent(obj.id)}`}>
-                          {obj.label}
-                        </Link>
-                      </th>
-                      <td><Link className="entity-link" to={showWorkspacePath(obj.show)}>{obj.show}</Link></td>
-                      <td>{obj.currentRevision}</td>
-                      <td>{formatAbsolute(obj.updatedAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+      {Array.isArray(list) && list.length === 0 && (
+        <p className="ruled-strip ruled-strip--empty" role="status">
+          <span className="ruled-strip__state t-meta">Empty</span>
+          <span className="ruled-strip__explanation">No playlists are authored in this show yet.</span>
+        </p>
       )}
-    </div>
+      {Array.isArray(list) && list.length > 0 && (
+        <div className="playlist-card-list">
+          {list.map((obj) => {
+            const payload = payloads[obj.id]
+            return (
+              <a
+                key={obj.id}
+                className="playlist-card"
+                href={showPlaylistPath(showId, obj.id)}
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigate(showPlaylistPath(showId, obj.id))
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                    <span className="playlist-card__title">{obj.label}</span>
+                    {payload !== undefined && payload !== 'loading' && payload !== 'error' && (
+                      <span className="playlist-runner-chip">{payload.runner === 'fpp' ? 'FPP runner' : 'ShowMesh audio'}</span>
+                    )}
+                  </div>
+                  <p className="t-small shows-muted" style={{ margin: '4px 0 0' }}>
+                    {payload === undefined || payload === 'loading'
+                      ? 'Loading…'
+                      : payload === 'error'
+                        ? 'Could not load this playlist.'
+                        : payload.runner === 'fpp'
+                          ? `FPP owns order and progression · ${payload.entries.filter((e) => e.cue.trim() !== '').length} of ${payload.entries.length} entries bound`
+                          : `ShowMesh owns order and progression · ${payload.entries.length} entries${payload.showmeshAudio ? ` · repeat ${payload.showmeshAudio.repeat}` : ''}`}
+                  </p>
+                </div>
+              </a>
+            )
+          })}
+        </div>
+      )}
+
+      {Array.isArray(list) && list.length > 1 && (
+        <p className="playlist-concurrency-note">
+          Playlists run <strong>concurrently</strong>, not in sequence. Two runners are never
+          authoritative for the same playlist.
+        </p>
+      )}
+    </ShowWorkspaceFrame>
   )
 }

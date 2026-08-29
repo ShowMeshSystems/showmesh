@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent } from 'react'
 import { describeApiError } from '../app/session'
+import '../styles/session.css'
 
 // `POST /api/v1/bootstrap` (ADR-024 decision 9): claims the one-time
 // bootstrap code — readable only from a file in the coordinator's data
@@ -11,6 +12,9 @@ import { describeApiError } from '../app/session'
 // account that doesn't exist yet), and BootstrapBanner only ever renders
 // one of the two at a time, never both. `onSubmit` is injected for the
 // same reason as SignInForm's — see that component's comment.
+//
+// Every field is gloved (44px), the submit is 48px — this runs on install
+// day, sometimes from a phone standing next to the coordinator's box.
 export interface BootstrapClaimFormProps {
   onSubmit: (code: string, name: string, password: string, deviceLabel: string) => Promise<void>
   onSuccess?: () => void
@@ -41,53 +45,89 @@ export function BootstrapClaimForm({ onSubmit, onSuccess }: BootstrapClaimFormPr
   }
 
   return (
-    <form className="session-form" onSubmit={(e) => void handleSubmit(e)} aria-label="Claim the bootstrap code">
+    <form className="session-band__form" onSubmit={(e) => void handleSubmit(e)} aria-label="Claim the bootstrap code">
       {error !== null && (
-        <span role="alert" className="session-form__error">
-          {error}
-        </span>
+        <div role="alert" className="session-form__alert">
+          <p className="t-small" style={{ margin: 0 }}>
+            {error}
+          </p>
+        </div>
       )}
-      <label htmlFor={`${formId}-code`}>Bootstrap code</label>
-      <input
-        id={`${formId}-code`}
-        type="text"
-        placeholder="from the coordinator's data volume"
-        autoComplete="off"
-        required
-        value={code}
-        onChange={(event) => setCode(event.target.value)}
-      />
-      <label htmlFor={`${formId}-name`}>Administrator name</label>
-      <input
-        id={`${formId}-name`}
-        type="text"
-        autoComplete="username"
-        required
-        value={name}
-        onChange={(event) => setName(event.target.value)}
-      />
-      <label htmlFor={`${formId}-password`}>Password</label>
-      <input
-        id={`${formId}-password`}
-        type="password"
-        autoComplete="new-password"
-        required
-        value={password}
-        onChange={(event) => setPassword(event.target.value)}
-      />
-      <label htmlFor={`${formId}-device-label`}>This device’s name</label>
-      <input
-        id={`${formId}-device-label`}
-        type="text"
-        placeholder="e.g. porch tablet"
-        autoComplete="off"
-        required
-        value={deviceLabel}
-        onChange={(event) => setDeviceLabel(event.target.value)}
-      />
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Claiming…' : 'Create administrator'}
+      <div className="field field--gloved">
+        <label className="field__label" htmlFor={`${formId}-code`}>
+          Bootstrap code
+        </label>
+        <input
+          id={`${formId}-code`}
+          className="field__input field__input--data"
+          type="text"
+          placeholder="from the coordinator's data volume"
+          autoComplete="off"
+          required
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+        />
+        <span className="field__help">
+          Readable only from a file in the coordinator’s data volume. Having it proves filesystem
+          access, which is what stops this being a way to become administrator over the network.
+        </span>
+      </div>
+      <div className="field field--gloved">
+        <label className="field__label" htmlFor={`${formId}-name`}>
+          Administrator name
+        </label>
+        <input
+          id={`${formId}-name`}
+          className="field__input"
+          type="text"
+          autoComplete="username"
+          required
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </div>
+      <div className="field field--gloved">
+        <label className="field__label" htmlFor={`${formId}-password`}>
+          Password
+        </label>
+        <input
+          id={`${formId}-password`}
+          className="field__input"
+          type="password"
+          autoComplete="new-password"
+          required
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+      </div>
+      <div className="field field--gloved">
+        <label className="field__label" htmlFor={`${formId}-device-label`}>
+          This device’s name
+        </label>
+        <input
+          id={`${formId}-device-label`}
+          className="field__input"
+          type="text"
+          placeholder="e.g. install laptop"
+          autoComplete="off"
+          required
+          value={deviceLabel}
+          onChange={(event) => setDeviceLabel(event.target.value)}
+        />
+      </div>
+      <button type="submit" className="btn btn--primary btn--gloved-lg" disabled={submitting}>
+        {submitting ? 'Claiming…' : 'Claim and sign in'}
       </button>
+      <div style={{ display: 'grid', gap: 6 }}>
+        <p className="t-small" style={{ margin: 0, color: 'var(--text-muted)' }}>
+          This creates one administrator, deletes the code, and signs this device in. There is no
+          second code: a lost password after this needs filesystem access again.
+        </p>
+        <p className="t-small" style={{ margin: 0, color: 'var(--text-faint)' }}>
+          A wrong code is rate-limited per network, shared with ordinary sign-in, and is never a
+          lockout.
+        </p>
+      </div>
     </form>
   )
 }

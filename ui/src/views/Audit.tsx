@@ -2,18 +2,21 @@ import { useCallback, useEffect, useState } from 'react'
 import { listAudit } from '../api'
 import { describeApiError, evaluateScope } from '../app/session'
 import { useModelContext } from '../app/ModelContext'
-import { formatAbsolute } from '../app/time'
 import type { AuditEntry } from '../app/types'
 
 // Track G seam G-8: the audit log (ADR-024 decision 11), behind the
 // audit:read scope always: GET /audit is never one of the open-by-default
-// reads (api/openapi.yaml's own description), so this page (unlike every
-// other Class 3 view) is gated on a single scope rather than
-// evaluateAnyScope.
-const AUDIT_READ_SCOPE = 'audit:read'
+// reads (api/openapi.yaml's own description). Monitor's Activity facet
+// (Events.tsx) merges audit rows into the one event stream, gating ONLY
+// the audit rows -- system events need no scope at all, and their
+// presence must never depend on this one. This file used to be its own
+// routed page; it is now the data layer Events.tsx consumes (useAuditLog),
+// so the audit-specific fetch/pagination logic keeps exactly one home
+// instead of being duplicated into the merged view.
+export const AUDIT_READ_SCOPE = 'audit:read'
 const PAGE_SIZE = 100
 
-type LoadState =
+export type AuditLoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'unconfirmed-order'; message: string }
@@ -22,9 +25,9 @@ type LoadState =
 // olderState is deliberately separate from LoadState: a failure while
 // paging further back must not discard the entries already on screen, and
 // must stay distinguishable from "there is nothing older".
-type OlderState = { kind: 'idle' } | { kind: 'loading' } | { kind: 'error'; message: string }
+export type AuditOlderState = { kind: 'idle' } | { kind: 'loading' } | { kind: 'error'; message: string }
 
-function outcomeLabel(entry: AuditEntry): string {
+export function auditOutcomeLabel(entry: AuditEntry): string {
   if (entry.kind !== 'outcome') return '-'
   return entry.outcome === '' ? '(no evidence-bearing outcome recorded)' : entry.outcome
 }
@@ -67,27 +70,37 @@ function atBeginningOfHistory(entries: AuditEntry[], oldestRetainedId: number | 
 // runtime, so a response that reached `loaded` state with a missing or
 // non-finite id must not turn into a `before` that repeats the same page
 // forever: refuse to offer another page instead.
-function pagingCursor(entries: AuditEntry[]): number | null {
+export function auditPagingCursor(entries: AuditEntry[]): number | null {
   const oldestOnScreen = entries.at(-1)
   if (oldestOnScreen === undefined) return null
   const id = oldestOnScreen.id
   return typeof id === 'number' && Number.isFinite(id) ? id : null
 }
 
-export function Audit() {
+export interface AuditLog {
+  scopeGate: { allowed: boolean; reason: string }
+  state: AuditLoadState
+  older: AuditOlderState
+  loadOlder: () => void
+}
+
+// The one fetch site for GET /audit -- Events.tsx (Monitor's Activity
+// facet) calls this and merges `state.entries` into the combined stream
+// by timestamp. Gated on audit:read internally (never on a page-level
+// read scope any other Class 3 view would use), matching the wire
+// contract's own posture that this endpoint is never open-by-default.
+export function useAuditLog(): AuditLog {
   const model = useModelContext()
-  const scopeGate = evaluateScope(model.session, model.sessionFetchFailed, AUDIT_READ_SCOPE)
-  const [state, setState] = useState<LoadState>({ kind: 'loading' })
-  const [older, setOlder] = useState<OlderState>({ kind: 'idle' })
+  const scopeGateResult = evaluateScope(model.session, model.sessionFetchFailed, AUDIT_READ_SCOPE)
+  const scopeGate = { allowed: scopeGateResult.allowed, reason: scopeGateResult.allowed ? '' : scopeGateResult.reason }
+  const [state, setState] = useState<AuditLoadState>({ kind: 'loading' })
+  const [older, setOlder] = useState<AuditOlderState>({ kind: 'idle' })
 
   useEffect(() => {
     if (!scopeGate.allowed) return
     let cancelled = false
     setState({ kind: 'loading' })
     setOlder({ kind: 'idle' })
-    // One request, newest first (GET /audit's own `order=desc`), so this
-    // screen opens on what just happened instead of walking retained
-    // history forward to reach it.
     listAudit({ order: 'desc', limit: PAGE_SIZE })
       .then((resp) => {
         if (cancelled) return
@@ -114,17 +127,12 @@ export function Audit() {
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeGate.allowed])
 
-  // loadOlder pages BACKWARD on the last entry's own id (never on a count
-  // of entries: ids are never reused and retention prunes from the oldest
-  // end, so a count would re-read the same page indefinitely).
   const loadOlder = useCallback(() => {
     if (state.kind !== 'loaded') return
-    const before = pagingCursor(state.entries)
-    // No usable cursor: the button that would call this is not rendered
-    // in that case (see below), but refuse here too rather than send a
-    // `before` that cannot advance the page.
+    const before = auditPagingCursor(state.entries)
     if (before === null) return
     setOlder({ kind: 'loading' })
     listAudit({ order: 'desc', before, limit: PAGE_SIZE })
@@ -151,96 +159,5 @@ export function Audit() {
       })
   }, [state])
 
-  return (
-    <div>
-      <h2 className="panel__title">Audit log</h2>
-      {/* ADR-024 decision 11. */}
-      <p className="text-muted">
-        Append-only record of every authenticated write and access-control decision. Requires the{' '}
-        <code>audit:read</code> scope.
-      </p>
-
-      {!scopeGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {scopeGate.reason}
-        </p>
-      )}
-
-      {scopeGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading the audit log…</p>}
-      {scopeGate.allowed && state.kind === 'error' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
-        </p>
-      )}
-      {scopeGate.allowed && state.kind === 'unconfirmed-order' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
-        </p>
-      )}
-      {scopeGate.allowed && state.kind === 'loaded' && (
-        <>
-          {state.entries.length === 0 ? (
-            <p className="text-muted">No audit entries retained.</p>
-          ) : (
-            <>
-              {/* ADR-020: absent evidence is stated, never omitted. This
-                  window is bounded, so it says exactly what is on it and
-                  whether anything older exists. */}
-              <p className="text-muted">
-                Showing the <strong>{state.entries.length}</strong> most recent retained{' '}
-                {state.entries.length === 1 ? 'entry' : 'entries'}, newest first.
-                {state.atBeginning
-                  ? ' This is the beginning of retained history: there is nothing older to load.'
-                  : ' Older entries exist beyond this window and are not shown.'}
-                {state.oldestRetainedId !== null &&
-                  ` The oldest entry still retained has id ${state.oldestRetainedId}.`}
-              </p>
-              <div className="table-scroll">
-                <table className="config-table">
-                  <thead>
-                    <tr>
-                      <th>Time</th>
-                      <th>Principal</th>
-                      <th>Kind</th>
-                      <th>Action</th>
-                      <th>Target</th>
-                      <th>Outcome</th>
-                      <th>Evidence state</th>
-                      <th>Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {state.entries.map((entry) => (
-                      <tr key={entry.id}>
-                        <td>{formatAbsolute(entry.timestamp)}</td>
-                        <td>
-                          {entry.principalName} ({entry.form})
-                        </td>
-                        <td>{entry.kind}</td>
-                        <td>{entry.action}</td>
-                        <td>{entry.target}</td>
-                        <td>{outcomeLabel(entry)}</td>
-                        <td>{entry.outcomeState === '' ? '-' : entry.outcomeState}</td>
-                        <td>{entry.outcomeReason === '' ? '-' : entry.outcomeReason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {older.kind === 'error' && (
-                <p className="panel panel--error" role="alert">
-                  {older.message} The entries above are still what was loaded before this failure.
-                </p>
-              )}
-              {!state.atBeginning && pagingCursor(state.entries) !== null && (
-                <button type="button" onClick={loadOlder} disabled={older.kind === 'loading'}>
-                  {older.kind === 'loading' ? 'Loading older entries…' : 'Show older entries'}
-                </button>
-              )}
-            </>
-          )}
-        </>
-      )}
-    </div>
-  )
+  return { scopeGate, state, older, loadOlder }
 }

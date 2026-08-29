@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { getResolumeRecovery, listResolumeActions, restoreResolumeRecovery } from '../api'
+import {
+  getResolumeRecovery,
+  getResolumeRecoveryConfig,
+  listResolumeActions,
+  putResolumeRecoveryConfig,
+  restoreResolumeRecovery,
+} from '../api'
+import type { ResolumeRecoveryConfigResponse } from '../api'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError } from '../app/session'
+import { formatAbsolute } from '../app/time'
 import { findObservation } from '../app/fppSignals'
 import {
   ambiguousClips,
@@ -23,6 +31,8 @@ import { ScopedButton } from '../components/ScopedButton'
 import { ResolumeHealthBadge, ResolumeRecoveryLayerStateBadge, ResolumeRestoreResultBadge } from '../components/DomainBadges'
 import { ResolumeActionController } from '../components/ResolumeActionController'
 import { ResolumeCompositionUpload } from '../components/ResolumeCompositionUpload'
+import { PlannedFeature } from '../components/SharedLayouts'
+import '../styles/monitor.css'
 
 // Build contract §2.2/§2.3/§2.4: the Resolume detail/control view. Four
 // things per §2.2 (the observation list, the composition inventory, the
@@ -110,6 +120,115 @@ function RestoreReportView({
   )
 }
 
+// Resolume Config.dc.html's "Recovery" segmented On/Off toggle plus its
+// revision line -- `GET`/`PUT /config/resolume.recovery` (Track D seam
+// D-3a), a genuinely separate write from the crash-recovery record below
+// it: this decides WHETHER ShowMesh records and restores layer state at
+// all, the record panel shows what it has recorded and let an operator
+// force a restore now. Absent from today's ResolumeView.tsx; added here
+// per this task's own brief ("crash recovery toggle with revision").
+function ResolumeAutoRestoreToggle() {
+  const [state, setState] = useState<
+    | { kind: 'loading' }
+    | { kind: 'error'; message: string }
+    | { kind: 'loaded'; config: ResolumeRecoveryConfigResponse }
+  >({ kind: 'loading' })
+  const [pending, setPending] = useState<boolean | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getResolumeRecoveryConfig()
+      .then((resp) => {
+        if (!cancelled) setState({ kind: 'loaded', config: resp })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'error', message: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (state.kind === 'loading') return <p className="text-muted">Loading recovery configuration…</p>
+  if (state.kind === 'error') {
+    return (
+      <p className="panel panel--error" role="alert">
+        {state.message}
+      </p>
+    )
+  }
+
+  const current = pending ?? state.config.payload.autoRestoreEnabled
+  const dirty = pending !== null && pending !== state.config.payload.autoRestoreEnabled
+
+  async function handleSave(): Promise<void> {
+    if (pending === null) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const resp = await putResolumeRecoveryConfig({ autoRestoreEnabled: pending })
+      setState({ kind: 'loaded', config: resp })
+      setPending(null)
+    } catch (err) {
+      setSaveError(describeApiError(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="panel" aria-label="Auto-restore toggle">
+      <div className="segmented" role="group" aria-label="Auto-restore">
+        <button
+          type="button"
+          className="segmented__option"
+          aria-pressed={!current}
+          onClick={() => setPending(false)}
+        >
+          Off
+        </button>
+        <button
+          type="button"
+          className="segmented__option"
+          aria-pressed={current}
+          onClick={() => setPending(true)}
+        >
+          On
+        </button>
+      </div>
+      <p className="text-muted" style={{ marginTop: '8px' }}>
+        When on, ShowMesh records which clip each layer had connected, so it can put them back
+        after Arena restarts. It restores layers it recorded; it does not reconstruct a
+        composition it never saw. Changing this creates a coordinator revision attributed to you.
+      </p>
+      {saveError !== null && (
+        <p role="alert" className="session-form__error">
+          {saveError}
+        </p>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '10px' }}>
+        <ScopedButton
+          requiredScope="config:write"
+          onClick={() => void handleSave()}
+          busy={saving}
+          busyReason={dirty ? 'Saving…' : 'No unsaved changes.'}
+        >
+          {saving ? 'Saving…' : 'Save recovery'}
+        </ScopedButton>
+        <span className="text-muted">
+          Active revision <span className="t-data">{state.config.revision}</span>
+          {state.config.createdByPrincipalName !== null && ` · set by ${state.config.createdByPrincipalName}`}
+          {' '}
+          {formatAbsolute(state.config.updatedAt)}
+          {!dirty && ' · no unsaved changes'}
+        </span>
+      </div>
+    </section>
+  )
+}
+
 export function ResolumeView() {
   const model = useModelContext()
   const connected = model.connection.kind === 'live'
@@ -161,7 +280,7 @@ export function ResolumeView() {
 
   return (
     <div>
-      <h2 className="panel__title">Resolume</h2>
+      <h1 className="t-display" style={{ margin: 0 }}>Resolume</h1>
 
       {instance === undefined ? (
         <p className="text-muted" role="status">
@@ -169,6 +288,23 @@ export function ResolumeView() {
         </p>
       ) : (
         <>
+          {/* Resolume Config.dc.html draws a "Test connection" button in
+              the page header. No such endpoint exists (grep of
+              api/generated/schema.d.ts's "/resolume/*" paths: actions,
+              recovery, recovery/restore, instances -- nothing that
+              performs an ad hoc reachability probe). `reachable` below,
+              inside the instance summary, is the live path: it is what
+              the coordinator's own poll already observed, not something
+              this page can trigger on demand. */}
+          <PlannedFeature
+            title="Test connection"
+            why="No endpoint exists to probe Resolume Arena on demand. The reachable signal below is the coordinator's own last poll, not something this page can trigger."
+            preview={
+              <button type="button" className="btn btn--secondary">
+                Test connection
+              </button>
+            }
+          />
           <PanelErrorBoundary panelLabel="Resolume instance summary">
             <section className="panel">
               <div style={{ marginBottom: '0.75rem' }}>
@@ -192,7 +328,7 @@ export function ResolumeView() {
             </section>
           </PanelErrorBoundary>
 
-          <h3 className="section-title">Observations</h3>
+          <h2 id="rz-obs">What Arena is reporting</h2>
           <PanelErrorBoundary panelLabel="Resolume observations">
             <section className="panel">
               {instance.observations.length === 0 ? (
@@ -276,7 +412,7 @@ export function ResolumeView() {
             </section>
           </PanelErrorBoundary>
 
-          <h3 className="section-title">Composition inventory</h3>
+          <h2 id="rz-comp">Stored composition</h2>
           <PanelErrorBoundary panelLabel="Composition inventory">
             <section className="panel">
               {compositionState.kind === 'loading' && <p className="text-muted">Loading composition…</p>}
@@ -396,7 +532,7 @@ export function ResolumeView() {
             </section>
           </PanelErrorBoundary>
 
-          <h3 className="section-title">Ambiguous clips</h3>
+          <h2 id="rz-amb">Clips that cannot be named</h2>
           <PanelErrorBoundary panelLabel="Ambiguous clips">
             <section className="panel">
               {/* Review finding 4: ambiguousClips(null) is [] just like a
@@ -462,7 +598,10 @@ export function ResolumeView() {
             </section>
           </PanelErrorBoundary>
 
-          <h3 className="section-title">Crash recovery</h3>
+          <h2 id="rz-rec">Recovery</h2>
+          <PanelErrorBoundary panelLabel="Auto-restore toggle">
+            <ResolumeAutoRestoreToggle />
+          </PanelErrorBoundary>
           <PanelErrorBoundary panelLabel="Crash recovery record">
             <section className="panel">
               {recoveryState.kind === 'loading' && <p className="text-muted">Loading…</p>}
@@ -534,7 +673,7 @@ export function ResolumeView() {
             </section>
           </PanelErrorBoundary>
 
-          <h3 className="section-title">Controller</h3>
+          <h2 id="rz-ctrl">Controller</h2>
           <PanelErrorBoundary panelLabel="Resolume controller">
             <section className="panel">
               {actionsState.kind === 'loading' && <p className="text-muted">Loading actions…</p>}
@@ -549,7 +688,7 @@ export function ResolumeView() {
             </section>
           </PanelErrorBoundary>
 
-          <h3 className="section-title">Composition file</h3>
+          <h2 id="rz-upload">Composition file</h2>
           <PanelErrorBoundary panelLabel="Resolume composition upload">
             <section className="panel">
               <ResolumeCompositionUpload />

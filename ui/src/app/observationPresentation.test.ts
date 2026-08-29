@@ -35,7 +35,7 @@ describe('observationPresentation', () => {
       'FPP player',
       'Resolume',
     ])
-    expect(rows.find((row) => row.signal === 'fpp.status')?.href).toBe('/fpp/fpp-1')
+    expect(rows.find((row) => row.signal === 'fpp.status')?.href).toBe('/monitor/fleet/fpp/fpp-1')
     expect(rows.find((row) => row.signal === 'surface.pipeline.state')?.href).toBeNull()
   })
 })

@@ -89,7 +89,7 @@ describe('AssetUpload', () => {
 
     const banner = await screen.findByText(/rollback/i)
     expect(banner).toHaveTextContent(/asset-1/)
-    expect(banner.className).toContain('panel--warning')
+    expect(banner.className).toContain('asset-upload__rollback-banner')
   })
 
   it('does NOT render the rollback banner on an ordinary upload', async () => {

@@ -864,3 +864,80 @@
     transition: border-color 80ms linear, background-color 80ms linear, color 80ms linear;
   }
 }
+
+/* ------------------------------------------------------- planned, not built */
+
+/* A design idea that is drawn in the mocks but is not a working feature.
+ *
+ * This is deliberately NOT one of the four absences and must never be confused
+ * with one. Stale, unavailable, unobserved and empty all describe data the
+ * coordinator does or does not have. This describes a control that does not
+ * exist at all, so it takes its own channel: hatched rule, no status hue, and a
+ * stamp an operator cannot read past.
+ *
+ * The owner's rule: keep the good ideas visible, but never let one look live. */
+.planned {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+
+.planned__rule {
+  background: repeating-linear-gradient(135deg, transparent 0 4px, var(--hatch) 4px 8px);
+}
+
+.planned__body {
+  padding: 14px 16px;
+}
+
+.planned__stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  border: 1px solid var(--text-faint);
+  border-radius: 3px;
+  color: var(--text-faint);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.planned__title {
+  margin: 10px 0 0;
+  font: var(--t-subhead);
+  color: var(--text-muted);
+}
+
+.planned__why {
+  margin: 6px 0 0;
+  font: var(--t-small);
+  color: var(--text-faint);
+  max-width: 64ch;
+}
+
+/* Anything inside is a drawing of a control, never a control. It must not be
+ * focusable, must not submit, and must not look pressable. */
+.planned__preview {
+  margin-top: 12px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.planned__preview * {
+  cursor: not-allowed !important;
+}
+
+/* ------------------------------------------------------------ first connect */
+
+.first-connect__strips {
+  margin-top: 16px;
+}
+
+.first-connect__note {
+  margin: 16px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}

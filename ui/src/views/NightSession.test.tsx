@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NightSession } from './NightSession'
 import { ModelContext } from '../app/ModelContext'
@@ -25,7 +26,9 @@ afterEach(() => {
 function renderView(model: Model) {
   return render(
     <ModelContext.Provider value={model}>
-      <NightSession />
+      <MemoryRouter>
+        <NightSession />
+      </MemoryRouter>
     </ModelContext.Provider>,
   )
 }
@@ -77,7 +80,9 @@ describe('NightSession', () => {
     // The live frame lands first, while the GET above is still pending.
     rerender(
       <ModelContext.Provider value={makeModel({ nightSession: newerSession })}>
-        <NightSession />
+        <MemoryRouter>
+          <NightSession />
+        </MemoryRouter>
       </ModelContext.Provider>,
     )
     await waitFor(() => expect(screen.getByText('live')).toBeVisible())
@@ -283,7 +288,15 @@ describe('NightSession', () => {
     expect(getNightSessionConfigRevision).toHaveBeenCalledWith('halloween-night', 7)
     expect(configured).toHaveTextContent('Configured')
     expect(screen.getByRole('region', { name: 'Run of Show runtime executions' })).toHaveTextContent('resolved')
-    expect(screen.getAllByText('Last confirmed').length).toBe(2)
+    // The Configured Transition Steps table shows an Offset column instead
+    // of a "Last confirmed" column now (Show Night.dc.html): the offset is
+    // the configured fact this table has that the runtime table does not.
+    // "Last confirmed" still appears twice, but for a different reason
+    // than before: once as the Configured Transition Step evidence
+    // strip's own detail, and once as the RUNTIME table's own per-row
+    // confirmation-time column header (unchanged).
+    expect(screen.getAllByText(/Last confirmed/).length).toBe(2)
+    expect(configured).toHaveTextContent('-12000 ms')
   })
 
   it('places configured and runtime Run of Show content before runtime diagnostics in DOM, heading, and keyboard order', async () => {
@@ -305,9 +318,13 @@ describe('NightSession', () => {
     const positions = (name: string) => headings.findIndex((heading) => heading.textContent === name)
     expect(positions('Configured Transition Steps')).toBeGreaterThanOrEqual(0)
     expect(positions('Run of Show')).toBeGreaterThan(positions('Configured Transition Steps'))
-    expect(positions('Next Transition Step')).toBeGreaterThan(positions('Run of Show'))
     expect(positions('Transition evidence')).toBeGreaterThan(positions('Run of Show'))
     expect(positions('Power phase evidence')).toBeGreaterThan(positions('Run of Show'))
+    // "Next transition" moved out of `.show-night__detail` entirely, into
+    // the page's own Now/Next summary panel above the fold (Show
+    // Night.dc.html's "Next transition" box) — it is asserted separately
+    // below via its own accessible name rather than by this heading scan.
+    expect(screen.getByRole('heading', { name: 'Next transition' })).toBeVisible()
 
     const configured = screen.getByRole('heading', { name: 'Configured Transition Steps' })
     const runtime = screen.getByRole('region', { name: 'Run of Show runtime executions' })
@@ -480,14 +497,20 @@ describe('NightSession', () => {
     await waitFor(() => expect(screen.getByText('the outbox store could not be read')).toBeVisible())
   })
 
-  it('keeps operational commands out of Show Night, where Live Control owns them', async () => {
+  // Design change (UI-DESIGN-GUIDE.md section 8 / Show Night.dc.html):
+  // "Lifecycle commands live here even though Live Control also needs
+  // them." This used to assert the opposite (commands absent from Show
+  // Night); the new design puts them on both screens, each disabled with
+  // its own stated reason when the principal lacks night:command.
+  it('renders the night lifecycle commands here too, disabled with a stated reason when night:command is missing', async () => {
     getCurrentNightSession.mockResolvedValue({
       serverTime: '2026-08-22T00:00:00Z',
       session: makeNightSessionState(),
     })
     renderView(makeModel({ session: makeAuthenticatedSession({ scopes: ['node:read'] }) }))
-    await waitFor(() => expect(screen.getByText('FPP boundary')).toBeVisible())
-    expect(screen.queryByRole('button', { name: 'Prepare site' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Start night' })).toBeNull()
+    const prepareSite = await screen.findByRole('button', { name: 'Prepare site' })
+    expect(prepareSite).toBeDisabled()
+    const startNight = screen.getByRole('button', { name: 'Start night' })
+    expect(startNight).toBeDisabled()
   })
 })

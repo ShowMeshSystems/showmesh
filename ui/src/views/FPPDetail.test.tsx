@@ -78,9 +78,9 @@ afterEach(() => {
 function renderFPPDetail(instanceId: string, model: Model) {
   return render(
     <ModelContext.Provider value={model}>
-      <MemoryRouter initialEntries={[`/fpp/${instanceId}`]}>
+      <MemoryRouter initialEntries={[`/monitor/fleet/fpp/${instanceId}`]}>
         <Routes>
-          <Route path="/fpp/:instanceId" element={<FPPDetail />} />
+          <Route path="/monitor/fleet/fpp/:instanceId" element={<FPPDetail />} />
         </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
@@ -105,7 +105,8 @@ describe('FPPDetail', () => {
     })
     renderFPPDetail('fpp-1', makeModel({ fpp: [instance] }))
 
-    expect(screen.getByText('degraded')).toBeInTheDocument()
+    // Rendered twice (page header and instance-summary panel).
+    expect(screen.getAllByText('degraded').length).toBeGreaterThan(0)
     expect(screen.getByText('HTTP 503')).toBeInTheDocument()
     expect(screen.getByText('fpp.multisync.enabled')).toBeInTheDocument()
     expect(screen.getByText('fpp.status.playlist')).toBeInTheDocument()
@@ -216,8 +217,10 @@ describe('FPPDetail', () => {
     expect(warningsPanel).not.toBeNull()
     expect(within(warningsPanel!).getByText('A Log Level is set to Debug')).toBeInTheDocument()
     // Health badge is unaffected by the presence of warnings -- still
-    // exactly what the fixture's `health` field says.
-    expect(screen.getByText('healthy')).toBeInTheDocument()
+    // exactly what the fixture's `health` field says. Rendered twice
+    // (the page header and the instance-summary panel), so this asserts
+    // presence rather than uniqueness.
+    expect(screen.getAllByText('healthy').length).toBeGreaterThan(0)
   })
 
   // Spec section 4.2 / this build's best acceptance demonstration: a
@@ -607,9 +610,9 @@ describe("FPPDetail's current playback panel", () => {
       <ModelContext.Provider
         value={makeModel({ fpp: [instance], fppPlaylistEntryObservations: [observation] })}
       >
-        <MemoryRouter initialEntries={['/fpp/fpp-1']}>
+        <MemoryRouter initialEntries={['/monitor/fleet/fpp/fpp-1']}>
           <Routes>
-            <Route path="/fpp/:instanceId" element={<FPPDetail />} />
+            <Route path="/monitor/fleet/fpp/:instanceId" element={<FPPDetail />} />
           </Routes>
         </MemoryRouter>
       </ModelContext.Provider>,
@@ -624,9 +627,9 @@ describe("FPPDetail's current playback panel", () => {
           fppPlaylistEntryObservations: [{ ...observation, sequence: 2 }],
         })}
       >
-        <MemoryRouter initialEntries={['/fpp/fpp-1']}>
+        <MemoryRouter initialEntries={['/monitor/fleet/fpp/fpp-1']}>
           <Routes>
-            <Route path="/fpp/:instanceId" element={<FPPDetail />} />
+            <Route path="/monitor/fleet/fpp/:instanceId" element={<FPPDetail />} />
           </Routes>
         </MemoryRouter>
       </ModelContext.Provider>,

@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionsSettings } from './SettingsPages'
 import { ModelContext } from '../app/ModelContext'
@@ -77,9 +78,11 @@ const adminSession = makeAuthenticatedSession({
 
 function renderConfiguration(model: Model) {
   return render(
-    <ModelContext.Provider value={model}>
-      <ConnectionsSettings />
-    </ModelContext.Provider>,
+    <MemoryRouter>
+      <ModelContext.Provider value={model}>
+        <ConnectionsSettings />
+      </ModelContext.Provider>
+    </MemoryRouter>,
   )
 }
 

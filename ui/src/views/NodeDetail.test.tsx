@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { NodeDetail } from './NodeDetail'
 import { ModelContext } from '../app/ModelContext'
-import { makeCapability, makeModel, makeNode } from '../app/test-support/fixtures'
+import { makeCapability, makeModel, makeNode, makeNodeDeclaration } from '../app/test-support/fixtures'
 import type { Model } from '../app/types'
 
 afterEach(cleanup)
@@ -11,9 +11,9 @@ afterEach(cleanup)
 function renderNodeDetail(nodeId: string, model: Model) {
   return render(
     <ModelContext.Provider value={model}>
-      <MemoryRouter initialEntries={[`/nodes/${nodeId}`]}>
+      <MemoryRouter initialEntries={[`/monitor/fleet/node/${nodeId}`]}>
         <Routes>
-          <Route path="/nodes/:nodeId" element={<NodeDetail />} />
+          <Route path="/monitor/fleet/node/:nodeId" element={<NodeDetail />} />
         </Routes>
       </MemoryRouter>
     </ModelContext.Provider>,
@@ -131,5 +131,23 @@ describe('NodeDetail', () => {
     expect(within(table).getByRole('rowheader', { name: 'hello (advertisement)' })).toBeInTheDocument()
     expect(within(table).getByRole('rowheader', { name: 'last will' })).toBeInTheDocument()
     expect(within(table).getByRole('rowheader', { name: 'heartbeat' })).toBeInTheDocument()
+  })
+
+  it('renders the "Remove this node" danger zone only for a declared node, naming the general orphaning consequence', () => {
+    const declared = makeNode('node-declared', { declaration: makeNodeDeclaration({ declared: true, discoveryState: 'present' }) })
+    renderNodeDetail('node-declared', makeModel({ nodes: [declared] }))
+    expect(screen.getByRole('heading', { name: 'Remove this node' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Remove declaration/ })).toBeInTheDocument()
+  })
+
+  it('renders no danger zone for an undeclared node', () => {
+    const undeclared = makeNode('node-undeclared', { declaration: makeNodeDeclaration() })
+    renderNodeDetail('node-undeclared', makeModel({ nodes: [undeclared] }))
+    expect(screen.queryByRole('heading', { name: 'Remove this node' })).not.toBeInTheDocument()
+  })
+
+  it('carries the fleet-wide "Run discovery" control forward as a per-node header action', () => {
+    renderNodeDetail('node-a', makeModel({ nodes: [makeNode('node-a')] }))
+    expect(screen.getByRole('button', { name: 'Run discovery' })).toBeInTheDocument()
   })
 })

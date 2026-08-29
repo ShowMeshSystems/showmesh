@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Events } from './Events'
@@ -7,6 +8,13 @@ import { makeEvent, makeModel } from '../app/test-support/fixtures'
 import type { Model } from '../app/types'
 import { formatAbsolute } from '../app/time'
 
+// Monitor / Activity (owner ruling: Events.tsx + Audit.tsx merged into
+// ONE stream). Every assertion this file used to make about a bare
+// events-only table now expects the merged shape: Time / What happened /
+// Source columns up front, with severity/subject/category reachable
+// behind each row's own "Detail" disclosure (aria-expanded) rather than
+// inline — nothing measured here was dropped, only relocated, matching
+// the mock's own column collapse.
 afterEach(cleanup)
 
 function renderEvents(model: Model) {
@@ -19,9 +27,7 @@ function renderEvents(model: Model) {
   )
 }
 
-describe('Events', () => {
-  // spec section 6.4: gap:true is surfaced as permanently lost history,
-  // never as something a retry could recover.
+describe('Events (Monitor / Activity)', () => {
   it('surfaces gap:true as permanently lost history, with the oldest retained sequence', () => {
     renderEvents(makeModel({ eventsGap: true, oldestRetainedSeq: 42 }))
     expect(
@@ -36,54 +42,57 @@ describe('Events', () => {
     expect(screen.queryByText(/permanently lost to retention/)).not.toBeInTheDocument()
   })
 
-  // occurredAt: null means the occurrence time is genuinely unknown -- it
-  // must render as that, never silently substituted with recordedAt.
-  it('renders occurredAt: null as an unknown occurrence time, distinct from recordedAt', () => {
+  it('renders occurredAt: null as an unknown occurrence time behind the row detail, distinct from recordedAt', async () => {
+    const user = userEvent.setup()
     const event = makeEvent(1, { occurredAt: null, recordedAt: '2026-08-11T12:05:00.000Z', summary: 'test event' })
     renderEvents(makeModel({ events: [event] }))
+    await user.click(screen.getByRole('button', { name: 'Detail' }))
     expect(screen.getByText('occurrence time unknown')).toBeInTheDocument()
+    expect(screen.getByText(formatAbsolute('2026-08-11T12:05:00.000Z'))).toBeInTheDocument()
   })
 
-  it('renders events severity-distinguished with the resource reference', () => {
+  it('renders events severity-distinguished with the resource reference, reachable behind the row detail', async () => {
+    const user = userEvent.setup()
     const events = [
       makeEvent(2, { severity: 'critical', summary: 'critical thing happened', resource: { kind: 'fpp', id: 'fpp-1' } }),
       makeEvent(1, { severity: 'informational', summary: 'informational thing happened', resource: { kind: 'node', id: 'node-1' } }),
     ]
     renderEvents(makeModel({ events }))
+
+    const criticalRow = screen.getByText('critical thing happened').closest('tr')!
+    await user.click(within(criticalRow).getByRole('button', { name: 'Detail' }))
     expect(screen.getByText('critical')).toBeInTheDocument()
-    expect(screen.getByText('informational')).toBeInTheDocument()
     expect(screen.getByText('fpp: fpp-1')).toBeInTheDocument()
+
+    const infoRow = screen.getByText('informational thing happened').closest('tr')!
+    await user.click(within(infoRow).getByRole('button', { name: 'Detail' }))
+    expect(screen.getByText('informational')).toBeInTheDocument()
     expect(screen.getByText('node: node-1')).toBeInTheDocument()
   })
 
-  it('states plainly when no events have been recorded', () => {
+  it('states plainly when no activity has been recorded', () => {
     renderEvents(makeModel({ events: [] }))
-    expect(screen.getByText('No events recorded yet.')).toBeInTheDocument()
+    expect(screen.getByText('No activity recorded yet.')).toBeInTheDocument()
   })
 
-  // One row per event (real table), so the operator scanning for what
-  // just changed gets aligned columns instead of stacked panels.
-  it('renders as a table with one row per event and the expected column headers', () => {
+  it('renders as a table with one row per event and the merged column headers', () => {
     const events = [
       makeEvent(2, { summary: 'first event' }),
       makeEvent(1, { summary: 'second event' }),
     ]
     renderEvents(makeModel({ events }))
-    expect(screen.getByRole('table')).toBeInTheDocument()
+    const table = screen.getByRole('table', { name: 'Activity' })
+    expect(table).toBeInTheDocument()
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
-    expect(headers).toEqual(['Severity', 'Message', 'Subject', 'Occurred', 'Recorded', 'Category', 'Source'])
-    // Header row plus one row per event.
+    expect(headers).toEqual(['Time', 'What happened', 'Source', ''])
+    // Header row plus one row per event (each event has a possible, but
+    // collapsed by default, detail row -- collapsed rows render nothing).
     expect(screen.getAllByRole('row')).toHaveLength(events.length + 1)
   })
 
-  // occurredAt: null must still render its own row and its own "occurrence
-  // time unknown" cell, distinct from a populated recordedAt in the same row.
-  it('renders an event with an unknown occurrence time as its own table row', () => {
-    const event = makeEvent(1, { occurredAt: null, recordedAt: '2026-08-11T12:05:00.000Z', summary: 'unknown occurrence' })
-    renderEvents(makeModel({ events: [event] }))
-    const row = screen.getByText('unknown occurrence').closest('tr')
-    expect(row).not.toBeNull()
-    expect(row).toHaveTextContent('occurrence time unknown')
-    expect(row).toHaveTextContent(formatAbsolute('2026-08-11T12:05:00.000Z'))
+  it('states that audit rows are withheld, without blanking the system-event rows, when audit:read is not held', () => {
+    renderEvents(makeModel({ events: [makeEvent(1, { summary: 'a system event' })], session: null }))
+    expect(screen.getByText('a system event')).toBeInTheDocument()
+    expect(screen.getByText(/Operator-action \(audit\) rows are not shown/)).toBeInTheDocument()
   })
 })

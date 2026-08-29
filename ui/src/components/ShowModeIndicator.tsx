@@ -47,13 +47,21 @@ import { describeApiError } from '../app/session'
 // within a moment" and is three coordinator publish intervals.
 const SHOW_MODE_POLL_MS = 15_000
 
-type IndicatorState =
+export type ShowModeIndicatorState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'loaded'; config: ShowModeConfigResponse }
 
-export function ShowModeIndicator() {
-  const [state, setState] = useState<IndicatorState>({ kind: 'loading' })
+/**
+ * The polled GET /config/show.mode read, split out so the chrome bar's mode
+ * badge (ChromeBar.tsx) and this file's own rail-footer indicator render
+ * from the exact same fetch/poll instead of each opening a second one --
+ * see this file's header comment for why the read has to exist at all
+ * (config:write-gated would render nothing for the operator standing at
+ * the console).
+ */
+export function useShowModeState(): ShowModeIndicatorState {
+  const [state, setState] = useState<ShowModeIndicatorState>({ kind: 'loading' })
 
   useEffect(() => {
     let cancelled = false
@@ -78,6 +86,12 @@ export function ShowModeIndicator() {
       clearInterval(timer)
     }
   }, [])
+
+  return state
+}
+
+export function ShowModeIndicator() {
+  const state = useShowModeState()
 
   if (state.kind === 'loading') {
     return (

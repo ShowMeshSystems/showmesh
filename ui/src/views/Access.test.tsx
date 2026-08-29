@@ -76,11 +76,16 @@ const adminSession = makeAuthenticatedSession({
   scopesState: 'current',
 })
 
+// Access.tsx links out to Settings (its breadcrumb) and Monitor › Activity
+// (the Attribution section), so it needs a Router context even outside the
+// "leaving the page" test below.
 function renderAccess(model: Model) {
   return render(
-    <ModelContext.Provider value={model}>
-      <Access />
-    </ModelContext.Provider>,
+    <MemoryRouter initialEntries={['/access']}>
+      <ModelContext.Provider value={model}>
+        <Access />
+      </ModelContext.Provider>
+    </MemoryRouter>,
   )
 }
 
@@ -107,7 +112,7 @@ describe('Access: tokens panel', () => {
     const user = userEvent.setup()
     renderAccess(makeModel({ session: adminSession }))
 
-    await user.click(await screen.findByRole('button', { name: 'Tokens' }))
+    await user.click(await screen.findByRole('button', { name: 'Credentials' }))
     expect(await screen.findByText('smt_a1b2…')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /issue token/i }))
@@ -120,7 +125,7 @@ describe('Access: tokens panel', () => {
     expect(screen.queryByText(/loading tokens/i)).not.toBeInTheDocument()
     expect(screen.getAllByRole('table')).toHaveLength(2)
     for (const table of screen.getAllByRole('table')) {
-      expect(table.parentElement).toHaveClass('table-scroll')
+      expect(table.parentElement).toHaveClass('table-wrap')
     }
     await waitFor(() => expect(listPrincipalTokens).toHaveBeenCalledTimes(2))
   })
@@ -134,7 +139,7 @@ describe('Access: tokens panel', () => {
     const user = userEvent.setup()
     renderAccess(makeModel({ session: adminSession }))
 
-    await user.click(await screen.findByRole('button', { name: 'Tokens' }))
+    await user.click(await screen.findByRole('button', { name: 'Credentials' }))
     const row = (await screen.findByText('smt_a1b2…')).closest('tr')!
     await user.click(within(row).getByRole('button', { name: /revoke/i }))
 
@@ -179,5 +184,42 @@ describe('Access: independent unsaved owners', () => {
     await user.click(screen.getByRole('link', { name: 'Leave access' }))
 
     expect(screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' })).toBeInTheDocument()
+  })
+})
+
+// OWNER RULING 2026-08-29: the design's invented fields render, stamped,
+// via PlannedFeature (role="note", "Not built") rather than being
+// silently omitted or rendered as an absence. This pins that all five
+// stay stamped, and that the audit-store/bootstrap-provenance pair
+// specifically moved OFF the UnavailableBlock vocabulary those facts
+// used before the ruling -- PlannedFeature describes a surface that was
+// never built, not data the coordinator holds or withheld.
+describe("Access: planned-feature stamps for the design's invented fields", () => {
+  it('stamps all five invented ideas as "Not built", never as one of the four absences', async () => {
+    listPrincipals.mockResolvedValue({ serverTime: '2026-08-17T00:00:00Z', principals: [machinePrincipal] })
+    const user = userEvent.setup()
+    renderAccess(makeModel({ session: adminSession }))
+
+    const notes = await screen.findAllByRole('note')
+    const titles = notes.map((n) => n.getAttribute('aria-label'))
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        'Not built: Scopes held, for every principal',
+        'Not built: Last used, and a revoke suggestion built on it',
+        "Not built: Audit store status, and this session's own attribution completeness",
+        'Not built: Bootstrap claim provenance',
+      ]),
+    )
+    // The audit-store/bootstrap pair renders with the "planned" vocabulary
+    // (a Not-built stamp), never the shared-state-block absence vocabulary
+    // those two facts used before the ruling.
+    const auditNote = notes.find((n) => n.getAttribute('aria-label')?.startsWith('Not built: Audit store status'))
+    expect(auditNote).toHaveClass('planned')
+    expect(auditNote?.querySelector('.shared-state-block')).toBeNull()
+
+    await user.click(await screen.findByRole('button', { name: 'Credentials' }))
+    expect(
+      await screen.findByRole('note', { name: 'Not built: Sessions and devices for this principal' }),
+    ).toBeInTheDocument()
   })
 })

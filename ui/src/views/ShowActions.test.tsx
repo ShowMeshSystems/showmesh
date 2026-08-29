@@ -1,28 +1,20 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ShowActions } from './ShowActions'
 import { ModelContext } from '../app/ModelContext'
 import { makeModel } from '../app/test-support/fixtures'
 import { makeAuthenticatedSession } from '../api/test-support/fixtures'
 import type { Model } from '../app/types'
 
-// Same isolation pattern as Macros.test.tsx: mock the API calls this view
-// makes.
-const { listConfigObjects, listActionBindings } = vi.hoisted(() => ({
-  listConfigObjects: vi.fn(),
-  listActionBindings: vi.fn(),
-}))
+// An action never appears on its own in a running show (UI-DESIGN-GUIDE.md
+// section 3), so the standalone action list folded into the Automation
+// tab — see ShowActions.tsx's own doc comment and Macros.test.tsx's
+// identical pattern.
+const { listConfigObjects, listActionBindings } = vi.hoisted(() => ({ listConfigObjects: vi.fn(), listActionBindings: vi.fn() }))
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return { ...actual, listConfigObjects, listActionBindings }
-})
-
-beforeEach(() => {
-  // Best-effort by default — most sub-tests below care only about the
-  // action list, not the binding sweep; see the dedicated binding test.
-  listActionBindings.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -31,58 +23,37 @@ afterEach(() => {
   listActionBindings.mockReset()
 })
 
-function renderShowActions(model: Model) {
-  return render(
-    <ModelContext.Provider value={model}>
-      <MemoryRouter>
-        <ShowActions />
-      </MemoryRouter>
-    </ModelContext.Provider>,
-  )
-}
-
 const operatorSession = makeAuthenticatedSession({
   principal: { id: 'p-1', name: 'operator-1', kind: 'human', role: 'operator' },
   scopes: ['show:macro:run'],
 })
 
-const listResponse = {
-  serverTime: '2026-08-18T00:00:00Z',
-  kind: 'show.action' as const,
-  objects: [
-    { id: 'projectors-on', label: 'Projectors on', show: 'halloween-2026', currentRevision: 1, updatedAt: '2026-08-18T00:00:00Z' },
-  ],
+function render_(model: Model, path: string) {
+  return render(
+    <ModelContext.Provider value={model}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/actions" element={<ShowActions />} />
+          <Route path="/shows/:showId/automation" element={<ShowActions />} />
+        </Routes>
+      </MemoryRouter>
+    </ModelContext.Provider>,
+  )
 }
 
-describe('ShowActions', () => {
-  it('renders the action list with no filter by default', async () => {
-    listConfigObjects.mockResolvedValue(listResponse)
-    renderShowActions(makeModel({ session: operatorSession }))
-
-    await waitFor(() => expect(screen.getByText('Projectors on')).toBeVisible())
-    expect(listConfigObjects).toHaveBeenCalledWith('show.action', undefined)
+describe('ShowActions (old un-scoped mounting)', () => {
+  it('states that actions moved into a show workspace tab, rather than guessing a show', () => {
+    render_(makeModel({ session: operatorSession }), '/actions')
+    expect(screen.getByRole('status')).toHaveTextContent(/Actions live inside a show/)
+    expect(listConfigObjects).not.toHaveBeenCalled()
   })
+})
 
-  // E7-3 deliverable 4: the UI half of `?show=` parity with the CLI and
-  // API.
-  it('narrows the list by show when the operator types into the show filter', async () => {
-    listConfigObjects.mockResolvedValue(listResponse)
-    const user = userEvent.setup()
-    renderShowActions(makeModel({ session: operatorSession }))
-
-    await waitFor(() => expect(listConfigObjects).toHaveBeenCalledWith('show.action', undefined))
-    await user.type(screen.getByLabelText('Narrow by show'), 'halloween-2026')
-    await waitFor(() => expect(listConfigObjects).toHaveBeenCalledWith('show.action', 'halloween-2026'))
-  })
-
-  // The pre-show binding check renders per row.
-  it('renders a broken-binding badge for an action whose target no longer resolves', async () => {
-    listConfigObjects.mockResolvedValue(listResponse)
-    listActionBindings.mockResolvedValue([
-      { actionId: 'projectors-on', label: 'Projectors on', show: 'halloween-2026', state: 'broken', reason: 'instance "player-01" is not a configured FPP endpoint' },
-    ])
-    renderShowActions(makeModel({ session: operatorSession }))
-
-    await waitFor(() => expect(screen.getByText('broken')).toBeVisible())
+describe('ShowActions (show-scoped mounting)', () => {
+  it('delegates to the Automation workspace once a showId is present in the route', async () => {
+    listConfigObjects.mockResolvedValue({ serverTime: '2026-08-28T00:00:00Z', kind: 'show.macro', objects: [] })
+    listActionBindings.mockResolvedValue([])
+    render_(makeModel({ session: operatorSession }), '/shows/winter-ridge-2026/automation')
+    expect(await screen.findByText('Actions')).toBeVisible()
   })
 })

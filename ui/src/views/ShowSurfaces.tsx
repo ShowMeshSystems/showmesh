@@ -1,137 +1,183 @@
 import { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { listConfigObjects } from '../api'
-import { describeApiError, evaluateAnyScope, evaluateScope } from '../app/session'
-import { useModelContext } from '../app/ModelContext'
-import { formatAbsolute } from '../app/time'
-import type { ConfigObjectSummary } from '../app/types'
-import { showWorkspacePath } from '../components/showWorkspacePaths'
+import { useNavigate, useParams } from 'react-router-dom'
+import { getShowSurface, listConfigObjects } from '../api'
+import { ScopedButton } from '../components/ScopedButton'
+import { ShowWorkspaceFrame, useShowWorkspaceData } from '../components/ShowWorkspace'
+import { showSurfaceNewPath, showSurfacePath } from '../components/showWorkspacePaths'
+import '../styles/shows.css'
+import type { ConfigObjectSummary, ConfigShowSurface } from '../app/types'
 
-// Track G seam G-8: the show.surface list, narrowable by show
-// (?show=<id>, api/openapi.yaml's own `GET /config/show.surface`
-// parameter) — mirrored here as a query param so the filter is
-// shareable/bookmarkable, matching this app's existing URL-is-state
-// posture elsewhere (route params on every other detail view).
-const READ_SCOPES = ['show:macro:run', 'config:write']
+// Show Presentation.dc.html: Surfaces plus the virtual matrix map and the
+// derived channel count. The map draws one band across every surface's
+// claimed channel range, with an explicit "No overlaps" verdict -
+// overlapping ranges are a real authoring error that three separate
+// forms cannot reveal on their own.
+//
+// The mock's own band is drawn across a fixed 32,768-channel universe.
+// That figure is the mock's illustrative scenario, not a field this
+// API returns anywhere (grepped api/openapi.yaml, schema.d.ts,
+// pkg/capability/id.go: no total-matrix-capacity field exists), so this
+// view does not render it as if it were a coordinator fact. It instead
+// derives the band's known extent from the surfaces actually configured
+// (the highest claimed endChannel) and states plainly that no fixed
+// capacity is reported, rather than inventing an "unallocated" segment
+// sized against a number nothing confirms.
 const CONFIG_WRITE_SCOPE = 'config:write'
 
-type LoadState =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string }
-  | { kind: 'loaded'; objects: ConfigObjectSummary[] }
+interface SurfaceRow {
+  summary: ConfigObjectSummary
+  payload: ConfigShowSurface | null
+}
 
 export function ShowSurfaces() {
-  const model = useModelContext()
-  const readGate = evaluateAnyScope(model.session, model.sessionFetchFailed, READ_SCOPES)
-  const writeGate = evaluateScope(model.session, model.sessionFetchFailed, CONFIG_WRITE_SCOPE)
-  const [searchParams, setSearchParams] = useSearchParams()
-  const showFilter = searchParams.get('show') ?? ''
+  const { showId = '' } = useParams<{ showId: string }>()
+  const navigate = useNavigate()
+  const data = useShowWorkspaceData(showId)
 
-  const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [rows, setRows] = useState<SurfaceRow[] | 'loading' | 'error'>('loading')
 
   useEffect(() => {
-    if (!readGate.allowed) return
+    if (data.kind !== 'loaded') return
     let cancelled = false
-    setState({ kind: 'loading' })
-    listConfigObjects('show.surface', showFilter === '' ? undefined : showFilter)
-      .then((resp) => {
+    setRows('loading')
+    listConfigObjects('show.surface', showId)
+      .then(async (resp) => {
+        const payloads = await Promise.all(
+          resp.objects.map((s) =>
+            getShowSurface(s.id)
+              .then((r) => r.payload)
+              .catch(() => null),
+          ),
+        )
         if (cancelled) return
-        setState({ kind: 'loaded', objects: resp.objects })
+        setRows(resp.objects.map((summary, i) => ({ summary, payload: payloads[i] ?? null })))
       })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setState({ kind: 'error', message: describeApiError(err) })
+      .catch(() => {
+        if (!cancelled) setRows('error')
       })
     return () => {
       cancelled = true
     }
-  }, [readGate.allowed, showFilter])
+  }, [data.kind, showId])
+
+  const validRows = Array.isArray(rows) ? rows.filter((r): r is SurfaceRow & { payload: ConfigShowSurface } => r.payload !== null) : []
+  const knownExtent = validRows.reduce((max, r) => Math.max(max, r.payload.channelRange.startChannel + r.payload.channelRange.channelCount - 1), 0)
+  const overlaps: string[] = []
+  for (let i = 0; i < validRows.length; i++) {
+    for (let j = i + 1; j < validRows.length; j++) {
+      const a = validRows[i]!.payload.channelRange
+      const b = validRows[j]!.payload.channelRange
+      const aEnd = a.startChannel + a.channelCount - 1
+      const bEnd = b.startChannel + b.channelCount - 1
+      if (a.startChannel <= bEnd && b.startChannel <= aEnd) {
+        overlaps.push(`${validRows[i]!.summary.label} and ${validRows[j]!.summary.label}`)
+      }
+    }
+  }
 
   return (
-    <div className="operator-page authoring-page">
-      <div className="operator-page__header">
-        <h2 className="panel__title">Surfaces</h2>
-        {writeGate.allowed ? (
-          <Link className="entity-link" to="/config/show.surface/new">
-            New surface
-          </Link>
-        ) : (
-          <span className="scoped-button">
-            <button type="button" disabled aria-disabled="true" title={writeGate.reason}>
-              New surface
-            </button>
-            <span className="scoped-button__reason">{writeGate.reason}</span>
-          </span>
-        )}
+    <ShowWorkspaceFrame showId={showId} active="presentation" data={data}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <h2 className="t-heading">Surfaces</h2>
+        <ScopedButton requiredScope={CONFIG_WRITE_SCOPE} className="btn btn--primary" onClick={() => navigate(showSurfaceNewPath(showId))}>
+          New surface
+        </ScopedButton>
       </div>
-      {/* A surface owns a logical canvas, its virtual-matrix channel extraction, and its output
-          (ADR-026); a manual channel range is a permanent, first-class configuration path, not a
-          fallback (ADR-027 decision 4). */}
-      <p className="operator-page__lede text-muted">
-        A surface owns one node&rsquo;s canvas, its virtual-matrix channel extraction, and its
-        output. A manual channel range is a permanent, first-class way to configure one, not a
-        fallback.
+      <p className="t-small shows-muted" style={{ maxWidth: '74ch', marginTop: 8 }}>
+        Each surface extracts one channel range from the show&rsquo;s virtual matrix and renders it
+        to one node, over exactly one transport. Select a surface to edit it.
       </p>
 
-      <label className="form-field" style={{ maxWidth: '20rem' }}>
-        Narrow by show
-        <input
-          type="text"
-          placeholder="show id, or leave blank for every show"
-          value={showFilter}
-          onChange={(e) => {
-            const value = e.target.value
-            setSearchParams(value === '' ? {} : { show: value })
-          }}
-        />
-      </label>
-
-      {!readGate.allowed && (
-        <p className="panel panel--error" role="status">
-          {readGate.reason}
+      {rows === 'loading' && (
+        <p className="ruled-strip ruled-strip--loading" role="status">
+          <span className="ruled-strip__state t-meta">Loading</span>
+          <span className="ruled-strip__explanation">Reading this show&rsquo;s surfaces.</span>
+        </p>
+      )}
+      {rows === 'error' && (
+        <p className="ruled-strip ruled-strip--failed" role="alert">
+          <span className="ruled-strip__state t-meta">Failed</span>
+          <span className="ruled-strip__explanation">Could not load this show&rsquo;s surfaces.</span>
         </p>
       )}
 
-      {readGate.allowed && state.kind === 'loading' && <p className="text-muted">Loading surfaces…</p>}
-      {readGate.allowed && state.kind === 'error' && (
-        <p className="panel panel--error" role="alert">
-          {state.message}
-        </p>
+      {validRows.length > 0 && (
+        <div className="matrix-card">
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <h3 className="t-meta shows-faint">Virtual matrix &middot; known extent {knownExtent.toLocaleString()} channels</h3>
+            <span className="t-small" style={{ color: overlaps.length === 0 ? 'var(--good-fg)' : 'var(--bad-fg)' }}>
+              {overlaps.length === 0 ? 'No overlaps' : `Overlap: ${overlaps.join('; ')}`}
+            </span>
+          </div>
+          <div className="matrix-band">
+            {validRows
+              .slice()
+              .sort((a, b) => a.payload.channelRange.startChannel - b.payload.channelRange.startChannel)
+              .map((r) => (
+                <div
+                  key={r.summary.id}
+                  className="matrix-band__segment matrix-band__segment--claimed"
+                  style={{ width: `${(r.payload.channelRange.channelCount / knownExtent) * 100}%` }}
+                >
+                  <span className="matrix-band__label t-meta shows-faint">{r.summary.label.toUpperCase()}</span>
+                </div>
+              ))}
+          </div>
+          <p className="t-small shows-muted" style={{ marginTop: 10 }}>
+            {validRows.length} surface{validRows.length === 1 ? '' : 's'} claim channels 1&ndash;{knownExtent.toLocaleString()}.
+            This API reports no fixed matrix capacity, so no unallocated remainder is shown beyond
+            the highest channel a surface actually claims.
+          </p>
+        </div>
       )}
-      {readGate.allowed && state.kind === 'loaded' && (
-        <>
-          {state.objects.length === 0 ? (
-            <p className="text-muted">No surfaces are configured yet.</p>
-          ) : (
-            <div className="table-scroll">
-              <table className="config-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Show</th>
-                    <th>Revision</th>
-                    <th>Updated</th>
+
+      {validRows.length > 0 && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <div className="table-wrap">
+            <table className="table table--full" aria-label="Surfaces">
+              <thead>
+                <tr>
+                  <th scope="col">Surface</th>
+                  <th scope="col">Geometry</th>
+                  <th scope="col">Output</th>
+                </tr>
+              </thead>
+              <tbody>
+                {validRows.map((r) => (
+                  <tr key={r.summary.id} data-clickable onClick={() => navigate(showSurfacePath(showId, r.summary.id))}>
+                    <td>
+                      <a className="entity-link" href={showSurfacePath(showId, r.summary.id)} onClick={(e) => e.preventDefault()}>
+                        {r.summary.label}
+                      </a>
+                      <br />
+                      <span className="t-data shows-id-meta">
+                        {r.payload.node} &middot; ch {r.payload.channelRange.startChannel.toLocaleString()}&ndash;
+                        {(r.payload.channelRange.startChannel + r.payload.channelRange.channelCount - 1).toLocaleString()}
+                      </span>
+                    </td>
+                    <td className="t-data shows-id-meta">
+                      {r.payload.geometry.width}&times;{r.payload.geometry.height} {r.payload.geometry.pixelFormat}
+                    </td>
+                    <td>
+                      <span className={`transport-chip${r.payload.output.transport === 'ndi' ? '' : ' transport-chip--accent'}`}>
+                        {r.payload.output.transport.toUpperCase()}
+                      </span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {state.objects.map((obj) => (
-                    <tr key={obj.id}>
-                      <td>
-                        <Link className="entity-link" to={`/config/show.surface/${encodeURIComponent(obj.id)}`}>
-                          {obj.label}
-                        </Link>
-                      </td>
-                      <td><Link className="entity-link" to={showWorkspacePath(obj.show)}>{obj.show}</Link></td>
-                      <td>{obj.currentRevision}</td>
-                      <td>{formatAbsolute(obj.updatedAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="table__footer-note">Rendering evidence is not fetched here; see each surface&rsquo;s node for what it reports.</div>
+        </div>
       )}
-    </div>
+
+      {Array.isArray(rows) && rows.length === 0 && (
+        <p className="ruled-strip ruled-strip--empty" role="status">
+          <span className="ruled-strip__state t-meta">Empty</span>
+          <span className="ruled-strip__explanation">No surfaces are configured in this show yet.</span>
+        </p>
+      )}
+    </ShowWorkspaceFrame>
   )
 }
