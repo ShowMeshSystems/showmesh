@@ -12,56 +12,44 @@ my recommendation, and what the answer unblocks. Answered entries move to
 
 ## Open
 
-### D-001 Density switch: ship it or drop it
-
-**What.** The design-system specimen carries a `data-density="compact"` axis
-that swaps row and control height from 34px to 30px. No screen mock uses it, and
-the design guide does not mention it in section 1 or section 2.
-
-**Why now.** It is a kit-level element. If it ships, every table row and control
-in the kit reads its height from `--row-h` / `--ctrl-h` rather than a literal, and
-that shape is hard to retrofit later.
-
-**Options.**
-- A. Build the density axis into the kit now, expose it later as a setting.
-- B. Build the kit with literal 30 / 34 / 48px heights, no density axis.
-
-**Recommendation.** A. The variables cost nothing now and retrofitting them
-across every table later is expensive. No UI to switch it until you ask for one.
-
-**Unblocks.** Kit control and table CSS.
-
-**Ruling:**
-
----
-
-### D-002 Where the coordinator build string lives
-
-**What.** The specimen's chrome bar shows `v0.9.4 · a3f91c2 · API v1` on the
-right side. The Dashboard mock's chrome bar does not: it shows now-playing,
-connection, and principal, and the design guide's section 2 list of bar contents
-omits the build string entirely.
-
-**Why now.** The chrome bar is kit-level and is on every screen. The guide is
-explicit that the bar must not wrap, so anything added to it costs horizontal
-room the now-playing group needs.
-
-**Options.**
-- A. Follow the guide's section 2 list. No build string in the bar. Put it on
-  Settings, or in the Monitor Capabilities facet.
-- B. Follow the specimen. Keep the build string in the bar and shrink the
-  now-playing group.
-
-**Recommendation.** A. The guide is normative and names the bar's contents
-exactly; the specimen was demonstrating the bar's construction, not its final
-payload. Losing now-playing room during a show is the worse trade.
-
-**Unblocks.** ChromeBar component.
-
-**Ruling:**
+(none)
 
 ---
 
 ## Settled
 
-(none yet)
+### D-001 Density switch: ship it or drop it — 2026-08-29
+
+**Ruling: A.** The density axis ships in the kit. Every control and table row
+reads its height from `--ctrl-h` / `--row-h`, with `[data-density='compact']`
+swapping 34px for 30px. No UI switches it until Eric asks for one; the specimen
+exposes it for inspection.
+
+### D-002 Where the coordinator build string lives — 2026-08-29
+
+**Ruling: A.** The guide's §2 list is the chrome bar's contents. No build string
+in the bar. It goes on Settings or the Monitor Capabilities facet, decided in
+that seam. The now-playing group keeps its horizontal room.
+
+### D-003 The five routed screens with no mock — 2026-08-29
+
+**Ruling: fold each into the mocked screen it belongs to.** Do not invent
+layout for them and do not leave them on the old stylesheets.
+
+- **Playlist readiness** (`/monitor/readiness`) folds into the playlist
+  configuration page, not Show Night. It is an authoring-time verdict about a
+  playlist.
+- **FPP playlist definitions** (`/monitor/fleet/playlist-definitions/...`) fold
+  into the same playlist configuration page.
+- **Night sessions** (`shows/:id/night-sessions*`) are Show Night. The list and
+  detail routes fold into the Show Night screen.
+- **Asset manifest** (`/assets/manifest`) becomes a new Monitor facet. This
+  amends the guide's four-facet list in §3.
+- **Top-level `/assets`** stays a rail destination, per the guide's §3 Author
+  group, rebuilt from the `Show Assets` mock. (Not raised in the question; I am
+  recording the reading I am building to. Say so if it is wrong.)
+
+### D-004 Execution shape — 2026-08-29
+
+**Ruling: sequential, one PR per seam, in this worktree.** No parallel screen
+worktrees; every seam touches the route table and the shared kit.
