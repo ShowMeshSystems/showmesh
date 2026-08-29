@@ -198,100 +198,6 @@ func TestInterruptReleaseIgnoresRestartPolicyAndResumesFromPosition(t *testing.T
 	}
 }
 
-// mutation target: removeInterrupterLocked's fallback fault report. When
-// the interrupted session's own desired state changes
-// while suspended — here, a second Apply bumps the playlist's
-// OwnerRevision, exactly the "handle went stale" case the stale-handle
-// branch exists for — the bookmark this release would otherwise resume
-// from no longer resolves, so it falls back to position 0. That fallback
-// must be reported as a fault, not just logged, so an operator can tell
-// "resumed where it was" from "could not, so it restarted".
-func TestInterruptReleaseFaultsWhenBookmarkCannotBeResolved(t *testing.T) {
-	c := newClock(time.Now())
-	dir := t.TempDir()
-	store := NewFileSessionStore(dir)
-	m := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
-	ctx := context.Background()
-
-	playlist := twoItemPlaylist(t, dir)
-	m.Apply(ctx, "show", "show-apply", 1, pkgaudio.ApplyRequest{
-		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleShow),
-		Playlist:   pkgaudio.SetField(playlist),
-	})
-	if r := m.Start(ctx, "show", "show-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
-		t.Fatalf("show start: unexpectedly refused: %+v", r)
-	}
-
-	c.advance(700 * time.Millisecond)
-
-	annRef := writeTestAsset(t, dir, "ann.wav", "asset-ann", []byte("ann"))
-	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
-
-	show, _ := m.get("show")
-	show.mu.Lock()
-	if show.state != pkgaudio.StatePaused {
-		state := show.state
-		show.mu.Unlock()
-		t.Fatalf("show while interrupted: state=%q, want paused", state)
-	}
-	show.mu.Unlock()
-
-	// The desired state changes while suspended: Apply is state-agnostic
-	// (Manager.Apply never checks s.state), so this succeeds even though
-	// show is paused/interrupted, bumping OwnerRevision past what the
-	// bookmark captured at interrupt time.
-	newA := writeTestAsset(t, dir, "a2.wav", "asset-a2", []byte("a2a2"))
-	changed := playlist
-	changed.OwnerRevision = 2
-	changed.Items = []pkgaudio.PlaylistItem{
-		{ItemID: "item-a", Index: 0, Media: newA},
-		{ItemID: "item-b", Index: 1, Media: playlist.Items[1].Media},
-	}
-	if r := m.Apply(ctx, "show", "show-apply-2", 3, pkgaudio.ApplyRequest{
-		Playlist: pkgaudio.SetField(changed),
-	}); r.Outcome == pkgaudio.OutcomeRefused {
-		t.Fatalf("apply while interrupted: unexpectedly refused: %+v", r)
-	}
-
-	m.Stop(ctx, "ann", "inv-ann-stop", 3)
-
-	show.mu.Lock()
-	if show.state != pkgaudio.StatePlaying {
-		state := show.state
-		show.mu.Unlock()
-		t.Fatalf("show after ann stopped: state=%q, want playing", state)
-	}
-	snap := show.snapshotLocked(ctx)
-	fault, faultReason := show.fault, show.faultReason
-	show.mu.Unlock()
-	if !snap.PositionKnown || snap.Position != 0 {
-		t.Fatalf("show position after an unresolvable bookmark = %v (known=%v), want exactly 0 (the deliberate fallback)", snap.Position, snap.PositionKnown)
-	}
-	if fault != pkgaudio.FaultOther {
-		t.Fatalf("show.fault = %q, want %q reporting the lost bookmark", fault, pkgaudio.FaultOther)
-	}
-	if faultReason == "" {
-		t.Fatal("show.faultReason is empty, want a reason naming the unresolved bookmark")
-	}
-
-	// A second, ordinary interrupt cycle succeeds via the fast Resume
-	// path (the handle is valid again after the fresh prepare above) and
-	// must clear the standing fault: it must not stick to a session that
-	// is, from here on, playing correctly.
-	ann2Ref := writeTestAsset(t, dir, "ann2.wav", "asset-ann2", []byte("ann2"))
-	startPlaying(t, m, ctx, "ann2", ann2Ref, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
-	m.Stop(ctx, "ann2", "inv-ann2-stop", 4)
-
-	show.mu.Lock()
-	defer show.mu.Unlock()
-	if show.state != pkgaudio.StatePlaying {
-		t.Fatalf("show after ann2 stopped: state=%q, want playing", show.state)
-	}
-	if show.fault != pkgaudio.FaultNone {
-		t.Fatalf("show.fault = %q after a subsequent successful resume, want %q (cleared)", show.fault, pkgaudio.FaultNone)
-	}
-}
-
 // mutation target: removeInterrupterLocked's branch selector no longer
 // consulting t's Resume policy — a Restart-policy session whose
 // handle is still valid must still take the Resume route, not the
@@ -535,5 +441,45 @@ func TestInterruptedSessionResumeFailureStaysRecoverable(t *testing.T) {
 	bg.mu.Unlock()
 	if finalState != pkgaudio.StatePlaying {
 		t.Fatalf("bg state after recovery Resume = %q, want Playing", finalState)
+	}
+}
+
+// mutation target: removeInterrupterLocked's fast-Resume success path
+// must not clear a fault it did not itself cause. A session can carry a
+// genuine standing fault (e.g. a freeze from a failed Seek) while paused
+// and interrupted; the announcement's own release succeeding must not
+// erase evidence of a problem that predates and is unrelated to it.
+func TestInterruptReleasePreservesAnUnrelatedStandingFault(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
+
+	bg, _ := m.get("bg")
+	bg.mu.Lock()
+	if bg.state != pkgaudio.StatePaused {
+		state := bg.state
+		bg.mu.Unlock()
+		t.Fatalf("precondition: bg should be paused while interrupted, got %q", state)
+	}
+	// Stands in for a failed Seek while paused: a genuine fault recorded
+	// before the announcement ends, unrelated to the interrupt itself.
+	bg.setFaultLocked(pkgaudio.FaultFreeze, "engine reported a freeze")
+	bg.mu.Unlock()
+
+	m.Stop(ctx, "ann", "inv-ann-stop", 3)
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if bg.state != pkgaudio.StatePlaying {
+		t.Fatalf("bg after ann stopped: state=%q, want playing", bg.state)
+	}
+	if bg.fault != pkgaudio.FaultFreeze {
+		t.Fatalf("bg.fault = %q after the announcement released, want %q (an unrelated standing fault must survive)", bg.fault, pkgaudio.FaultFreeze)
 	}
 }

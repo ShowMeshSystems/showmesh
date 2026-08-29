@@ -2,7 +2,6 @@ package audio
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
@@ -153,11 +152,6 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 		t.bookmark = nil
 		t.timingKnown = true
 		t.lastObservedAt = obs.ObservedAt
-		// A genuine engine observation, not a bare state transition: the
-		// same revalidation bar [Session.clearFaultLocked]'s own doc
-		// comment states, satisfied here by Resume actually succeeding
-		// rather than merely being attempted.
-		t.clearFaultLocked()
 		m.startLTCLocked(ctx, t, obs.Position)
 		t.persistBestEffortLocked("state change")
 		return
@@ -169,15 +163,17 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	// [Manager.restoreOne] uses for crash recovery, against a fresh
 	// handle. Still tries to land on the bookmarked position, not 0 — see
 	// this function's own doc comment — landing on 0 only when the
-	// bookmark itself cannot be resolved against the fresh handle, which
-	// is reported as a fault (not just logged) so an operator can tell
-	// "resumed where it was" from "could not, so it restarted".
+	// bookmark itself cannot be resolved against the fresh handle. This
+	// is [Manager.restoreOne]'s own IDENTICAL fallback (restore.go), and
+	// deliberately matches its choice not to fault: this case is only
+	// reachable through a deliberate operator Apply while suspended, so
+	// faulting it would report the operator's own intent as a fault on a
+	// session that is, immediately after, playing the new item
+	// correctly. Logged, same as there.
 	position := time.Duration(0)
-	var bookmarkLostReason string
 	resolved, err := t.resolveBookmarkPositionLocked(item)
 	if err != nil {
-		bookmarkLostReason = fmt.Sprintf("interrupt resume bookmark could not be resolved, restarted from 0: %v", err)
-		m.logf("audio session %s: %s", t.id, bookmarkLostReason)
+		m.logf("audio session %s: interrupt resume bookmark could not be resolved, starting from 0: %v", t.id, err)
 	} else {
 		position = resolved
 	}
@@ -204,14 +200,6 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 	t.state = pkgaudio.StatePlaying
 	t.timingKnown = true
 	t.lastObservedAt = obs.ObservedAt
-	if bookmarkLostReason != "" {
-		// [Session.prepareLocked]'s own success above already ran
-		// [Session.clearFaultLocked] — overridden here because a session
-		// playing correctly, just from the wrong position, is still a
-		// fact an operator needs surfaced, and this is the only shipped
-		// signal (audio_session.fault.kind/reason) that carries a reason.
-		t.setFaultLocked(pkgaudio.FaultOther, bookmarkLostReason)
-	}
 	m.startLTCLocked(ctx, t, position)
 	t.persistBestEffortLocked("state change")
 }
