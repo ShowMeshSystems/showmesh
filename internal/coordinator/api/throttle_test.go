@@ -341,3 +341,50 @@ func TestLoginThrottleAppliesAcrossDifferentPrincipalsFromTheSameSource(t *testi
 		t.Errorf("currentDelay for bystander's own source = 0, want > 0 (inherited from victim's failure) — the throttle must be keyed on source, not on which principal name is being attempted")
 	}
 }
+
+// TestStaleCookieSignInPaysThePerSourceDelayOnlyOnce is the regression
+// guard for the 502 an operator saw on the sign-in form of a running
+// stack: POST /api/v1/session carrying a stale showmesh_session cookie
+// was charged the per-source delay twice — once by withIdentity, whose
+// resolveCredential failure branch runs on every request, and once again
+// by handleCreateSession — and maxDelay twice plus the queue wait exceeds
+// net/http.Server's WriteTimeout, so the coordinator closed the
+// connection with no response and the proxy in front of it reported 502.
+// Reproduced against the running binary: 502 after exactly 10s, the
+// configured WriteTimeout to the millisecond.
+//
+// Asserted against the limiter's own sleep bookkeeping rather than a
+// wall-clock duration, per this package's testing standard: the whole
+// middleware-plus-handler path must request AT MOST ONE sleep for a
+// single request, and must still answer it (401 here, never a dropped
+// connection).
+func TestStaleCookieSignInPaysThePerSourceDelayOnlyOnce(t *testing.T) {
+	svc := newTestIdentityService(t, fixedClock(testNow))
+	mustCreatePrincipal(t, svc, "victim", identity.RoleOperator)
+
+	clock := &fakeLoginClock{t: testNow}
+	limiter, rec := newTestLoginLimiter(clock, 4, time.Second, 50*time.Millisecond, time.Second)
+	h := &handlers{deps: authTestDeps(svc), clock: fixedClock(testNow), logger: testLogger(), loginLimiter: limiter}
+	mw := withIdentity(svc, limiter, testLogger(), fixedClock(testNow), false)(http.HandlerFunc(h.handleCreateSession))
+
+	const source = "198.51.100.30:6000"
+
+	// Give the source a non-zero accumulated delay, so delay() actually
+	// reaches sleep at all — otherwise this test would pass against the
+	// double-charging code it exists to catch.
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/session",
+		`{"name":"victim","password":"wrong","deviceLabel":"x"}`, map[string]string{"Sec-Fetch-Site": "same-origin"})
+	req.RemoteAddr = source
+	limiter.recordFailure(loginSource(req))
+
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "stale-value-from-an-earlier-stack"})
+	rr := httptest.NewRecorder()
+	mw.ServeHTTP(rr, req)
+
+	if rr.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 — a sign-in with a stale cookie and a wrong password must be answered, not dropped", rr.Result().StatusCode)
+	}
+	if n, _ := rec.calls(); n != 1 {
+		t.Errorf("loginLimiter.sleep calls for ONE sign-in request = %d, want 1 — withIdentity and handleCreateSession must not each charge the same request the per-source delay", n)
+	}
+}
