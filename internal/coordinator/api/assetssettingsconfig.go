@@ -373,6 +373,15 @@ func (h *handlers) handlePutAssetsSettingsConfig(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// FC3 (ADR-028 decision 8): a node's registrar reads contentBaseUrl
+	// through the pushed coordinatorBaseUrl field, resolved fresh on every
+	// fppconnect.configure push (internal/coordinator/fppconnectpush). A
+	// changed contentBaseUrl is exactly the kind of write ADR-039/ADR-036
+	// requires apply without a node restart, matching the identical push
+	// this package already fires on a show/show.active/fppconnect.settings
+	// write, best-effort per node.
+	h.pushFPPConnectToAllNodes(ctx, now)
+
 	jsonWrite(w, mapAssetsSettingsConfigResponse(now, activated, store.ConfigObjectRecord{
 		Kind: config.AssetSettingsConfigKind, ID: config.AssetSettingsConfigObjectID,
 		CurrentRevision: nextRevisionNo, UpdatedAt: now,

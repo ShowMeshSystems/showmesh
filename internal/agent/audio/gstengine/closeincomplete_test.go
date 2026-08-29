@@ -228,6 +228,13 @@ func TestTeardownWaitsThenSucceedsWhenPendingDrainsInTime(t *testing.T) {
 		t.Fatalf("branchFor: %v", err)
 	}
 
+	// drainAfter sits well inside teardownTimeout (5s) so the wait this
+	// test proves is real never competes with the bound that would turn
+	// it into a deferral instead, and the explicit ctx below — rather
+	// than context.Background(), which never expires on its own — keeps
+	// this test's own runtime bounded even if the real device this
+	// package exercises stalls awaitNoElementRace's poll loop, instead
+	// of leaving the test to run until Go's package-level test timeout.
 	const drainAfter = 150 * time.Millisecond
 	b.pendingStateChanges.Add(1)
 	go func() {
@@ -235,8 +242,10 @@ func TestTeardownWaitsThenSucceedsWhenPendingDrainsInTime(t *testing.T) {
 		b.pendingStateChanges.Add(-1)
 	}()
 
+	teardownCtx, teardownCancel := context.WithTimeout(context.Background(), engineOpTimeout)
+	defer teardownCancel()
 	start := time.Now()
-	teardownErr := b.teardown(context.Background())
+	teardownErr := b.teardown(teardownCtx)
 	elapsed := time.Since(start)
 
 	if teardownErr != nil {

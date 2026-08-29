@@ -453,6 +453,7 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 			ID: "s1", State: pkgaudio.StatePlaying, Fault: pkgaudio.FaultPipelineCrash,
 			FaultReason:   "engine: audio: pipeline crashed",
 			PositionKnown: true, Position: 4200 * time.Millisecond, ObservedAt: time.Unix(9000, 0).UTC(),
+			LTCClaimState: audio.LTCClaimRefused, LTCClaimReason: "this node's one LTC run is held by session s0",
 		}},
 	}}
 
@@ -492,6 +493,9 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 	if got.Fault != string(pkgaudio.FaultPipelineCrash) || got.FaultReason == "" {
 		t.Errorf("second tick fault = %q/%q, want %q with a non-empty reason", got.Fault, got.FaultReason, pkgaudio.FaultPipelineCrash)
 	}
+	if got.LTCClaimState != string(audio.LTCClaimRefused) || got.LTCClaimReason == "" {
+		t.Errorf("second tick ltc claim = %q/%q, want %q with a non-empty reason", got.LTCClaimState, got.LTCClaimReason, audio.LTCClaimRefused)
+	}
 	if !got.PositionKnown || got.PositionMs != 4200 {
 		t.Errorf("second tick position = known=%v ms=%d, want known=true ms=4200", got.PositionKnown, got.PositionMs)
 	}
@@ -502,6 +506,9 @@ func TestRunAudioReportRebuildsSessionsEveryTick(t *testing.T) {
 	firstSession := firstReport.Sessions[0]
 	if firstSession.Fault != "none" {
 		t.Errorf("first tick fault = %q, want %q (FaultNone renders as the literal string \"none\")", firstSession.Fault, "none")
+	}
+	if firstSession.LTCClaimState != "none" {
+		t.Errorf("first tick ltc claim state = %q, want %q (the zero value renders as the literal string \"none\")", firstSession.LTCClaimState, "none")
 	}
 	if firstSession.PositionKnown {
 		t.Error("first tick PositionKnown = true, want false (no engine evidence was ever supplied)")

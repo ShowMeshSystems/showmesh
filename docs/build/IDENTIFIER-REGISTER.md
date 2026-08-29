@@ -105,7 +105,8 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `audio.node` | operator-chosen (the node id) | shipped | Track C seam C1b |
 | `night.session` | operator-chosen | reserved | Track F seam F1 |
 | `night.session.active` | `default` singleton | reserved | Track F seam F1 |
-| `fppconnect.settings` | `default` singleton | reserved | Track E phase 2 seam FC1a |
+| `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
+| `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -116,6 +117,18 @@ Operator UI in a parallel worktree, and an additive payload field plus a new
 UI over the same object is the collision this register exists to prevent.
 A per-surface override of the renderer default is future work, sequenced
 after G-8 folds.
+
+**`node.clock` is a new kind rather than fields on `audio.node`, and that is
+deliberate.** The media clock is a node-level facility: RES-019 §11 states the
+reusable asset is the media clock and timeline, not the local playback engine,
+and the renderer and a later AES67 send read the same clock. `audio.node`
+requires a program route, channel map, `clockDomain` and its provenance, so
+folding the PTP provider into it would make declaring a clock impossible on a
+node with no audio placement, and would put a non-audio setting behind an audio
+object. `audio.node.clockDomain` and `clockDomainProvenance` are unchanged
+(RES-019 §5.4): they still declare that program and LTC leave one hardware
+clock, which is a different statement from which PTP domain that hardware clock
+follows.
 
 **`fppconnect.settings` holds the two byte caps and the enable flag for the
 node's xLights ingestion listener** (`enabled`, `maxFileBytes` default 2 GiB,
@@ -317,6 +330,7 @@ the wrong device, because every collector shares one
 | `resolume-survey` | shipped | `collector/resolume` (composition-derived) |
 | `node-render` | shipped | Track B seam B2 (`collector/noderender`) |
 | `node-audio` | shipped | Track C seam C1a (`collector/nodeaudio`) |
+| `node-clock` | reserved | Track I seam I1 (`collector/nodeclock`) |
 
 **Instance ids share this namespace.** A Resolume instance id must not
 collide with any FPP endpoint id, for the same `Runner` reason. Validation
@@ -356,8 +370,9 @@ after shipping a breaking change to stored history.
 | `audio.media.probe` | reserved | Track C seam C2 |
 | `audio.node.configure` | shipped | Track C seam C5 |
 | `audio.settings.configure` | shipped | Track C seam C5 |
+| `node.clock.configure` | reserved | Track I seam I1: the coordinator pushing the node's `node.clock` object over the existing MQTT command path, on write and on hello, exactly as `audio.node.configure` does. Payload schema string `showmesh.node.clock.config/v1` (ADR-044); the retained `observed/clock` payload is `showmesh.node.clock/v1` |
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
-| `fppconnect.configure` | reserved | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
+| `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
@@ -454,6 +469,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `surface` | `surface.*` | shipped | Track B seam B2 |
 | `node` | `node.audio.*` | shipped | Track C seam C1a (engine, device, buses) |
 | `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
+| `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
@@ -530,6 +546,37 @@ listed because the last row was minted after the others had shipped:
 | `node.multisync.reason` | shipped | Track B review fix, finding 7 (node-level, not surface) |
 | `node.fppconnect.channel_range.state` | reserved | Lane 16, SM-294 (node-level; one push per node) |
 | `node.fppconnect.channel_range.reason` | reserved | Lane 16, SM-294 |
+
+**Track I's `node.clock.ptp.*` signals, reserved 2026-08-28 before seam I1
+starts.** All are on the `node` resource kind, resource id the node id, from
+RES-019 §5.2 (provider status) and §10 (observability). A seam that emits a
+spelling not in this table renames the code before it ships, the way Track C's
+divergence was reconciled below.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `node.clock.ptp.state` | reserved | Track I seam I1 (`unsynchronized`, `acquiring`, `locked`, `holdover`, `failed`) |
+| `node.clock.ptp.reason` | reserved | Track I seam I1 (why the state is what it is; required whenever state is not `locked`) |
+| `node.clock.ptp.provider` | reserved | Track I seam I1 (`managed`, `external`, `fpp`, `none`) |
+| `node.clock.ptp.role` | reserved | Track I seam I1 (`grandmaster`, `follower`, `passive`, `listening`) |
+| `node.clock.ptp.owner` | reserved | Track I seam I1 (which component runs `ptp4l` on the interface) |
+| `node.clock.ptp.interface` | reserved | Track I seam I1 |
+| `node.clock.ptp.domain` | reserved | Track I seam I1 |
+| `node.clock.ptp.grandmaster_identity` | reserved | Track I seam I1 |
+| `node.clock.ptp.timescale` | reserved | Track I seam I1 (`ptp`, `arb`, `unknown`) |
+| `node.clock.ptp.offset_ns` | reserved | Track I seam I1 (`master_offset`) |
+| `node.clock.ptp.clock_class` | reserved | Track I seam I1 |
+| `node.clock.ptp.timestamping` | reserved | Track I seam I1 (`hardware`, `software`) |
+| `node.clock.ptp.locked_seconds` | reserved | Track I seam I1 (seconds since the current lock began) |
+| `node.clock.ptp.last_step_at` | reserved | Track I seam I1 |
+| `node.clock.ptp.last_step_ns` | reserved | Track I seam I1 (signed magnitude of the last step) |
+| `node.clock.ptp.mismatch` | reserved | Track I seam I1 (RES-019 §9: locked, but not to the declared domain or grandmaster) |
+
+**A new `observed/` subpath is only half the work**, as this file's MQTT
+section already says: `showmesh/nodes/<id>/observed/clock` needs a `case` in
+the coordinator's ingest switch (`internal/coordinator/inventory/inventory.go`),
+or the retained payload is dropped at Debug level and the collector reports
+nothing forever.
 
 **Track C's `audio_session.*` signals, as shipped by seams C6/C7 on
 2026-08-18.** They were reserved before C3 and C4 were written; the table
@@ -623,24 +670,29 @@ whole value of the signal is that a green alignment light means measured
 rather than configured, and only the hardware work can make it say
 anything else.
 
-**Five more node-level `node.audio.engine.*` signals, proposed but NOT
-owner-confirmed, added on the real-node audio acceptance bench review
-fold.** They carry gstengine's bus-level glitch evidence (ALSA
+**Seven node-level `node.audio.engine.*` signals, owner-confirmed
+2026-08-26.** Five of them were added on the real-node audio acceptance
+bench review fold and carry gstengine's bus-level glitch evidence (ALSA
 xrun/underrun-class and clock-drift WARNING messages, bucketed by GError
 domain, and QOS-class dropped-buffer counts) into an observation for the
 first time; before this they were counted in the agent process and
-discarded before reaching the coordinator. The spellings below are the
-builder's own naming, not the owner's: flagged for confirmation rather
-than reserved, per this section's no-additions-without-the-owner rule for
-the sibling LTC block above.
+discarded before reaching the coordinator. The spellings were the
+builder's own naming and were flagged for confirmation, per this section's
+no-additions-without-the-owner rule for the sibling LTC block above. The
+owner confirmed all five as they stand and ruled that further
+`node.audio.engine.*` signals may be added later without another ruling.
+`state` and `reason` shipped with the same collector and are recorded here
+alongside them.
 
 | Signal | Status | Owner |
 |---|---|---|
-| `node.audio.engine.started_at` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.stream` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.resource` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.warnings.other` | proposed, unconfirmed | flagged for Eric |
-| `node.audio.engine.qos_drops` | proposed, unconfirmed | flagged for Eric |
+| `node.audio.engine.state` | shipped | C6/C7 |
+| `node.audio.engine.reason` | shipped | C6/C7 |
+| `node.audio.engine.started_at` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.stream` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.resource` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.warnings.other` | shipped | owner-confirmed 2026-08-26 |
+| `node.audio.engine.qos_drops` | shipped | owner-confirmed 2026-08-26 |
 
 **None of the five is confirmed to identify an ALSA xrun/underrun
 specifically.** alsasink logs a recovered xrun via `GST_WARNING_OBJECT`,
@@ -650,6 +702,72 @@ closest-available bucket, not verified evidence. `qos_drops` is live
 evidence once the sink's `qos` property is enabled (done as part of this
 change), independent of the xrun question. See gstengine's own
 `classifyWarningDomain` doc comment.
+
+**Lane 18a signal reservations, 2026-08-28.** Reserved by the lane before
+its builders start, so that two branches cannot mint two spellings for the
+same fact. A builder ships the rows its chosen shape needs and leaves the
+rest reserved rather than released.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.gain.effective_db` | reserved | Lane 18a (dB companion to `audio_session.gain.effective`) |
+| `audio_session.gain.ceiling_db` | reserved | Lane 18a (dB companion to `audio_session.gain.ceiling`) |
+| `audio_session.ltc.claim.state` | shipped | Lane 18a (`held`, `refused` or `none`: whether this session drives the node's one LTC run) |
+| `audio_session.ltc.claim.reason` | shipped | Lane 18a (why a claim was refused; required whenever the state is `refused`) |
+| `node.audio.ltc.owner_session_id` | reserved | Lane 18a (which session holds the node's single LTC run, so a mismatch is legible from node-level evidence) |
+
+**A refused LTC claim's own shape, 2026-08-28.** The session-level pair
+above ships; `node.audio.ltc.owner_session_id` stays reserved. A session
+whose claim on this node's one LTC run is refused now carries that fact
+itself (`audio_session.ltc.claim.state` = `refused`, with `.reason`
+naming the session that holds the run) — legible from the refused
+session's own evidence, not only inferable by cross-referencing which
+session started the node's LTC generator. The node-level owner id would
+answer the same question from the other direction and remains available
+to a future builder who needs it; shipping both was not required to make
+the refusal itself observable.
+
+**The two gain rows are companions, not replacements.** Operators enter
+gain in decibels, so the observation must read in decibels; whether that
+is a new pair beside the linear values or a conversion of the existing two
+signals is the builder's call. If the existing signals are converted in
+place, these two rows stay reserved and unshipped, because releasing a
+name only to re-mint it later is how a spelling drifts.
+
+**Lane 18b reservations, 2026-08-28.** Reserved by the lane before its
+builders start. SM-295 needs a way to say "a restore is queued and nothing
+is playing" and SM-296 needs the automatic retry to be visible without
+opening the node log; both are one design, so both names are minted here
+rather than by whichever branch lands first.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `audio_session.restore.attempts` | reserved | Lane 18b SM-296 (how many automatic restore attempts this session has made) |
+| `audio_session.restore.next_attempt_ms` | reserved | Lane 18b SM-296 (milliseconds until the next backed-off attempt) |
+| `audio_session.restore.last_reason` | reserved | Lane 18b SM-296 (why the last attempt did not build an engine) |
+
+`pkg/audio.State` value `restore_pending` is reserved for Lane 18b SM-295.
+SM-295 leaves the choice of shape to its builder: a new `State` member or a
+documented state-plus-fault combination. If the builder takes the
+combination, this value stays reserved and unshipped rather than released,
+on the same rule the gain rows above follow. Either shape changes what
+`audio_session.state` can report, so it is an API change and is recorded on
+SM-310.
+
+**Lane 18b coordinator reservation, 2026-08-28.** A coordinator that cannot
+decode its stored `audio.settings` stops pushing audio configuration to every
+node and says so only in one Warn line. Making that legible needs a name, and
+the shape is the builder's call: a coordinator-level signal, a readiness
+condition, or a refusal surfaced through the API. The signal pair is reserved
+here so the choice does not also mint a spelling.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `coordinator.audio.config.push.state` | reserved | Lane 18b SM-357 (whether the coordinator can use its stored `audio.settings` to configure nodes) |
+| `coordinator.audio.config.push.reason` | reserved | Lane 18b SM-357 (why it cannot; required whenever the state is not usable) |
+
+If the builder takes the readiness-condition or API-refusal shape instead,
+both rows stay reserved and unshipped rather than being released.
 
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
@@ -795,6 +913,7 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/result/<cmd-id>` | shipped | Step 2 |
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 | `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
+| `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -935,7 +1054,8 @@ sessions running.
 |---|---|---|
 | RES-001 to RES-017 | shipped | see the research tracker |
 | RES-018 | issued | FPP brightness, ADR-043 playlist identity, and the three-repository plugin runtime (Tracks F/H) |
-| RES-019+ | unallocated | free |
+| RES-019 | issued | PTP-synchronized multi-node audio: clock provider, scheduled start, rate lock, output latency |
+| RES-020+ | unallocated | free |
 
 ## API paths
 

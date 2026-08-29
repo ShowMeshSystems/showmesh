@@ -77,7 +77,8 @@
         "notSeenAsOfRunFinishedAt": null
       },
       "render": [],
-      "audio": []
+      "audio": [],
+      "fppConnect": []
     },
     {
       "nodeId": "shed-01",
@@ -146,7 +147,8 @@
         "notSeenAsOfRunFinishedAt": null
       },
       "render": [],
-      "audio": []
+      "audio": [],
+      "fppConnect": []
     }
   ],
   "fpp": {
@@ -254,6 +256,10 @@
       ],
       "composition": null
     }
-  ]
+  ],
+  "audioConfigPush": {
+    "state": "usable",
+    "reason": null
+  }
 }
 

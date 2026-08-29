@@ -91,6 +91,7 @@ export function makeNode(nodeId: string, overrides: Partial<Node> = {}): Node {
     declaration: makeNodeDeclaration(),
     render: [],
     audio: [],
+    fppConnect: [],
     ...overrides,
   }
 }
@@ -135,6 +136,9 @@ export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     // Required on every snapshot, same defaulting pattern as `macroRuns`
     // above.
     resolume: [],
+    // Required on every snapshot, same defaulting pattern as `resolume`
+    // above.
+    audioConfigPush: { state: 'usable', reason: null },
     ...overrides,
   }
 }

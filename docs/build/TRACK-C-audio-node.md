@@ -282,7 +282,7 @@ Software discovery is necessary and insufficient. Some interfaces report four ou
 ## Standing constraints
 
 - Nodes play complete local files against their own audio clock. The coordinator and broker never carry the real-time PCM path.
-- Audio aligns to the FPP timeline at start and explicit correction points. It measures drift and never continuously slews program audio to chase small differences.
+- Audio aligns to the FPP timeline at start and explicit correction points. It measures drift and never continuously slews program audio to chase small differences. (2026-08-28: ADR-046 permits a ppm-scale rate trim against a locked shared PTP clock, staged in RES-019; it changes nothing built here.)
 - Program and LTC share one clock domain. LTC never enters the program bus.
 - FPP's audience-audio output is unused during ShowMesh operation.
 - Device loss fails silent, preserves session state, alerts critically, and never hands audio back to FPP automatically.
@@ -423,4 +423,4 @@ C8 is accepted separately when its mock trace proves advance provisioning and ev
 
 **Bound by:** ADR-007, ADR-008, ADR-011, ADR-017, ADR-018, ADR-019, ADR-028, `AUDIO-ENGINE.md`, and the command envelope in ARCHITECTURE §8.1.
 
-**Out of Day-0 scope:** a real synchronized third-party destination, Dante as a required transport, real-time PCM streaming between ShowMesh nodes, automatic or sample-transparent failover, multi-zone audio, dynamic clock-rate correction, and automatic fallback to FPP audio.
+**Out of Day-0 scope:** a real synchronized third-party destination, Dante as a required transport, real-time PCM streaming between ShowMesh nodes, automatic or sample-transparent failover, multi-zone audio, rate-locking to a shared PTP clock (ADR-046, RES-019), and automatic fallback to FPP audio.

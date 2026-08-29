@@ -1,10 +1,15 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -487,5 +492,74 @@ func TestShowWriteRequiresConfigWrite(t *testing.T) {
 	resp, body := doRawRequest(t, api.Handler, req)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body: %s", resp.StatusCode, body)
+	}
+}
+
+// erroringConfigStore is a [ConfigStore] whose GetConfigRevision fails
+// with a genuine (non-ErrConfigObjectNotFound) error for one specific
+// (kind, id) pair, and otherwise defers to an embedded real store, for
+// TestPreviousShowSurfaceNodeLogsARealReadFailureDistinctFromNotFound,
+// which needs a failure previousShowSurfaceNode (showobjects.go) must
+// treat differently from "nothing stored yet".
+type erroringConfigStore struct {
+	ConfigStore
+	failKind, failID string
+}
+
+func (e *erroringConfigStore) GetConfigRevision(ctx context.Context, kind, id string, revision int64) (store.ConfigRevisionRecord, error) {
+	if kind == e.failKind && id == e.failID {
+		return store.ConfigRevisionRecord{}, errors.New("simulated transient store failure")
+	}
+	return e.ConfigStore.GetConfigRevision(ctx, kind, id, revision)
+}
+
+// TestPreviousShowSurfaceNodeLogsARealReadFailureDistinctFromNotFound
+// proves the review finding this closes: a genuine store read failure
+// while resolving a show.surface's previous node degrades safely
+// (returns ok=false, never panics or propagates) exactly like the
+// expected "never written yet" case, BUT is logged as a warning naming
+// the surface id, distinct from the silent, expected
+// store.ErrConfigObjectNotFound case, so a transient failure here is
+// visible rather than indistinguishable from "this surface has never
+// moved."
+func TestPreviousShowSurfaceNodeLogsARealReadFailureDistinctFromNotFound(t *testing.T) {
+	svc, st, _ := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	token := mustIssueToken(t, svc, admin.ID)
+	deps := showObjectsTestDeps(svc, st)
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	mustDeclareNode(t, st, "render-01")
+	mustPutShow(t, api, token, "halloween-2026", `{"name":"Halloween 2026"}`)
+
+	// Create the surface for real first, so its config object genuinely
+	// exists with an active revision; the failure this test injects is
+	// on the SECOND read (the one previousShowSurfaceNode performs ahead
+	// of a later PUT), not on its creation.
+	req := newJSONRequest(t, http.MethodPut, "/api/v1/config/show.surface/garage-door", validSurfaceBodyNDI, map[string]string{"Authorization": "Bearer " + token})
+	if resp, body := doRawRequest(t, api.Handler, req); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT show.surface status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	var logBuf bytes.Buffer
+	capturing := slog.New(slog.NewTextHandler(&logBuf, nil))
+	h := &handlers{
+		deps:   Dependencies{Config: &erroringConfigStore{ConfigStore: deps.Config, failKind: config.ShowSurfaceConfigKind, failID: "garage-door"}},
+		clock:  fixedClock(testNow),
+		logger: capturing,
+	}
+
+	node, ok := h.previousShowSurfaceNode(context.Background(), "garage-door")
+	if ok {
+		t.Errorf("ok = true, want false on a real read failure")
+	}
+	if node != "" {
+		t.Errorf("node = %q, want empty", node)
+	}
+	if !strings.Contains(logBuf.String(), "garage-door") {
+		t.Errorf("log output missing the surface id; got: %s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "simulated transient store failure") {
+		t.Errorf("log output missing the underlying error; got: %s", logBuf.String())
 	}
 }

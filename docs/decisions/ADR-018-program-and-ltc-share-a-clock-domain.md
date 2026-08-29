@@ -37,7 +37,7 @@ ShowMesh models three distinct clocks and never assumes they are the same: the s
 
 ## Alternatives considered
 
-**Allowing independent clocks and correcting in software** was rejected because the correction would have to be continuous rate adjustment or repeated seeks on one of the two signals, and both are the failure modes [ADR-017](ADR-017-showmesh-owns-audience-audio.md) rules out for program audio. It also converts a hardware guarantee into a running software obligation with no failure signal when it stops working.
+**Allowing independent clocks and correcting in software** was rejected because the correction would have to be continuous rate adjustment or repeated seeks on one of the two signals, and both are the failure modes [ADR-017](ADR-017-showmesh-owns-audience-audio.md) rules out for program audio. It also converts a hardware guarantee into a running software obligation with no failure signal when it stops working. (ADR-046, 2026-08-28: this rejection stands for two signals on two interfaces. Rate-locking one interface, carrying both signals, to a shared PTP clock is permitted and leaves this decision unchanged.)
 
 **Deriving LTC from the show timeline independently of the audio device** was rejected for the same reason: the resulting LTC is phase-related to the coordinator's idea of the timeline rather than to the sound the audience hears, which is the relationship that actually matters for projection.
 

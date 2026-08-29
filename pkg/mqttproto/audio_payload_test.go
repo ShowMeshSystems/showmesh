@@ -191,6 +191,22 @@ func TestAudioPayloadValidateRequiresFaultReasonWhenFaulted(t *testing.T) {
 	}
 }
 
+func TestAudioPayloadValidateRequiresLTCClaimReasonWhenRefused(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "none", LTCClaimState: "refused", LTCClaimReason: ""}}
+	if err := p.Validate(); !errors.Is(err, ErrPayloadMissingField) {
+		t.Errorf("Validate(refused claim with no reason) = %v, want ErrPayloadMissingField", err)
+	}
+}
+
+func TestAudioPayloadValidateAllowsHeldClaimWithNoReason(t *testing.T) {
+	p := validAudioPayload()
+	p.Sessions = []AudioSessionReport{{SessionID: "s1", Fault: "none", LTCClaimState: "held", LTCClaimReason: ""}}
+	if err := p.Validate(); err != nil {
+		t.Errorf("Validate(held claim, no reason) = %v, want nil", err)
+	}
+}
+
 func TestAudioPayloadValidateRequiresLTCGeneratorState(t *testing.T) {
 	p := validAudioPayload()
 	p.LTCGeneratorState = ""

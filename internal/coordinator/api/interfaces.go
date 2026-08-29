@@ -238,6 +238,39 @@ type EventReader interface {
 	OldestEventSeq(ctx context.Context) (seq uint64, ok bool, err error)
 }
 
+// AudioConfigPushRunState is the closed, three-value vocabulary
+// [v1.AudioConfigPushStatus.State] uses. It answers one narrow question,
+// coordinator-wide: can this coordinator's stored, engine-wide
+// audio.settings revision be decoded right now. It is computed fresh from
+// the same decode [audioconfigpush.pushSettings] performs on that same
+// revision, never from [audioconfigpush.ToNode] (which decodes a NODE's
+// own separate audio.node binding FIRST and returns before ever reaching
+// audio.settings on that failure) — a stale per-node audio.node binding
+// strands that one node on both pushes without this field moving, and
+// this field does not claim otherwise. "Can a push actually reach node
+// N right now" additionally depends on N's own audio.node binding and
+// reachability, neither of which this value reports.
+type AudioConfigPushRunState string
+
+const (
+	// AudioConfigPushUsable: the stored audio.settings revision (or the
+	// default payload, when nothing has ever been written) decodes.
+	AudioConfigPushUsable AudioConfigPushRunState = "usable"
+
+	// AudioConfigPushUnusable: the stored revision fails to decode, so
+	// every node is stranded on whatever audio.settings it last
+	// successfully received. Reason is always set alongside this value.
+	AudioConfigPushUnusable AudioConfigPushRunState = "unusable"
+
+	// AudioConfigPushUnknown: a genuine config-store failure, not a
+	// decode failure, kept this coordinator from reading its own stored
+	// revision just now — the revision itself may be perfectly usable.
+	// See [audioConfigPushStatusDegradeOnError]'s own doc comment for why
+	// this is a distinct value rather than folded into "unusable".
+	// Reason is always set alongside this value.
+	AudioConfigPushUnknown AudioConfigPushRunState = "unknown"
+)
+
 // CollectorRunState is the closed, small vocabulary [CollectorState.State]
 // and [v1.CollectorStatus.State] use, deliberately distinct from
 // pkg/observation.State — see [v1.CollectorStatus]'s doc comment for why

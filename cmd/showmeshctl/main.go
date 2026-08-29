@@ -78,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdRender(rest, stdout, stderr, clock)
 	case "audio":
 		return cmdAudio(rest, stdout, stderr, clock)
+	case "fppconnect":
+		return cmdFPPConnect(rest, stdout, stderr, clock)
 	case "fpp-mqtt":
 		return cmdFPPMQTT(rest, stdout, stderr, clock)
 	case "assets":
@@ -347,6 +349,14 @@ Commands:
                                         dispatch audio.output.mute (write, requires audio:command)
   audio output unmute <nodeId> <sessionId>
                                         dispatch audio.output.unmute (write, requires audio:command)
+  fppconnect settings get              show the active fppconnect.settings configuration
+                                        (ADR-044; never 404s, reports the built-in default)
+  fppconnect settings set              write a new fppconnect.settings revision (write,
+                                        full replacement, requires config:write)
+  fppconnect settings revisions        list fppconnect.settings revision history, newest first
+  fppconnect status <node-id>          show one node's most recently pushed FPP Connect
+                                        channel-range outcome: formatted, empty because no
+                                        surface is configured, or dropped and why (read)
   fpp-mqtt get              show the fpp.mqtt configuration (broker, credentials, topic
                             prefix, host map); the password is never returned
   fpp-mqtt set              write a new fpp.mqtt revision, changing only the fields
