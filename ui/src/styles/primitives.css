@@ -1,0 +1,866 @@
+/* Shared visual primitives for the operator UI overhaul.
+ *
+ * Every value here is lifted from docs/design_handoff_operator_ui_overhaul/design/
+ * "ShowMesh Design System.dc.html", which the handoff names as the tie-breaker for
+ * anything the written guide leaves ambiguous. The mocks inline-style every element
+ * because they must paint while streaming; that is a constraint of the mock format
+ * and explicitly not a rule for this codebase, so the values live here as classes.
+ *
+ * Colour and type come only from tokens.css. Never hard-code a colour in a screen.
+ */
+
+/* ---------------------------------------------------------------- chrome bar */
+
+/* The bar must not wrap. If it wraps its height changes and the rail's 50px
+ * offset puts the first nav group behind it; fix the wrap, never the offset. */
+.chrome {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+.chrome__bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  padding: 8px 18px;
+  background: var(--surface);
+}
+
+.chrome__brand {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+.chrome__show-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: var(--control-compact);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chrome__show-picker:hover {
+  border-color: var(--accent);
+}
+
+.chrome__show-picker-eyebrow,
+.chrome__show-picker-chevron {
+  color: var(--text-faint);
+}
+
+.chrome__mode-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: var(--control-compact);
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--on-accent);
+  letter-spacing: 0.07em;
+}
+
+.chrome__divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+}
+
+/* The only child allowed to flex. Everything else is `flex: 0 0 auto` so the
+ * bar keeps a fixed 49px height at every width. */
+.chrome__now {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chrome__now-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.chrome__now-title {
+  min-width: 0;
+  font: var(--t-body);
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chrome__now-title:hover {
+  color: var(--accent);
+}
+
+.chrome__now-position {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.chrome__now-detail {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.chrome__right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+.chrome__connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.07em;
+}
+
+.chrome__connection--good { color: var(--good-fg); }
+.chrome__connection--warn { color: var(--warn-fg); }
+.chrome__connection--unknown { color: var(--unk-fg); }
+
+.chrome__principal {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.chrome__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* 3px position bar under the chrome. A session with no playback renders
+ * .chrome__progress-strip instead: a plain strip with no role and no value, never
+ * a progress bar zeroed to 0%, which would assert a position nothing reported. */
+.chrome__progress,
+.chrome__progress-strip {
+  height: 3px;
+  background: var(--sunken);
+  border-bottom: 1px solid var(--border);
+}
+
+.chrome__progress-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* ---------------------------------------------------------------------- rail */
+
+.shell {
+  display: grid;
+  grid-template-columns: 212px minmax(0, 1fr);
+  align-items: start;
+}
+
+.rail {
+  position: sticky;
+  top: 50px;
+  padding: 12px 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  min-height: calc(100vh - 50px);
+}
+
+.rail__group + .rail__group {
+  margin-top: 16px;
+}
+
+.rail__group-label {
+  margin: 0 0 4px;
+  padding: 0 14px;
+  color: var(--text-faint);
+}
+
+.rail__link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 14px;
+  border-left: 2px solid transparent;
+  color: var(--text-muted);
+  font: var(--t-body);
+  text-decoration: none;
+}
+
+.rail__link:hover {
+  background: var(--raised);
+  border-left-color: var(--border-strong);
+  color: var(--text);
+}
+
+.rail__link[aria-current='page'] {
+  border-left-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* An attention count, never an inventory count. A badge means the operator has
+ * something to do, so a signed-out or not-yet-read device renders none at all:
+ * an attention count requires a read, and showing one without evidence invents it. */
+.rail__badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--warn-border);
+  border-radius: 3px;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+/* ---------------------------------------------------------------------- tabs */
+
+.tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.tabs__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: var(--t-body);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tabs__item:hover {
+  color: var(--text);
+  border-bottom-color: var(--border-strong);
+}
+
+.tabs__item[aria-current='page'],
+.tabs__item[aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Inventory of the tab's primary object, so it is safe to render without a read
+ * of anything else. Distinct from a rail badge, which is an attention count. */
+.tabs__count {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.tabs__item[aria-current='page'] .tabs__count,
+.tabs__item[aria-selected='true'] .tabs__count {
+  color: var(--accent);
+}
+
+/* -------------------------------------------------------------- page header */
+
+.page-header {
+  padding: 20px 28px 0;
+}
+
+.page-header__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.page-header__breadcrumb {
+  margin: 0 0 6px;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.page-header__title {
+  margin: 0;
+}
+
+.page-header__meta {
+  margin: 6px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.page-header__actions {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.page-body {
+  padding: 20px 28px 48px;
+}
+
+/* --------------------------------------------------------------- two panes */
+
+.panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  align-items: start;
+  gap: 28px;
+}
+
+.panes > aside {
+  position: sticky;
+  top: 0;
+  padding: 20px 28px 0 0;
+}
+
+@media (max-width: 1100px) {
+  .panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panes > aside {
+    position: static;
+    padding: 20px 0 0;
+  }
+}
+
+/* --------------------------------------------------------------- card, table */
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* Tables scroll inside their own wrapper so a wide table never gives the page
+ * horizontal scroll. min-width belongs on the table, overflow on the wrapper. */
+.table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.table-wrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-body);
+}
+
+.table--inspector { min-width: 596px; }
+.table--full { min-width: 1012px; }
+
+.table thead th {
+  padding: 8px 10px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  text-align: left;
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.table tbody td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.table tr > :first-child { padding-left: 14px; }
+.table tr > :last-child { padding-right: 14px; }
+
+.table tbody tr[data-clickable] {
+  cursor: pointer;
+}
+
+.table tbody tr[data-clickable]:hover {
+  background: var(--raised);
+}
+
+/* Selection and defect must read on separate channels: a row can be both the one
+ * being edited and the one that is broken, so selection never borrows status colour. */
+.table tbody tr[aria-current='true'] {
+  background: var(--accent-bg);
+}
+
+.table__editing-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 3px;
+  color: var(--accent);
+}
+
+.table__drag-handle {
+  color: var(--text-faint);
+  cursor: grab;
+}
+
+.table__footer-note {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--control-default);
+  padding: 0 14px;
+  border-radius: 5px;
+  font: var(--t-body);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn--compact { height: var(--control-compact); }
+
+/* 44 to 48px is reserved for controls touched with gloves: transport, night
+ * lifecycle commands, macro Run, and every field on a sign-in or bootstrap form. */
+.btn--gloved { height: var(--control-gloved); }
+.btn--gloved-lg { height: var(--control-gloved-lg); }
+
+.btn--primary {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.btn--primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn--primary:active {
+  background: var(--accent-active);
+  border-color: var(--accent-active);
+}
+
+.btn--secondary {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.btn--secondary:hover { border-color: var(--accent); }
+.btn--secondary:active { background: var(--raised); }
+
+.btn--quiet {
+  padding: 0 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.btn--quiet:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+
+.btn--destructive {
+  border: 1px solid var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+  font-weight: 600;
+}
+
+.btn--destructive:hover {
+  background: var(--bad-fg);
+  border-color: var(--bad-fg);
+  color: var(--bg);
+}
+
+/* A control the principal may not use renders disabled with a stated reason,
+ * never hidden. The reason is a sibling element, not a title attribute alone. */
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.btn__reason {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------------- fields */
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field__label {
+  font: var(--t-body);
+  font-weight: 500;
+}
+
+.field__input,
+.field select,
+.field textarea {
+  height: var(--control-default);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+}
+
+.field textarea {
+  height: auto;
+  padding: 8px 10px;
+}
+
+/* Identifiers, timecodes and numbers read in mono so they are legible as literal
+ * values rather than prose. */
+.field__input--data {
+  font: var(--t-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.field__input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible {
+  border-color: var(--accent);
+}
+
+.field--gloved .field__input,
+.field--gloved select {
+  height: var(--control-gloved);
+}
+
+.field__help {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* The server's own refusal, rendered verbatim. Client validation exists to save a
+ * round trip and is never stricter than the server. */
+.field__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font: var(--t-small);
+  color: var(--bad-fg);
+}
+
+.field--invalid .field__input,
+.field--invalid select {
+  border-color: var(--bad-border);
+}
+
+.field__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-default);
+  cursor: pointer;
+}
+
+.field__check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+/* ------------------------------------------------------- segmented control */
+
+/* Buttons with aria-pressed, never radios styled as tabs: these change a value
+ * immediately rather than staging one for a submit. */
+.segmented {
+  display: flex;
+  gap: 1px;
+  padding: 1px;
+  background: var(--border);
+  border-radius: 5px;
+  width: max-content;
+}
+
+.segmented__option {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: var(--t-body);
+  cursor: pointer;
+}
+
+.segmented__option[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------- ruled strip */
+
+/* The default absence treatment. It sits in the row or field where the content
+ * would have been: no fill, no radius, no card. */
+.ruled-strip {
+  display: grid;
+  grid-template-columns: 158px minmax(0, 1fr);
+  gap: 0 20px;
+  align-items: start;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ruled-strip:first-of-type {
+  border-top: 1px solid var(--border);
+}
+
+.ruled-strip__state {
+  color: var(--text-faint);
+  letter-spacing: 0.1em;
+}
+
+.ruled-strip__fact {
+  margin: 0;
+  font: var(--t-subhead);
+}
+
+.ruled-strip__explanation {
+  margin: 5px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.ruled-strip__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* The four absences, plus the three states that are not absences at all.
+ *
+ * stale        reported before, not recently; carries a last-observed time
+ * unavailable  the source does not support the field; nothing to retry
+ * unobserved   never collected by any collector
+ * empty        a settled, definitive zero
+ *
+ * The dashed edge is reserved for never-collected. An empty list, a stale value
+ * and an unsupported field are all settled facts and must not borrow the shape of
+ * absent evidence. */
+.ruled-strip--stale .ruled-strip__state { color: var(--warn-fg); }
+.ruled-strip--failed .ruled-strip__state { color: var(--bad-fg); }
+.ruled-strip--no-permission .ruled-strip__state { color: var(--warn-fg); }
+.ruled-strip--unavailable .ruled-strip__state,
+.ruled-strip--empty .ruled-strip__state,
+.ruled-strip--loading .ruled-strip__state,
+.ruled-strip--signed-out .ruled-strip__state { color: var(--text-faint); }
+
+.ruled-strip--unobserved .ruled-strip__state {
+  color: var(--text-faint);
+  justify-self: start;
+  padding-bottom: 2px;
+  border-bottom: 1px dashed var(--text-faint);
+}
+
+/* ---------------------------------------------------------- blanking plate */
+
+/* For a whole region that cannot render. The hatch runs in the gutter only; copy
+ * always sits on clean surface, never behind it.
+ *
+ * Rejected and not to be reinvented: a grid of rounded cards with coloured left
+ * borders. It made absence of data look like a card containing data. */
+.plate {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.plate__gutter {
+  display: grid;
+  place-items: center;
+  border-right: 1px solid var(--border-strong);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--hatch) 6px 12px);
+}
+
+.plate__stamp {
+  padding: 3px 6px;
+  border: 1px solid var(--text-faint);
+  background: var(--surface);
+  color: var(--text-faint);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+/* Dashed stamp for never-collected only. */
+.plate--unobserved .plate__stamp {
+  border-style: dashed;
+}
+
+.plate--permission {
+  border-color: var(--warn-border);
+}
+
+.plate--permission .plate__gutter {
+  border-right-color: var(--warn-border);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--warn-bg) 6px 12px);
+}
+
+.plate--permission .plate__stamp {
+  border-color: var(--warn-fg);
+  color: var(--warn-fg);
+}
+
+.plate__body {
+  padding: 20px 22px;
+}
+
+.plate__eyebrow {
+  margin: 0;
+  color: var(--text-faint);
+  letter-spacing: 0.11em;
+}
+
+.plate--permission .plate__eyebrow {
+  color: var(--warn-fg);
+}
+
+.plate__heading {
+  margin: 8px 0 0;
+}
+
+.plate__explanation {
+  margin: 8px 0 0;
+  font: var(--t-body);
+  color: var(--text-muted);
+  max-width: 64ch;
+}
+
+.plate__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* --------------------------------------------------------------- status pair */
+
+/* Every status is a state word plus a colour, never a colour alone. */
+.status-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid;
+}
+
+.status-pair--good { background: var(--good-bg); color: var(--good-fg); border-color: var(--good-border); }
+.status-pair--warn { background: var(--warn-bg); color: var(--warn-fg); border-color: var(--warn-border); }
+.status-pair--bad { background: var(--bad-bg); color: var(--bad-fg); border-color: var(--bad-border); }
+.status-pair--unknown { background: var(--unk-bg); color: var(--unk-fg); border-color: var(--unk-border); }
+
+/* An unknown check could not be performed. It is never a soft ok and never a
+ * defect, so it never borrows either colour. */
+.status-pair--unobserved {
+  background: transparent;
+  color: var(--text-faint);
+  border-color: var(--text-faint);
+  border-style: dashed;
+}
+
+/* --------------------------------------------------------------- session band */
+
+/* Signed out is a state, not a wall: GET /session answers 200 with
+ * authenticated:false. These bands sit in the document flow and push content
+ * down. They are never modals, and there is no full-screen login page. */
+.session-band {
+  padding: 16px 28px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.session-band--alert {
+  border-left: 3px solid var(--bad-fg);
+}
+
+.session-band__title {
+  margin: 0;
+}
+
+.session-band__body {
+  margin: 8px 0 0;
+  font: var(--t-body);
+  color: var(--text-muted);
+  max-width: 64ch;
+}
+
+.session-band__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* Every field on a sign-in or bootstrap form is gloved: these get used on a phone
+ * in the cold. */
+.session-band__form {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  max-width: 420px;
+}
+
+/* --------------------------------------------------------------- transitions */
+
+/* No transition on a state colour. An operator must read a state, not watch it. */
+@media (prefers-reduced-motion: no-preference) {
+  .btn,
+  .rail__link,
+  .tabs__item {
+    transition: border-color 80ms linear, background-color 80ms linear, color 80ms linear;
+  }
+}

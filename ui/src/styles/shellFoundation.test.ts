@@ -5,22 +5,142 @@ import { describe, expect, it } from 'vitest'
 const stylesDir = path.resolve(__dirname)
 
 describe('operator shell foundation', () => {
-  it('defines semantic surfaces, contrast-safe action text, and a five-role type scale for all supported themes', () => {
+  it('defines the design-guide token set on :root, with light and contrast theme overrides', () => {
     const css = readFileSync(path.join(stylesDir, 'tokens.css'), 'utf8')
 
-    expect(css).toMatch(/--color-graphite-950:\s*#111b1b/)
-    expect(css).toMatch(/--color-blue-green-500:\s*#087f78/)
-    expect(css).toMatch(/--color-accent:\s*var\(--color-blue-green-700\)/)
-    expect(css).toMatch(/--color-on-accent:\s*#071817/)
-    expect(css).toMatch(/--color-nav-surface:\s*var\(--color-surface-raised\)/)
-    expect(css).toMatch(/--font-size-micro:\s*0\.6875rem/)
-    expect(css).toMatch(/--font-size-small:\s*0\.75rem/)
-    expect(css).toMatch(/--font-size-body:\s*0\.875rem/)
-    expect(css).toMatch(/--font-size-heading:\s*1\.25rem/)
-    expect(css).toMatch(/--font-size-display:\s*1\.5625rem/)
-    expect(css).toMatch(/@media \(prefers-color-scheme: dark\)/)
-    expect(css).toMatch(/:root\[data-contrast='high'\]/)
-    expect(css).toMatch(/--color-focus-ring:\s*#ffff00/)
+    // Surfaces, text, and status roles from UI-DESIGN-GUIDE.md section 1.
+    for (const token of [
+      '--bg',
+      '--surface',
+      '--raised',
+      '--sunken',
+      '--border',
+      '--border-strong',
+      '--text',
+      '--text-muted',
+      '--text-faint',
+      '--hatch',
+      '--accent',
+      '--accent-hover',
+      '--accent-active',
+      '--accent-bg',
+      '--accent-border',
+      '--on-accent',
+      '--focus',
+    ]) {
+      expect(css).toMatch(new RegExp(`${token}:`))
+    }
+    for (const status of ['good', 'warn', 'bad', 'unk']) {
+      expect(css).toMatch(new RegExp(`--${status}-fg:`))
+      expect(css).toMatch(new RegExp(`--${status}-bg:`))
+      expect(css).toMatch(new RegExp(`--${status}-border:`))
+    }
+
+    // Dark is the default palette on bare :root, not a media-query fallback.
+    expect(css).toMatch(/:root\s*\{[\s\S]*?--bg:\s*#080c0e/)
+
+    // Explicit theme overrides, plus the OS-preference fallback guarded so
+    // an explicit choice always wins.
+    expect(css).toMatch(/:root\[data-theme='light'\]\s*\{[\s\S]*?--bg:\s*#f2f5f4/)
+    expect(css).toMatch(/:root\[data-theme='contrast'\]\s*\{[\s\S]*?--bg:\s*#000000/)
+    expect(css).toMatch(/@media \(prefers-color-scheme: light\)[\s\S]*?:root:not\(\[data-theme\]\)/)
+
+    // Accent, focus, and on-accent match the design guide's dark values.
+    expect(css).toMatch(/--accent:\s*oklch\(0\.845 0\.112 181\)/)
+    expect(css).toMatch(/--focus:\s*oklch\(0\.88 0\.09 181\)/)
+    expect(css).toMatch(/--on-accent:\s*#05191a/)
+
+    // Type faces and the seven type roles.
+    expect(css).toMatch(/--sans:\s*Archivo/)
+    expect(css).toMatch(/--mono:\s*'JetBrains Mono'/)
+    for (const role of ['display', 'heading', 'subhead', 'body', 'small', 'meta', 'data']) {
+      expect(css).toMatch(new RegExp(`--t-${role}:`))
+    }
+  })
+
+  it('keeps every old tokens.css custom property resolvable through the transition alias block', () => {
+    const css = readFileSync(path.join(stylesDir, 'tokens.css'), 'utf8')
+
+    expect(css).toMatch(/Transition aliases: deleted at the end of the overhaul\./)
+
+    for (const oldToken of [
+      '--color-graphite-50',
+      '--color-graphite-100',
+      '--color-graphite-300',
+      '--color-graphite-600',
+      '--color-graphite-800',
+      '--color-graphite-950',
+      '--color-blue-green-500',
+      '--color-blue-green-700',
+      '--color-bg',
+      '--color-surface',
+      '--color-surface-raised',
+      '--color-border',
+      '--color-text',
+      '--color-text-muted',
+      '--color-accent',
+      '--color-focus-ring',
+      '--color-link',
+      '--color-on-accent',
+      '--color-nav-surface',
+      '--color-nav-border',
+      '--color-nav-text',
+      '--color-nav-text-muted',
+      '--color-nav-hover',
+      '--shadow-nav',
+      '--status-good-bg',
+      '--status-good-fg',
+      '--status-warn-bg',
+      '--status-warn-fg',
+      '--status-bad-bg',
+      '--status-bad-fg',
+      '--status-unknown-bg',
+      '--status-unknown-fg',
+      '--connection-problem-bg',
+      '--connection-problem-fg',
+      '--connection-problem-border',
+      '--connection-live-fg',
+      '--notice-info-bg',
+      '--notice-info-fg',
+      '--notice-info-border',
+      '--space-1',
+      '--space-2',
+      '--space-3',
+      '--space-4',
+      '--space-5',
+      '--space-6',
+      '--space-7',
+      '--control-height-sm',
+      '--control-height',
+      '--control-height-lg',
+      '--control-content-gap',
+      '--font-family',
+      '--font-family-mono',
+      '--font-size-micro',
+      '--font-size-small',
+      '--font-size-body',
+      '--font-size-heading',
+      '--font-size-display',
+      '--font-size-3xs',
+      '--font-size-2xs',
+      '--font-size-xs',
+      '--font-size-sm',
+      '--font-size-md',
+      '--font-size-lg',
+      '--font-size-xl',
+      '--font-size-2xl',
+      '--font-weight-normal',
+      '--font-weight-medium',
+      '--font-weight-bold',
+      '--line-height-normal',
+      '--line-height-tight',
+      '--touch-target-min',
+      '--radius-sm',
+      '--radius-md',
+      '--radius-control',
+    ]) {
+      expect(css).toMatch(new RegExp(`${oldToken}:`))
+    }
   })
 
   it('keeps the semantic rail in flow on phones and independently scrollable on desktop', () => {

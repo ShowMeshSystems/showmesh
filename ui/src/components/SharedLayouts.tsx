@@ -72,13 +72,86 @@ export function EvidenceTable({ label, children }: { label: string } & Children)
   return <div className="shared-evidence-table" role="region" aria-label={label} tabIndex={0}>{children}</div>
 }
 
-function StateBlock({ state, title, reason, role = 'status', headingLevel = 2 }: { state: string; title: string; reason: ReactNode; role?: 'status' | 'alert' } & StateBlockOptions) {
-  return <section className={`shared-state-block shared-state-block--${state}`} role={role} aria-label={`${title}: ${state}`}>{headingLevel === 3 ? <h3>{title}</h3> : <h2>{title}</h2>}<p>{reason}</p></section>
+/* The eight inline absence and refusal states, rendered as the design's ruled
+ * strip: a mono state word in a left column, the fact and its explanation on the
+ * right, hairline top and bottom. It sits in the row or field where the content
+ * would have been, so it carries no fill, no radius and no card.
+ *
+ * `state` drives the colour, and only `unobserved` gets a dashed edge. Stale, an
+ * unsupported field and an empty list are settled facts, and must not borrow the
+ * shape of evidence that was never collected. */
+const STATE_WORD: Record<string, string> = {
+  loading: 'Loading',
+  empty: 'Empty',
+  stale: 'Stale',
+  failed: 'Failed',
+  unavailable: 'Unavailable',
+  unobserved: 'Unobserved',
+  signed_out: 'Signed out',
+  no_permission: 'No permission',
+}
+
+type StateBlockProps = {
+  state: string
+  title: string
+  reason: ReactNode
+  role?: 'status' | 'alert'
+  /* Appended to the state word after a middot, for the one detail that belongs
+   * beside it: a stale value's age, or a failed read's retry hint. */
+  stateDetail?: string | undefined
+  actions?: ReactNode | undefined
+} & StateBlockOptions
+
+function StateBlock({ state, title, reason, role = 'status', headingLevel = 2, stateDetail, actions }: StateBlockProps) {
+  const word = STATE_WORD[state] ?? state
+  return (
+    <section className={`shared-state-block ruled-strip ruled-strip--${state.replace('_', '-')} shared-state-block--${state}`} role={role} aria-label={`${title}: ${state}`}>
+      <span className="ruled-strip__state t-meta">{stateDetail ? `${word} · ${stateDetail}` : word}</span>
+      <div>
+        {headingLevel === 3 ? <h3 className="ruled-strip__fact">{title}</h3> : <h2 className="ruled-strip__fact">{title}</h2>}
+        <p className="ruled-strip__explanation">{reason}</p>
+        {actions && <div className="ruled-strip__actions">{actions}</div>}
+      </div>
+    </section>
+  )
 }
 
 export function LoadingBlock({ title = 'Loading', reason = 'Waiting for coordinator data.', headingLevel }: { title?: string; reason?: ReactNode } & StateBlockOptions) { return <StateBlock state="loading" title={title} reason={reason} headingLevel={headingLevel} /> }
-export function EmptyBlock({ title, reason, children, headingLevel }: { title: string; reason: ReactNode } & Partial<Children> & StateBlockOptions) { return <StateBlock state="empty" title={title} reason={<>{reason}{children}</>} headingLevel={headingLevel} /> }
+export function EmptyBlock({ title, reason, children, headingLevel, actions }: { title: string; reason: ReactNode; actions?: ReactNode | undefined } & Partial<Children> & StateBlockOptions) { return <StateBlock state="empty" title={title} reason={<>{reason}{children}</>} headingLevel={headingLevel} actions={actions} /> }
 export function UnavailableBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="unavailable" title={title} reason={reason} headingLevel={headingLevel} /> }
-export function FailedBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="failed" title={title} reason={reason} role="alert" headingLevel={headingLevel} /> }
-export function StaleBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="stale" title={title} reason={reason} headingLevel={headingLevel} /> }
+export function FailedBlock({ title, reason, headingLevel, stateDetail, actions }: { title: string; reason: ReactNode; stateDetail?: string | undefined; actions?: ReactNode | undefined } & StateBlockOptions) { return <StateBlock state="failed" title={title} reason={reason} role="alert" headingLevel={headingLevel} stateDetail={stateDetail} actions={actions} /> }
+export function StaleBlock({ title, reason, headingLevel, stateDetail, actions }: { title: string; reason: ReactNode; stateDetail?: string | undefined; actions?: ReactNode | undefined } & StateBlockOptions) { return <StateBlock state="stale" title={title} reason={reason} headingLevel={headingLevel} stateDetail={stateDetail} actions={actions} /> }
 export function UnobservedBlock({ title, reason, headingLevel }: { title: string; reason: ReactNode } & StateBlockOptions) { return <StateBlock state="unobserved" title={title} reason={reason} headingLevel={headingLevel} /> }
+
+/* Reads stay open when writes do not, so a signed-out region states what is still
+ * readable rather than blanking. */
+export function SignedOutBlock({ title, reason, headingLevel, actions }: { title: string; reason: ReactNode; actions?: ReactNode | undefined } & StateBlockOptions) { return <StateBlock state="signed_out" title={title} reason={reason} headingLevel={headingLevel} actions={actions} /> }
+
+/* A refusal from a healthy coordinator, never a connection problem. */
+export function NoPermissionBlock({ title, reason, headingLevel, actions }: { title: string; reason: ReactNode; actions?: ReactNode | undefined } & StateBlockOptions) { return <StateBlock state="no_permission" title={title} reason={reason} headingLevel={headingLevel} actions={actions} /> }
+
+/* The second state treatment: a whole region that cannot render at all. The hatch
+ * runs in the 76px gutter only and the copy sits on clean surface, so absence
+ * never takes the shape of a card containing data. */
+export function BlankingPlate({ variant, stamp, eyebrow, title, explanation, actions, headingLevel = 2 }: {
+  variant: 'unobserved' | 'empty' | 'unavailable' | 'permission'
+  stamp: string
+  eyebrow: string
+  title: ReactNode
+  explanation: ReactNode
+  actions?: ReactNode | undefined
+} & StateBlockOptions) {
+  return (
+    <section className={`plate plate--${variant}`} role={variant === 'permission' ? 'alert' : 'status'}>
+      <div className="plate__gutter">
+        <span className="plate__stamp t-meta">{stamp}</span>
+      </div>
+      <div className="plate__body">
+        <p className="plate__eyebrow t-meta">{eyebrow}</p>
+        {headingLevel === 3 ? <h3 className="plate__heading t-heading">{title}</h3> : <h2 className="plate__heading t-heading">{title}</h2>}
+        <p className="plate__explanation">{explanation}</p>
+        {actions && <div className="plate__actions">{actions}</div>}
+      </div>
+    </section>
+  )
+}
