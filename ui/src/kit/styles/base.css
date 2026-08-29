@@ -1,0 +1,49 @@
+/*
+ * Reset and page ground. Scoped under .sm so the kit can coexist with the
+ * old stylesheets until every screen is rebuilt; the scope comes off in
+ * phase 2 when the old system is deleted.
+ */
+
+.sm *,
+.sm *::before,
+.sm *::after {
+  box-sizing: border-box;
+}
+
+.sm {
+  background: var(--bg);
+  color: var(--text);
+  font: var(--t-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+.sm a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16em;
+}
+
+.sm a:hover {
+  color: var(--accent-hover);
+}
+
+.sm :focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.sm code,
+.sm kbd,
+.sm samp {
+  font: var(--t-data);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sm *,
+  .sm *::before,
+  .sm *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

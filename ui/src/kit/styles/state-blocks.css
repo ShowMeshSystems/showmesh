@@ -1,0 +1,163 @@
+/*
+ * The two absence treatments. A ruled strip sits in the row or field where
+ * the content would have been. A blanking plate covers a whole region that
+ * cannot render at all.
+ *
+ * Rejected, do not reinvent: a grid of rounded cards with coloured left
+ * borders. It made absence of data look like a card containing data.
+ */
+
+.sm-strips {
+  border-bottom: 0;
+}
+
+.sm-strips__title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.sm-strip {
+  display: grid;
+  grid-template-columns: 158px minmax(0, 1fr);
+  gap: 0 20px;
+  align-items: start;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-strip__label {
+  font: var(--t-meta);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-strip__label--warn {
+  color: var(--warn-fg);
+}
+
+.sm-strip__label--bad {
+  color: var(--bad-fg);
+}
+
+/* Never collected. The dashed underline does the same job the dashed badge
+   does elsewhere. */
+.sm-strip__label--unobserved {
+  justify-self: start;
+  padding-bottom: 2px;
+  border-bottom: 1px dashed var(--text-faint);
+}
+
+.sm-strip__fact {
+  margin: 0;
+  font: var(--t-subhead);
+}
+
+.sm-strip__detail {
+  margin: 5px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+/* Blanking plate. The hatch runs in the gutter only; copy sits on clean
+   surface. The stamp's border carries the absence class: dashed for
+   never-collected, solid otherwise. */
+.sm-plate {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.sm-plate__gutter {
+  display: grid;
+  place-items: center;
+  border-right: 1px solid var(--border-strong);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--hatch) 6px 12px);
+}
+
+.sm-plate__stamp {
+  padding: 3px 6px;
+  border: 1px solid var(--text-faint);
+  background: var(--surface);
+  color: var(--text-faint);
+  font: var(--t-meta);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.sm-plate--unobserved .sm-plate__stamp {
+  border-style: dashed;
+}
+
+.sm-plate--warn {
+  border-color: var(--warn-border);
+}
+
+.sm-plate--warn .sm-plate__gutter {
+  border-right-color: var(--warn-border);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--warn-bg) 6px 12px);
+}
+
+.sm-plate--warn .sm-plate__stamp {
+  border-color: var(--warn-fg);
+  color: var(--warn-fg);
+}
+
+.sm-plate--bad {
+  border-color: var(--bad-border);
+}
+
+.sm-plate--bad .sm-plate__gutter {
+  border-right-color: var(--bad-border);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--bad-bg) 6px 12px);
+}
+
+.sm-plate--bad .sm-plate__stamp {
+  border-color: var(--bad-fg);
+  color: var(--bad-fg);
+}
+
+.sm-plate__body {
+  padding: 20px 22px;
+}
+
+.sm-plate__eyebrow {
+  margin: 0;
+  font: var(--t-meta);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-plate--warn .sm-plate__eyebrow {
+  color: var(--warn-fg);
+}
+
+.sm-plate--bad .sm-plate__eyebrow {
+  color: var(--bad-fg);
+}
+
+.sm-plate__title {
+  margin: var(--s-2) 0 0;
+  font: var(--t-heading);
+  letter-spacing: -0.015em;
+}
+
+.sm-plate__detail {
+  margin: var(--s-2) 0 0;
+  font: var(--t-body);
+  color: var(--text-muted);
+  max-width: 64ch;
+}
+
+.sm-plate__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: var(--s-4);
+}

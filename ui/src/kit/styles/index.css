@@ -1,0 +1,10 @@
+/* The kit. Import once. Phase 2 deletes ../../styles/index.css. */
+@import './tokens.css';
+@import './base.css';
+@import './type.css';
+@import './blocks.css';
+@import './controls.css';
+@import './status.css';
+@import './state-blocks.css';
+@import './table.css';
+@import './shell.css';

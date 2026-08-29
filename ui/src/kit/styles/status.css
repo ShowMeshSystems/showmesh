@@ -1,0 +1,82 @@
+/*
+ * Status is a labelled pair: a glyph and a state word as well as a fill.
+ * Colour alone is never the signal.
+ *
+ * The dashed edge is reserved for never-collected evidence. An empty list,
+ * a stale value and an unsupported field are settled facts and keep a solid
+ * edge; absence must not be able to borrow the shape of a settled state.
+ */
+
+.sm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid;
+  border-radius: var(--r-chip);
+  font: var(--t-meta);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sm-status--lg {
+  height: 22px;
+  padding: 0 var(--s-2);
+  gap: 6px;
+  letter-spacing: 0.06em;
+}
+
+.sm-status--good {
+  border-color: var(--good-fg);
+  background: var(--good-bg);
+  color: var(--good-fg);
+}
+
+.sm-status--warn {
+  border-color: var(--warn-fg);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.sm-status--bad {
+  border-color: var(--bad-fg);
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+}
+
+.sm-status--unknown {
+  border-style: dashed;
+  border-color: var(--unk-fg);
+  background: var(--unk-bg);
+  color: var(--unk-fg);
+}
+
+/* Evidence panel: the same four tones at region size, for a specimen or a
+   summary tile that carries its own fill. */
+.sm-evidence {
+  padding: 14px;
+  border: 1px solid;
+  border-radius: var(--r-card);
+}
+
+.sm-evidence--good {
+  border-color: var(--good-border);
+  background: var(--good-bg);
+}
+
+.sm-evidence--warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.sm-evidence--bad {
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+}
+
+.sm-evidence--unknown {
+  border-color: var(--unk-border);
+  background: var(--unk-bg);
+}

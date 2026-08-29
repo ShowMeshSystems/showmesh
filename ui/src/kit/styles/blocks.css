@@ -1,0 +1,143 @@
+/*
+ * Page and section furniture, plus the small supporting pieces the mocks
+ * reuse: eyebrow, callout, definition strip, hairline divider.
+ *
+ * A page is an h1 and one muted line. Nothing else goes above the first
+ * section: no eyebrow over the page title, no action cluster beside it.
+ */
+
+.sm-page__title {
+  margin: 0;
+  font: var(--t-display);
+  letter-spacing: -0.02em;
+}
+
+.sm-page__lede {
+  margin: 6px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.sm-section {
+  margin-top: 26px;
+}
+
+.sm-section__title {
+  margin: 0;
+  font: var(--t-heading);
+  letter-spacing: -0.015em;
+}
+
+.sm-section__detail {
+  margin: var(--s-2) 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+
+.sm-section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
+/* Section eyebrow. Legal above an h2; never above the page h1. */
+.sm-eyebrow {
+  margin: 0 0 var(--s-2);
+  font: var(--t-meta);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-eyebrow--accent {
+  color: var(--accent);
+}
+
+.sm-callout {
+  margin: 20px 0 0;
+  padding: var(--s-3) 14px;
+  border-left: 3px solid var(--accent-border);
+  background: var(--raised);
+  font: var(--t-small);
+  color: var(--text-muted);
+  max-width: 78ch;
+}
+
+/* Definition strip: hairline-separated facts in one row. This is the shape
+   the Dashboard system-health tiles use. */
+.sm-defs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-defs > div {
+  padding: 14px var(--s-4);
+  border-right: 1px solid var(--border);
+}
+
+.sm-defs > div:first-child {
+  padding-left: 0;
+}
+
+.sm-defs > div:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.sm-defs dt {
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-defs dd {
+  margin: 6px 0 0;
+  font: var(--t-body);
+}
+
+.sm-defs dd + dd {
+  margin-top: 2px;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.sm-hr {
+  height: 1px;
+  border: 0;
+  margin: var(--s-5) 0;
+  background: var(--border);
+}
+
+/* An ordinary group of fields gets a heading and a divider, not a card.
+   A panel signals a meaningfully different context, state, or confirmation. */
+.sm-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  padding: var(--s-4);
+}
+
+.sm-panel--raised {
+  background: var(--raised);
+}
+
+.sm-grid {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.sm-grid--auto {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.sm-grid--wide {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}

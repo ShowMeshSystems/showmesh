@@ -1,0 +1,81 @@
+/*
+ * Evidence table. Dense rows, tabular numerals, freshness in the row and
+ * never in a banner above it.
+ *
+ * Wide tables scroll inside their own container; the page never gains
+ * horizontal scrolling. Keep min-width low enough to fit the 1280 spine:
+ * about 596px with an inspector pane, about 1012px without.
+ */
+
+.sm-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  background: var(--surface);
+}
+
+.sm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-body);
+}
+
+.sm-table th {
+  padding: 9px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  background: var(--raised);
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.sm-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  height: var(--row-h);
+}
+
+.sm-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.sm-table tbody tr:hover td {
+  background: var(--raised);
+}
+
+.sm-table tbody tr[aria-current='true'] td {
+  background: var(--accent-bg);
+}
+
+.sm-table__num,
+.sm-table th.sm-table__num {
+  text-align: right;
+  font: var(--t-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.sm-table__id {
+  font: var(--t-data);
+  color: var(--text-muted);
+}
+
+.sm-table__fresh {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.sm-table__fresh--stale {
+  color: var(--warn-fg);
+}
+
+/* Reorderable lists. Say "Drag to reorder" once in the container footer. */
+.sm-table__handle {
+  cursor: grab;
+  color: var(--text-faint);
+  font: var(--t-data);
+}

@@ -75,6 +75,7 @@ import { Readiness } from '../views/PlaylistReadiness'
 // routes under Configure rather than Show night.
 import { FPPPlaylistDefinitionDetail } from '../views/FPPPlaylistDefinitionDetail'
 import { NotFound } from '../views/NotFound'
+import { Specimen } from '../kit/Specimen'
 import '../styles/index.css'
 
 // Operator-reported: navigating from a long page to another one left the
@@ -194,6 +195,10 @@ export default function App() {
           <ScrollToTop />
           <RouteTitle />
           <Routes>
+          {/* The element kit, rendered whole. Outside the Layout because it
+              carries its own chrome and its own theme scope. Acceptance gate
+              for the visual language; see docs/ui-rebuild/REBUILD-PLAN.md. */}
+          <Route path="_specimen" element={<Specimen />} />
           <Route element={<Layout onSubmitToken={submitToken} />}>
             {/* Seven rail destinations, no eighth. UI-DESIGN-GUIDE.md section 3.
                 Old addresses are deliberately NOT redirected: the not-found page

@@ -1,0 +1,242 @@
+/*
+ * Buttons, fields and choice controls. One primary action per region.
+ * 34px on a pointer, 48px where the shell is touched with gloves
+ * (transport, lifecycle commands, macro Run, sign-in and bootstrap forms).
+ */
+
+.sm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: var(--ctrl-h);
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sm-btn:hover:not(:disabled) {
+  border-color: var(--text-muted);
+}
+
+.sm-btn:active:not(:disabled) {
+  background: var(--raised);
+}
+
+.sm-btn--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.sm-btn--primary:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.sm-btn--primary:active:not(:disabled) {
+  border-color: var(--accent-active);
+  background: var(--accent-active);
+}
+
+.sm-btn--quiet {
+  padding: 0 12px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.sm-btn--quiet:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* Destructive controls sit physically apart from the save path. */
+.sm-btn--danger {
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+  font-weight: 600;
+}
+
+.sm-btn--danger:hover:not(:disabled) {
+  border-color: var(--bad-fg);
+  background: var(--bad-fg);
+  color: var(--bg);
+}
+
+.sm-btn--compact {
+  height: var(--ctrl-h-compact);
+  padding: 0 10px;
+}
+
+/* Gloved: transport, lifecycle, macro Run, sign-in and bootstrap fields. */
+.sm-btn--gloved {
+  height: var(--ctrl-h-gloved);
+  padding: 0 20px;
+  font-weight: 600;
+}
+
+/* A control the principal may not use renders disabled with a stated
+   reason, never hidden. The reason belongs in the label or beside it. */
+.sm-btn:disabled,
+.sm-btn[aria-disabled='true'] {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.sm-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.sm-rule-v {
+  width: 1px;
+  height: 26px;
+  background: var(--border);
+}
+
+/* Fields */
+
+.sm-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sm-field__label {
+  font: var(--t-body);
+  font-weight: 500;
+}
+
+.sm-field__help {
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.sm-field__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font: var(--t-small);
+  color: var(--bad-fg);
+}
+
+.sm-input,
+.sm-select,
+.sm-textarea {
+  height: var(--ctrl-h);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-data);
+  min-width: 0;
+}
+
+.sm-select {
+  padding: 0 8px;
+  font: var(--t-body);
+}
+
+.sm-textarea {
+  height: auto;
+  min-height: 88px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.sm-input:focus-visible,
+.sm-select:focus-visible,
+.sm-textarea:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.sm-input[aria-invalid='true'],
+.sm-select[aria-invalid='true'],
+.sm-textarea[aria-invalid='true'] {
+  border-color: var(--bad-border);
+}
+
+.sm-input:disabled,
+.sm-select:disabled,
+.sm-textarea:disabled {
+  border-color: var(--border);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.sm-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s-5);
+}
+
+.sm-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--ctrl-h);
+  cursor: pointer;
+}
+
+.sm-choice input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.sm-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-5);
+}
+
+/* Segmented control. Each segment needs aria-pressed. */
+.sm-segmented {
+  display: inline-flex;
+  gap: 1px;
+  padding: 1px;
+  background: var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+
+.sm-segmented__item {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: var(--t-meta);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sm-segmented__item:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.sm-segmented__item[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+}

@@ -1,0 +1,282 @@
+/*
+ * Shell chrome. The rail owns intent; the top bar owns the installation.
+ *
+ * The bar must not wrap. If its height changes, the rail's sticky offset
+ * puts the first nav group behind it: fix the wrap, never the offset.
+ */
+
+.sm-shell {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--t-body);
+}
+
+.sm-chrome {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  height: var(--chrome-h);
+  padding: 0 var(--s-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-chrome__left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* Truncates so the bar keeps its height under a long title. */
+.sm-chrome__now {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sm-chrome__right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+.sm-brand {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-panel);
+  color: var(--accent);
+  font: var(--t-meta);
+  flex: 0 0 auto;
+}
+
+.sm-chrome__divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex: 0 0 auto;
+}
+
+.sm-showpicker {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--ctrl-h-compact);
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--t-body);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sm-showpicker:hover {
+  border-color: var(--accent);
+}
+
+.sm-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--ctrl-h-compact);
+  padding: 0 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-card);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: var(--t-meta);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sm-mode-badge--setup {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.sm-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--t-meta);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sm-conn__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.sm-conn--live {
+  color: var(--good-fg);
+}
+
+.sm-conn--degraded {
+  color: var(--warn-fg);
+}
+
+.sm-conn--lost {
+  color: var(--bad-fg);
+}
+
+.sm-conn--unknown {
+  color: var(--unk-fg);
+}
+
+/* Full-width position bar for the current item, under the chrome. */
+.sm-progress {
+  position: sticky;
+  top: var(--chrome-h);
+  z-index: 29;
+  height: 3px;
+  background: var(--sunken);
+}
+
+.sm-progress__fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+/* Rail and page spine. */
+.sm-shell-body {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+}
+
+.sm-rail {
+  position: sticky;
+  top: calc(var(--chrome-h) + 1px);
+  align-self: start;
+  padding: 10px 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sm-rail__group {
+  margin: 0 0 6px;
+  padding: 0 14px;
+  font: var(--t-meta);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-rail__group + .sm-rail__group,
+.sm-rail__link + .sm-rail__group {
+  margin-top: var(--s-4);
+}
+
+.sm-rail__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: 0 14px;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  font: var(--t-body);
+  text-decoration: none;
+}
+
+.sm-rail__link:hover {
+  background: var(--raised);
+  border-left-color: var(--border-strong);
+  color: var(--text);
+}
+
+.sm-rail__link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.sm-rail__link[aria-current='page'] {
+  border-left-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sm-rail__link[aria-disabled='true'] {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+/* Attention counts, never inventory counts. A badge means an operator has
+   something to do; no read means no badge at all. */
+.sm-rail__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid;
+  border-radius: var(--r-chip);
+  font: var(--t-meta);
+  font-size: 10px;
+}
+
+.sm-rail__badge--bad {
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad-fg);
+}
+
+.sm-rail__badge--warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.sm-rail__badge--live {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent);
+}
+
+.sm-main {
+  min-width: 0;
+  padding: 22px 28px 80px;
+  max-width: var(--page-max);
+}
+
+/* Two-pane screens: list plus inspector. */
+.sm-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: var(--s-5);
+  align-items: start;
+}
+
+.sm-panes > aside {
+  position: sticky;
+  top: calc(var(--chrome-h) + var(--s-5));
+}
+
+@media (max-width: 1100px) {
+  .sm-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
