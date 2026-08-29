@@ -244,6 +244,16 @@ export function NodeRoutingSettings() {
             )}
           </>
         )}
+
+        {/* Declare above reuses an advertising agent's own node id, which is the
+            safe default and removes a whole class of typo. This is the escape
+            hatch for the other case: routing declared ahead of a node that has
+            not come up yet, which is the only path that accepts a typed id. */}
+        <p className="field__help" style={{ marginTop: 16 }}>
+          A node that has not come up yet will not appear above.{' '}
+          <Link to="/settings/node-routing/new">Declare routing by typing a node id</Link> to
+          prepare one in advance.
+        </p>
       </section>
 
       {scopeGate.allowed && state.kind === 'loaded' && (
