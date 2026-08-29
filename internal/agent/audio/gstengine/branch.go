@@ -362,12 +362,30 @@ func (b *branch) setElementsState(ctx context.Context, state gst.State) error {
 // element b owns, with no bound of its own; setElementsState is what
 // bounds the caller's wait for it.
 func setElementsStateNow(b *branch, state gst.State) error {
-	for _, el := range b.elements() {
+	for _, el := range stateChangeOrder(b.elements(), state) {
 		if el.SetState(state) == gst.StateChangeFailure {
 			return fmt.Errorf("%w: element %q refused to reach state %v", pkgaudio.ErrEnginePipelineCrash, el.GetName(), state)
 		}
 	}
 	return nil
+}
+
+// stateChangeOrder is the order to walk els in for a transition to
+// state: downstream first on the way up, source first on the way down,
+// the same direction a GstBin uses for its own children. Bringing the
+// source up first instead activates its src pad in push mode and starts
+// a streaming task, which then races decodebin's switch to pull mode;
+// when the task wins that race its push is refused and filesrc posts
+// "Internal data stream error" against a branch that is still loading.
+func stateChangeOrder(els []gst.Element, state gst.State) []gst.Element {
+	if state == gst.StateNull {
+		return els
+	}
+	out := make([]gst.Element, len(els))
+	for i, el := range els {
+		out[len(els)-1-i] = el
+	}
+	return out
 }
 
 // awaitNoElementRace blocks until no setElementsState call, including
