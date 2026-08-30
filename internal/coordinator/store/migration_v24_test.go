@@ -8,7 +8,7 @@ import (
 // The acceptance property: a revision written before
 // duckFadeDurationMs/duckRestoreFadeDurationMs existed still decodes
 // after this migration, carrying each field's own default.
-func TestMigrateV21BackfillsMissingDuckFadeDurations(t *testing.T) {
+func TestMigrateV24BackfillsMissingDuckFadeDurations(t *testing.T) {
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1,
 		`{"driftIgnoreThresholdMs":20,"defaultFadeCurve":"linear","defaultFadeDurationMs":1000,`+
@@ -29,8 +29,8 @@ func TestMigrateV21BackfillsMissingDuckFadeDurations(t *testing.T) {
 }
 
 // A revision that already carries both keys is left byte-for-byte alone.
-func TestMigrateV21LeavesCompletePayloadsAlone(t *testing.T) {
-	// Values deliberately differ from v21's own backfill defaults, so a
+func TestMigrateV24LeavesCompletePayloadsAlone(t *testing.T) {
+	// Values deliberately differ from v24's own backfill defaults, so a
 	// mutation that overwrote a present key rather than skipping it would
 	// change this payload and fail the byte-for-byte check below.
 	const complete = `{"driftIgnoreThresholdMs":500,"defaultFadeCurve":"linear","defaultFadeDurationMs":2500,` +
@@ -56,7 +56,7 @@ func TestMigrateV21LeavesCompletePayloadsAlone(t *testing.T) {
 // A stored payload_json of the JSON literal null decodes to a nil map,
 // not an error, exactly as v20's own equivalent test proves; this
 // migration must handle it without panicking too.
-func TestMigrateV21HandlesNullPayloadWithoutPanicking(t *testing.T) {
+func TestMigrateV24HandlesNullPayloadWithoutPanicking(t *testing.T) {
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1, `null`)
 
@@ -74,9 +74,9 @@ func TestMigrateV21HandlesNullPayloadWithoutPanicking(t *testing.T) {
 	}
 }
 
-// migrate stamps the maximum migration version, and v21 is now that
+// migrate stamps the maximum migration version, and v24 is now that
 // maximum.
-func TestMigrateV21AdvancesTheSchemaVersion(t *testing.T) {
+func TestMigrateV24AdvancesTheSchemaVersion(t *testing.T) {
 	db := openDatabaseAtV18(t)
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)

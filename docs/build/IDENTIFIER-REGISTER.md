@@ -1087,7 +1087,8 @@ The store schema version, bumped by migrations in
 | v21 | reserved | the multi-node audio branch's `audio_sessions` re-key, from `id` alone to `(node_id, id)`, so two nodes dispatching the same session id keep separate desired state and revision; existing rows migrated in place. Built and merged on `dev/multi-audio` as v20 before v20 was taken on `main`; it renumbers to v21 when that branch takes `main` |
 | v22 | reserved | Lane 17a SM-111: renaming `commands.requested_revision` to an honest name and formalizing its per-family discriminator (owner, 2026-08-19). Supersedes the v13 reservation below, which was made before v14 through v21 were taken |
 | v23 | reserved | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, if J1 needs a table (ADR-048, TRACK-J-fpp-fallback.md J1) |
-| v24+ | unallocated | free |
+| v24 | shipped | every stored `audio.settings` revision is backfilled with `duckFadeDurationMs`/`duckRestoreFadeDurationMs` when either is missing, using each field's own stated default, so a revision written before a duck fade (rather than an instant step) existed still decodes and can be pushed |
+| v25+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest

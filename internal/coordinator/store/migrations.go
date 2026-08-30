@@ -63,7 +63,11 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
-	{version: 21, fn: migrateV21AudioSettingsBackfillDuckFadeDurations},
+	// v21-v23 are reserved for other, not-yet-merged branches
+	// (docs/build/IDENTIFIER-REGISTER.md): this migration takes v24, the
+	// next free number, rather than the lowest one, to avoid colliding
+	// with them when they land.
+	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task

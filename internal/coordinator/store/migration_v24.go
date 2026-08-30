@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// v21AudioSettingsRequiredFieldDefaults is the value backfilled into a
+// v24AudioSettingsRequiredFieldDefaults is the value backfilled into a
 // stored audio.settings revision for duckFadeDurationMs and
 // duckRestoreFadeDurationMs when either key is entirely absent from the
 // stored JSON: both joined the required set after this project's first
@@ -18,19 +18,19 @@ import (
 // Repeated here as literals for the same reason schemaV19's bounds are: a
 // migration must keep applying the values it shipped with, even if
 // [config.AudioSettingsDefaultPayload] moves later.
-var v21AudioSettingsRequiredFieldDefaults = map[string]json.RawMessage{
+var v24AudioSettingsRequiredFieldDefaults = map[string]json.RawMessage{
 	"duckFadeDurationMs":        json.RawMessage(`200`),
 	"duckRestoreFadeDurationMs": json.RawMessage(`800`),
 }
 
-// migrateV21AudioSettingsBackfillDuckFadeDurations makes every stored
+// migrateV24AudioSettingsBackfillDuckFadeDurations makes every stored
 // audio.settings revision decode under the validator shipping today,
 // regardless of whether it predates duckFadeDurationMs/
 // duckRestoreFadeDurationMs. A value migration, not a table change,
-// matching migrateV20AudioSettingsBackfillMissingRequiredFields one
-// migration below it: the payload column's shape is unchanged, and a
-// revision that already carries both keys is left byte-for-byte alone.
-func migrateV21AudioSettingsBackfillDuckFadeDurations(ctx context.Context, tx *sql.Tx) error {
+// matching migrateV20AudioSettingsBackfillMissingRequiredFields's own
+// shape: the payload column's shape is unchanged, and a revision that
+// already carries both keys is left byte-for-byte alone.
+func migrateV24AudioSettingsBackfillDuckFadeDurations(ctx context.Context, tx *sql.Tx) error {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT object_id, revision, payload_json FROM config_revisions WHERE kind = ?`, audioSettingsKind)
 	if err != nil {
@@ -49,7 +49,7 @@ func migrateV21AudioSettingsBackfillDuckFadeDurations(ctx context.Context, tx *s
 			_ = rows.Close()
 			return fmt.Errorf("scan audio.settings revision: %w", err)
 		}
-		rewritten, changed, err := v21BackfillAudioSettingsPayload(r.payload)
+		rewritten, changed, err := v24BackfillAudioSettingsPayload(r.payload)
 		if err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("backfill audio.settings revision %d: %w", r.revision, err)
@@ -78,11 +78,11 @@ func migrateV21AudioSettingsBackfillDuckFadeDurations(ctx context.Context, tx *s
 	return nil
 }
 
-// v21BackfillAudioSettingsPayload adds any of
-// [v21AudioSettingsRequiredFieldDefaults]'s keys missing from raw's
+// v24BackfillAudioSettingsPayload adds any of
+// [v24AudioSettingsRequiredFieldDefaults]'s keys missing from raw's
 // top-level object, changing nothing else. It reports changed=false, with
 // no error, for a payload that already carries both keys.
-func v21BackfillAudioSettingsPayload(raw string) (string, bool, error) {
+func v24BackfillAudioSettingsPayload(raw string) (string, bool, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
 		return "", false, fmt.Errorf("stored payload is not a JSON object: %w", err)
@@ -92,12 +92,12 @@ func v21BackfillAudioSettingsPayload(raw string) (string, bool, error) {
 		// leaves top nil rather than failing. There is no top-level
 		// object to backfill a key into, so report unchanged, matching
 		// migrateV20AudioSettingsBackfillMissingRequiredFields's own
-		// handling of the same input one migration below this one.
+		// handling of the same input.
 		return "", false, nil
 	}
 
 	changed := false
-	for key, def := range v21AudioSettingsRequiredFieldDefaults {
+	for key, def := range v24AudioSettingsRequiredFieldDefaults {
 		if _, present := top[key]; present {
 			continue
 		}
