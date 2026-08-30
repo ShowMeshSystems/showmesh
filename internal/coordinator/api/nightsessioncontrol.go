@@ -1564,22 +1564,11 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
 }
 
-// nightPinnedBackgroundMaxGainDb is the background-audio ceiling rec
-// itself pinned when it started - rec's own pinned night.session
-// revision's resting.backgroundAudio.maxGainDb, never the value
-// night.session.resting's config currently holds, which can differ across
-// a later revision (owner ruling 2026-08-28). This is called for a
-// non-running rec too, on the by-id path (mapNightBackgroundAudio's
-// current=false case, owner ruling 2026-08-30): whether rec was ever the
-// RUNNING session is the caller's decision, not this function's - it
-// only ever reads the one pinned revision rec names. A nil gain with a
-// non-empty reason and a nil error means that pinned revision configures
-// no background audio at all - a legitimate reading, not a read failure,
-// but one the caller's Reason must still say out loud rather than leave
-// blank. rec.ConfigObjectID == "" (found by review: mapNightCues already
-// guards this, this call site did not) is the same "nothing pinned yet"
-// case, answered the same way without issuing a doomed GetConfigRevision
-// call against an empty object id.
+// nightPinnedBackgroundMaxGainDb reads rec's own pinned night.session
+// revision's resting.backgroundAudio.maxGainDb; it makes no judgment on
+// whether rec was ever the running session, so the caller decides that.
+// A nil gain with a non-empty reason and a nil error means the pinned
+// revision configures no background audio at all - not a read failure.
 func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) (gain *float64, reason string, err error) {
 	if rec.ConfigObjectID == "" {
 		return nil, "", nil

@@ -95,19 +95,10 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		return
 	}
 
-	// Printed once, ahead of the step sections below (not nested under
-	// either one, and not conditioned on either having steps): the pinned
-	// ceiling describes the SESSION, not one sequence's own step log.
-	// Today this prints only from GET /night/session (there is no by-id
-	// showmeshctl command yet), so in practice it is only ever present
-	// while running; that is this CALL SITE's own current status, not a
-	// property of pinnedMaxGainDb itself - see the OpenAPI description of
-	// pinnedMaxGainDb, which also covers GET /night/sessions/{id} and
-	// reports there regardless of state (owner ruling 2026-08-30). Found
-	// by review: an earlier version printed this line indented under the
-	// background section specifically, right after a "not configured"
-	// line, and never printed at all when only announcement steps
-	// existed.
+	// Printed once, ahead of either step section: it describes the
+	// SESSION, not one sequence's step log. Only ever present while
+	// running here because this command only ever hits GET
+	// /night/session, which has no by-id command yet.
 	if s.BackgroundAudio.PinnedMaxGainDb != nil {
 		_, _ = fmt.Fprintf(w, "\nPinned max gain: %.1f dB\n", *s.BackgroundAudio.PinnedMaxGainDb)
 	} else if s.BackgroundAudio.Reason != "" {

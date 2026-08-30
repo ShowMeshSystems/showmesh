@@ -138,7 +138,7 @@ type NightBackgroundAudio struct {
 	// and reports the record's own pinned ceiling regardless of state
 	// (owner ruling 2026-08-30). Never defaulted to a plausible-looking
 	// value.
-	PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb,omitempty"`
+	PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb"`
 }
 
 // NightSessionState is the full lifecycle resource.

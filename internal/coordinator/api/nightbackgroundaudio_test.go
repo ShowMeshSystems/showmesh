@@ -878,20 +878,12 @@ func nightPinnedMaxGainDbFromResponse(t *testing.T, body []byte) (id string, pin
 	return decoded.Session.ID, decoded.Session.BackgroundAudio.PinnedMaxGainDb
 }
 
-// TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint is an
-// HTTP-level test proving the actual handler wiring, not just the
-// mapper: GET /api/v1/night/sessions/{id} on a STOPPED session (still
-// the store's own "current" row - GetCurrentNightSession returns the
-// most recently created row regardless of its state, exactly the case
-// the owner ruling (2026-08-30) is about) reports its pinned ceiling
-// unconditionally, while GET /api/v1/night/session on that SAME session
-// reports null. Two mapper-level tests already exist
-// (TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates and
-// TestMapNightBackgroundAudio_ByIDIgnoresRunningState); this test is the
-// one that actually exercises handleGetNightLifecycle and
-// handleGetNightLifecycleByID, so a wiring mistake at either call site
-// (the current bool passed to mapNightSessionState) fails here even if
-// every mapper-level test still passes.
+// TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint exercises
+// handleGetNightLifecycle and handleGetNightLifecycleByID directly, not
+// just the mapper, so a wiring mistake in either handler's own `current`
+// argument fails here even if every mapper-level test still passes. A
+// stopped session stays the store's "current" row, exactly the case the
+// owner ruling (2026-08-30) is about.
 func TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
