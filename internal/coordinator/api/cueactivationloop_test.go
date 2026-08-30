@@ -339,6 +339,7 @@ func TestDispatchBlackAndSilenceAudioStopSurvivesNodeClockAheadOfCoordinator(t *
 
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 	act.EvidenceAt = nodeClockEvidenceAt
 	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)
@@ -382,6 +383,7 @@ func TestDispatchBlackAndSilenceAudioStopOrdinaryCoordinatorClockAhead(t *testin
 
 	setup := newAudioDispatchTestSetup(t, fixedClock(now))
 	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+	putAuthorizedAudioAssetForTest(t, setup.st, act.Show, act.CueID, nodeID, now)
 	act.EvidenceAt = nodeClockEvidenceAt
 	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
 	setup.pub.result = cueActivationNodeResultPayload(true, cueActivationNodeOutcomeAuthorized)

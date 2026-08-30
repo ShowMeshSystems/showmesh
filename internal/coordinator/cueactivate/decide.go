@@ -467,18 +467,27 @@ func knownCueRevisions(catalog assetsync.Catalog) map[string]int64 {
 // a reason to execute" posture the other direction: an UNKNOWN state must
 // never read as present either.
 //
-// A declared output whose AssetHashes is empty (nothing has been uploaded
-// for that sequence at all — [cuecatalog.RenderOutput.Filename]'s own doc
-// comment) is NOT treated as missing here, matching [assetsync.
-// ComputeNodeManifest]'s existing Missing computation, which only ever
-// names an asset a [store.AssetRecord] actually exists for: an unauthored
-// sequence is a separate, out-of-scope authoring gap, not evidence this
-// node failed to sync something that exists.
+// A declared output whose Filename is empty — [cuecatalog.RenderOutput.
+// Filename]'s own doc comment: no asset has ever been uploaded for that
+// sequence at all, so [assetsync.ExpectedAssetsForNode] resolved zero
+// AssetHashes and [resolveAssetFor] left Filename blank — is treated as
+// MISSING here, the same as any other absent asset. This coordinator used
+// to special-case it as present, on the theory that an unauthored sequence
+// is an out-of-scope authoring gap rather than a sync failure; that theory
+// is what let this coordinator authorize an activation its own node then
+// refused (internal/agent's own [assetPresent] has always treated an empty
+// filename as absent, never present) — the exact disagreement this
+// coordinator's readiness answer must never produce.
+// [assetsync.ComputeNodeManifest]'s own Missing/Gaps split is unaffected:
+// this function answers a narrower question (can THIS Cue activate on THIS
+// node right now), not that one.
 //
-// reason names entry's Cue, the sequence, and the missing content hash and
-// filename — TRACK-H-H3-SPEC.md section 6's "a refusal is a state with
-// evidence, never a silent no-op" applied to WHICH asset is missing, never
-// left for an operator to guess at. Empty when present is true.
+// reason names entry's Cue, the sequence, and either the missing content
+// hash and filename or — for a never-uploaded sequence — that no asset was
+// ever uploaded for it at all: TRACK-H-H3-SPEC.md section 6's "a refusal is
+// a state with evidence, never a silent no-op" applied to WHICH asset is
+// missing and WHY, never left for an operator to guess at. Empty when
+// present is true.
 func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inventoryInterval time.Duration, nodeID string, entry cuecatalog.Entry) (present bool, reason string, err error) {
 	report, err := st.GetNodeAssetReport(ctx, nodeID)
 	switch {
@@ -506,12 +515,20 @@ func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inven
 	}
 
 	if entry.Outputs.Render != nil {
+		if entry.Outputs.Render.Filename == "" {
+			return false, fmt.Sprintf("cue %q: render sequence %q has never had an asset uploaded, so it resolves to no runtime filename on node %q",
+				entry.CueID, entry.Outputs.Render.Sequence, nodeID), nil
+		}
 		if ok, missing := firstMissingHash(held, entry.Outputs.Render.AssetHashes); !ok {
 			return false, fmt.Sprintf("cue %q: render sequence %q asset %s (file %q) is not present on node %q",
 				entry.CueID, entry.Outputs.Render.Sequence, missing, entry.Outputs.Render.Filename, nodeID), nil
 		}
 	}
 	if entry.Outputs.Audio != nil {
+		if entry.Outputs.Audio.Filename == "" {
+			return false, fmt.Sprintf("cue %q: audio sequence %q has never had an asset uploaded, so it resolves to no runtime filename on node %q",
+				entry.CueID, entry.Outputs.Audio.Asset, nodeID), nil
+		}
 		if ok, missing := firstMissingHash(held, entry.Outputs.Audio.AssetHashes); !ok {
 			return false, fmt.Sprintf("cue %q: audio sequence %q asset %s (file %q) is not present on node %q",
 				entry.CueID, entry.Outputs.Audio.Asset, missing, entry.Outputs.Audio.Filename, nodeID), nil
@@ -520,12 +537,12 @@ func cueAssetsPresent(ctx context.Context, st *store.Store, now time.Time, inven
 	return true, "", nil
 }
 
-// firstMissingHash reports whether every one of hashes is in held —
-// [cuecatalog.RenderOutput.AssetHashes]'s own doc comment: empty means
-// nothing was ever uploaded for this sequence, which [cueAssetsPresent]'s
-// own doc comment states is never a reason to refuse — and, when not,
-// returns the first hash held lacks, for [cueAssetsPresent]'s own reason
-// text.
+// firstMissingHash reports whether every one of hashes is in held, and,
+// when not, returns the first hash held lacks, for [cueAssetsPresent]'s own
+// reason text. Only ever called once [cueAssetsPresent] has already
+// confirmed the output's Filename is non-empty, so an empty hashes slice
+// here means an asset row exists with no recorded content hash, not a
+// never-uploaded sequence — that case is refused earlier, by Filename.
 func firstMissingHash(held map[string]bool, hashes []string) (ok bool, missing string) {
 	for _, h := range hashes {
 		if !held[h] {
