@@ -8,9 +8,40 @@ Format: each entry states what is unresolved, why it matters now, the options,
 my recommendation, and what the answer unblocks. Answered entries move to
 "Settled" at the bottom with the ruling and the date.
 
+**Nothing is open as of 2026-08-30.** Every entry D-001 to D-017 is ruled. The
+index below is the working list; the entries keep their full reasoning.
+
+## Ruling index
+
+| # | Ruling | What it obliges the rebuild to do |
+|---|---|---|
+| D-001 | Density ships in the kit, no UI switch | Done |
+| D-002 | No build string in the chrome bar | Place it on Settings or Monitor · Capabilities |
+| D-003 | Fold the five mock-less routes into mocked screens | `/assets` is a rail destination built from `Show Assets.dc.html` |
+| D-004 | Sequential, one PR per screen, one worktree | Standing |
+| D-005 | Dashboard keeps the mock's three blocks | Done |
+| D-006 | "N items" alone; never claim nothing is stopping the show | Standing; B only when `CurrentRun.targets` is real-hardware verified |
+| D-007 | Commands stay enabled, report the coordinator's refusal | Open an issue for per-command `withheldReason` |
+| D-008 | List announcement cues, no fire button; disable the undeliverable-asset card from its reported fact | Open an issue for a fire endpoint |
+| D-009 | Rail states what the session reports | Open an issue for per-cycle history |
+| D-010 | A control the API cannot serve is built, inert, `NotWired` | Standing |
+| D-011 | **B.** Build show and playlist creation | `Object Creation.dc.html` sections 1 and 2 |
+| D-012 | Drop the "Resume where it left off" checkbox | `ShowsPlaylists.tsx:628` |
+| D-013 | **A.** FPP rebind stays inert | Open a backlog issue |
+| D-014 | **B.** Re-read the revision before a config write and refuse a stale save | Every config editor, plus a retrofit of the shipped ones. Open an issue for C |
+| D-015 | **A.** Mismatch control stays inert, with a note beside it saying it is not wired | `ShowsPlaylists.tsx:475` |
+| D-016 | **B.** Add the missing facts to the API | Leaves UI-only scope. Last track, see the plan |
+| D-017 | **B.** Build action creation, action editing and macro creation | `Object Creation.dc.html` sections 3, 4 and 5 |
+
+`Object Creation.dc.html` (added 2026-08-30) is the drawn answer to D-011 and
+D-017 and is normative for every creation surface, Settings and Access included.
+
 ---
 
-## Open
+## Settled 2026-08-30
+
+Ruled by Eric on 2026-08-30. The entries below keep their original wording;
+each one's **Ruling** is his.
 
 ### D-017 Automation: creation and action-authoring have no drawn form
 
@@ -38,15 +69,15 @@ before the page ships, rather than getting invented layout.
 **Options.**
 
 - A. Ship "New action" and "New macro" disabled with a stated reason, as
-  built. Action rows stay read-only (label, target summary, kind, used-by,
-  binding). Step editing (the mock's own drawn `step` pane) is built and
-  live. Honest, but creating or re-authoring an action, and creating a macro,
-  is not usable from the UI yet, even though the API could serve both.
+built. Action rows stay read-only (label, target summary, kind, used-by,
+binding). Step editing (the mock's own drawn `step` pane) is built and
+live. Honest, but creating or re-authoring an action, and creating a macro,
+is not usable from the UI yet, even though the API could serve both.
 - B. Design a minimal action-creation form (label, safety class, an
-  integration picker that then asks that integration's own required fields)
-  and a minimal macro-creation form (label plus a first step), and an
-  action-editing pane matching the step editor's own shape, none drawn in
-  the mock, and wire all three to the real PUTs.
+integration picker that then asks that integration's own required fields)
+and a minimal macro-creation form (label plus a first step), and an
+action-editing pane matching the step editor's own shape, none drawn in
+the mock, and wire all three to the real PUTs.
 - C. Drop the buttons and treat action rows as permanently read-only.
 
 **Recommendation.** A now, matching D-011's precedent exactly. B is real,
@@ -58,7 +89,10 @@ loses the visibility the mock intends for the buttons.
 **Unblocks.** Nothing; the tab ships at the mock's drawn state either way —
 macro step editing, binding checks, run, and invoke are all live.
 
-**Ruling:**
+**Ruling:**  
+
+
+**Option B**
 
 ---
 
@@ -104,8 +138,8 @@ recorded here rather than invented.
 
 - A. Ship the tabs without these three elements, as built.
 - B. Add the missing facts to the API: an FPP-sequence staleness signal for
-  cues, a per-asset sync verdict (or a `wasRolledBack` flag) for the asset
-  store.
+cues, a per-asset sync verdict (or a `wasRolledBack` flag) for the asset
+store.
 - C. Infer them client-side from filename or timestamp correlation.
 
 **Recommendation.** A now. B is real work with its own design questions (does
@@ -118,7 +152,9 @@ evidence.
 
 **Unblocks.** Nothing. Both tabs ship at this state either way.
 
-**Ruling:**
+**Ruling:** 
+
+Add the missing facts to the API.
 
 ---
 
@@ -139,13 +175,13 @@ open, which on a settings page is minutes.
 
 - A. Leave it. Last write wins, silently. What ships today.
 - B. **UI-side detection.** Re-read the object immediately before writing and
-  refuse the save when `currentRevision` moved since load, showing what changed.
-  Buildable today with no coordinator change. It narrows the window to the
-  round trip rather than closing it, and cannot help `showmeshctl` or any other
-  client.
+refuse the save when `currentRevision` moved since load, showing what changed.
+Buildable today with no coordinator change. It narrows the window to the
+round trip rather than closing it, and cannot help `showmeshctl` or any other
+client.
 - C. **Contract-side prevention.** Accept the read revision on the write and
-  answer 409 when it has moved. Closes the window for every client, not just
-  this one. Needs a coordinator change and an `api/openapi.yaml` change.
+answer 409 when it has moved. Closes the window for every client, not just
+this one. Needs a coordinator change and an `api/openapi.yaml` change.
 
 **Recommendation.** B now, because it is honest and cheap and turns a silent
 loss into a visible refusal. C is the real fix and deserves its own issue: the
@@ -157,6 +193,8 @@ writer, which it is not.
 them carries the hazard until this is ruled.
 
 **Ruling:**
+
+Build B now, open a backlog linear issue for C
 
 ---
 
@@ -176,14 +214,14 @@ so nothing set by `showmeshctl` is lost.
 **Options.**
 
 - A. Inert, as built. Matches the mock exactly, including its note. An operator
-  cannot set the policy from the UI, but the coordinator's default applies and
-  `showmeshctl` can still set it.
+cannot set the policy from the UI, but the coordinator's default applies and
+`showmeshctl` can still set it.
 - B. Make it live per playlist. The schema serves it today, and it is a real
-  show-safety behaviour: what happens when FPP plays something the playlist
-  cannot resolve. Contradicts the design note.
+show-safety behaviour: what happens when FPP plays something the playlist
+cannot resolve. Contradicts the design note.
 - C. Move it to Show vs Program mode, as the note intends, and remove it from
-  this screen. Needs that mode to exist and needs the per-playlist field
-  deprecated or ignored.
+this screen. Needs that mode to exist and needs the per-playlist field
+deprecated or ignored.
 
 **Recommendation.** A now. C is what the note describes and it is a design
 decision, not an implementation one. B only if you want the capability before
@@ -192,7 +230,9 @@ playlist now may stop being honoured when C lands.
 
 **Unblocks.** Nothing. The screen shipped.
 
-**Ruling:**
+**Ruling: **  
+
+A now, note that it doesnt work yet nearby.
 
 ---
 
@@ -214,10 +254,10 @@ before the page ships, rather than getting invented layout.
 **Options.**
 
 - A. Ship both buttons disabled with a stated reason ("needs a form the mock
-  does not draw"), as built. Honest, but creation is not usable from the UI
-  yet, even though the API could serve it.
+does not draw"), as built. Honest, but creation is not usable from the UI
+yet, even though the API could serve it.
 - B. Design a minimal creation form (id, name for a show; runner, name for a
-  playlist) not drawn in either mock, and wire it to the real PUT.
+playlist) not drawn in either mock, and wire it to the real PUT.
 - C. Drop the buttons.
 
 **Recommendation.** A now. B is a small, well-scoped follow-up once a
@@ -226,7 +266,9 @@ likely need the same shape). C loses the visibility the mock intends.
 
 **Unblocks.** Nothing; both screens ship at the mock's drawn state either way.
 
-**Ruling:**
+**Ruling:**  
+  
+**Option B**
 
 ---
 
@@ -246,10 +288,10 @@ rather than silently dropped.
 **Options.**
 
 - A. Ship the checkbox disabled with a stated reason ("no stored field"), as
-  built. Honest, but resuming a playhead position is not settable from the
-  UI, and was never settable from the API either.
+built. Honest, but resuming a playhead position is not settable from the
+UI, and was never settable from the API either.
 - B. Add a field for it to `ConfigShowPlaylistShowmeshAudio` (a new API
-  surface) and wire the checkbox.
+surface) and wire the checkbox.
 - C. Drop the checkbox.
 
 **Recommendation.** A now. B is a real feature (playhead resume across a
@@ -259,7 +301,9 @@ from a UI control found by inspection.
 **Unblocks.** Nothing; the playlist editor ships at the mock's drawn state
 either way.
 
-**Ruling:**
+**Ruling:**  
+  
+Drop the checkbox
 
 ---
 
@@ -285,13 +329,13 @@ before the page ships, rather than getting an invented reconciliation rule.
 **Options.**
 
 - A. Ship all three disabled with a stated reason ("needs a reconciliation
-  flow the mock does not fully specify"), as built. Per-entry cue binding
-  and the mismatch policy stay editable; only the source rebind is inert.
+flow the mock does not fully specify"), as built. Per-entry cue binding
+and the mismatch policy stay editable; only the source rebind is inert.
 - B. Design the carry-over rule (e.g., match on unchanged
-  section/position, drop the rest, flag what was dropped) and wire it.
+section/position, drop the rest, flag what was dropped) and wire it.
 - C. Wire only "Re-import" to reload the currently bound instance/playlist
-  at its newest captured hash (no instance/playlist change), dropping any
-  binding whose section/position is no longer present.
+at its newest captured hash (no instance/playlist change), dropping any
+binding whose section/position is no longer present.
 
 **Recommendation.** A now. C is the smallest real version of this and a
 likely next step once the drop behavior in B has an answer; today it would
@@ -301,7 +345,9 @@ either.
 **Unblocks.** Nothing; the playlist editor ships at the mock's drawn state
 either way.
 
-**Ruling:**
+**Ruling:**  
+  
+Option A, and file a linear backlog issue on this.
 
 ---
 
@@ -352,8 +398,7 @@ strip, and Readiness already names the state in words.
 **Clock skew → A.** Chrome bar. It invalidates every age on every screen, so it
 belongs to the chrome that renders those ages, not to one screen.
 
-**Data freshness → no change.** The lede (`Snapshot 0.4 s ago · Winter Ridge
-2026 is the active show`) is the whole treatment. No banner.
+**Data freshness → no change.** The lede (`Snapshot 0.4 s ago · Winter Ridge 2026 is the active show`) is the whole treatment. No banner.
 
 Dashboard stays at the mock's three blocks. That was already the intent of
 drawing three blocks.
@@ -361,15 +406,15 @@ drawing three blocks.
 **What each ruling cost to build, checked 2026-08-29.**
 
 - *Presentation path.* Nothing to build. Monitor Fleet's resource table already
-  carries every row the old block had, and more: one row per FPP instance, node
-  and Resolume instance, each with its health, its last report, and the same
-  `/monitor/fleet/<kind>/<id>` destination the old block linked to
-  (`screens/monitorModel.ts` `fleetRows`). The old block's render-endpoint count
-  survives as the node row's `render · N surfaces` detail.
+carries every row the old block had, and more: one row per FPP instance, node
+and Resolume instance, each with its health, its last report, and the same
+`/monitor/fleet/<kind>/<id>` destination the old block linked to
+(`screens/monitorModel.ts` `fleetRows`). The old block's render-endpoint count
+survives as the node row's `render · N surfaces` detail.
 - *Recent activity, Tonight's lifecycle, data freshness.* Already as ruled.
 - *Clock skew.* Built into the chrome as a strip under the bar. It is not an
-  item inside the bar: the bar must not wrap, and D-002 protects the
-  now-playing group's horizontal room.
+item inside the bar: the bar must not wrap, and D-002 protects the
+now-playing group's horizontal room.
 
 ---
 
@@ -412,7 +457,6 @@ run, no clause.
 
 Same rule on Monitor's "Needs an operator" aside. C is the version that lies on
 the one night it matters; it is off the table permanently, not deferred.
-
 
 ---
 
@@ -457,8 +501,7 @@ mock's copy as the string template, ready to take real data:
 
 - `Not valid from <code>live</code>.`
 - `Not valid from <code>live</code>. The night is already running.`
-- `Withheld by interlock <code>projector-cooldown</code> — lamp above 40 °C.
-  Needs an authorized override.`
+- `Withheld by interlock <code>projector-cooldown</code> — lamp above 40 °C. Needs an authorized override.`
 
 When B lands it should be a data swap into those strings, not a layout change.
 Prefer per-command `withheldReason` over a bare `allowedCommands` list: the
@@ -554,7 +597,6 @@ drawn in the rail itself ("earlier than 18:40 not retained"), never a silently
 partial night. A rail that looks complete and is not is worse than the honest
 one shipped today.
 
-
 ---
 
 ## D-010 The standing rule for a control the API cannot serve
@@ -569,9 +611,9 @@ control, and do not quietly leave the mock's element out.
 The kit carries the treatment, so it is the same everywhere:
 
 - `NotWiredBanner` sits above the section. It names what the control would do
-  and the endpoint that does not exist, verbatim.
+and the endpoint that does not exist, verbatim.
 - `NotWired` wraps a single control, forces `disabled` on it, and tags it in
-  place so the warning cannot be scrolled away from the button it describes.
+place so the warning cannot be scrolled away from the button it describes.
 - Amber, not red. Nothing has failed; the coordinator is simply not finished.
 
 Two limits on the rule, both from Eric's own standing rules and neither in

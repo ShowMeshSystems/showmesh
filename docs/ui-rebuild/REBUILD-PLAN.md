@@ -7,7 +7,10 @@ Normative sources, in this order:
 
 1. `docs/design_handoff_operator_ui_overhaul/UI-DESIGN-GUIDE.md` (the rules)
 2. `docs/design_handoff_operator_ui_overhaul/design/ShowMesh Design System.dc.html` (the element vocabulary)
-3. `docs/design_handoff_operator_ui_overhaul/design/*.dc.html` (the fifteen screen mocks)
+3. `docs/design_handoff_operator_ui_overhaul/design/*.dc.html` (the screen
+   mocks, sixteen as of 2026-08-30)
+   `Object Creation.dc.html` is the newest and is normative for every creation
+   and edit surface, Settings and Access included.
 4. `docs/design_handoff_operator_ui_overhaul/DESIGN-DECISIONS-AND-API-FACTS.md` (verified identifiers)
 5. `OPEN-DECISIONS.md` in this directory (Eric's rulings; they amend the guide)
 
@@ -87,17 +90,22 @@ visual language.
 | Live Control | Done | #197 |
 | Show Night | Done | #198 |
 | Monitor · Fleet, facet tabs, inspector | Done | #199 |
-| Apply the D-005 to D-010 rulings | Done | |
+| Apply the D-005 to D-010 rulings | Done | #199 |
 | Session states: signed out, bootstrap, connecting, not found | Done | #200 |
 | Monitor · Signals, Activity, Capabilities, Manifest | Done | #201 |
 | Shows workspace: shell, show list, Identity, Playlists | Done | #202 |
 | Shows workspace: Cues, Assets | Done | #203 |
-| Shows workspace: Presentation, Automation | Next | |
+| Shows workspace: Presentation, Automation | Done | #204 |
+| Creation pattern: new show, new playlist (D-011) | Next | |
+| Creation pattern: new action, edit action, new macro (D-017) | | |
 | Node detail | | |
 | Settings, seven tabs | | |
 | Access | | |
 | Resolume Config | | |
-| Delete the old system | | |
+| Assets library (`/assets`) | | |
+| Stale-write guard retrofit (D-014 B) | | |
+| Phase 2: delete the old system and lock it out | | |
+| Track C: the API facts D-016 asks for | | |
 
 Each PR is stacked on the one before it, so its diff is only its own screen.
 
@@ -118,7 +126,7 @@ Fixed procedure. No deviation.
    stylesheet, and its now-invalid tests.
 5. Verify by screenshot against the mock at 1280 in dark, light and contrast.
 
-Order, as agreed:
+Order, as agreed. Steps 0 to 5 are done; 5a onward is what remains.
 
 0. Clear the old UI and stand up the shell (chrome bar, rail, theme and density
    root, session bands, not-found map, a blanking plate on every route the
@@ -128,11 +136,19 @@ Order, as agreed:
 3. Show Night, including the night-session list and detail
 4. Monitor and its facets: Fleet, Signals, Activity, Capabilities, Manifest
 5. Shows workspace, five tabs: Playlists, Cues, Assets, Presentation, Automation
+5a. The creation pattern from `Object Creation.dc.html`: new show and new
+    playlist (D-011 B), then new action, action editing and new macro (D-017 B)
 6. Node detail
 7. Settings, seven tabs
 8. Access
 9. Resolume Config
-10. Session states: signed out, bootstrap, not found, connecting
+9a. Assets library at `/assets`, from `Show Assets.dc.html` (D-003)
+9b. The stale-write guard (D-014 B) retrofitted onto every shipped editor
+10. Session states: signed out, bootstrap, not found, connecting (done, #200)
+
+The creation pattern comes before Settings and Access deliberately: the mock's
+own Reuse note says both screens create objects with the same pattern rather
+than a variant, so the pattern has to exist before they are written.
 
 The chrome bar's show picker, mode badge, cycle and time to next transition
 arrive with the screens that own their data: Shows, Settings › Mode, and Show
@@ -154,6 +170,56 @@ rather than getting invented layout.
   list in §3.
 - **Top-level `/assets`** stays a rail destination per the guide's §3 Author
   group, rebuilt from the `Show Assets` mock.
+
+## The creation pattern (D-011 B and D-017 B)
+
+`Object Creation.dc.html` draws five instances of one pattern and states the
+rule: **creation is the object's own edit surface, opened empty.** There is no
+create-modal anywhere in this UI. Its five rules are normative:
+
+1. The id is the only field creation has that editing does not. It seeds from
+   the name, stays editable until the first save, then locks with the object's
+   own immutability copy.
+2. One gate field first where the rest of the form depends on it (a playlist's
+   runner, an action's integration). Below the gate, nothing renders until it is
+   answered: absent, not disabled.
+3. The pane header reads `Draft` where an existing object reads `Editing`, and
+   the footer says what the save writes: *Creates* for a draft,
+   *Creates revision n* for an edit.
+4. Nothing is written before the save. No optimistic row. A refused `PUT` leaves
+   the draft open with the coordinator's reason above the footer, in Live
+   Control's refusal pattern. No toast.
+5. Never-defaulted stays never-defaulted. An action's `safetyClass` and a step's
+   `localFallback.reason` have no schema default, so the draft opens with them
+   unanswered and the save is withheld until they are answered. That is the one
+   legitimate disabled save in the pattern.
+
+Settings and Access inherit it. Cue creation already has its own drawn surface,
+the Show Cues two-pane composer, and does not change.
+
+## Ruled follow-ups folded in on 2026-08-30
+
+- **D-012.** Delete the "Resume where it left off" checkbox
+  (`ShowsPlaylists.tsx:628`) and its test, rather than shipping it inert.
+- **D-015.** The "On mismatch" control stays inert and gains a note beside it
+  saying it is not wired yet.
+- **D-014 B.** A config editor re-reads the object immediately before its write
+  and refuses the save when `currentRevision` moved since load, showing what
+  changed. Build it once in a shared save path with the creation pattern, then
+  retrofit the shipped editors. C, the `409` precondition on the API, is its own
+  issue and is not this rebuild's work.
+- **D-013, D-007, D-008, D-009, D-014 C, D-016.** Issues, not rebuild work.
+  Search before filing so a duplicate is not created.
+
+## Track C: the API facts D-016 asks for
+
+This is the one ruling that leaves the UI-only scope: an FPP-sequence staleness
+signal for cues, and a per-asset sync verdict plus a rollback flag for the asset
+store. It runs last, after Phase 2, as its own branches, and it touches
+`api/openapi.yaml` and the coordinator, so it carries the code gates the
+documentation-only path does not. Where the rule cannot be derived from
+`api/openapi.yaml`, an accepted ADR, or a research record, write the question
+down and stop rather than inventing a staleness rule.
 
 ## Phase 2: delete the old system and make it unreturnable
 

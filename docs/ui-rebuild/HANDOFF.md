@@ -16,8 +16,13 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/show-night` | #198 | Show Night |
 | `ui-rebuild/monitor` | #199 | Monitor · Fleet, and the D-005 to D-010 rulings |
 | `ui-rebuild/session-states` | #200 | Session states |
+| `ui-rebuild/monitor-facets` | #201 | Monitor · Signals, Activity, Capabilities, Manifest |
+| `ui-rebuild/shows` | #202 | Shows workspace shell, list, Identity, Playlists |
+| `ui-rebuild/shows-tabs` | #203 | Shows · Cues, Assets |
+| `ui-rebuild/shows-tabs-2` | #204 | Shows · Presentation, Automation |
 
-All green on all ten checks. Nothing is merged: Eric reviews and merges, and a
+#196 to #200 were green on all ten checks when they were opened; re-check the
+later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
 session does not merge for him unless he says so in that session.
 
 #199 carries two things rather than one. The rulings commit landed on that
@@ -26,10 +31,20 @@ split it.
 
 ## What to do next
 
-1. Monitor · Signals, Activity, Capabilities, Manifest.
-2. Shows workspace, five tabs.
-3. Node detail, Settings, Access, Resolume Config.
-4. Phase 2: delete the old system and add the check that keeps it deleted.
+Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
+`OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
+order. In short:
+
+1. The creation pattern from `Object Creation.dc.html`: new show and new
+   playlist, then new action, action editing and new macro.
+2. Node detail.
+3. Settings, seven tabs.
+4. Access.
+5. Resolume Config.
+6. The Assets library at `/assets`.
+7. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
+8. Phase 2: delete the old system and add the check that keeps it deleted.
+9. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
 
 ## How to run and verify
 
