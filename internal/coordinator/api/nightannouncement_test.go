@@ -21,7 +21,7 @@ import (
 
 func announcementAudioAction() config.ShowActionTarget {
 	return config.ShowActionTarget{
-		Integration: config.ShowActionIntegrationAudio,
+		Integration:  config.ShowActionIntegrationAudio,
 		AudioNodeIDs: config.AudioNodeIDList{"node-a"}, AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
 	}
 }
@@ -231,7 +231,7 @@ func TestNightAnnouncement_OperatorDeclaredParamsAreNeverOverwritten(t *testing.
 	putNightAction(t, st, "thank-you", config.ShowActionPayload{
 		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
 		Target: config.ShowActionTarget{
-			Integration: config.ShowActionIntegrationAudio,
+			Integration:  config.ShowActionIntegrationAudio,
 			AudioNodeIDs: config.AudioNodeIDList{"node-a"}, AudioSessionID: "announcement-1", AudioAction: "audio.session.apply",
 			Params: map[string]any{"sourceRole": "manual", "mixPolicy": "mix"},
 		},
@@ -513,7 +513,7 @@ func TestNightAnnouncement_TwoNodesBothPlayAndARefusedStartIsIsolatedToItsNode(t
 	putNightAction(t, st, "thank-you", config.ShowActionPayload{
 		Show: "halloween", Label: "Thank you announcement", SafetyClass: config.ShowSafetyClassNone,
 		Target: config.ShowActionTarget{
-			Integration: config.ShowActionIntegrationAudio,
+			Integration:  config.ShowActionIntegrationAudio,
 			AudioNodeIDs: config.AudioNodeIDList{"node-a", "node-b"}, AudioSessionID: "announcement-1",
 			AudioAction: "audio.session.apply",
 		},
