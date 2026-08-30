@@ -66,6 +66,7 @@ func (s *svc) WriteAudit(ctx context.Context, entry AuditEntry) error {
 		OutcomeState:   entry.OutcomeState,
 		OutcomeReason:  entry.OutcomeReason,
 	})
+	s.recordAuditWriteOutcome(err)
 	if err != nil {
 		return fmt.Errorf("identity: write audit: %w", err)
 	}
@@ -124,10 +125,39 @@ func (s *svc) AuditedWrite(ctx context.Context, fn func(ctx context.Context, tx 
 			OutcomeState:   entry.OutcomeState,
 			OutcomeReason:  entry.OutcomeReason,
 		}); aerr != nil {
+			s.recordAuditWriteOutcome(aerr)
 			return fmt.Errorf("%w: %v", ErrAuditWrite, aerr)
 		}
+		s.recordAuditWriteOutcome(nil)
 		return nil
 	})
+}
+
+// recordAuditWriteOutcome updates the state [Service.AuditWriteStatus]
+// reports from the outcome of an actual audit_log append attempt. The
+// only two call sites are [svc.WriteAudit] and [svc.AuditedWrite]'s own
+// append step above, deliberately never AuditedWrite's fn: fn's error is
+// the caller's own business-logic failure, not a fact about whether the
+// audit store itself is writable, and conflating the two would report
+// "audit unusable" for e.g. a duplicate-key business error that never
+// touched audit_log at all.
+func (s *svc) recordAuditWriteOutcome(err error) {
+	s.auditWriteMu.Lock()
+	defer s.auditWriteMu.Unlock()
+	if err != nil {
+		s.auditWriteState = "unusable"
+		s.auditWriteReason = fmt.Sprintf("the coordinator's most recent attempt to write an audit_log entry failed: %v", err)
+		return
+	}
+	s.auditWriteState = "usable"
+	s.auditWriteReason = ""
+}
+
+// AuditWriteStatus implements [Service.AuditWriteStatus].
+func (s *svc) AuditWriteStatus() (state, reason string) {
+	s.auditWriteMu.Lock()
+	defer s.auditWriteMu.Unlock()
+	return s.auditWriteState, s.auditWriteReason
 }
 
 // ListAudit returns audit entries after since (the id [AuditEntry.ID]

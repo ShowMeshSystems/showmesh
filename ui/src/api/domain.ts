@@ -58,6 +58,13 @@ export type ResourceRef = components['schemas']['ResourceRef']
 export type ServiceDescriptor = components['schemas']['ServiceDescriptor']
 export type CoordinatorInfo = components['schemas']['CoordinatorInfo']
 
+// ADR-024 decision 11's amendment (owner ruling, 2026-08-26): the standing,
+// coordinator-wide signal for whether this coordinator can currently write
+// to its audit store, part of `Snapshot` -- see `Model.auditStore`'s own
+// comment for why this exists alongside the per-action `attributionDegraded`
+// flag rather than instead of it.
+export type AuditStoreStatus = components['schemas']['AuditStoreStatus']
+
 // ADR-024: the session/identity shapes, aliased from the generated schema
 // for the same reason as every type above (ADR-015: generated from or
 // verified against the Go types, never hand-copied a second time).
@@ -462,6 +469,21 @@ export interface Model {
    */
   resolume: ResolumeInstance[]
   /**
+   * ADR-024 decision 11's amendment (owner ruling, 2026-08-26): whether
+   * this coordinator can currently write to its audit store, exactly as
+   * `Snapshot.auditStore` carries it -- a coordinator-wide signal, not a
+   * per-node or per-action one. It exists alongside the per-action
+   * `attributionDegraded` flag every command response carries, not instead
+   * of it: that flag answers "was this one action unaudited", which only
+   * an operator who just acted can read, while this answers "is audit
+   * down right now", readable without acting at all. Replaced wholesale on
+   * every snapshot, like `resolume` above; `null` only before the first
+   * snapshot has ever been applied (see `snapshotReceivedAt`), never
+   * afterward -- `Snapshot.auditStore` is fatal to omit on the wire, so a
+   * connected client always has a real value here.
+   */
+  auditStore: AuditStoreStatus | null
+  /**
    * Track F seam F2: the night-session lifecycle controller's current
    * state, kept live by `nightSession.changed` frames (store.ts's
    * applyNightSessionChanged) — a whole-object replace, matching
@@ -551,6 +573,7 @@ export function initialModel(): Model {
     collectors: [],
     macroRuns: [],
     resolume: [],
+    auditStore: null,
     nightSession: null,
     fppPlaylistEntryObservations: [],
     events: [],

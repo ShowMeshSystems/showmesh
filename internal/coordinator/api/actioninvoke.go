@@ -31,8 +31,12 @@ import (
 // uses. AuditExempt is read from the stored action's own SafetyClass,
 // never re-derived.
 //
-// A non-exempt audit failure refuses before dispatch; an exempt one
-// re-inserts non-transactionally and proceeds with degraded attribution.
+// ADR-024 decision 11, amended 2026-08-26 (owner ruling): a pre-dispatch
+// audit failure never refuses this endpoint, exempt or not. It re-inserts
+// non-transactionally and proceeds with degraded attribution either way.
+// AuditExempt now only selects which justification is reported
+// (degradedAttributionReasonSafetyClassExemption vs.
+// degradedAttributionReasonAuditNeverBlocks).
 
 // scopeActionInvoke exists only so api.go's route registration can take
 // its address — see scopeResolumeAction's identical pattern.
@@ -109,25 +113,6 @@ const actionInvokeFPPChildIdempotencyKeyPrefix = "action-invoke:"
 const actionInvokeHTTPWriteDeadline = 150 * time.Second
 
 const actionInvokeBookkeepingBudget = 5 * time.Second
-
-// ProblemTypeActionInvokeRefusedAuditUnavailable mirrors
-// [ProblemTypeResolumeActionRefusedAuditUnavailable]'s identical shape:
-// a non-exempt action's pre-dispatch audit write failed, the whole
-// transaction rolled back, and nothing was recorded or dispatched.
-const ProblemTypeActionInvokeRefusedAuditUnavailable = problemBaseURI + "action-invoke-refused-audit-unavailable"
-
-func actionInvokeAuditUnavailableProblem(actionID string, cause error) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeActionInvokeRefusedAuditUnavailable,
-		Title:  "Action refused: it could not be durably recorded",
-		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf(
-			"action %q was refused before anything was dispatched: it must be durably recorded before dispatch, and "+
-				"this coordinator's audit store is currently unavailable (%v). Nothing was recorded and nothing was "+
-				"dispatched; retry once the audit store is writable again.",
-			actionID, cause),
-	}
-}
 
 // actionInvokeReplayConflictProblem mirrors resolumeActionReplayConflictProblem's
 // identical reasoning: an idempotency key reused against a DIFFERENT
@@ -311,15 +296,10 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 		jsonWrite(w, v1.ActionInvocationResponse{ServerTime: formatTime(h.now()), Result: result})
 		return
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if !auditExempt {
-			// Fail closed: the transaction above already rolled back in
-			// full, so nothing is re-inserted and nothing is dispatched —
-			// ADR-024 decision 11's default rule for every action outside
-			// the three-member safety class.
-			writeProblem(w, h.logger, now, actionInvokeAuditUnavailableProblem(id, auditErr))
-			return
-		}
-		// Safety-class exemption: redo the insert through the plain,
+		// ADR-024 decision 11, amended 2026-08-26 (owner ruling): an
+		// audit-store outage never blocks a command dispatch, for any
+		// action, not only the three-member safety class read off
+		// auditExempt. Redo the insert through the plain,
 		// non-transactional store method and proceed with degraded
 		// attribution — mirroring dispatchFPPCommand/handleDispatchResolumeAction's
 		// identical fallback.
@@ -336,7 +316,11 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 			h.writeInternalError(w, now, "insert action invocation command", err)
 			return
 		}
-		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedAttributionReasonSafetyClassExemption)
+		degradedReason := degradedAttributionReasonAuditNeverBlocks
+		if auditExempt {
+			degradedReason = degradedAttributionReasonSafetyClassExemption
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedReason)
 		dispatchDegraded = true
 	case auditErr != nil:
 		h.writeInternalError(w, now, "insert action invocation command", auditErr)

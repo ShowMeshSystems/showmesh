@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { getServiceDescriptor, type ServiceDescriptor } from '../api'
 import { ConnectionBanner } from '../components/ConnectionBanner'
+import { AuditStoreBanner } from '../components/AuditStoreBanner'
 import { TokenPrompt } from '../components/TokenPrompt'
 import { SessionPanel, SessionIdentity } from '../components/SessionPanel'
 import { ShowModeIndicator } from '../components/ShowModeIndicator'
@@ -243,6 +244,12 @@ export function Layout({ onSubmitToken }: LayoutProps) {
           </button>
         </header>
         <ConnectionBanner connection={model.connection} />
+        {/* ADR-024 decision 11's amendment: independent of `connection`
+            above and never gated on `blockContent` below, matching
+            SessionPanel's identical reasoning -- an operator must be able
+            to see the audit store is down even while the rest of the
+            page is showing "no data yet". */}
+        <AuditStoreBanner auditStore={model.auditStore} />
         {model.connection.kind === 'unauthorized' && (
           <TokenPrompt reason={model.connection.reason} onSubmit={onSubmitToken} />
         )}

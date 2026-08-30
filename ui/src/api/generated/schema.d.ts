@@ -3034,7 +3034,18 @@ export interface components {
             macroRuns: components["schemas"]["MacroRunSummary"][];
             /** @description Every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
             resolume: components["schemas"]["ResolumeInstance"][];
+            auditStore: components["schemas"]["AuditStoreStatus"];
             audioConfigPush: components["schemas"]["AudioConfigPushStatus"];
+        };
+        /** @description Whether this coordinator can currently write to its audit store, live from the most recent audit_log append attempt made anywhere in the coordinator, not computed fresh per request. ADR-024 decision 11's amendment (owner ruling, 2026-08-26) removed the fail-closed refusal that used to make an audit-write failure directly visible on the three request paths it protected (direct action invoke, audio session commands, FPP commands): those now run regardless, so this field is the standing surface an operator reads to learn the audit store is down without having invoked an action themselves. */
+        AuditStoreStatus: {
+            /**
+             * @description "usable": the most recent audit_log append attempt succeeded. "unusable": it failed, and reason names why. "unknown": no append has been attempted since this coordinator started, per the standing rule that unattempted evidence is never reported as healthy.
+             * @enum {string}
+             */
+            state: "usable" | "unusable" | "unknown";
+            /** @description Set whenever state is not "usable", null otherwise. */
+            reason: string | null;
         };
         /** @description Whether the coordinator can decode its stored, engine-wide audio.settings revision right now. Coordinator-wide, not per-node or per-collector: audio.settings is a singleton (ADR-039), so there is exactly one current revision to decode. Computed fresh from the same decode a real push performs on that revision, so this always reflects the revision currently active. Deliberately narrow: this reports only whether the audio.settings singleton itself decodes, never whether any one node's own separate audio.node binding does or whether that node is reachable — a node can still be stranded by a broken audio.node revision, or by being unreachable, while this reads "usable". */
         AudioConfigPushStatus: {
@@ -3846,14 +3857,14 @@ export interface components {
          *
          *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) - a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision - the macro was edited between two submissions under one key, 409) - minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, mirroring "fpp-command-refused-audit-unavailable" exactly, for a second vendor's command surface). One is Track E seam E7-1's own addition: "action-invoke-refused-audit-unavailable" (POST /actions/{id}/invocations' own ADR-024 decision 11 fail-closed default for an action whose stored safetyClass is "none"). Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (programRoute and ltcRoute naming the same device route). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable" - an unavailable audit store never blocks a command dispatch now; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface; unchanged by the 2026-08-26 amendment above, which covers only the three request paths ADR-024 decision 11 names explicitly). **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (programRoute and ltcRoute naming the same device route). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
             title: string;
             status: number;
             detail: string;
@@ -5417,16 +5428,6 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description The pre-dispatch write that must durably record this command before it is dispatched could not be appended to this coordinator's audit store. Nothing was recorded and nothing was dispatched to the node; retry once the audit store is writable again. */
-        AudioCommandAuditUnavailable: {
-            headers: {
-                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
     };
     parameters: never;
     requestBodies: never;
@@ -5938,7 +5939,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionPrepare: {
@@ -5982,7 +5982,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionStart: {
@@ -6026,7 +6025,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionPause: {
@@ -6070,7 +6068,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionResume: {
@@ -6114,7 +6111,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionSeek: {
@@ -6158,7 +6154,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionAdvance: {
@@ -6202,7 +6197,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionStop: {
@@ -6246,7 +6240,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionClear: {
@@ -6290,7 +6283,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioGainSet: {
@@ -6334,7 +6326,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioGainFade: {
@@ -6378,7 +6369,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioOutputMute: {
@@ -6422,7 +6412,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioOutputUnmute: {
@@ -6466,7 +6455,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchFPPCommand: {
@@ -6511,16 +6499,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description ADR-024 decision 11's fail-closed default: this action is not a member of decision 11's blackout/stop/power-off safety class, and the pre-dispatch write that must durably record a command before it is dispatched could not be appended to this coordinator's audit store. `type` `fpp-command-refused-audit-unavailable`. Nothing was recorded and nothing was dispatched to FPP; retry once the audit store is writable again. */
-            503: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
         };
     };
     listObservations: {
@@ -8675,16 +8653,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description ADR-024 decision 11's fail-closed default: this action's own safetyClass is "none", and the pre-dispatch write that must durably record it before dispatch could not be appended to this coordinator's audit store. `type` `action-invoke-refused-audit-unavailable`. Nothing was recorded and nothing was dispatched; retry once the audit store is writable again. */
-            503: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
         };
     };
     submitMacroRun: {

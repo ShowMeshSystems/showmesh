@@ -42,51 +42,35 @@ import (
 // AUDIO-ENGINE.md.
 //
 // Insert-plus-dispatch-audit runs atomically via [identity.Service.
-// AuditedWrite], mirroring resolumeaction.go's identical shape: an
-// audit-write failure fails this dispatch closed (nothing was recorded,
-// nothing was dispatched) UNLESS the action is in
-// audioSafetyExemptActions, ADR-024 decision 11's safety-class exemption
-// — audio.session.stop/clear and audio.output.mute are this subsystem's
-// blackout, and a full audit disk must not leave an operator unable to
-// silence the show. Every other audio.* action fails closed.
+// AuditedWrite], mirroring resolumeaction.go's identical shape. ADR-024
+// decision 11, amended 2026-08-26 (owner ruling): an audit-write failure
+// never fails this dispatch closed for ANY audio.* action: every one
+// proceeds with degraded attribution. audioSafetyExemptActions
+// (audio.session.stop/clear, audio.output.mute) still exists because it
+// names this subsystem's own blackout-equivalent set and still picks the
+// degradedAttributionReasonSafetyClassExemption justification for those
+// three actions specifically, distinct from
+// degradedAttributionReasonAuditNeverBlocks for every other one; it no
+// longer gates whether the dispatch proceeds at all.
 
 var scopeAudioCommand = identity.ScopeAudioCommand
 
 var audioSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
-// audioSafetyExemptActions is ADR-024 decision 11's safety class for this
-// file: the audience-audio equivalent of blackout/stop/power-off. Muting
-// the output is this subsystem's blackout, so it is exempt alongside the
-// two ways to silence a session.
+// audioSafetyExemptActions is this file's own audience-audio equivalent of
+// ADR-024 decision 11's blackout/stop/power-off safety class: muting the
+// output is this subsystem's blackout, so it is grouped alongside the two
+// ways to silence a session. Since the 2026-08-26 amendment it no longer
+// decides whether an audit-write failure blocks dispatch (nothing does,
+// for any audio.* action); it only picks
+// degradedAttributionReasonSafetyClassExemption over
+// degradedAttributionReasonAuditNeverBlocks as the reported reason, so an
+// investigator can still tell "this is the blackout-equivalent set" from
+// "this is every other action" in the record.
 var audioSafetyExemptActions = map[string]bool{
 	"audio.session.stop":  true,
 	"audio.session.clear": true,
 	"audio.output.mute":   true,
-}
-
-// ProblemTypeAudioCommandRefusedAuditUnavailable mirrors
-// ProblemTypeFPPCommandRefusedAuditUnavailable/
-// ProblemTypeResolumeActionRefusedAuditUnavailable one file over: the
-// pre-dispatch write that must durably record a command before it is
-// dispatched could not be appended to this coordinator's audit store, so
-// nothing was recorded and nothing was dispatched.
-const ProblemTypeAudioCommandRefusedAuditUnavailable = problemBaseURI + "audio-command-refused-audit-unavailable"
-
-// audioCommandAuditUnavailableProblem is
-// [ProblemTypeAudioCommandRefusedAuditUnavailable]'s own constructor,
-// mirroring fppCommandAuditUnavailableProblem's identical reasoning
-// (problem.go) including its 503 status.
-func audioCommandAuditUnavailableProblem(action string, cause error) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeAudioCommandRefusedAuditUnavailable,
-		Title:  "Command refused: it could not be durably recorded",
-		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf(
-			"%q was refused before anything was sent to the node: it must be durably recorded before dispatch, and "+
-				"this coordinator's audit store is currently unavailable (%v). Nothing was recorded and nothing "+
-				"was dispatched; retry once the audit store is writable again.",
-			action, cause),
-	}
 }
 
 const (
@@ -347,13 +331,10 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 		result, problem := resolveAudioSessionReplay(dup.Existing, in.Action, in.NodeID, in.SessionID, string(paramsJSON))
 		return result, problem, nil
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if !audioSafetyExemptActions[in.Action] {
-			// Fail closed: the transaction above already rolled back in
-			// full, so nothing is re-inserted and nothing is dispatched.
-			p := audioCommandAuditUnavailableProblem(in.Action, auditErr)
-			return v1.AudioSessionCommandResult{}, &p, nil
-		}
-		// Safety-class exemption (ADR-024 decision 11): redo the insert
+		// ADR-024 decision 11, amended 2026-08-26 (owner ruling): an
+		// audit-store outage never blocks a command dispatch, for any
+		// audio action, not only this file's own audioSafetyExemptActions
+		// (audio.session.stop/clear, audio.output.mute). Redo the insert
 		// through the plain, non-transactional store method and proceed
 		// with degraded attribution — mirroring dispatchFPPCommand's/
 		// resolumeaction.go's identical fallback.
@@ -364,7 +345,11 @@ func (h *handlers) executeAudioSessionDispatch(ctx context.Context, now time.Tim
 			}
 			return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("insert audio command: %w", err)
 		}
-		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedAttributionReasonSafetyClassExemption)
+		degradedReason := degradedAttributionReasonAuditNeverBlocks
+		if audioSafetyExemptActions[in.Action] {
+			degradedReason = degradedAttributionReasonSafetyClassExemption
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedReason)
 		dispatchDegraded = true
 	case auditErr != nil:
 		return v1.AudioSessionCommandResult{}, nil, fmt.Errorf("insert audio command: %w", auditErr)

@@ -245,6 +245,24 @@ type Service interface {
 	ListAudit(ctx context.Context, since int64, limit int) ([]AuditEntry, error)
 	ListAuditNewestFirst(ctx context.Context, before int64, limit int) ([]AuditEntry, error)
 	OldestAuditID(ctx context.Context) (int64, bool, error)
+
+	// AuditWriteStatus reports coordinator.audit.store.state and
+	// coordinator.audit.store.reason (docs/build/IDENTIFIER-REGISTER.md):
+	// whether this coordinator's most recent attempt to append
+	// an audit_log row succeeded, live, from WriteAudit's and
+	// AuditedWrite's own append outcomes; nothing else updates it. This
+	// answers a different question than [store.Store.Readiness]'s plain
+	// connection ping: a disk that is full or a table that has hit a
+	// constraint can leave the connection itself perfectly reachable
+	// while every append fails, which is ADR-024 decision 11's own named
+	// trigger for the audit-unavailable condition this reports. state is
+	// one of "usable", "unusable", or "unknown" ("unknown" until the
+	// first append attempt since this Service was constructed), per
+	// ADR-011's own rule restated here: no attempt yet is not evidence of
+	// health, so it is never reported as "usable" by default. reason is
+	// empty exactly when state is "usable", mirroring
+	// [v1.AudioConfigPushStatus]'s identical convention one layer up.
+	AuditWriteStatus() (state, reason string)
 }
 
 // TokenInfo is an API token's non-secret metadata — what [Service.ListTokens]
@@ -281,6 +299,12 @@ type svc struct {
 	bootstrapTTL time.Duration
 
 	logger *slog.Logger
+
+	// auditWriteMu guards auditWriteState/auditWriteReason: see
+	// [Service.AuditWriteStatus]'s own doc comment.
+	auditWriteMu     sync.Mutex
+	auditWriteState  string
+	auditWriteReason string
 }
 
 // Option configures [NewService]. Matches store.Option's functional-option
@@ -342,6 +366,10 @@ func NewService(st *store.Store, now func() time.Time, dataDir string, opts ...O
 		dataDir:      dataDir,
 		bootstrapTTL: DefaultBootstrapCodeTTL,
 		logger:       slog.Default(),
+		// "unknown": no audit_log append has been attempted by this Service
+		// instance yet, see [Service.AuditWriteStatus]'s own doc comment
+		// for why this is never optimistically "usable".
+		auditWriteState: "unknown",
 	}
 	for _, opt := range opts {
 		opt(s)

@@ -3373,6 +3373,11 @@ export class ApiStore {
       // coordinator's own authoritative current list, never a delta this
       // store needs to merge.
       resolume: snapshot.resolume,
+      // ADR-024 decision 11's amendment (owner ruling, 2026-08-26): a plain
+      // wholesale replace, exactly like `resolume` above -- `Snapshot.auditStore`
+      // is this coordinator's own live, current signal, never a delta this
+      // store needs to merge.
+      auditStore: snapshot.auditStore,
       // Review finding 9: `Snapshot` carries no `nightSession` field
       // (domain.ts's own comment on Model.nightSession), so unlike every
       // field above this one is not being refreshed here, it is being

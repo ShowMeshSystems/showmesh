@@ -179,6 +179,32 @@
   padding: var(--space-2) var(--space-4);
 }
 
+/* Audit-store banner (ADR-024 decision 11's amendment, owner ruling
+   2026-08-26): a coordinator-state fact, not a browser connectivity one,
+   so it uses the --status-warn-*/--status-bad-* pair every stale-evidence
+   reading already uses (evidence--tone-warn/bad above), never
+   --connection-problem-* -- an audit-store outage must not be mistaken
+   for "cannot reach the coordinator" when the coordinator is reachable
+   and the show is running fine; only its own attribution logging is
+   degraded. */
+.audit-store-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  border-bottom: 3px solid var(--status-warn-fg);
+  font-weight: 600;
+}
+
+.audit-store-banner__detail {
+  font-weight: 400;
+  font-size: var(--font-size-sm);
+}
+
 .token-form {
   display: flex;
   gap: var(--space-2);

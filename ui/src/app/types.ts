@@ -42,6 +42,9 @@ export type {
   RenderCommandResult,
   // The first audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
   AudioSessionCommandResult,
+  // ADR-024 decision 11's amendment (owner ruling, 2026-08-26): the
+  // standing coordinator-wide audit-store health signal.
+  AuditStoreStatus,
   // Track D seam D-4: Resolume as an observability resource and the
   // seven-action vocabulary.
   ResolumeInstanceComposition,

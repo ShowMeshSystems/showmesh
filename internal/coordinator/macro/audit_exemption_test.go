@@ -122,12 +122,19 @@ func TestMacroRunNeverWithholdsAnMQTTStepForAnAuditFailure(t *testing.T) {
 // builder's own report for the exact diff and both observed outputs.
 
 // TestPerStepAuditExemptionRealDispatchSeam is the same scenario as above
-// but through the REAL api.FPPCommandDispatcher, so the audit-write
-// failure this test relies on is the one dispatchFPPCommand's own step 5
-// actually hits (fppCommandAuditUnavailableProblem, 503-shaped), never
-// this package's own fake standing in for it. This is what makes the
-// per-step exemption a proof about the SEAM this package was handed,
-// not only about this package's own control flow.
+// but through the REAL api.FPPCommandDispatcher, so the audit degrade this
+// test relies on for the stop step is the one dispatchFPPCommand's own
+// step 5 actually produces, never this package's own fake standing in for
+// it. This is what makes the per-step exemption a proof about the SEAM
+// this package was handed, not only about this package's own control
+// flow. The start step's own outcomeFailed below is unrelated to the
+// audit store: this harness feeds startPlaylist no fpp.status evidence at
+// all, so its ifBusy=refuse PreDispatchCheck guard refuses it on "could
+// not tell whether the host is busy" regardless of audit health -- this
+// package's step_fpp.go always sets [api.FPPCommandInput.NeverWithholdOnAuditFailure]
+// to true, so an audit-write failure alone was never able to fail this
+// step closed, before or after ADR-024 decision 11's 2026-08-26
+// amendment.
 func TestPerStepAuditExemptionRealDispatchSeam(t *testing.T) {
 	st, svc, storeDir := newTestStoreAndIdentity(t, time.Now)
 

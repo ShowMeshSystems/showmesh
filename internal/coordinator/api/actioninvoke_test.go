@@ -12,6 +12,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/broker"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // fakeMQTTBrokerRegistry is a minimal [MQTTBrokerRegistry] fake: publish
@@ -515,32 +516,50 @@ func TestInvokeActionAuditUnavailableExemptSafetyClassDegradesOnDispatchAlone(t 
 	}
 }
 
-// TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch proves
-// the fail-closed default: an FPP action whose safetyClass is "none" is
-// refused before anything reaches FPP when the audit store is
-// unwritable.
-func TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch(t *testing.T) {
-	fppSrv := newFailIfHitFPPCommandServer(t)
+// TestInvokeActionAuditUnavailableNonExemptRunsWithDegradedAttribution
+// proves ADR-024 decision 11's amendment (owner ruling, 2026-08-26): an
+// FPP action whose safetyClass is "none" still dispatches to
+// FPP, with degraded attribution, when the audit store is unwritable,
+// never refused for that reason alone. Observations are set to idle
+// (rather than TestInvokeActionAuditUnavailableNonExemptRefusesWithNoDispatch's
+// former setObs(nil)) so startPlaylist's own ifBusy=refuse guard clears
+// and this proves the action's OWN normal outcome (confirmed dispatch),
+// not merely that the pre-dispatch guard's own unrelated 409-shaped
+// "refused" outcome still fires.
+func TestInvokeActionAuditUnavailableNonExemptRunsWithDegradedAttribution(t *testing.T) {
+	fppSrv, fppFake := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
-	setup.obs.setObs(nil)
+	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
 
 	admin := mustCreatePrincipal(t, setup.svc, "admin-1", identity.RoleAdmin)
 	token := mustIssueToken(t, setup.svc, admin.ID)
 	deps := setup.deps()
 	deps.Config = setup.st
-	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+	api := New(deps, Options{
+		Clock: fixedClock(testNow), Logger: testLogger(),
+		FPPCommandConfirmDeadline: 20 * 1e6, // 20ms: this test does not care about confirmation, only dispatch.
+	})
 	mustPutShow(t, api, token, "halloween-2026", `{"name":"halloween-2026"}`)
 	mustPutAction(t, api, token, "start-now", validShowActionFPPStartOnBenchBody)
 
 	installFailAuditTrigger(t, setup.storeDir)
 
 	resp, body := doRawRequest(t, api.Handler, invokeActionRequest("start-now", "start-key-1", token))
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ADR-024 decision 11 amended 2026-08-26: audit unavailability never blocks "+
+			"an action); body: %s", resp.StatusCode, body)
 	}
-	if !strings.Contains(strings.ToLower(string(body)), "audit") {
-		t.Errorf("problem detail = %s, want it to name the audit store", body)
+	if fppFake.hitCount() != 1 {
+		t.Errorf("fpp hits = %d, want exactly 1 (the action must actually dispatch)", fppFake.hitCount())
+	}
+	m := decodeMap(t, body)
+	result := m["result"].(map[string]any)
+	if outcome, _ := result["outcome"].(string); outcome == "refused" {
+		t.Errorf("outcome = %q, want a normal dispatch outcome, not a refusal", outcome)
+	}
+	if degraded, _ := result["attributionDegraded"].(bool); !degraded {
+		t.Errorf("attributionDegraded = %v, want true", result["attributionDegraded"])
 	}
 }
 

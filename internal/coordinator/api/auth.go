@@ -163,6 +163,13 @@ func (noIdentityService) OldestAuditID(context.Context) (int64, bool, error) {
 	return 0, false, nil
 }
 
+// AuditWriteStatus reports "unknown", matching every other never-attempted
+// evidence default this type reports rather than fabricating a claim of
+// health for a dependency that was never wired up at all.
+func (noIdentityService) AuditWriteStatus() (state, reason string) {
+	return "unknown", ""
+}
+
 // sessionCookieName is the HttpOnly cookie ADR-024 decision 5 mints.
 const sessionCookieName = "showmesh_session"
 
