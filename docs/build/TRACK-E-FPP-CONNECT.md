@@ -36,7 +36,7 @@ A ShowMesh render node appears as its own upload target in xLights' FPP Connect 
 
 **FC0. The v3 ping layout, verified and fixed.** Confirm or correct `pkg/multisync`'s responder against the v3 offsets RES-003 cross-verified in both directions (xLights' `ProcessFPPPingPacket` and FPP's `MultiSync::CreatePingPacket`). Table-driven tests against hand-built v3 packets, same discipline as Step 1. Small, standalone, and everything else is dead until it is right.
 
-**FC1. The agent's discovery surface.** The HTTP listener with `GET /api/system/info`, `GET /api/fppd/multiSyncSystems`, `GET /api/playlists` and `GET /api/playlist/{name}`, plus the UDP responder wired into the agent. The advertised values are settled and are not a builder's choice: **`typeId` `0x7F`** (provisional, never `0x01`, ADR-044 decision 6), **mode `player`** rather than `remote`, because xLights renders the playlist widget only for `player` or `master` and sparse-by-default holds for every mode but `master`, and **version `9.5.0`** with explicit `majorVersion` 9 and `minorVersion` 5, past the 7.1 eligibility gate and the 7.0 and 9.3 FSEQ gates and deliberately below 10.0. Each is a deliberate compatibility choice whose reasoning is RES-003 §10.2, §10.5 and §10.6, and each changes which xLights code path runs, so none may be edited as a cosmetic detail. `uuid` maps to the node's ShowMesh identity and must be stable across restarts. **`channelRanges` is `start-end`, 0-based, with an inclusive end** (RES-003 §10.1, correcting §9.5): `show.surface`'s range is 1-based, so the advertised string runs `start-1` to `start+count-2`, and the base conversion is the point of the formatter. A node with no configured surface advertises nothing rather than an empty string. `GET /api/playlists` returns a **bare JSON array** of ShowMesh show names, not an object; `GET /api/playlist/{name}` answers with the show's current entries, and a 404 is tolerated by the client.
+**FC1. The agent's discovery surface.** The HTTP listener with `GET /api/system/info`, `GET /api/fppd/multiSyncSystems`, `GET /api/playlists`, `GET /api/playlist/{name}`, `GET /api/models` and `GET /api/system/fppd/restart`, plus the UDP responder wired into the agent. The last two were added once a real xLights run on 2026-08-30 showed it calls both unprompted during every upload and reports a red error on their 404 (RES-003's 2026-08-30 observation, §9.7c and §10.6); `GET /api/models` serves a bare array built from this node's own currently-applied render surface assignments (never a `POST`, which stays deferred), and `GET /api/system/fppd/restart` answers success and performs no action at all, since a ShowMesh node has no `fppd` to restart. The advertised values are settled and are not a builder's choice: **`typeId` `0x7F`** (provisional, never `0x01`, ADR-044 decision 6), **mode `player`** rather than `remote`, because xLights renders the playlist widget only for `player` or `master` and sparse-by-default holds for every mode but `master`, and **version `9.5.0`** with explicit `majorVersion` 9 and `minorVersion` 5, past the 7.1 eligibility gate and the 7.0 and 9.3 FSEQ gates and deliberately below 10.0. Each is a deliberate compatibility choice whose reasoning is RES-003 §10.2, §10.5 and §10.6, and each changes which xLights code path runs, so none may be edited as a cosmetic detail. `uuid` maps to the node's ShowMesh identity and must be stable across restarts. **`channelRanges` is `start-end`, 0-based, with an inclusive end** (RES-003 §10.1, correcting §9.5): `show.surface`'s range is 1-based, so the advertised string runs `start-1` to `start+count-2`, and the base conversion is the point of the formatter. A node with no configured surface advertises nothing rather than an empty string. `GET /api/playlists` returns a **bare JSON array** of ShowMesh show names, not an object; `GET /api/playlist/{name}` answers with the show's current entries, and a 404 is tolerated by the client.
 
 **FC2. The upload receiver and the show binding.** Chunked `PATCH /api/file/{dir}` per the real protocol, directories `sequences`/`music`/`videos` accepted, `effects` and everything else refused politely, the allowlist being the first of ADR-044 decision 4's three bounds. The other two are here too: a **per-file byte cap** and a **total asset-directory byte cap**, both from the store-backed `fppconnect.settings` kind, both registering nothing and removing the staging file when exceeded, and `ENOSPC` classified the same way. This seam also serves **`POST /api/playlist/{name}`**, which is how an upload binds to a show: the playlist the operator picks in FPP Connect is the ShowMesh show, the join key is the file name with its extension (identical as `Upload-Name` and as the entry's `sequenceName`), and the file name stem is the logical sequence. xLights fires it up to twice per target, the first time before any file exists, so it must be idempotent, and it never inspects the response status, so ShowMesh surfaces its own evidence. Assembly per §9.4 semantics; then hash, then register into the asset store, in that order. **A partial upload registers nothing** (Track E's standing criterion): stage, assemble, hash, rename, register, and any failure before the last step leaves no trace an operator could mistake for an asset. xLights sends no hash, so content identity is computed node-side after assembly. The meta endpoints (`/api/sequence/{name}/meta`, `/api/media/{name}/meta`) are pure upload-skip optimisations where a 404 breaks nothing; ship them only if trivially true, and never let them claim a file the store has not verified.
 
@@ -66,9 +66,9 @@ Every item below was an open owner decision when this document was written on 20
 FC1's build, as specified and tested (ADR-044 decision 2: this section, not
 `api/openapi.yaml`, is this listener's specification). The listener binds
 `SHOWMESH_FPPCONNECT_LISTEN_ADDR` (default `:80`; ADR-044 decision 5) and
-serves exactly four `GET` routes (`HEAD` is also served, with no body, per
+serves exactly six `GET` routes (`HEAD` is also served, with no body, per
 `net/http`'s own handling). Anything else, including a known path with the
-wrong method, is 404: ADR-044 decision 1 makes everything outside the four
+wrong method, is 404: ADR-044 decision 1 makes everything outside these
 routes 404, so a wrong method never gets `http.ServeMux`'s own 405-plus-
 `Allow`-header answer. Routing does not use `http.ServeMux` at all, because
 its automatic path cleaning would 301-redirect a dirty path (a doubled
@@ -104,6 +104,30 @@ filesystem.
   <name>, "mainPlaylist": [], "leadIn": [], "leadOut": [], "playlistInfo":
   {"total_duration": 0, "total_items": 0}}`; FC2's upload receiver is what
   populates `mainPlaylist`. Any other name is 404.
+- **`GET /api/models`**: a bare JSON array (RES-003's "GET returns a bare
+  array" trap, never `{"models": [...]}`, which is `POST`'s shape only), one
+  entry per this node's currently-applied render surface assignment. Each
+  entry carries `Name` (the surface's configured name, spaces replaced with
+  underscores, falling back to the surface id when unnamed), `ChannelCount`
+  and `StartChannel` (the assignment's own `channelRange`, `StartChannel`
+  taken as-is, already 1-based, never run through the `channelRanges`
+  formatter's 0-based conversion), `ChannelCountPerNode` (3 for `rgb`, 4 for
+  `rgbw`, from `geometry.pixelFormat`), `xLights: true`, `Orientation`
+  (`horizontal` when `geometry.width >= geometry.height`, else `vertical`),
+  `StringCount` (`geometry.height`), `StrandsPerString` (always `1`),
+  `StartCorner` (always `"TL"`), and `Type` (always `"Channel"`). A node
+  with no configured surface, or a state-read failure, serves `[]` with
+  `200`, never a 404 or an error status. `POST /api/models` is not served
+  (still deferred, per the list below).
+- **`GET /api/system/fppd/restart`** (with or without `?quick=1`, matched
+  identically since routing ignores the query string): answers `200` and
+  performs no action whatsoever. A ShowMesh node has no `fppd` and needs no
+  restart to serve an uploaded sequence; xLights' own `FPP::Restart` reads
+  this response into a string it never inspects, and its error logging
+  fires purely off a non-200 status (traced from
+  `xLightsSequencer/xLights`'s `src-core/controllers/FPP.cpp`, the source-
+  reading method RES-003 uses throughout), so the response body carries no
+  contract of its own.
 - **Everything else**: 404, a short plain-text body, never HTML.
 
 **Disabled behaviour.** While the pushed `fppconnect.settings.enabled` flag
