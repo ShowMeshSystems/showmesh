@@ -795,9 +795,13 @@ func TestFinding8_CommittedTransitionToShowDefersRatherThanCancels(t *testing.T)
 	}
 }
 
-// --- finding 9: fail-closed for the four admission-opening commands ---
+// --- finding 9: ADR-024 decision 11 amended 2026-08-26 (owner ruling) -
+// the four admission-opening commands (prepare-site, run-readiness,
+// start-preshow, start-night) no longer fail closed on an audit-write
+// failure either; start-night refused for a full audit disk is the
+// literal show-stopper the ruling exists to prevent. ---
 
-func TestFinding9_PrepareSiteRefusedWhenAuditWriteFails(t *testing.T) {
+func TestFinding9_PrepareSiteRunsDegradedWhenAuditWriteFails(t *testing.T) {
 	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	adminToken := mustIssueToken(t, svc, admin.ID)
@@ -815,16 +819,19 @@ func TestFinding9_PrepareSiteRefusedWhenAuditWriteFails(t *testing.T) {
 
 	installFailAuditTrigger(t, storeDir)
 
-	status, p := nightCommandProblem(t, api, opToken, "prepare-site")
-	if status != http.StatusServiceUnavailable || p.Type != ProblemTypeNightAuditUnavailable {
-		t.Fatalf("prepare-site with a failing audit write: status=%d type=%q, want 503/%s", status, p.Type, ProblemTypeNightAuditUnavailable)
+	out := mustNightCommand(t, api, opToken, "prepare-site")
+	if !out.Command.AttributionDegraded {
+		t.Fatalf("command.attributionDegraded = false, want true (the audit write failed and prepare-site must still run)")
+	}
+	if !out.Session.AttributionDegraded {
+		t.Fatalf("session.attributionDegraded = false, want true")
 	}
 	_, ok, err := st.GetCurrentNightSession(context.Background())
 	if err != nil {
 		t.Fatalf("get current night session: %v", err)
 	}
-	if ok {
-		t.Fatalf("prepare-site refused for want of audit still created a session; the whole transaction must have rolled back")
+	if !ok {
+		t.Fatalf("prepare-site with a failing audit write created no session; ADR-024 decision 11's amendment requires it to still run")
 	}
 }
 

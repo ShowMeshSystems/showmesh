@@ -248,21 +248,26 @@ type Service interface {
 
 	// AuditWriteStatus reports coordinator.audit.store.state and
 	// coordinator.audit.store.reason (docs/build/IDENTIFIER-REGISTER.md):
-	// whether this coordinator's most recent attempt to append
-	// an audit_log row succeeded, live, from WriteAudit's and
-	// AuditedWrite's own append outcomes; nothing else updates it. This
-	// answers a different question than [store.Store.Readiness]'s plain
-	// connection ping: a disk that is full or a table that has hit a
-	// constraint can leave the connection itself perfectly reachable
-	// while every append fails, which is ADR-024 decision 11's own named
-	// trigger for the audit-unavailable condition this reports. state is
-	// one of "usable", "unusable", or "unknown" ("unknown" until the
-	// first append attempt since this Service was constructed), per
-	// ADR-011's own rule restated here: no attempt yet is not evidence of
-	// health, so it is never reported as "usable" by default. reason is
-	// empty exactly when state is "usable", mirroring
-	// [v1.AudioConfigPushStatus]'s identical convention one layer up.
-	AuditWriteStatus() (state, reason string)
+	// whether this coordinator can currently write to its audit store.
+	// Computed FRESH on every call via [store.Store.ProbeAuditWrite] (a
+	// real INSERT into audit_log, always rolled back), matching
+	// [v1.AudioConfigPushStatus]'s own "computed fresh on every snapshot
+	// request" precedent one layer up: a caller polling this on some
+	// fixed interval (a dashboard left open overnight, say) gets a live
+	// answer every time, never a value that goes stale between real
+	// command traffic. This answers a different question than
+	// [store.Store.Readiness]'s plain connection ping: a disk that is
+	// full or a table that has hit a constraint can leave the connection
+	// itself perfectly reachable while every append fails, which is
+	// ADR-024 decision 11's own named trigger for the audit-unavailable
+	// condition this reports. The same probe result also updates this
+	// Service's own internal latch (the one [AuditedWrite]/[WriteAudit]'s
+	// real append attempts already maintain), so a caller checking
+	// immediately after a real dispatch sees a consistent answer either
+	// way. state is "usable" or "unusable"; reason is empty exactly when
+	// state is "usable", mirroring [v1.AudioConfigPushStatus]'s identical
+	// convention.
+	AuditWriteStatus(ctx context.Context) (state, reason string)
 }
 
 // TokenInfo is an API token's non-secret metadata — what [Service.ListTokens]
@@ -366,10 +371,11 @@ func NewService(st *store.Store, now func() time.Time, dataDir string, opts ...O
 		dataDir:      dataDir,
 		bootstrapTTL: DefaultBootstrapCodeTTL,
 		logger:       slog.Default(),
-		// "unknown": no audit_log append has been attempted by this Service
-		// instance yet, see [Service.AuditWriteStatus]'s own doc comment
-		// for why this is never optimistically "usable".
-		auditWriteState: "unknown",
+		// auditWriteState/auditWriteReason start at their zero values and
+		// are never read raw: [Service.AuditWriteStatus] always probes
+		// and overwrites them before returning, and nothing else reads
+		// them, so there is no externally observable "before the first
+		// call" state to initialize here.
 	}
 	for _, opt := range opts {
 		opt(s)

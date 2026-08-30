@@ -186,6 +186,42 @@ func (t *Tx) AppendAuditEntry(ctx context.Context, rec AuditRecord) (int64, erro
 	return appendAuditEntry(ctx, t.tx, t.s, rec)
 }
 
+// errAuditProbeRollback is the sentinel [Store.ProbeAuditWrite]'s own
+// InTx closure returns unconditionally after a successful insert,
+// forcing InTx to roll back rather than commit: this probe must never
+// leave a synthetic row in the append-only audit log.
+var errAuditProbeRollback = errors.New("store: audit write probe (deliberately rolled back)")
+
+// ProbeAuditWrite attempts a real INSERT into audit_log, inside a
+// transaction it always rolls back, and reports whether that INSERT
+// itself succeeded. Unlike [Store.Readiness]'s plain connection ping,
+// this exercises the SAME statement [Store.AppendAuditEntry]/
+// [Tx.AppendAuditEntry] run in production, so it catches a failure mode
+// a ping cannot: the connection is reachable and every other table can
+// still be written, but this specific write fails (a full disk mid
+// write, a corrupted index on this one table), which is ADR-024 decision
+// 11's own named trigger for the condition
+// [identity.Service.AuditWriteStatus] reports. Computed fresh on every
+// call, never cached, matching this
+// coordinator's own audioConfigPushStatus precedent (audiosettings.go,
+// internal/coordinator/api) for a standing, request-time-computed health
+// signal.
+func (s *Store) ProbeAuditWrite(ctx context.Context) error {
+	err := s.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		if _, aerr := tx.AppendAuditEntry(ctx, AuditRecord{
+			Kind: "probe", Action: "coordinator.audit.store.probe",
+			OutcomeReason: "live audit-store write probe; always rolled back, never committed",
+		}); aerr != nil {
+			return aerr
+		}
+		return errAuditProbeRollback
+	})
+	if errors.Is(err, errAuditProbeRollback) {
+		return nil
+	}
+	return err
+}
+
 const auditColumns = `
 	id, recorded_at, principal_id, principal_name, form, credential_id,
 	client_addr, action, target, params_json, idempotency_key,

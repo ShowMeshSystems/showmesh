@@ -476,6 +476,10 @@ func TestInvokeActionAuditUnavailableExemptSafetyClassStillDispatches(t *testing
 	if degraded, _ := result["attributionDegraded"].(bool); !degraded {
 		t.Errorf("attributionDegraded = %v, want true", result["attributionDegraded"])
 	}
+	if reason, _ := result["dispatchAttributionReason"].(string); reason != degradedAttributionReasonSafetyClassExemption {
+		t.Errorf("dispatchAttributionReason = %q, want %q (the durable record and the API response must say WHY "+
+			"this ran unaudited, and this action's own stop safetyClass is the real reason)", reason, degradedAttributionReasonSafetyClassExemption)
+	}
 }
 
 // Isolates the pre-dispatch half of the exemption proved above, using
@@ -560,6 +564,10 @@ func TestInvokeActionAuditUnavailableNonExemptRunsWithDegradedAttribution(t *tes
 	}
 	if degraded, _ := result["attributionDegraded"].(bool); !degraded {
 		t.Errorf("attributionDegraded = %v, want true", result["attributionDegraded"])
+	}
+	if reason, _ := result["dispatchAttributionReason"].(string); reason != degradedAttributionReasonAuditNeverBlocks {
+		t.Errorf("dispatchAttributionReason = %q, want %q (this action's own safetyClass is \"none\": it must "+
+			"never claim it ran unaudited because of the blackout/stop/power-off safety class)", reason, degradedAttributionReasonAuditNeverBlocks)
 	}
 }
 

@@ -278,6 +278,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	auditExempt := payload.SafetyClass != config.ShowSafetyClassNone
 
 	var dispatchDegraded bool
+	dispatchDegradedReason := degradedAttributionReasonAuditNeverBlocks
 	auditErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
 		if _, err := tx.InsertCommand(ctx, rec); err != nil {
 			return identity.AuditEntry{}, err
@@ -316,11 +317,10 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 			h.writeInternalError(w, now, "insert action invocation command", err)
 			return
 		}
-		degradedReason := degradedAttributionReasonAuditNeverBlocks
 		if auditExempt {
-			degradedReason = degradedAttributionReasonSafetyClassExemption
+			dispatchDegradedReason = degradedAttributionReasonSafetyClassExemption
 		}
-		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedReason)
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, dispatchDegradedReason)
 		dispatchDegraded = true
 	case auditErr != nil:
 		h.writeInternalError(w, now, "insert action invocation command", auditErr)
@@ -329,7 +329,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 
 	dispatchAttribution, dispatchAttributionReason := attributionStateComplete, actionInvokeDispatchCompleteReason
 	if dispatchDegraded {
-		dispatchAttribution, dispatchAttributionReason = attributionStateDegraded, degradedAttributionReasonSafetyClassExemption
+		dispatchAttribution, dispatchAttributionReason = attributionStateDegraded, dispatchDegradedReason
 	}
 
 	// --- From here on, a detached context: an abandoned client must not

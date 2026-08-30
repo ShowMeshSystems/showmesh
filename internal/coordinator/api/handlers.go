@@ -529,12 +529,11 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	// resolumeCompositionDegradeOnError's own precedent two calls above.
 	pushState, pushReason := audioConfigPushStatusDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
 
-	// Live from the most recent audit_log append attempt this coordinator
-	// has made anywhere, not computed fresh here: see
-	// [identity.Service.AuditWriteStatus]'s own doc comment for why a
-	// live read (rather than a synthetic probe write on every snapshot
-	// poll) is the right shape for this signal.
-	auditState, auditReasonStr := h.deps.Identity.AuditWriteStatus()
+	// Computed fresh via a real probe write to audit_log (always rolled
+	// back), never cached: see [identity.Service.AuditWriteStatus]'s own
+	// doc comment for why a stale, traffic-fed latch alone was not
+	// answerable enough for this standing signal.
+	auditState, auditReasonStr := h.deps.Identity.AuditWriteStatus(ctx)
 	var auditReason *string
 	if auditReasonStr != "" {
 		auditReason = &auditReasonStr

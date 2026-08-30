@@ -4214,22 +4214,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          description: >-
-            ADR-024 decision 11's fail-closed default: this action is not
-            exempt (not `blackout` or `clearLayer`), and the pre-dispatch
-            write that must durably record it before dispatch could not be
-            appended to this coordinator's audit store. `type`
-            `resolume-action-refused-audit-unavailable`. Nothing was
-            recorded and nothing was dispatched to Resolume; retry once
-            the audit store is writable again.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
   /resolume/recovery:
     get:
       operationId: getResolumeRecovery
@@ -6128,20 +6112,6 @@ paths:
             state table for the session's current state), or
             `night-ambiguous` (the session is degraded; run `end-session`
             then `prepare-site` to recover).
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "503":
-          description: >-
-            `prepare-site`, `run-readiness`, `start-preshow`, or
-            `start-night` only: its audit entry could not be written, so
-            the whole command was refused rather than applied without one
-            (`night-command-refused-audit-unavailable`). Nothing was
-            dispatched and nothing was recorded.
           headers:
             ShowMesh-API-Version:
               $ref: "#/components/headers/ShowMesh-API-Version"
@@ -8831,26 +8801,24 @@ components:
       type: object
       description: >-
         Whether this coordinator can currently write to its audit store,
-        live from the most recent audit_log append attempt made anywhere
-        in the coordinator, not computed fresh per request. ADR-024
-        decision 11's amendment (owner ruling, 2026-08-26) removed the
-        fail-closed refusal that used to make an audit-write failure
-        directly visible on the three request paths it protected (direct
-        action invoke, audio session commands, FPP commands): those now
-        run regardless, so this field is the standing surface an operator
-        reads to learn the audit store is down without having invoked an
-        action themselves.
+        computed FRESH on every request via a real probe write to
+        audit_log (always rolled back, never committed), not cached from
+        past traffic. ADR-024 decision 11's amendment (owner ruling,
+        2026-08-26) removed the fail-closed refusal that used to make an
+        audit-write failure directly visible on the five request paths it
+        protected (direct action invoke, audio session commands, FPP
+        commands, Resolume actions, and the night-session
+        admission-opening commands): those now run regardless, so this
+        field is the standing surface an operator reads to learn the
+        audit store is down without having invoked an action themselves.
       required: [state, reason]
       properties:
         state:
           type: string
-          enum: [usable, unusable, unknown]
+          enum: [usable, unusable]
           description: >-
-            "usable": the most recent audit_log append attempt succeeded.
-            "unusable": it failed, and reason names why. "unknown": no
-            append has been attempted since this coordinator started, per
-            the standing rule that unattempted evidence is never reported
-            as healthy.
+            "usable": the probe write just now succeeded. "unusable": it
+            failed, and reason names why.
         reason:
           type: [string, "null"]
           description: Set whenever state is not "usable", null otherwise.
@@ -10966,9 +10934,11 @@ components:
         current split had left "busy" still sharing a type with the
         idempotency case even after the evidence-not-current case was
         split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11
-        amended):** `POST /fpp/{instanceId}/commands` no longer produces
-        "fpp-command-refused-audit-unavailable" - an unavailable audit
-        store never blocks a command dispatch now; the command still runs
+        amended):** an unavailable audit store no longer blocks a command
+        dispatch on ANY request path this coordinator has - the amendment
+        covers every one of them, not a named subset - so
+        `POST /fpp/{instanceId}/commands` no longer produces
+        "fpp-command-refused-audit-unavailable"; the command still runs
         and degraded attribution is recorded and surfaced instead of a
         `503`.
         One is Track D seam D-2a's own addition: "payload-too-large" (413,
@@ -10978,14 +10948,15 @@ components:
         for a request body over its own much smaller limit - Review fix 5,
         2026-08-15 - because both refusals share the identical remedy,
         "shrink the request", unlike the busy/evidence-not-current split
-        above where the type had to fork because the remedies differ). One
-        is Track D seam D-3/B's own addition:
-        "resolume-action-refused-audit-unavailable" (POST /resolume/actions'
-        own ADR-024 decision 11 fail-closed default for a non-exempt
-        action - every action except `blackout` and `clearLayer` - `503`,
-        for a second vendor's command surface; unchanged by the 2026-08-26
-        amendment above, which covers only the three request paths ADR-024
-        decision 11 names explicitly). **REMOVED 2026-08-26:**
+        above where the type had to fork because the remedies differ).
+        Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable"
+        (POST /resolume/actions' own former ADR-024 decision 11 fail-closed
+        default for a non-exempt action - every action except `blackout`
+        and `clearLayer` - `503`, for a second vendor's command surface),
+        is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing
+        in this coordinator's audit-write posture treats Resolume actions
+        differently from FPP commands, so this type is no longer produced
+        either. **REMOVED 2026-08-26:**
         POST /actions/{id}/invocations no longer produces
         "action-invoke-refused-audit-unavailable" for the identical reason
         - an action whose stored safetyClass is "none" used to fail closed
@@ -11054,13 +11025,11 @@ components:
             - https://showmesh.dev/problems/macro-run-idempotency-macro-conflict
             - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
             - https://showmesh.dev/problems/payload-too-large
-            - https://showmesh.dev/problems/resolume-action-refused-audit-unavailable
             - https://showmesh.dev/problems/storage-full
             - https://showmesh.dev/problems/asset-target-required
             - https://showmesh.dev/problems/night-not-ready
             - https://showmesh.dev/problems/night-state-rejected
             - https://showmesh.dev/problems/night-ambiguous
-            - https://showmesh.dev/problems/night-command-refused-audit-unavailable
             - https://showmesh.dev/problems/audio-node-channel-duplicate
             - https://showmesh.dev/problems/audio-node-channel-overlap
             - https://showmesh.dev/problems/audio-node-route-mismatch

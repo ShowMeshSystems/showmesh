@@ -258,7 +258,7 @@
     }
   ],
   "auditStore": {
-    "state": "unknown",
+    "state": "usable",
     "reason": null
   },
   "audioConfigPush": {
