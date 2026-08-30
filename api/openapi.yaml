@@ -8660,14 +8660,13 @@ components:
       type: object
       description: >-
         The body of the nine audio session dispatch endpoints that take
-        no operation-specific params: the seven single-segment
-        POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare|start|
-        pause|resume|advance|stop|clear endpoints, plus the two
-        two-segment POST /nodes/{nodeId}/audio/sessions/{sessionId}/
-        output/mute and .../output/unmute endpoints. revision goes
-        through the node's own per-session revision ledger: a value not
-        strictly greater than the session's current desired revision is
-        refused, never silently applied out of order.
+        no operation-specific params: the seven single-segment endpoints
+        (prepare, start, pause, resume, advance, stop, clear) plus the
+        two two-segment endpoints (output/mute, output/unmute), all
+        under POST /nodes/{nodeId}/audio/sessions/{sessionId}/. revision
+        goes through the node's own per-session revision ledger: a value
+        not strictly greater than the session's current desired revision
+        is refused, never silently applied out of order.
       required: [revision]
       additionalProperties: false
       properties:
@@ -8688,8 +8687,13 @@ components:
           type: object
           additionalProperties: false
           description: >-
-            Optional; this operation takes no params. Omitted and `{}`
-            are the only accepted values.
+            Optional. Neither the node nor this coordinator actually
+            validates params for these nine operations: each is
+            silently accepted and ignored, whatever it contains. This
+            schema states the useful contract instead of that
+            unconditional tolerance, matching AudioSessionSeekParams'
+            and AudioSessionGainParams' own stricter-than-the-node
+            posture.
     AudioSessionApplyParams:
       type: object
       additionalProperties: false
@@ -8816,15 +8820,24 @@ components:
             minLength: 1
         ltcStartOffset:
           type: string
+          pattern: '^[0-9]{2}:[0-9]{2}:[0-9]{2}:[0-9]{2}$'
           description: >-
             HH:MM:SS:FF, non-drop-frame - this session's LTC start
             point, overriding
             ConfigAudioSettingsPayload.ltcDefaultStartOffset for this
-            apply only.
+            apply only. The node re-checks each field's own natural
+            range (hours 0-23, minutes/seconds 0-59) beyond what this
+            pattern expresses, and refuses a schema-valid value whose
+            fields are out of range.
         mixPolicy:
           type: string
-          enum: [mix, duck, interrupt, unsupported]
-          description: How this session's audio combines with a lower- or higher-priority session's own audio.
+          enum: [mix, duck, interrupt]
+          description: >-
+            How this session's audio combines with a lower- or
+            higher-priority session's own audio. "unsupported" is a
+            fourth member of this vocabulary, but it names a capability
+            an adapter can report, never a policy a caller may request:
+            the node unconditionally refuses it here.
     AudioSessionSeekParams:
       type: object
       additionalProperties: false

@@ -1331,11 +1331,12 @@ export class ApiStore {
   //
   // -- Second slice: prepare/start/advance/clear (no params) plus
   // seek/gain/gain.fade (each carrying operation-specific params the
-  // node itself validates -- AudioSessionCommandRequest.params is opaque
-  // to this coordinator by design). apply is the same shape as
-  // seek/gain: this coordinator passes params through verbatim without
-  // validating it, exactly as showmeshctl's own "params-json is passed
-  // through verbatim" positional argument does (cmd_audio_session.go).
+  // node itself validates -- each operation's own request schema's
+  // params is opaque to this coordinator by design). apply is the same
+  // shape as seek/gain: this coordinator passes params through verbatim
+  // without validating it, exactly as showmeshctl's own "params-json is
+  // passed through verbatim" positional argument does
+  // (cmd_audio_session.go).
 
   private async dispatchAudioSessionCommand(
     nodeId: string,

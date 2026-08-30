@@ -2959,13 +2959,13 @@ export interface components {
             idempotencyKey?: string;
             params: components["schemas"]["AudioSessionGainFadeParams"];
         };
-        /** @description The body of the nine audio session dispatch endpoints that take no operation-specific params: the seven single-segment POST /nodes/{nodeId}/audio/sessions/{sessionId}/prepare|start| pause|resume|advance|stop|clear endpoints, plus the two two-segment POST /nodes/{nodeId}/audio/sessions/{sessionId}/ output/mute and .../output/unmute endpoints. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        /** @description The body of the nine audio session dispatch endpoints that take no operation-specific params: the seven single-segment endpoints (prepare, start, pause, resume, advance, stop, clear) plus the two two-segment endpoints (output/mute, output/unmute), all under POST /nodes/{nodeId}/audio/sessions/{sessionId}/. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
         AudioSessionNoParamsRequest: {
             /** Format: int64 */
             revision: number;
             /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
             idempotencyKey?: string;
-            /** @description Optional; this operation takes no params. Omitted and `{}` are the only accepted values. */
+            /** @description Optional. Neither the node nor this coordinator actually validates params for these nine operations: each is silently accepted and ignored, whatever it contains. This schema states the useful contract instead of that unconditional tolerance, matching AudioSessionSeekParams' and AudioSessionGainParams' own stricter-than-the-node posture. */
             params?: Record<string, never>;
         };
         /** @description Every field is independently optional: params with no fields at all is syntactically valid and merges nothing new onto the session's already-applied state. `media` and `playlist` are mutually exclusive; neither is required, since an apply that only changes e.g. `outputs` or `mixPolicy` on an already-applied session is valid. `gain`, `ceiling`, `fade`, and `bookmark` are never accepted here: gain and its ceiling and fade are set through the separate audio.gain.* commands, and a bookmark is state the session records for itself, never supplied by a caller. */
@@ -3021,13 +3021,13 @@ export interface components {
                 }[];
             };
             outputs?: string[];
-            /** @description HH:MM:SS:FF, non-drop-frame - this session's LTC start point, overriding ConfigAudioSettingsPayload.ltcDefaultStartOffset for this apply only. */
+            /** @description HH:MM:SS:FF, non-drop-frame - this session's LTC start point, overriding ConfigAudioSettingsPayload.ltcDefaultStartOffset for this apply only. The node re-checks each field's own natural range (hours 0-23, minutes/seconds 0-59) beyond what this pattern expresses, and refuses a schema-valid value whose fields are out of range. */
             ltcStartOffset?: string;
             /**
-             * @description How this session's audio combines with a lower- or higher-priority session's own audio.
+             * @description How this session's audio combines with a lower- or higher-priority session's own audio. "unsupported" is a fourth member of this vocabulary, but it names a capability an adapter can report, never a policy a caller may request: the node unconditionally refuses it here.
              * @enum {string}
              */
-            mixPolicy?: "mix" | "duck" | "interrupt" | "unsupported";
+            mixPolicy?: "mix" | "duck" | "interrupt";
         };
         /** @description This schema is stricter than the node: an unrecognized key here is refused, where the node itself silently ignores one instead. */
         AudioSessionSeekParams: {
