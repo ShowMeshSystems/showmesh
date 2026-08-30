@@ -1232,11 +1232,16 @@ it.
 
 | Name | Status | Owner |
 |---|---|---|
-| `AudioSessionCommandParams` (discriminated on `command`) | reserved | Lane 17a SM-259 |
+| `AudioSessionCommandParams` (discriminated on `command`) | superseded | Lane 17a SM-259: a shared request schema keyed only by which endpoint a caller happened to call let one operation's body validate against another's; replaced by the five per-operation request schemas below (2026-08-30 review) |
 | `AudioSessionApplyParams` | reserved | Lane 17a SM-259 |
 | `AudioSessionSeekParams` | reserved | Lane 17a SM-259 |
 | `AudioSessionGainParams` | reserved | Lane 17a SM-259 |
 | `AudioSessionGainFadeParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionApplyRequest` | reserved | Lane 17a SM-259 |
+| `AudioSessionSeekRequest` | reserved | Lane 17a SM-259 |
+| `AudioGainSetRequest` | reserved | Lane 17a SM-259 |
+| `AudioGainFadeRequest` | reserved | Lane 17a SM-259 |
+| `AudioSessionNoParamsRequest` | reserved | Lane 17a SM-259 |
 | `pinnedMaxGainDb` on `NightSessionState.backgroundAudio` | reserved | Lane 17a SM-202 |
 
 **`pinnedMaxGainDb` is named apart from the configured `maxGainDb`
