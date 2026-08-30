@@ -54,6 +54,28 @@ var knownIDs = map[ID]struct{}{
 	"audio.output.dante":    {},
 	"timecode.ltc.observe":  {},
 	"process.supervise":     {},
+
+	// SM-201: an audio output's granular playback abilities, reserved
+	// 2026-08-30 so ValidateItemTransitionSupport and the
+	// resting:background-audio-output-capabilities readiness check have
+	// real identifiers to ask a node's Hello advertisement about instead
+	// of none at all. See internal/agent/audiocapabilities.go for which
+	// of these a node actually advertises and why; membership here is
+	// informational only, per this map's own doc comment.
+	"audio.playback.background":   {},
+	"audio.playback.announcement": {},
+	"audio.playback.playlist":     {},
+	"audio.playback.loop":         {},
+	"audio.playback.gain":         {},
+	"audio.playback.fade":         {},
+	"audio.playback.seek":         {},
+	"audio.playback.position":     {},
+	"audio.mix.concurrent":        {},
+	"audio.mix.duck":              {},
+	"audio.mix.interrupt":         {},
+	"audio.transition.sequential": {},
+	"audio.transition.gapless":    {},
+	"audio.transition.crossfade":  {},
 }
 
 // withdrawnIDs are identifiers ARCHITECTURE section 6 records as replaced:

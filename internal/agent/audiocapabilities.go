@@ -35,6 +35,52 @@ var audioEngineAvailable = func() (bool, string) { return false, "no playback en
 // chase an import to find the number that gates its own output.
 const minLTCChannels = audio.MinLTCChannels
 
+// audioSessionCapabilityIDs are the capability.IDs SM-201 assigned that
+// this node's session Manager (internal/agent/audio) provides IDENTICALLY
+// for every Engine implementation this repository binds, once that
+// engine reports itself available — see [detectAudioCapabilities]'s own
+// gating of these (and "audio.engine") on [audioEngineAvailable].
+// Playlist advance (background/announcement source roles, item repeat),
+// gain/fade application, duck/interrupt priority resolution, and
+// position readback are all Manager-level behavior implemented once
+// against the [audio.Engine] interface (internal/agent/audio/mix.go,
+// session.go, engine.go), never varying by which engine backend is
+// actually bound underneath it, so there is nothing further to probe
+// per-ID: an available engine provides all of them.
+//
+// "audio.mix.concurrent" — more than one session audible on this output
+// at once — is real for the one production engine this repository binds
+// (internal/agent/audio/gstengine, cgo-built): its own doc comment states
+// concurrent sessions are branches mixed by a single audiomixer onto one
+// physical sink. It is included here rather than probed separately
+// because no other Engine implementation in this repository is ever
+// wired as "the real engine" behind [audioEngineAvailable] (see
+// TestFakeAudioEngineNeverAdvertisesPlaybackCapability).
+//
+// "audio.transition.gapless" and "audio.transition.crossfade" are
+// deliberately NOT in this list, and ship nowhere in this build:
+// [audio.Session.advanceLocked] always stops the completed item and
+// starts its successor in sequence, only MEASURING the resulting gap
+// (docs/build/IDENTIFIER-REGISTER.md's inter-item gap), never eliminating
+// it — true for every engine this repository ships, gstengine included.
+// There is no evidence any node built from this repository could ever
+// honestly confirm either ability, so only "audio.transition.sequential"
+// ships until an engine actually implements one of the other two.
+var audioSessionCapabilityIDs = []capability.ID{
+	"audio.playback.background",
+	"audio.playback.announcement",
+	"audio.playback.playlist",
+	"audio.playback.loop",
+	"audio.playback.gain",
+	"audio.playback.fade",
+	"audio.playback.seek",
+	"audio.playback.position",
+	"audio.mix.concurrent",
+	"audio.mix.duck",
+	"audio.mix.interrupt",
+	"audio.transition.sequential",
+}
+
 // detectAudioCapabilities probes this node's real ALSA/GStreamer state and
 // returns exactly the capability set that evidence supports —
 // audio.output.local and audio.output.ltc from route probe evidence
@@ -42,10 +88,11 @@ const minLTCChannels = audio.MinLTCChannels
 // audio.node placement validation reads these BEFORE a binding can ever
 // be delivered, so gating them on [audioEngineAvailable] would make a
 // node's own output routes unreachable to configure), plus audio.engine
-// ONLY when [audioEngineAvailable] also reports true — the actual
-// session engine, never merely "gst-launch-1.0 works on this box". A
-// node with no audio hardware — every render node and the development
-// laptop — returns an empty set, not a fault.
+// and every ID in [audioSessionCapabilityIDs] ONLY when
+// [audioEngineAvailable] also reports true — the actual session engine,
+// never merely "gst-launch-1.0 works on this box". A node with no audio
+// hardware — every render node and the development laptop — returns an
+// empty set, not a fault.
 //
 // This node never claims its own clock domain: no software call here
 // proves two outputs share a hardware clock, so ClockDomain/
@@ -60,6 +107,9 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	set := capability.Set{}
 	if ok, _ := audioEngineAvailable(); ok {
 		set = append(set, capability.Capability{ID: "audio.engine", Version: 1})
+		for _, id := range audioSessionCapabilityIDs {
+			set = append(set, capability.Capability{ID: id, Version: 1})
+		}
 	}
 
 	usable, ltc := splitUsableRoutes(d.Routes)

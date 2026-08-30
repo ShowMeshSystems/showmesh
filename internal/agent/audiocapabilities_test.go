@@ -64,6 +64,11 @@ func TestDetectAudioCapabilitiesEngineOnlyNoHardware(t *testing.T) {
 	if _, ok := set.Lookup("audio.engine"); !ok {
 		t.Error("audio.engine not advertised, want present")
 	}
+	for _, id := range audioSessionCapabilityIDs {
+		if _, ok := set.Lookup(id); !ok {
+			t.Errorf("%s not advertised alongside audio.engine, want present", id)
+		}
+	}
 	if _, ok := set.Lookup("audio.output.local"); ok {
 		t.Error("audio.output.local advertised from a route that never reached PLAYING, want absent")
 	}
@@ -229,9 +234,32 @@ func TestFakeAudioEngineNeverAdvertisesPlaybackCapability(t *testing.T) {
 		t.Error(`"audio.engine" advertised while the only Engine is FakeEngine (Available() == false); this must never happen`)
 	}
 	for _, c := range set {
-		if strings.HasPrefix(string(c.ID), "audio.session") || strings.HasPrefix(string(c.ID), "audio.playback") {
+		if strings.HasPrefix(string(c.ID), "audio.session") || strings.HasPrefix(string(c.ID), "audio.playback") ||
+			strings.HasPrefix(string(c.ID), "audio.mix") || strings.HasPrefix(string(c.ID), "audio.transition") {
 			t.Errorf("capability set advertises %q while the only Engine is FakeEngine; this must never happen", c.ID)
 		}
+	}
+}
+
+// TestDetectAudioCapabilitiesNeverAdvertisesUnimplementedTransitions
+// proves gapless/crossfade never ship regardless of engine availability:
+// no engine in this repository ever eliminates the inter-item gap
+// [audio.Session.advanceLocked] measures, so there is no evidence path
+// that could ever add either ID to [audioSessionCapabilityIDs] and this
+// test would catch it if one did.
+func TestDetectAudioCapabilitiesNeverAdvertisesUnimplementedTransitions(t *testing.T) {
+	withAudioEngineAvailable(t, true, "")
+	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true})
+
+	set := detectAudioCapabilities(context.Background())
+	if _, ok := set.Lookup("audio.transition.gapless"); ok {
+		t.Error(`"audio.transition.gapless" advertised, want absent: no engine in this repository implements it`)
+	}
+	if _, ok := set.Lookup("audio.transition.crossfade"); ok {
+		t.Error(`"audio.transition.crossfade" advertised, want absent: no engine in this repository implements it`)
+	}
+	if _, ok := set.Lookup("audio.transition.sequential"); !ok {
+		t.Error(`"audio.transition.sequential" not advertised while the engine is available, want present`)
 	}
 }
 
@@ -250,13 +278,25 @@ func TestDetectAudioCapabilitiesEngineGatedOnAvailability(t *testing.T) {
 
 	withAudioEngineAvailable(t, false, "no audio.node binding delivered yet")
 	withAudioDiscoverer(t, discovery)
-	if _, ok := detectAudioCapabilities(context.Background()).Lookup("audio.engine"); ok {
+	unavailable := detectAudioCapabilities(context.Background())
+	if _, ok := unavailable.Lookup("audio.engine"); ok {
 		t.Error(`"audio.engine" advertised while audioEngineAvailable() == false, want absent`)
+	}
+	for _, id := range audioSessionCapabilityIDs {
+		if _, ok := unavailable.Lookup(id); ok {
+			t.Errorf("%s advertised while audioEngineAvailable() == false, want absent", id)
+		}
 	}
 
 	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, discovery)
-	if _, ok := detectAudioCapabilities(context.Background()).Lookup("audio.engine"); !ok {
+	available := detectAudioCapabilities(context.Background())
+	if _, ok := available.Lookup("audio.engine"); !ok {
 		t.Error(`"audio.engine" not advertised while audioEngineAvailable() == true, want present`)
+	}
+	for _, id := range audioSessionCapabilityIDs {
+		if _, ok := available.Lookup(id); !ok {
+			t.Errorf("%s not advertised while audioEngineAvailable() == true, want present", id)
+		}
 	}
 }

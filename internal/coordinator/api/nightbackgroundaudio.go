@@ -60,11 +60,13 @@ import (
 // Known, deliberate limits (see this builder's own report): a failed
 // apply or start is logged and left for an operator rather than auto-
 // retried indefinitely (a session with genuinely bad configuration would
-// otherwise retry forever); gapless/crossfade item transitions can never
-// be confirmed because no audio.node capability signal for them exists
-// yet (ValidateItemTransitionSupport's outputConfirms is always false
-// here), so configuring one refuses background audio outright; and
-// maxGainDb is enforced only at the moment this controller computes and
+// otherwise retry forever); gapless/crossfade item transitions are
+// confirmed against the output node's live capability advertisement
+// (SM-201, [audioNodeConfirmsTransition]) - configuring one against an
+// output that has never declared the matching audio.transition.* ID
+// refuses background audio outright, honestly, rather than approximating
+// it as sequential; and maxGainDb is enforced only at the moment this
+// controller computes and
 // sends a gain - there is no wire-level standing ceiling on
 // audio.session.apply or audio.gain.set today (a contract gap filed
 // separately, not invented here).
@@ -409,7 +411,12 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 	nodeID := ba.OutputNodeID()
 	sessionID := nightBackgroundAudioSessionID(rec)
 
-	if err := pkgaudio.ValidateItemTransitionSupport(pkgaudio.ItemTransition(ba.ItemTransition), false); err != nil {
+	confirms, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, pkgaudio.ItemTransition(ba.ItemTransition))
+	if err != nil {
+		h.logWarn("night loop: background audio: failed to read output node's capability advertisement", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
+		return
+	}
+	if err := pkgaudio.ValidateItemTransitionSupport(pkgaudio.ItemTransition(ba.ItemTransition), confirms); err != nil {
 		h.logWarn("night loop: background audio: requested item transition is not confirmed by the output; refusing to start", "sessionId", rec.ID, "itemTransition", ba.ItemTransition, "error", err)
 		return
 	}

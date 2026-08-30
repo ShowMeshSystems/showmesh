@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
 // Track F seam F5's own readiness checks (RESTING-MODE.md §13), added to
@@ -42,40 +44,125 @@ func (h *handlers) nightCheckBackgroundAudioAssets(ctx context.Context, show str
 		len(ba.Items))}
 }
 
-// nightCheckBackgroundAudioItemTransition is §13's own item-transition
-// capability bullet, for the ONE case this coordinator can actually
-// answer without a real capability signal: sequential never needs
-// confirmation and always passes; gapless and crossfade require an
-// output confirmation this codebase has no signal for (this file's own
-// top doc comment, and nightAdvanceBackgroundAudio's identical check at
-// dispatch time), so configuring either is reported failed HERE, at
-// readiness, rather than only discovered when background audio never
-// starts.
-func nightCheckBackgroundAudioItemTransition(ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
-	name := "resting:background-audio-item-transition"
-	if err := pkgaudio.ValidateItemTransitionSupport(pkgaudio.ItemTransition(ba.ItemTransition), false); err != nil {
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-			"itemTransition %q requires the selected output to confirm support, and no audio.node capability signal for that exists in this build; background audio will refuse to start until this is changed to \"sequential\" or that capability signal ships", ba.ItemTransition)}
+// transitionCapabilityID returns the capability.ID that would confirm t
+// (SM-201), and false for [pkgaudio.ItemTransitionSequential], which
+// [pkgaudio.ValidateItemTransitionSupport] never gates on output
+// confirmation at all - see [audioNodeConfirmsTransition].
+func transitionCapabilityID(t pkgaudio.ItemTransition) (capability.ID, bool) {
+	switch t {
+	case pkgaudio.ItemTransitionGapless:
+		return "audio.transition.gapless", true
+	case pkgaudio.ItemTransitionCrossfade:
+		return "audio.transition.crossfade", true
+	default:
+		return "", false
 	}
-	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "sequential requires no output confirmation"}
 }
 
-// nightCheckAudioOutputCapabilities is §13's own bullet: "every configured
-// audio output declares the background, announcement, playlist, mix,
-// duck, interrupt, loop, gain, fade, seek, position, and requested
-// sequential/gapless/crossfade item-transition capabilities this session
-// requires." pkg/capability's own registered vocabulary
-// (pkg/capability/id.go) has no member for any of these - only
-// audio.engine/audio.output.local/audio.output.fm/audio.output.ltc/
-// audio.output.dante/audio.playback/audio.multichannel/audio.dante exist,
-// none of them this granular - so this coordinator holds no evidence to
-// check against and reports that honestly rather than inventing a passing
-// check.
-func nightCheckAudioOutputCapabilities(nodeID string) nightReadinessCheck {
-	return nightReadinessCheck{
-		name: "resting:background-audio-output-capabilities:" + nodeID, health: nightCheckStateNotVerifiable,
-		reason: "no audio.node capability signal for background/announcement/playlist/mix/duck/interrupt/loop/gain/fade/seek/position exists in this build; this coordinator cannot confirm the output declares them",
+// audioNodeConfirmsTransition reads nodeID's live capability advertisement
+// and reports whether it confirms t, per [transitionCapabilityID] -
+// SM-201's real answer to the outputConfirms bool
+// [pkgaudio.ValidateItemTransitionSupport] takes, in place of the
+// hardcoded false this coordinator passed before that capability signal
+// existed. Sequential needs no confirmation and reports true without
+// reading inventory at all.
+func audioNodeConfirmsTransition(ctx context.Context, nodes NodeLister, now time.Time, nodeID string, t pkgaudio.ItemTransition) (bool, error) {
+	id, needsConfirmation := transitionCapabilityID(t)
+	if !needsConfirmation {
+		return true, nil
 	}
+	caps, err := audioNodeCapabilitySet(ctx, nodes, now, nodeID)
+	if err != nil {
+		return false, err
+	}
+	_, confirmed := caps.Lookup(id)
+	return confirmed, nil
+}
+
+// nightCheckBackgroundAudioItemTransition is §13's own item-transition
+// capability bullet: sequential never needs confirmation and always
+// passes; gapless and crossfade pass only when the configured output
+// node's live Hello capability advertisement declares the matching
+// audio.transition.* ID (SM-201; nightAdvanceBackgroundAudio's identical
+// check at dispatch time reads the same evidence), so a session
+// configured against an output that never declared it is reported
+// failed HERE, at readiness, rather than only discovered when background
+// audio never starts.
+func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+	name := "resting:background-audio-item-transition"
+	t := pkgaudio.ItemTransition(ba.ItemTransition)
+	nodeID := ba.OutputNodeID()
+	confirms, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, t)
+	if err != nil {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"could not read audio.node %q's capability advertisement: %s", nodeID, err.Error())}
+	}
+	if verr := pkgaudio.ValidateItemTransitionSupport(t, confirms); verr != nil {
+		id, _ := transitionCapabilityID(t)
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
+			"itemTransition %q requires output %q to declare %q, and its current capability advertisement does not; background audio will refuse to start until this is changed to \"sequential\" or the output ships that capability", ba.ItemTransition, nodeID, id)}
+	}
+	if t == pkgaudio.ItemTransitionSequential {
+		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "sequential requires no output confirmation"}
+	}
+	id, _ := transitionCapabilityID(t)
+	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("output %q declares %q", nodeID, id)}
+}
+
+// audioOutputCapabilityIDsForBackgroundAudio returns the capability.IDs
+// SM-201 assigned that a configured resting.backgroundAudio session
+// concretely exercises on its output node, independent of the separate
+// item-transition ability [nightCheckBackgroundAudioItemTransition]
+// already reports under its own check name: audio.playback.background
+// and audio.playback.playlist always (every apply carries source role
+// background and a real playlist - nightBuildBackgroundApplyBody), and
+// audio.playback.gain always (nightBGStepGain runs on every session
+// start/gain step, unconditionally). audio.playback.loop is required
+// only when the configured repeat mode actually asks for one - "none"
+// never calls Advance with RepeatItem/RepeatPlaylist semantics.
+//
+// audio.playback.announcement, audio.mix.duck, audio.mix.interrupt, and
+// audio.playback.seek/position are deliberately NOT required here: this
+// controller issues no seek for background audio, and duck/interrupt/
+// announcement describe the ANNOUNCEMENT session's own requirement on
+// its own output node (which may or may not be this one) - a different
+// session's readiness this check does not have evidence to speak for.
+func audioOutputCapabilityIDsForBackgroundAudio(ba *config.NightSessionBackgroundAudio) []capability.ID {
+	ids := []capability.ID{"audio.playback.background", "audio.playback.playlist", "audio.playback.gain"}
+	if ba.Repeat == string(pkgaudio.RepeatItem) || ba.Repeat == string(pkgaudio.RepeatPlaylist) {
+		ids = append(ids, "audio.playback.loop")
+	}
+	return ids
+}
+
+// nightCheckAudioOutputCapabilities is §13's own bullet, narrowed to what
+// this configured resting.backgroundAudio session concretely needs (see
+// [audioOutputCapabilityIDsForBackgroundAudio]): healthy when the output
+// node's live Hello capability advertisement declares every one of them,
+// failed naming whichever are missing otherwise. SM-201 gave this a real
+// capability signal to check against; before it, this always reported
+// not_verifiable (docs/build/BUILD-LOG.md).
+func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+	nodeID := ba.OutputNodeID()
+	name := "resting:background-audio-output-capabilities:" + nodeID
+	caps, err := audioNodeCapabilitySet(ctx, h.deps.Nodes, now, nodeID)
+	if err != nil {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"could not read audio.node %q's capability advertisement: %s", nodeID, err.Error())}
+	}
+	needed := audioOutputCapabilityIDsForBackgroundAudio(ba)
+	var missing []string
+	for _, id := range needed {
+		if _, ok := caps.Lookup(id); !ok {
+			missing = append(missing, string(id))
+		}
+	}
+	if len(missing) > 0 {
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
+			"audio.node %q's current capability advertisement does not declare %v, which this configured resting.backgroundAudio session requires", nodeID, missing)}
+	}
+	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf(
+		"audio.node %q declares every capability %v this configured resting.backgroundAudio session requires", nodeID, needed)}
 }
 
 // nightCheckAnnouncementAssets is §13's own announcement-asset bullet -

@@ -2,10 +2,41 @@ package api
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
+
+// containsAllSubstrings reports whether s contains every one of substrs,
+// for asserting a readiness check's reason names multiple expected IDs
+// without depending on showobjects_test.go's own two-argument
+// containsAll.
+func containsAllSubstrings(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
+
+// nodeViewWithGenericCapabilities builds an [inventory.NodeView] advertising
+// exactly the given capability.IDs at Version 1 — the SM-201 granular
+// audio.playback/audio.mix/audio.transition IDs this file's own tests
+// exercise, distinct from audionode_test.go's own
+// nodeViewWithAudioCapabilities (which carries only the two route-bearing
+// audio.output.* IDs placement validation reads).
+func nodeViewWithGenericCapabilities(nodeID string, ids ...capability.ID) inventory.NodeView {
+	caps := make(capability.Set, 0, len(ids))
+	for _, id := range ids {
+		caps = append(caps, capability.Capability{ID: id, Version: 1})
+	}
+	return inventory.NodeView{NodeID: nodeID, Hello: &store.HelloRecord{Capabilities: caps}}
+}
 
 // TestNightCheckBackgroundAudioAssets_MissingAssetFails proves a
 // configured item with no current asset reports failed, not a silent
@@ -36,41 +67,113 @@ func TestNightCheckBackgroundAudioAssets_PresentAssetsPass(t *testing.T) {
 	}
 }
 
-// TestNightCheckBackgroundAudioItemTransition defends the closed
-// evidence-backed rule: sequential always passes; gapless/crossfade
-// always fail, because this build holds no capability signal that could
-// ever confirm them. Mutation-checked: flipping outputConfirms's literal
-// from false to true in nightCheckBackgroundAudioItemTransition would
-// make gapless/crossfade pass, which is exactly the "invented passing
-// check" this seam must not produce.
-func TestNightCheckBackgroundAudioItemTransition(t *testing.T) {
+// TestNightCheckBackgroundAudioItemTransition_SequentialAlwaysPasses
+// proves sequential needs no output evidence at all: no node is ever
+// registered in inventory, and the check still reports healthy.
+func TestNightCheckBackgroundAudioItemTransition_SequentialAlwaysPasses(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := &config.NightSessionBackgroundAudio{ItemTransition: config.NightSessionItemTransitionSequential}
+
+	check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("check = %+v, want healthy", check)
+	}
+}
+
+// TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade is SM-201's
+// own defended rule: gapless/crossfade fail when the configured output
+// node has never declared the matching audio.transition.* capability, and
+// pass once it has - proving the check reads real evidence in both
+// directions, not a hardcoded refusal.
+func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) {
 	cases := []struct {
-		transition string
-		wantHealth nightCheckState
+		transition   string
+		confirmingID capability.ID
 	}{
-		{config.NightSessionItemTransitionSequential, nightHealthHealthy()},
-		{config.NightSessionItemTransitionGapless, nightHealthFailed()},
-		{config.NightSessionItemTransitionCrossfade, nightHealthFailed()},
+		{config.NightSessionItemTransitionGapless, "audio.transition.gapless"},
+		{config.NightSessionItemTransitionCrossfade, "audio.transition.crossfade"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.transition, func(t *testing.T) {
-			ba := &config.NightSessionBackgroundAudio{ItemTransition: tc.transition}
-			check := nightCheckBackgroundAudioItemTransition(ba)
-			if check.health != tc.wantHealth {
-				t.Errorf("itemTransition %q: health = %v, want %v", tc.transition, check.health, tc.wantHealth)
+			h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+			ba := &config.NightSessionBackgroundAudio{
+				Items:          []config.NightSessionBackgroundAudioItem{{Asset: config.NightSessionAssetRef{Target: "node-a"}}},
+				ItemTransition: tc.transition,
+			}
+
+			check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			if check.health != nightHealthFailed() {
+				t.Fatalf("undeclared output: check = %+v, want failed", check)
+			}
+
+			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+				nodeViewWithGenericCapabilities("node-a", tc.confirmingID),
+			})
+			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			if check.health != nightHealthHealthy() {
+				t.Fatalf("output declaring %q: check = %+v, want healthy", tc.confirmingID, check)
 			}
 		})
 	}
 }
 
-// TestNightCheckAudioOutputCapabilities_NeverInventsAPass proves this
-// check is always not_verifiable, never healthy - this codebase holds no
-// evidence for it, and reporting anything else would be inventing a
-// passing check.
-func TestNightCheckAudioOutputCapabilities_NeverInventsAPass(t *testing.T) {
-	check := nightCheckAudioOutputCapabilities("node-a")
-	if check.health != nightCheckStateNotVerifiable {
-		t.Fatalf("health = %v, want not_verifiable", check.health)
+// TestNightCheckAudioOutputCapabilities defends SM-201's real check:
+// failed naming the missing IDs when the output node declares none of
+// them, healthy once it declares every one this configured session
+// requires (background/playlist/gain always, loop only because Repeat is
+// configured here).
+func TestNightCheckAudioOutputCapabilities(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := &config.NightSessionBackgroundAudio{
+		Items:  []config.NightSessionBackgroundAudioItem{{Asset: config.NightSessionAssetRef{Target: "node-a"}}},
+		Repeat: config.NightSessionBackgroundRepeatPlaylist,
+	}
+
+	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	if check.health != nightHealthFailed() {
+		t.Fatalf("no capability advertisement: check = %+v, want failed", check)
+	}
+	if !containsAllSubstrings(check.reason, "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop") {
+		t.Fatalf("reason does not name every missing capability; reason: %s", check.reason)
+	}
+
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithGenericCapabilities("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain"),
+	})
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	if check.health != nightHealthFailed() {
+		t.Fatalf("missing only loop: check = %+v, want failed", check)
+	}
+	if !containsAllSubstrings(check.reason, "audio.playback.loop") {
+		t.Fatalf("reason does not name the still-missing loop capability; reason: %s", check.reason)
+	}
+
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithGenericCapabilities("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop"),
+	})
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("every required capability declared: check = %+v, want healthy", check)
+	}
+}
+
+// TestNightCheckAudioOutputCapabilities_NoRepeatDoesNotRequireLoop proves
+// audio.playback.loop is only demanded when the configured repeat mode
+// actually asks for one, not unconditionally.
+func TestNightCheckAudioOutputCapabilities_NoRepeatDoesNotRequireLoop(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := &config.NightSessionBackgroundAudio{
+		Items:  []config.NightSessionBackgroundAudioItem{{Asset: config.NightSessionAssetRef{Target: "node-a"}}},
+		Repeat: config.NightSessionBackgroundRepeatNone,
+	}
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithGenericCapabilities("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain"),
+	})
+
+	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	if check.health != nightHealthHealthy() {
+		t.Fatalf("check = %+v, want healthy (repeat=none never requires loop)", check)
 	}
 }
 
