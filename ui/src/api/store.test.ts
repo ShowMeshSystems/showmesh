@@ -31,6 +31,7 @@ import {
 import type { components } from './generated/schema'
 
 type Evidence = components['schemas']['Evidence']
+type AuditStoreStatus = components['schemas']['AuditStoreStatus']
 
 // A fast backoff schedule for tests only (spec section 5.4 allows this:
 // it is a timing knob on our own client, not a mock of the transport —
@@ -1436,7 +1437,7 @@ describe('ApiStore: auditStore stays live on an open connection (ADR-024 decisio
         // usable; the poll's own re-fetch reports unusable - the model
         // must show the LATER value, proving the poll actually landed,
         // not merely that a fetch happened.
-        const auditStore =
+        const auditStore: AuditStoreStatus =
           snapshotAttempt === 1 ? { state: 'usable', reason: null } : { state: 'unusable', reason: 'disk full' }
         respondJson(res, 200, makeSnapshot({ auditStore }))
         return
