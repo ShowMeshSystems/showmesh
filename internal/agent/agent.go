@@ -379,7 +379,7 @@ func Run() int {
 		defer close(audioRestoreRetryDone)
 		ticker := time.NewTicker(audioRestoreRetryPollInterval)
 		defer ticker.Stop()
-		runAudioRestoreRetry(sigCtx, audioMgr, audioBind.currentNode, audioRebuilder.rebuildIfUnavailable, time.Now, ticker.C, logger)
+		runAudioRestoreRetry(sigCtx, audioMgr, audioBind.currentNode, audioRebuilder.rebuildIfUnavailable, audioEngine.Available, time.Now, ticker.C, logger)
 	}()
 
 	// cmdHandler is constructed once, outside newMQTTConn, and reused across

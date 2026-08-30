@@ -58,24 +58,30 @@ type audioRestoreRetryer struct {
 // resolves every deferred restore the moment a NEW audio.node binding
 // arrives, but nothing before this drove that resolution on its own: an
 // interface that enumerates late, with no coordinator reconnect and no
-// newer audio.node revision, left the session pending indefinitely —
+// newer audio.node revision, left the session pending indefinitely, or
+// left a bound engine reporting unavailable with zero pending restores
+// to even signal it (a delivered binding with no persisted session):
 // this loop's whole reason to exist.
 //
 // On a bounded, backed-off schedule, whenever [audio.Manager.
-// PendingRestoreCount] is nonzero, this calls rebuild against the SAME,
-// already-accepted audio.node binding currentNode reports.
-// [audioEngineRebuilder.rebuildIfUnavailable] re-probes the device fresh
-// on every call ([buildGstEngineConfig] runs discovery inline) and
-// atomically declines to act at all when the bound engine already
-// reports available — see that method's own doc comment for why the
-// availability check must be atomic with the decision to act, not a
-// separate read this driver takes on its own: a genuine
+// PendingRestoreCount] is nonzero OR engineAvailable reports false, this
+// calls rebuild against the SAME, already-accepted audio.node binding
+// currentNode reports. [audioEngineRebuilder.rebuildIfUnavailable]
+// re-probes the device fresh on every call ([buildGstEngineConfig] runs
+// discovery inline) and atomically declines to act at all when the bound
+// engine already reports available. See that method's own doc comment
+// for why the availability check must be atomic with the decision to
+// act, not a separate read this driver takes on its own: a genuine
 // audio.node.configure delivery finishing in the gap between a stale
 // read and this driver's own rebuild call would otherwise get its own
 // working engine torn back down for no benefit to the session this
 // driver is trying to help. A skipped attempt (outcome.Skipped) counts
 // against nothing: no attempt increment, no backoff advance, no status
 // change, exactly as if this tick had found nothing to do.
+//
+// engineAvailable only gates whether to attempt at all. rebuildIfUnavailable
+// still rechecks under its own lock, so this separate read is not the
+// TOCTOU guard: a stale answer either way costs at most one no-op skip.
 //
 // currentNode reports the most recently accepted audio.node binding —
 // nothing to retry against until the first one lands, so a false ok
@@ -85,6 +91,7 @@ func runAudioRestoreRetry(
 	mgr *audio.Manager,
 	currentNode func() (audioNodeConfig, bool),
 	rebuild func(audioNodeConfig) audioRebuildOutcome,
+	engineAvailable func() (bool, string),
 	now func() time.Time,
 	ticks <-chan time.Time,
 	logger *slog.Logger,
@@ -98,7 +105,7 @@ func runAudioRestoreRetry(
 			if !ok {
 				return
 			}
-			runAudioRestoreRetryTick(mgr, currentNode, rebuild, now, t, &retry, logger)
+			runAudioRestoreRetryTick(mgr, currentNode, rebuild, engineAvailable, now, t, &retry, logger)
 		}
 	}
 }
@@ -107,26 +114,33 @@ func runAudioRestoreRetry(
 // out so audiorestoreretry_test.go can drive it directly against a fake
 // clock instead of a real ticker channel.
 //
-// Exhaustion is reported explicitly, not left implicit: the moment
-// attempts reaches len(audioRestoreRetryDelays), this clears
-// nextAttemptAt to zero and pushes that to [audio.Manager.
-// SetRestoreRetryStatus] before returning, so
+// Two independent reasons keep this driver active: a deferred restore
+// pending, or the bound engine unavailable with nothing pending at all.
+// Both must clear together for the reset below to fire.
+//
+// Exhaustion clears nextAttemptAt to zero and pushes that to
+// [audio.Manager.SetRestoreRetryStatus], so
 // audio_session.restore.next_attempt_ms stops counting down to an
-// attempt that will never happen — a countdown outliving the thing it
-// is counting down to is worse than no countdown, since it reads as the
-// driver still trying when it has already given up. retry.exhausted
-// guards the one-time log line so a node left in this state for hours
-// does not spam it every poll.
+// attempt that will never happen. retry.exhausted guards the one-time
+// log line so a node stuck for hours does not spam it every poll.
+//
+// That status write reaches only sessions with a pending restore. With
+// nothing pending, exhaustion is visible in this node's log and in the
+// audio report's own live EngineAvailable/EngineReason, not in a
+// restore-retry field.
 func runAudioRestoreRetryTick(
 	mgr *audio.Manager,
 	currentNode func() (audioNodeConfig, bool),
 	rebuild func(audioNodeConfig) audioRebuildOutcome,
+	engineAvailable func() (bool, string),
 	now func() time.Time,
 	tick time.Time,
 	retry *audioRestoreRetryer,
 	logger *slog.Logger,
 ) {
-	if mgr.PendingRestoreCount() == 0 {
+	pending := mgr.PendingRestoreCount()
+	available, _ := engineAvailable()
+	if pending == 0 && available {
 		if retry.attempts != 0 || retry.exhausted {
 			*retry = audioRestoreRetryer{}
 			mgr.ClearRestoreRetryStatus()
@@ -135,9 +149,9 @@ func runAudioRestoreRetryTick(
 	}
 	if retry.attempts >= len(audioRestoreRetryDelays) {
 		// Already reported as exhausted by the attempt that reached the
-		// bound, below — nothing left to do until PendingRestoreCount
-		// reaches 0 or a genuine binding delivery resolves this outside
-		// this driver entirely.
+		// bound, below. Nothing left to do until both conditions above
+		// clear or a genuine binding delivery resolves this outside this
+		// driver entirely.
 		return
 	}
 	if !retry.nextAttemptAt.IsZero() && tick.Before(retry.nextAttemptAt) {
@@ -145,6 +159,8 @@ func runAudioRestoreRetryTick(
 	}
 	node, haveNode := currentNode()
 	if !haveNode {
+		// No binding yet: an unbound engine reports unavailable, which
+		// would otherwise trip the widened trigger on every idle node.
 		return
 	}
 
@@ -158,12 +174,13 @@ func runAudioRestoreRetryTick(
 	}
 	retry.attempts++
 	attemptsUsed := retry.attempts
-	pending := mgr.PendingRestoreCount()
-	if pending == 0 {
+	pending = mgr.PendingRestoreCount()
+	available, _ = engineAvailable()
+	if pending == 0 && available {
 		*retry = audioRestoreRetryer{}
 		mgr.ClearRestoreRetryStatus()
 		if logger != nil {
-			logger.Info("automatic audio restore retry resolved every deferred restore", "attempt", attemptsUsed)
+			logger.Info("automatic audio restore retry resolved: no pending restore and the audio engine is available", "attempt", attemptsUsed)
 		}
 		return
 	}
@@ -178,7 +195,7 @@ func runAudioRestoreRetryTick(
 		// stale.
 		reason = "a newer audio.node binding was accepted concurrently with this automatic retry attempt"
 	case reason == "":
-		reason = "the engine rebuilt but a deferred restore still did not resolve"
+		reason = "the engine rebuilt but automatic retry still did not fully resolve"
 	}
 	retry.lastReason = reason
 
@@ -188,7 +205,7 @@ func runAudioRestoreRetryTick(
 		mgr.SetRestoreRetryStatus(retry.attempts, time.Time{}, reason)
 		if logger != nil {
 			logger.Warn("automatic audio restore retry exhausted its bounded schedule; no further automatic attempts will run",
-				"attempts", retry.attempts, "pending", pending, "reason", reason)
+				"attempts", retry.attempts, "pending", pending, "engine_available", available, "reason", reason)
 		}
 		return
 	}
@@ -197,7 +214,7 @@ func runAudioRestoreRetryTick(
 	retry.nextAttemptAt = now().Add(audioRestoreRetryDelays[delayIndex])
 	mgr.SetRestoreRetryStatus(retry.attempts, retry.nextAttemptAt, reason)
 	if logger != nil {
-		logger.Warn("automatic audio restore retry attempt did not resolve every deferred restore",
-			"attempt", retry.attempts, "pending", pending, "reason", reason, "next_attempt_at", retry.nextAttemptAt)
+		logger.Warn("automatic audio restore retry attempt did not fully resolve",
+			"attempt", retry.attempts, "pending", pending, "engine_available", available, "reason", reason, "next_attempt_at", retry.nextAttemptAt)
 	}
 }
