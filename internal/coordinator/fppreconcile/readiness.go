@@ -177,6 +177,29 @@ const (
 	// reads that SAME computation rather than deriving a second one — see
 	// [exclusiveClaimReadiness]'s own doc comment.
 	ReadinessExclusiveClaimConflict ReadinessCondition = "exclusive-claim-conflict"
+
+	// ReadinessAudioLTCEmitterAmbiguous: more than one audio.node holds
+	// role "program+ltc" (ADR-045 decision 2, ADR-018's one clock domain).
+	// Authoring refuses the second one, so reaching this state means two
+	// nodes were declared while a third path was open, or one was rewritten
+	// while the other was absent. [Report.Reason] names both node ids.
+	ReadinessAudioLTCEmitterAmbiguous ReadinessCondition = "audio-ltc-emitter-ambiguous"
+
+	// ReadinessAudioTargetUnbound: a referenced Cue's audio, LTC or
+	// announcement output names a target node that holds no audio.node
+	// object. Authoring refuses a target that names no configured
+	// audio.node, so this is the state an installation reaches by deleting
+	// or never re-declaring an audio.node a Cue already points at, and the
+	// output would silently reach nobody.
+	ReadinessAudioTargetUnbound ReadinessCondition = "audio-target-unbound"
+
+	// ReadinessAudioTargetUnresolved: a referenced Cue's audio, LTC or
+	// announcement output names NO target, and the installation has no node
+	// for it to resolve to. An untargeted output goes to the sole
+	// program+ltc node, or, when there is none, to the sole audio.node of
+	// any role; an installation with two or more audio nodes and no
+	// program+ltc among them leaves that output pointing nowhere.
+	ReadinessAudioTargetUnresolved ReadinessCondition = "audio-target-unresolved"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -426,6 +449,18 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// Condition 9: every node participating in this Show's catalog has
 	// acknowledged the active show's currently required catalog revision.
 	if cond, reason, err := nodeCatalogReadiness(ctx, st, p); err != nil {
+		return Report{}, err
+	} else if cond != "" {
+		report.Ready = false
+		report.FailingCondition = cond
+		report.Reason = reason
+		return report, nil
+	}
+
+	// Condition 10: exactly one node may emit LTC, and every referenced
+	// Cue's audio, LTC and announcement outputs must resolve to a node
+	// that can receive them (ADR-045 decisions 1 and 2).
+	if cond, reason, err := audioTargetReadiness(ctx, st, logger, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
 		report.Ready = false

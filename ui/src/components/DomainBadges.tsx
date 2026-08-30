@@ -373,6 +373,9 @@ const FPP_PLAYLIST_READINESS_FAILING_CONDITION: Record<
   'node-render-unassigned': { tone: 'bad', icon: '✕', label: 'node render unassigned' },
   'exclusive-claim-conflict': { tone: 'bad', icon: '✕', label: 'exclusive claim conflict' },
   'node-catalog-stale': { tone: 'bad', icon: '✕', label: 'node catalog stale' },
+  'audio-ltc-emitter-ambiguous': { tone: 'bad', icon: '✕', label: 'two LTC emitters' },
+  'audio-target-unbound': { tone: 'bad', icon: '✕', label: 'audio target unbound' },
+  'audio-target-unresolved': { tone: 'bad', icon: '✕', label: 'audio target unresolved' },
 }
 
 // Only rendered once `ready` is false: every failing condition gets its

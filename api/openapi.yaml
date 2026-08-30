@@ -12490,6 +12490,17 @@ components:
         participating in this Playlist's own Show's resolved Cue catalog,
         reusing the same resolution `GET /nodes/{nodeId}/cue-catalog` and
         the cue-catalog deploy path already use -- never a second one.
+        `audio-ltc-emitter-ambiguous`, `audio-target-unbound` and
+        `audio-target-unresolved` check ADR-045's audio routing against the
+        store rather than against authoring, which cannot see an audio.node
+        deleted after a Cue named it: more than one audio.node holding role
+        "program+ltc"; a Cue output naming a target node that holds no
+        audio.node object; and a Cue output naming no target where more
+        than one audio.node exists and none holds role "program+ltc", so
+        there is no node for it to resolve to. An installation with no
+        audio.node at all is unchanged by these three: a Show declaring
+        audio on a fleet with no audio node is reported exactly as it was
+        before.
       required: [playlistId, ready, serverTime]
       properties:
         playlistId:
@@ -12509,6 +12520,9 @@ components:
             - node-render-unassigned
             - exclusive-claim-conflict
             - node-catalog-stale
+            - audio-ltc-emitter-ambiguous
+            - audio-target-unbound
+            - audio-target-unresolved
         reason:
           type: string
         warning:
