@@ -28,6 +28,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/resolume` | #215 | Resolume Config |
 | `ui-rebuild/assets` | #216 | The Assets library at `/assets` |
 | `ui-rebuild/retrofit` | #217 | Guard retrofit, folded addresses, Phase 2 |
+| `track-c/asset-sync-verdict` | #218 | Track C: the per-asset sync verdict |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a

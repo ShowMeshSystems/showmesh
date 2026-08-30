@@ -105,7 +105,8 @@ visual language.
 | Assets library (`/assets`) | Done | #216 |
 | Stale-write guard retrofit (D-014 B) | Done | #217 |
 | Phase 2: delete the old system and lock it out | Done | #217 |
-| Track C: the API facts D-016 asks for | Waiting on Eric | |
+| Track C: the per-asset sync verdict (D-016 item 2) | Done | #218 |
+| Track C: the FPP-sequence staleness signal (D-016 item 1) | Waiting on Eric | SM-383 |
 
 Each PR is stacked on the one before it, so its diff is only its own screen.
 
