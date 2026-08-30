@@ -139,6 +139,46 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ---
 
+## 2026-08-30 (`dev/multi-audio` takes `main`: schema v21, and the role default meets the optional LTC pair)
+
+**Goal:** bring `main` into the multi-audio branch so the remaining SM-308
+seams build against current code, without rebasing a published branch.
+
+**Seven files conflicted; two more merged cleanly and were wrong.** The
+conflicts were `api/openapi.yaml`, `cmd/showmeshctl/cmd_audio.go`,
+`internal/coordinator/store/migrations.go`, its v20 test file (add/add: both
+sides created one), `ui/src/api/generated/schema.d.ts`,
+`docs/build/IDENTIFIER-REGISTER.md` and `docs/decisions/README.md`. The two
+silent ones mattered more:
+
+- `internal/coordinator/assetsync/manifest.go` merged with no conflict and did
+  not compile. `main` added a `DecodeShowCuePayload` caller while this branch
+  added a third argument to that function.
+- `internal/coordinator/config/audionode.go` merged with no conflict into a
+  contradiction. `main` made `ltcRoute` and `ltcChannel` an optional pair so a
+  two-output interface can be declared program-only; this branch added the
+  ADR-045 `role`, defaulting to `program+ltc`. Nothing tied the two together, so
+  a program-only node defaulted into the one role only a single node may hold,
+  and `ValidateAudioNodeRoleUniqueness` refused the second one over LTC neither
+  of them emits. That is exactly the M4-with-LTC plus Pi-without installation
+  ADR-045 exists to allow.
+
+**Resolutions.** The `audio_sessions` re-key is now schema v21, behind `main`'s
+v20 `audio.settings` backfill, and its test file is renamed to match. An
+`audio.node` with no `ltcRoute` now defaults to role `program`, and an explicit
+`program+ltc` with no `ltcRoute` is refused; ADR-045's role default is amended
+to record it, and the amendment is **not owner-ruled**. The generated UI types
+were regenerated from the merged spec rather than resolved by hand.
+
+**Verification gates:** `make check` passed on the merged tree before the merge
+commit. No hardware evidence: no installation has ever had two audio nodes.
+
+**Deferred:** the remaining SM-308 seams (per-cue target-node resolution,
+readiness for a second LTC emitter and an unbound target, night-mode target
+lists) and the owner's two-node bench.
+
+---
+
 ## 2026-08-30 (the schema-version register catches up with `main`: v20 was minted twice)
 
 **Goal:** make the schema-version register match what `main` and
