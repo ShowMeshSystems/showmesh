@@ -2933,8 +2933,89 @@ export interface components {
             revision: number;
             /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
             idempotencyKey?: string;
-            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs/ mixPolicy, seek's positionMs. Opaque here by design - see this operation's own description for what it accepts. */
-            params?: Record<string, never>;
+            params?: components["schemas"]["AudioSessionCommandParams"];
+        };
+        /** @description Every shape `params` may take across the thirteen POST /nodes/{nodeId}/audio/sessions/{sessionId}/{op} endpoints - the command a request carries is the URL's own `{op}` segment, never an in-body field, so there is no discriminator property for a validator to key on; a caller picks the member matching the endpoint it is calling. Each named member is built against what internal/agent/audiosessionops.go and internal/agent/audiogainops.go actually parse and reject, not against this document's older prose, which omitted apply's ltcStartOffset entirely. `sessionId`/`invocationId`/`revision` are never members of any of these: dispatchAudioSessionCommand (internal/coordinator/api/audiodispatch.go) injects them into the node-bound params itself and overwrites anything a caller sent under those names, so they are not part of this client-facing contract. prepare/start/pause/resume/advance/stop/clear and audio.output.mute/audio.output.unmute - nine of the thirteen - take no operation-specific params at all and so have no named component of their own here; their member below is a closed empty object, matching an omitted or `{}` params body. */
+        AudioSessionCommandParams: components["schemas"]["AudioSessionApplyParams"] | components["schemas"]["AudioSessionSeekParams"] | components["schemas"]["AudioSessionGainParams"] | components["schemas"]["AudioSessionGainFadeParams"] | Record<string, never>;
+        /** @description `audio.session.apply`'s own params (internal/agent/audiosessionops.go parseApplyRequest and audioSessionApplyKnownKeys). Every field is independently optional - an apply with no fields at all is syntactically valid and merges nothing new onto the session's desired state (persistAudioSessionDesiredState). `media` and `playlist` are mutually exclusive (parseApplyRequest refuses both present); neither is required, since an apply that only changes e.g. `outputs` or `mixPolicy` on an already-applied session is valid. `ltcStartOffset` is in the code's own known-key allowlist (audioSessionApplyKnownKeys) and is not named in this endpoint's older prose description - the code is what this schema follows. `gain`/`ceiling`/`fade`/`bookmark` are never accepted here: the first three belong to the separate audio.gain.* surface below, and a bookmark is session-internal state this package writes itself. */
+        AudioSessionApplyParams: {
+            /**
+             * @description pkg/audio.SourceRole's four reserved members (vocab.go). A non-member string is refused downstream even though this parse layer only checks for a non-empty string itself.
+             * @enum {string}
+             */
+            sourceRole?: "show" | "background" | "announcement" | "manual";
+            /** @description A single pinned media item (internal/agent/audiomediaprobe.go parseMediaRef, reused here). Mutually exclusive with `playlist`. This parse layer does not reject an unrecognized key on this object the way it rejects one on `playlist` or on apply's own top level - additionalProperties is left open on purpose to match that. */
+            media?: {
+                assetId: string;
+                contentHash: string;
+                filename: string;
+                /** @description Optional; when present must be at least 1. */
+                sizeBytes?: number;
+            } & {
+                [key: string]: unknown;
+            };
+            /** @description A pinned playlist (internal/agent/audiosessionops.go parsePlaylistRef). Mutually exclusive with `media`. */
+            playlist?: {
+                ownerKind: string;
+                ownerId: string;
+                /** @description Optional; defaults to 0 when absent. */
+                ownerRevision?: number;
+                /**
+                 * @description Optional; defaults to "none" when absent.
+                 * @enum {string}
+                 */
+                repeat?: "none" | "item" | "playlist";
+                /**
+                 * @description Optional; defaults to "restart" when absent.
+                 * @enum {string}
+                 */
+                resume?: "resume" | "restart";
+                /**
+                 * @description Optional; defaults to "sequential" when absent.
+                 * @enum {string}
+                 */
+                requestedTransition?: "sequential" | "gapless" | "crossfade";
+                items: {
+                    /** @description Optional; defaults to assetId when absent. */
+                    itemId?: string;
+                    /** @description Optional; defaults to this item's own array position when absent. */
+                    index?: number;
+                    assetId: string;
+                    contentHash: string;
+                    filename: string;
+                    /** @description Optional; when present must be at least 1. */
+                    sizeBytes?: number;
+                }[];
+            };
+            outputs?: string[];
+            /** @description HH:MM:SS:FF, non-drop-frame (pkg/audio.LTCTimecode) - this session's LTC start point, overriding ConfigAudioSettingsPayload.ltcDefaultStartOffset for this apply only. audioSessionApplyKnownKeys already accepted this key even though this endpoint's own prose description omitted it. */
+            ltcStartOffset?: string;
+            /**
+             * @description pkg/audio.MixPolicy's four reserved members (vocab.go), validated by parseApplyRequest itself.
+             * @enum {string}
+             */
+            mixPolicy?: "mix" | "duck" | "interrupt" | "unsupported";
+        };
+        /** @description `audio.session.seek`'s own params (internal/agent/audiosessionops.go seekSession). This parse layer does not call rejectUnknownKeys, so the node itself silently ignores an unrecognized key rather than refusing it; this schema is stricter than that on purpose, closing off a key that would be accepted but have no effect. */
+        AudioSessionSeekParams: {
+            /** @description Milliseconds. A negative value is refused. */
+            positionMs: number;
+        };
+        /** @description `audio.gain.set`'s own params. The operator-facing field is `gainDb`, in decibels - internal/coordinator/api/audiogaindb.go's convertAudioGainParamsToLinear converts it to the `gain` linear multiplier internal/agent/audiogainops.go gainSet actually reads before this reaches the node; a caller sending `gain` directly is refused by name (that boundary's own stated reason: the two units overlap numerically). This parse layer does not call rejectUnknownKeys either, matching AudioSessionSeekParams' own note on that. */
+        AudioSessionGainParams: {
+            /** @description 0 dB is unity; -60 dB and below is silence (pkg/audio.SilenceFloorDb); no lower bound is enforced - a more negative value is simply clamped to silence. +12 dB (pkg/audio.MaxOperatorGainDb) is the refused ceiling, a typo guard rather than a tuned headroom figure. */
+            gainDb: number;
+        };
+        /** @description `audio.gain.fade`'s own params (internal/agent/audiogainops.go gainFade and audioGainFadeKnownKeys). `targetGainDb` shares its decibel boundary and bounds with AudioSessionGainParams.gainDb - see that field's own description. */
+        AudioSessionGainFadeParams: {
+            targetGainDb: number;
+            /** @description Optional; when absent, defaults to this node's own ConfigAudioSettingsPayload.defaultFadeDurationMs (settings.DefaultFadeDurationMs at dispatch time). A value at or below 0 is refused. */
+            durationMs?: number;
+            /**
+             * @description Optional; when absent, defaults to this node's own ConfigAudioSettingsPayload.defaultFadeCurve. "linear" is the only member pkg/audio.FadeCurve reserves today - see that config field's own description.
+             * @enum {string}
+             */
+            curve?: "linear";
         };
         /** @description The body of a successful (200) response from any of the nine audio.session.* dispatch endpoints. */
         AudioSessionCommandResponse: {
