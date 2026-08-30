@@ -22,6 +22,7 @@ import { ShowsCues } from '../screens/ShowsCues'
 import { ShowsAssets } from '../screens/ShowsAssets'
 import { ShowsPresentation } from '../screens/ShowsPresentation'
 import { ShowsAutomation } from '../screens/ShowsAutomation'
+import { Access } from '../screens/Access'
 import { Settings } from '../screens/Settings'
 import { SettingsConnections } from '../screens/SettingsConnections'
 import { SettingsDelivery } from '../screens/SettingsDelivery'
@@ -55,7 +56,6 @@ const QUEUE: readonly { path: string; title: string; mock: string }[] = [
   { path: '/assets/*', title: 'Assets', mock: 'Show Assets.dc.html' },
   { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
   { path: '/monitor/fleet/resolume/*', title: 'Resolume Config', mock: 'Resolume Config.dc.html' },
-  { path: '/access', title: 'Access', mock: 'Access.dc.html' },
 ]
 
 function Shell() {
@@ -104,6 +104,7 @@ export default function App() {
               <Route path="node-routing" element={<SettingsNodeRouting />} />
               <Route path="mode" element={<SettingsMode />} />
             </Route>
+            <Route path="access" element={<Access />} />
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />
             ))}
