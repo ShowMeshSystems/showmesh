@@ -13979,10 +13979,15 @@ components:
             config currently holds, which can differ across a later
             revision (owner ruling 2026-08-28: the useful number during a
             show is the limit the session pinned, not the limit currently
-            configured). Absent or null when no session is running, or
-            when the pinned revision configures no background audio at
-            all; `state` and `reason` say why. Never a fallback to the
-            currently configured value.
+            configured). Populated ONLY while the top-level state is one
+            of preshow, transition-to-show, live, transition-to-resting,
+            resting-intershow, end-of-night-resting, or fading-out.
+            Absent or null in every other state (including inactive,
+            preparing, and stopped, so the last night's ceiling is never
+            reported as live once the night has ended or before it has
+            begun), and null when the pinned revision configures no
+            background audio at all, in which case `reason` says so.
+            Never a fallback to the currently configured value.
     NightSessionState:
       type: object
       description: >-

@@ -95,6 +95,20 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		return
 	}
 
+	// Printed once, ahead of the step sections below (not nested under
+	// either one, and not conditioned on either having steps): the pinned
+	// ceiling describes the SESSION, not one sequence's own step log, and
+	// is only ever present while running (see the OpenAPI description of
+	// pinnedMaxGainDb) - found by review: an earlier version printed it
+	// indented under the background section specifically, right after a
+	// "not configured" line, and never printed at all when only
+	// announcement steps existed.
+	if s.BackgroundAudio.PinnedMaxGainDb != nil {
+		_, _ = fmt.Fprintf(w, "\nPinned max gain: %.1f dB\n", *s.BackgroundAudio.PinnedMaxGainDb)
+	} else if s.BackgroundAudio.Reason != "" {
+		_, _ = fmt.Fprintf(w, "\nPinned max gain: none (%s)\n", s.BackgroundAudio.Reason)
+	}
+
 	// The two audio sequences print under their own headings. An
 	// announcement's clear and start arrive in the same step list as the
 	// bed's own steps, and a failure in one says something quite
@@ -109,9 +123,6 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	} else {
 		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
 		printNightAudioSteps(w, background)
-	}
-	if s.BackgroundAudio.PinnedMaxGainDb != nil {
-		_, _ = fmt.Fprintf(w, "  Pinned max gain: %.1f dB\n", *s.BackgroundAudio.PinnedMaxGainDb)
 	}
 	if len(announcement) > 0 {
 		_, _ = fmt.Fprintf(w, "\nAnnouncement sessions:\n")

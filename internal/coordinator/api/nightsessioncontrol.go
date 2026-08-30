@@ -1465,6 +1465,24 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	return out
 }
 
+// nightSessionIsRunning reports whether rec.State is one where the night
+// session is actually presenting, as opposed to "inactive" (no session),
+// "preparing" (site prep, before the session presents anything to an
+// audience), or "stopped" (the night has already ended). pinnedMaxGainDb
+// is gated on this: the owner ruling (2026-08-28) is about the ceiling a
+// RUNNING session pinned, never a stale ceiling read back once the night
+// has ended or before it has begun.
+func nightSessionIsRunning(state string) bool {
+	switch state {
+	case nightStatePreshow, nightStateTransitionToShow, nightStateLive,
+		nightStateTransitionToResting, nightStateRestingIntershow,
+		nightStateEndOfNightResting, nightStateFadingOut:
+		return true
+	default:
+		return false
+	}
+}
+
 // mapNightBackgroundAudio is RESTING-MODE.md section 14's own surface for
 // Track F seam F5's background-audio/announcement steps
 // (nightbackgroundaudio.go's own durable log), on the SAME "read failure
@@ -1472,6 +1490,16 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 // already follows. Empty Steps with State Recorded is a legitimate
 // reading (backgroundAudio not configured, or never started this
 // cycle), distinct from a read failure.
+//
+// pinnedMaxGainDb is a strictly additive field on top of that step log: a
+// failure reading it (or the session simply not being in a running state)
+// must never hide the step log an operator needs to see a stuck or
+// refused announcement clear - so unlike the two step-log reads above, a
+// pinnedMaxGainDb read failure stays State Recorded with the steps
+// already read, nil PinnedMaxGainDb, and its own Reason (found by review:
+// an earlier version flipped the whole block to Unknown on this failure,
+// which drops the entire step log an operator needs from an unrelated
+// config-read hiccup).
 func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightBackgroundAudio {
 	if rec.ID == "" {
 		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}}
@@ -1506,30 +1534,43 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 		}
 		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind))
 	}
-	pinnedMaxGainDb, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
-	if err != nil {
-		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the pinned background-audio configuration: " + err.Error(), Steps: out}
+
+	if !nightSessionIsRunning(rec.State) {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
 	}
-	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
+
+	pinnedMaxGainDb, reason, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
+	if err != nil {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out}
+	}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
 }
 
 // nightPinnedBackgroundMaxGainDb is the background-audio ceiling the
 // RUNNING session pinned when it started - rec's own pinned night.session
 // revision's resting.backgroundAudio.maxGainDb, never the value
 // night.session.resting's config currently holds, which can differ across
-// a later revision (owner ruling 2026-08-28). Nil, nil means that pinned
-// revision configures no background audio at all - a legitimate reading,
-// not a read failure.
-func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) (*float64, error) {
+// a later revision (owner ruling 2026-08-28). A nil gain with a non-empty
+// reason and a nil error means that pinned revision configures no
+// background audio at all - a legitimate reading, not a read failure, but
+// one the caller's Reason must still say out loud rather than leave
+// blank. rec.ConfigObjectID == "" (found by review: mapNightCues already
+// guards this, this call site did not) is the same "nothing pinned yet"
+// case, answered the same way without issuing a doomed GetConfigRevision
+// call against an empty object id.
+func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) (gain *float64, reason string, err error) {
+	if rec.ConfigObjectID == "" {
+		return nil, "", nil
+	}
 	payload, err := nightPinnedNightSessionPayload(ctx, deps, rec)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if payload.Resting.BackgroundAudio == nil {
-		return nil, nil
+		return nil, "resting.backgroundAudio is not configured on this session's pinned night.session revision", nil
 	}
-	gain := payload.Resting.BackgroundAudio.MaxGainDb
-	return &gain, nil
+	g := payload.Resting.BackgroundAudio.MaxGainDb
+	return &g, "", nil
 }
 
 // mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read
