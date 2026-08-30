@@ -11,6 +11,7 @@ import { MonitorSignals } from '../screens/MonitorSignals'
 import { MonitorActivity } from '../screens/MonitorActivity'
 import { MonitorCapabilities } from '../screens/MonitorCapabilities'
 import { MonitorManifest } from '../screens/MonitorManifest'
+import { NodeDetail } from '../screens/NodeDetail'
 import { ShowNight } from '../screens/ShowNight'
 import { Shows } from '../screens/Shows'
 import { ShowDraft } from '../screens/ShowDraft'
@@ -44,7 +45,6 @@ function ScrollToTop() {
  */
 const QUEUE: readonly { path: string; title: string; mock: string }[] = [
   { path: '/assets/*', title: 'Assets', mock: 'Show Assets.dc.html' },
-  { path: '/monitor/fleet/node/:nodeId', title: 'Node', mock: 'Node.dc.html' },
   { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
   { path: '/monitor/fleet/resolume/*', title: 'Resolume Config', mock: 'Resolume Config.dc.html' },
   { path: '/settings/*', title: 'Settings', mock: 'Settings.dc.html' },
@@ -77,6 +77,7 @@ export default function App() {
             <Route path="monitor/activity" element={<MonitorActivity />} />
             <Route path="monitor/capabilities" element={<MonitorCapabilities />} />
             <Route path="monitor/manifest" element={<MonitorManifest />} />
+            <Route path="monitor/fleet/node/:nodeId" element={<NodeDetail />} />
             <Route path="shows" element={<Shows />} />
             <Route path="shows/new" element={<ShowDraft />} />
             <Route path="shows/:id" element={<ShowDetail />} />

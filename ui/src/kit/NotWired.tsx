@@ -8,8 +8,8 @@ import { cloneElement, type ReactElement, type ReactNode } from 'react'
 type BannerProps = {
   /** What the section would do once it is wired: "Fire an announcement cue". */
   what: string
-  /** The endpoint that does not exist, verbatim: "POST /cues/{id}/fire". */
-  missing: string
+  /** The missing fact, e.g. `<code className="sm-data">POST /cues/{'{id}'}/fire</code>` for a known path, or plain prose for a described absence. Callers wrap a path in `<code>` themselves; this component never assumes one. */
+  missing: ReactNode
   detail?: ReactNode
 }
 
@@ -21,10 +21,7 @@ export function NotWiredBanner({ what, missing, detail }: BannerProps) {
       </div>
       <div className="sm-nowire__body">
         <p className="sm-nowire__title">{what} does nothing yet.</p>
-        <p className="sm-nowire__detail">
-          The control below is drawn to its final shape and is deliberately inert. The coordinator has no{' '}
-          <code className="sm-data">{missing}</code>, so nothing is sent and nothing happens.
-        </p>
+        <p className="sm-nowire__detail">The control below is drawn to its final shape and is deliberately inert. The coordinator has no {missing}, so nothing is sent and nothing happens.</p>
         {detail !== undefined && <p className="sm-nowire__detail">{detail}</p>}
       </div>
     </div>

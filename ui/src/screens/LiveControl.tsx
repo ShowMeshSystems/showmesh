@@ -441,7 +441,7 @@ function Announcements({ show }: { show: string | null }) {
         <>
           <NotWiredBanner
             what="Firing an announcement"
-            missing="POST /cues/{id}/fire"
+            missing={<code className="sm-data">POST /cues/{'{id}'}/fire</code>}
             detail="Until it exists, an announcement runs only when its Show Night transition runs."
           />
           <ul className="sm-plain-list">

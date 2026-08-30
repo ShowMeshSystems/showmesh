@@ -300,7 +300,7 @@ export function Specimen() {
           </div>
           <NotWiredBanner
             what="Firing an announcement"
-            missing="POST /cues/{id}/fire"
+            missing={<code className="sm-data">POST /cues/{'{id}'}/fire</code>}
             detail="This is not an absence of evidence. The screen is complete and the coordinator is not."
           />
           <ButtonRow>

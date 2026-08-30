@@ -130,7 +130,7 @@ export function ShowNight() {
       {tonight.some((step) => step.status === 'notWired') && (
         <NotWiredBanner
           what="The night timeline"
-          missing="GET /night/session/cycles"
+          missing={<code className="sm-data">GET /night/session/cycles</code>}
           detail="The rail is drawn to its final shape, but this session reports only the cycle it is in, so earlier cycles read as unreported rather than being reconstructed or invented."
         />
       )}
