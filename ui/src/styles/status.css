@@ -179,14 +179,9 @@
   padding: var(--space-2) var(--space-4);
 }
 
-/* Audit-store banner (ADR-024 decision 11's amendment, owner ruling
-   2026-08-26): a coordinator-state fact, not a browser connectivity one,
-   so it uses the --status-warn-*/--status-bad-* pair every stale-evidence
-   reading already uses (evidence--tone-warn/bad above), never
-   --connection-problem-* -- an audit-store outage must not be mistaken
-   for "cannot reach the coordinator" when the coordinator is reachable
-   and the show is running fine; only its own attribution logging is
-   degraded. */
+/* An audit-store outage is a coordinator-state fact, not a browser
+   connectivity one, so it uses the status-warn/status-bad token pair
+   (evidence--tone-warn/bad above), never connection-problem's. */
 .audit-store-banner {
   display: flex;
   align-items: center;
