@@ -125,8 +125,8 @@ func TestMacroRunNeverWithholdsAnMQTTStepForAnAuditFailure(t *testing.T) {
 // but through the REAL api.FPPCommandDispatcher, so the audit degrade this
 // test relies on for the stop step is the one dispatchFPPCommand's own
 // step 5 actually produces, never this package's own fake standing in for
-// it. This is what makes the per-step exemption a proof about the SEAM
-// this package was handed, not only about this package's own control
+// it. This is what makes the per-step exemption a proof about the call
+// path this package was handed, not only about this package's own control
 // flow. The start step's own outcomeFailed below is unrelated to the
 // audit store: this harness feeds startPlaylist no fpp.status evidence at
 // all, so its ifBusy=refuse PreDispatchCheck guard refuses it on "could

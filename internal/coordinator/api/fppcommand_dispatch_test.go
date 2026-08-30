@@ -367,7 +367,7 @@ func TestFPPCommandDecision11ClassForAction(t *testing.T) {
 // in fppcommand_handler_test.go's
 // TestFPPCommandNonSafetyClassPrimitiveRunsWithAuditFailing. This test
 // covers the SAME rule through [FPPCommandDispatcher.Dispatch], the
-// in-process seam a macro run also calls, so both callers of
+// in-process call path a macro run also uses, so both callers of
 // dispatchFPPCommand are proven, not only the HTTP one.
 func TestNonExemptPrimitiveDispatchesDegradedWhenAuditUnavailable(t *testing.T) {
 	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
