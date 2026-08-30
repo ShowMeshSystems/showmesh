@@ -163,3 +163,63 @@ func TestBeginTransitionSkipsGuardWhenNothingWasRunning(t *testing.T) {
 		t.Fatalf("observe immediately after a cold start = %+v, want the incoming placeholder with no guard delay", got)
 	}
 }
+
+// TestObserveEndsGuardAsSoonAsIncomingRunIsConfirmed is a fast,
+// deterministic guard for the evidence-based half of the transition-guard
+// fix: once the feeder confirms the incoming run (ch.obs becomes
+// LTCRunning for the new generation, exactly as runLTCFeeder does under
+// its own lock), observe must report that confirmed run immediately, not
+// keep reporting the outgoing run's evidence until ltcTransitionGuardDuration
+// elapses. Driven directly against ltcChannel, the same way
+// TestBeginTransitionGuardsOutgoingEvidence proves the surrounding guard,
+// so the assertion holds regardless of how long a real pipeline actually
+// takes to deliver that confirmation -- see
+// TestLTCObserveFollowsSeekPromptlyAfterConfirmation for that timing
+// against a real pipeline.
+func TestObserveEndsGuardAsSoonAsIncomingRunIsConfirmed(t *testing.T) {
+	ch := &ltcChannel{}
+	now := time.Now()
+	ch.mu.Lock()
+	ch.obs = agentaudio.LTCObservation{
+		State: agentaudio.LTCRunning, FrameRateKnown: true, FrameRate: pkgaudio.LTCFrameRate25,
+		TimecodeKnown: true, Timecode: "01:00:00:00", ObservedAt: now,
+	}
+	ch.lastConfirmed = now
+	ch.beginTransition(now)
+	ch.obs = agentaudio.LTCObservation{State: agentaudio.LTCStopped, Reason: "LTC run requested; no output confirmed yet"}
+	ch.mu.Unlock()
+
+	// The incoming run's own first confirmed emission, well inside the
+	// guard window ltcTransitionGuardDuration would otherwise hold open.
+	confirmedAt := now.Add(30 * time.Millisecond)
+	ch.mu.Lock()
+	ch.obs = agentaudio.LTCObservation{
+		State: agentaudio.LTCRunning, FrameRateKnown: true, FrameRate: pkgaudio.LTCFrameRate25,
+		TimecodeKnown: true, Timecode: "02:00:00:00", ObservedAt: confirmedAt,
+	}
+	ch.lastConfirmed = confirmedAt
+	ch.mu.Unlock()
+
+	if got := ch.observe(confirmedAt); got.State != agentaudio.LTCRunning || got.Timecode != "02:00:00:00" {
+		t.Fatalf("observe at the confirmation instant = %+v, want the incoming run's own evidence, not the outgoing run's, this early in the guard window", got)
+	}
+
+	// The guard must stay ended: a later sample, still well inside what
+	// would have been ltcTransitionGuardDuration, must not revert to the
+	// outgoing run's evidence.
+	later := now.Add(80 * time.Millisecond)
+	if got := ch.observe(later); got.State != agentaudio.LTCRunning || got.Timecode != "02:00:00:00" {
+		t.Fatalf("observe after confirmation = %+v, want the guard to stay ended rather than reverting to the outgoing run's evidence", got)
+	}
+}
+
+// TestLTCTransitionGuardDurationCoversTheMeasuredTail guards
+// ltcTransitionGuardDuration's own value: StopLTC's path relies on this
+// fixed bound alone (see [ltcChannel.observe]), so it must stay at or
+// above the worst measured real tail (see the PR record for the numbers).
+func TestLTCTransitionGuardDurationCoversTheMeasuredTail(t *testing.T) {
+	const worstMeasuredTail = 320 * time.Millisecond
+	if ltcTransitionGuardDuration < worstMeasuredTail {
+		t.Fatalf("ltcTransitionGuardDuration = %s, want at least %s: StopLTC's path has no further evidence to end the guard on, so a shorter bound risks claiming LTCStopped while the wire is still audible", ltcTransitionGuardDuration, worstMeasuredTail)
+	}
+}

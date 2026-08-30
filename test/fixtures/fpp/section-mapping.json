@@ -1,0 +1,57 @@
+{
+  "description": "Runtime-to-canonical section mapping cases for docs/build/FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 1.2. Unlike entry-key.json, which supplies an already-canonical section and checks only entryKey derivation, these cases start from FPP's own runtime playlist-section string (the spelling FPP's playlist callback reports: LeadIn, MainPlaylist, LeadOut, or New) and pin both the canonical value that runtime string maps to and the entryKey that results from hashing the canonical value. A side that derives entryKey from the runtime string instead of the mapped canonical value produces a different entryKey and fails this case; entry-key.json alone cannot catch that, because it never exercises the runtime spelling.",
+  "cases": [
+    {
+      "name": "lead-in",
+      "description": "FPP's runtime section string for the lead-in section, LeadIn, maps to the playlist definition's member name, leadIn.",
+      "runtimeSection": "LeadIn",
+      "expectedCanonicalSection": "leadIn",
+      "identity": {
+        "instanceUuid": "6f1c1a52-1b6c-4b53-9a0e-9f7c2f0d1b44",
+        "playlistName": "Main Show",
+        "playlistHash": "deadbeef",
+        "position": 0
+      },
+      "expectedEntryKey": "1469c9d27bcfd8bf48c7d1d85b6d75b7785a71cd20b274189c173c30a64bdc61"
+    },
+    {
+      "name": "main-playlist",
+      "description": "FPP's runtime section string for the main section, MainPlaylist, maps to the playlist definition's member name, mainPlaylist.",
+      "runtimeSection": "MainPlaylist",
+      "expectedCanonicalSection": "mainPlaylist",
+      "identity": {
+        "instanceUuid": "6f1c1a52-1b6c-4b53-9a0e-9f7c2f0d1b44",
+        "playlistName": "Main Show",
+        "playlistHash": "deadbeef",
+        "position": 0
+      },
+      "expectedEntryKey": "4412de28018bd7bd4b20df96341da9737a24ec604d88c2b2372a8a068f55e591"
+    },
+    {
+      "name": "lead-out",
+      "description": "FPP's runtime section string for the lead-out section, LeadOut, maps to the playlist definition's member name, leadOut.",
+      "runtimeSection": "LeadOut",
+      "expectedCanonicalSection": "leadOut",
+      "identity": {
+        "instanceUuid": "6f1c1a52-1b6c-4b53-9a0e-9f7c2f0d1b44",
+        "playlistName": "Main Show",
+        "playlistHash": "deadbeef",
+        "position": 0
+      },
+      "expectedEntryKey": "fd61b334c1fc5af9e22a037fd14ff62229ee30ace2eef542caa2e29de32ae9d0"
+    },
+    {
+      "name": "unrecognized-new-passthrough",
+      "description": "FPP also reports the runtime section string New, which names no member of the playlist definition (leadIn, mainPlaylist, leadOut). Contract section 1.2 mints no canonical spelling for it: it passes through unchanged, so it will not match any parsed definition entry and the coordinator's existing unknown-entry outcome is the visible failure, rather than a silently wrong binding.",
+      "runtimeSection": "New",
+      "expectedCanonicalSection": "New",
+      "identity": {
+        "instanceUuid": "6f1c1a52-1b6c-4b53-9a0e-9f7c2f0d1b44",
+        "playlistName": "Main Show",
+        "playlistHash": "deadbeef",
+        "position": 0
+      },
+      "expectedEntryKey": "aee40df1ce38a1a19a64dcb860916d513b99b4c3ac85af11101afbb532cf610c"
+    }
+  ]
+}

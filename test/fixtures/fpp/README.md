@@ -19,6 +19,12 @@ parser is a fixture it cannot use.
   `playlistHash` derivation.
 - `entry-key.json`: `entryKey` derivation cases, covering the five-field
   identity object contract section 1.3 fixes.
+- `section-mapping.json`: FPP runtime playlist-section string to canonical
+  section mapping cases, covering contract section 1.2's mapping table and
+  section 1.3's requirement that the `entryKey` hash input is the mapped
+  canonical value, never FPP's runtime spelling. See "`section-mapping.json`
+  schema" below for why this file exists alongside `entry-key.json` rather
+  than folded into it.
 - `ingestion.json`: cases for
   `POST /api/v1/integrations/fpp/playlist-entry-observations`, covering
   contract section 1.7's refusal table and the acceptance behaviors around
@@ -98,6 +104,37 @@ here than a real SHA-256. Those values are not valid ingestion bodies:
 lowercase hex (contract section 1.6 step 7). The two fixture families are
 not composable; do not build an `ingestion.json` case's `entryKey` or
 `playlistHash` by copying an `entry-key.json` identity's values.
+
+## `section-mapping.json` schema
+
+A JSON object with a `description` string and a `cases` array. Each case is
+an object:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | Unique within the file. |
+| `description` | string | What the case exercises. |
+| `runtimeSection` | string | FPP's own runtime playlist-section string, the spelling FPP's playlist callback reports (contract section 1.2): `LeadIn`, `MainPlaylist`, `LeadOut`, or any other value FPP might report, for example `New`. |
+| `expectedCanonicalSection` | string | The canonical wire value `runtimeSection` maps to: the playlist definition's own section member name (`leadIn`, `mainPlaylist`, `leadOut`) for FPP's three known runtime strings, or `runtimeSection` unchanged for any value outside that map. |
+| `identity` | object | The remaining four entry-identity fields: `instanceUuid`, `playlistName`, `playlistHash` (all strings), `position` (a JSON number, zero-based). `section` is deliberately absent here; it comes from mapping `runtimeSection`, not from this object. |
+| `expectedEntryKey` | string | The lowercase-hex SHA-256 `entryKey` that results from hashing the five-member object built from `identity` plus the mapped `expectedCanonicalSection` (contract section 1.3). |
+
+A consumer maps `runtimeSection` with its own implementation of the section
+mapping (contract section 1.2), compares the result against
+`expectedCanonicalSection`, builds the five-member entry-identity object from
+`identity` plus that mapped value, derives `entryKey` the same way
+`entry-key.json` does, and compares against `expectedEntryKey`.
+
+This file exists separately from `entry-key.json` because `entry-key.json`'s
+`identity.section` is already the canonical spelling — it checks derivation
+from a value neither implementation is required to produce from FPP input,
+which is exactly the blind spot that let the plugin hash FPP's runtime
+string while the coordinator derived from the definition's member name and
+neither shared fixture set noticed (docs/bench/TRACK-H-CHAIN.md). A
+consumer that (re)introduces that defect — deriving `entryKey` from
+`runtimeSection` directly instead of from the mapped canonical value — fails
+this file's cases whose `runtimeSection` and `expectedCanonicalSection`
+differ, even though it would still pass every `entry-key.json` case.
 
 ## `ingestion.json` schema
 

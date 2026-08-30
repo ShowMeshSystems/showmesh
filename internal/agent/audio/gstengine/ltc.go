@@ -59,15 +59,9 @@ const ltcAppSrcLeadSeconds = 0.2
 const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
 
 // ltcTransitionGuardDuration bounds [ltcChannel.beginTransition]'s guard
-// window: appsink measurement of the real tail after a Stop or Start
-// swap (loopback, no flush) showed real audio on the wire for close to
-// 0.29s, above ltcAppSrcLeadDuration's own 0.2s nominal queue depth --
-// scheduling and downstream pipeline latency beyond the appsrc's own
-// queue add to it. This constant is sized with headroom over that
-// measurement rather than reused from the nominal bound, because
-// erring toward reporting the outgoing run's evidence a little longer
-// is the safe direction; claiming the run stopped while it is still on
-// the wire is the defect this guards against.
+// only for StopLTC, which has no future confirmation to end it on sooner
+// (see [ltcChannel.observe]); erring long is the safe direction, since
+// claiming stopped while still audible is the defect this guards against.
 const ltcTransitionGuardDuration = 2 * ltcAppSrcLeadDuration
 
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
@@ -244,7 +238,12 @@ func (ch *ltcChannel) observe(now time.Time) agentaudio.LTCObservation {
 	o := ch.obs
 	lastConfirmed := ch.lastConfirmed
 	if !ch.transitionDeadline.IsZero() {
-		if now.Before(ch.transitionDeadline) {
+		if o.State == agentaudio.LTCRunning {
+			// ch.obs only ever reaches LTCRunning for the current
+			// generation (same lock): end the guard on that evidence
+			// rather than waiting out ltcTransitionGuardDuration.
+			ch.transitionDeadline = time.Time{}
+		} else if now.Before(ch.transitionDeadline) {
 			o = ch.preTransitionObs
 			if o.TimecodeKnown && o.FrameRateKnown {
 				if extended, err := o.Timecode.Advance(now.Sub(o.ObservedAt), o.FrameRate); err == nil {

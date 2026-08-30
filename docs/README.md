@@ -25,6 +25,7 @@ What an external system actually does, captured from a running instance before S
 - [Resolume control surface](bench/resolume-control-surface.md) — Arena 7.23.2's REST, WebSocket, and OSC surfaces: what each exposes, how a clip and a layer are addressed in all three, what confirmation costs in latency and bytes, and what a restart does. Established that OSC cannot address a pinned clip, and that a disconnect confirms one layer transition after a connect does.
 - [RES-002 capture procedure](bench/RES-002-capture-procedure.md) — the method for the FPP MultiSync wire capture.
 - [Track B NDI spike](bench/TRACK-B-NDI-SPIKE.md) — NDI transport spike notes.
+- [Running a hardware test session](bench/HARDWARE-TEST-SESSION.md) — the procedure a hardware session runs under: a session branch in its own worktree so the rig stays fixed, each defect fixed on its own branch off `main`, and `main` never frozen for the session.
 
 A capture supersedes desk research on the same question. Where one contradicts a research record, the research record is corrected by the orchestrating session rather than by the capture editing it in place.
 

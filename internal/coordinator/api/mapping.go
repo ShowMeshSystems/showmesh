@@ -82,8 +82,22 @@ func mapEvidence(o observation.Observation, now time.Time) v1.Evidence {
 		ev.ValidForSeconds = &secs
 	}
 
-	if state != observation.StateCurrent {
-		reason := evidenceReason(o, state, now)
+	reason := ""
+	switch {
+	case state != observation.StateCurrent:
+		reason = evidenceReason(o, state, now)
+	case o.Reason != "":
+		// A state can be "current" (fresh evidence, per o.StateAt's own
+		// freshness clock) while o.Reason still carries an authored
+		// explanation of what the VALUE means — e.g.
+		// applySupersededVerdict's superseded relabeling in
+		// rendersuperseded.go, which never touches ObservedAt/ValidFor and
+		// so never changes this freshness state. Dropping Reason here
+		// because state reads "current" silently discarded that
+		// explanation on the wire.
+		reason = o.Reason
+	}
+	if reason != "" {
 		ev.Reason = &reason
 	}
 
@@ -385,7 +399,15 @@ func nodeEvidenceObservations(nv inventory.NodeView) []observation.Observation {
 //
 // audioObs is [NodeAudioLister.NodeAudioObservations]'s identical
 // pass-through, one dependency over.
-func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs []observation.Observation) v1.Node {
+//
+// fppConnectObs is [fppconnectpush.StatusStore.NodeFPPConnectObservations]'s
+// identical pass-through, one push surface over: the two
+// node.fppconnect.channel_range.* signals, resource nv.NodeID directly (the
+// node.multisync.* precedent — one fppconnect.configure push carries one
+// channel-range string per node). nil (no channel-range push ever resolved
+// for this node) renders as an empty array, matching renderObs/audioObs'
+// identical "absent evidence is stated, never omitted" rule.
+func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRecord, latestRun *store.DiscoveryRunRecord, renderObs, audioObs, fppConnectObs []observation.Observation) v1.Node {
 	render := make([]v1.ObservationEntry, 0, len(renderObs))
 	for _, o := range renderObs {
 		render = append(render, mapObservationEntry(o, now))
@@ -393,6 +415,10 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 	audio := make([]v1.ObservationEntry, 0, len(audioObs))
 	for _, o := range audioObs {
 		audio = append(audio, mapObservationEntry(o, now))
+	}
+	fppConnect := make([]v1.ObservationEntry, 0, len(fppConnectObs))
+	for _, o := range fppConnectObs {
+		fppConnect = append(fppConnect, mapObservationEntry(o, now))
 	}
 
 	n := v1.Node{
@@ -409,6 +435,7 @@ func mapNode(nv inventory.NodeView, now time.Time, decl *store.NodeDeclarationRe
 		Declaration: mapNodeDeclaration(decl, latestRun),
 		Render:      render,
 		Audio:       audio,
+		FPPConnect:  fppConnect,
 	}
 
 	if nv.Hello != nil {

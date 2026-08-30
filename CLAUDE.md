@@ -39,7 +39,12 @@ These instructions are guardrails, not a checklist to perform on every task.
   code and present a concrete plan before editing.
 - Treat settled decisions as settled. Ask only when a genuine contradiction,
   destructive action, missing credential, or scope-changing choice cannot be
-  resolved from the repository and the user request.
+  resolved from the repository and the user request. When evidence contradicts
+  a settled decision, say so in a sentence and ask. Do not stop the work or open
+  a correction record unless Eric asks for one.
+- Fix what you were asked to fix. Never fix an adjacent defect, refactor
+  neighbouring code, or improve a nearby document because you were in the file.
+  Report it in a sentence instead.
 - Decide reversible implementation details and continue. Do not stop merely
   because several reasonable implementations exist.
 - Preserve unrelated worktree changes. Never use destructive Git operations or
@@ -50,6 +55,12 @@ These instructions are guardrails, not a checklist to perform on every task.
 ## Evidence and verification
 
 Claims must match the evidence actually obtained.
+
+Eric runs the real-hardware test. Your work ends at built, unit tested, run
+against the containerized benches where they cover it, and pushed. Those
+container benches are yours. Real hardware, the deployed fleet, and the live
+show environment are his: never simulate them to manufacture evidence, and never
+treat new test scaffolding as the deliverable when you were asked for a fix.
 
 - Say what was observed, what is inferred, and what remains unverified.
 - A sent command, successful HTTP response, compiling package, or passing unit
@@ -179,9 +190,11 @@ handoff, not an investigation log.
 ## Code and documentation conventions
 
 - Prefer names, types, small functions, and tests over explanatory comments.
-  Comments state a non-obvious invariant, caller-visible contract, or safety
-  reason that code cannot express; they do not preserve issue history, review
-  narration, or implementation chronology.
+  Three lines of comment at most, unless the file documents a wire format or an
+  external system's exact behavior. A comment states a non-obvious rule,
+  caller-visible guarantee, or safety reason that code cannot express; it does
+  not preserve issue history, review narration, or implementation chronology.
+  If the comment is longer than the code it describes, it is wrong.
 - Put durable design rationale in ADRs, measurements in research records,
   current build history in the build log, and user-facing behavior in the
   appropriate documentation.

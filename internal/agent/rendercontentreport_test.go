@@ -20,7 +20,7 @@ func publishAndDecodeRenderReport(t *testing.T, sup *pipeline.Supervisor, store 
 	pub := newFakePublisher()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	publishOneRenderReport(ctx, pub, "showmesh/nodes/media-03/observed/render", "media-03", sup, store, newMultiSyncStatus(), time.Now, discardLogger())
+	publishOneRenderReport(ctx, pub, "showmesh/nodes/media-03/observed/render", "media-03", sup, store, newMultiSyncStatus(), newFPPConnectHTTPStatus(), newTestFPPConnectHeldStore(t), time.Now, discardLogger())
 
 	calls := pub.snapshot()
 	if len(calls) != 1 {
@@ -96,6 +96,12 @@ func TestRenderReportCarriesContentIdentityAfterCueActivation(t *testing.T) {
 	if sf.CatalogRevision != "rev-a" {
 		t.Errorf("CatalogRevision = %q, want %q", sf.CatalogRevision, "rev-a")
 	}
+	if sf.Show != "halloween-2026" {
+		t.Errorf("Show = %q, want %q", sf.Show, "halloween-2026")
+	}
+	if sf.Generation != 3 {
+		t.Errorf("Generation = %d, want %d", sf.Generation, 3)
+	}
 }
 
 // TestRenderReportNoAssignmentReportsAbsence proves a surface this node
@@ -133,6 +139,12 @@ func TestRenderReportNoAssignmentReportsAbsence(t *testing.T) {
 	}
 	if sf.CatalogRevision != "" {
 		t.Errorf("CatalogRevision = %q, want empty (no assignment held)", sf.CatalogRevision)
+	}
+	if sf.Show != "" {
+		t.Errorf("Show = %q, want empty (no assignment held)", sf.Show)
+	}
+	if sf.Generation != 0 {
+		t.Errorf("Generation = %d, want 0 (no assignment held)", sf.Generation)
 	}
 }
 

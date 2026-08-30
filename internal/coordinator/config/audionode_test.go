@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -103,6 +104,57 @@ func TestDecodeAudioNodePayloadRoleDefaultsProgramLTC(t *testing.T) {
 	}
 }
 
+// TestDecodeAudioNodePayloadRoleDefaultsProgramOnLTCLessPayload proves a
+// program-only declaration does NOT default into the one role only a single
+// node may hold. Two program-only nodes emit no LTC between them, so
+// defaulting both to "program+ltc" would make the second refuse the first
+// over LTC neither of them carries.
+func TestDecodeAudioNodePayloadRoleDefaultsProgramOnLTCLessPayload(t *testing.T) {
+	raw := `{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"single interface"}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("unexpected error: %v", verr)
+	}
+	if p.Role != AudioNodeRoleProgram {
+		t.Fatalf("role = %q, want %q", p.Role, AudioNodeRoleProgram)
+	}
+}
+
+// TestDecodeAudioNodePayloadRejectsProgramLTCWithoutLTCRoute proves the
+// role and the LTC pair cannot disagree: a node that declares no LTC route
+// emits no LTC and cannot be the installation's LTC emitter.
+func TestDecodeAudioNodePayloadRejectsProgramLTCWithoutLTCRoute(t *testing.T) {
+	raw := `{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo",` +
+		`"clockDomainProvenance":"single interface","role":"program+ltc"}`
+	_, verr := DecodeAudioNodePayload(raw)
+	if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "role" {
+		t.Fatalf("verr = %v, want field-invalid on role", verr)
+	}
+}
+
+// TestTwoProgramOnlyNodesCoexist is the M4-plus-Pi installation ADR-045
+// exists to allow: one node with LTC, one without, both declared and
+// neither refusing the other.
+func TestTwoProgramOnlyNodesCoexist(t *testing.T) {
+	withLTC, verr := DecodeAudioNodePayload(validAudioNodePayloadJSON())
+	if verr != nil {
+		t.Fatalf("decode LTC-carrying node: %v", verr)
+	}
+	withoutLTC, verr := DecodeAudioNodePayload(
+		`{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"single interface"}`)
+	if verr != nil {
+		t.Fatalf("decode program-only node: %v", verr)
+	}
+	existing := map[string]string{"m4": withLTC.Role}
+	if err := ValidateAudioNodeRoleUniqueness("pi", withoutLTC, existing); err != nil {
+		t.Fatalf("program-only node refused alongside the LTC emitter: %v", err)
+	}
+	existing = map[string]string{"pi": withoutLTC.Role}
+	if err := ValidateAudioNodeRoleUniqueness("m4", withLTC, existing); err != nil {
+		t.Fatalf("LTC emitter refused alongside the program-only node: %v", err)
+	}
+}
+
 // TestDecodeAudioNodePayloadRoleZone proves an explicit "zone" role decodes
 // with its zone name.
 func TestDecodeAudioNodePayloadRoleZone(t *testing.T) {
@@ -200,18 +252,147 @@ func TestDecodeAudioNodePayloadRejectsUnknownTopLevelKey(t *testing.T) {
 	}
 }
 
-// TestDecodeAudioNodePayloadRejectsAbsentField proves every field is
-// required on every write — PUT is a full replacement, matching every
-// other collection kind in this package.
+// TestDecodeAudioNodePayloadAcceptsProgramOnly proves a node with no LTC
+// at all decodes: both ltcRoute and ltcChannel omitted together. This is
+// the only shape a two-output interface can be declared in, because
+// ADR-018 needs a channel discrete from the program pair to carry LTC
+// and such a device has none to spare.
+func TestDecodeAudioNodePayloadAcceptsProgramOnly(t *testing.T) {
+	raw := `{"programRoute":"hw:CARD=USB,DEV=0","programChannels":[1,2],"clockDomain":"solo","clockDomainProvenance":"single interface"}`
+	p, verr := DecodeAudioNodePayload(raw)
+	if verr != nil {
+		t.Fatalf("verr = %v, want nil", verr)
+	}
+	if p.LTCRoute != "" {
+		t.Errorf("LTCRoute = %q, want empty on a program-only node", p.LTCRoute)
+	}
+	if p.LTCChannel != 0 {
+		t.Errorf("LTCChannel = %d, want 0 on a program-only node", p.LTCChannel)
+	}
+	if p.ProgramRoute != "hw:CARD=USB,DEV=0" || len(p.ProgramChannels) != 2 {
+		t.Errorf("program half decoded wrong: %+v", p)
+	}
+}
+
+// TestEncodeDecodeProgramOnlyRoundTrips proves a program-only payload
+// survives the store: it must not come back with an empty ltcRoute and a
+// zero ltcChannel present as keys, or the re-decode would refuse it.
+func TestEncodeDecodeProgramOnlyRoundTrips(t *testing.T) {
+	want := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	encoded, err := EncodeAudioNodePayload(want)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got, verr := DecodeAudioNodePayload(encoded)
+	if verr != nil {
+		t.Fatalf("re-decode of %s: %v", encoded, verr)
+	}
+	if got.LTCRoute != "" || got.LTCChannel != 0 {
+		t.Errorf("round trip invented LTC: %+v", got)
+	}
+	if got.ProgramRoute != want.ProgramRoute || got.ClockDomain != want.ClockDomain {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC proves one of the LTC
+// pair without the other is refused rather than half-honoured: naming a
+// route with no channel, or a channel with no route, is an operator
+// mistake with two plausible readings.
+func TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		wantField string
+	}{
+		{"route without channel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`, "ltcChannel"},
+		{"channel without route", `{"programRoute":"a","ltcChannel":2,"programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`, "ltcRoute"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, verr := DecodeAudioNodePayload(tc.raw)
+			if verr == nil || verr.Code != ValidationCodeFieldRequired || verr.Field != tc.wantField {
+				t.Fatalf("verr = %v, want field-required on %s", verr, tc.wantField)
+			}
+		})
+	}
+}
+
+// TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice is
+// the defect this whole shape exists for: a node whose only routes are
+// two-channel advertises an EMPTY LTC-capable route list, so before
+// program-only declarations existed no audio.node could be placed on it
+// at all.
+func TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0", "hw:CARD=Headphones,DEV=0"}, nil); err != nil {
+		t.Fatalf("placement = %v, want accepted", err)
+	}
+}
+
+// TestValidateAudioNodePlacementNoEvidenceStillFiresForProgramOnly proves
+// the more basic refusal survives: "this node has advertised nothing at
+// all" is distinct from "advertised something, but not this route", and
+// making the LTC pair optional must not let a program-only payload be
+// placed against a node with no probe evidence whatsoever.
+func TestValidateAudioNodePlacementNoEvidenceStillFiresForProgramOnly(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	err := ValidateAudioNodePlacement(p, nil, nil)
+	if !errors.Is(err, ErrAudioNodeNoEvidence) {
+		t.Fatalf("placement = %v, want ErrAudioNodeNoEvidence", err)
+	}
+}
+
+// TestValidateAudioNodePlacementRejectsProgramOnlyUnevidencedRoute
+// proves the program half is still checked against probe evidence when
+// no LTC is declared: dropping LTC must not drop every check with it.
+func TestValidateAudioNodePlacementRejectsProgramOnlyUnevidencedRoute(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=TYPO,DEV=0", ProgramChannels: []int{1, 2},
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0"}, nil); err == nil {
+		t.Fatal("placement accepted an unevidenced program route on a program-only node")
+	}
+}
+
+// TestValidateAudioNodePlacementStillRejectsUnevidencedLTCRoute proves
+// making the pair optional did not weaken the LTC case: a declaration
+// that DOES name an LTC route is refused exactly as before when the node
+// never advertised that route as LTC-capable.
+func TestValidateAudioNodePlacementStillRejectsUnevidencedLTCRoute(t *testing.T) {
+	p := AudioNodePayload{
+		ProgramRoute: "hw:CARD=USB,DEV=0", LTCRoute: "hw:CARD=USB,DEV=0",
+		ProgramChannels: []int{1, 2}, LTCChannel: 3,
+		ClockDomain: "solo", ClockDomainProvenance: "single interface",
+	}
+	if err := ValidateAudioNodePlacement(p, []string{"hw:CARD=USB,DEV=0"}, nil); err == nil {
+		t.Fatal("placement accepted an LTC route the node never advertised as LTC-capable")
+	}
+}
+
+// TestDecodeAudioNodePayloadRejectsAbsentField proves every required
+// field is required on every write — PUT is a full replacement, matching
+// every other collection kind in this package. ltcRoute and ltcChannel
+// are covered separately by
+// TestDecodeAudioNodePayloadRejectsHalfDeclaredLTC, being the one pair
+// that may be omitted together.
 func TestDecodeAudioNodePayloadRejectsAbsentField(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
 	}{
 		{"programRoute", `{"ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"ltcRoute", `{"programRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
 		{"programChannels", `{"programRoute":"a","ltcRoute":"a","ltcChannel":2,"clockDomain":"d","clockDomainProvenance":"p"}`},
-		{"ltcChannel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"clockDomain":"d","clockDomainProvenance":"p"}`},
 		{"clockDomain", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomainProvenance":"p"}`},
 		{"clockDomainProvenance", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d"}`},
 	}
@@ -238,6 +419,12 @@ func TestDecodeAudioNodePayloadRejectsNullField(t *testing.T) {
 		{"ltcChannel", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":null,"clockDomain":"d","clockDomainProvenance":"p"}`},
 		{"clockDomain", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":null,"clockDomainProvenance":"p"}`},
 		{"clockDomainProvenance", `{"programRoute":"a","ltcRoute":"a","programChannels":[1],"ltcChannel":2,"clockDomain":"d","clockDomainProvenance":null}`},
+		// Both LTC keys present but null. The pair is "present" as far as
+		// the optional-together check is concerned, so this must reach
+		// the null refusal rather than being read as a program-only
+		// declaration: an operator who typed null meant to say something,
+		// and silently treating it as "no LTC" would hide the mistake.
+		{"ltcRoute", `{"programRoute":"a","ltcRoute":null,"programChannels":[1],"ltcChannel":null,"clockDomain":"d","clockDomainProvenance":"p"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

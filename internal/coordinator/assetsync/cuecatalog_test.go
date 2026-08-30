@@ -75,6 +75,23 @@ func putAudioNode(t *testing.T, st *store.Store, nodeID string) {
 	putConfig(t, st, config.AudioNodeConfigKind, nodeID, raw)
 }
 
+// putProgramOnlyAudioNode writes a valid audio.node with NO LTC route or
+// channel: the shape a two-output interface (a Focusrite Scarlett Solo, a
+// Raspberry Pi headphone jack) can be declared in.
+func putProgramOnlyAudioNode(t *testing.T, st *store.Store, nodeID string) {
+	t.Helper()
+	raw, err := config.EncodeAudioNodePayload(config.AudioNodePayload{
+		ProgramRoute:          "usb-interface",
+		ProgramChannels:       []int{1, 2},
+		ClockDomain:           "single-interface",
+		ClockDomainProvenance: "two-output interface, program only",
+	})
+	if err != nil {
+		t.Fatalf("encode program-only audio.node payload: %v", err)
+	}
+	putConfig(t, st, config.AudioNodeConfigKind, nodeID, raw)
+}
+
 func simplePlaylist(showID string, cueIDs ...string) config.ShowPlaylistPayload {
 	entries := make([]config.ShowPlaylistEntry, 0, len(cueIDs))
 	for i, cueID := range cueIDs {
@@ -389,6 +406,123 @@ func TestCueCatalogRevisionDiffersByNode(t *testing.T) {
 }
 
 // --- audio/ltc/announcement scoping by audio.node presence ---
+
+// TestCueCatalogResolvesForProgramOnlyNodeAndOmitsLTC pins program-only
+// nodes at the catalog layer. A program-only audio.node EXISTS,
+// so "does this node have an audio.node" is true, but it carries no
+// LTCRoute, so ShowCueClaimContext.LTCNode/LTCRoute are empty. If LTC
+// scoping keyed off audio.node existence rather than off having an LTC
+// route, Outputs.LTC would survive scoping against an empty LTC context
+// and DeriveShowCueClaims would refuse it — failing resolution for EVERY
+// cue on the node, not only the one declaring LTC, which is exactly the
+// opaque failure the Catalog type forbids.
+func TestCueCatalogResolvesForProgramOnlyNodeAndOmitsLTC(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "pi-audio-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putProgramOnlyAudioNode(t, st, "pi-audio-01")
+	putCue(t, st, "thriller", "halloween-2026", config.ShowCuePayload{
+		Name: "Thriller",
+		Outputs: config.ShowCueOutputs{
+			Audio: &config.ShowCueAudioOutput{Asset: "thriller-audio"},
+			LTC:   &config.ShowCueLTCOutput{},
+		},
+	})
+	putCue(t, st, "cue-ann", "halloween-2026", config.ShowCuePayload{
+		Name: "Announcement",
+		Outputs: config.ShowCueOutputs{
+			Audio:        &config.ShowCueAudioOutput{Asset: "ann-audio"},
+			Announcement: &config.ShowCueAnnouncementOutput{Policy: config.ShowCueAnnouncementPolicyMix},
+		},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "thriller"))
+	putActiveShow(t, st, "halloween-2026")
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+
+	// Resolution SUCCEEDING is the primary assertion. Before the fix this
+	// returned "outputs.ltc is declared but ShowCueClaimContext.LTCNode/
+	// LTCRoute is empty" and no catalog at all.
+	catalog, err := ResolveCueCatalog(ctx, st, active, "pi-audio-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog (program-only node): %v; a node that emits no LTC must still resolve its catalog, not fail every cue", err)
+	}
+	if len(catalog.Entries) != 2 {
+		t.Fatalf("entries = %+v, want exactly two (thriller + cue-ann)", catalog.Entries)
+	}
+
+	thrillerOut, ok := cueOutputsByID(catalog.Entries, "thriller")
+	if !ok {
+		t.Fatal("thriller missing from the catalog")
+	}
+	if thrillerOut.Audio == nil {
+		t.Errorf("thriller audio = nil, want present: a program-only node still plays program audio")
+	}
+	if thrillerOut.LTC != nil {
+		t.Errorf("thriller LTC = %+v, want nil: this node declares no LTC route and must never be shipped an LTC output", thrillerOut.LTC)
+	}
+
+	annOut, ok := cueOutputsByID(catalog.Entries, "cue-ann")
+	if !ok {
+		t.Fatal("cue-ann missing from the catalog")
+	}
+	if annOut.Audio == nil || annOut.Announcement == nil {
+		t.Errorf("cue-ann outputs = %+v, want audio and announcement present: neither depends on LTC", annOut)
+	}
+}
+
+// TestCueCatalogProgramOnlyNodeTakesNoLTCClaim proves the LTC claim is
+// not merely absent from the shipped outputs but never arbitrated at all:
+// two cues both declaring LTC on the same program-only node must NOT
+// collide, because neither holds an LTC claim there.
+func TestCueCatalogProgramOnlyNodeTakesNoLTCClaim(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	declareNode(t, st, "pi-audio-01")
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	putProgramOnlyAudioNode(t, st, "pi-audio-01")
+	// Both cues declare audio as well: showcue.go refuses outputs.ltc
+	// without outputs.audio, since LTC and program audio are one clock
+	// domain. They deliberately name DIFFERENT assets, so the only claim
+	// they could possibly collide on is the LTC one.
+	putCue(t, st, "cue-a", "halloween-2026", config.ShowCuePayload{
+		Name: "A",
+		Outputs: config.ShowCueOutputs{
+			Audio: &config.ShowCueAudioOutput{Asset: "a-audio"},
+			LTC:   &config.ShowCueLTCOutput{},
+		},
+	})
+	putCue(t, st, "cue-b", "halloween-2026", config.ShowCuePayload{
+		Name: "B",
+		Outputs: config.ShowCueOutputs{
+			Audio: &config.ShowCueAudioOutput{Asset: "b-audio"},
+			LTC:   &config.ShowCueLTCOutput{},
+		},
+	})
+	putPlaylist(t, st, "main", simplePlaylist("halloween-2026", "cue-a", "cue-b"))
+	putActiveShow(t, st, "halloween-2026")
+
+	active, err := ResolveActiveShow(ctx, st)
+	if err != nil {
+		t.Fatalf("ResolveActiveShow: %v", err)
+	}
+	catalog, err := ResolveCueCatalog(ctx, st, active, "pi-audio-01")
+	if err != nil {
+		t.Fatalf("ResolveCueCatalog: %v", err)
+	}
+	if len(catalog.Conflicts) != 0 {
+		t.Errorf("conflicts = %+v, want none: neither cue holds an LTC claim on a node that emits no LTC", catalog.Conflicts)
+	}
+	for _, e := range catalog.Entries {
+		if e.Outputs.LTC != nil {
+			t.Errorf("cue %q shipped an LTC output to a program-only node: %+v", e.CueID, e.Outputs.LTC)
+		}
+	}
+}
 
 func TestCueCatalogIncludesAudioOutputsOnlyForNodeWithAudioNode(t *testing.T) {
 	st := openTestStore(t)

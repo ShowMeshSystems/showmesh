@@ -1255,6 +1255,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/fppconnect.settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The fppconnect.settings singleton (ADR-044 decision 5)
+         * @description Requires `config:write`, mirroring `GET /config/audio.settings`'s own always-sensitive, never-404 posture: the payload has a well-defined default, so this always answers `200`, with `revision` `0` and `source` `"default"` when nothing has ever been written. `enabled` gates the node's unauthenticated xLights ingestion listener; `maxFileBytes` and `maxAssetDirBytes` are the two byte caps ADR-044 decision 4 requires (a per-file cap and a total asset-directory cap), pushed to every node over the existing MQTT command path alongside its channel ranges and active show.
+         */
+        get: operations["getFPPConnectSettingsConfig"];
+        /**
+         * Write a new fppconnect.settings revision (ADR-044 decision 5)
+         * @description Requires `config:write` (admin only). A full replacement: every field is required and non-null on every write - never merged against the previous revision, so an absent key is refused by name rather than silently defaulting or carrying the old value forward. `maxFileBytes` and `maxAssetDirBytes` must each be at least 1 byte, and `maxAssetDirBytes` must be at least `maxFileBytes` - a total cap smaller than the per-file cap would refuse every upload unconditionally. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11's same-transaction rule). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putFPPConnectSettingsConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/fppconnect.settings/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * fppconnect.settings revision history, newest first
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/audio.settings/revisions`.
+         */
+        get: operations["getFPPConnectSettingsConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/audio.node": {
         parameters: {
             query?: never;
@@ -2291,7 +2335,7 @@ export interface paths {
         };
         /**
          * Report whether one FPP-backed Playlist is ready (TRACK-H-H2-SPEC.md §6)
-         * @description Open under `observation:read`, matching the reconciliation route above. Reports whether every one of §6's five ordered conditions holds (a definition is stored for the binding's (instanceUuid, playlistHash), every entry's (section, position) exists in that definition with matching filenames, every referenced Cue exists and belongs to the same Show, and the latest accepted observation (when one exists) carries the same playlistHash), and the exact failing one when it does not. Refuses with `400` for a playlist whose runner is not `fpp`: §6 readiness is an FPP-specific concept. Read-only: this route never activates anything.
+         * @description Open under `observation:read`, matching the reconciliation route above. Reports whether every one of §6's ordered conditions holds, and the exact failing one when it does not. §6 originally specified five and closed the vocabulary; it has since been opened, and the `failingCondition` enum below is the authoritative list of what this route currently checks. In order: a definition is stored for the binding's (instanceUuid, playlistHash); no newer definition is stored for the same instance and playlist name under a different hash; every entry's (section, position) exists in that definition with matching filenames; every referenced Cue exists and belongs to the same Show; the latest accepted observation, when one exists, either carries the same playlistHash or, if it could not establish identity at all, fails as `evidence-unavailable` rather than warning; when a referenced Cue declares a render output, every node holding a show.surface object for this Playlist's Show currently holds a render assignment for it; no two Cues the Show can run concurrently hold a colliding exclusive claim; and every node participating in the Show's catalog has acknowledged the revision the active show requires. Refuses with `400` for a playlist whose runner is not `fpp`: §6 readiness is an FPP-specific concept. Read-only: this route never activates anything.
          */
         get: operations["getFPPPlaylistReadiness"];
         put?: never;
@@ -2544,10 +2588,16 @@ export interface components {
             controlPlane: components["schemas"]["ControlPlane"];
             evidence: components["schemas"]["NodeEvidence"];
             declaration: components["schemas"]["NodeDeclaration"];
-            /** @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent. */
+            /**
+             * @description Track B seam B2b: whatever render-pipeline observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published a render report. Most entries' resource names the SURFACE they concern (ADR-026), not this node - the exception (finding 7) is the two `node.multisync.*` signals, which name this node directly, because one MultiSync listener serves every surface a node supervises and attributing its status to a surface would report one fact once per surface as though each were independent.
+             *
+             *     `surface.pipeline.state`'s open vocabulary includes `superseded`: a surface holding its previous render across an active-show switch reports this instead of `running` - the coordinator's own verdict, compared against its current show resolution, never a claim the node makes about itself. `surface.content.show` and `surface.content.generation` name the show and generation that authorized what is currently held, present exactly when `surface.content.catalog_revision` is.
+             */
             render: components["schemas"]["ObservationEntry"][];
             /** @description Whatever node.audio.* observations this coordinator currently holds for this node, one entry per signal. Never omitted; an empty array means this node has never published an audio discovery report. */
             audio: components["schemas"]["ObservationEntry"][];
+            /** @description Whatever node.fppconnect.channel_range.* observations this coordinator currently holds for this node's most recently resolved fppconnect.configure push - whether the pushed channel range was formatted, legitimately empty (no configured surface), or dropped (a surface existed but could not be formatted, e.g. a refused range or a string too long for the ping's 120-byte field), and why. Never omitted; an empty array means this node has never had a fppconnect.configure push resolved for it. Resource names this node directly, the `node.multisync.*` precedent (one push carries one channel-range string per node). */
+            fppConnect: components["schemas"]["ObservationEntry"][];
         };
         /**
          * @description A node's declaration state (RES-008 D2/D6, BUILD-PLAN Step 7 seam B): an operator's durable statement that this node belongs to the installation, independent of whether it currently reports in, plus a discovery-evidence verdict computed on every read against the single most recent discovery run - never stored. `declared: false` means every other field is null: this node exists only as an observation nobody has ever promoted (POST /nodes/{nodeId}/declaration), and `discoveryState` is `not_applicable` (discovery-seen state has no meaning for something not part of the declared inventory).
@@ -2984,6 +3034,17 @@ export interface components {
             macroRuns: components["schemas"]["MacroRunSummary"][];
             /** @description Every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
             resolume: components["schemas"]["ResolumeInstance"][];
+            audioConfigPush: components["schemas"]["AudioConfigPushStatus"];
+        };
+        /** @description Whether the coordinator can decode its stored, engine-wide audio.settings revision right now. Coordinator-wide, not per-node or per-collector: audio.settings is a singleton (ADR-039), so there is exactly one current revision to decode. Computed fresh from the same decode a real push performs on that revision, so this always reflects the revision currently active. Deliberately narrow: this reports only whether the audio.settings singleton itself decodes, never whether any one node's own separate audio.node binding does or whether that node is reachable — a node can still be stranded by a broken audio.node revision, or by being unreachable, while this reads "usable". */
+        AudioConfigPushStatus: {
+            /**
+             * @description "usable": the stored audio.settings revision (or the built-in default, when nothing has ever been written) decodes. "unusable": it does not, and every node is stranded on whatever audio.settings it last successfully received. "unknown": a genuine config-store failure, not a decode failure, kept the coordinator from reading its own revision just now — the revision itself may be perfectly usable.
+             * @enum {string}
+             */
+            state: "usable" | "unusable" | "unknown";
+            /** @description Set whenever state is not "usable", null otherwise. */
+            reason: string | null;
         };
         /** @description A principal's own non-secret identity (ADR-024). */
         PrincipalSummary: {
@@ -3292,12 +3353,12 @@ export interface components {
             note: string;
             active: boolean;
         };
-        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, and GET /config/audio.node/{id}/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, and ADR-033's show.mode one more). */
+        /** @description The body of GET /config/fpp.endpoints/revisions, GET /config/show.action/{id}/revisions, GET /config/show.macro/{id}/revisions, GET /config/show/{id}/revisions, GET /config/show.surface/{id}/revisions, GET /config/show.active/revisions, GET /config/show.mode/revisions, GET /config/show.cue/{id}/revisions, GET /config/show.playlist/{id}/revisions, GET /config/resolume.recovery/revisions, GET /config/render.settings/revisions, GET /config/resolume.instances/revisions, GET /config/fpp.mqtt/revisions, GET /config/assets.settings/revisions, GET /config/audio.settings/revisions, GET /config/audio.node/{id}/revisions, and GET /config/fppconnect.settings/revisions, newest first - one shape shared across every configuration kind's own revision history route (Step 9 wave 2: kind's const narrowed to fpp.endpoints was Step 7-only and never revisited when this schema gained more callers; Track E added three more, Track D seam D-3a another, Track B seam B2c another, Track G seams G-2, G-3, and G-4 one each more, audio.settings/audio.node two more, Track H seam H1 two more, ADR-033's show.mode one more, and Track E phase 2 seam FC1a's fppconnect.settings one more). */
         ConfigRevisionsResponse: {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3730,16 +3791,45 @@ export interface components {
             createdByPrincipalName: string | null;
             source: string;
         };
-        /** @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every field required, non-null, and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`. `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the two routes share, never inferred. `role` (ADR-045) is one of `program`, `program+ltc`, or `zone`; optional on the wire, and absent decodes to `program+ltc` - the role every pre-ADR-045 audio.node object already implicitly held, since an installation had exactly one and it always carried both program and LTC. At most one audio.node across the installation may carry `program+ltc` at a time (ADR-018's one clock domain, one LTC emitter); a second is refused, naming both node ids. `zone` is the operator's own name for the independent speaker zone this node drives, present only when `role` is `zone` - refused on any other role, since an ignored field would read as an applied one. */
+        /** @description The "fppconnect.settings" configuration kind's decoded payload (ADR-044 decision 5): the body PUT /config/fppconnect.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/fppconnect.settings' response. `enabled` gates the node's unauthenticated xLights ingestion listener. `maxFileBytes` is the per-file byte cap on one ingested upload; `maxAssetDirBytes` is the total byte cap on the node's asset directory and must be at least `maxFileBytes` - a cap smaller than the per-file cap would refuse every upload unconditionally. Defaults: `enabled` true (a builder default, not an owner ruling), `maxFileBytes` 2147483648 (2 GiB), `maxAssetDirBytes` 21474836480 (20 GiB). */
+        ConfigFPPConnectSettingsPayload: {
+            enabled: boolean;
+            /** @description Always at least 1. */
+            maxFileBytes: number;
+            /** @description Always at least 1, and always at least maxFileBytes. */
+            maxAssetDirBytes: number;
+        };
+        /** @description The body of GET and PUT /config/fppconnect.settings. Never `404`s: the payload has a well-defined default, reported with `revision` `0` and `source` `"default"` when nothing has ever been written, mirroring AudioSettingsConfigResponse's identical posture. */
+        FPPConnectSettingsConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigFPPConnectSettingsPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        /**
+         * @description The "audio.node" configuration kind's decoded payload (ADR-018/ADR-039): the body PUT /config/audio.node/{id} accepts (a full replacement - every required field non-null and non-empty), and the "payload" member of GET /config/audio.node/{id}'s response. `programRoute` and `ltcRoute` name discovered output routes (device identities the node itself reported) and, when both are given, MUST name the same route: program and LTC leave through one interface in one clock domain, so two different route names are refused. `programChannels` is the ordered, distinct, 1-based channel indices on that route carrying program audio ([1, 2] for reference stereo, [1] for mono); `ltcChannel` is the 1-based index carrying LTC and must not appear in `programChannels`.
+         *
+         *     `ltcRoute` and `ltcChannel` are the one optional pair, and they are optional TOGETHER: omitting both declares a program-only node that emits no LTC at all, and giving one without the other is refused rather than half-honoured. A program-only declaration is the only way to place a two-output interface, whose LTC-capable route list is correctly empty because ADR-018 requires LTC on a channel discrete from the program pair. Every LTC refusal is unchanged for a declaration that DOES name an LTC route, including the check that the route is one the node advertised as LTC-capable. ADR-042 section 5 already treats losing LTC as costing timecode and never the audience's program audio.
+         *
+         *     `clockDomain` and `clockDomainProvenance` are the operator's own declaration of which hardware clock the routes run on, never inferred, and are required on a program-only node too.
+         *
+         *     `role` (ADR-045) is one of `program`, `program+ltc`, or `zone`, and is optional on the wire. Absent, it decodes to `program+ltc` when the payload declares an LTC route - the role every pre-ADR-045 audio.node object already implicitly held, since an installation had exactly one and it always carried both program and LTC - and to `program` when it declares none, because a node that emits no LTC cannot be the installation's LTC emitter. `program+ltc` given explicitly on a payload with no `ltcRoute` is refused for the same reason. At most one audio.node across the installation may carry `program+ltc` at a time (ADR-018's one clock domain, one LTC emitter); a second is refused, naming both node ids. `zone` is the operator's own name for the independent speaker zone this node drives, present only when `role` is `zone` - refused on any other role, since an ignored field would read as an applied one.
+         */
         ConfigAudioNode: {
             programRoute: string;
-            ltcRoute: string;
+            ltcRoute?: string;
             programChannels: number[];
-            ltcChannel: number;
+            ltcChannel?: number;
             clockDomain: string;
             clockDomainProvenance: string;
             /**
-             * @description Optional; absent decodes to "program+ltc" (ADR-045).
+             * @description Optional (ADR-045). Absent, it decodes to "program+ltc" when the payload declares an ltcRoute and to "program" when it does not. "program+ltc" on a payload with no ltcRoute is refused.
              * @enum {string}
              */
             role?: "program" | "program+ltc" | "zone";
@@ -4324,12 +4414,12 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
         };
-        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set only for the non-fatal form of the observation-hash check (no observation received yet, "the normal afternoon state, not a fault"), never alongside a non-empty `failingCondition`. */
+        /** @description The body of GET /integrations/fpp/playlists/{playlistId}/readiness (TRACK-H-H2-SPEC.md §6, whose vocabulary has since been opened -- see docs/build/TRACK-H-cues-and-playlists.md section H6 for the full account of what was added and why): whether one FPP-backed Playlist is ready, and which condition fails first when it is not. `warning` is set when a condition did not fail readiness outright but is still worth surfacing: either the non-fatal form of the observation-hash check (no observation received at all yet, "the normal afternoon state, not a fault"), or `exclusive-claim-conflict`'s own inconclusive form (a stored Cue elsewhere could not be decoded, so the check could not be verified). `warning` is never set alongside a non-empty `failingCondition` equal to `observation-hash-mismatch`. An observation that WAS received but could not establish identity is the `evidence-unavailable` failing condition, not a warning: readiness never returns `ready: true` for a check it could not evaluate. `definition-superseded` detects an edited-but-never- played FPP playlist directly from the definition store, so it does not require FPP to have played anything since the edit. `node-render-unassigned`, `node-catalog-stale` and `exclusive-claim-conflict` are evaluated against every node participating in this Playlist's own Show's resolved Cue catalog, reusing the same resolution `GET /nodes/{nodeId}/cue-catalog` and the cue-catalog deploy path already use -- never a second one. */
         FPPPlaylistReadinessResponse: {
             playlistId: string;
             ready: boolean;
             /** @enum {string} */
-            failingCondition?: "definition-missing" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "observation-hash-mismatch";
+            failingCondition?: "definition-missing" | "definition-superseded" | "entry-not-in-definition" | "entry-filename-mismatch" | "cue-not-ready" | "evidence-unavailable" | "observation-hash-mismatch" | "node-render-unassigned" | "exclusive-claim-conflict" | "node-catalog-stale";
             reason?: string;
             warning?: string;
             /** Format: date-time */
@@ -7839,6 +7929,95 @@ export interface operations {
         };
     };
     getAudioSettingsConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPConnectSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPConnectSettingsConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putFPPConnectSettingsConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigFPPConnectSettingsPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FPPConnectSettingsConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFPPConnectSettingsConfigRevisions: {
         parameters: {
             query?: never;
             header?: never;

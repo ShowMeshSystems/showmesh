@@ -836,6 +836,68 @@ func TestPollContentIdentityProducesAllFourSignals(t *testing.T) {
 	}
 }
 
+// TestPollContentIdentityProducesShowAndGeneration proves: a surface
+// reporting a full authorization tuple emits surface.content.show
+// and surface.content.generation too, stamped from the same
+// ContentObservedAt evidence time as the other four content signals.
+func TestPollContentIdentityProducesShowAndGeneration(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	payload.Surfaces[0].FSEQFilename = "halloween-01.fseq"
+	payload.Surfaces[0].FSEQContentHash = "sha256:deadbeef"
+	payload.Surfaces[0].CueID = "cue-42"
+	payload.Surfaces[0].CatalogRevision = "rev-7"
+	payload.Surfaces[0].Show = "halloween-2026"
+	payload.Surfaces[0].Generation = 1
+	payload.Surfaces[0].ContentObservedAt = sampleContentObservedAt
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	show := findObs(t, obs, SignalSurfaceContentShow)
+	if show.Absence != "" {
+		t.Errorf("surface.content.show: Absence = %q, want empty", show.Absence)
+	}
+	if v, ok := show.Value.(string); !ok || v != "halloween-2026" {
+		t.Errorf("surface.content.show: Value = %v, want %q", show.Value, "halloween-2026")
+	}
+	if show.ObservedAt == nil || !show.ObservedAt.Equal(sampleContentObservedAt) {
+		t.Errorf("surface.content.show: ObservedAt = %v, want %v (content evidence time, not pipeline state's)", show.ObservedAt, sampleContentObservedAt)
+	}
+
+	generation := findObs(t, obs, SignalSurfaceContentGeneration)
+	if generation.Absence != "" {
+		t.Errorf("surface.content.generation: Absence = %q, want empty", generation.Absence)
+	}
+	if v, ok := generation.Value.(int64); !ok || v != 1 {
+		t.Errorf("surface.content.generation: Value = %v, want 1", generation.Value)
+	}
+}
+
+// TestPollNoContentIdentityLeavesShowAndGenerationNotCollected extends
+// TestPollNoContentIdentityIsNotCollected to the Show/generation signals: a
+// surface holding no assignment at all must state absence for these too,
+// never a fabricated "" or 0.
+func TestPollNoContentIdentityLeavesShowAndGenerationNotCollected(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalSurfaceContentShow, SignalSurfaceContentGeneration} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s: Absence = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+		if o.Reason == "" {
+			t.Errorf("%s: Reason is empty, want a stated reason", sig)
+		}
+	}
+}
+
 // TestPollNoContentIdentityIsNotCollected proves a surface reporting no
 // FSEQ at all (the field mqttproto's own doc comment states means "no
 // assignment held") renders all four content signals as an explicit
@@ -862,6 +924,43 @@ func TestPollNoContentIdentityIsNotCollected(t *testing.T) {
 		}
 		if o.Reason == "" {
 			t.Errorf("%s: Reason is empty, want a stated reason", sig)
+		}
+	}
+}
+
+// TestPollWithheldContentIdentityStatesTheNodesReasonNotNoAssignment proves
+// that a surface whose node withheld a real but malformed persisted
+// assignment (mqttproto.RenderSurfaceReport.ContentIdentityReason set,
+// FSEQFilename left empty by internal/agent/renderreport.go's
+// applyContentIdentity) reports the node's own reason on all six
+// content-identity signals, never the "this surface holds no render
+// assignment" text that TestPollNoContentIdentityIsNotCollected's true
+// no-assignment case gets — that text would tell an operator this surface
+// holds no assignment when it actually holds a broken one.
+func TestPollWithheldContentIdentityStatesTheNodesReasonNotNoAssignment(t *testing.T) {
+	st := NewStore()
+	payload := samplePayload(mqttproto.RenderPipelineStateRunning)
+	const withheldReason = "persisted assignment has a fseqFilename but no fseqContentHash (hand-edited or pre-content-identity-contract assignments.json); content identity withheld"
+	payload.Surfaces[0].ContentIdentityReason = withheldReason
+	st.Put("render-01", payload, false, time.Now())
+
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{
+		SignalSurfaceContentFSEQFilename,
+		SignalSurfaceContentFSEQContentHash,
+		SignalSurfaceContentCueID,
+		SignalSurfaceContentCatalogRevision,
+		SignalSurfaceContentShow,
+		SignalSurfaceContentGeneration,
+	} {
+		o := findObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s: Absence = %q, want %q", sig, o.Absence, observation.StateNotCollected)
+		}
+		if o.Reason != withheldReason {
+			t.Errorf("%s: Reason = %q, want the node's own withheld-identity reason %q", sig, o.Reason, withheldReason)
 		}
 	}
 }

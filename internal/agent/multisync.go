@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 
-	"github.com/showmeshsystems/showmesh/internal/version"
+	"github.com/showmeshsystems/showmesh/internal/fppconnect"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
 
@@ -36,7 +37,14 @@ import (
 // normally is still correct: a bind conflict must fail loudly (which it
 // does, here, as a degraded-with-reason node) rather than silently sharing
 // the port and risking exactly the desync ADR-013 documents.
-func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName string, timeline *multisync.Timeline, status *multiSyncStatus, logger *slog.Logger) {
+func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName string, timeline *multisync.Timeline, status *multiSyncStatus, fppConnect *fppConnectState, logger *slog.Logger) {
+	ranges := rangesFunc(fppConnect)
+	// oversizeRangesLogged rate-limits the warning below to once per node
+	// process life, not once per discover ping: DiscoverResponseFunc runs on
+	// every reply, and a held string that is already over the limit stays
+	// over the limit on every subsequent ping too.
+	var oversizeRangesLogged sync.Once
+
 	l, err := multisync.NewListener(multisync.ListenerConfig{
 		ListenAddr:    listenAddr,
 		InterfaceName: interfaceName,
@@ -50,11 +58,21 @@ func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName
 		// unicast-only one. It also puts the node in FPP's own MultiSync
 		// list, which is where an operator looks first.
 		RespondToDiscoverPings: true,
-		DiscoverResponse: multisync.PingPacket{
-			SystemType:    multisync.SystemTypeShowMesh,
-			Mode:          multisync.PingModeRemote,
-			Hostname:      nodeID,
-			VersionString: version.Version,
+		// DiscoverResponseFunc, not the static DiscoverResponse template,
+		// because the ranges field must be read fresh at reply time from
+		// fppConnect rather than fixed at listener construction.
+		DiscoverResponseFunc: func() multisync.PingPacket {
+			v := ranges()
+			if len(v) > multisync.MaxPingRangesLength {
+				oversizeRangesLogged.Do(func() {
+					logger.Warn("multisync: held channel ranges string exceeds the ping Ranges field capacity; replying with an empty Ranges field instead",
+						"length", len(v), "limit", multisync.MaxPingRangesLength)
+				})
+			}
+			// discoverResponse independently clamps an over-long v to "",
+			// so this reply is never left unencodable even if that check
+			// above is ever bypassed.
+			return discoverResponse(nodeID, func() string { return v })
 		},
 	})
 	if err != nil {
@@ -99,6 +117,68 @@ func runMultiSyncListener(ctx context.Context, nodeID, listenAddr, interfaceName
 		logger.Warn("multisync: listener stopped", "error", err)
 		status.set(false, fmt.Sprintf("multisync listener stopped unexpectedly: %v", err))
 	}
+}
+
+// discoverResponse builds the Ping packet this node answers a discover
+// request with. It is a pure function, factored out of
+// runMultiSyncListener's Listener construction, so the wire-level values it
+// produces can be tested without a socket. ranges is called once, at build
+// time, to read the node's currently advertised channel range string; nil
+// is treated the same as a func returning "".
+//
+// Every value here is a deliberate compatibility choice pinned by RES-003
+// and ADR-044, not a builder's choice:
+//   - SystemType 0x7F: the type xLights must see to offer this node as an
+//     FPP Connect upload target at all (RES-003 section 10.2).
+//   - VersionMajor/VersionMinor 9/5: past xLights' 7.1 eligibility gate and
+//     the 7.0 and 9.3 FSEQ gates (RES-003 section 10.5).
+//   - Mode stays PingModeRemote, NOT the "player" mode the HTTP seam's
+//     GET /api/system/info serves. FPP reads this ping byte, not the HTTP
+//     mode, to decide whether to unicast sync to this node at all
+//     (supportsUnicast = type < 0x80 && fppMode == REMOTE_MODE, RES-003
+//     section 10.2); xLights instead takes its mode from the HTTP surface
+//     (fppconnect.AdvertisedMode). Putting the HTTP mode's player bits here
+//     would silently stop FPP itself from unicasting to this node. See
+//     ADR-044 decision 7.
+//   - VersionString "9.5.0": matches the major/minor integers above
+//     (RES-003 section 10.5).
+//   - HardwareType is left empty: nothing served may contain the string
+//     "Falcon Player" (ADR-044 decision 10).
+//
+// If ranges() returns a string longer than multisync.MaxPingRangesLength,
+// Ranges is left empty rather than encoded: EncodePing would otherwise
+// reject the whole packet, which answers no discover ping at all.
+func discoverResponse(nodeID string, ranges func() string) multisync.PingPacket {
+	var rangeStr string
+	if ranges != nil {
+		rangeStr = ranges()
+	}
+	if len(rangeStr) > multisync.MaxPingRangesLength {
+		rangeStr = ""
+	}
+	return multisync.PingPacket{
+		SystemType:    multisync.SystemTypeShowMesh,
+		VersionMajor:  fppconnect.AdvertisedVersionMajor,
+		VersionMinor:  fppconnect.AdvertisedVersionMinor,
+		Mode:          multisync.PingModeRemote,
+		Hostname:      nodeID,
+		VersionString: fppconnect.AdvertisedVersion,
+		Ranges:        rangeStr,
+	}
+}
+
+// rangesFunc returns a func reading fppConnect's channel ranges, or a func
+// always returning "" if fppConnect is nil. A nil *fppConnectState must
+// never reach fppConnect.ChannelRanges as a bare method value: calling it
+// dereferences the nil receiver's mu field from inside the per-ping
+// discover-response goroutine (pkg/multisync's Listener.maybeRespondToDiscover
+// has no recover), which crashes the whole agent process rather than just
+// failing to answer that one discover ping.
+func rangesFunc(fppConnect *fppConnectState) func() string {
+	if fppConnect == nil {
+		return func() string { return "" }
+	}
+	return fppConnect.ChannelRanges
 }
 
 // sourceIP extracts just the IP address from a UDP source address, per

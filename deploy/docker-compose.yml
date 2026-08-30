@@ -70,9 +70,16 @@ services:
       context: ..
       dockerfile: Dockerfile
       args:
-        VERSION: ${SHOWMESH_VERSION:-dev}
-        COMMIT: ${SHOWMESH_COMMIT:-none}
-        BUILD_DATE: ${SHOWMESH_BUILD_DATE:-unknown}
+        # These have no defaults on purpose: a bare `docker compose up -d
+        # --build` would otherwise produce a coordinator that could not say
+        # which commit it was running. The :? form makes Compose
+        # itself refuse when the variable is unset rather than silently
+        # supplying that fallback; `make deploy-up`/`make deploy-build`
+        # always set all three (see the Makefile), so this only fires for
+        # the unsupported bare-compose path.
+        VERSION: ${SHOWMESH_VERSION:?SHOWMESH_VERSION is required. Use 'make deploy-up' or 'make deploy-build' from the repo root, which set it automatically; see deploy/README.md.}
+        COMMIT: ${SHOWMESH_COMMIT:?SHOWMESH_COMMIT is required. Use 'make deploy-up' or 'make deploy-build' from the repo root, which set it automatically; see deploy/README.md.}
+        BUILD_DATE: ${SHOWMESH_BUILD_DATE:?SHOWMESH_BUILD_DATE is required. Use 'make deploy-up' or 'make deploy-build' from the repo root, which set it automatically; see deploy/README.md.}
     # Once published images exist, prefer pulling instead of building
     # locally on every `up`. Uncomment and set the tag, and drop `build:`
     # above if you never intend to build from source on this host.

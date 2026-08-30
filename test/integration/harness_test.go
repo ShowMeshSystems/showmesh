@@ -142,6 +142,22 @@ const (
 	// instead of "alsasink" and exercise it with no real audio device.
 	// Forwarded by startAgent exactly like the intervals above.
 	envGstAudioSinkOverride = "SHOWMESH_GST_AUDIO_SINK_FACTORY"
+
+	// envAgentBin, envCoordinatorBin, and envShowmeshctlBin, when set, name
+	// already-built binaries TestMain execs directly instead of invoking
+	// `go build` itself (see resolveBinary). scripts/test-integration.sh
+	// sets all three so its own -timeout budget covers only the tests, not
+	// a cold-cache build; unset (the direct `go test -tags=integration
+	// ./test/integration/...` path), TestMain builds all three itself
+	// exactly as before. A caller supplying a path here owns its cgo
+	// linkage: per buildEnvWithCGO's own reasoning, ADR-042 requires the
+	// agent binary link the real GStreamer/libltc engine (built with cgo),
+	// and ADR-012 requires the coordinator binary be CGo-free, so a path
+	// given here for either must already satisfy that or the tests it
+	// backs are not proving what they claim to.
+	envAgentBin       = "SHOWMESH_TEST_AGENT_BIN"
+	envCoordinatorBin = "SHOWMESH_TEST_COORDINATOR_BIN"
+	envShowmeshctlBin = "SHOWMESH_TEST_SHOWMESHCTL_BIN"
 )
 
 const defaultBrokerURL = "tcp://localhost:11883"
@@ -201,8 +217,10 @@ func parseDurationEnv(key string, def time.Duration) time.Duration {
 
 // TestMain resolves the broker address once, probes it (skipping every
 // test with a clear message rather than failing if nothing answers — see
-// probeBroker), and builds both the showmesh-agent and showmesh-coordinator
-// binaries once for every test in this package to exec.
+// probeBroker), and resolves the showmesh-agent, showmesh-coordinator, and
+// showmeshctl binaries once for every test in this package to exec: each
+// is either built here (the default) or, when envAgentBin/envCoordinatorBin/
+// envShowmeshctlBin names one, taken as already built (see resolveBinary).
 //
 // Building the real showmesh-coordinator binary here — rather than wiring
 // internal/coordinator/{store,inventory,broker} together in-process, which
@@ -243,25 +261,25 @@ func TestMain(m *testing.M) {
 			return m.Run() // every test skips itself via requireBroker
 		}
 
-		agentBin, agentCleanup, err := buildBinary("showmesh-agent", "./cmd/showmesh-agent", true)
+		agentBin, agentCleanup, err := resolveBinary(envAgentBin, "showmesh-agent", "./cmd/showmesh-agent", true)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "integration: failed to build the showmesh-agent binary: %v\n", err)
+			fmt.Fprintf(os.Stderr, "integration: failed to prepare the showmesh-agent binary: %v\n", err)
 			return 1
 		}
 		agentBinPath = agentBin
 		cleanupFuncs = append(cleanupFuncs, agentCleanup)
 
-		coordBin, coordCleanup, err := buildBinary("showmesh-coordinator", "./cmd/showmesh-coordinator", false)
+		coordBin, coordCleanup, err := resolveBinary(envCoordinatorBin, "showmesh-coordinator", "./cmd/showmesh-coordinator", false)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "integration: failed to build the showmesh-coordinator binary: %v\n", err)
+			fmt.Fprintf(os.Stderr, "integration: failed to prepare the showmesh-coordinator binary: %v\n", err)
 			return 1
 		}
 		coordinatorBinPath = coordBin
 		cleanupFuncs = append(cleanupFuncs, coordCleanup)
 
-		showmeshctlBin, ctlCleanup, err := buildBinary("showmeshctl", "./cmd/showmeshctl", false)
+		showmeshctlBin, ctlCleanup, err := resolveBinary(envShowmeshctlBin, "showmeshctl", "./cmd/showmeshctl", false)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "integration: failed to build the showmeshctl binary: %v\n", err)
+			fmt.Fprintf(os.Stderr, "integration: failed to prepare the showmeshctl binary: %v\n", err)
 			return 1
 		}
 		showmeshctlBinPath = showmeshctlBin
@@ -434,6 +452,32 @@ func buildBinary(name, pkgPath string, cgoEnabled bool) (path string, cleanup fu
 		return "", nil, fmt.Errorf("go build -o %s %s: %w\n%s", bin, pkgPath, err, out)
 	}
 	return bin, cleanup, nil
+}
+
+// resolveBinary returns the path named by envVar if that env var is set,
+// after verifying the path exists and is executable, so a broken hand-off
+// (a typo, a stale path, a file left non-executable) fails TestMain loudly
+// rather than silently falling back to a slow build or, worse, running a
+// stale binary under a name that looks current. envVar unset or blank
+// falls back to buildBinary exactly as if this function did not exist. No
+// cleanup func is returned for a caller-supplied path: the caller owns
+// that file's lifetime, and this package must never delete it.
+func resolveBinary(envVar, name, pkgPath string, cgoEnabled bool) (path string, cleanup func(), err error) {
+	given := strings.TrimSpace(os.Getenv(envVar))
+	if given == "" {
+		return buildBinary(name, pkgPath, cgoEnabled)
+	}
+	info, statErr := os.Stat(given)
+	if statErr != nil {
+		return "", nil, fmt.Errorf("%s=%q: %w", envVar, given, statErr)
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, fmt.Errorf("%s=%q: not a regular file", envVar, given)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return "", nil, fmt.Errorf("%s=%q: not executable", envVar, given)
+	}
+	return given, func() {}, nil
 }
 
 // buildEnvWithCGO returns os.Environ() with any inherited CGO_ENABLED

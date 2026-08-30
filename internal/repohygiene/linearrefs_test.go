@@ -11,13 +11,20 @@ import (
 	"testing"
 )
 
-// linearRefPatterns match a private tracker reference in any form that
-// has actually shipped: the issue key, and a bare tracker URL. Matching is
-// case-insensitive. ADR-024, RES-002, TRACK-F and L0..L4 are deliberately
-// not matched — those are this project's own public identifiers.
+// linearRefPatterns match a private reference in any form that has
+// actually shipped: the issue key, a bare tracker URL, and a build-lane
+// label. Matching is case-insensitive. ADR-024, RES-002, TRACK-F and
+// L0..L4 are deliberately not matched — those are this project's own
+// public identifiers.
+//
+// A lane label names a slot in the maintainer's private orchestration
+// schedule, not anything in this repository. One shipped into
+// api/openapi.yaml and four source files before this pattern existed,
+// where it read as though a public reader could look it up.
 var linearRefPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bSM\x2d[0-9]+\b`),
 	regexp.MustCompile(`(?i)\blinear\.app/`),
+	regexp.MustCompile(`(?i)\blane[ \x2d]?[0-9]+\b`),
 }
 
 // commentWrap matches a line break and the comment marker that continues
@@ -26,9 +33,9 @@ var linearRefPatterns = []*regexp.Regexp{
 // evasion nobody types on purpose and every 72-column reflow produces.
 var commentWrap = regexp.MustCompile(`\r?\n[ \t]*(?://+|\*|#)?[ \t]*`)
 
-// wrapCandidate is the cheap precondition for that second pass: a key can
-// only be split if the prefix and hyphen survive on the first line.
-var wrapCandidate = regexp.MustCompile(`(?i)SM\x2d`)
+// wrapCandidate is the cheap precondition for that second pass: a key or
+// lane label can only be split if its prefix survives on the first line.
+var wrapCandidate = regexp.MustCompile(`(?i)SM\x2d|lane`)
 
 // linearRefSweepRoots are the directories this test sweeps, relative to
 // the repository root: everywhere shipped Go and TypeScript source and
@@ -36,16 +43,19 @@ var wrapCandidate = regexp.MustCompile(`(?i)SM\x2d`)
 // allowed to cite internal history — and so is ui/src/api/generated,
 // which is generated from api/openapi.yaml and inherits that file's own
 // cleanliness rather than being swept a second time.
-var linearRefSweepRoots = []string{"cmd", "internal", "pkg", "test", "ui/src"}
+var linearRefSweepRoots = []string{"cmd", "internal", "pkg", "test", "ui/src", "deploy"}
 
-var linearRefSweepExtraFiles = []string{"api/openapi.yaml"}
+// linearRefSweepExtraFiles covers the files an operator reads that no
+// sweep root or extension rule reaches: the API contract, and the two
+// extensionless build files that produce the image they deploy.
+var linearRefSweepExtraFiles = []string{"api/openapi.yaml", "Dockerfile", "Makefile"}
 
 // linearRefSweptExts is wider than the shipped-source extensions because a
 // reference is just as public in a fixture or a stylesheet.
 var linearRefSweptExts = map[string]bool{
 	".go": true, ".ts": true, ".tsx": true, ".js": true,
 	".json": true, ".css": true, ".sql": true, ".sh": true,
-	".yaml": true, ".yml": true,
+	".yaml": true, ".yml": true, ".example": true, ".conf": true,
 }
 
 // linearRefSkipDirs are matched as repo-relative paths, not basenames, so
@@ -133,8 +143,8 @@ func TestNoLinearIssueReferencesInShippedSource(t *testing.T) {
 	}
 
 	if len(offenders) > 0 {
-		t.Errorf("found %d Linear issue reference(s) in shipped source, which this public repository "+
-			"must never carry (an internal tracker id is meaningless to an operator and, in "+
+		t.Errorf("found %d private reference(s) in shipped source, which this public repository "+
+			"must never carry (a tracker id or build-lane label is meaningless to an operator and, in "+
 			"api/openapi.yaml, ships as generated documentation):\n%s\n"+
 			"Remove the citation — usually just the parenthetical, not the sentence around it — or, "+
 			"if the reasoning is worth keeping, move it to the ADR, research record, or "+

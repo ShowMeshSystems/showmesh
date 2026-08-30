@@ -324,8 +324,12 @@ func TestRemoveInterrupterLockedBoundsAWedgedResume(t *testing.T) {
 
 // TestRemoveInterrupterLockedBoundsAWedgedStart is
 // TestRemoveInterrupterLockedBoundsAWedgedResume's counterpart for the
-// restart route: a Restart-policy playlist takes removeInterrupterLocked's
-// release+prepare+Start path instead of Resume.
+// stale-handle route: removeInterrupterLocked always tries Engine.Resume
+// first — it no longer honors t's own Resume policy for an announcement
+// release — so the only way to reach its
+// release+prepare+Start path is a handle that went stale while
+// suspended, forced here by mutating loadedIdentity directly rather than
+// through a real Apply/Start cycle.
 func TestRemoveInterrupterLockedBoundsAWedgedStart(t *testing.T) {
 	withShrunkEngineCallTimeout(t, 200*time.Millisecond)
 
@@ -336,7 +340,6 @@ func TestRemoveInterrupterLockedBoundsAWedgedStart(t *testing.T) {
 	ctx := context.Background()
 
 	playlist := twoItemPlaylist(t, m.assetDir)
-	playlist.Resume = pkgaudio.ResumePolicyRestart
 	m.Apply(ctx, "bg", "inv-bg-apply", 1, pkgaudio.ApplyRequest{
 		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleShow),
 		Playlist:   pkgaudio.SetField(playlist),
@@ -355,7 +358,8 @@ func TestRemoveInterrupterLockedBoundsAWedgedStart(t *testing.T) {
 	}
 
 	bg.mu.Lock()
-	m.interruptOneLocked(ctx, bg, "ann") // suspends bg: Paused, Restart policy.
+	m.interruptOneLocked(ctx, bg, "ann") // suspends bg: Paused, handle still loaded.
+	bg.loadedIdentity = "stale-identity" // force removeInterrupterLocked's stale-handle route.
 	bg.mu.Unlock()
 
 	nextHandle := bg.engineHandleFor("item-a")

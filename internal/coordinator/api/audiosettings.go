@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -52,6 +53,48 @@ func resolveAudioSettings(ctx context.Context, cs ConfigStore) (payload config.A
 		return config.AudioSettingsPayload{}, false, fmt.Errorf("api: decode audio.settings payload: %s", verr.Error())
 	}
 	return payload, true, nil
+}
+
+// audioConfigPushStatus reports whether the audio.settings singleton
+// itself decodes. "usable" claims nothing about a node's own audio.node
+// binding or reachability. err is a store failure, never a decode
+// failure — see [audioConfigPushStatusDegradeOnError].
+func audioConfigPushStatus(ctx context.Context, cs ConfigStore) (state AudioConfigPushRunState, reason *string, err error) {
+	obj, err := cs.GetConfigObject(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID)
+	switch {
+	case errors.Is(err, store.ErrConfigObjectNotFound):
+		return AudioConfigPushUsable, nil, nil
+	case err != nil:
+		return "", nil, fmt.Errorf("api: get audio.settings config object: %w", err)
+	case obj.CurrentRevision == 0:
+		return AudioConfigPushUsable, nil, nil
+	}
+
+	rev, err := cs.GetConfigRevision(ctx, config.AudioSettingsConfigKind, config.AudioSettingsConfigObjectID, obj.CurrentRevision)
+	if err != nil {
+		return "", nil, fmt.Errorf("api: get audio.settings config revision %d: %w", obj.CurrentRevision, err)
+	}
+	if _, verr := config.DecodeAudioSettingsPayload(rev.PayloadJSON); verr != nil {
+		detail := fmt.Sprintf("the engine-wide audio.settings revision %d does not decode: %s", obj.CurrentRevision, verr.Error())
+		return AudioConfigPushUnusable, &detail, nil
+	}
+	return AudioConfigPushUsable, nil, nil
+}
+
+// audioConfigPushStatusDegradeOnError reads [audioConfigPushStatus],
+// logging and reporting state=unknown on a store error rather than
+// propagating it: the revision may be fine, only the read failed, so
+// this must not be conflated with "unusable" (a real decode failure).
+func audioConfigPushStatusDegradeOnError(ctx context.Context, cs ConfigStore, logger *slog.Logger, action string) (state AudioConfigPushRunState, reason *string) {
+	state, reason, err := audioConfigPushStatus(ctx, cs)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("audio.settings config push status read failed; reporting unknown", "action", action, "error", err)
+		}
+		detail := "the coordinator could not read its stored audio.settings configuration; see the coordinator log"
+		return AudioConfigPushUnknown, &detail
+	}
+	return state, reason
 }
 
 // handleGetAudioSettingsConfig serves GET /api/v1/config/audio.settings.

@@ -454,7 +454,8 @@ func (h *Hub) render(ctx context.Context) {
 		for _, nv := range views {
 			key := "node:" + nv.NodeID
 			present[key] = struct{}{}
-			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID))
+			render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
+			node := mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID))
 			if h.updateRendered(key, node) {
 				n := node
 				pending = append(pending, pendingFrame{event: "node.changed", serverTime: formatTime(now), node: &n})

@@ -202,17 +202,22 @@ const (
 	SystemTypeAlphaPix            SystemType = 0xFE
 	SystemTypeSanDevices          SystemType = 0xFF
 
-	// SystemTypeShowMesh is the value ShowMesh should report in its own
-	// outgoing Ping packets. FPP has not reserved an ID for ShowMesh:
-	// RES-002 (accessed 2026-08-10) records the reserved third-party IDs as
-	// xSchedule, ESPixelStick, WLED, HinksPix, and a handful of others, and
-	// ShowMesh is not among them, nor is it in src/MultiSync.h's enum.
-	// SystemTypeOther (0xC0) is FPP's own documented catch-all for exactly
-	// this situation, a generic "other systems" bucket rather than an
-	// arbitrary unused byte that some future FPP release, or some other
-	// project, could later claim for itself. Revisit this if FPP ever
-	// reserves an ID for ShowMesh specifically.
-	SystemTypeShowMesh = SystemTypeOther
+	// SystemTypeShowMesh is the value ShowMesh reports in its own outgoing
+	// Ping packets, PROVISIONAL (ADR-044 decision 6, RES-003 section 10.2).
+	// xLights only offers a device as an FPP Connect upload target when its
+	// typeId is below 0x80, which xLights classifies as FPP_TYPE::FPP; every
+	// value at or above 0x80, including SystemTypeOther (0xC0), falls
+	// through xLights' own type map and is rejected outright, so ShowMesh
+	// cannot use FPP's real "other systems" bucket for this purpose. There is
+	// no value in 0x01-0x7F that is both eligible and honestly unclaimed,
+	// since FPP reserves that whole range for its own platform enumeration
+	// (src/MultiSync.h), so 0x7F is chosen as the value furthest from every
+	// growing FPP platform family base, minimizing collision risk. 0x01 is
+	// never used: it is FPP's live fallback for unrecognized hardware, so a
+	// real FPP on a new board reports it too. Getting a value allocated
+	// properly needs pull requests to both FPP and xLights; that is a
+	// tracked follow-up, not a blocker here.
+	SystemTypeShowMesh SystemType = 0x7F
 )
 
 // String renders known system types by name and unknown ones as
@@ -225,6 +230,8 @@ func (t SystemType) String() string {
 		return "FPP"
 	case SystemTypeOther:
 		return "Other"
+	case SystemTypeShowMesh:
+		return "ShowMesh"
 	case SystemTypeXSchedule:
 		return "xSchedule"
 	case SystemTypeESPixelStickESP8266:
@@ -601,6 +608,13 @@ const (
 	pingHardwareFieldLen = 41
 	pingRangesFieldLen   = 121
 )
+
+// MaxPingRangesLength is the most content bytes (not counting the
+// terminator) a Ping packet's Ranges field can hold. EncodePing already
+// rejects a longer string with ErrFieldTooLong; this constant lets a caller
+// assembling a ranges string check the limit itself before encoding, rather
+// than discovering it only when encoding fails.
+const MaxPingRangesLength = pingRangesFieldLen - 1
 
 // pingV3BodyLen is the total body length CreatePingPacket in FPP's own
 // source allocates for a version 3 ping (280 bytes of defined fields plus

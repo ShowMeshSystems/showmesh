@@ -231,3 +231,66 @@ func TestAudioBindingApplyNodeReplayRebuildsWhenEngineBroken(t *testing.T) {
 		t.Fatalf("calls after exact-revision replay while healthy = %d, want still 2 (a healthy engine's replay stays a no-op)", calls)
 	}
 }
+
+// programOnlyNodeParams is an audio.node.configure params map with no
+// LTC route or channel at all: the shape the coordinator pushes for a
+// two-output interface, which has no channel to spare for LTC.
+func programOnlyNodeParams() map[string]any {
+	return map[string]any{
+		"programRoute":          "hw:CARD=USB,DEV=0",
+		"programChannels":       []any{float64(1), float64(2)},
+		"clockDomain":           "solo",
+		"clockDomainProvenance": "single interface",
+		"revision":              float64(1),
+	}
+}
+
+// TestDecodeAudioNodeConfigAcceptsProgramOnly proves the agent accepts a
+// binding with no LTC. gstengine.Config.Validate already permits
+// LTCChannel 0 and wires unclaimed channels to silence, so the agent's
+// own wire-shape check was the only thing refusing it.
+func TestDecodeAudioNodeConfigAcceptsProgramOnly(t *testing.T) {
+	p, err := decodeAudioNodeConfig(programOnlyNodeParams())
+	if err != nil {
+		t.Fatalf("decodeAudioNodeConfig = %v, want nil", err)
+	}
+	if p.LTCRoute != "" || p.LTCChannel != 0 {
+		t.Errorf("decoded LTC where none was declared: route %q channel %d", p.LTCRoute, p.LTCChannel)
+	}
+	if got := audioNodeChannelCount(p); got != 2 {
+		t.Errorf("audioNodeChannelCount = %d, want 2: a program-only binding must not ask the device for an LTC channel", got)
+	}
+}
+
+// TestDecodeAudioNodeConfigRejectsHalfDeclaredLTC proves one of the pair
+// without the other is refused, matching the coordinator's own decode
+// rather than silently binding half an LTC route.
+func TestDecodeAudioNodeConfigRejectsHalfDeclaredLTC(t *testing.T) {
+	cases := []struct {
+		name  string
+		mutry func(map[string]any)
+	}{
+		{"route without channel", func(m map[string]any) { m["ltcRoute"] = "hw:CARD=USB,DEV=0" }},
+		{"channel without route", func(m map[string]any) { m["ltcChannel"] = float64(3) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params := programOnlyNodeParams()
+			tc.mutry(params)
+			if _, err := decodeAudioNodeConfig(params); err == nil {
+				t.Fatal("decodeAudioNodeConfig accepted half a declared LTC pair")
+			}
+		})
+	}
+}
+
+// TestDecodeAudioNodeConfigStillRejectsBadLTCWhenDeclared proves making
+// the pair optional did not weaken the declared-LTC case.
+func TestDecodeAudioNodeConfigStillRejectsBadLTCWhenDeclared(t *testing.T) {
+	params := programOnlyNodeParams()
+	params["ltcRoute"] = "hw:CARD=USB,DEV=0"
+	params["ltcChannel"] = float64(0)
+	if _, err := decodeAudioNodeConfig(params); err == nil {
+		t.Fatal("decodeAudioNodeConfig accepted a declared ltcChannel of 0")
+	}
+}

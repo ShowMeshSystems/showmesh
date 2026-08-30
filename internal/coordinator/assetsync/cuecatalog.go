@@ -98,13 +98,22 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		return Catalog{}, fmt.Errorf("assetsync: resolve cue catalog: %w", err)
 	}
 
+	// A program-only audio.node declares no LTC route at all, so
+	// having an audio.node no longer implies being able to emit LTC. LTC
+	// scoping, LTC output projection, and the LTC claim context all key
+	// off this narrower fact; Audio and Announcement still key off the
+	// audio.node's mere existence.
+	nodeHasLTC := nodeHasAudioNode && audioNode.LTCRoute != ""
+
 	claimCtx := config.ShowCueClaimContext{
 		RenderSurfaceIDs: surfaceIDs,
 	}
 	if nodeHasAudioNode {
 		claimCtx.ProgramAudioNode, claimCtx.ProgramAudioRoute = nodeID, audioNode.ProgramRoute
-		claimCtx.LTCNode, claimCtx.LTCRoute = nodeID, audioNode.LTCRoute
 		claimCtx.AnnouncementNode = nodeID
+	}
+	if nodeHasLTC {
+		claimCtx.LTCNode, claimCtx.LTCRoute = nodeID, audioNode.LTCRoute
 	}
 	claimants := make(map[config.ShowCueClaim]claimant)
 	var conflicts []CatalogConflict
@@ -143,10 +152,10 @@ func ResolveCueCatalog(ctx context.Context, st *store.Store, active ActiveShow, 
 		entries = append(entries, cuecatalog.Entry{
 			CueID:       obj.ID,
 			CueRevision: obj.CurrentRevision,
-			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, assetsBySequence),
+			Outputs:     resolveCueOutputs(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC, assetsBySequence),
 		})
 
-		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode)
+		scoped := scopeShowCueOutputsForNode(payload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC)
 		conflict, err := detectClaimConflicts(claimants, claimant{cueID: obj.ID, playlists: referencingPlaylists[obj.ID]}, scoped, claimCtx)
 		if err != nil {
 			return Catalog{}, err
@@ -212,7 +221,7 @@ func (c CatalogConflict) Detail() string {
 
 // resolveCueOutputs projects payload's declared outputs onto
 // [cuecatalog.Outputs], restricted per this file's own doc comment.
-func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode bool, assetsBySequence map[string][]ExpectedAsset) cuecatalog.Outputs {
+func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool, assetsBySequence map[string][]ExpectedAsset) cuecatalog.Outputs {
 	var out cuecatalog.Outputs
 
 	if payload.Outputs.Render != nil && nodeHasSurface {
@@ -241,7 +250,7 @@ func resolveCueOutputs(payload config.ShowCuePayload, nodeHasSurface, nodeHasAud
 			AssetHashes:       hashes,
 		}
 	}
-	if payload.Outputs.LTC != nil && nodeHasAudioNode {
+	if payload.Outputs.LTC != nil && nodeHasLTC {
 		out.LTC = &cuecatalog.LTCOutput{StartOffsetMillis: payload.Outputs.LTC.StartOffsetMillis}
 	}
 	if payload.Outputs.Announcement != nil && nodeHasAudioNode {
@@ -288,20 +297,30 @@ func loadAudioNodePayload(ctx context.Context, st *store.Store, nodeID string) (
 // [config.ShowCueClaimContext] field is empty (its own doc comment: "a
 // field ctx must supply for a claim p's outputs actually produce, left
 // empty, is refused"), and a node with no show.surface, or no audio.node,
-// leaves those context fields empty by construction. Without this
-// narrowing, a Cue declaring render (and this node having no surface at
-// all) would refuse catalog resolution outright instead of correctly
-// producing no render claim for a node the render output was never
-// meant to concern.
-func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode bool) config.ShowCuePayload {
+// leaves those context fields empty. Without this narrowing, a Cue
+// declaring render (and this node having no surface at all) would refuse
+// catalog resolution outright instead of correctly producing no render
+// claim for a node the render output was never meant to concern.
+//
+// nodeHasLTC is deliberately separate from nodeHasAudioNode rather than
+// derived from it. A program-only audio.node exists and carries
+// a ProgramRoute but no LTCRoute, so "has an audio.node" no longer
+// implies "can emit LTC" and the claim context's LTCNode/LTCRoute are
+// empty for a node that does have one. Scoping LTC on the wider
+// predicate would leave Outputs.LTC standing against an empty LTC
+// context, which DeriveShowCueClaims refuses — failing resolution for
+// EVERY cue on that node, not just the one declaring LTC.
+func scopeShowCueOutputsForNode(payload config.ShowCuePayload, nodeHasSurface, nodeHasAudioNode, nodeHasLTC bool) config.ShowCuePayload {
 	scoped := payload
 	if !nodeHasSurface {
 		scoped.Outputs.Render = nil
 	}
 	if !nodeHasAudioNode {
 		scoped.Outputs.Audio = nil
-		scoped.Outputs.LTC = nil
 		scoped.Outputs.Announcement = nil
+	}
+	if !nodeHasLTC {
+		scoped.Outputs.LTC = nil
 	}
 	return scoped
 }

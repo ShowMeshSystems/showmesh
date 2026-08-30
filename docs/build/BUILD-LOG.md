@@ -30,6 +30,82 @@ The **Current state** block at the top of this file is overwritten each session:
 
 ## Current state
 
+> **`main` was at `ff56233`** (2026-08-28) when Lane 21 folded Track E phase 2
+> onto it as pull request #178. The lanes recorded in the dated entries below
+> are Lane 16's ten Track H defect fixes (`85ed4bc`..`629754e`), Lane 19's three
+> node-agent and audio-node fixes (`f2d13e6`, `7c7129a`, `1528203`), Lane 15's
+> five defect fixes (`85ed4bc`..`d297c05`), Lane 20's identifier reservation
+> (`ccd83b7`), Track I's research and reservations (`9157e26`, `ff56233`), and
+> Lane 21's FPP Connect fold. **`dev/fpp-connect` is now on `main`**; one
+> integration branch is still deliberately off it, `dev/multi-audio` (Lane 20's
+> ADR-045 and schema v20).
+>
+> **CI on `main` at `629754e` is red, on two known pre-existing failures, neither
+> caused by these merges.** `test (1.26.6)` failed on the audio engine's
+> `TestCloseTearsDownThreeConcurrentPlayingBranches` with the deferred-teardown
+> warnings that SM-252 describes; nothing in `6da29d6..629754e` touches
+> `internal/agent/audio`. `integration` was killed by its own timeout at 9m0s
+> while still running tests, with **zero assertion failures**, which is the same
+> gate-under-its-own-ceiling failure recorded against unmodified `main` the day
+> before. The same instability shows on other branches with different tests on
+> different legs: pull request #169's run passed `test (1.26.6)` and failed
+> `test (1.25.0)` on `TestLTCResumeRealignsAudioToNewPosition`, on a diff that
+> changes one test file, a shell comment and a Makefile comment. Both need
+> owner decisions rather than a fix chosen here: the audio-engine teardown flake
+> is filed and carries a `Needs decision` label, and the integration timeout was
+> deliberately closed as not worth fixing when it was believed to be a build-VM
+> problem, before it started failing on GitHub's own runners. One half of that
+> integration failure now has a fix open as pull request #171 and **not yet on
+> `main`**: the suite built its three binaries inside its own 8m timeout, and
+> that build has moved into the scripts ahead of the clock. See the 2026-08-27
+> entry below.
+>
+> **Track H has H1 through H6 merged, and H7's defect list is now closed
+> except for three follow-ups.** The chain was assembled and run end to end for
+> the first time on 2026-08-26, on a containerized FPP 10.0, a coordinator and a
+> node agent all on one laptop, and the multi-sequence swap works. Every defect
+> that run filed against this repository is now fixed on `main`: the shutdown
+> panic (`4d4fb2d`), render content identity (`e2d6274`), its own follow-up
+> SM-292 (`cc2f9f8`), the per-cue asset gate (`f6923ed`), render assignment
+> readiness (`533bbf2`), catalog-deploy establishment (`fa6cec9`), the superseded
+> render verdict (`5e178a9`), and four readiness conditions (`795c48e`,
+> `629754e`). Three follow-ups the lane filed rather than fixed remain open:
+> `assets-missing` readiness (now unblocked), the coordinator/node disagreement
+> about a never-uploaded sequence, and the intermittent supervisor-test race that
+> reddens the Go 1.25 leg on unrelated branches. **No hardware, NDI,
+> audio-hardware or wall evidence exists for any of it.** The bench and its
+> case-by-case record are at `f404ebd`: `bench/track-h-chain/` and
+> [TRACK-H-CHAIN](../bench/TRACK-H-CHAIN.md).
+>
+> **Readiness now checks nine ordered conditions, and the list is still growing.**
+> `internal/coordinator/fppreconcile/readiness.go`'s `ReadinessCondition` const
+> list is the authoritative one; nothing else, including `api/openapi.yaml`,
+> restates a count. Two concurrent branches each wrote a different total into the
+> same API description before this rule existed.
+>
+> **A Raspberry Pi 3B+ has been proven as an audio node.** The node agent
+> installs from a prebuilt arm64 tarball with no build toolchain on the host
+> (`f2d13e6`), `make package-node-agent` names the tarball for the platform it
+> actually built (`7c7129a`), and a two-output interface can be declared as a
+> program-only `audio.node` with no LTC (`1528203`). This is the first real
+> hardware evidence in the node-install path. The Pi needs reinstalling from
+> `main` to pick up all three.
+>
+> **Schema versions on `main` run to v19; v20 is reserved for Lane 20 and lands
+> with `dev/multi-audio`.** [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is
+> the register. **Builders never edit it**, a rule three builders broke in one
+> lane; nothing enforces it yet.
+>
+> **The repository hygiene sweep covers private references in shipped source.**
+> `TestNoLinearIssueReferencesInShippedSource` matches the tracker key, a tracker
+> URL and a build-lane label, and sweeps `cmd`, `internal`, `pkg`, `test`,
+> `ui/src`, `deploy`, `api/openapi.yaml`, the `Dockerfile` and the `Makefile`.
+> `docs/` is deliberately excluded and may cite internal history.
+>
+> ---
+>
+> *The paragraphs below describe earlier lanes and are kept for continuity.*
+>
 > **Lane 8 left `main` at `349093a`.** Other lanes were merging concurrently on 2026-08-26, so `main` may already be ahead of that; this paragraph describes what this lane landed, not the tip. The Operator UI fold took it to `53d3db0`, six defect fixes to `cf0c349`, then #115, #116, #117 and #128 to `270aead`, then the audit contract change #129 to `d4aee09`, then the nav and chrome work #114 to `349093a`. Twenty-two pull requests, #91 through #112 excluding #109, were squash-merged between 2026-08-25 18:40Z and 2026-08-26 01:30Z, in merge-time order: 91 (`03a1cc5`), 92 (`03db85a`), 93 (`4efc96c`), 94 (`00f278e`), 95 (`d846f15`), 99 (`bff51fb`), 98 (`87a2c63`), 96 (`af06ddc`), 100 (`89ca8ae`), 101 (`fe3eb99`), 97 (`2400f0d`), 102 (`966cb16`), 103 (`21c65d1`), 104 (`01b081d`), 105 (`03256b9`), 106 (`a1ceb56`), 107 (`5c89297`), 108 (`3ed4ef5`), 110 (`d24a1c6`), 112 (`3c6b06f`), 111 (`53d3db0`). This is the Operator UI fold that ships Track H's **H6**; see the dated entry below. PR #109 (`c7fd5e8`) also merged in this window but is the FPP Connect decisions record, a separate track, and is why a docs-only commit appears inside this range.
 >
 > Before this fold, `main` was at `6eafb4e` (`9f28832` after the dependabot `docker/login-action` bump). Eight pull requests, #82 through #89, were squash-merged between `44b16fa` and `6eafb4e` on 2026-08-25, in this order: 84, 85, 86, 82, 83, 87, 89, 88. **Every merge was gated by `make check` on the merged tree** (each pull request merged onto the then-current `main` in a temporary worktree and gated there); #88, the last, also ran `make test-integration` on its merged tree. Before that, twenty-four pull requests, #55 through #78, were folded the same way between `e2d6c47` and `3d7d822` on 2026-08-24 and 2026-08-25 (order: 67, 55, 56, 57, 63, 65, 62, 60, 68, 59, 66, 70, 61, 78, 69, 72, 74, 75, 58, 77, 64, 71, 73, 76), with `make test-integration` on `main` at `410bf22`, `3d2883b` and `3d7d822`. The three 2026-08-25/26 dated entries below (this fold's and the two earlier ones) are the records of the three folds.
@@ -50,7 +126,663 @@ The **Current state** block at the top of this file is overwritten each session:
 >
 > **Browser click-through for the Operator UI fold was collected for one pull request only.** PR #91 (node detail evidence panel) was exercised against the local compose stack at `f102ae6`. Every other pull request in the fold records "not exercised in a browser": the local stack has no audio node, no audio session, no configured cues and no `audio.settings` revision, so those screens' paths are unreachable there. **Nothing in this fold, or in any earlier fold recorded above, ran on real hardware, on a deployed fleet, or against a real Resolume Arena.** Bench and hardware acceptance for the Operator UI fold's screens is tracked separately as SM-253, SM-254, SM-255 and SM-269. The Operator UI parity audit (SM-242) classified 144 API operations and found 41 gaps (20 show-night, 12 authoring, 10 admin); readability is tracked as SM-241; gap issues SM-243 through SM-249 are Done; follow-ups SM-250, SM-251, SM-252, SM-256, SM-257, SM-258, SM-259, SM-268, SM-270 and SM-271 are filed.
 >
+> **Track E phase 2, FPP Connect, is on `main`.** Seams FC0, FC1a, FC1b, FC2 and FC3 merged onto `dev/fpp-connect` on 2026-08-26 as `9292931` (#118), `e445e24` (#127), `8e79e15` (#126), `31165fc` (#136) and `5e57e9f` (#144), followed by SM-294's channel-range visibility fix at `23ae13d` (#159). Each was gated by `showmesh-check` on the `showmesh-dev-01` build VM and by GitHub checks, and reviewed by Hermes and by an independent Opus reviewer. Lane 21 folded the branch onto `main` on 2026-08-28 as pull request #178; the 2026-08-28 entry below is that record and the 2026-08-26 entry is the branch's own. **Nothing has run against a real xLights or a real FPP, and no node has run it on hardware**, so FC4, the owner's bench, is still the acceptance gate and none of RES-003 §9's conclusions have moved above L1.
+>
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
+
+---
+
+## 2026-08-28 (Lane 21: FPP Connect folds onto `main`)
+
+**Goal:** land the `dev/fpp-connect` integration branch on `main` after the 28 August hardware test, on top of Lane 16's dispatch fixes, without rewriting the branch's published history.
+
+**Completed:** `main` merged into `dev/fpp-connect` at `9fc037d` and again at `8c94392` for Track I's `ff56233`, `fppconnect status` documented in `showmeshctl --help` at `3163470`, and the branch folded onto `main` as pull request #178. The fold carries the whole FPP Connect upload base: `pkg/multisync`'s v3 ping reply, `internal/coordinator/config/fppconnectsettings.go` and the `fppconnect.configure` push, `internal/agent/fppconnecthttp.go`'s inbound listener, `internal/agent/fppconnectupload.go`'s chunked receiver and show binding, `internal/agent/fppconnectregister.go`'s registration through `POST /api/v1/assets`, and `cmd/showmeshctl/cmd_fppconnect.go`'s `settings` and `status` verbs. `docs/build/IDENTIFIER-REGISTER.md` now records `fppconnect.settings` as shipped.
+
+**Decisions made:** none new. The fold is executed under [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) as written. The merge-not-rebase rule is `docs/bench/HARDWARE-TEST-SESSION.md`'s, and it is why no force-push happened on a published branch.
+
+**Questions raised with the owner:** none. The token-scope question this lane inherited was already ruled on 2026-08-28 (nodes keep the admin-scoped `SHOWMESH_AGENT_API_TOKEN` this season) and the narrowing is filed as its own after-Day-0 issue.
+
+**Conflict resolutions worth recording**, all toward `main`'s fixes:
+
+- `internal/coordinator/api/handlers.go` and `stream.go`: `main` had replaced a raw `NodeRenderObservations()` call with `nodeRenderView()` (the SM-281 render-assignment readiness fix) while the branch had added an `FPPConnectStatus` argument to `mapNode`. All four call sites keep `nodeRenderView()` and gain the FPP Connect argument.
+- `internal/agent/renderreport.go` and `agent.go`: `runRenderReport` and `publishOneRenderReport` gained `main`'s `store *pipeline.AssignmentStore` (content-identity stamping) and the branch's `fcStatus`/`fcHeld` (listener and held-file evidence) together, with five further call sites in `renderreport_test.go` and `main`'s own `rendercontentreport_test.go` updated for the combined signature.
+- `cmd/showmeshctl/main.go`: the two sides' help additions are both kept, and the missing `fppconnect status` entry was added. That subcommand arrived on the branch with #159 and the test enforcing help coverage arrived on `main` with #155, so the gap existed only in the merged tree.
+- `ui/src/api/generated/schema.d.ts` was regenerated with `npm run gen:api` rather than hand-resolved. `api/openapi.yaml` and the API golden JSON files auto-merged with both sides' fields intact.
+- `internal/coordinator/cueactivate`, `internal/coordinator/assetsync` and `internal/agent/cueactivation*` took no conflicts and are byte-identical to `main`.
+
+**Deferred:** SM-293, the `fppconnect.settings` byte caps decoding through the platform `int` range so the documented default cannot round-trip on a 32-bit build. It is real and unfixed; the coordinator ships as an amd64 container, CI runs 64-bit only, and it is invisible until someone builds for `GOARCH=386` or `arm`.
+
+**Verification gates:** `/build/bin/showmesh-check` passed on `showmesh-dev-01` at `3163470` (fmt-check, vet, lint, test, ui-lint, ui-test, ui-build, ui-gen-check; 0 golangci-lint issues, 1101 UI tests). `make test-integration` passed there at the same commit: `ok github.com/showmeshsystems/showmesh/test/integration 343.127s`, 72 passed, 13 skipped (FPP-dependent, no `fppd` reachable), 0 failed. Two earlier `showmesh-check` runs failed first: the help-coverage gap above, and one occurrence of the `TestLoadDeadlineDoesNotLeakElements` gstengine teardown flake already recorded against SM-252, which passed in isolation and did not recur. `8c94392` adds only the `IDENTIFIER-REGISTER.md` merge and was gated by GitHub checks on pull request #178 rather than by a fourth local run.
+
+**Acceptance, unchanged by this fold:** nothing here has run against a real xLights, a real FPP, a browser, a node's hardware, or the fleet. RES-003 §9 stays at L1 and Track E's seam FC4 bench (Eric's, on his machine) is the only thing that moves it. The seven acceptance criteria in [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md) are all unproven.
+
+---
+
+## 2026-08-28 (PTP research, two rulings, Track I opened; no code)
+
+**Goal:** turn the multi-node audio synchronization question into a research record with a defensible architecture, verified against current FPP master rather than release notes, and record the owner rulings it produced.
+
+**Completed:** `docs/research/RES-019-ptp-synchronized-multi-node-audio.md` (four-problem split, clock-provider model, scheduled start, two rate-lock candidates, failure and observability requirements, staged plan, FPP-originated AES67 as program source, upstream MultiSync opportunity, third-party listener note); `docs/decisions/ADR-046-rate-lock-to-a-shared-clock-is-not-chasing.md`; `docs/decisions/ADR-047-fpp-aes67-is-the-primary-program-source.md`; `docs/build/TRACK-I-clock-and-sync.md`; amendments in place to ADR-017, ADR-018, ARCHITECTURE §5, AUDIO-ENGINE §4.2 and §16, and Track C's principles; RES-019 indexed and allocated in the register. Upstream facts were read from `FalconChristmas/fpp` master at `d318b1d` (2026-08-28), linuxptp, GStreamer, PipeWire, and kernel sources, with commits and files cited in RES-019 §18.
+
+**Decisions made:** ADR-046: a bounded ppm-scale rate trim of a whole audio interface against a locked shared PTP clock is permitted; slews, seeks as ordinary correction, and chasing the MultiSync position feed stay forbidden (the owner's 2025 skipping-CD test was the latter). ADR-047: FPP's AES67 stream is the primary program source, local playback the standby and the engine for every ShowMesh-owned source, with an ordering rule that clock provider and scheduled start land before AES67 receive.
+
+**Questions raised with the owner:** whether continuous rate correction could ever be allowed (answered: yes, as ADR-046 bounds it); whether FPP's stream should be the preferred program source (answered: yes, ADR-047, with the source-priority model the owner supplied).
+
+**Deferred:** every ShowMesh measurement (drift curve, output latency, audibility, LTC under trim) to Track I seams I0 and I4 to I5; the FPP "AES67-only output group keeps `secondsElapsed`" capture, which now gates ADR-047's primary source; the go-gst custom-clock question.
+
+**Verification gates:** documentation-only; internal links checked, no em dashes, no executable file touched. `make check` not run.
+
+## 2026-08-27 (the integration gate builds its binaries before its own timeout starts; open as #171, not on `main`)
+
+**Goal:** stop `make test-integration` failing with zero assertion failures on a
+loaded machine, so the gate again distinguishes a real hang from a busy host.
+
+**The defect.** `test/integration`'s `TestMain` shelled out to `go build` three
+times, for `showmesh-agent` with cgo, `showmesh-coordinator` and `showmeshctl`,
+after `go test -timeout=8m` had already started its clock. On a cold cache those
+builds cost about three minutes of the eight minute budget, measured on the
+GitHub runner. The suite then timed out on a loaded build
+host and in GitHub Actions with **zero assertion failures**, which is the
+`integration` leg failure recorded against unmodified `main` in the Current state
+block above.
+
+**Completed** (one commit, `77264b4`, three files):
+
+- `scripts/test-integration.sh` builds all three binaries into a `mktemp -d`
+  before the broker container starts, so a compile error fails fast without
+  touching Docker, and exports `SHOWMESH_TEST_AGENT_BIN`,
+  `SHOWMESH_TEST_COORDINATOR_BIN` and `SHOWMESH_TEST_SHOWMESHCTL_BIN`. Its
+  `cleanup()` trap removes the directory.
+- `scripts/test-integration-fpp.sh` does the same for its own
+  `./test/integration/...` invocation under its 20m timeout.
+- `test/integration/harness_test.go` gains `resolveBinary`. A variable that is
+  set and names an executable file is used as given, with no cleanup function,
+  because the caller owns the file. A variable that is set but names a missing or
+  non-executable path is a hard error. A variable that is unset falls back to the
+  existing `buildBinary` unchanged, so a bare
+  `go test -tags=integration ./test/integration/...` still works.
+
+**Decisions made:**
+
+- **`-timeout=8m` is deliberately unchanged.** A genuine hang must still fail
+  this gate rather than be absorbed by a larger limit. The fix moves the build
+  out of the window; it does not widen the window.
+- **A supplied path that is wrong is a hard error, never a silent fallback.**
+  Falling back to a build would hide the misconfiguration and reintroduce the
+  cost inside the timeout; falling back to whatever is on disk would test a stale
+  binary.
+- **Both scripts pin `CGO_ENABLED` per binary rather than inheriting it**,
+  matching the reasoning already in `buildEnvWithCGO`: ADR-042 requires the agent
+  to link the real GStreamer/libltc engine, and ADR-012 requires the coordinator
+  to build CGo-free. An inherited value would silently produce the wrong agent.
+
+**Deferred:** the work is on a branch and open as pull request #171. It is **not
+on `main`**, and the `integration` leg on `main` is still red for the reason
+described in Current state.
+
+**Verification gates**, all at `77264b4`:
+
+- `make check` passed. An earlier run of it failed on
+  `TestFadeHeldByStopStaysActive` in `internal/agent/audio/gstengine`, a package
+  this change does not touch; that package passed in isolation on `main` and
+  passed on the re-run, so it is read as a flake rather than a regression.
+- `make test-integration` passed: 72 passed, 13 skipped, 0 failed, with `go test`
+  reporting 340.5s against the unchanged 8m budget and 356s total wall. It was
+  run with `SHOWMESH_TEST_FPP_URL` pointed at an unreachable address to isolate
+  it from an unrelated `fppd` container already holding port 8090 on the build
+  machine, which is why the 13 FPP-dependent tests skipped.
+- `gofmt -l` clean, `go vet -tags=integration ./test/integration/...` clean, and
+  `bash -n` plus `shellcheck` clean on both scripts, with only pre-existing
+  SC2155 warnings on untouched lines.
+- The fallback path was exercised with all three variables unset. The hard-error
+  path was exercised with `SHOWMESH_TEST_AGENT_BIN=/nonexistent`, which exits in
+  0.4s naming the variable and the reason.
+- All twelve GitHub checks on `77264b4` passed, including `integration` and
+  `test-integration-fpp`, the two legs this change touches. In the `integration`
+  job the prebuild step, module downloads plus the three binaries on a cold
+  cache, took 2m29.8s, and every second of it now falls outside the timeout.
+  `go test` then reported 310.194s against the unchanged 480s budget, roughly
+  170s of headroom where the same suite previously did not finish inside it. The
+  job as a whole went from about 11m30s and failing to 8m52s and passing.
+
+**Unverified:** nothing material remains. The earlier acceptance gaps closed on
+the CI run described above: it supplied the cold-cache measurement this laptop's
+warm cache could not, and it exercised `scripts/test-integration-fpp.sh` end to
+end rather than only under `bash -n` and `shellcheck`.
+
+---
+
+## 2026-08-26/2026-08-27 (Lane 16, the Track H defect lane: ten pull requests, `main` from `85ed4bc` to `629754e`)
+
+**Goal:** close the defects the 2026-08-26 Track H end-to-end run filed, and the
+identifier reservations the lane needed before nine concurrent branches started.
+
+**Completed.** Merged overnight on 2026-08-26:
+
+- **#150 (`6da29d6`).** The identifier reservation, made before any builder
+  started: eight readiness conditions, two render-surface signals and one new
+  `surface.pipeline.state` member. It also adds a Playlist readiness condition
+  section to [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md), because
+  [TRACK-H-H2-SPEC.md](TRACK-H-H2-SPEC.md) section 6 had fixed five values as a
+  closed vocabulary and this lane opens it.
+- **#158 (`f6923ed`).** A missing asset now refuses only the cue whose own asset
+  is genuinely absent, and the refusal names it, instead of refusing every cue on
+  the node. This is the defect that blocked the first otherwise-working
+  end-to-end run.
+- **#156 (`533bbf2`).** A node holding no render assignment fails readiness by
+  name, and an unreachable node is distinguished from a genuinely unassigned one.
+
+Merged 2026-08-27, after a pre-merge review over all eight branches:
+
+- **#152 (`bdd9bb1`).** The plugin/coordinator contract now fixes which of FPP's
+  two playlist section spellings goes on the wire, with a shared fixture
+  (`test/fixtures/fpp/section-mapping.json`) both implementations check against,
+  so two correct implementations cannot disagree again.
+- **#155 (`fd263fb`).** `showmeshctl --help` lists `cuecatalog deploy` and every
+  other subcommand it was hiding, and a coverage guard now fails the build when a
+  dispatcher gains a verb that help does not list.
+- **#153 (`f9c589b`).** The deploy image build stamps the real
+  `VERSION`/`COMMIT`/`BUILD_DATE`. A bare `docker compose up -d --build` with
+  those unset now refuses to build rather than producing a coordinator that
+  reports `version=dev commit=none build_date=unknown`.
+- **#168 (`fa6cec9`).** A confirmed cue-catalog deploy establishes every one of
+  the active Show's `show.surface` objects on that node with no sequence
+  selected, so the first cue activation has something to swap an FSEQ onto. Before
+  this, a render node that rebooted mid-show never rendered again on its own,
+  because ADR-043's H0.7 clears assignments at boot and nothing but a manual
+  `render.surface.apply` ever created one.
+- **#167 (`5e178a9`).** A render held under a superseded show is reported as
+  `superseded`, compared on the show and generation tuple rather than on catalog
+  revision.
+- **#163 (`795c48e`).** The `node-catalog-stale` and `exclusive-claim-conflict`
+  readiness conditions, both built by reusing the existing resolvers rather than
+  deriving a second computation.
+- **#164 (`629754e`).** `definition-superseded` and `evidence-unavailable`.
+  Readiness detects an edited FPP playlist directly from the definition store,
+  so it no longer needs FPP to have played anything since the edit; and an
+  observation that was received but could not establish identity is now its own
+  failing condition rather than a warning alongside `ready: true`.
+
+**Decisions made:**
+
+- **The readiness condition list is not restated as a number anywhere.**
+  `ReadinessCondition`'s own const list is the authoritative count, and
+  `api/openapi.yaml` points at the `failingCondition` enum rather than naming a
+  total. #163 and #164 were written concurrently, each opened the vocabulary by
+  two, and each independently wrote "eight" into the same API description meaning
+  two different eights. Caught in the pre-merge review; the fix is to stop
+  counting in prose, not to correct the number.
+- **Ordering: binding-specific conditions run before fleet-wide ones.**
+  `node-render-unassigned`, `exclusive-claim-conflict` and `node-catalog-stale`
+  hold or fail identically for every Playlist of a Show. Readiness stops at the
+  first failing condition, so on an undeployed fleet a Playlist whose own binding
+  had drifted would never surface that. The ordered list is now
+  `definition-missing`, `definition-superseded`, `entry-not-in-definition`,
+  `entry-filename-mismatch`, `cue-not-ready`, then the observation check
+  (`evidence-unavailable` or `observation-hash-mismatch`), then
+  `node-render-unassigned`, `exclusive-claim-conflict` and `node-catalog-stale`.
+
+**Found in the pre-merge review, and worth keeping:**
+
+- **#163 and #164 conflicted in five files** and were clean only in isolation.
+  Merging #163 first and rebasing #164 onto it was a real conflict resolution
+  across `api/openapi.yaml`, `TRACK-H-H2-SPEC.md`, `readiness.go`,
+  `fppreconciliation.go` and `DomainBadges.tsx`, including renumbering the
+  ordered conditions for the combined list. Two lanes editing one closed
+  vocabulary is the shape that produces this; the identifier register prevented
+  the name collision, not the prose collision.
+- **Private references reached public files that the hygiene sweep did not
+  cover.** "Lane 16" shipped into `api/openapi.yaml`, `readiness.go`,
+  `fppreconciliation.go` and `DomainBadges.tsx`; `SM-291` into the `Dockerfile`,
+  `Makefile`, `deploy/docker-compose.yml` and `deploy/.env.example`; a test
+  fixture show was named for the lane that wrote it. All removed before merge.
+  `TestNoLinearIssueReferencesInShippedSource` could not see any of it: it swept
+  only `cmd`, `internal`, `pkg`, `test`, `ui/src` and `api/openapi.yaml`, and
+  matched only the tracker key. Widened in #169, which immediately found two more
+  that had already shipped, in `deploy/node/preflight.sh` and the `Makefile`.
+
+**Deferred:**
+
+- `assets-missing`, the fourth readiness condition Track H specified, was blocked
+  on #158's rework of `assetsync.ExpectedAssetsForNode` and could not be built on
+  an unmerged tip. Its dependency is now on `main`; the condition is not built.
+- `output-policy-unsupported` and `plugin-capability-ungated` are recorded as out
+  of scope this season, with reasons, in
+  [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) section H6.
+
+**Verification gates:** every one of the ten pull requests was green on all ten
+GitHub checks before merge. #168 also ran `make test-integration` on its own
+branch in an isolated broker slot, passing, including the rebuilt
+clear/redeploy/re-establish sequence. #164's rebase onto #163 was re-gated
+locally before merge: `go build ./...`, `go test` over every non-audio package,
+`gofmt`, `tsc --noEmit`, and 1101 UI tests across 89 files, all passing on the
+merged tree. **No hardware, deployed-fleet, browser or live-Arena evidence exists
+for any of it.** #168's establishment path has never run against a real render
+node, and none of the readiness conditions has been seen by a real FPP.
+
+---
+
+## 2026-08-26 (Lane 15: five defects from the Track H run and the audio lane fixed, `main` from `982fa2f` to `d297c05`)
+
+**Goal:** fix the defects filed against `main` immediately after the Track H
+end-to-end run and the 2026-08-26 audio lane, none of which needed new design.
+
+**Completed:**
+
+- **#146 (`85ed4bc`).** The FPP instance page's "Current playback" panel refetches
+  the reconciliation verdict whenever that instance reports a new playlist entry,
+  not only on reconnect, and shows the verdict's own fetch time so an operator can
+  tell a stale verdict from a fresh one.
+- **#147 (`ae3d431`).** `bench/track-h-chain/run-chain.sh` refuses to run unless
+  both `COORD` and `FPP` resolve to loopback, before any write. Its idle wait is
+  bounded and fails loudly instead of hanging, and `ADMIN_TOKEN` no longer appears
+  in any process's argv. This laptop keeps a preserved `.env` pointing at the live
+  fleet, which is why an unguarded bench script mattered.
+- **#148 (`91f4c9a`).** `showmeshctl cuecatalog get` shows a node's held
+  cue-catalog acknowledgement in both table and JSON output, matching what the API
+  already returned.
+- **#149 (`cc2f9f8`).** The four `surface.content.*` signals are stamped from a
+  real content-read timestamp. They had reported the right values with an evidence
+  time from before the content changed, which is the dangerous direction.
+- **#151 (`d297c05`).** `defaultMaxBackgroundGainDb` gains a -60 dB floor.
+
+**Verification gates:** each pull request green on GitHub before merge. No
+hardware or deployed-fleet evidence; #149's fix addresses a defect that was
+observed on running binaries, and the fix itself has not been re-observed there.
+
+---
+
+## 2026-08-26 (Lane 20, multi-node audio: the ADR and the first schema change, on `dev/multi-audio`, not on `main`)
+
+**Goal:** record the multi-audio-node decisions durably and land the first
+additive contract and storage changes behind them.
+
+**Only the identifier reservation is on `main`.** #157 (`ccd83b7`) reserves
+ADR-045 and schema v20 in [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md). The
+two code pull requests merged into the integration branch `dev/multi-audio` and
+are **not on `main`**:
+
+- **#160 (`82c16c7`).** ADR-045 carries the five owner decisions (a target node on
+  cue audio, LTC and announcement outputs; one LTC emitter per installation; an
+  `audio.node` `role` and `zone`; `audio.settings` stays a singleton this season;
+  night-mode targets become a list), plus the additive contract change itself.
+- **#161 (`b5149d8`).** `audio_sessions` is keyed by `(node_id, id)` in schema
+  v20. The cue and blackAndSilence session ids are global constants, so two nodes
+  shared one row and `PutAudioSession`'s revision guard silently dropped the
+  second node's write.
+
+**Deferred:** the rest of the multi-audio work, and the rebase of
+`dev/multi-audio` onto `main`. Readiness conditions for a second LTC emitter and
+for a cue whose target node is missing or unbound are specified and not built.
+
+**Verification gates:** both pull requests green on GitHub before merging to
+`dev/multi-audio`. Nothing here has run on a real audio node, and no installation
+has ever had two audio nodes.
+
+---
+
+## 2026-08-26 (Track E phase 2, FPP Connect: seams FC0, FC1a, FC1b, FC2 and FC3 built and merged to `dev/fpp-connect`; nothing on `main`)
+
+**Goal:** build the FPP Connect upload base that [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md) pulled forward on 2026-08-25, so xLights' FPP Connect dialog can discover a ShowMesh render node, upload a sequence to it in chunks, and have the completed file registered as a dispatchable asset through the coordinator's existing asset path.
+
+**Integration branch, not `main`.** All five pull requests merged into `dev/fpp-connect` on 2026-08-26 and its tip is `5e57e9f`. **Nothing from this work reached `main`**, which is unchanged by this entry. The branch lands on `main` only after the 28 August hardware landing, per the schedule in the track document and in [BUILD-PLAN.md](BUILD-PLAN.md).
+
+**Completed:** five seams, one pull request each, in merge order.
+
+- **FC0, pull request #118, merged as `9292931`.** The render node's MultiSync discover-ping reply now advertises the values the FPP Connect dialog needs before it will offer the node as an upload target: `typeId` `0x7f` as its own constant rather than an alias for `0xC0`, version 9.5.0, and a channel range string read fresh from a holder at reply time. The v3 wire layout itself is unchanged; only the advertised field values and the source of the ranges field changed.
+- **FC1a, pull request #127, merged as `e445e24`.** The coordinator holds a store-backed `fppconnect.settings` kind and computes each node's 0-based channel range string from its `show.surface` objects, then pushes that range, the active show, the show name list and the two byte caps to the node over the existing MQTT command path as `fppconnect.configure`, on every hello and on every write that changes an input. The render node persists what it was pushed before applying it, so a restart answers from disk. Adds the `GET`/`PUT`/`revisions` endpoints, their OpenAPI schemas, and `showmeshctl fppconnect settings get|set|revisions`.
+- **FC1b, pull request #126, merged as `8e79e15`.** The render node's first inbound HTTP listener (ADR-044), serving the four xLights-required discovery routes on port 80 and 404 for everything else, including a known path with the wrong method. Adds `SHOWMESH_FPPCONNECT_LISTEN_ADDR` as a start-time override, `AmbientCapabilities=CAP_NET_BIND_SERVICE` on the node service unit, listener status on the render report, and the "Listener surface" section of the track document as the listener's specification in place of `api/openapi.yaml`.
+- **FC2, pull request #136, merged as `31165fc`.** The chunked upload receiver and the show binding: xLights can PATCH a sequence, audio or video file in 16 MiB chunks, and the render node streams the bytes to disk, hashes incrementally, and holds the file, binding it to a ShowMesh show by playlist name or by the active-show fallback. Held bound, held unbound and refused are each recorded as evidence and published on the render report. A partial upload leaves nothing the node treats as complete.
+- **FC3, pull request #144, merged as `5e57e9f`.** A held, bound FSEQ is registered through the coordinator's existing `POST /api/v1/assets` with `targetKind=node`, which makes it dispatchable over the existing `asset.fetch` path with no FPP Connect special case. Terminal statuses (`400`, `401`, `403`, `405`, `413`) are never retried; every other non-terminal `4xx`, every `5xx` including `507`, and every transport error retry with capped exponential backoff.
+
+**Decisions made:** one owner ruling, made 2026-08-25 and implemented here. **The MultiSync ping's mode byte stays `remote`, while `player` is served over HTTP.** FPP unicasts sync only to nodes whose ping reports remote, and xLights reads `player` from `GET /api/system/info`'s `Mode` field instead, so the two fields carry different values deliberately. The durable record is [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 7, amended 2026-08-25, restated as item 6 of [RES-003](../research/RES-003-xlights-fpp-connect-compatibility.md) section 10.7. Nothing else in these five seams rose to an ADR. One reversible builder default is flagged on its own pull request rather than ruled: `fppconnect.settings.enabled` defaults to `true` (#127).
+
+**Questions raised with the owner:** one, recorded on #144 and unanswered. Registration requires `SHOWMESH_AGENT_API_TOKEN` to carry `asset:write`, and whether a node principal should instead get a scoped write capability rather than that broad token is open.
+
+**Reviews:** every seam had Hermes `showmesh-review` runs and independent Opus review rounds, all recorded on the pull requests. Round counts, as stated in the pull request bodies: FC0 two Opus rounds (six findings applied, delta pass confirmed all six), FC1a three (the blocking one: the push idempotency key repeated when a surface was moved off a node, so the vacated node kept advertising the old range), FC1b three (the two contract ones: `http.ServeMux` redirecting an uncleaned path with an HTML body, and 405 instead of 404 on a non-GET), FC2 five (among them: held files were reported nowhere an operator could see, refused uploads left no evidence, chunks were buffered whole, and a server-wide write timeout killed slow chunks after they had already been applied), and FC3 eight, with four Hermes runs alongside them. Hermes was clean at `7dfb797` and `572d1a6` (FC0), `cd847ef` and `15240de` (FC1a), `59d899e` (FC1b) and `89936f4` (FC2).
+
+**Deferred, and the follow-ups this work leaves behind.**
+
+- **A 32-bit coordinator build cannot write the byte caps the settings kind documents.** The decoder for `maxFileBytes` and `maxAssetDirBytes` reads them into Go's `int`, which is 32 bits on a 32-bit build, while the documented default per-file cap is 2 GiB, one byte past what such a build can hold. Read from the code on this branch, not measured against a 32-bit build.
+- **There is no operator-visible evidence when a node's channel range is dropped.** When the coordinator cannot format a node's range (no surfaces, a refused range, or a string longer than the ping's 120-byte field) it pushes an empty string and logs a warning, and a pushed string the node cannot fit is clamped to empty with a warning in the node's log; nothing else records either case, and xLights treats an empty range as render everything. The same gap covers the listener's bind status and the held-file list: they travel on the render report, and no coordinator collector signal, API field or Operator UI surface reads them yet.
+
+**Acceptance gaps, stated as the pull requests state them.**
+
+- **Nothing ran against a real xLights or a real FPP.** Every behaviour above is implemented from RES-003's source-read protocol and ADR-044's decisions, not observed against a live client.
+- **No multi-hundred-megabyte upload was exercised.** Tests use small in-memory payloads, plus one real `http.Server` drip test sized for timeout behaviour rather than volume.
+- **No node has bound port 80 with `CAP_NET_BIND_SERVICE` on real hardware**, and no node has run any of this on real hardware.
+- **Held-file and listener evidence exists only in the render report payload.** It has been exercised in unit tests against that payload, never watched by an operator.
+
+**Verification gates, per pull request, as each body records them.** All are `showmesh-check`, the wrapper on the `showmesh-dev-01` build VM for `make check` (`fmt-check vet lint test ui-lint ui-test ui-build ui-gen-check`), plus GitHub checks.
+
+- #118: `showmesh-check` passed against `6f77fc3`; GitHub checks passed at `6f77fc3` (10 checks).
+- #127: `showmesh-check` passed against `833d4d8`; the comment-only final round was gated more narrowly with `gofmt -l internal/agent`, `go vet ./internal/agent/` and `go test -count=1 ./internal/agent/` against `bfd4242`; GitHub checks passed at `bfd4242` (10 checks).
+- #126: `showmesh-check` passed against `eedd60d`; GitHub checks passed at `eedd60d` (10 checks).
+- #136: `showmesh-check` passed against `0173f9c`, with `gstengine` run alone (ok 182.3 s) and every other package in the batch; GitHub checks passed at `0173f9c` (10 checks).
+- #144: `showmesh-check` passed against `4c22174`, plus `go test -race ./internal/agent/... -run 'FPPConnect'` and `go test -race ./internal/coordinator/api/...` at the same commit; GitHub checks passed at `4c22174` (10 checks, after a re-run during the GitHub Actions incident of 2026-08-26).
+
+**Not run and not claimed:** `make test-integration` was not run for any of the five, and each body says why: no FPP or broker behaviour changed (FC0), no FPP integration target exercises the seam (FC1a, FC1b, FC2), and no coordinator-plus-agent integration target was run on the VM's own Docker (FC3). Nothing ran on real hardware, in a browser, on a deployment, or against a real xLights or FPP.
+
+**What is next:** rebase `dev/fpp-connect` onto `main` after the 28 August landing, open the pull request into `main`, then run FC4, the owner's bench against his real xLights, which is the acceptance gate for everything above and the only thing that raises RES-003 section 9's conclusions above L1.
+
+---
+
+## 2026-08-26 (SM-317: a two-output audio interface could not be declared as an `audio.node` at all)
+
+**Goal:** make a program-only audio node declarable. Found while trying to
+run the Lane 19 Raspberry Pi audio node, and it is neither arm64-specific
+nor Pi-specific.
+
+**The defect.** `audio.node` made `ltcChannel` and `ltcRoute` required,
+and `ValidateAudioNodePlacement` then refused any `ltcRoute` absent from
+the node's advertised discrete LTC-capable route list, which per ADR-018
+needs a third channel beyond the program pair. A two-output interface
+satisfies neither: its LTC-capable list is correctly empty, and the
+fields could not be omitted. **No `audio.node` could be placed on such a
+node on any platform.** Four refusals were observed against the running
+coordinator, each a different point in the space: omitting `ltcChannel`
+(`show-config-field-required`), sending `"ltcChannel": 0`
+(`show-config-field-invalid`), `programChannels [1,2]` with `ltcChannel 3`
+(`invalid-parameter`, no LTC-capable route), and mono program with LTC
+discrete on channel 2 (the same). The agent agreed with the coordinator
+rather than with its own engine: `internal/agent/audionodeops.go` also
+rejected a non-positive `ltcChannel`, so there was no MQTT-direct path
+around it either.
+
+This contradicted already-recorded intent rather than raising a new
+design question. SM-307's own description names program on channels 1
+and 2 with no LTC as the expected configuration for this node, SM-316 is
+explicitly "the Pi node without LTC", and ADR-042 section 5 already
+treats an LTC failure as costing timecode and never the audience's
+audio. `gstengine.Config.Validate` has always accepted `LTCChannel == 0`
+and wires every unclaimed channel to silence, so the engine was the only
+layer that had this right.
+
+**The shape.** `ltcRoute` and `ltcChannel` become optional **together**.
+Both absent declares a program-only node that emits no LTC. One without
+the other is refused rather than half-honoured, in both the coordinator's
+decode and the agent's, because a payload naming an LTC route with no
+channel has two plausible readings and neither should be guessed. When
+both are present every existing rule is unchanged: same-route, positive
+1-based index, no overlap with `programChannels`, and the advertised
+LTC-capable route check.
+
+**ADR-018's clock-domain rule is untouched.** It governs the clock domain
+when a node emits LTC; nothing in it requires every node to emit LTC.
+`clockDomain` and `clockDomainProvenance` stay required on a program-only
+node, where they name the clock the program route runs on.
+
+Note where the capability condition had to live. The ruling was phrased
+as "optional when a node advertises no discrete LTC-capable route", but
+`DecodeAudioNodePayload` has no store access by design (its own doc
+comment records that split, matching `showsurface.go`), so it cannot see
+what a node advertised. Structural optionality therefore lives in the
+decode and the capability-conditioned refusal stays in
+`ValidateAudioNodePlacement`, which is where it already was. The
+observable behaviour is the intended one: a node that advertises an
+LTC-capable route still cannot name a bad one, and a node that advertises
+none can now be declared program-only.
+
+**Changed:** `api/openapi.yaml`'s `ConfigAudioNode` required set and
+description, `internal/coordinator/config/audionode.go` (decode and
+placement), `internal/coordinator/api/v1/audio.go`,
+`internal/coordinator/audioconfigpush/push.go` (a program-only push omits
+both LTC keys rather than sending an empty route and a zero channel, so
+the agent sees the shape the operator declared), and
+`internal/agent/audionodeops.go`.
+
+The Operator UI came along because the contract change made the two
+fields optional in the generated client and
+`ui/src/views/AudioNodeDetail.tsx` assigned them to required strings, so
+`typecheck` failed. It is the minimum to keep that screen honest:
+clearing both LTC fields saves a program-only node with both keys
+omitted, one without the other is refused client-side with the same
+reason the coordinator gives, and a stored program-only payload loads
+into blank fields. No new affordance was added and the screen was not
+redesigned.
+
+**Tests.** Program-only decode, program-only encode/decode round trip
+through the store shape, half-declared LTC refused in both directions,
+placement accepting a program-only node whose LTC-capable list is empty,
+placement still refusing an unevidenced program route on a program-only
+node, and placement still refusing an unevidenced LTC route when LTC is
+declared. Agent-side equivalents including `audioNodeChannelCount`
+returning 2 rather than asking the device for a third channel. The
+placement guard was mutation-checked: removing it fails
+`TestValidateAudioNodePlacementAcceptsProgramOnlyOnTwoOutputDevice` with
+the original defect's own error text. Two Operator UI tests cover the
+screen: a program-only save asserting both LTC keys are absent from the
+PUT body rather than sent empty, and a half-declared pair refused before
+any request is dispatched.
+
+**Review found two blocking defects in the first cut, both fixed here.**
+
+- **A program-only node broke cue-catalog resolution for the WHOLE show,
+  not just its LTC cue.** `assetsync/cuecatalog.go`'s
+  `scopeShowCueOutputsForNode` cleared `Outputs.LTC` only when the node
+  had no `audio.node` at all. A program-only node HAS one, so
+  `Outputs.LTC` survived scoping while `ShowCueClaimContext.LTCRoute` was
+  empty, and `DeriveShowCueClaims` then refused with "outputs.ltc is
+  declared but ShowCueClaimContext.LTCNode/LTCRoute is empty", which
+  `ResolveCueCatalog` propagates as `return Catalog{}, err`. Every cue on
+  that node failed, which is exactly the opaque failure the `Catalog`
+  type's own doc comment forbids, and activation and deployment for all
+  of them depend on it. The scoping function's comment stated the
+  assumption in as many words: a node with no `audio.node` "leaves those
+  context fields empty by construction". Making the LTC pair optional
+  destroyed that by-construction guarantee, so the predicate is now
+  explicit: `nodeHasLTC := nodeHasAudioNode && audioNode.LTCRoute != ""`,
+  used for LTC scoping, LTC output projection and the LTC claim context,
+  while `nodeHasAudioNode` still governs Audio and Announcement.
+  `resolveCueOutputs` had the same wrong predicate and is fixed too; it
+  was an independent second defect, not merely masked by the first, and
+  reverting only that line makes the new tests fail with an `LTCOutput`
+  shipped to a node that emits no LTC.
+- **`showmeshctl` could not declare a program-only node.** `audio node
+  set` hard-required `--ltc-route` and `--ltc-channel`, and
+  `configAudioNode` carried no `omitempty`, so even a relaxed flag check
+  would have sent `"ltcRoute":""`, which the new decode correctly refuses
+  as field-empty. Operator capabilities are API-first and must stay
+  usable through `showmeshctl` at practical parity with the UI, and a
+  headless operator had no path at all to the exact device class this
+  change exists to support. Both flags are now optional together with the
+  same both-or-neither refusal the server applies, failing fast rather
+  than spending a round trip. `printAudioNodeDetail` printed a blank "LTC
+  route:" and "LTC channel: 0"; it now says "LTC: none (program-only
+  node)" outright, removing from the CLI the same misleading channel-zero
+  render that was removed from the UI.
+
+`api/openapi.yaml` also gained `dependentRequired` ({ltcRoute:
+[ltcChannel], ltcChannel: [ltcRoute]}) so a generated client refuses the
+half-pair the server refuses, rather than accepting it and learning at
+runtime. The document is 3.1.0, so the keyword is available.
+
+**Gates.** `make check` run in the foreground, **exit 0, clean tree**,
+against the final pushed commit; the commit identifier is recorded in the
+pull request. `make test-integration` was not run: another lane was
+exercising the same broker and container resources, and this change is
+covered at the decode, placement, catalog-resolution, push, CLI and UI
+layers rather than across the wire.
+
+**Not verified.** No stored pre-change `audio.node` revision was migrated
+or re-decoded; every existing revision carries both LTC fields and
+decodes unchanged, but that was reasoned from the decode path rather than
+exercised against a populated store. The Operator UI and CLI changes have
+component and command-level test evidence only, with no browser or
+terminal click-through. The end-to-end path (declare a program-only node,
+prepare and play a session on the Raspberry Pi through the agent's own
+session engine) was exercised against a branch build of this change and
+is recorded on SM-181, not here.
+
+Two related limitations are deliberately NOT addressed here and are filed
+separately: the Operator UI's route picker still intersects program-
+capable and LTC-capable routes, and nothing flags an LTC-capable node
+accidentally declared program-only.
+
+---
+
+## 2026-08-26 (Installing a prebuilt node agent no longer needs a compiler; first arm64 install, on a Raspberry Pi 3B+)
+
+**Goal:** install the native node agent on a Raspberry Pi from a prebuilt
+tarball, which is the first time the agent has been installed on anything
+other than x86_64 Debian 13, and fix what that path got wrong.
+
+**Two defects, both found on the Pi and both fixed here.**
+
+- **`install.sh` demanded a build toolchain to install an already-built
+  binary.** It called `"$SCRIPT_DIR/preflight.sh"` with no arguments, so
+  the build-time branch ran: a prebuilt-tarball install refused to
+  proceed without `gcc`, `pkg-config`, `libgstreamer1.0-dev`,
+  `libgstreamer-plugins-base1.0-dev` and `libltc-dev`, none of which the
+  agent needs in order to run. Observed on the Pi as three `MISSING`
+  lines for the `-dev` packages. `install.sh` only ever installs a binary
+  it is handed, so it now calls `preflight.sh --runtime-only`. The
+  build-time checks are unchanged and still reachable: `./preflight.sh`
+  with no arguments runs them for anyone building on the host.
+- **`preflight.sh --runtime-only` reported `libltc.so.11` missing when it
+  was present.** The runtime branch resolved `ldconfig` through
+  `command -v`, but on Debian 13 `ldconfig` exists only at
+  `/usr/sbin/ldconfig` and an unprivileged user's PATH is
+  `/usr/local/bin:/usr/bin:/bin:/usr/games`. Root's PATH does include
+  `/usr/sbin`, so `install.sh` never hit it; anyone running preflight by
+  hand as a normal user was told to install a package that was already
+  installed. It now falls back to `/usr/sbin/ldconfig` and
+  `/sbin/ldconfig`.
+
+The Debian 13 floor is untouched in both scripts. No `raspbian` case was
+added: this Pi OS Lite 64-bit image reports `ID=debian` and
+`VERSION_ID="13"`, so the existing check passes as-is and the
+`ID=raspbian` problem SM-307 anticipated does not occur on it.
+
+**Hardware this was observed on.** A Raspberry Pi 3 Model B Plus Rev 1.3,
+Raspberry Pi OS Lite 64-bit on the Debian 13 trixie base
+(`DEBIAN_VERSION_FULL=13.5`), kernel `6.18.34+rpt-rpi-v8`, aarch64,
+905 MB RAM, wired Ethernet. Runtime packages installed from
+`deploy/node/README.md` section 3 only, with no compiler and no `-dev`
+packages beyond what the image already carried. `libltc11` 1.3.2-1+b2
+and GStreamer 1.26.2 are both available for arm64 on trixie, which
+SM-307 listed as expected but unverified.
+
+**Evidence, all post-dating the change.** `preflight.sh --runtime-only`
+passes on the Pi as an unprivileged user, all checks OK. `sudo
+./install.sh ./showmesh-agent-native` from an unpacked tarball completes
+with exit 0, asking for no compiler, and correctly declines to start the
+service until `SHOWMESH_NODE_ID` is set. After configuration the service
+came up `active (running)` under systemd, which is **the first time this
+unit has been started by systemd anywhere** (`bench/node-install` proves
+the file and permission behaviour in a container, where systemd is not
+PID 1 and activation is skipped by design). The agent advertised
+platform `linux-arm64` and appeared in the coordinator's node list as
+online, having discovered both of the Pi's output routes by itself.
+
+**One thing found and not fixed.** `install.sh` printed `user showmesh
+already exists`. That was not idempotency. On a host whose interactive
+login account is already named `showmesh`, the installer adopts that
+account as the service account instead of creating the system user it
+intends, and the agent then runs as that account with its groups and
+home directory. It worked in this case because the account was already
+in the `audio` group, which is luck rather than design. Left as-is and
+reported rather than changed.
+
+**Gates.** `make check` in the foreground. No integration target was run:
+this change touches two shell scripts and a README and no Go code, no
+generated output and no API contract.
+
+**Not verified.** Nothing here was exercised against a deployed fleet.
+The installer's upgrade-in-place path was not re-run on the Pi; only the
+fresh install was. Playing audio and measuring it is SM-181 and is
+recorded separately.
+
+## 2026-08-26 (`package-node-agent` names the tarball for the platform it actually built; first arm64 cgo build of the agent)
+
+**Goal:** package the native node agent for a Raspberry Pi, which is the
+first arm64 build of the cgo agent anywhere in this project, and stop the
+target from mislabelling the result.
+
+**The defect.** `package-node-agent` hardcoded `linux_amd64` in the
+tarball name and in the SHA256SUMS entry regardless of the host it ran
+on. Running it on an arm64 host produced an arm64 binary inside a file
+called `showmesh-node-agent_<VERSION>_linux_amd64.tar.gz`, with a
+checksums file that agreed. The target now derives `NODE_AGENT_PLATFORM`
+from `go env GOOS` and `go env GOARCH`. That is the correct source for
+this one target: `build-agent-native` is `CGO_ENABLED=1` and links host C
+libraries (go-gst, libltc), so unlike the CGO-free FPP plugin it cannot
+cross-compile and can only ever target the platform it is built on.
+
+Two further packaging corrections came out of review. `NODE_AGENT_PLATFORM`
+is a parse-time `:=`, so it runs on every `make` invocation including
+`make help` on a host with no Go; it is now one guarded `go env GOOS
+GOARCH` call like every other parse-time shell in this Makefile, and
+`package-node-agent` refuses outright rather than producing a
+`showmesh-node-agent_<VERSION>__.tar.gz` when the platform cannot be
+determined. And now that the tarball name varies by platform, the
+SHA256SUMS file is written with a glob covering every tarball at that
+version, following `release-fpp-plugin`'s own precedent: packaging two
+platforms into one dist directory previously left a sums file naming
+only the last one, where before this change the collision was on the
+tarball itself and the pair stayed self-consistent. Verified by
+packaging twice into one directory: the sums file lists both tarballs
+and `sha256sum -c` reports OK for each.
+
+The deterministic tar and gzip discipline is untouched
+(`--sort=name --owner=0 --group=0 --numeric-owner --mtime='@0'`,
+`gzip -n -9`), and so is the `sha256sum -c` self-verification. Both were
+exercised by the arm64 run below: the tarball's entries came out with
+mtime `Jan 1 1970` and owner 0/0, and the self-check reported OK. The
+artifact contract comment at the head of the target now reads
+`showmesh-node-agent_<VERSION>_<GOOS>_<GOARCH>.tar.gz`.
+
+**`deploy/node/README.md` section 2 corrected while here.** It offered
+`apt-get install golang-go` as the primary way to get Go. Debian 13's
+`golang-go` is older than the `go 1.25.0` line in `go.mod`, so that
+instruction does not work today; installing Go by hand is the only path
+that does, and the README now says so rather than listing it as an
+alternative. The README also states that the tarball is named for its
+build platform and that packaging for a Pi means running the target on
+an arm64 host or in an arm64 container.
+
+**The build, and it is a container build.** An arm64 `debian:13`
+container on an arm64 host, resolved digest
+`sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1`,
+`docker image inspect` reporting `Architecture: arm64` (native, not
+emulated), `uname -m` = `aarch64`. Build packages from
+`deploy/node/README.md` section 2. Toolchain inside the container:
+gcc 14.2.0, GStreamer 1.26.2, GLib 2.84.4 (over the 2.80 floor),
+libltc 1.3.2, Go 1.25.0 linux/arm64.
+
+`make package-node-agent` with `CGO_ENABLED=1` completed in **113 s**
+wall clock including module downloads, with no cgo warnings and no link
+errors. **go-gst and libltc compile and link on arm64 on the first
+attempt**, which was genuinely unknown before this: CI's arm64 leg is a
+`CGO_ENABLED=0` cross-build and has never exercised the cgo backend on
+that architecture. The binary is 15,662,032 bytes unstripped; the tarball
+is 7,575,764 bytes and is named `..._linux_arm64.tar.gz`.
+
+**The container-built binary loads and runs on the one Pi OS image
+tested.** This was the open question and on that image the answer is
+yes. On a Raspberry Pi 3 Model B Plus Rev 1.3 running Pi OS Lite 64-bit
+on the Debian 13 trixie base (`DEBIAN_VERSION_FULL=13.5`, kernel
+`6.18.34+rpt-rpi-v8`),
+`sha256sum -c` verified the tarball on the Pi, `ldd` on the unpacked
+binary resolved every dependency with no `not found` line, and the binary
+ran and printed its version. Debian 13 in a container and Pi OS Trixie do
+share a compatible glibc, GStreamer 1.26 and libltc 11 ABI, which SM-307
+predicted but nothing had confirmed. State the limit plainly: the
+Raspberry Pi archive ships `+rpt`-patched GStreamer (1.26.2-1+rpt3) while
+the container had plain Debian 1.26.2, and the two proved soname
+compatible **as observed by `ldd` and one successful start on one image,
+one image revision and one Pi model**. That is an ABI observation, not a
+general guarantee about Pi OS or about future `+rpt` revisions.
+
+**Gates.** `make check` in the foreground. No integration target was run:
+this change touches the packaging target's file naming and a README, and
+no Go code, no generated output and no API contract.
+
+**Not verified.** The linux/amd64 leg of this target was not re-run, so
+the change is proven to produce the right name on linux/arm64 and on
+darwin/arm64 and is unexercised on linux/amd64 since the edit. Byte-for-byte reproducibility across two runs was
+not re-measured; only the deterministic flags and the self-check were
+observed to work. Nothing was published as a release.
 
 ---
 

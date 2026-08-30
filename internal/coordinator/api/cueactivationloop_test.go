@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/cueactivation"
+	"github.com/showmeshsystems/showmesh/pkg/cueauth"
+	"github.com/showmeshsystems/showmesh/pkg/cuecatalog"
 )
 
 // countingFPPObservationStore counts every call to
@@ -401,5 +404,144 @@ func TestDispatchBlackAndSilenceAudioStopOrdinaryCoordinatorClockAhead(t *testin
 	decision := rs.Apply(pkgaudio.InvocationID("stop-invocation"), pkgaudio.Revision(stopRevision))
 	if !decision.Accepted {
 		t.Fatalf("stop revision %d refused by the real RevisionState in the ordinary (coordinator clock ahead) case: %+v", stopRevision, decision)
+	}
+}
+
+// --- Asset-missing fail-to-black is show-mode gated ---
+
+// TestAssetMissingFailToBlackTargetsCollectsBothRefusalKinds proves
+// [assetMissingFailToBlackTargets] names every node refused asset-missing
+// from EITHER side — this coordinator's own pre-dispatch Authorize
+// refusal (AuthorizeOutcome) AND the node's own post-dispatch refusal
+// (NodeOutcome) — carrying that node's own RefusedCueOutputs so the
+// scoped dispatch downstream can black exactly what the Cue declared;
+// never a node dispatched successfully, and never a node refused for an
+// unrelated reason (cross-show, stale-cue) that fail-to-black has no
+// bearing on.
+func TestAssetMissingFailToBlackTargetsCollectsBothRefusalKinds(t *testing.T) {
+	audioOutputs := cuecatalog.Outputs{Audio: &cuecatalog.AudioOutput{Asset: "asset-x"}}
+	outcomes := []cueActivationDispatchOutcome{
+		{NodeID: "node-confirmed", Dispatched: true, Confirmed: true},
+		{NodeID: "node-coordinator-refused", AuthorizeOutcome: cueauth.OutcomeAssetMissing, AuthorizeReason: "cue \"x\": asset missing", RefusedCueOutputs: audioOutputs},
+		{NodeID: "node-cross-show", AuthorizeOutcome: cueauth.OutcomeCrossShow},
+		{NodeID: "node-stale-cue-refused", Dispatched: true, Confirmed: false, NodeOutcome: string(cueauth.OutcomeStaleCue)},
+		{NodeID: "node-node-refused", Dispatched: true, Confirmed: false, NodeOutcome: string(cueauth.OutcomeAssetMissing), RefusedCueOutputs: audioOutputs},
+	}
+	got := assetMissingFailToBlackTargets(outcomes)
+	want := map[string]bool{"node-coordinator-refused": true, "node-node-refused": true}
+	if len(got) != len(want) {
+		t.Fatalf("assetMissingFailToBlackTargets() = %+v, want exactly nodes %v", got, want)
+	}
+	for _, target := range got {
+		if !want[target.NodeID] {
+			t.Fatalf("assetMissingFailToBlackTargets() included unexpected node %q; got %+v", target.NodeID, got)
+		}
+		if target.Outputs.Audio == nil {
+			t.Fatalf("target %q Outputs.Audio = nil, want the refused Cue's own RefusedCueOutputs carried through", target.NodeID)
+		}
+	}
+}
+
+// TestAssetMissingFailToBlackTargetsEmptyWhenNothingRefusedAssetMissing
+// proves the zero-value/empty case: no asset-missing outcome anywhere
+// yields no targets to black, never a nil-vs-empty-slice surprise a
+// caller's own len() check would already handle either way, but pinned
+// explicitly.
+func TestAssetMissingFailToBlackTargetsEmptyWhenNothingRefusedAssetMissing(t *testing.T) {
+	outcomes := []cueActivationDispatchOutcome{{NodeID: "node-confirmed", Dispatched: true, Confirmed: true}}
+	if got := assetMissingFailToBlackTargets(outcomes); len(got) != 0 {
+		t.Fatalf("assetMissingFailToBlackTargets() = %v, want none", got)
+	}
+}
+
+// TestAssetMissingFailToBlackOnlyFiresInShowMode pins the owner's own
+// ruling: a genuinely missing asset fails that Cue to black ONLY in show
+// mode; in setup/program mode the refusal must stay loud (the existing
+// log line and audit entry), never disappear to black, because an
+// operator programming the show is expected to be watching for exactly
+// this kind of error.
+func TestAssetMissingFailToBlackOnlyFiresInShowMode(t *testing.T) {
+	targets := []cueScopedFailToBlackTarget{{NodeID: "node-1"}}
+	if !assetMissingFailToBlack(config.ShowModeShow, targets) {
+		t.Error("assetMissingFailToBlack(show, [node-1]) = false, want true")
+	}
+	if assetMissingFailToBlack(config.ShowModeProgram, targets) {
+		t.Error("assetMissingFailToBlack(program, [node-1]) = true, want false: setup/program mode keeps the refusal loud, never blacked (the owner's own ruling)")
+	}
+	if assetMissingFailToBlack(config.ShowModeShow, nil) {
+		t.Error("assetMissingFailToBlack(show, nil) = true, want false: nothing to black")
+	}
+}
+
+// TestDispatchOneCueActivationAssetMissingNamesTheSequenceAndAsset proves
+// the per-cue asset gate's dispatch-layer wiring: a Cue whose own asset is
+// genuinely missing from the node's reported inventory is refused
+// asset-missing, and AuthorizeReason — what writeCueActivationRefusalAudit
+// records as the audit's own OutcomeReason — names the sequence, the
+// node, and the Cue, never just the bare outcome string.
+func TestDispatchOneCueActivationAssetMissingNamesTheSequenceAndAsset(t *testing.T) {
+	now := testNow
+	setup := newAudioDispatchTestSetup(t, fixedClock(now))
+	nodeID, act := cueActivationDispatchTestFixture(t, setup, now)
+
+	// cueActivationDispatchTestFixture's own Cue names an asset ("asset-
+	// cue-1") that nothing ever uploads, so [assetsync.ExpectedAssetsForNode]
+	// resolves no content hash for it and the fixture is normally
+	// vacuously "ready" without uploading anything (see
+	// putAudioOnlyCueForTest's own doc comment). Creating a REAL asset
+	// record for it here, without adding it to node-1's own reported
+	// inventory, turns this into a genuinely missing asset: an asset
+	// record exists, targeted at this exact node, but the node does not
+	// hold it. This must happen BEFORE resolving CatalogRevision below —
+	// the asset's own hash is part of what the catalog revision covers
+	// (cuecatalog.RevisionInput's own doc comment).
+	if _, _, err := setup.st.CreateAsset(context.Background(), store.AssetRecord{
+		ID: "sha256:missing-cue-1-node", ShowID: act.Show, SequenceID: "asset-" + act.CueID,
+		TargetKind: store.AssetTargetKindNode, TargetID: nodeID, MediaType: "audio",
+		ContentHash: "sha256:missing-cue-1-node", RuntimeFilename: "Missing.wav",
+		SizeBytes: 1024, Backend: "volume", StorageKey: "sha256:missing-cue-1-node",
+	}); err != nil {
+		t.Fatalf("create asset: %v", err)
+	}
+	act.CatalogRevision = resolvedCatalogRevisionForTest(t, setup.st, act.Show, nodeID)
+
+	deps := setup.deps()
+	deps.AssetManifests = setup.st
+	h := &handlers{deps: deps.withDefaults(), clock: fixedClock(now), logger: testLogger()}
+	issuer := cueActivationIssuer{PrincipalID: "system:cue-activation-loop:test"}
+
+	outcome := h.dispatchOneCueActivation(context.Background(), now, nodeID, act, issuer)
+	if outcome.Err != nil {
+		t.Fatalf("dispatchOneCueActivation: %v", outcome.Err)
+	}
+	if outcome.AuthorizeOutcome != cueauth.OutcomeAssetMissing {
+		t.Fatalf("AuthorizeOutcome = %q, want %q", outcome.AuthorizeOutcome, cueauth.OutcomeAssetMissing)
+	}
+	if outcome.Dispatched {
+		t.Fatal("Dispatched = true, want false: this coordinator's own Authorize refused before publish")
+	}
+	if !strings.Contains(outcome.AuthorizeReason, "asset-cue-1") || !strings.Contains(outcome.AuthorizeReason, nodeID) || !strings.Contains(outcome.AuthorizeReason, "cue-1") {
+		t.Fatalf("AuthorizeReason = %q, want it to name the sequence (asset-cue-1), the node (%s) and the cue (cue-1)", outcome.AuthorizeReason, nodeID)
+	}
+
+	// writeCueActivationRefusalAudit's own fallback ("outcomeReason := reason;
+	// if outcomeReason == \"\" { outcomeReason = string(outcome) }") must
+	// actually reach the persisted audit row, not just the in-process
+	// outcome struct — this is what an operator reading the audit log sees.
+	entries, err := setup.st.ListAuditEntries(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Action == "cue.activate" && e.Outcome == "refused" {
+			found = true
+			if e.OutcomeReason != outcome.AuthorizeReason {
+				t.Fatalf("audit OutcomeReason = %q, want it to match the resolved AuthorizeReason %q, not the bare outcome string", e.OutcomeReason, outcome.AuthorizeReason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no refused cue.activate audit entry was written")
 	}
 }

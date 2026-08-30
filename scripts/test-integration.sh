@@ -110,13 +110,35 @@ export SHOWMESH_TEST_MQTT_COORDINATOR_PASSWORD="$(random_password)"
 export SHOWMESH_TEST_MQTT_BURST_PUBLISHER_USERNAME="test-burst-publisher"
 export SHOWMESH_TEST_MQTT_BURST_PUBLISHER_PASSWORD="$(random_password)"
 
+BIN_DIR="$(mktemp -d)"
+
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  rm -rf "$BIN_DIR"
 }
 trap cleanup EXIT
 
 # In case a previous run was interrupted before its own cleanup ran.
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+
+# Built here, before the broker container even starts, rather than left to
+# test/integration/harness_test.go's own TestMain: -timeout below covers
+# everything TestMain does, and a cold-cache `go build` (measured at about
+# 3 minutes for these three binaries combined) competes with the tests
+# themselves for that budget, which is how this suite used to time out with
+# zero assertion failures. Building here also fails fast on a compile error
+# before any Docker container is touched. CGO_ENABLED is pinned per binary
+# rather than inherited, matching buildEnvWithCGO's own reasoning in
+# harness_test.go: ADR-042 requires the agent link the real cgo
+# GStreamer/libltc engine, and ADR-012 requires the coordinator (and
+# showmeshctl, which needs no cgo either) build CGo-free.
+echo "test-integration: prebuilding showmesh-agent, showmesh-coordinator, and showmeshctl"
+CGO_ENABLED=1 go build -o "$BIN_DIR/showmesh-agent" ./cmd/showmesh-agent
+CGO_ENABLED=0 go build -o "$BIN_DIR/showmesh-coordinator" ./cmd/showmesh-coordinator
+CGO_ENABLED=0 go build -o "$BIN_DIR/showmeshctl" ./cmd/showmeshctl
+export SHOWMESH_TEST_AGENT_BIN="$BIN_DIR/showmesh-agent"
+export SHOWMESH_TEST_COORDINATOR_BIN="$BIN_DIR/showmesh-coordinator"
+export SHOWMESH_TEST_SHOWMESHCTL_BIN="$BIN_DIR/showmeshctl"
 
 echo "test-integration: starting $MOSQUITTO_IMAGE as $CONTAINER_NAME on port $HOST_PORT"
 # mosquitto.conf is mounted read-only, UNMODIFIED: this is the exact

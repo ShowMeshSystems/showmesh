@@ -96,8 +96,18 @@ if [ "$RUNTIME_ONLY" -eq 0 ]; then
   fi
 else
   # Runtime-only: libltc.so.11 itself must still be resolvable, even
-  # without libltc-dev's pkg-config file.
-  if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libltc\.so\.11'; then
+  # without libltc-dev's pkg-config file. ldconfig lives in /usr/sbin,
+  # which is not on an unprivileged user's PATH on Debian 13, so look
+  # there directly rather than reporting the library missing.
+  LDCONFIG=""
+  if command -v ldconfig >/dev/null 2>&1; then
+    LDCONFIG=ldconfig
+  elif [ -x /usr/sbin/ldconfig ]; then
+    LDCONFIG=/usr/sbin/ldconfig
+  elif [ -x /sbin/ldconfig ]; then
+    LDCONFIG=/sbin/ldconfig
+  fi
+  if [ -n "$LDCONFIG" ] && "$LDCONFIG" -p 2>/dev/null | grep -q 'libltc\.so\.11'; then
     ok "libltc.so.11 (runtime library present)"
   else
     fail "libltc.so.11 (runtime library the agent links against)" \
@@ -144,7 +154,7 @@ if command -v gst-inspect-1.0 >/dev/null 2>&1; then
 
   # NDI output element: informational only. A render node needs it; an
   # audio-only node does not, and this repo never builds or ships it (the
-  # gst-plugins-rs NDI element is SM-9's separately owned build recipe;
+  # gst-plugins-rs NDI element has its own separately owned build recipe;
   # see deploy/node/README.md).
   if gst-inspect-1.0 ndisink >/dev/null 2>&1; then
     info "ndisink resolves: this host can drive NDI output. (Not verified against real hardware or a real NDI receiver by this script.)"

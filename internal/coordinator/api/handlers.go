@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -90,6 +91,19 @@ type handlers struct {
 	// [nightCueDispatchHooks]'s own doc comment (nightcuerun.go). Its zero
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
+
+	// cueActivationFailToBlackWG owns every dispatchAssetMissingFailToBlack
+	// goroutine cueActivationTickOne has launched but not yet finished (see
+	// that method's own doc comment in cueactivationloop.go for why the
+	// dispatch runs off the tick's own critical path in the first place).
+	// [CueActivationLoop.Run] Waits on this SAME *handlers' WaitGroup before
+	// returning from its own ctx.Done() case, so shutdown cannot close the
+	// store while one of these goroutines is still writing to it, and it
+	// gives this package's own tests an explicit way to synchronize with a
+	// dispatch's real completion instead of inferring it from a side effect
+	// (e.g. a dispatched command appearing in a fake publisher) that can
+	// still be running well after that side effect is observed.
+	cueActivationFailToBlackWG sync.WaitGroup
 }
 
 func (h *handlers) now() time.Time { return h.clock() }
@@ -132,7 +146,8 @@ func (h *handlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID)))
+		render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
 	}
 	jsonWrite(w, v1.NodesResponse{ServerTime: formatTime(now), Nodes: nodes})
 }
@@ -165,7 +180,8 @@ func (h *handlers) handleNode(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	for _, nv := range views {
 		if nv.NodeID == nodeID {
-			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID))})
+			render := nodeRenderView(r.Context(), h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
+			jsonWrite(w, v1.NodeResponse{ServerTime: formatTime(now), Node: mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID))})
 			return
 		}
 	}
@@ -448,7 +464,8 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	views = mergeDeclaredOnlyNodes(views, declByNodeID)
 	nodes := make([]v1.Node, 0, len(views))
 	for _, nv := range views {
-		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, h.deps.Render.NodeRenderObservations(nv.NodeID), h.deps.Audio.NodeAudioObservations(nv.NodeID)))
+		render := nodeRenderView(ctx, h.deps.Render, h.deps.AssetManifests, nv.NodeID, now)
+		nodes = append(nodes, mapNode(nv, now, declPtr(declByNodeID, nv.NodeID), latestRun, render, h.deps.Audio.NodeAudioObservations(nv.NodeID), h.deps.FPPConnectStatus.NodeFPPConnectObservations(nv.NodeID)))
 	}
 
 	fppViews, err := h.deps.FPP.ListInstances(ctx)
@@ -505,6 +522,13 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, now))
 	}
 
+	// Coordinator-wide, computed fresh from the same decode a real push
+	// performs — see audioConfigPushStatus's own doc comment. A
+	// config-store failure here degrades this one field (state=unknown)
+	// rather than failing the whole snapshot, matching
+	// resolumeCompositionDegradeOnError's own precedent two calls above.
+	pushState, pushReason := audioConfigPushStatusDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -513,6 +537,9 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		Collectors:     collectors,
 		MacroRuns:      runs,
 		Resolume:       resolumeInstances,
+		AudioConfigPush: v1.AudioConfigPushStatus{
+			State: string(pushState), Reason: pushReason,
+		},
 	})
 }
 

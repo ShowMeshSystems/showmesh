@@ -354,10 +354,12 @@ func (m *Manager) deferRestoreLocked(ctx context.Context, s *Session, id pkgaudi
 // queueForRetryLocked is deferRestoreLocked's and restoreOne's own
 // shared retry-queueing: it must never overwrite the on-disk persisted
 // record with StateFailed, because that overwrite is exactly the
-// permanent damage this exists to prevent. s.state is left as whatever
-// restoreOne already loaded from disk (Playing/Preparing/Paused), and
-// nothing is persisted here — so a reboot before the next successful
-// retry still finds the original desired state on disk, not Failed.
+// permanent damage this exists to prevent. Nothing is persisted here.
+// s.state is never set to a value restoreOne's own switch has no case
+// for: every persist call in this package writes s.state verbatim, and
+// dispatch persists after every accepted command, so the
+// pending-versus-playing distinction is carried by m.pendingEngineRestore
+// and applied only in snapshotLocked, never onto s.state.
 //
 // s is left with no engine handle (any partial Load this attempt
 // produced is released), so [Manager.invalidateActiveSessions] must
@@ -372,11 +374,7 @@ func (m *Manager) deferRestoreLocked(ctx context.Context, s *Session, id pkgaudi
 // own setFaultLocked call happened to leave behind on its Load failure:
 // a future change to that internal call must not silently turn a
 // deferred session into one reported with no explanation for why it is
-// not actually driving audio. This does not change what STATE
-// [Session.snapshotLocked] reports — still whatever was persisted
-// (Playing/Preparing/Paused) — only the fault attached to it; see that
-// function's own doc comment for the open question of whether State
-// itself should say something different here.
+// not actually driving audio.
 func (m *Manager) queueForRetryLocked(ctx context.Context, s *Session, id pkgaudio.SessionID, faultReason string) {
 	// A no-binding failure never loads a handle, so these two lines are
 	// a no-op on that path; kept defensively for the Start/Pause retry
@@ -392,6 +390,20 @@ func (m *Manager) queueForRetryLocked(ctx context.Context, s *Session, id pkgaud
 	m.pendingEngineRestore[id] = struct{}{}
 	m.mu.Unlock()
 	m.logf("audio session %s: %s", id, faultReason)
+}
+
+// sessionHasQueuedRestore reports whether id currently has a
+// restore queued (m.pendingEngineRestore) — [Session.snapshotLocked]'s
+// own gate for reporting [pkgaudio.StateRestorePending] in place of
+// s.state, which is never itself set to that value (see
+// queueForRetryLocked's own doc comment for why). Caller may or may not
+// hold s.mu for the session in question; this takes m.mu itself, the
+// same s.mu-then-m.mu order queueForRetryLocked already uses.
+func (m *Manager) sessionHasQueuedRestore(id pkgaudio.SessionID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, pending := m.pendingEngineRestore[id]
+	return pending
 }
 
 // sourceStillActiveOnDisk reports whether id's persisted record shows a

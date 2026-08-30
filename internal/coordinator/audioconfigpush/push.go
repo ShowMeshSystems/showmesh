@@ -93,10 +93,17 @@ func pushNode(ctx context.Context, cs ConfigStore, pub Publisher, now func() tim
 	}
 
 	params := map[string]any{
-		"programRoute": payload.ProgramRoute, "ltcRoute": payload.LTCRoute,
-		"programChannels": payload.ProgramChannels, "ltcChannel": payload.LTCChannel,
-		"clockDomain": payload.ClockDomain, "clockDomainProvenance": payload.ClockDomainProvenance,
+		"programRoute":    payload.ProgramRoute,
+		"programChannels": payload.ProgramChannels,
+		"clockDomain":     payload.ClockDomain, "clockDomainProvenance": payload.ClockDomainProvenance,
 		"revision": obj.CurrentRevision,
+	}
+	// A program-only node's stored payload carries no LTC route or
+	// channel, and the agent refuses one of the pair without the other,
+	// so omit both rather than pushing an empty route and a zero channel.
+	if payload.LTCRoute != "" {
+		params["ltcRoute"] = payload.LTCRoute
+		params["ltcChannel"] = payload.LTCChannel
 	}
 	idempotencyKey := fmt.Sprintf("audio.node.configure/%s/rev-%d", nodeID, obj.CurrentRevision)
 	return publish(ctx, pub, now, nodeID, "audio.node.configure", idempotencyKey, params)

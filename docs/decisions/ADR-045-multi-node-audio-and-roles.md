@@ -1,6 +1,6 @@
 # ADR-045: An Installation May Declare More Than One Audio Node, With Roles
 
-Status: Accepted (owner, 2026-08-26)
+Status: Accepted (owner, 2026-08-26); role default amended 2026-08-30
 Date: 2026-08-26
 
 ## Context
@@ -33,7 +33,9 @@ Every `audio.node` object carries a `role`, one of:
 - `program+ltc` — plays program audio and is this installation's sole LTC emitter (decision 2);
 - `zone` — plays an independent local speaker zone, never program or LTC for the main mix.
 
-`role` is optional on the wire. Absent, it defaults to `program+ltc` — the role every pre-ADR-045 `audio.node` object already implicitly held, since there was only ever one and it always carried both program and LTC. This is what keeps every already-configured single-node installation's stored `audio.node` object valid and unchanged without a forced rewrite.
+`role` is optional on the wire. Absent, it defaults to `program+ltc` when the payload declares an `ltcRoute`, the role every pre-ADR-045 `audio.node` object already implicitly held, since there was only ever one and it always carried both program and LTC. This is what keeps every already-configured single-node installation's stored `audio.node` object valid and unchanged without a forced rewrite.
+
+**Amended 2026-08-30.** Absent `role` on a payload that declares NO `ltcRoute` defaults to `program` instead. When this record was written, every `audio.node` carried an LTC route because the shape required one. SM-317 then made `ltcRoute` and `ltcChannel` an optional pair on `main`, so a two-output interface could be declared program-only, and that shipped before this branch merged. An unconditional `program+ltc` default would give every program-only node the one role only a single node may hold, and the second such node would be refused over LTC neither of them emits, which is exactly the M4-plus-Pi installation this record exists to allow. `program+ltc` given explicitly on a payload with no `ltcRoute` is refused for the same reason: the role and the LTC pair must not disagree.
 
 `audio.node` also gains an optional `zone` name, meaningful only when `role` is `zone` — an operator-facing label ("porch", "garage") for which independent zone this node drives. `zone` present on any other role is refused: an ignored field would read as an applied one, the same posture this package already takes with `show.cue.outputs.announcement.duckGainDb`.
 
@@ -56,7 +58,8 @@ Nothing in this record says how two audio nodes stay in sample-accurate sync wit
 ## Consequences
 
 - `show.cue`, `audio.node`, `api/openapi.yaml`, `showmeshctl`, and the generated UI client all gain the new optional fields this record adds. Every change is additive: no existing required field, enum member, or default changes meaning.
-- A one-node installation's existing `show.cue` and `audio.node` objects — no `target`, no `role`, no `zone` — continue to decode, validate, and derive the identical resource claims they did before this record, because absent `target` resolves later to the sole `program+ltc` node and absent `role` defaults to `program+ltc`.
+- A one-node installation's existing `show.cue` and `audio.node` objects (no `target`, no `role`, no `zone`) continue to decode, validate, and derive the identical resource claims they did before this record, because absent `target` resolves later to the sole `program+ltc` node and absent `role` defaults to `program+ltc` on the LTC-carrying declaration every such installation has.
+- An installation whose only audio node is program-only has no `program+ltc` node for an absent `target` to resolve to. Naming that refusal is the target-resolution seam's work, not this record's.
 - Authoring a second `program+ltc` `audio.node` is refused, naming both node ids, so an operator who mistypes a role finds out at write time rather than at showtime.
 - Authoring a Cue whose `target` names no configured `audio.node` is refused at write time for the same reason.
 - [AUDIO-ENGINE.md](../architecture/AUDIO-ENGINE.md) §4 and §11 are amended to describe N nodes with roles rather than "the active audio node" and its standbys.

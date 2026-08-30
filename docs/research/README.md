@@ -26,6 +26,7 @@ Research records separate verified product behavior from architectural intent. E
 | [RES-016](RES-016-third-party-synchronized-audio-output.md) | Third-party synchronized audio: advance provisioning, playout, and evidence | planned (L0) | high | RES-007 |
 | [RES-017](RES-017-fseq-format.md) | FSEQ format and duration evidence | planned (L1) | medium | RES-002 |
 | [RES-018](RES-018-fpp-brightness-control.md) | FPP brightness, playlist identity, and plugin runtime | planned (design/source L1; stock-command absence L2; implementation L0) | high | RES-015 |
+| [RES-019](RES-019-ptp-synchronized-multi-node-audio.md) | PTP-synchronized multi-node audio playback: clock provider, scheduled start, rate lock, output latency | planned (upstream FPP master, linuxptp, GStreamer, PipeWire, Pi drivers L1 2026-08-28; every ShowMesh measurement L0) | high | RES-007, RES-002 |
 
 RES-009 is not a terminal record: each failure row is exercised against the assembled system as soon as the relevant path exists, and findings drive hardening.
 

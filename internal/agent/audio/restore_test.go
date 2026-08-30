@@ -309,9 +309,8 @@ func TestRestoreAllWithNoEngineBoundDoesNotFailPersistedState(t *testing.T) {
 	}
 
 	// Before the binding arrives, the session must be left exactly as
-	// deferred: still Playing in memory (never Failed), but with no
-	// engine handle actually loaded — leaving it reported "Playing" with
-	// a handle would be its own lie.
+	// deferred: still Playing internally, but reporting RestorePending,
+	// with no engine handle actually loaded.
 	s2, ok := m2.get(id)
 	if !ok {
 		t.Fatalf("session %s missing from the rebooted manager", id)
@@ -324,6 +323,9 @@ func TestRestoreAllWithNoEngineBoundDoesNotFailPersistedState(t *testing.T) {
 	}
 	if handleLoadedBeforeBind {
 		t.Fatalf("session reports a loaded engine handle before any binding arrived, want none")
+	}
+	if reported := snapshotFor(t, m2, id).State; reported != pkgaudio.StateRestorePending {
+		t.Fatalf("reported state before any binding = %q, want RestorePending", reported)
 	}
 
 	// Now the binding arrives, through the same [Manager.RebindEngine]
@@ -524,6 +526,26 @@ func TestRestoreAllWithNoEngineBoundDefersAPausedSession(t *testing.T) {
 	}
 	if rec2.SessionState == pkgaudio.StateFailed {
 		t.Fatalf("persisted state after a no-engine-bound RestoreAll of a Paused session = Failed, want the persisted desired state (Paused) to survive")
+	}
+
+	// Before the binding arrives, this session must report RestorePending
+	// too, not the persisted Paused: nothing is actually playing, and the
+	// Playing-branch defect (silently reporting the persisted state
+	// verbatim) applies identically here. The persisted record and the
+	// in-memory s.state both stay Paused throughout — only the reported
+	// snapshot changes — matching the Playing branch's own split.
+	sBeforeBind, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing from the rebooted manager", id)
+	}
+	sBeforeBind.mu.Lock()
+	stateBeforeBind := sBeforeBind.state
+	sBeforeBind.mu.Unlock()
+	if stateBeforeBind != pkgaudio.StatePaused {
+		t.Fatalf("in-memory state before any binding = %q, want Paused (never itself set to RestorePending)", stateBeforeBind)
+	}
+	if reported := snapshotFor(t, m2, id).State; reported != pkgaudio.StateRestorePending {
+		t.Fatalf("reported state before any binding = %q, want RestorePending", reported)
 	}
 
 	real := NewFakeEngine(c.now)
@@ -931,8 +953,14 @@ func TestDeferredRestoreSetsADeliberateFault(t *testing.T) {
 		t.Fatalf("session %s missing after RestoreAll", id)
 	}
 	s.mu.Lock()
-	fault, faultReason := s.fault, s.faultReason
+	state, fault, faultReason := s.state, s.fault, s.faultReason
 	s.mu.Unlock()
+	if state != pkgaudio.StatePlaying {
+		t.Fatalf("in-memory state after a deferred restore = %q, want Playing (never itself set to RestorePending)", state)
+	}
+	if reported := snapshotFor(t, m2, id).State; reported != pkgaudio.StateRestorePending {
+		t.Fatalf("reported state after a deferred restore = %q, want RestorePending", reported)
+	}
 	if fault == pkgaudio.FaultNone {
 		t.Fatalf("in-memory fault after a deferred restore = none, want a deliberate reason recorded")
 	}
@@ -1007,6 +1035,22 @@ func TestDeferredRestoreSurvivesAnEngineThatRefusesToBuild(t *testing.T) {
 	m2.mu.Unlock()
 	if !pendingAfterRefusal {
 		t.Fatalf("session %s not queued for deferred restore after the engine refused to build, want it still pending: a binding that fails to build must not consume the pending restore", id)
+	}
+
+	// The build refusal must not leave the session reporting the
+	// persisted Playing either: it is still not actually driving audio.
+	sAfterRefusal, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing after the refused bind", id)
+	}
+	sAfterRefusal.mu.Lock()
+	stateAfterRefusal := sAfterRefusal.state
+	sAfterRefusal.mu.Unlock()
+	if stateAfterRefusal != pkgaudio.StatePlaying {
+		t.Fatalf("in-memory state after a build refusal = %q, want Playing (re-queued, never itself set to RestorePending)", stateAfterRefusal)
+	}
+	if reported := snapshotFor(t, m2, id).State; reported != pkgaudio.StateRestorePending {
+		t.Fatalf("reported state after a build refusal = %q, want RestorePending (re-queued, not reported Playing)", reported)
 	}
 
 	// A later audio.node push, once discovery has actually run: the
@@ -1094,6 +1138,22 @@ func TestDeferredRestoreOfAPausedSessionSurvivesAnEngineThatRefusesToBuild(t *te
 		t.Fatalf("session %s not queued for deferred restore after the engine refused to build, want it still pending: a binding that fails to build must not consume the pending restore", id)
 	}
 
+	// The build refusal must not leave the session reporting the
+	// persisted Paused either: it is still not actually driving audio.
+	sAfterRefusal, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing after the refused bind", id)
+	}
+	sAfterRefusal.mu.Lock()
+	stateAfterRefusal := sAfterRefusal.state
+	sAfterRefusal.mu.Unlock()
+	if stateAfterRefusal != pkgaudio.StatePaused {
+		t.Fatalf("in-memory state after a build refusal = %q, want Paused (re-queued, never itself set to RestorePending)", stateAfterRefusal)
+	}
+	if reported := snapshotFor(t, m2, id).State; reported != pkgaudio.StateRestorePending {
+		t.Fatalf("reported state after a build refusal = %q, want RestorePending (re-queued, not reported Paused)", reported)
+	}
+
 	// A later audio.node push, once discovery has actually run: the
 	// engine builds successfully.
 	available := NewFakeEngine(c.now)
@@ -1114,5 +1174,162 @@ func TestDeferredRestoreOfAPausedSessionSurvivesAnEngineThatRefusesToBuild(t *te
 	}
 	if _, err := available.Observe(ctx, gotHandle); err != nil {
 		t.Fatalf("Observe on the resumed handle: %v (a paused session must end up resumed on the engine once one actually becomes available)", err)
+	}
+}
+
+// TestQueuedRestoreCommandDuringPendingWindowMustNotCorruptPersistedState
+// reproduces a defect a review found in this package's own restore-
+// pending reporting: an earlier version of queueForRetryLocked set
+// s.state itself to StateRestorePending while a restore was queued, and
+// [Session.dispatch] persists after every accepted command (including a
+// refusal) via [Session.persistedLocked], which writes s.state verbatim.
+// Any command reaching a pending session -- an ordinary Apply, say --
+// therefore burned "restore_pending" onto the on-disk record
+// permanently: [Manager.restoreOne]'s own switch has no case for that
+// value, so a LATER reboot with a real engine available neither resumes
+// the session nor fails it -- it is silently abandoned. This is the same
+// class of failure (a reboot destroying persisted session state) this
+// whole cluster of audio work exists to have fixed.
+//
+// Before the fix, this test's final assertions see
+// state=StateRestorePending, handleLoaded=false at "boot 3" where they
+// must see Playing, true: the corrupted record reaches restoreOne's
+// switch, matches no case, and the session is neither restored nor
+// re-queued.
+func TestQueuedRestoreCommandDuringPendingWindowMustNotCorruptPersistedState(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("pending-window-command-session")
+
+	// "Boot 1": a real, available engine, session reaches Playing, its
+	// Playing record lands on disk.
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	ref := writeTestAsset(t, dir, "pending-window.wav", "asset-pending-window", []byte("content-pending-window"))
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r := m1.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start: unexpectedly refused: %+v", r)
+	}
+
+	// "Boot 2": no audio.node binding has arrived yet -- the restore
+	// defers, and this session's id lands in m.pendingEngineRestore.
+	switchable := NewSwitchableEngine()
+	m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll (boot 2): %v", err)
+	}
+
+	// A command reaches this session WHILE the restore is still pending --
+	// an ordinary operator Apply, accepted and executed like any other.
+	// This is exactly Session.dispatch's own persist-after-every-
+	// accepted-command contract; it must not be special-cased away by
+	// this session's temporary pending status.
+	if r := m2.Apply(ctx, id, "inv-during-pending", 3, pkgaudio.ApplyRequest{}); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("apply during the pending window: unexpectedly refused: %+v", r)
+	}
+
+	rec, ok, err := store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("persisted record missing after the apply: ok=%v err=%v", ok, err)
+	}
+	if err := rec.SessionState.Validate(); err != nil {
+		t.Fatalf("persisted state after a command during the pending window = %q, which is not even a valid audio.State: %v", rec.SessionState, err)
+	}
+	if rec.SessionState != pkgaudio.StatePlaying {
+		t.Fatalf("persisted state after a command during the pending window = %q, want Playing (this session's actual state before the reboot, untouched by the pending report)", rec.SessionState)
+	}
+
+	// "Boot 3": a real, available engine finally arrives. A session whose
+	// persisted record survived the pending window intact must resume
+	// exactly as it would have if no command had ever reached it during
+	// that window.
+	real := NewFakeEngine(c.now)
+	m3 := NewManager(real, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m3.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll (boot 3): %v", err)
+	}
+	s3, ok := m3.get(id)
+	if !ok {
+		t.Fatalf("session %s missing from boot 3's manager -- abandoned, not restored and not failed", id)
+	}
+	s3.mu.Lock()
+	state, handleLoaded, handle := s3.state, s3.handleLoaded, s3.handle
+	s3.mu.Unlock()
+	if state != pkgaudio.StatePlaying {
+		t.Fatalf("in-memory state at boot 3 = %q, want Playing: a command during the pending window must never change what a later, real reboot resumes to", state)
+	}
+	if !handleLoaded {
+		t.Fatalf("session has no loaded engine handle at boot 3 -- the persisted state was corrupted, so restoreOne's switch never even attempted a restore")
+	}
+	if _, err := real.Observe(ctx, handle); err != nil {
+		t.Fatalf("Observe on the resumed handle at boot 3: %v (the session must actually be driving the engine, not merely reporting Playing)", err)
+	}
+}
+
+// TestDuckReleaseDuringPendingWindowMustNotCorruptPersistedState
+// reproduces the second vector a review flagged for the same class of
+// defect TestQueuedRestoreCommandDuringPendingWindowMustNotCorruptPersistedState
+// covers: [Manager.removeDuckerLocked] calls persistBestEffortLocked
+// unconditionally whenever a ducking session's set changes, reached from
+// [Manager.restoreDucked] with NO operator command at all -- the
+// natural-completion watcher (RunWatcher/watchTick) calls it the moment
+// a DIFFERENT session (the one that was ducking this one) completes. A
+// session with a restore still queued must survive that release exactly
+// as it survives an operator command reaching it directly.
+func TestDuckReleaseDuringPendingWindowMustNotCorruptPersistedState(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(time.Now())
+	store := NewFileSessionStore(dir)
+	ctx := context.Background()
+	const id = pkgaudio.SessionID("ducked-pending-session")
+	const duckerID = pkgaudio.SessionID("ducker-session")
+
+	// "Boot 1": id reaches Playing and is (synthetically) ducked by
+	// duckerID; its own persisted record lands on disk carrying
+	// DuckedByAll=[duckerID].
+	m1 := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	ref := writeTestAsset(t, dir, "ducked-pending.wav", "asset-ducked-pending", []byte("content-ducked-pending"))
+	m1.Apply(ctx, id, "inv-apply", 1, pkgaudio.ApplyRequest{Media: pkgaudio.SetField(ref)})
+	if r := m1.Start(ctx, id, "inv-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("start: unexpectedly refused: %+v", r)
+	}
+	s1, ok := m1.get(id)
+	if !ok {
+		t.Fatalf("session %s missing on boot 1", id)
+	}
+	s1.mu.Lock()
+	s1.duckedByAll = map[pkgaudio.SessionID]struct{}{duckerID: {}}
+	s1.persistBestEffortLocked("test setup: simulate an active duck")
+	s1.mu.Unlock()
+
+	// "Boot 2": no audio.node binding yet -- the restore defers, and id
+	// lands in m.pendingEngineRestore.
+	switchable := NewSwitchableEngine()
+	m2 := NewManager(switchable, store, dir, staticDecoder{duration: 10 * time.Second}, c.now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	// The ducking session completes elsewhere and releases id, exactly
+	// as [Manager.restoreDucked] does from the natural-completion
+	// watcher -- no operator command reaches id at all.
+	s2, ok := m2.get(id)
+	if !ok {
+		t.Fatalf("session %s missing after RestoreAll", id)
+	}
+	s2.mu.Lock()
+	m2.removeDuckerLocked(ctx, s2, duckerID)
+	s2.mu.Unlock()
+
+	rec, ok, err := store.Load(id)
+	if err != nil || !ok {
+		t.Fatalf("persisted record missing after the duck release: ok=%v err=%v", ok, err)
+	}
+	if err := rec.SessionState.Validate(); err != nil {
+		t.Fatalf("persisted state after a duck release during the pending window = %q, which is not even a valid audio.State: %v", rec.SessionState, err)
+	}
+	if rec.SessionState != pkgaudio.StatePlaying {
+		t.Fatalf("persisted state after a duck release during the pending window = %q, want Playing (untouched by the pending report)", rec.SessionState)
 	}
 }

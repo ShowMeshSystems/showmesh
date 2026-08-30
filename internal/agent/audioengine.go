@@ -179,10 +179,94 @@ func newAudioEngineRebuilder(ctx context.Context, assetDir string, switchable *a
 // SampleRate with real probe evidence after the outgoing engine closes.
 const validationSampleRate = 1
 
+// audioRebuildOutcome is what one [audioEngineRebuilder.rebuildResult]
+// call actually did — reported back to internal/agent's own automatic
+// restore-retry driver (audiorestoreretry.go) so it can tell an
+// attempt that genuinely ran the probe-and-build sequence apart from a
+// dropped, stale revision, and can report "why the last attempt did not
+// build an engine" (docs/build/IDENTIFIER-REGISTER.md
+// audio_session.restore.last_reason) without re-deriving it from a log
+// line.
+type audioRebuildOutcome struct {
+	// Attempted is false only when node.Revision was dropped as older
+	// than the one already bound, or when [rebuildIfUnavailable] declined
+	// to act at all (see Skipped below). The retry driver replays the
+	// same, already-accepted binding on every automatic attempt, so a
+	// dropped revision can only happen there if a genuinely newer binding
+	// raced in concurrently and won.
+	Attempted bool
+	// Skipped is true only when [rebuildIfUnavailable] found the engine
+	// already available, checked atomically with that decision, and did
+	// nothing at all — no invalidation, no close, no probe, no build.
+	// Always false for [rebuild]/[rebuildResult], which never skip.
+	Skipped bool
+	// Available and Reason mirror the bound engine's own
+	// [audio.Engine.Available] at the moment this call bound it — Reason
+	// is populated whenever Available is false, and meaningless
+	// (untouched) when Attempted is false.
+	Available bool
+	Reason    string
+}
+
+// rebuild is the onNode callback [audioBinding] invokes for every
+// genuinely newer audio.node.configure delivery; it discards the
+// [audioRebuildOutcome] [rebuildResult] returns, since a coordinator-
+// pushed binding has nowhere to report it. See [rebuildResult]'s own doc
+// comment for the actual rebuild logic.
 func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
+	r.rebuildResult(node)
+}
+
+// rebuildResult is [rebuild]'s own body, returning what it actually did.
+// A genuinely newer audio.node.configure delivery always rebuilds,
+// regardless of the currently bound engine's own availability — an
+// operator or the coordinator asked for this specific binding, and a
+// stale-availability skip would silently ignore that request. See
+// [rebuildIfUnavailable] for the automatic retry driver's own,
+// availability-gated entry point.
+func (r *audioEngineRebuilder) rebuildResult(node audioNodeConfig) audioRebuildOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.rebuildLocked(node)
+}
 
+// rebuildIfUnavailable is the automatic retry driver's own entry point
+// (audiorestoreretry.go), replacing a separate, unsynchronised
+// engineAvailable() read the driver used to take before calling rebuild:
+// that shape was a TOCTOU — a genuine audio.node.configure delivery
+// (a real [rebuild] call, from [audioBinding]'s onNode callback on
+// another goroutine) could finish in the gap between the driver's stale
+// read and its own rebuild call, and the driver, still trusting that
+// stale "unavailable" answer, would call rebuild anyway and tear the
+// concurrent delivery's own working engine back down — failing every
+// session that binding had just restored, for no benefit to the one
+// session the retry was trying to help.
+//
+// This closes that gap by checking [audio.SwitchableEngine.Available]
+// itself, under the SAME r.mu that guards every rebuild: no rebuild,
+// concurrent or otherwise, can complete between this check and this
+// call's own decision to act, because both run under one lock
+// acquisition. If the engine already reports available, this returns
+// immediately (Skipped: true, Attempted: false) without touching
+// anything — no invalidation, no close, no probe, no build; whatever is
+// keeping a session pending in that case is not a device problem, and
+// rebuilding would only risk the sessions that ARE working.
+func (r *audioEngineRebuilder) rebuildIfUnavailable(node audioNodeConfig) audioRebuildOutcome {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ok, _ := r.switchable.Available(); ok {
+		return audioRebuildOutcome{Skipped: true}
+	}
+	return r.rebuildLocked(node)
+}
+
+// rebuildLocked is [rebuildResult]'s and [rebuildIfUnavailable]'s shared
+// body. Caller holds r.mu. Every ordering and behavior guarantee in this
+// method's own package doc comment (validate, rebind, close, probe,
+// build — every probe call site after the close) is unchanged from the
+// single rebuildResult this was split out of; this only adds the return
+// value alongside each existing return point.
+func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildOutcome {
 	// applyNode orders acceptance, not execution: it records a newer
 	// revision and releases its own lock before calling onNode, so an
 	// older delivery's rebuild can still reach mu after a newer one has
@@ -193,7 +277,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 			r.logger.Warn("dropped an audio.node revision older than the one currently bound",
 				"revision", node.Revision, "bound_revision", r.builtRevision)
 		}
-		return
+		return audioRebuildOutcome{}
 	}
 
 	staticCfg := staticGstEngineConfig(r.assetDir, node)
@@ -202,7 +286,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		if r.logger != nil {
 			r.logger.Error("audio.node.configure delivered a binding this node cannot build an engine from", "revision", node.Revision, "error", err)
 		}
-		return
+		return audioRebuildOutcome{Attempted: true, Available: false, Reason: err.Error()}
 	}
 
 	prev := r.mgr.RebindEngine(r.ctx, r.switchable, nil, audio.RebindReasonEngineRebind)
@@ -218,7 +302,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		r.bind(gstengine.NewUnavailable(reason))
 		r.builtRevision = node.Revision
 		r.haveBuilt = true
-		return
+		return audioRebuildOutcome{Attempted: true, Available: false, Reason: reason}
 	}
 	engine, err := newGstEngine(cfg)
 	if err != nil {
@@ -228,10 +312,10 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 		if r.logger != nil {
 			r.logger.Error("failed to build the real audio engine after releasing the outgoing one; this node has no audio engine until the next audio.node.configure", "revision", node.Revision, "error", err)
 		}
-		return
+		return audioRebuildOutcome{Attempted: true, Available: false, Reason: err.Error()}
 	}
+	ok, reason := engine.Available()
 	if r.logger != nil {
-		ok, reason := engine.Available()
 		r.logger.Info("rebuilt the real audio engine from a delivered audio.node binding",
 			"revision", node.Revision, "program_route", node.ProgramRoute,
 			"sample_rate", cfg.SampleRate, "sample_rate_source", rateSource,
@@ -243,6 +327,7 @@ func (r *audioEngineRebuilder) rebuild(node audioNodeConfig) {
 	// guard above never drops a revision on the strength of a failed build.
 	r.builtRevision = node.Revision
 	r.haveBuilt = true
+	return audioRebuildOutcome{Attempted: true, Available: ok, Reason: reason}
 }
 
 // bind installs engine as this node's current engine through
