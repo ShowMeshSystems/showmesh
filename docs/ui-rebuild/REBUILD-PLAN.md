@@ -88,8 +88,8 @@ visual language.
 | Show Night | Done | #198 |
 | Monitor · Fleet, facet tabs, inspector | Done | #199 |
 | Apply the D-005 to D-010 rulings | Done | |
-| Session states: signed out, bootstrap, connecting, not found | Next | |
-| Monitor · Signals, Activity, Capabilities, Manifest | | |
+| Session states: signed out, bootstrap, connecting, not found | Done | #200 |
+| Monitor · Signals, Activity, Capabilities, Manifest | Next | |
 | Shows workspace, five tabs | | |
 | Node detail | | |
 | Settings, seven tabs | | |
