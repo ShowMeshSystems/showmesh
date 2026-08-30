@@ -2132,6 +2132,8 @@ export interface paths {
          * @description Never gated by any scope - reads stay open by default (ADR-024 constraint 23): a credential problem must never cost the operator sight of the lifecycle state. Distinct from `/config/night.session/{id}` (the AUTHORED definition a session pins): this is the RUNNING controller's own persisted state, a dedicated closed state machine, never observed evidence and never a general workflow.
          *
          *     If no session has ever been created (the coordinator has never seen `prepare-site`), this still answers `200` with `session.state` = `"inactive"` and every identity field empty, rather than `404` - "no session yet" is itself a real, renderable state.
+         *
+         *     `backgroundAudio.pinnedMaxGainDb` is populated only while `session.state` is a running state (owner ruling 2026-08-30); it is null once the night has ended or before it has begun, so this route never reports a past night's ceiling as if it were live. `/night/sessions/{id}` below reports that value unconditionally instead, since it is a historical, by-id lookup.
          */
         get: operations["getCurrentNightSession"];
         put?: never;
@@ -2152,6 +2154,8 @@ export interface paths {
         /**
          * One specific night session by its own id (Track F seam F2)
          * @description Same open-read posture as `/night/session`. Every session that has ever been created remains reachable by id (a new `prepare-site` after `stopped` creates a NEW session/epoch; this is how a prior night's own record stays inspectable).
+         *
+         *     Unlike `/night/session`, `backgroundAudio.pinnedMaxGainDb` here is populated regardless of `session.state` (owner ruling 2026-08-30): the value is already scoped to the specific record this route was asked for, so a stopped or never-started session still reports the ceiling its own pinned revision held.
          */
         get: operations["getNightSessionByID"];
         put?: never;
@@ -5003,8 +5007,11 @@ export interface components {
         NightBackgroundAudio: {
             /** @enum {string} */
             state: "recorded" | "unknown" | "not_configured" | "not_available";
+            /** @description Usually only meaningful when state is not "recorded". The one exception: reason may be non-empty while state is "recorded", in which case it describes pinnedMaxGainDb alone (why that one field is null) and says nothing about steps, which are unaffected and reported as read. */
             reason: string;
             steps: components["schemas"]["NightBackgroundAudioStep"][];
+            /** @description The background-audio ceiling the session pinned when it started (resting.backgroundAudio.maxGainDb on the session's own pinned configRevision), never the value night.session's config currently holds, which can differ across a later revision (owner ruling 2026-08-28). Null when the pinned revision configures no background audio at all, in which case `reason` says so. Never a fallback to the currently configured value. This schema is shared by two endpoints that populate it differently (owner ruling 2026-08-30): on GET /night/session (the current-session views, including the SSE nightSession.changed frame and a night command's own response), it is the ceiling the RUNNING session pinned, so it is populated ONLY while the top-level state is one of preshow, transition-to-show, live, transition-to-resting, resting-intershow, end-of-night-resting, or fading-out, and is otherwise null (including inactive, preparing, and stopped, so a past night's ceiling is never reported as live). On GET /night/sessions/{id}, it is that record's own pinned ceiling, historical by construction, so it is populated regardless of state, including preparing and stopped. */
+            pinnedMaxGainDb?: number | null;
         };
         /** @description The night-session lifecycle controller's own persisted state - a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
         NightSessionState: {

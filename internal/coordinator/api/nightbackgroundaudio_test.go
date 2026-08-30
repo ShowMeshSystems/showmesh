@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -660,5 +662,261 @@ func TestNightBackgroundAudioRevisionNeverRewindsPastAnUnrecognizedRow(t *testin
 	applyRow := pub.dispatched[len(pub.dispatched)-1]
 	if applyRow.Params["revision"].(float64) <= 99 {
 		t.Fatalf("apply dispatched at revision %v, want above the legacy row's 99", applyRow.Params["revision"])
+	}
+}
+
+// TestMapNightBackgroundAudio_PinnedMaxGainDb proves the owner ruling
+// (2026-08-28) directly: the GET /night/session projection reports the
+// maxGainDb the RUNNING session pinned at its own configRevision, and
+// keeps reporting that value unchanged after a later revision
+// reconfigures the ceiling - never the value night.session.resting's
+// config currently holds.
+func TestMapNightBackgroundAudio_PinnedMaxGainDb(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+		t.Fatalf("PinnedMaxGainDb = %v, want -10", got.PinnedMaxGainDb)
+	}
+
+	// A later revision reconfigures the ceiling. The running session stays
+	// pinned to revision 1, so the response must not move.
+	reconfigured := *ba
+	reconfigured.MaxGainDb = -3
+	payload := config.NightSessionPayload{
+		Show: "halloween", Label: "Halloween main loop",
+		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "fpp-main", Playlist: "halloween-show"},
+		Resting: config.NightSessionResting{
+			FPPInstanceID: "fpp-main", Playlist: "halloween-resting",
+			TimelineAsset:   config.NightSessionAssetRef{Show: "halloween", Sequence: "resting-loop", Target: "fpp-main"},
+			BackgroundAudio: &reconfigured,
+		},
+		EnterShow:                 config.NightSessionEnterShow{Cues: nil, BlackoutHoldMs: 0},
+		EnterResting:              config.NightSessionEnterResting{Cues: nil, BlackoutAfterShowMs: 0},
+		AnnouncementDefaultPolicy: config.NightSessionAnnouncementPolicyDefault,
+	}
+	raw, err := config.EncodeNightSessionPayload(payload)
+	if err != nil {
+		t.Fatalf("encode revision 2 payload: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.NightSessionConfigKind, ObjectID: "halloween-main", Revision: 2, PayloadJSON: raw,
+		CreatedByPrincipalID: "test", CreatedByPrincipalName: "test", Source: "api",
+	}); err != nil {
+		t.Fatalf("create night.session revision 2: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.NightSessionConfigKind, "halloween-main", 2); err != nil {
+		t.Fatalf("activate night.session revision 2: %v", err)
+	}
+
+	got = mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+		t.Fatalf("PinnedMaxGainDb after reconfiguration = %v, want still -10 (the pinned revision), not the newly configured -3", got.PinnedMaxGainDb)
+	}
+
+	// No session running: the field is absent, never a fallback value.
+	if none := mapNightBackgroundAudio(ctx, h.deps, store.NightSessionRecord{}, true); none.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb with no session = %v, want nil", none.PinnedMaxGainDb)
+	}
+}
+
+// TestMapNightBackgroundAudio_NoBackgroundAudioConfigured proves a session
+// pinned to a revision that configures no backgroundAudio at all reports
+// State "recorded" (a legitimate reading, not a read failure) with
+// PinnedMaxGainDb nil rather than a defaulted or fallback value, and a
+// non-empty Reason naming why (found by review: an earlier version left
+// Reason empty here, breaking the OpenAPI description's own promise that
+// state and reason say why the field is absent).
+func TestMapNightBackgroundAudio_NoBackgroundAudioConfigured(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", nil, nightStateRestingIntershow)
+
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+	if got.State != v1.NightEvidenceRecorded {
+		t.Fatalf("state with no backgroundAudio configured = %q, want recorded", got.State)
+	}
+	if got.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb with no backgroundAudio configured = %v, want nil", got.PinnedMaxGainDb)
+	}
+	if got.Reason == "" {
+		t.Fatalf("Reason with no backgroundAudio configured = %q, want a non-empty explanation", got.Reason)
+	}
+}
+
+// TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates proves the
+// owner-ruled gate directly, on the CURRENT-session side only
+// (current=true, GET /night/session and its siblings): pinnedMaxGainDb is
+// nil for a session record that exists but is not in a running state
+// (preparing, or stopped), even though its pinned revision configures a
+// real ceiling - so that endpoint never reports the last night's ceiling
+// as live before the session has started or after it has ended.
+func TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates(t *testing.T) {
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+
+	for _, state := range []string{nightStatePreparing, nightStateStopped} {
+		t.Run(state, func(t *testing.T) {
+			h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, state)
+			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, true)
+			if got.State != v1.NightEvidenceRecorded {
+				t.Fatalf("state %q: reported state = %q, want recorded", state, got.State)
+			}
+			if got.PinnedMaxGainDb != nil {
+				t.Fatalf("state %q: PinnedMaxGainDb = %v, want nil (not a running state, current=true)", state, got.PinnedMaxGainDb)
+			}
+		})
+	}
+}
+
+// TestMapNightBackgroundAudio_ByIDIgnoresRunningState proves the owner
+// ruling's other half (2026-08-30), on the BY-ID side (current=false, GET
+// /night/sessions/{id}): a stopped session's own pinned revision still
+// reports its pinnedMaxGainDb, because the value there is already scoped
+// to the specific historical record the caller asked for, never a live
+// claim. Paired with TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates,
+// which proves the opposite for current=true on the same states.
+func TestMapNightBackgroundAudio_ByIDIgnoresRunningState(t *testing.T) {
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+
+	for _, state := range []string{nightStatePreparing, nightStateStopped} {
+		t.Run(state, func(t *testing.T) {
+			h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+			rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, state)
+			got := mapNightBackgroundAudio(context.Background(), h.deps, rec, false)
+			if got.State != v1.NightEvidenceRecorded {
+				t.Fatalf("state %q: reported state = %q, want recorded", state, got.State)
+			}
+			if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+				t.Fatalf("state %q: PinnedMaxGainDb = %v, want -10 (by-id reports the record's own pinned ceiling regardless of state)", state, got.PinnedMaxGainDb)
+			}
+		})
+	}
+}
+
+// TestMapNightBackgroundAudio_PinnedGainReadFailureKeepsStepsRecorded
+// proves finding 1 directly: a failure reading the pinned night.session
+// revision for pinnedMaxGainDb must never hide the step log an operator
+// needs to see a stuck or refused announcement clear. State stays
+// "recorded", the steps already read are still reported, and only
+// PinnedMaxGainDb is nil, with its own Reason - never the whole block
+// flipped to Unknown with the steps dropped (the bug this test guards
+// against: an earlier version did exactly that for a read failure on
+// this strictly additive field).
+func TestMapNightBackgroundAudio_PinnedGainReadFailureKeepsStepsRecorded(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	// A real step, so there is genuine evidence to lose if this regresses.
+	ctx := context.Background()
+	if err := st.InsertNightCueOutboxRow(ctx, store.NightCueOutboxRecord{
+		ID: "row-apply", SessionID: rec.ID, Cycle: rec.Cycle,
+		Phase: nightPhaseRestingBackground, CueName: nightBackgroundAudioCueNameApply(1),
+		ActionRevision: 1, State: nightCueStateResolved, Outcome: nightCueOutcomeConfirmed,
+	}, testNow); err != nil {
+		t.Fatalf("insert apply row: %v", err)
+	}
+
+	// Point the session at a config revision that does not exist, so the
+	// pinned-config read fails while the outbox reads above are
+	// untouched: a real "config read fails, evidence already read is
+	// still reported" case, not a simulated error.
+	rec.ConfigRevision = 99
+
+	got := mapNightBackgroundAudio(ctx, h.deps, rec, true)
+	if got.State != v1.NightEvidenceRecorded {
+		t.Fatalf("state = %q, want recorded (a pinnedMaxGainDb read failure must not hide the step log)", got.State)
+	}
+	if got.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb = %v, want nil on a pinned-config read failure", got.PinnedMaxGainDb)
+	}
+	if got.Reason == "" {
+		t.Fatalf("Reason = %q, want a non-empty explanation of the pinnedMaxGainDb read failure", got.Reason)
+	}
+	if len(got.Steps) != 1 || got.Steps[0].CueName != nightBackgroundAudioCueNameApply(1) {
+		t.Fatalf("Steps = %+v, want the one apply step still reported despite the pinned-config read failure", got.Steps)
+	}
+}
+
+// TestNightPinnedBackgroundMaxGainDb_EmptyConfigObjectID proves finding
+// 2 directly: an empty rec.ConfigObjectID (mapNightCues already guards
+// this; this call site did not) is answered as "nothing pinned yet" -
+// nil gain, no reason, no error - never a doomed GetConfigRevision call
+// against an empty object id.
+func TestNightPinnedBackgroundMaxGainDb_EmptyConfigObjectID(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	gain, reason, err := nightPinnedBackgroundMaxGainDb(context.Background(), h.deps, store.NightSessionRecord{ID: "sess-1", State: nightStateRestingIntershow})
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if gain != nil {
+		t.Fatalf("gain = %v, want nil", gain)
+	}
+	if reason != "" {
+		t.Fatalf("reason = %q, want empty", reason)
+	}
+}
+
+// nightPinnedMaxGainDbFromResponse decodes just the one field this test
+// package cares about out of a real NightSessionResponse body.
+func nightPinnedMaxGainDbFromResponse(t *testing.T, body []byte) (id string, pinnedMaxGainDb *float64) {
+	t.Helper()
+	var decoded struct {
+		Session struct {
+			ID              string `json:"id"`
+			BackgroundAudio struct {
+				PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb"`
+			} `json:"backgroundAudio"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode NightSessionResponse: %v; body=%s", err, body)
+	}
+	return decoded.Session.ID, decoded.Session.BackgroundAudio.PinnedMaxGainDb
+}
+
+// TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint exercises
+// handleGetNightLifecycle and handleGetNightLifecycleByID directly, not
+// just the mapper, so a wiring mistake in either handler's own `current`
+// argument fails here even if every mapper-level test still passes. A
+// stopped session stays the store's "current" row, exactly the case the
+// owner ruling (2026-08-30) is about.
+func TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := identity.NewService(st, fixedClock(testNow), filepath.Join(dir, "data"), identity.WithLogger(testLogger()))
+	deps := Dependencies{
+		NightSessions: st, Config: st, Commands: st, Identity: svc,
+		AudioPublisher: &fakeAudioPublisher{}, AudioSessions: st, Assets: st, Observations: &dynamicObservationLister{},
+		ResolumeActions: &fakeResolumeActionDispatcher{},
+	}.withDefaults()
+	nightAPI := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateStopped)
+
+	_, byIDBody := doRequest(t, nightAPI.Handler, "GET", "/api/v1/night/sessions/"+rec.ID, nil)
+	byIDID, byIDGain := nightPinnedMaxGainDbFromResponse(t, byIDBody)
+	if byIDID != rec.ID {
+		t.Fatalf("GET /night/sessions/{id}: id = %q, want %q; body=%s", byIDID, rec.ID, byIDBody)
+	}
+	if byIDGain == nil || *byIDGain != -10 {
+		t.Fatalf("GET /night/sessions/{id} on a stopped session: pinnedMaxGainDb = %v, want -10 (the record's own pinned ceiling, regardless of state)", byIDGain)
+	}
+
+	_, curBody := doRequest(t, nightAPI.Handler, "GET", "/api/v1/night/session", nil)
+	curID, curGain := nightPinnedMaxGainDbFromResponse(t, curBody)
+	if curID != rec.ID {
+		t.Fatalf("GET /night/session did not return the stopped session as current: id = %q, want %q; body=%s", curID, rec.ID, curBody)
+	}
+	if curGain != nil {
+		t.Fatalf("GET /night/session on a stopped session: pinnedMaxGainDb = %v, want nil (never a dead session's ceiling reported as live)", curGain)
 	}
 }
