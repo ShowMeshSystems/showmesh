@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -856,5 +857,74 @@ func TestNightPinnedBackgroundMaxGainDb_EmptyConfigObjectID(t *testing.T) {
 	}
 	if reason != "" {
 		t.Fatalf("reason = %q, want empty", reason)
+	}
+}
+
+// nightPinnedMaxGainDbFromResponse decodes just the one field this test
+// package cares about out of a real NightSessionResponse body.
+func nightPinnedMaxGainDbFromResponse(t *testing.T, body []byte) (id string, pinnedMaxGainDb *float64) {
+	t.Helper()
+	var decoded struct {
+		Session struct {
+			ID              string `json:"id"`
+			BackgroundAudio struct {
+				PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb"`
+			} `json:"backgroundAudio"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode NightSessionResponse: %v; body=%s", err, body)
+	}
+	return decoded.Session.ID, decoded.Session.BackgroundAudio.PinnedMaxGainDb
+}
+
+// TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint is an
+// HTTP-level test proving the actual handler wiring, not just the
+// mapper: GET /api/v1/night/sessions/{id} on a STOPPED session (still
+// the store's own "current" row - GetCurrentNightSession returns the
+// most recently created row regardless of its state, exactly the case
+// the owner ruling (2026-08-30) is about) reports its pinned ceiling
+// unconditionally, while GET /api/v1/night/session on that SAME session
+// reports null. Two mapper-level tests already exist
+// (TestMapNightBackgroundAudio_NotPopulatedOutsideRunningStates and
+// TestMapNightBackgroundAudio_ByIDIgnoresRunningState); this test is the
+// one that actually exercises handleGetNightLifecycle and
+// handleGetNightLifecycleByID, so a wiring mistake at either call site
+// (the current bool passed to mapNightSessionState) fails here even if
+// every mapper-level test still passes.
+func TestNightSessionEndpoints_PinnedMaxGainDbDiffersByEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(dir, "db"), nil, store.WithClock(fixedClock(testNow)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := identity.NewService(st, fixedClock(testNow), filepath.Join(dir, "data"), identity.WithLogger(testLogger()))
+	deps := Dependencies{
+		NightSessions: st, Config: st, Commands: st, Identity: svc,
+		AudioPublisher: &fakeAudioPublisher{}, AudioSessions: st, Assets: st, Observations: &dynamicObservationLister{},
+		ResolumeActions: &fakeResolumeActionDispatcher{},
+	}.withDefaults()
+	nightAPI := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger()})
+
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateStopped)
+
+	_, byIDBody := doRequest(t, nightAPI.Handler, "GET", "/api/v1/night/sessions/"+rec.ID, nil)
+	byIDID, byIDGain := nightPinnedMaxGainDbFromResponse(t, byIDBody)
+	if byIDID != rec.ID {
+		t.Fatalf("GET /night/sessions/{id}: id = %q, want %q; body=%s", byIDID, rec.ID, byIDBody)
+	}
+	if byIDGain == nil || *byIDGain != -10 {
+		t.Fatalf("GET /night/sessions/{id} on a stopped session: pinnedMaxGainDb = %v, want -10 (the record's own pinned ceiling, regardless of state)", byIDGain)
+	}
+
+	_, curBody := doRequest(t, nightAPI.Handler, "GET", "/api/v1/night/session", nil)
+	curID, curGain := nightPinnedMaxGainDbFromResponse(t, curBody)
+	if curID != rec.ID {
+		t.Fatalf("GET /night/session did not return the stopped session as current: id = %q, want %q; body=%s", curID, rec.ID, curBody)
+	}
+	if curGain != nil {
+		t.Fatalf("GET /night/session on a stopped session: pinnedMaxGainDb = %v, want nil (never a dead session's ceiling reported as live)", curGain)
 	}
 }

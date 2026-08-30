@@ -2132,6 +2132,8 @@ export interface paths {
          * @description Never gated by any scope - reads stay open by default (ADR-024 constraint 23): a credential problem must never cost the operator sight of the lifecycle state. Distinct from `/config/night.session/{id}` (the AUTHORED definition a session pins): this is the RUNNING controller's own persisted state, a dedicated closed state machine, never observed evidence and never a general workflow.
          *
          *     If no session has ever been created (the coordinator has never seen `prepare-site`), this still answers `200` with `session.state` = `"inactive"` and every identity field empty, rather than `404` - "no session yet" is itself a real, renderable state.
+         *
+         *     `backgroundAudio.pinnedMaxGainDb` is populated only while `session.state` is a running state (owner ruling 2026-08-30); it is null once the night has ended or before it has begun, so this route never reports a past night's ceiling as if it were live. `/night/sessions/{id}` below reports that value unconditionally instead, since it is a historical, by-id lookup.
          */
         get: operations["getCurrentNightSession"];
         put?: never;
@@ -2152,6 +2154,8 @@ export interface paths {
         /**
          * One specific night session by its own id (Track F seam F2)
          * @description Same open-read posture as `/night/session`. Every session that has ever been created remains reachable by id (a new `prepare-site` after `stopped` creates a NEW session/epoch; this is how a prior night's own record stays inspectable).
+         *
+         *     Unlike `/night/session`, `backgroundAudio.pinnedMaxGainDb` here is populated regardless of `session.state` (owner ruling 2026-08-30): the value is already scoped to the specific record this route was asked for, so a stopped or never-started session still reports the ceiling its own pinned revision held.
          */
         get: operations["getNightSessionByID"];
         put?: never;

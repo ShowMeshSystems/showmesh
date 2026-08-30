@@ -1482,9 +1482,12 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 // session is actually presenting, as opposed to "inactive" (no session),
 // "preparing" (site prep, before the session presents anything to an
 // audience), or "stopped" (the night has already ended). pinnedMaxGainDb
-// is gated on this: the owner ruling (2026-08-28) is about the ceiling a
-// RUNNING session pinned, never a stale ceiling read back once the night
-// has ended or before it has begun.
+// is gated on this only when current is true (mapNightBackgroundAudio):
+// the owner ruling (2026-08-28, refined 2026-08-30) is that the CURRENT-
+// session views never read back a stale ceiling as live once the night
+// has ended or before it has begun; GET /night/sessions/{id} has no such
+// gate, because that value is already scoped to the specific historical
+// record requested.
 func nightSessionIsRunning(state string) bool {
 	switch state {
 	case nightStatePreshow, nightStateTransitionToShow, nightStateLive,
@@ -1561,14 +1564,18 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
 }
 
-// nightPinnedBackgroundMaxGainDb is the background-audio ceiling the
-// RUNNING session pinned when it started - rec's own pinned night.session
+// nightPinnedBackgroundMaxGainDb is the background-audio ceiling rec
+// itself pinned when it started - rec's own pinned night.session
 // revision's resting.backgroundAudio.maxGainDb, never the value
 // night.session.resting's config currently holds, which can differ across
-// a later revision (owner ruling 2026-08-28). A nil gain with a non-empty
-// reason and a nil error means that pinned revision configures no
-// background audio at all - a legitimate reading, not a read failure, but
-// one the caller's Reason must still say out loud rather than leave
+// a later revision (owner ruling 2026-08-28). This is called for a
+// non-running rec too, on the by-id path (mapNightBackgroundAudio's
+// current=false case, owner ruling 2026-08-30): whether rec was ever the
+// RUNNING session is the caller's decision, not this function's - it
+// only ever reads the one pinned revision rec names. A nil gain with a
+// non-empty reason and a nil error means that pinned revision configures
+// no background audio at all - a legitimate reading, not a read failure,
+// but one the caller's Reason must still say out loud rather than leave
 // blank. rec.ConfigObjectID == "" (found by review: mapNightCues already
 // guards this, this call site did not) is the same "nothing pinned yet"
 // case, answered the same way without issuing a doomed GetConfigRevision
