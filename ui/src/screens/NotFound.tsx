@@ -47,11 +47,17 @@ const MOVED: readonly { prefixes: readonly string[]; from: string; to: string; l
 ]
 
 /** Not a Monitor fold, so the mock's table does not list it, but a bookmark still lands here. */
-const ALSO_MOVED = [{ prefixes: ['/config'], to: '/settings/connections', label: 'Settings › Connections' }]
+const ALSO_MOVED = [
+  { prefixes: ['/config'], to: '/settings/connections', label: 'Settings › Connections' },
+  { prefixes: ['/monitor/readiness'], to: '/shows/playlists', label: 'Shows › Playlists' },
+  { prefixes: ['/monitor/fleet/playlist-definitions'], to: '/shows/playlists', label: 'Shows › Playlists' },
+  { prefixes: ['/night-sessions'], to: '/night', label: 'Show Night' },
+  { prefixes: ['/assets/manifest'], to: '/monitor/manifest', label: 'Monitor › Manifest' },
+]
 
 export function NotFound() {
   const { pathname } = useLocation()
-  const matches = (entry: { prefixes: readonly string[] }) => entry.prefixes.some((prefix) => pathname.startsWith(prefix))
+  const matches = (entry: { prefixes: readonly string[] }) => entry.prefixes.some((prefix) => pathname.includes(prefix))
   const moved = MOVED.find(matches) ?? ALSO_MOVED.find(matches)
 
   return (

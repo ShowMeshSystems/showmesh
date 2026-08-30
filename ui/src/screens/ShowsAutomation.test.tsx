@@ -262,6 +262,30 @@ describe('Shows · Automation tab', () => {
     expect(save).toHaveAttribute('title', 'State what happens locally while the coordinator is unreachable, in your own words.')
   })
 
+  it('a stale macro step save is refused and writes nothing', async () => {
+    let calls = 0
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (kind: string) => withContents(kind, [macroSummary()], [actionSummary()])
+    stubs.listAssets = assetsEmpty
+    stubs.getShowMacro = (id: string) => {
+      calls += 1
+      return Promise.resolve(macroResponse(id, calls === 1 ? 3 : 4))
+    }
+    stubs.getShowAction = (id: string) => Promise.resolve(actionResponse(id))
+    stubs.listActionBindings = () => Promise.resolve([binding()])
+    const putSpy = vi.fn(() => Promise.resolve(macroResponse('preshow-lights-up', 4)))
+    stubs.putShowMacro = putSpy
+    renderWorkspace({ session: signedIn(['config:write', 'show:macro:run', 'show:action:invoke']) })
+
+    const stepButton = await screen.findByRole('button', { name: /^1\. Start Preshow Playlist/ })
+    fireEvent.click(stepButton)
+    const save = await screen.findByRole('button', { name: 'Save macro' })
+    await waitFor(() => expect(save).not.toBeDisabled())
+    fireEvent.click(save)
+    expect(await screen.findByText(/Stale write/)).toBeInTheDocument()
+    expect(putSpy).not.toHaveBeenCalled()
+  })
+
   function resolumeActionsFixture() {
     return Promise.resolve({
       serverTime: '2026-08-30T21:00:00Z',

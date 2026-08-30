@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
+  getShowCue,
   putShowCue,
   type Asset,
   type ConfigShowCue,
@@ -11,6 +12,8 @@ import {
 import { Button, Choice, Field, Input, Panes, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
+import { guardedSave, type SaveOutcome } from '../domain/save'
+import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowCues, fetchShowPlaylists } from './showsData'
 import { CUE_OUTPUT_CHIP, type CueOutputKind, type CueRow, cueRows, formatBytes, slugify } from './showsModel'
 
@@ -335,6 +338,7 @@ function CueEditor({
   const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<ShowCueConfigResponse>, { kind: 'stale' }> | null>(null)
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
@@ -384,8 +388,30 @@ function CueEditor({
     const payload: ConfigShowCue = { show: showId, name: name.trim(), outputs }
     setSaving(true)
     setSaveError(null)
-    putShowCue(id.trim(), payload)
-      .then((response) => onSaved(response))
+    setStale(null)
+    if (cue === null) {
+      putShowCue(id.trim(), payload)
+        .then((response) => onSaved(response))
+        .catch((err: unknown) => setSaveError(describeApiError(err)))
+        .finally(() => setSaving(false))
+      return
+    }
+    guardedSave({
+      loaded: cue,
+      read: () => getShowCue(cue.id),
+      write: () => putShowCue(cue.id, payload),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onSaved(outcome.response)
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
       .catch((err: unknown) => setSaveError(describeApiError(err)))
       .finally(() => setSaving(false))
   }
@@ -511,6 +537,15 @@ function CueEditor({
           </Button>
         </div>
       </div>
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            if (cue !== null) getShowCue(cue.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
+          }}
+        />
+      )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
     </div>
   )

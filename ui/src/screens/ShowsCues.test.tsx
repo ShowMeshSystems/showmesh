@@ -210,6 +210,29 @@ describe('Shows · Cues tab', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
+  it('a stale cue save is refused, writes nothing, and names the changed fields', async () => {
+    let calls = 0
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (kind: string) => withContents(kind, [cueSummary()], [playlistSummary()])
+    stubs.listAssets = assetsEmpty
+    stubs.getShowCue = (id: string) => {
+      calls += 1
+      return Promise.resolve(cueResponse(cuePayload(calls === 1 ? {} : { name: 'Renamed Elsewhere' }), id, calls === 1 ? 1 : 2))
+    }
+    stubs.getShowPlaylist = () => Promise.resolve(playlistResponse())
+    const putSpy = vi.fn(() => Promise.resolve(cueResponse(cuePayload({ name: 'Renamed Elsewhere' }), 'cue-1', 2)))
+    stubs.putShowCue = putSpy
+    renderWorkspace({ session: signedIn(['config:write']) })
+
+    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    fireEvent.click(row)
+    const save = await screen.findByRole('button', { name: 'Save cue' })
+    fireEvent.click(save)
+    expect(await screen.findByText(/Stale write/)).toBeInTheDocument()
+    expect(screen.getByText(/Changed:/)).toHaveTextContent('name')
+    expect(putSpy).not.toHaveBeenCalled()
+  })
+
   it('a new cue with no output selected cannot be created', async () => {
     setup()
     fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))

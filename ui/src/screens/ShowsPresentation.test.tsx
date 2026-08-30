@@ -256,6 +256,28 @@ describe('Shows · Presentation tab', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
+  it('a stale surface save is refused, writes nothing, and names the changed fields', async () => {
+    let calls = 0
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (kind: string) => withContents(kind, [surfaceSummary()])
+    stubs.listAssets = assetsEmpty
+    stubs.getShowSurface = (id: string) => {
+      calls += 1
+      return Promise.resolve(surfaceResponse(id, calls === 1 ? 6 : 7, surfacePayload(calls === 1 ? {} : { name: 'Renamed Elsewhere' })))
+    }
+    const putSpy = vi.fn(() => Promise.resolve(surfaceResponse('garage', 7, surfacePayload({ name: 'Renamed Elsewhere' }))))
+    stubs.putShowSurface = putSpy
+    renderWorkspace({ session: signedIn(['config:write']), nodes: [node()] })
+
+    const row = await screen.findByRole('button', { name: 'Garage door' })
+    fireEvent.click(row)
+    const save = await screen.findByRole('button', { name: 'Save surface' })
+    fireEvent.click(save)
+    expect(await screen.findByText(/Stale write/)).toBeInTheDocument()
+    expect(screen.getByText(/Changed:/)).toHaveTextContent('name')
+    expect(putSpy).not.toHaveBeenCalled()
+  })
+
   it('a new surface needs a node and an NDI source name before it can be created', async () => {
     setup()
     fireEvent.click(await screen.findByRole('button', { name: 'New surface' }))

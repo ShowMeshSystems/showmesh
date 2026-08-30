@@ -6,7 +6,7 @@
   "description": "ShowMesh Operator UI: a read-only TypeScript SPA client of the coordinator's public control API (ADR-014, ADR-015). Not the system; see CLAUDE.md constraint 15.",
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck && vite build",
+    "build": "npm run typecheck && node scripts/check-old-design.mjs && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

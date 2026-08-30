@@ -612,6 +612,7 @@ function StepEditor({
   const [fallbackReason, setFallbackReason] = useState(step?.localFallback.reason ?? '')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<ShowMacroConfigResponse>, { kind: 'stale' }> | null>(null)
 
   if (step === undefined) return null
 
@@ -634,8 +635,23 @@ function StepEditor({
     const payload: ConfigShowMacro = { show: macro.payload.show, label: macro.payload.label, description: macro.payload.description, steps }
     setSaving(true)
     setSaveError(null)
-    putShowMacro(macro.id, payload)
-      .then((response) => onSaved(response))
+    setStale(null)
+    guardedSave({
+      loaded: macro,
+      read: () => getShowMacro(macro.id),
+      write: () => putShowMacro(macro.id, payload),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onSaved(outcome.response)
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
       .catch((err: unknown) => setSaveError(describeApiError(err)))
       .finally(() => setSaving(false))
   }
@@ -735,6 +751,15 @@ function StepEditor({
           </Button>
         </div>
       </div>
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            getShowMacro(macro.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
+          }}
+        />
+      )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
     </div>
   )

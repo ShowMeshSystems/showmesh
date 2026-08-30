@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  getShowSurface,
   putShowSurface,
   type ConfigShowSurface,
   type ShowSurfaceConfigResponse,
@@ -9,6 +10,8 @@ import { Button, Field, Input, Panes, RuledStrip, Section, Segmented, Select, St
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
+import { guardedSave, type SaveOutcome } from '../domain/save'
+import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowSurfaces } from './showsData'
 import { channelsPerPixel, channelSpans, renderCapableNodes, slugify, surfaceRenderStatus } from './showsModel'
 
@@ -265,6 +268,7 @@ function SurfaceEditor({
   const [frameRate, setFrameRate] = useState(String(surface?.payload.frameRate ?? 40))
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<ShowSurfaceConfigResponse>, { kind: 'stale' }> | null>(null)
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const nodeOptions = renderCapableNodes(model.nodes)
@@ -315,8 +319,30 @@ function SurfaceEditor({
     }
     setSaving(true)
     setSaveError(null)
-    putShowSurface(id.trim(), payload)
-      .then((response) => onSaved(response))
+    setStale(null)
+    if (surface === null) {
+      putShowSurface(id.trim(), payload)
+        .then((response) => onSaved(response))
+        .catch((err: unknown) => setSaveError(describeApiError(err)))
+        .finally(() => setSaving(false))
+      return
+    }
+    guardedSave({
+      loaded: surface,
+      read: () => getShowSurface(surface.id),
+      write: () => putShowSurface(surface.id, payload),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onSaved(outcome.response)
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
       .catch((err: unknown) => setSaveError(describeApiError(err)))
       .finally(() => setSaving(false))
   }
@@ -453,6 +479,15 @@ function SurfaceEditor({
           </Button>
         </div>
       </div>
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            if (surface !== null) getShowSurface(surface.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
+          }}
+        />
+      )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
     </div>
   )
