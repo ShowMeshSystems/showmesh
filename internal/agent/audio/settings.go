@@ -25,6 +25,19 @@ type Settings struct {
 	// unaffected, it silences unconditionally.
 	DuckTargetGain pkgaudio.Gain
 
+	// DuckFadeDurationMs is how long a session takes to fade DOWN to
+	// DuckTargetGain once a higher-priority session starts ducking it —
+	// fast, broadcast-style attack, since an announcement is already
+	// talking over the bed by the time the duck starts.
+	DuckFadeDurationMs int
+
+	// DuckRestoreFadeDurationMs is how long a session takes to fade back
+	// UP once the last ducker releases it — slower than
+	// DuckFadeDurationMs by design: an abrupt return to full level once
+	// nothing is talking over the bed reads as jarring in a way the
+	// duck-down does not.
+	DuckRestoreFadeDurationMs int
+
 	LTCFrameRate          pkgaudio.LTCFrameRate
 	LTCDefaultStartOffset pkgaudio.LTCTimecode
 
@@ -52,12 +65,14 @@ type Settings struct {
 // node that has never received an audio.settings.configure push still
 // fades and ceils exactly as the coordinator's documented default would.
 var DefaultSettings = Settings{
-	DefaultFadeCurve:         pkgaudio.FadeCurveLinear,
-	DefaultFadeDurationMs:    1000,
-	DefaultMaxBackgroundGain: pkgaudio.Ceiling(0.6),
-	DuckTargetGain:           pkgaudio.Gain(0.25),
-	LTCFrameRate:             pkgaudio.LTCFrameRate30,
-	LTCDefaultStartOffset:    pkgaudio.LTCTimecode("00:00:00:00"),
+	DefaultFadeCurve:          pkgaudio.FadeCurveLinear,
+	DefaultFadeDurationMs:     1000,
+	DefaultMaxBackgroundGain:  pkgaudio.Ceiling(0.6),
+	DuckTargetGain:            pkgaudio.Gain(0.25),
+	DuckFadeDurationMs:        200,
+	DuckRestoreFadeDurationMs: 800,
+	LTCFrameRate:              pkgaudio.LTCFrameRate30,
+	LTCDefaultStartOffset:     pkgaudio.LTCTimecode("00:00:00:00"),
 }
 
 // validDuckTargetGain reports why g is not a usable duck depth: a valid
@@ -91,6 +106,12 @@ func invalidSettingsFields(s Settings) []string {
 	}
 	if err := validDuckTargetGain(s.DuckTargetGain); err != nil {
 		issues = append(issues, "DuckTargetGain: "+err.Error())
+	}
+	if s.DuckFadeDurationMs <= 0 {
+		issues = append(issues, fmt.Sprintf("DuckFadeDurationMs %d is not positive", s.DuckFadeDurationMs))
+	}
+	if s.DuckRestoreFadeDurationMs <= 0 {
+		issues = append(issues, fmt.Sprintf("DuckRestoreFadeDurationMs %d is not positive", s.DuckRestoreFadeDurationMs))
 	}
 	if err := s.LTCFrameRate.Validate(); err != nil {
 		issues = append(issues, "LTCFrameRate: "+err.Error())
@@ -126,6 +147,12 @@ func (m *Manager) SetSettings(s Settings) {
 		}
 		if validDuckTargetGain(s.DuckTargetGain) != nil {
 			s.DuckTargetGain = DefaultSettings.DuckTargetGain
+		}
+		if s.DuckFadeDurationMs <= 0 {
+			s.DuckFadeDurationMs = DefaultSettings.DuckFadeDurationMs
+		}
+		if s.DuckRestoreFadeDurationMs <= 0 {
+			s.DuckRestoreFadeDurationMs = DefaultSettings.DuckRestoreFadeDurationMs
 		}
 		if s.LTCFrameRate.Validate() != nil {
 			s.LTCFrameRate = DefaultSettings.LTCFrameRate

@@ -43,14 +43,16 @@ type audioNodeConfig struct {
 // mirroring internal/coordinator/config.AudioSettingsPayload's JSON tags,
 // independently reproduced for the identical reason audioNodeConfig is.
 type audioSettingsConfig struct {
-	DriftIgnoreThresholdMs   int     `json:"driftIgnoreThresholdMs"`
-	DefaultFadeCurve         string  `json:"defaultFadeCurve"`
-	DefaultFadeDurationMs    int     `json:"defaultFadeDurationMs"`
-	DefaultMaxBackgroundGain float64 `json:"defaultMaxBackgroundGain"`
-	DuckTargetGain           float64 `json:"duckTargetGain"`
-	LTCFrameRate             string  `json:"ltcFrameRate"`
-	LTCDefaultStartOffset    string  `json:"ltcDefaultStartOffset"`
-	Revision                 int64   `json:"revision"`
+	DriftIgnoreThresholdMs    int     `json:"driftIgnoreThresholdMs"`
+	DefaultFadeCurve          string  `json:"defaultFadeCurve"`
+	DefaultFadeDurationMs     int     `json:"defaultFadeDurationMs"`
+	DefaultMaxBackgroundGain  float64 `json:"defaultMaxBackgroundGain"`
+	DuckTargetGain            float64 `json:"duckTargetGain"`
+	DuckFadeDurationMs        int     `json:"duckFadeDurationMs"`
+	DuckRestoreFadeDurationMs int     `json:"duckRestoreFadeDurationMs"`
+	LTCFrameRate              string  `json:"ltcFrameRate"`
+	LTCDefaultStartOffset     string  `json:"ltcDefaultStartOffset"`
+	Revision                  int64   `json:"revision"`
 }
 
 // audioBinding holds this node's most recently accepted audio.node and
@@ -254,6 +256,7 @@ func decodeAudioNodeConfig(params map[string]any) (audioNodeConfig, error) {
 var audioSettingsConfigureKnownKeys = map[string]bool{
 	"driftIgnoreThresholdMs": true, "defaultFadeCurve": true, "defaultFadeDurationMs": true,
 	"defaultMaxBackgroundGain": true, "duckTargetGain": true,
+	"duckFadeDurationMs": true, "duckRestoreFadeDurationMs": true,
 	"ltcFrameRate": true, "ltcDefaultStartOffset": true, "revision": true,
 }
 
@@ -268,7 +271,9 @@ func decodeAudioSettingsConfig(params map[string]any) (audioSettingsConfig, erro
 	}
 	for _, field := range []string{
 		"driftIgnoreThresholdMs", "defaultFadeCurve", "defaultFadeDurationMs",
-		"defaultMaxBackgroundGain", "duckTargetGain", "ltcFrameRate", "ltcDefaultStartOffset", "revision",
+		"defaultMaxBackgroundGain", "duckTargetGain",
+		"duckFadeDurationMs", "duckRestoreFadeDurationMs",
+		"ltcFrameRate", "ltcDefaultStartOffset", "revision",
 	} {
 		if _, ok := params[field]; !ok {
 			return audioSettingsConfig{}, fmt.Errorf("%s: params.%s is required", action, field)
@@ -296,6 +301,12 @@ func decodeAudioSettingsConfig(params map[string]any) (audioSettingsConfig, erro
 	}
 	if p.DuckTargetGain >= 1 {
 		return audioSettingsConfig{}, fmt.Errorf("%s: params.duckTargetGain must be below 1: a gain of 1 or more does not duck anything", action)
+	}
+	if p.DuckFadeDurationMs <= 0 {
+		return audioSettingsConfig{}, fmt.Errorf("%s: params.duckFadeDurationMs must be positive", action)
+	}
+	if p.DuckRestoreFadeDurationMs <= 0 {
+		return audioSettingsConfig{}, fmt.Errorf("%s: params.duckRestoreFadeDurationMs must be positive", action)
 	}
 	if err := pkgaudio.LTCFrameRate(p.LTCFrameRate).Validate(); err != nil {
 		return audioSettingsConfig{}, fmt.Errorf("%s: params.ltcFrameRate: %w", action, err)
