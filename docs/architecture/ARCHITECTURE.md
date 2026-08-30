@@ -104,6 +104,13 @@ Its internal design should be a modular monolith initially (Go, per [ADR-006](..
 
 ### 4.2 FPP integration
 
+For normal operation, the FPP integration observes FPP playlist progression and
+the coordinator resolves that observation to ShowMesh Cues.  During a confirmed
+coordinator outage, ADR-048 permits the plugin to execute only a coordinator-
+signed, pre-resolved fallback program at safe entry boundaries.  This preserves
+FPP's schedule and progression authority and does not make the plugin a general
+command authority.
+
 The FPP integration exposes scheduler- and playlist-safe native FPP commands. It forwards commands to the coordinator when available and implements explicitly defined reduced fallbacks for critical actions.
 
 The integration also imports relevant playlist, playback, and timing state through supported FPP interfaces. Compatibility remains subject to [FPP MultiSync research](../research/RES-002-fpp-multisync-compatibility.md) and [xLights/FPP Connect research](../research/RES-003-xlights-fpp-connect-compatibility.md).

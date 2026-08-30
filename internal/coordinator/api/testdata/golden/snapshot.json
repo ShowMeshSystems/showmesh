@@ -256,6 +256,10 @@
       ],
       "composition": null
     }
-  ]
+  ],
+  "audioConfigPush": {
+    "state": "usable",
+    "reason": null
+  }
 }
 

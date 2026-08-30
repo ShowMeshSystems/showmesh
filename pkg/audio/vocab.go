@@ -90,15 +90,27 @@ const (
 	StateCompleted State = "completed"
 	StateFailed    State = "failed"
 	StateUnknown   State = "unknown"
+
+	// StateRestorePending is a session whose persisted record was
+	// Playing/Preparing/Paused at last save but whose restart-time
+	// restore has not yet driven any engine: it is reported instead of
+	// the persisted state whenever a deferred or re-queued restore
+	// (internal/agent/audio/restore.go queueForRetryLocked) is waiting
+	// on an audio.node binding or a build refusal to clear. Nothing is
+	// actually playing while a session reports this, and the persisted
+	// record itself is left untouched so a reboot before the next
+	// successful retry still finds the original desired state on disk.
+	StateRestorePending State = "restore_pending"
 )
 
 var states = map[string]struct{}{
 	string(StatePreparing): {}, string(StateReady): {}, string(StatePlaying): {},
 	string(StatePaused): {}, string(StateStopping): {}, string(StateStopped): {},
 	string(StateCompleted): {}, string(StateFailed): {}, string(StateUnknown): {},
+	string(StateRestorePending): {},
 }
 
-// Validate reports whether s is one of the nine reserved session states.
+// Validate reports whether s is one of the ten reserved session states.
 func (s State) Validate() error {
 	return closedSet("audio.State", string(s), states)
 }

@@ -81,18 +81,6 @@ func (m *Manager) restoreInterrupted(ctx context.Context, interrupterID pkgaudio
 	}
 }
 
-// interruptResumePolicyLocked is the [pkgaudio.ResumePolicy] an interrupted
-// session resumes under: its own playlist's Resume when it has one — the
-// same field [Manager.restoreOne] already honors for crash recovery — or
-// Resume by default for a single-media session, which carries no such
-// field of its own. Caller holds t.mu.
-func interruptResumePolicyLocked(t *Session) pkgaudio.ResumePolicy {
-	if t.desired.Playlist != nil {
-		return t.desired.Playlist.Resume
-	}
-	return pkgaudio.ResumePolicyResume
-}
-
 // removeInterrupterLocked removes interrupterID from t's interrupter set,
 // or does nothing when interrupterID is not a member — the same
 // membership-check exactly-once guarantee [Manager.removeDuckerLocked]
@@ -105,6 +93,14 @@ func interruptResumePolicyLocked(t *Session) pkgaudio.ResumePolicy {
 // inferring a position from pre-interrupt timing — the same rule
 // [Engine.Seek]'s doc comment states at the engine boundary. Caller holds
 // t.mu.
+//
+// Deliberately ignores t's own configured [pkgaudio.ResumePolicy]: that
+// field still means "restart the current item from 0" for a genuine
+// restart request, for [Manager.restoreOne]'s crash recovery, and for the
+// coordinator's own end-of-resting-mode decision — but an announcement
+// ending is none of those. It is a transient suspension the session never
+// asked for, so its release always tries to continue from the bookmark,
+// landing on 0 only when that bookmark genuinely cannot be resolved.
 func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, interrupterID pkgaudio.SessionID) {
 	if _, ok := t.interruptedByAll[interrupterID]; !ok {
 		return
@@ -125,19 +121,18 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 		return
 	}
 
-	policy := interruptResumePolicyLocked(t)
 	handleStillValid := t.handleLoaded && t.loadedIdentity == itemIdentity(item)
 
-	// The common case, Resume with the handle untouched since the pause,
-	// uses the exact same [Engine.Resume] call an operator-issued
-	// [Manager.Resume] makes: continue the still-paused handle from
-	// exactly the position [Engine.Pause] froze it at (Resume issues its
-	// own internal seek to that position; this call site does not pass
-	// one of its own). This is deliberately NOT [Engine.Start] with a
-	// resolved position: a handle that is merely paused (never released)
-	// has no reason for this call site to seek it a second time when
-	// Resume already re-anchors it.
-	if policy == pkgaudio.ResumePolicyResume && handleStillValid {
+	// The common case, the handle untouched since the pause, uses the
+	// exact same [Engine.Resume] call an operator-issued [Manager.Resume]
+	// makes: continue the still-paused handle from exactly the position
+	// [Engine.Pause] froze it at (Resume issues its own internal seek to
+	// that position; this call site does not pass one of its own). This
+	// is deliberately NOT [Engine.Start] with a resolved position: a
+	// handle that is merely paused (never released) has no reason for
+	// this call site to seek it a second time when Resume already
+	// re-anchors it.
+	if handleStillValid {
 		resumeCtx, cancel := boundedEngineCallContext(ctx)
 		obs, err := m.engine.Resume(resumeCtx, t.handle)
 		cancel()
@@ -162,22 +157,25 @@ func (m *Manager) removeInterrupterLocked(ctx context.Context, t *Session, inter
 		return
 	}
 
-	// Restart, or a resume whose handle went stale in the meantime
-	// (desired state changed while suspended): re-established through
-	// the same release+prepare+Start(0-or-bookmark) sequence
-	// [Manager.restoreOne] uses for crash recovery, always against a
-	// FRESH handle — including when handleStillValid, for Restart: the
-	// paused handle sits frozen at its pre-interrupt position, and this
-	// package's own [Engine.Start] never seeks a zero position, so a
-	// restart reusing that handle would resume it, not restart it.
+	// The handle went stale while suspended (desired state changed
+	// underneath it): re-established through the same
+	// release+prepare+Start(bookmark position) sequence
+	// [Manager.restoreOne] uses for crash recovery, against a fresh
+	// handle. Still tries to land on the bookmarked position, not 0 — see
+	// this function's own doc comment — landing on 0 only when the
+	// bookmark itself cannot be resolved against the fresh handle. This
+	// is [Manager.restoreOne]'s own IDENTICAL fallback (restore.go), and
+	// deliberately matches its choice not to fault: this case is only
+	// reachable through a deliberate operator Apply while suspended, so
+	// faulting it would report the operator's own intent as a fault on a
+	// session that is, immediately after, playing the new item
+	// correctly. Logged, same as there.
 	position := time.Duration(0)
-	if policy == pkgaudio.ResumePolicyResume {
-		resolved, err := t.resolveBookmarkPositionLocked(item)
-		if err != nil {
-			m.logf("audio session %s: interrupt resume bookmark could not be resolved, restarting from 0: %v", t.id, err)
-		} else {
-			position = resolved
-		}
+	resolved, err := t.resolveBookmarkPositionLocked(item)
+	if err != nil {
+		m.logf("audio session %s: interrupt resume bookmark could not be resolved, starting from 0: %v", t.id, err)
+	} else {
+		position = resolved
 	}
 	t.bookmark = nil
 

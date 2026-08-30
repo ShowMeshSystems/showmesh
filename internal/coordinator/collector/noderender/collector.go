@@ -248,9 +248,12 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 // cue, catalog revision, Show and generation that authorized it, from the
 // node's own persisted evidence (mqttproto.RenderSurfaceReport.FSEQFilename
 // etc, internal/agent/renderreport.go's applyContentIdentity). sf.FSEQFilename
-// == "" means this surface holds no assignment at all: never a stale
-// filename left over from a previous one, so all six signals are
-// NotCollected together with one reason, mirroring
+// == "" covers two distinct cases, told apart by sf.ContentIdentityReason:
+// an empty reason means this surface holds no assignment at all (never a
+// stale filename left over from a previous one); a non-empty reason means
+// the node withheld a real but malformed persisted assignment (see
+// applyContentIdentity's own doc comment) and states why. Either way all six
+// signals are NotCollected together with the applicable reason, mirroring
 // surfaceDrawStateObservations' identical "no active writer" grouping.
 //
 // observedAt is sf.ContentObservedAt (the node's own content-identity read
@@ -259,6 +262,9 @@ func surfaceReportObservations(nodeID string, sf mqttproto.RenderSurfaceReport, 
 func surfaceContentObservations(nodeID string, res observation.ResourceRef, sf mqttproto.RenderSurfaceReport, observedAt time.Time, rep report) []observation.Observation {
 	if sf.FSEQFilename == "" {
 		reason := "this surface holds no render assignment"
+		if sf.ContentIdentityReason != "" {
+			reason = sf.ContentIdentityReason
+		}
 		return []observation.Observation{
 			notCollected(res, SignalSurfaceContentFSEQFilename, SourceFor(nodeID), reason, rep.receivedAt),
 			notCollected(res, SignalSurfaceContentFSEQContentHash, SourceFor(nodeID), reason, rep.receivedAt),

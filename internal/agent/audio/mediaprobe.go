@@ -122,9 +122,9 @@ func classifyDecode(dr DecodeResult) MediaItemResult {
 	if !dr.TypeIdentified {
 		return faulted(MediaFaultUndecodable, "GStreamer could not identify any stream type in this file's content")
 	}
-	if !isAudioMIME(dr.MIMEType) {
+	if !isAudioMIME(dr.MIMEType) && !dr.Decoded {
 		return faulted(MediaFaultUnsupportedFormat, fmt.Sprintf(
-			"this file's actual content is %q, not an audio format, regardless of its assigned filename", dr.MIMEType))
+			"this file's actual content is %q and a bounded decode of it produced no audio, regardless of its assigned filename", dr.MIMEType))
 	}
 	if !dr.Decoded {
 		reason := fmt.Sprintf("GStreamer identified %q but a bounded decode of it produced no audio", dr.MIMEType)
@@ -184,7 +184,10 @@ func firstPositive(a, b int) int {
 }
 
 // isAudioMIME reports whether mimeType is an audio type by GStreamer's own
-// typefind naming convention (an "audio/" prefix).
+// typefind naming convention (an "audio/" prefix). typefind names the
+// OUTERMOST container, which for a tagged file is the tag wrapper
+// ("application/x-id3" for any ID3v2-tagged MP3), so this is not on its
+// own decisive: a bounded decode that produced raw audio outranks it.
 func isAudioMIME(mimeType string) bool {
 	return len(mimeType) > len("audio/") && mimeType[:len("audio/")] == "audio/"
 }

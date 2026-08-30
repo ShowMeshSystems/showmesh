@@ -673,6 +673,37 @@ type Snapshot struct {
 	// rendered exactly as GET /resolume/instances renders it. Never null,
 	// matching MacroRuns' own "fatal to omit" reasoning.
 	Resolume []ResolumeInstance `json:"resolume"`
+
+	// AudioConfigPush is the coordinator-level signal for whether this
+	// coordinator can decode its stored, engine-wide audio.settings
+	// revision right now. It reports ONLY that: it says nothing about
+	// whether a given node's own separate audio.node binding is usable,
+	// or whether that node is currently reachable, so "usable" here does
+	// not by itself mean every node's next push will land — see
+	// [AudioConfigPushStatus]'s own doc comment. Fatal to omit for the
+	// same reason Collectors is — an operator whose nodes have gone quiet
+	// on audio configuration has no other API-visible way to learn why.
+	AudioConfigPush AudioConfigPushStatus `json:"audioConfigPush"`
+}
+
+// AudioConfigPushStatus is GET /api/v1/snapshot's "audioConfigPush"
+// member (coordinator.audio.config.push.state /
+// coordinator.audio.config.push.reason in IDENTIFIER-REGISTER.md). Unlike
+// [CollectorStatus], this is a single coordinator-wide value, not a list:
+// audio.settings is a singleton (ADR-039), so there is exactly one
+// current revision to decode. Deliberately narrow: it reports whether
+// THIS coordinator-wide singleton revision decodes, never whether any one
+// node's own separate audio.node binding does — a node can still be
+// stranded by a broken audio.node revision while this reads "usable".
+// State is one of internal/coordinator/api.AudioConfigPushRunState's
+// three values ("usable", "unusable", or "unknown" when a genuine
+// config-store failure, not a decode failure, kept the coordinator from
+// reading its own revision); Reason is set whenever State is not "usable"
+// and always nil otherwise, mirroring [CollectorStatus.Reason]'s own
+// convention.
+type AudioConfigPushStatus struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
 }
 
 // Problem is the RFC 9457 application/problem+json body every error in

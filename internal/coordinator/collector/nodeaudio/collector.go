@@ -356,6 +356,40 @@ func oneSessionObservations(nodeID string, sess mqttproto.AudioSessionReport, re
 		obs = append(obs, notCollected(res, SignalSessionFaultReason, source, "session has no standing fault", rep.receivedAt))
 	}
 
+	ltcClaimState := sess.LTCClaimState
+	if ltcClaimState == "" {
+		ltcClaimState = "none"
+	}
+	obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimState, ltcClaimState, sessionAt, rep))
+	if ltcClaimState == "refused" {
+		obs = append(obs, buildSessionValue(res, source, SignalSessionLTCClaimReason, sess.LTCClaimReason, sessionAt, rep))
+	} else {
+		obs = append(obs, notCollected(res, SignalSessionLTCClaimReason, source, "session's LTC claim was not refused", rep.receivedAt))
+	}
+
+	// Gated on RestorePending, not on RestoreAttempts > 0: attempts
+	// starting at 0 is genuinely ambiguous between "nothing queued" and
+	// "queued, but the automatic retry driver has not attempted it yet"
+	// — exactly the window an operator most needs to see, and the one a
+	// gate on the count alone reports as nothing at all.
+	if sess.RestorePending {
+		obs = append(obs,
+			buildSessionValue(res, source, SignalSessionRestoreAttempts, sess.RestoreAttempts, sessionAt, rep),
+			buildSessionValue(res, source, SignalSessionRestoreNextAttemptMs, sess.RestoreNextAttemptMs, sessionAt, rep),
+		)
+		if sess.RestoreAttempts > 0 {
+			obs = append(obs, buildSessionValue(res, source, SignalSessionRestoreLastReason, sess.RestoreLastReason, sessionAt, rep))
+		} else {
+			obs = append(obs, notCollected(res, SignalSessionRestoreLastReason, source, "a restore is queued but the automatic retry driver has not attempted it yet", rep.receivedAt))
+		}
+	} else {
+		obs = append(obs,
+			notCollected(res, SignalSessionRestoreAttempts, source, "no restore is currently queued for this session", rep.receivedAt),
+			notCollected(res, SignalSessionRestoreNextAttemptMs, source, "no restore is currently queued for this session", rep.receivedAt),
+			notCollected(res, SignalSessionRestoreLastReason, source, "no restore is currently queued for this session", rep.receivedAt),
+		)
+	}
+
 	if sess.GapKnown {
 		obs = append(obs,
 			buildSessionValue(res, source, SignalSessionItemGapMs, sess.ItemGapMs, sess.ItemGapObservedAt, rep),
