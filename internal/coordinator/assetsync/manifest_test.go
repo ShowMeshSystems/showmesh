@@ -290,6 +290,61 @@ func TestExpectedAssetsForNodeNoGapWithoutSurface(t *testing.T) {
 	}
 }
 
+// TestExpectedAssetsForNodeGapsReachAudioSequenceThroughAudioBranch proves
+// [NodeCueSequenceIDs]'s audio branch (added alongside PR #209's target
+// resolution -- resolving a Cue's audio, LTC and announcement outputs to
+// their target node) is a real, exercised consumer of "which sequences
+// does this node's own Cues reference": a node holding a show.surface
+// (required to reach gap detection at all -- see
+// [TestExpectedAssetsForNodeNoGapWithoutSurface]) that ALSO holds an
+// audio.node, whose own audio-only Cue names a sequence with NO current
+// asset anywhere, reads that sequence as a Gap. Dropping or misordering
+// NodeCueSequenceIDs' audio branch removes this Gap silently, which is
+// exactly the failure this test exists to catch: this is the only place
+// NodeCueSequenceIDs' return value is ever consumed (ExpectedAssetsForNode's
+// own Gaps computation), and Gaps itself is read only by the asset-manifest
+// API route and showmeshctl assets output (internal/coordinator/api/
+// assetmanifest.go, cmd/showmeshctl/cmd_assets.go) -- readiness
+// (fppreconcile.assetsMissingReadiness) deliberately never reads Gaps at
+// all, so it is not and cannot be this branch's consumer.
+func TestExpectedAssetsForNodeGapsReachAudioSequenceThroughAudioBranch(t *testing.T) {
+	st := openTestStore(t)
+	putShow(t, st, "halloween-2026", "Halloween 2026")
+	declareNode(t, st, "hybrid-01")
+	putSurface(t, st, "hybrid-01-surface", "halloween-2026", "hybrid-01")
+	putAudioNode(t, st, "hybrid-01")
+
+	audioCuePayload, err := config.EncodeShowCuePayload(config.ShowCuePayload{
+		Show: "halloween-2026", Name: "audio-only",
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "audio-seq-never-uploaded"}},
+	})
+	if err != nil {
+		t.Fatalf("encode audio cue: %v", err)
+	}
+	putConfig(t, st, config.ShowCueConfigKind, "cue-audio", audioCuePayload)
+
+	playlistPayload, err := config.EncodeShowPlaylistPayload(config.ShowPlaylistPayload{
+		Show: "halloween-2026", Name: "Main", Runner: config.ShowPlaylistRunnerShowmeshAudio,
+		Entries: []config.ShowPlaylistEntry{{ID: "e1", Cue: "cue-audio"}},
+	})
+	if err != nil {
+		t.Fatalf("encode playlist: %v", err)
+	}
+	putConfig(t, st, config.ShowPlaylistConfigKind, "playlist-1", playlistPayload)
+
+	// No asset is ever created for "audio-seq-never-uploaded" -- the Gap
+	// this test asserts on comes entirely from the audio branch adding it
+	// to hybrid-01's own referenced-sequence set, never from any asset row.
+
+	got, err := ExpectedAssetsForNode(context.Background(), st, "halloween-2026", "hybrid-01")
+	if err != nil {
+		t.Fatalf("ExpectedAssetsForNode() error = %v, want nil", err)
+	}
+	if len(got.Gaps) != 1 || got.Gaps[0].SequenceID != "audio-seq-never-uploaded" {
+		t.Fatalf("ExpectedAssetsForNode(hybrid-01) Gaps = %+v, want one gap naming %q", got.Gaps, "audio-seq-never-uploaded")
+	}
+}
+
 func TestStalenessWindowIsThreeTimesInventoryInterval(t *testing.T) {
 	got := StalenessWindow(2 * time.Minute)
 	want := 6 * time.Minute

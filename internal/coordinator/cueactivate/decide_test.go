@@ -773,7 +773,17 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 	putLTCCue(t, st, "cue-1", "show-1")
 	putAudioNode(t, st, "node-1")
 	declareNode(t, st, "node-1")
-	putFreshReport(t, st, "node-1", now)
+	// putLTCCue's own audio output names "asset-cue-1"; genuinely upload
+	// and hold it, so this pin-focused test exercises a healthy
+	// installation rather than tripping cueAssetsPresent's own
+	// never-uploaded-sequence refusal.
+	ltcCueAsset := createAsset(t, st, "show-1", "asset-cue-1", store.AssetTargetKindNode, "node-1", "sha256:ltc-cue-1", "Cue1.wav")
+	if err := st.ReplaceNodeAssetInventory(context.Background(), "node-1",
+		[]store.NodeAssetInventoryRecord{{NodeID: "node-1", ContentHash: ltcCueAsset.ContentHash, RuntimeFilename: ltcCueAsset.RuntimeFilename, SizeBytes: ltcCueAsset.SizeBytes, VerifiedAt: now}},
+		store.NodeAssetReportRecord{NodeID: "node-1", ReportedAt: now, Complete: true},
+	); err != nil {
+		t.Fatalf("replace node asset inventory: %v", err)
+	}
 	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
 
 	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
@@ -856,4 +866,55 @@ func TestShowPinFreezesActivationIdentityAcrossAMidShowCueEdit(t *testing.T) {
 			t.Fatalf("CatalogRevision did not change across an unpinned edit: still %q; program mode must re-snapshot live on its own next tick", before.CatalogRevision)
 		}
 	})
+}
+
+// TestAuthorizeRefusesASequenceThatWasNeverUploaded proves this coordinator
+// refuses a Cue output naming a sequence with NO asset ever uploaded for it
+// anywhere — not merely missing from this node's own inventory, but absent
+// from the asset store entirely (createAsset is deliberately never called
+// for "never-uploaded-seq") — exactly like any other missing asset, never
+// treated as present. This is what keeps this coordinator's own dispatch
+// gate agreeing with the node's own assetPresent (internal/agent/
+// cueactivationops.go), which has always refused an empty filename: before
+// this fix, this coordinator authorized the activation and the refusal
+// only ever surfaced later, at the node, past the point a readiness check
+// could have told an operator anything.
+func TestAuthorizeRefusesASequenceThatWasNeverUploaded(t *testing.T) {
+	st := openTestStore(t)
+	now := time.Unix(3000, 0).UTC()
+	putShow(t, st, "show-1", "Show One")
+	putActiveShow(t, st, "show-1")
+	putAudioNode(t, st, "node-1")
+	declareNode(t, st, "node-1")
+
+	putAudioCue(t, st, "cue-1", "show-1", "never-uploaded-seq")
+	// node-1's own inventory report is fresh and complete, but nothing was
+	// ever uploaded for "never-uploaded-seq" anywhere.
+	putFreshReport(t, st, "node-1", now)
+
+	putPlaylist(t, st, "playlist-1", singleEntryPlaylist("show-1", "inst-1", hash64("a1"), "cue-1", config.ShowPlaylistMismatchPolicyHold, ""))
+
+	result := resolvedResult("show-1", "playlist-1", 1, "entry-1", "cue-1", 1)
+	dec, err := Decide(context.Background(), st, result, baseObservation("inst-1"), "inst-1", nil)
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	act, ok := dec.Activations["node-1"]
+	if !ok {
+		t.Fatalf("no activation built for node-1")
+	}
+
+	outcome, reason, _, ok, err := Authorize(context.Background(), st, now, testInterval, "node-1", act, nil)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if ok {
+		t.Fatal("Authorize ok = true, want false: never-uploaded-seq has no asset anywhere, so this activation can never resolve to a runtime file on the node")
+	}
+	if outcome != cueauth.OutcomeAssetMissing {
+		t.Fatalf("outcome = %q, want %q", outcome, cueauth.OutcomeAssetMissing)
+	}
+	if !strings.Contains(reason, "never-uploaded-seq") || !strings.Contains(reason, "node-1") || !strings.Contains(reason, "cue-1") {
+		t.Fatalf("reason = %q, want it to name the sequence (never-uploaded-seq), the node (node-1) and the cue (cue-1)", reason)
+	}
 }
