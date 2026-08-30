@@ -154,7 +154,7 @@ func nightAudioStepsForSequence(steps []nightBackgroundAudioStepWire, sequence s
 
 func printNightAudioSteps(w io.Writer, steps []nightBackgroundAudioStepWire) {
 	for _, step := range steps {
-		_, _ = fmt.Fprintf(w, "  - [%s] %s (kind=%s rev=%d): %s", step.Phase, step.CueName, step.Kind, step.ActionRevision, step.State)
+		_, _ = fmt.Fprintf(w, "  - node=%s [%s] %s (kind=%s rev=%d): %s", step.NodeID, step.Phase, step.CueName, step.Kind, step.ActionRevision, step.State)
 		if step.Outcome != "" {
 			_, _ = fmt.Fprintf(w, " outcome=%s", step.Outcome)
 		}

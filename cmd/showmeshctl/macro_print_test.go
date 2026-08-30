@@ -228,7 +228,7 @@ func TestPrintShowActionDetailRendersAudioTarget(t *testing.T) {
 		Payload: showAction{
 			Show: "halloween-2026", Label: "Hush resting background audio", SafetyClass: "stop",
 			Target: showActionTarget{
-				Integration: "audio", AudioNodeID: "node-a", AudioSessionID: "resting-bg",
+				Integration: "audio", AudioNodeIDs: audioNodeIDList{"node-a"}, AudioSessionID: "resting-bg",
 				AudioAction: "audio.session.stop",
 			},
 		},
@@ -369,5 +369,52 @@ func TestShowActionIdempotentSurvivesDecodeAsTriState(t *testing.T) {
 	}
 	if declaredFalse.Idempotent == nil || *declaredFalse.Idempotent != false {
 		t.Errorf("declared-false payload decoded Idempotent = %v, want a non-nil pointer to false", declaredFalse.Idempotent)
+	}
+}
+
+// TestAudioNodeIDListUnmarshalJSON_AcceptsScalarOrArray is the CLI-side
+// decode compatibility proof: the server's audioNodeId is a
+// bare string (every payload stored before that change) or an array of
+// strings, and this program's own independent transcription must accept
+// both under the same wire key.
+func TestAudioNodeIDListUnmarshalJSON_AcceptsScalarOrArray(t *testing.T) {
+	var scalar audioNodeIDList
+	if err := scalar.UnmarshalJSON([]byte(`"node-a"`)); err != nil {
+		t.Fatalf("unmarshal scalar: %v", err)
+	}
+	if len(scalar) != 1 || scalar[0] != "node-a" {
+		t.Fatalf("scalar decode = %+v, want [node-a]", scalar)
+	}
+
+	var array audioNodeIDList
+	if err := array.UnmarshalJSON([]byte(`["node-a","node-b"]`)); err != nil {
+		t.Fatalf("unmarshal array: %v", err)
+	}
+	if len(array) != 2 || array[0] != "node-a" || array[1] != "node-b" {
+		t.Fatalf("array decode = %+v, want [node-a node-b]", array)
+	}
+}
+
+// TestPrintShowActionDetailRendersEveryAudioNode proves the printer's
+// Node line lists every configured node, not only the first, for a
+// night-mode bed or announcement target naming more than one.
+func TestPrintShowActionDetailRendersEveryAudioNode(t *testing.T) {
+	resp := showActionConfigResponse{
+		ID: "thank-you", Revision: 1,
+		Payload: showAction{
+			Show: "halloween-2026", Label: "Thank you announcement", SafetyClass: "none",
+			Target: showActionTarget{
+				Integration: "audio", AudioNodeIDs: audioNodeIDList{"node-a", "node-b"}, AudioSessionID: "announcement-1",
+				AudioAction: "audio.session.apply",
+			},
+		},
+	}
+	var buf bytes.Buffer
+	printShowActionDetail(&buf, resp)
+	out := buf.String()
+	for _, want := range []string{"node-a", "node-b"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printShowActionDetail output missing node %q:\n%s", want, out)
+		}
 	}
 }

@@ -12469,9 +12469,22 @@ components:
             validation rather than by this schema.
           additionalProperties: true
         audioNodeId:
-          type: string
-          description: "audio-only: the target audio node id."
-          minLength: 1
+          description: >-
+            audio-only: the target audio node id(s), widened from one
+            node to a list: a bare string (one node - the shape
+            every payload stored before that change already used) or an
+            array of distinct, non-empty node ids. A show.action bound to
+            a night-session announcement, or the night-mode resting bed,
+            may name more than one; every other consumer of an
+            audio-integration show.action reads only the first.
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: array
+              minItems: 1
+              items:
+                type: string
+                minLength: 1
         audioSessionId:
           type: string
           description: "audio-only: the target pkg/audio session id."
@@ -12527,8 +12540,18 @@ components:
           type: object
           additionalProperties: true
         audioNodeId:
-          type: string
-          minLength: 1
+          description: >-
+            audio-only: the target audio node id(s) - a bare string or an
+            array of distinct, non-empty node ids. See ConfigShowActionTarget's
+            own audioNodeId description.
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: array
+              minItems: 1
+              items:
+                type: string
+                minLength: 1
         audioSessionId:
           type: string
           minLength: 1
@@ -14268,23 +14291,30 @@ components:
         target:
           type: string
           minLength: 1
+          description: >-
+            The audio.node id this item plays on. Items are not required
+            to share one target - every distinct target among them is
+            its own node the bed plays on, each with its own independent
+            playback progress.
     ConfigNightSessionBackgroundAudio:
       type: object
       description: >-
         night.session.resting.backgroundAudio: a ShowMesh `background`
-        playback session (RESTING-MODE.md §8). Present only when the
-        deployment configures background audio at all; its absence is
-        valid and is not degraded. `resume` and `itemTransition` are
-        pinned against pkg/audio's vocabulary on Track C's branch
-        (track-c/audio-node). crossfadeMs is required when itemTransition
-        is "crossfade" and must be absent otherwise (server-side; not
-        expressible here). maxGainDb must be <= 0. fadeOutMs and fadeInMs
-        are the show-boundary fade pair: fadeOutMs fades the bed to
-        silence before it is paused or stopped for a show, fadeInMs
-        fades it back up to maxGainDb after resting returns. They must
-        be configured together, or both omitted for an instant cut
-        exactly as before this pair existed (server-side; not
-        expressible here).
+        playback session (RESTING-MODE.md §8), playing on every distinct
+        node its own items[].target names (a list of target nodes,
+        derived from the items themselves - there is no separate
+        "which output(s)" field). Present only when the deployment
+        configures background audio at all; its absence is valid and is
+        not degraded. `resume` and `itemTransition` are pinned against
+        pkg/audio's vocabulary on Track C's branch (track-c/audio-node).
+        crossfadeMs is required when itemTransition is "crossfade" and
+        must be absent otherwise (server-side; not expressible here).
+        maxGainDb must be <= 0. fadeOutMs and fadeInMs are the
+        show-boundary fade pair: fadeOutMs fades the bed to silence
+        before it is paused or stopped for a show, fadeInMs fades it
+        back up to maxGainDb after resting returns. They must be
+        configured together, or both omitted for an instant cut exactly
+        as before this pair existed (server-side; not expressible here).
       required: [items, repeat, resume, itemTransition, maxGainDb]
       properties:
         items:
@@ -15035,8 +15065,11 @@ components:
         One durable audio step Track F seam F5's own controller has
         recorded, across every cycle the session has lived through:
         either the resting bed's own playback sequence or an
-        announcement session's clear and start.
-      required: [sequence, phase, cueName, kind, actionRevision, state,
+        announcement session's clear, apply, and start. The bed and an
+        announcement each accept a list of target nodes, and
+        every one of them, including the first, reports through this
+        array with its own nodeId - never a first-node exception.
+      required: [sequence, phase, cueName, nodeId, kind, actionRevision, state,
                  dispatchedAt, resolvedAt]
       properties:
         sequence:
@@ -15054,10 +15087,16 @@ components:
             request.
         cueName:
           type: string
+        nodeId:
+          type: string
+          description: >-
+            The audio.node this step addressed. A refused or stalled step
+            on one node is answerable from this field alone, without
+            reading phase or relying on any array ordering.
         kind:
           type: string
           enum: [apply, gain, start, pause, resume, stop,
-                 announcementClear, announcementStart]
+                 announcementClear, announcementApply, announcementStart]
         actionRevision:
           type: integer
         state:

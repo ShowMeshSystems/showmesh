@@ -140,10 +140,9 @@ func audioNodeConfirmsTransition(ctx context.Context, nodes NodeLister, now time
 // about (never seen, never advertised, or not currently online) is
 // reported unknown, matching api/openapi.yaml's NightReadinessCheck rule
 // that missing evidence is never "failed".
-func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
-	name := "resting:background-audio-item-transition"
+func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, now time.Time, nodeID string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
+	name := "resting:background-audio-item-transition:" + nodeID
 	t := pkgaudio.ItemTransition(ba.ItemTransition)
-	nodeID := ba.OutputNodeID()
 	confirms, evidence, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, t)
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
@@ -269,8 +268,7 @@ func audioNodeEngineStateNow(audio NodeAudioLister, nodeID string, now time.Time
 // api/openapi.yaml's own NightReadinessCheck rule that missing evidence
 // is never "failed". This check now has a real capability signal to
 // check against; before it, this always reported not_verifiable.
-func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
-	nodeID := ba.OutputNodeID()
+func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now time.Time, nodeID string, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	name := "resting:background-audio-output-capabilities:" + nodeID
 	evidence, err := audioNodeCapabilitySet(ctx, h.deps.Nodes, now, nodeID)
 	if err != nil {

@@ -82,7 +82,43 @@ func nightAnnouncementCueWithResolvedPolicy(cue config.NightSessionCue, payload 
 // to, and this controller has no way to make room for it or to know when
 // it ends. That is reported at readiness (nightaudioreadiness.go) rather
 // than papered over with a gain command that would strand the bed.
+//
+// Also clamps AudioNodeIDs to its own first element. The generic
+// per-cue engine (nightRunCue) can only ever dispatch to and report on
+// ONE target - that invariant predates this change and stays
+// unchanged, including for barrier satisfaction, which gates on this
+// exact row. A multi-node announcement's remaining nodes are this file's
+// own controller-owned fan-out (nightAdvanceAnnouncementApplyExtra,
+// nightAdvanceAnnouncementClear, nightAdvanceAnnouncementStart), never
+// the generic engine. Applied to every audio-integration target, not
+// only role "announcement": nothing else this coordinator dispatches
+// through the generic engine is multi-node aware, so silently sending
+// only the first configured node (rather than one arbitrarily chosen, or
+// refusing outright) is the same "never guess, never drop silently"
+// posture as the rest of this package, made loud in this comment because
+// there is no validation-time check for it (a cue's bound action is
+// decoded independently of the cue that binds it).
 func nightAnnouncementDeclaredTarget(cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
+	target = nightAnnouncementDeclareParams(cue, target)
+	if len(target.AudioNodeIDs) > 1 {
+		target.AudioNodeIDs = target.AudioNodeIDs[:1]
+	}
+	return target
+}
+
+// nightAnnouncementDeclaredTargetFullNodeList is
+// [nightAnnouncementDeclaredTarget]'s own param-declaration logic without
+// its first-node clamp, for [handlers.nightAdvanceAnnouncementApplyExtra]
+// - which needs the SAME declared params (source role, mix policy) for
+// every additional node, each under its own single-node target.
+func nightAnnouncementDeclaredTargetFullNodeList(cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
+	return nightAnnouncementDeclareParams(cue, target)
+}
+
+// nightAnnouncementDeclareParams is nightAnnouncementDeclaredTarget's own
+// param-declaration step, factored out so it can run once, before AudioNodeIDs
+// is clamped or replaced per node.
+func nightAnnouncementDeclareParams(cue config.NightSessionCue, target config.ShowActionTarget) config.ShowActionTarget {
 	if cue.Role != config.NightSessionCueRoleAnnouncement || cue.AnnouncementPolicy == nil {
 		return target
 	}
@@ -138,31 +174,74 @@ const (
 	nightPhaseAnnouncementSession = "announcementSession"
 	nightPhaseAnnouncementClear   = nightPhaseAnnouncementSession + ":clear"
 	nightPhaseAnnouncementStart   = nightPhaseAnnouncementSession + ":start"
+
+	// nightPhaseAnnouncementApplyExtra is this controller's own extra
+	// apply, for every target node BEYOND the cue's bound action's own
+	// first (which the generic engine already applies and reports -
+	// nightAnnouncementDeclaredTarget's own doc comment). Never dispatched
+	// when a target names one node, so a single-node installation writes
+	// no row under this phase at all.
+	nightPhaseAnnouncementApplyExtra = nightPhaseAnnouncementSession + ":applyExtra"
 )
 
-// The step kinds these two phases surface, distinct from background
-// audio's own so an operator reading one step list can tell which
-// sequence a failure belongs to (ADR-039: a durable step nothing can
-// read is not evidence). A refused clear in particular means the
-// PREVIOUS announcement may still be playing and still holding the bed
-// ducked, which is exactly the kind of thing that must not live only in
-// a log line.
+// The step kinds these phases surface, distinct from background audio's
+// own so an operator reading one step list can tell which sequence a
+// failure belongs to (ADR-039: a durable step nothing can read is not
+// evidence). A refused clear in particular means the PREVIOUS
+// announcement may still be playing and still holding the bed ducked,
+// which is exactly the kind of thing that must not live only in a log
+// line. nightAnnouncementStepApply is shared with the generic engine's
+// own row for the cue's first node (mapNightAnnouncementPrimaryApplySteps,
+// nightsessioncontrol.go) - owner ruling: every target node, including
+// the first, reports through this ONE array, uniformly.
 const (
 	nightAnnouncementStepClear = "announcementClear"
 	nightAnnouncementStepStart = "announcementStart"
+	nightAnnouncementStepApply = "announcementApply"
 )
 
-// nightParseAnnouncementRow classifies one outbox row under this
-// controller's announcement-session phase family. false means the row
-// matches no shape this build writes.
-func nightParseAnnouncementRow(row store.NightCueOutboxRecord) (kind string, ok bool) {
-	switch {
-	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementClear+":"):
-		return nightAnnouncementStepClear, true
-	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementStart+":"):
-		return nightAnnouncementStepStart, true
+// nightAnnouncementKnownCuePhases are the only cuePhase values this
+// package ever suffixes an announcement phase string with -
+// nightAnnouncementNodeFromPhase's own closed vocabulary to split a
+// phase's trailing ":"+nodeID from the coordinator-chosen cuePhase
+// segment before it, safely regardless of what characters an
+// operator-chosen node id itself contains.
+var nightAnnouncementKnownCuePhases = []string{nightPhaseEnterShow, nightPhaseEnterResting, nightPhaseFadeOut}
+
+// nightAnnouncementNodeFromPhase recovers the target node id from a
+// phase built as kindPrefix+":"+cuePhase+":"+nodeID.
+func nightAnnouncementNodeFromPhase(phase, kindPrefix string) (nodeID string, ok bool) {
+	rest, ok := strings.CutPrefix(phase, kindPrefix+":")
+	if !ok {
+		return "", false
+	}
+	for _, cuePhase := range nightAnnouncementKnownCuePhases {
+		if nodeID, ok := strings.CutPrefix(rest, cuePhase+":"); ok {
+			return nodeID, true
+		}
 	}
 	return "", false
+}
+
+// nightParseAnnouncementRow classifies one outbox row under this
+// controller's announcement-session phase family and recovers the node
+// it addressed. false means the row matches no shape this build writes.
+func nightParseAnnouncementRow(row store.NightCueOutboxRecord) (kind, nodeID string, ok bool) {
+	switch {
+	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementClear+":"):
+		if n, ok := nightAnnouncementNodeFromPhase(row.Phase, nightPhaseAnnouncementClear); ok {
+			return nightAnnouncementStepClear, n, true
+		}
+	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementStart+":"):
+		if n, ok := nightAnnouncementNodeFromPhase(row.Phase, nightPhaseAnnouncementStart); ok {
+			return nightAnnouncementStepStart, n, true
+		}
+	case strings.HasPrefix(row.Phase, nightPhaseAnnouncementApplyExtra+":"):
+		if n, ok := nightAnnouncementNodeFromPhase(row.Phase, nightPhaseAnnouncementApplyExtra); ok {
+			return nightAnnouncementStepApply, n, true
+		}
+	}
+	return "", "", false
 }
 
 // nightAnnouncementHistory returns every announcement-session step this
@@ -242,24 +321,28 @@ func nightAnnouncementRevisions(persistedRevision int64) (clearRevision, applyRe
 	return floor + 1, floor + 2, floor + 3
 }
 
-// nightAudioSessionPersistedRevision reads sessionID's own durable
-// audio_sessions row and returns its revision, or 0 when no row exists
-// yet (a session this coordinator has never dispatched anything against).
-// This is [nightAnnouncementRevisions]'s floor input across night
-// sessions - see that function's own doc comment. A read error other
-// than "not found" costs only the chance to advance past a revision this
-// coordinator could not read this time: the apply's own pinned config
-// revision is still in the floor, so this can never cause a rewind, only
-// fail to include evidence it could not get.
-func (h *handlers) nightAudioSessionPersistedRevision(ctx context.Context, sessionID string) int64 {
-	rec, err := h.deps.AudioSessions.GetAudioSession(ctx, sessionID)
+// nightAudioSessionPersistedRevision reads nodeID's own durable
+// audio_sessions row for sessionID and returns its revision, or 0 when no
+// row exists yet (a session this coordinator has never dispatched
+// anything against on that node). audio_sessions is keyed by (node_id,
+// id) (schemaV21), so the same sessionID on two different nodes is two
+// independent rows and two independent floors - a bed or announcement
+// with more than one target node must read each node's own row, never a
+// single shared one. This is [nightAnnouncementRevisions]'s floor input
+// across night sessions - see that function's own doc comment. A read
+// error other than "not found" costs only the chance to advance past a
+// revision this coordinator could not read this time: the apply's own
+// pinned config revision is still in the floor, so this can never cause a
+// rewind, only fail to include evidence it could not get.
+func (h *handlers) nightAudioSessionPersistedRevision(ctx context.Context, nodeID, sessionID string) int64 {
+	rec, err := h.deps.AudioSessions.GetAudioSession(ctx, nodeID, sessionID)
 	switch {
 	case err == nil:
 		return int64(rec.Revision)
 	case errors.Is(err, store.ErrAudioSessionNotFound):
 		return 0
 	default:
-		h.logWarn("night loop: announcement: failed to read persisted audio session revision; the floor may not include it", "sessionId", sessionID, "error", err)
+		h.logWarn("night loop: announcement: failed to read persisted audio session revision; the floor may not include it", "nodeId", nodeID, "sessionId", sessionID, "error", err)
 		return 0
 	}
 }
@@ -287,9 +370,12 @@ func (h *handlers) nightAnnouncementAppliedThisCycle(ctx context.Context, rec st
 }
 
 // nightAdvanceAnnouncementClear runs BEFORE an announcement cue's own
-// dispatch. See this file's constants for why the clear belongs here
-// rather than after. Never gated on anything: clearing a session that
-// does not exist is a no-op success on the node.
+// dispatch, for EVERY one of the cue's own target nodes (not only the
+// generic engine's own first node - clear was already
+// controller-owned for every node, so this is a plain fan-out with no
+// special first-node case). See this file's constants for why the clear
+// belongs here rather than after. Never gated on anything: clearing a
+// session that does not exist is a no-op success on the node.
 func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
 	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
 	if !ok {
@@ -300,13 +386,84 @@ func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
-	clearRevision, _, _ := nightAnnouncementRevisions(persisted)
-	clear := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.clear", map[string]any{})
-	phase := nightPhaseAnnouncementClear + ":" + cuePhase
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, clear, clearRevision, history); err != nil {
-		h.logWarn("night loop: announcement: clear failed", "sessionId", rec.ID, "cue", cue.Name, "error", err)
+	for _, nodeID := range target.AudioNodeIDs {
+		persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, target.AudioSessionID)
+		clearRevision, _, _ := nightAnnouncementRevisions(persisted)
+		clear := nightAudioTarget(nodeID, target.AudioSessionID, "audio.session.clear", map[string]any{})
+		phase := nightPhaseAnnouncementClear + ":" + cuePhase + ":" + nodeID
+		if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, clear, clearRevision, history); err != nil {
+			h.logWarn("night loop: announcement: clear failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
+		}
 	}
+}
+
+// nightAdvanceAnnouncementApplyExtra runs the SAME announcement apply the
+// generic per-cue engine already applies to the cue's bound action's own
+// first node (nightRunCue, via nightAnnouncementDeclaredTarget's clamp),
+// again for every ADDITIONAL configured node - this controller's own
+// multi-node fan-out for the one step the generic engine cannot itself
+// repeat. Uses
+// the exact same applyRevision the generic engine pins (never a fresh
+// one): every node must apply the identical show.action revision, and
+// this is the same params the bound action's own dispatch would send,
+// down to source role and mix policy declaration.
+//
+// Dispatched via [handlers.nightRunAnnouncementApply], NOT
+// [handlers.nightRunAudioCommand]: applyRevision is a show.action config
+// revision, a different, smaller number space than clear/start's own
+// floor+1/floor+2 counter over this SAME announcement history
+// (nightAnnouncementRevisions) - reusing nightRunAudioCommand's local
+// RevisionState pre-check against that shared history would refuse
+// apply's own legitimate, smaller revision as stale. The generic engine's
+// own apply for node 0 carries no such local pre-check either (it trusts
+// the node's own RevisionState), so nightRunAnnouncementApply mirrors
+// that, not nightRunAudioCommand.
+func (h *handlers) nightAdvanceAnnouncementApplyExtra(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
+	target, applyRevision, ok := h.nightAnnouncementSessionTarget(ctx, cue)
+	if !ok || len(target.AudioNodeIDs) <= 1 {
+		return
+	}
+	declared := nightAnnouncementDeclaredTargetFullNodeList(cue, target)
+	for _, nodeID := range target.AudioNodeIDs[1:] {
+		applyTarget := declared
+		applyTarget.AudioNodeIDs = config.AudioNodeIDList{nodeID}
+		phase := nightPhaseAnnouncementApplyExtra + ":" + cuePhase + ":" + nodeID
+		if err := h.nightRunAnnouncementApply(ctx, now, rec, phase, cue.Name, applyTarget, applyRevision); err != nil {
+			h.logWarn("night loop: announcement: extra-node apply failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
+		}
+	}
+}
+
+// nightRunAnnouncementApply commits (if needed) and dispatches one
+// extra-node announcement apply step, mirroring nightRunCue's own
+// commit-then-dispatch shape (nightcuerun.go) rather than
+// nightRunAudioCommand's (see nightAdvanceAnnouncementApplyExtra's own
+// doc comment for why).
+func (h *handlers) nightRunAnnouncementApply(ctx context.Context, now time.Time, rec store.NightSessionRecord, phase, cueName string, target config.ShowActionTarget, revision int64) error {
+	issuer := nightControllerIssuer(rec)
+	row, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+	switch {
+	case err == nil:
+		if row.State == nightCueStateResolved || row.State == nightCueStateAmbiguous {
+			return nil
+		}
+	case errors.Is(err, store.ErrNightCueOutboxNotFound):
+		if cerr := h.nightCommitCueRow(ctx, now, rec, phase, cueName, revision); cerr != nil && !errors.Is(cerr, store.ErrNightCueOutboxDuplicate) {
+			return cerr
+		}
+		row, err = h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, phase, cueName)
+		if err != nil {
+			return err
+		}
+		if row.State == nightCueStateResolved || row.State == nightCueStateAmbiguous {
+			return nil
+		}
+	default:
+		return err
+	}
+	idemKey := nightCueIdempotencyKey(rec.ID, rec.Cycle, phase, cueName)
+	_, err = h.nightDispatchAndPersistCue(ctx, now, rec, phase, cueName, target, idemKey, issuer, revision)
+	return err
 }
 
 // nightAdvanceAnnouncementStart runs AFTER an announcement cue's own
@@ -319,32 +476,46 @@ func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.T
 // is not a reason to leave the announcement silent, and an apply that
 // genuinely failed produces a start that fails in its own row, visibly,
 // rather than one that is silently never attempted.
+// nightAnnouncementApplyRowPhase is the outbox phase holding nodeID's own
+// apply step for cue under cuePhase: the generic engine's own row
+// (cuePhase, unsuffixed) for the bound action's first node, or this
+// controller's own extra-node apply phase for every other node.
+func nightAnnouncementApplyRowPhase(cuePhase string, target config.ShowActionTarget, nodeID string) string {
+	if len(target.AudioNodeIDs) > 0 && target.AudioNodeIDs[0] == nodeID {
+		return cuePhase
+	}
+	return nightPhaseAnnouncementApplyExtra + ":" + cuePhase + ":" + nodeID
+}
+
 func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.Time, rec store.NightSessionRecord, cuePhase string, cue config.NightSessionCue) {
 	target, _, ok := h.nightAnnouncementSessionTarget(ctx, cue)
 	if !ok {
 		return
-	}
-	applyRow, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, cuePhase, cue.Name)
-	if err != nil {
-		return
-	}
-	if applyRow.State != nightCueStateResolved && applyRow.State != nightCueStateAmbiguous {
-		return // the announcement's own apply has not reached a terminal state yet.
-	}
-	if applyRow.Outcome != nightCueOutcomeConfirmed {
-		h.logWarn("night loop: announcement: the apply did not confirm; starting anyway so a silent announcement is never the quiet outcome", "sessionId", rec.ID, "cue", cue.Name, "outcome", applyRow.Outcome)
 	}
 	history, err := h.nightAnnouncementHistory(ctx, rec)
 	if err != nil {
 		h.logWarn("night loop: announcement: failed to read announcement-session history for start", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
-	_, _, startRevision := nightAnnouncementRevisions(persisted)
-	start := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.start", map[string]any{})
-	phase := nightPhaseAnnouncementStart + ":" + cuePhase
-	if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, start, startRevision, history); err != nil {
-		h.logWarn("night loop: announcement: start failed", "sessionId", rec.ID, "cue", cue.Name, "error", err)
+	for _, nodeID := range target.AudioNodeIDs {
+		applyPhase := nightAnnouncementApplyRowPhase(cuePhase, target, nodeID)
+		applyRow, err := h.deps.NightSessions.GetNightCueOutboxRow(ctx, rec.ID, rec.Cycle, applyPhase, cue.Name)
+		if err != nil {
+			continue
+		}
+		if applyRow.State != nightCueStateResolved && applyRow.State != nightCueStateAmbiguous {
+			continue // this node's own apply has not reached a terminal state yet.
+		}
+		if applyRow.Outcome != nightCueOutcomeConfirmed {
+			h.logWarn("night loop: announcement: the apply did not confirm; starting anyway so a silent announcement is never the quiet outcome", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "outcome", applyRow.Outcome)
+		}
+		persisted := h.nightAudioSessionPersistedRevision(ctx, nodeID, target.AudioSessionID)
+		_, _, startRevision := nightAnnouncementRevisions(persisted)
+		start := nightAudioTarget(nodeID, target.AudioSessionID, "audio.session.start", map[string]any{})
+		phase := nightPhaseAnnouncementStart + ":" + cuePhase + ":" + nodeID
+		if _, err := h.nightRunAudioCommand(ctx, now, rec, phase, cue.Name, start, startRevision, history); err != nil {
+			h.logWarn("night loop: announcement: start failed", "sessionId", rec.ID, "cue", cue.Name, "nodeId", nodeID, "error", err)
+		}
 	}
 }
 
@@ -392,7 +563,10 @@ func (h *handlers) nightAnnouncementApplyDispatchRevision(ctx context.Context, c
 	if cue.Role != config.NightSessionCueRoleAnnouncement || !nightAnnouncementTargetDeclarable(target) {
 		return 0, false
 	}
-	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
+	if len(target.AudioNodeIDs) == 0 {
+		return 0, false
+	}
+	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioNodeIDs[0], target.AudioSessionID)
 	_, applyRevision, _ := nightAnnouncementRevisions(persisted)
 	return applyRevision, true
 }

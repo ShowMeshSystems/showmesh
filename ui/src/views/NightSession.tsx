@@ -450,6 +450,7 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                   <thead>
                     <tr>
                       <th>Sequence</th>
+                      <th>Node</th>
                       <th>Cue</th>
                       <th>Kind</th>
                       <th>Pinned revision</th>
@@ -462,8 +463,15 @@ function NightSessionDetail({ session, onReload }: { session: NightSessionState;
                   </thead>
                   <tbody>
                     {session.backgroundAudio.steps.map((step: NightBackgroundAudioStep, i) => (
-                      <tr key={`${step.sequence}-${step.cueName}-${step.kind}-${i}`}>
+                      <tr key={`${step.sequence}-${step.nodeId}-${step.cueName}-${step.kind}-${i}`}>
                         <td>{step.sequence}</td>
+                        {/* The bed and an announcement each accept a
+                            list of target nodes; every step, including the
+                            first node's, carries its own nodeId here — a
+                            refused step on one node is answerable from this
+                            column alone, with no other array or sort order
+                            to reconcile it against. */}
+                        <td>{step.nodeId}</td>
                         <td>{step.cueName}</td>
                         <td>{step.kind}</td>
                         <td>{step.actionRevision}</td>

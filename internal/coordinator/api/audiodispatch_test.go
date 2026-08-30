@@ -61,6 +61,19 @@ type fakeAudioPublisher struct {
 	// map falls back to f.result.
 	resultsByAction map[string]mqttproto.ResultPayload
 
+	// resultsByNode, when non-nil, answers AwaitResponse per dispatched
+	// TARGET NODE and action (key "nodeID" alone matches every action on
+	// that node; key "nodeID:action" matches only that one action, and
+	// takes priority), checked before resultsByAction - this file's own
+	// multi-node tests need the SAME action (e.g. "apply") to confirm on
+	// one node and refuse on another, or one specific action on one node
+	// to refuse while every other action on that SAME node confirms
+	// (e.g. a node's clear and apply confirm but its start is refused),
+	// in the SAME test - neither of which resultsByAction (keyed only by
+	// action) can express. A node/action absent from both key forms
+	// falls through to resultsByAction, then f.result.
+	resultsByNode map[string]mqttproto.ResultPayload
+
 	// dispatched records every command this fake was handed, in order.
 	// lastAction/lastParams answer "what was the final one"; a test that
 	// must prove a command was NEVER sent, or must read the params of an
@@ -74,10 +87,11 @@ type fakeAudioPublisher struct {
 	onAwaitResponse func()
 }
 
-// dispatchedAudioCommand is one recorded publish: the action string and
-// the params it carried.
+// dispatchedAudioCommand is one recorded publish: the action string, the
+// target node id, and the params it carried.
 type dispatchedAudioCommand struct {
 	Action string
+	NodeID string
 	Params map[string]any
 }
 
@@ -86,6 +100,7 @@ func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool
 	defer f.mu.Unlock()
 	f.publishCount++
 	var env struct {
+		NodeID  string `json:"nodeId"`
 		Payload struct {
 			Action string         `json:"action"`
 			Params map[string]any `json:"params"`
@@ -94,7 +109,7 @@ func (f *fakeAudioPublisher) Publish(_ context.Context, _ string, _ byte, _ bool
 	_ = json.Unmarshal(payload, &env)
 	f.lastAction = env.Payload.Action
 	f.lastParams = env.Payload.Params
-	f.dispatched = append(f.dispatched, dispatchedAudioCommand{Action: env.Payload.Action, Params: env.Payload.Params})
+	f.dispatched = append(f.dispatched, dispatchedAudioCommand{Action: env.Payload.Action, NodeID: env.NodeID, Params: env.Payload.Params})
 	return f.publishErr
 }
 
@@ -134,6 +149,14 @@ func (f *fakeAudioPublisher) AwaitResponse(_ context.Context, req broker.Respons
 	result := f.result
 	if f.resultsByAction != nil {
 		if r, ok := f.resultsByAction[cmd.Action]; ok {
+			result = r
+		}
+	}
+	if f.resultsByNode != nil {
+		if r, ok := f.resultsByNode[cmdEnv.NodeID]; ok {
+			result = r
+		}
+		if r, ok := f.resultsByNode[cmdEnv.NodeID+":"+cmd.Action]; ok {
 			result = r
 		}
 	}

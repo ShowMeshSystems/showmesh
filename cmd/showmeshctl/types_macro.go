@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // This file is Step 9 wave 3's own transcription of
 // internal/coordinator/api/v1/showmacros.go into showmeshctl's independent
@@ -86,10 +89,38 @@ type showActionTarget struct {
 
 	// audio-only. AudioAction is one of the reserved audio.session.*/
 	// audio.gain.*/audio.output.* operation names; Params (above) is
-	// that operation's own command params.
-	AudioNodeID    string `json:"audioNodeId,omitempty"`
-	AudioSessionID string `json:"audioSessionId,omitempty"`
-	AudioAction    string `json:"audioAction,omitempty"`
+	// that operation's own command params. AudioNodeIDs is the
+	// target audio node(s): the server accepts and returns either a bare
+	// string (one node) or an array of strings (more than one, for a
+	// night-mode bed or announcement) under this same "audioNodeId" key.
+	AudioNodeIDs   audioNodeIDList `json:"audioNodeId,omitempty"`
+	AudioSessionID string          `json:"audioSessionId,omitempty"`
+	AudioAction    string          `json:"audioAction,omitempty"`
+}
+
+// audioNodeIDList is showActionTarget.AudioNodeIDs' own wire type: the
+// server's own scalar-or-array flexible decode
+// (internal/coordinator/config.AudioNodeIDList), independently
+// transcribed here per this package's own "never reuse the server's
+// types directly" rule.
+type audioNodeIDList []string
+
+func (l *audioNodeIDList) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*l = nil
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(b, &single); err == nil {
+		*l = audioNodeIDList{single}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(b, &list); err != nil {
+		return err
+	}
+	*l = audioNodeIDList(list)
+	return nil
 }
 
 // showAction is the "show.action" configuration kind's decoded payload

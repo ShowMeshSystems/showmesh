@@ -198,7 +198,7 @@ func NodeCueSequenceIDs(ctx context.Context, st *store.Store, showID, nodeID str
 			}
 			return nil, fmt.Errorf("assetsync: node cue sequence ids: read show.cue %q revision %d: %w", obj.ID, obj.CurrentRevision, err)
 		}
-		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue)
+		payload, verr := config.DecodeShowCuePayload(rev.PayloadJSON, alwaysTrue, alwaysTrue)
 		if verr != nil {
 			return nil, fmt.Errorf("assetsync: node cue sequence ids: decode stored show.cue %q: %s", obj.ID, verr.Detail)
 		}
