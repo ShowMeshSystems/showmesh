@@ -664,11 +664,12 @@ func TestNightBackgroundAudioRevisionNeverRewindsPastAnUnrecognizedRow(t *testin
 	}
 }
 
-// TestMapNightBackgroundAudio_PinnedMaxGainDb proves SM-202's own ruling
-// directly: the GET /night/session projection reports the maxGainDb the
-// RUNNING session pinned at its own configRevision, and keeps reporting
-// that value unchanged after a later revision reconfigures the ceiling -
-// never the value night.session.resting's config currently holds.
+// TestMapNightBackgroundAudio_PinnedMaxGainDb proves the owner ruling
+// (2026-08-28) directly: the GET /night/session projection reports the
+// maxGainDb the RUNNING session pinned at its own configRevision, and
+// keeps reporting that value unchanged after a later revision
+// reconfigures the ceiling - never the value night.session.resting's
+// config currently holds.
 func TestMapNightBackgroundAudio_PinnedMaxGainDb(t *testing.T) {
 	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
 	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
