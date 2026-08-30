@@ -1,5 +1,13 @@
 # FPP plugin coordinator contracts
 
+> **ADR-048 amendment, 2026-08-30.** Sections 1 through 4 remain the normal
+> coordinator-facing contract.  The plugin has no general execution authority
+> under those sections.  [Track J](TRACK-J-fpp-fallback.md) adds a separately
+> versioned signed fallback-program contract: it maps the existing deterministic
+> entry key to an already authorized Cue and named node targets during confirmed
+> coordinator loss.  Its schema is frozen by J1 before plugin or node work
+> begins; it does not widen any existing observation route into a command route.
+
 [RES-018](../research/RES-018-fpp-brightness-control.md) · [ADR-043](../decisions/ADR-043-show-scoped-cues-and-playlist-authority.md) · [ADR-024](../decisions/ADR-024-identity-authorization-and-audit.md) · [Track F](TRACK-F-resting-mode.md) · [Track H](TRACK-H-cues-and-playlists.md) · [SM-63 handoff](SM-63-FPP-PLUGIN-HANDOFF.md)
 
 Status: frozen 2026-08-21, extended 2026-08-22, corrected 2026-08-23,
