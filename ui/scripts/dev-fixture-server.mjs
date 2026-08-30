@@ -163,6 +163,8 @@ const CURRENT_RUNS = () => ({
   }],
 })
 
+let staleCueRevision = 1
+
 const json = (res, body, status = 200) => {
   res.writeHead(status, {
     'content-type': 'application/json',
@@ -216,9 +218,13 @@ createServer((req, res) => {
   ] })
   if (p.startsWith('/config/show.cue/')) {
     const id = p.split('/').pop()
+    // SHOWMESH_FIXTURE_STALE=1 makes every cue re-read report a higher
+    // revision than the last, which is the only way to exercise the
+    // stale-write refusal without two real writers.
+    if (process.env.SHOWMESH_FIXTURE_STALE === '1') staleCueRevision += 1
     const announcement = id === 'main-cue' ? undefined : { policy: id === 'show-starting-soon' ? 'interrupt' : 'duck', duckGainDb: -18, fadeMillis: 400 }
     return json(res, {
-      serverTime: NOW(), kind: 'show.cue', id, revision: 1,
+      serverTime: NOW(), kind: 'show.cue', id, revision: staleCueRevision,
       payload: { show: 'Winter Ridge 2026', name: id, outputs: announcement === undefined ? {} : { announcement } },
       updatedAt: ago(86_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
     })

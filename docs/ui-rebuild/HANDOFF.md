@@ -123,6 +123,25 @@ Traps that have cost time, in the order they will bite again:
   a flake. With both servers stopped the file passes on its own and in the full
   suite. Verified 2026-08-30 by stopping them and re-running.
 
+## Exercising the stale-write refusal
+
+`guardedSave` only refuses when the revision moves between load and write, so
+a fixture that always answers with the same revision can never reach that
+branch. Start the fixture with `SHOWMESH_FIXTURE_STALE=1` and every cue
+re-read reports a higher revision than the last, which stands in for a
+competing writer:
+
+```
+SHOWMESH_FIXTURE_STALE=1 node ui/scripts/dev-fixture-server.mjs
+```
+
+Then open a cue, change something, and save. Verified in a browser on
+2026-08-30 in dark and contrast: the refusal names both revisions, who wrote
+the other one and when, says nothing was written, and offers a reload. Because
+the fixture returns an unchanged payload under a new revision, it also
+exercises the branch where no stored field differs, which says so rather than
+printing an empty change list.
+
 ## Rules this rebuild runs on
 
 - The mock is the specification. Extract its block list and order, and match it
