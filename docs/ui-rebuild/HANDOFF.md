@@ -21,7 +21,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/shows-tabs` | #203 | Shows · Cues, Assets |
 | `ui-rebuild/shows-tabs-2` | #204 | Shows · Presentation, Automation |
 | `ui-rebuild/creation-1` | #207 | New show, new playlist, the stale-write guard |
-| `ui-rebuild/creation-2` | #208 | New action, action editing, new macro |
+| `ui-rebuild/creation-2` | #211 | New action, action editing, new macro |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
@@ -37,7 +37,7 @@ Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
 `OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
 order. In short:
 
-1. Node detail. The whole creation pattern is done (#207 and #208).
+1. Node detail. The whole creation pattern is done (#207 and #211).
 2. Settings, seven tabs.
 3. Access.
 4. Resolume Config.
