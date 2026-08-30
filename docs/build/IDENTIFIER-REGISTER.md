@@ -272,6 +272,7 @@ bundles of these (ADR-024).
 | `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
 | `night:override` | shipped | Track F seam F6: interlock override where a rule declares `authorized-operator` (force-power-off instead reuses `show:action:invoke`, see RESTING-MODE.md §10.4) |
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
+| `fpp:fallback` | reserved | Track J seam J1: an FPP host fetches its current fallback program and posts its acknowledgement |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -445,6 +446,7 @@ after shipping a breaking change to stored history.
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
+| `fallback.program.deploy` | reserved, expected unused | Track J seam J1: pushing a signed fallback program to an FPP host. Reserved defensively only. The FPP plugin already reaches the coordinator over outbound HTTP (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 1), so J1 is expected to deliver the program over the HTTP paths named under "API paths" below and never to mint this operation. Release it if J1 lands without it |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
 `announce` and `duck` mint no operation of their own.** §14 permits combining
@@ -508,6 +510,9 @@ register entry comes from the code and never from a plan.
 | `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 | `fpp.instance_uuid.acknowledge` | shipped | per-endpoint observed FPP instance uuid conflict acknowledgment |
 | `cuecatalog.acknowledge` | shipped | Track H seam H3: a node's cue-catalog acknowledgement |
+| `fallback.program.publish` | reserved | Track J seam J1: the coordinator building and signing a new fallback-program revision |
+| `fallback.program.refuse` | reserved | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
+| `fallback.program.acknowledge` | reserved | Track J seam J1: an FPP host acknowledging the installed package |
 | `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
 
 **Two naming conventions are in use and neither is being changed
@@ -542,6 +547,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
 | `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
+| `fallback_program` | `fallback_program.*` | reserved | Track J seam J1 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -568,6 +574,16 @@ rows were wrong because they were written from a plan. The resource id is the
 night-session identity, not the `night.session` configuration object id,
 because one definition is activated many times and a signal keyed on the
 definition could not distinguish tonight's session from last night's.
+
+**Track J's `fallback_program` kind is reserved with its namespace and
+without its individual signal rows**, for the reason the paragraph above
+gives: the rows get written from the code when seam J1 lands, never from
+this plan. The resource id is the FPP host identity, not the program's own
+package id, because a host holds one current program at a time and an
+operator asking whether that host can survive a coordinator outage is asking
+about the host. ADR-048 names the reported facts (package id, revision,
+verification result, installed time, age) and makes a missing, stale,
+mismatched, or unacknowledged package a readiness failure before showtime.
 
 Adding a resource kind is not only a constant: `internal/coordinator/api/
 handlers.go:301` switches over the allowed kinds and silently rejects any
@@ -1012,6 +1028,8 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 | `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
 | `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
+| `showmesh/fpp/<instance-id>/fallback/program` (retained) | reserved, expected unused | Track J seam J1 |
+| `showmesh/fpp/<instance-id>/observed/fallback` (retained) | reserved, expected unused | Track J seam J1 |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -1029,6 +1047,16 @@ uppercase. `observed/render` is legal, `observed/renderPipeline` is not.
 ingest switch (`internal/coordinator/inventory/inventory.go:315`) drops any
 subpath it has no `case` for, at Debug level, silently. `observed/agent/echo`
 is being dropped that way today.
+
+**Track J's two rows reserve a new top-level prefix, `showmesh/fpp/`.**
+Every topic above it lives under `showmesh/nodes/`, and an FPP host is not a
+node agent, so a fallback program addressed to one cannot use the node topic
+space. Both rows are reserved defensively and are expected to stay unused for
+the same reason `fallback.program.deploy` is: the plugin already reaches the
+coordinator over outbound HTTP, so J1 is expected to deliver and acknowledge
+the program there. Release both rows if J1 lands without them. If J1 does mint
+them, note that a new `observed/` subpath needs a matching `case` in the
+coordinator's ingest switch, per the paragraph above.
 
 **Never publish on `falcon/player/<host>/command/run` or any other
 `falcon/` topic against the live fleet.** FPP acts on it. This is a safety
@@ -1057,7 +1085,15 @@ The store schema version, bumped by migrations in
 | v19 | shipped | operator-facing audio gain moves to decibels: every stored `audio.settings` revision's `defaultMaxBackgroundGain`/`duckTargetGain` is rewritten to `defaultMaxBackgroundGainDb`/`duckTargetGainDb` so an existing revision reads back at the same audible level |
 | v20 | shipped | every stored `audio.settings` revision is backfilled with any of the seven currently-required top-level keys it is missing, using each field's own stated default, so a revision written before `ltcFrameRate`, `ltcDefaultStartOffset` and `duckTargetGainDb` joined the required set still decodes and can be pushed |
 | v21 | reserved | the multi-node audio branch's `audio_sessions` re-key, from `id` alone to `(node_id, id)`, so two nodes dispatching the same session id keep separate desired state and revision; existing rows migrated in place. Built and merged on `dev/multi-audio` as v20 before v20 was taken on `main`; it renumbers to v21 when that branch takes `main` |
-| v22+ | unallocated | free |
+| v22 | unallocated | free |
+| v23 | reserved | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, if J1 needs a table (ADR-048, TRACK-J-fpp-fallback.md J1) |
+| v24+ | unallocated | free |
+
+**v23 was taken while v22 was still free, deliberately.** Another
+in-flight branch is holding v22, so J1 took the next number rather than the
+lowest free one. That follows this file's own rule at the top: reserving
+costs nothing and a collision costs a rename across a whole branch. v22's
+row stays `free` here until the branch holding it registers what it is for.
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are
@@ -1171,6 +1207,12 @@ to call them. They are excluded from `api/openapi.yaml` by intent per
 [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 2,
 specified in [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md), and tested
 there. They reserve nothing here and collide with nothing here.
+
+**Track J seam J1 owns every path under `/api/v1/fallback-programs`.**
+That prefix is recorded here rather than the individual paths, because
+`api/openapi.yaml` remains the register for the paths themselves. J1 is
+expected to add a listing, a per-FPP-host current-program read, and an
+acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
 
 **Lane 17a wave 1 component and field reservations, 2026-08-30.** Schema
 component names and response field names are not otherwise tracked here,
