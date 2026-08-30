@@ -376,6 +376,9 @@ const FPP_PLAYLIST_READINESS_FAILING_CONDITION: Record<
   'audio-ltc-emitter-ambiguous': { tone: 'bad', icon: '✕', label: 'two LTC emitters' },
   'audio-target-unbound': { tone: 'bad', icon: '✕', label: 'audio target unbound' },
   'audio-target-unresolved': { tone: 'bad', icon: '✕', label: 'audio target unresolved' },
+  // A resolved target that exists, unlike the two audio-target conditions
+  // above — this node just does not hold the file yet.
+  'assets-missing': { tone: 'bad', icon: '✕', label: 'assets missing' },
 }
 
 // Only rendered once `ready` is false: every failing condition gets its

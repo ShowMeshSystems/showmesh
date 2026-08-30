@@ -1066,21 +1066,19 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `definition-superseded` | reserved | Lane 16, SM-290 |
 | `evidence-unavailable` | reserved | Lane 16, SM-290 |
 | `node-render-unassigned` | shipped | Lane 16, SM-281 (merged `main` at `533bbf2`, PR #156) |
-| `assets-missing` | reserved | Lane 16, SM-285 |
+| `assets-missing` | shipped | Lane 20.1, SM-329 |
 | `node-catalog-stale` | reserved | Lane 16, SM-285 |
 | `output-policy-unsupported` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
 | `exclusive-claim-conflict` | reserved | Lane 16, SM-285 |
 | `plugin-capability-ungated` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
-| `audio-ltc-emitter-ambiguous` | reserved | Lane 20.1, SM-314 |
-| `audio-target-unbound` | reserved | Lane 20.1, SM-314 |
-| `audio-target-unresolved` | reserved | Lane 20.1, SM-314 |
+| `audio-ltc-emitter-ambiguous` | shipped | Lane 20.1, SM-314 |
+| `audio-target-unbound` | shipped | Lane 20.1, SM-314 |
+| `audio-target-unresolved` | shipped | Lane 20.1, SM-314 |
 
-**Lane 20.1's three audio-target conditions are reserved here after the
+**Lane 20.1's three audio-target conditions are registered here after the
 fact.** SM-314 shipped them on `dev/multi-audio` (PR #210) without a
-register row, so the names were live in
-`internal/coordinator/fppreconcile/readiness.go` and invisible to any other
-lane minting a condition. They are recorded as reserved on `main` and flip
-to shipped when that branch folds.
+register row; `internal/coordinator/fppreconcile/readiness.go` already
+declares all three. This is bookkeeping for that omission, not new work.
 
 **`definition-superseded` and `observation-hash-mismatch` answer different
 questions and must not be merged.** The shipped condition compares the
@@ -1114,12 +1112,10 @@ assigns either one to Authoring, Readiness, Activation or Dispatch. The
 reservation stands so the name is not minted differently by Lane 20's
 SM-314, which shares the per-node readiness resolution.
 
-**`assets-missing` is reserved and not built, for a different reason: its
-dependency merged after SM-285 was cut.** The condition needs SM-287's
-narrowing of `ExpectedAssetsForNode` (`NodeCueSequenceIDs`), which reached
-`main` at `f6923ed` (PR #158) roughly ninety minutes after SM-285's last
-commit — there was nothing to build the readiness condition against at the
-time SM-285 was written.
+**`assets-missing` is now built.** Its dependency, SM-287's narrowing of
+`ExpectedAssetsForNode` (`NodeCueSequenceIDs`, merged to `main` at `f6923ed`,
+PR #158), reached `main` after SM-285 was cut, leaving nothing to build the
+condition against at the time. SM-329 builds it on `dev/multi-audio`.
 
 ## MQTT topics
 
