@@ -14,10 +14,12 @@ import { MonitorManifest } from '../screens/MonitorManifest'
 import { ShowNight } from '../screens/ShowNight'
 import { Shows } from '../screens/Shows'
 import { ShowDetail } from '../screens/ShowDetail'
-import { ShowsWorkspace, ShowsTabPlaceholder } from '../screens/ShowsWorkspace'
+import { ShowsWorkspace } from '../screens/ShowsWorkspace'
 import { ShowsPlaylists } from '../screens/ShowsPlaylists'
 import { ShowsCues } from '../screens/ShowsCues'
 import { ShowsAssets } from '../screens/ShowsAssets'
+import { ShowsPresentation } from '../screens/ShowsPresentation'
+import { ShowsAutomation } from '../screens/ShowsAutomation'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
@@ -80,8 +82,8 @@ export default function App() {
               <Route path="playlists" element={<ShowsPlaylists />} />
               <Route path="cues" element={<ShowsCues />} />
               <Route path="assets" element={<ShowsAssets />} />
-              <Route path="presentation" element={<ShowsTabPlaceholder tab="Presentation" />} />
-              <Route path="automation" element={<ShowsTabPlaceholder tab="Automation" />} />
+              <Route path="presentation" element={<ShowsPresentation />} />
+              <Route path="automation" element={<ShowsAutomation />} />
             </Route>
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />

@@ -90,7 +90,7 @@ const STRIPS = [
 const ROWS = [
   { node: 'Barn roof', signal: 'surface.pipeline.state', tone: 'good' as const, word: 'Playing', fresh: 'Current', stale: false, at: '21:04:11' },
   { node: 'Driveway arch', signal: 'surface.pipeline.state', tone: 'warn' as const, word: 'Restarting', fresh: 'Stale · 4 m 12 s', stale: true, at: '20:59:59' },
-  { node: 'Front hedge', signal: 'audio.route.owner', tone: 'unknown' as const, word: 'Unobserved', fresh: 'Never collected', stale: false, at: '—' },
+  { node: 'Front hedge', signal: 'audio.route.owner', tone: 'unknown' as const, word: 'Unobserved', fresh: 'Never collected', stale: false, at: 'not collected' },
   { node: 'Pump house', signal: 'node.controlplane.state', tone: 'bad' as const, word: 'Offline', fresh: 'Last will received', stale: false, at: '20:41:07' },
 ]
 
@@ -155,7 +155,7 @@ export function Specimen() {
           />
         </section>
 
-        <SpecSection number="01 — Surfaces" id="specimen-surfaces" title="Four depths, and hairlines do the grouping" detail="Panels signal a meaningfully different context, state, or confirmation. An ordinary group of fields gets a heading and a divider, not a card.">
+        <SpecSection number="01 · Surfaces" id="specimen-surfaces" title="Four depths, and hairlines do the grouping" detail="Panels signal a meaningfully different context, state, or confirmation. An ordinary group of fields gets a heading and a divider, not a card.">
           <div className="sm-spec-swatches">
             {DEPTHS.map((depth) => (
               <div key={depth.token} className="sm-spec-swatch">
@@ -176,7 +176,7 @@ export function Specimen() {
           </div>
         </SpecSection>
 
-        <SpecSection number="02 — Accent ramp" id="specimen-accent" title="One accent, five stops, real interaction states" detail="Five named stops, not one flat accent with a brightness filter for hover. A filter reads as an accident under high contrast.">
+        <SpecSection number="02 · Accent ramp" id="specimen-accent" title="One accent, five stops, real interaction states" detail="Five named stops, not one flat accent with a brightness filter for hover. A filter reads as an accident under high contrast.">
           <div className="sm-spec-ramp">
             {ACCENT.map((stop) => (
               <div key={stop.token} className="sm-spec-ramp__cell">
@@ -188,7 +188,7 @@ export function Specimen() {
           </div>
         </SpecSection>
 
-        <SpecSection number="03 — Evidence colour" id="specimen-status" title="Status is a labelled pair, never a colour alone" detail="Every status surface renders a glyph and a word as well as a fill. All four tones sit at matched lightness and chroma, so amber never reads louder than green.">
+        <SpecSection number="03 · Evidence colour" id="specimen-status" title="Status is a labelled pair, never a colour alone" detail="Every status surface renders a glyph and a word as well as a fill. All four tones sit at matched lightness and chroma, so amber never reads louder than green.">
           <div className="sm-grid sm-grid--auto sm-spec-tones">
             {TONES.map((entry) => (
               <div key={entry.tone} className={`sm-evidence sm-evidence--${entry.tone}`}>
@@ -204,7 +204,7 @@ export function Specimen() {
           </Callout>
         </SpecSection>
 
-        <SpecSection number="04 — Type scale" id="specimen-type" title="Seven roles, and mono is an accent">
+        <SpecSection number="04 · Type scale" id="specimen-type" title="Seven roles, and mono is an accent">
           <div className="sm-spec-type">
             {TYPE_ROLES.map((role) => (
               <div key={role.role} className="sm-spec-type__row">
@@ -218,7 +218,7 @@ export function Specimen() {
           </div>
         </SpecSection>
 
-        <SpecSection number="05 — Controls" id="specimen-controls" title="One primary action, and secondary means secondary" detail="34px on a pointer, 48px minimum where the shell is touched with gloves. Destructive controls sit physically apart from the save path.">
+        <SpecSection number="05 · Controls" id="specimen-controls" title="One primary action, and secondary means secondary" detail="34px on a pointer, 48px minimum where the shell is touched with gloves. Destructive controls sit physically apart from the save path.">
           <ButtonRow>
             <Button variant="primary">Save changes</Button>
             <Button>Test connection</Button>
@@ -255,7 +255,7 @@ export function Specimen() {
           </ChoiceRow>
         </SpecSection>
 
-        <SpecSection number="06 — State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">
+        <SpecSection number="06 · State blocks" id="specimen-states" title="Absence should not look like a card containing data" detail="Two treatments, one job each. The ruled strip is the default and sits where the content would have been. The blanking plate is for a whole region that cannot render.">
           <div className="sm-strips__title">
             <span className="sm-spec-mark">A</span>
             <span className="sm-subhead">Ruled strip, the default</span>
@@ -334,7 +334,7 @@ export function Specimen() {
           />
         </SpecSection>
 
-        <SpecSection number="07 — Shell chrome" id="specimen-shell" title="Rail owns intent. The top bar owns the installation." detail="Mode, session, connection and principal belong in one persistent context bar, not stacked in a rail footer where nothing reads them.">
+        <SpecSection number="07 · Shell chrome" id="specimen-shell" title="Rail owns intent. The top bar owns the installation." detail="Mode, session, connection and principal belong in one persistent context bar, not stacked in a rail footer where nothing reads them.">
           <div className="sm-spec-shell">
             <ChromeBar
               showPicker={<button type="button" className="sm-showpicker"><span className="sm-meta sm-faint">Show</span>Winter Ridge 2026<span aria-hidden="true" className="sm-faint">▾</span></button>}
@@ -384,7 +384,7 @@ export function Specimen() {
           </div>
         </SpecSection>
 
-        <SpecSection number="08 — Evidence table" id="specimen-table" title="Dense rows, tabular numbers, local overflow" detail="Wide tables scroll inside their own container; the page never gains horizontal scrolling. Freshness rides in the row, not in a banner above it.">
+        <SpecSection number="08 · Evidence table" id="specimen-table" title="Dense rows, tabular numbers, local overflow" detail="Wide tables scroll inside their own container; the page never gains horizontal scrolling. Freshness rides in the row, not in a banner above it.">
           <TableWrap label="Signal evidence specimen">
             <Table>
               <thead>
@@ -411,7 +411,7 @@ export function Specimen() {
           </TableWrap>
         </SpecSection>
 
-        <SpecSection number="09 — Copy rules" id="specimen-copy" title="Shorter, and only where it changes a decision">
+        <SpecSection number="09 · Copy rules" id="specimen-copy" title="Shorter, and only where it changes a decision">
           <div className="sm-grid sm-grid--wide sm-spec-copy">
             <div className="sm-panel sm-spec-copy__card sm-spec-copy__card--bad">
               <p className="sm-meta sm-spec-copy__tag--bad">Today</p>

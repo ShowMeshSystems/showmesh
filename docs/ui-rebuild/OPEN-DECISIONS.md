@@ -12,6 +12,56 @@ my recommendation, and what the answer unblocks. Answered entries move to
 
 ## Open
 
+### D-017 Automation: creation and action-authoring have no drawn form
+
+**What.** `Show Automation.dc.html` draws "New action" and "New macro" buttons,
+and its action table rows carry `cursor:pointer` suggesting a click opens
+something. The mock's own component script (`data-props`) exposes exactly two
+aside states, `step` and `run` — there is no third `action` state captured
+anywhere in the mock, so what an action row's click would open is not drawn.
+Unlike a step's editor (fully drawn: action reference, step id, on-failure and
+on-unconfirmed segments, local-fallback class and reason, Save macro), there
+is no evidence of what fields a new action's form asks for before its
+integration-specific target (`fpp`/`mqtt`/`resolume`/`audio`, each with a
+different required shape) could even be chosen, and no evidence of what a new
+macro's form asks for before it has a first step. `PUT /config/show.action/{id}`
+and `PUT /config/show.macro/{id}` can both serve the write once a client has
+an id and a payload; the gap is a UI design one, matching D-011's reading for
+show/playlist creation, not a missing endpoint, so this is not the D-010
+not-wired treatment.
+
+**Why now.** All three controls (New action, New macro, and an action row's
+implied click target) are drawn or implied in the block this change builds.
+Per the rebuild plan step 3, a control with no home in a mock block goes here
+before the page ships, rather than getting invented layout.
+
+**Options.**
+
+- A. Ship "New action" and "New macro" disabled with a stated reason, as
+  built. Action rows stay read-only (label, target summary, kind, used-by,
+  binding). Step editing (the mock's own drawn `step` pane) is built and
+  live. Honest, but creating or re-authoring an action, and creating a macro,
+  is not usable from the UI yet, even though the API could serve both.
+- B. Design a minimal action-creation form (label, safety class, an
+  integration picker that then asks that integration's own required fields)
+  and a minimal macro-creation form (label plus a first step), and an
+  action-editing pane matching the step editor's own shape, none drawn in
+  the mock, and wire all three to the real PUTs.
+- C. Drop the buttons and treat action rows as permanently read-only.
+
+**Recommendation.** A now, matching D-011's precedent exactly. B is real,
+well-scoped follow-up work once a creation-form pattern and an
+integration-specific target editor exist somewhere in the kit (Settings and
+Access will likely need a similar shape for their own object creation). C
+loses the visibility the mock intends for the buttons.
+
+**Unblocks.** Nothing; the tab ships at the mock's drawn state either way —
+macro step editing, binding checks, run, and invoke are all live.
+
+**Ruling:**
+
+---
+
 ### D-016 Cues and Assets: mock elements with no evidence behind them
 
 **What.** `Show Cues.dc.html` and `Show Assets.dc.html` each draw an element

@@ -45,7 +45,7 @@ describe('describeSignInState', () => {
   it('is bootstrap_required whenever bootstrapRequired is true, even if this device happens to be authenticated', () => {
     // Case named explicitly: SessionResponse's own doc comment says
     // bootstrapRequired is "computed and returned regardless of whether
-    // this particular request authenticated" — a break-glass token could
+    // this particular request authenticated", a break-glass token could
     // in principle authenticate a request against a coordinator that
     // otherwise has zero PASSWORD principals. If this branch were ever
     // reordered to check `authenticated` first, this is the test that
@@ -60,7 +60,7 @@ describe('describeSignInState', () => {
   it('is signed_out for every one of ADR-024 decision 5\'s three cases, because all three produce the identical wire signal', () => {
     // Case 1: an invalidated (revoked) session.
     expect(describeSignInState(signedOut())).toEqual({ kind: 'signed_out' })
-    // Case 3: a device that has never authenticated at all — the SAME
+    // Case 3: a device that has never authenticated at all, the SAME
     // shape as case 1 on the wire; this function must not need to know
     // which one it is, because SessionResponse carries no field that
     // would tell it (see this file's own module comment).
@@ -84,7 +84,7 @@ describe('evaluateScope', () => {
   it('is not allowed when the last session fetch failed, even if a scope list is cached from before', () => {
     // ADR-024 decision 12: "a stale or unavailable [scope list] renders
     // as unknown, never as permissive." This is the test that would pass
-    // even with the bug present if it only checked `session === null` —
+    // even with the bug present if it only checked `session === null`,
     // it deliberately supplies a session that WOULD grant the scope, so
     // only the `sessionFetchFailed` check can be what makes it fail.
     const result = evaluateScope(signedIn({ scopes: [SCOPE] }), true, SCOPE)
@@ -104,7 +104,7 @@ describe('evaluateScope', () => {
     expect(result.allowed).toBe(false)
   })
 
-  it('is not allowed when authenticated, current, but the scope is missing — and names the scope', () => {
+  it('is not allowed when authenticated, current, but the scope is missing, and names the scope', () => {
     const result = evaluateScope(signedIn({ scopes: ['node:read'] }), false, SCOPE)
     expect(result.allowed).toBe(false)
     if (!result.allowed) {
@@ -138,7 +138,7 @@ describe('describeApiError', () => {
     // ADR-024 decision 8: "never a lockout." The message must actively say
     // this is not one (assertion below), and must never claim the
     // principal itself is locked out (as opposed to this source being
-    // rate-limited) — "locked out"/"you are locked" would be that wrong claim.
+    // rate-limited), "locked out"/"you are locked" would be that wrong claim.
     expect(text.toLowerCase()).not.toContain('locked out')
     expect(text.toLowerCase()).toContain('not a lockout')
   })
@@ -198,7 +198,7 @@ describe('describeSignInRefusal', () => {
 })
 
 // Step 9 (STEP-9-SPEC.md section 5.5): the first read surface gated by
-// MORE THAN ONE scope — the exact criterion 21 concern: "an operator-role
+// MORE THAN ONE scope, the exact criterion 21 concern: "an operator-role
 // principal can list, read and run a macro... this is the criterion that
 // catches the UI rendering an empty list for the role the actual operator
 // signs in as."
@@ -225,7 +225,7 @@ describe('evaluateAnyScope', () => {
   })
 
   // This is the exact shape of the "operator" role: show:macro:run held,
-  // config:write NOT held. The list must render for this principal — a
+  // config:write NOT held. The list must render for this principal, a
   // regression here is a 403/empty macro list for the role the actual
   // operator signs in as.
   it('is allowed when the principal holds ONLY the first of the two scopes (the operator-role shape)', () => {

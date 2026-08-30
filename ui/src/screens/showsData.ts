@@ -4,12 +4,20 @@
  * the network, matching `MonitorManifest.tsx`'s own split.
  */
 import {
+  getShowAction,
   getShowCue,
+  getShowMacro,
   getShowPlaylist,
+  getShowSurface,
+  listActionBindings,
   listAssets,
   listConfigObjects,
+  type ActionBinding,
+  type ShowActionConfigResponse,
   type ShowCueConfigResponse,
+  type ShowMacroConfigResponse,
   type ShowPlaylistConfigResponse,
+  type ShowSurfaceConfigResponse,
 } from '../api'
 import type { ShowContents } from './showsModel'
 
@@ -80,4 +88,24 @@ export async function fetchShowPlaylists(playlists: readonly { id: string }[]): 
  */
 export async function fetchShowCues(cues: readonly { id: string }[]): Promise<ShowCueConfigResponse[]> {
   return Promise.all(cues.map((c) => getShowCue(c.id)))
+}
+
+/** Bounded by this show's own surface count, matching [fetchShowPlaylists]'s own fan-out. */
+export async function fetchShowSurfaces(surfaces: readonly { id: string }[]): Promise<ShowSurfaceConfigResponse[]> {
+  return Promise.all(surfaces.map((s) => getShowSurface(s.id)))
+}
+
+/** Bounded by this show's own macro count, matching [fetchShowPlaylists]'s own fan-out. */
+export async function fetchShowMacros(macros: readonly { id: string }[]): Promise<ShowMacroConfigResponse[]> {
+  return Promise.all(macros.map((m) => getShowMacro(m.id)))
+}
+
+/** Bounded by this show's own action count, matching [fetchShowPlaylists]'s own fan-out. */
+export async function fetchShowActions(actions: readonly { id: string }[]): Promise<ShowActionConfigResponse[]> {
+  return Promise.all(actions.map((a) => getShowAction(a.id)))
+}
+
+/** The pre-show binding sweep for every show.action in this show, in one request. */
+export async function fetchActionBindings(showId: string): Promise<ActionBinding[]> {
+  return listActionBindings(showId)
 }

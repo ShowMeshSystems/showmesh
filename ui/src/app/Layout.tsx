@@ -45,7 +45,7 @@ const BLIND_NOW: Partial<Record<SignInState['kind'], string>> = {
 const BLIND_PRINCIPAL: Partial<Record<SignInState['kind'], string>> = {
   signed_out: 'Signed out',
   bootstrap_required: 'No principal',
-  loading: '\u2014',
+  loading: 'not signed in yet',
 }
 
 /**

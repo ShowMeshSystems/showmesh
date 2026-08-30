@@ -7,6 +7,7 @@ import { ModelContext } from '../app/ModelContext'
 
 const stubs = vi.hoisted(() => ({
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   uploadAsset: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
@@ -16,6 +17,7 @@ vi.mock('../api', async () => {
   return {
     ...actual,
     listAssets: (...args: never[]) => stubs.listAssets(...args),
+    listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getShow: (...args: never[]) => stubs.getShow(...args),
     uploadAsset: (...args: never[]) => stubs.uploadAsset(...args),
   }
@@ -98,13 +100,17 @@ describe('Shows · Assets tab', () => {
 
   function setup(scopes: string[], assets: Asset[]) {
     stubs.getShow = showHead
+    // The workspace shell reads every config kind for its tab counts. Leaving
+    // this unstubbed let a real network call decide when the screen painted.
+    stubs.listConfigObjects = (kind: string) =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [] })
     stubs.listAssets = () => assetsResponse(assets)
     return renderWorkspace({ session: signedIn(scopes) })
   }
 
   it('renders the section heading and a current asset grouped under its logical sequence', async () => {
     setup(['asset:write'], [asset()])
-    expect(await screen.findByRole('heading', { name: 'Assets in this show' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Assets in this show' })).toBeInTheDocument())
     const region = await screen.findByRole('region', { name: "This show's current assets, grouped by sequence, scrollable" })
     await waitFor(() => expect(within(region).getByText('carol-of-the-bells')).toBeInTheDocument())
     expect(within(region).getByText('media-front')).toBeInTheDocument()
@@ -130,7 +136,7 @@ describe('Shows · Assets tab', () => {
     const superseded = asset({ id: 'a-old', contentHash: 'sha256:' + 'aa'.repeat(32), current: false, supersededAt: '2026-08-26T14:02:00Z', createdAt: '2026-08-24T09:18:00Z' })
     setup(['asset:write'], [current, superseded])
     fireEvent.click(await screen.findByRole('button', { name: 'media-front' }))
-    expect(await screen.findByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'carol-of-the-bells' })).toBeInTheDocument())
     expect(screen.getByText('Current')).toBeInTheDocument()
     expect(screen.getByText('Superseded')).toBeInTheDocument()
   })

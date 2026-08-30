@@ -602,7 +602,7 @@ a.sm-tile:hover {
 /* A form column that stays readable rather than stretching to the page width. */
 .sm-form-column { max-width: 660px; }
 
-/* A row of short mono badges naming what a cue or asset declares — RND/AUD/LTC/ANN. */
+/* A row of short mono badges naming what a cue or asset declares: RND/AUD/LTC/ANN. */
 .sm-chip-row {
   display: inline-flex;
   gap: 3px;

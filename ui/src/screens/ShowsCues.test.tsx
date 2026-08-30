@@ -154,7 +154,7 @@ describe('Shows · Cues tab', () => {
 
   it('renders the section heading and groups a playlist-bound cue under "In a playlist"', async () => {
     setup()
-    expect(await screen.findByRole('heading', { name: 'Cues in this show' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Cues in this show' })).toBeInTheDocument())
     const region = await screen.findByRole('region', { name: 'In a playlist, scrollable' })
     await waitFor(() => expect(within(region).getByText('House Preshow Loop')).toBeInTheDocument())
     expect(within(region).getByText('Main Show')).toBeInTheDocument()

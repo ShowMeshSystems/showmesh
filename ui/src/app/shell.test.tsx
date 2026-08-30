@@ -119,7 +119,7 @@ describe('app shell', () => {
         now: 'Unclaimed coordinator, no administrator exists',
         who: 'No principal',
       },
-      { model: { session: null }, now: 'Reading the coordinator', who: '\u2014' },
+      { model: { session: null }, now: 'Reading the coordinator', who: 'not signed in yet' },
     ]) {
       cleanup()
       renderShell(state.model)

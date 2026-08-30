@@ -161,7 +161,7 @@ export function ShowNight() {
             <>
               <p className="sm-nownext__title">{state.media ?? run?.playback.media ?? 'No item reported'}</p>
               <p className="sm-small sm-muted">
-                {formatPosition(state.elapsedSeconds) ?? '—'} / {formatPosition(state.totalSeconds) ?? '—'}
+                {formatPosition(state.elapsedSeconds) ?? 'not reported'} / {formatPosition(state.totalSeconds) ?? 'not reported'}
               </p>
               <DefinitionStrip
                 items={[

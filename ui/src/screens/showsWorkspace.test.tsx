@@ -104,7 +104,7 @@ describe('Shows workspace shell', () => {
     vi.restoreAllMocks()
   })
 
-  it('lists all five tabs and marks the two not yet rebuilt', async () => {
+  it('lists all five tabs, none marked as still queued now every tab is rebuilt', async () => {
     stubs.getShow = showHead
     stubs.listConfigObjects = () => contentsEmpty()
     stubs.listAssets = assetsEmpty
@@ -112,10 +112,10 @@ describe('Shows workspace shell', () => {
     await waitFor(() => expect(screen.getByRole('navigation', { name: 'Show workspace tabs' })).toBeInTheDocument())
     const nav = screen.getByRole('navigation', { name: 'Show workspace tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs.map((t) => t.textContent?.replace(/\d+/, '').trim().split('Soon')[0]?.trim())).toEqual(
+    expect(tabs.map((t) => t.textContent?.replace(/\d+/, '').trim())).toEqual(
       expect.arrayContaining(['Playlists', 'Cues', 'Assets', 'Presentation', 'Automation']),
     )
-    expect(within(nav).getAllByText('Soon')).toHaveLength(2)
+    expect(within(nav).queryAllByText('Soon')).toHaveLength(0)
   })
 
   it('shows the not-yet-rebuilt plate inside the shell, not a bare blank page, for a queued tab', async () => {
