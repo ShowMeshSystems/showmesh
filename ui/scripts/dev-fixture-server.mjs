@@ -234,6 +234,25 @@ createServer((req, res) => {
     { section: 'mainPlaylist', position: 0, sequenceName: 'carol-of-the-bells.fseq', mediaName: '' },
     { section: 'mainPlaylist', position: 1, sequenceName: 'wizards-in-winter.fseq', mediaName: '' },
   ] })
+  if (p === '/principals') return json(res, { serverTime: NOW(), principals: [
+    { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin', disabled: false, hasPassword: true, reserved: false, createdAt: ago(1_555_200_000) },
+    { id: 'p2', name: 'scheduler-host', kind: 'machine', role: 'scheduler', disabled: false, hasPassword: false, reserved: false, createdAt: ago(1_382_400_000) },
+    { id: 'p3', name: 'old-laptop', kind: 'human', role: 'operator', disabled: false, hasPassword: true, reserved: false, createdAt: ago(2_419_200_000) },
+    { id: 'p4', name: 'bench-probe', kind: 'machine', role: 'viewer', disabled: false, hasPassword: false, reserved: false, createdAt: ago(2_419_200_000) },
+  ] })
+  if (/^\/principals\/[^/]+\/tokens$/.test(p)) {
+    const who = p.split('/')[2]
+    const byPrincipal = {
+      p1: [
+        { id: 'cred-4a91', principalId: 'p1', hint: 'sm_live_...4a91', label: 'This browser session', createdAt: ago(1_555_200_000), expiresAt: null, lastUsedAt: ago(300_000) },
+        { id: 'cred-77c3', principalId: 'p1', hint: 'sm_live_...77c3', label: 'CLI on the bench machine', createdAt: ago(1_382_400_000), expiresAt: null, lastUsedAt: ago(780_000) },
+      ],
+      p2: [{ id: 'cred-1d20', principalId: 'p2', hint: 'sm_live_...1d20', label: 'showmeshctl', createdAt: ago(1_382_400_000), expiresAt: null, lastUsedAt: ago(300_000) }],
+      p3: [{ id: 'cred-9f44', principalId: 'p3', hint: 'sm_live_...9f44', label: '', createdAt: ago(2_419_200_000), expiresAt: null, lastUsedAt: ago(2_246_400_000) }],
+      p4: [],
+    }
+    return json(res, { serverTime: NOW(), tokens: byPrincipal[who] ?? [] })
+  }
   if (p === '/config/fpp.endpoints') return json(res, {
     serverTime: NOW(), kind: 'fpp.endpoints', revision: 12,
     payload: { endpoints: [{ id: 'main-player', url: 'http://198.51.100.11' }, { id: 'barn-player', url: 'http://198.51.100.12' }] },

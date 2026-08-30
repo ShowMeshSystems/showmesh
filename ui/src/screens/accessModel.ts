@@ -61,7 +61,11 @@ export function isSignedInPrincipal(session: SessionResponse | null, principal: 
  * a bearer-token request names no token id anywhere in SessionResponse, so
  * this can never match one and correctly leaves that row ordinary.
  */
-export function isCurrentCredential(session: SessionResponse | null, token: TokenObject): boolean {
-  if (session === null || session.credentialForm !== 'session' || session.session === null) return false
-  return session.session.id === token.id
+/**
+ * Nothing reports which issued token, if any, is the credential in use.
+ * `SessionResponse` reports only the form and its own session id, which is a
+ * different id space from `TokenObject.id`, so no row is ever marked.
+ */
+export function currentCredentialIsUnreported(session: SessionResponse | null): boolean {
+  return session !== null && session.credentialForm === 'token'
 }

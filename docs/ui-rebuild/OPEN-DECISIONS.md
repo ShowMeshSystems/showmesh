@@ -8,7 +8,8 @@ Format: each entry states what is unresolved, why it matters now, the options,
 my recommendation, and what the answer unblocks. Answered entries move to
 "Settled" at the bottom with the ruling and the date.
 
-**Nothing is open as of 2026-08-30.** Every entry D-001 to D-018 is ruled.
+**One entry is open as of 2026-08-30: D-019**, self-ruled A so Access could
+ship, and marked for your review. Every entry D-001 to D-018 is ruled.
 D-018 was raised during the build, self-ruled so the screen could ship, and
 Eric ruled the same option the same day. The index below is the working list;
 the entries keep their full reasoning.
@@ -35,9 +36,45 @@ the entries keep their full reasoning.
 | D-016 | **B.** Add the missing facts to the API | Leaves UI-only scope. Last track, see the plan |
 | D-017 | **B.** Build action creation, action editing and macro creation | `Object Creation.dc.html` sections 3, 4 and 5 |
 | D-018 | **B.** A playlist draft asks for the first entry the contract requires | `Object Creation.dc.html` section 2, amended by `api/openapi.yaml` |
+| D-019 | **A**, self-ruled, for review | Access ships as drawn; four principal endpoints stay CLI-only |
 
 `Object Creation.dc.html` (added 2026-08-30) is the drawn answer to D-011 and
 D-017 and is normative for every creation surface, Settings and Access included.
+
+---
+
+## Raised 2026-08-30 while building Access
+
+### D-019 Access has no control for four principal endpoints the API serves
+
+**What.** `Access.dc.html` draws a principals table with a name, its
+credentials, a last-used time and a state. It draws no control for changing a
+principal's role, disabling one, enabling one, or resetting a password. All
+four exist on the API: `POST /principals/{id}/role`, `/disable`, `/enable`,
+and `/password`. The rebuilt screen ships what the mock draws, so those four
+endpoints have no UI at all.
+
+**Why now.** The screen ships either way, but it means an operator can create a
+principal from the UI and then never change its role or take it out of service
+from the UI. On a load-in day the remedy is `showmeshctl` or nothing.
+
+**Options.**
+
+- A. Ship as drawn. Four endpoints stay CLI-only.
+- B. Add the four controls to the principals table, designed to match, and
+  wire them. Disabling a principal is a sharp action and would need the
+  typed-confirmation treatment the node-removal block uses.
+- C. Draw them into the mock first, then build from the drawing.
+
+**Recommendation and self-ruling: A, and record B for a design pass.** Adding
+four undrawn controls to the one screen that governs credentials is exactly the
+invented-design pattern this rebuild exists to stop, and a disable control in
+particular has real failure modes worth drawing before building. C is the
+right order if the capability is wanted.
+
+Taken so the screen ships. Say if the gap matters more than the drawing does.
+
+**Unblocks.** Nothing. Access ships either way.
 
 ---
 

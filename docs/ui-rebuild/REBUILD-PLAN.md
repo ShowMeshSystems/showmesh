@@ -100,8 +100,8 @@ visual language.
 | Creation pattern: new action, edit action, new macro (D-017) | Done | #211 |
 | Node detail | Done | #212 |
 | Settings, seven tabs | Done | #213 |
-| Access | Next | |
-| Resolume Config | | |
+| Access | Done | #214 |
+| Resolume Config | Next | |
 | Assets library (`/assets`) | | |
 | Stale-write guard retrofit (D-014 B) | | |
 | Phase 2: delete the old system and lock it out | | |

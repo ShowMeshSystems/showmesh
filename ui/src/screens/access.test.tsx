@@ -137,7 +137,7 @@ describe('Access', () => {
     renderScreen()
     await waitFor(() => expect(screen.getByText('cred-77c3', { exact: false })).toBeInTheDocument())
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Principals', 'Credentials for erbartos', 'Attribution'])
+    expect(headings).toEqual(['Principals', 'Credentials for erbartos', 'Attribution', 'Bootstrap'])
   })
 
   it('shows resolved scopes on the signed-in row and a role on every other row, and states the bundle is not reported', async () => {
@@ -229,8 +229,7 @@ describe('Access', () => {
     stubs.listPrincipalTokens = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', tokens: [] })
     stubs.getCurrentNightSession = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', session: null })
     renderScreen()
-    await waitFor(() => expect(screen.getByText('Bootstrap')).toBeInTheDocument())
-    expect(screen.getByText(/Who claimed it and when are not reported/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/Who claimed it and when are not reported/)).toBeInTheDocument())
     expect(screen.queryByText(/by erbartos/)).not.toBeInTheDocument()
     expect(screen.queryByText(/12 Aug/)).not.toBeInTheDocument()
   })
@@ -252,5 +251,29 @@ describe('Access', () => {
     renderScreen({ session: session({ scopes: ['principal:read', 'principal:write'] }) })
     await waitFor(() => expect(screen.getByText('Audit store')).toBeInTheDocument())
     expect(within(screen.getByText('Audit store').closest('.sm-strip') as HTMLElement).getByText('audit:read')).toBeInTheDocument()
+  })
+})
+
+describe('Access, the credential in use', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('marks no credential row as in use, because nothing reports which token authenticates this device', async () => {
+    stubs.listPrincipals = () => Promise.resolve({ principals: [principal({ id: 'p1', name: 'erbartos' })] })
+    stubs.listPrincipalTokens = () =>
+      Promise.resolve({
+        tokens: [
+          { id: 'cred-4a91', principalId: 'p1', hint: 'sm_live_…4a91', label: 'This browser session', createdAt: '2026-08-12T09:38:00Z', expiresAt: null, lastUsedAt: '2026-08-30T21:02:14Z' },
+        ],
+      })
+
+    renderScreen({ session: session({ credentialForm: 'token' }) })
+
+    await waitFor(() => expect(screen.getByText('sm_live_…4a91')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'In use' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeInTheDocument()
+    expect(screen.getByText(/Which of these it is, is not reported/)).toBeInTheDocument()
   })
 })

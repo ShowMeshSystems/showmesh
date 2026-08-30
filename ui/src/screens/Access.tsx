@@ -33,7 +33,7 @@ import { effectiveServerTimeIso, formatDateClock } from '../domain/time'
 import {
   credentialCount,
   daysUnused,
-  isCurrentCredential,
+  currentCredentialIsUnreported,
   isLongUnused,
   isSignedInPrincipal,
   latestTokenUse,
@@ -285,7 +285,7 @@ export function Access() {
           <RuledStrip
             absence="failed"
             label="This session"
-            fact="One autonomous transition step was dispatched with no authorizing principal recorded."
+            fact="At least one step was dispatched with no authorizing principal recorded. How many, and which, are not reported."
             detail={
               <>
                 <strong>This never clears for the rest of the session.</strong> It is a permanent statement that
@@ -294,6 +294,9 @@ export function Access() {
             }
           />
         )}
+      </Section>
+
+      <Section id="ac-bootstrap" title="Bootstrap">
         <BootstrapRow session={model.session} />
       </Section>
     </>
@@ -544,6 +547,12 @@ function CredentialsPanel({
   return (
     <>
       <p className="sm-small sm-muted">A token is shown once, at the moment it is issued, and never again. If it is lost, revoke it and issue another.</p>
+      {currentCredentialIsUnreported(session) && (
+        <p className="sm-small sm-faint">
+          This device is authenticated by a token. Which of these it is, is not reported, so no row is marked as the one in use. Revoking the wrong
+          one signs this device out.
+        </p>
+      )}
 
       {readDenied && <RuledStrip absence="noPermission" label="Credentials not shown" fact="This device may not read credentials." />}
       {readFailed !== null && <RuledStrip absence="failed" label="Read failed" fact={readFailed} />}
@@ -581,7 +590,6 @@ function CredentialsPanel({
             </thead>
             <tbody>
               {tokens.map((token) => {
-                const current = isCurrentCredential(session, token)
                 return (
                   <tr key={token.id}>
                     <td>
@@ -601,24 +609,18 @@ function CredentialsPanel({
                     <td className="sm-data">{token.expiresAt === null ? 'Never' : formatDateClock(token.expiresAt)}</td>
                     <td className="sm-data">{token.lastUsedAt === null ? 'Never used' : formatDateClock(token.lastUsedAt)}</td>
                     <td>
-                      {current ? (
-                        <Button disabled={true} title="This is the credential authenticating this device right now.">
-                          In use
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="danger"
-                          disabled={!writeGate.allowed}
-                          title={writeGate.allowed ? undefined : writeGate.reason}
-                          onClick={() => {
-                            setRevokeTarget(token)
-                            setRevokeConfirmText('')
-                            setRevokeError(null)
-                          }}
-                        >
-                          Revoke
-                        </Button>
-                      )}
+                      <Button
+                        variant="danger"
+                        disabled={!writeGate.allowed}
+                        title={writeGate.allowed ? undefined : writeGate.reason}
+                        onClick={() => {
+                          setRevokeTarget(token)
+                          setRevokeConfirmText('')
+                          setRevokeError(null)
+                        }}
+                      >
+                        Revoke
+                      </Button>
                     </td>
                   </tr>
                 )
