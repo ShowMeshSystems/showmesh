@@ -329,17 +329,12 @@ type cueScopedFailToBlackTarget struct {
 //     asset-missing refusal only produced a log line
 //     (outcome.Dispatched && !outcome.Confirmed, cueActivationTickOne's
 //     own switch above), identical to a bare unconfirmed dispatch. This
-//     matters because a never-uploaded sequence can be resolved
-//     "present" by this coordinator's own manifest computation (an
-//     unauthored sequence is not "missing" — see [cueactivate.
-//     cueAssetsPresent]'s own doc comment) while the node itself, asked
-//     to open a file that was never uploaded at all, refuses — the
-//     single worst case Eric's ruling named, and the one case a
-//     fail-to-black gated only on THIS coordinator's own opinion could
-//     never reach. Whether that coordinator/node disagreement about a
-//     never-uploaded sequence is itself a separate defect is a question
-//     for its own fix; this path does not depend on the coordinator
-//     having noticed first, which is the requirement here.
+//     matters even now that [cueactivate.cueAssetsPresent] itself refuses
+//     a never-uploaded sequence (so the ordinary case reaches path 1,
+//     pre-dispatch): this coordinator's own view of a node's inventory can
+//     still be stale or wrong relative to what the node just observed on
+//     disk, and path 2 is what catches THAT residual disagreement rather
+//     than depending on the coordinator having noticed first.
 //
 // Every other outcome (successfully confirmed, refused for an unrelated
 // reason, or no result at all) is excluded — fail-to-black has no bearing

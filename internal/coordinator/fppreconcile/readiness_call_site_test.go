@@ -231,6 +231,82 @@ func TestPlaylistReadinessEveryClosedVocabularyConditionFires(t *testing.T) {
 				return mustReadiness(t, st, p)
 			},
 		},
+		{
+			// Not a tenth closed-vocabulary member: [ReadinessAssetsMissing]
+			// again, from an AUDIO target rather than a render one. The
+			// "assets-missing" case above exercises only a render output,
+			// even though assetsMissingReadiness (assetsmissingreadiness.go)
+			// reuses the SAME assetsync.NodeCueSequenceIDs path for every
+			// target kind (its own doc comment: "a plain node id, so this
+			// covers audio and LTC targets exactly like render, with no
+			// separate resolution to write"). Without a case that actually
+			// drives an audio target through THIS call site, a regression
+			// that dropped or misordered the audio-scoping branch could pass
+			// every other test here while an audio-only installation's own
+			// readiness silently stayed wrong. seen[c.want] below dedups by
+			// condition, so a second case naming the identical want does not
+			// change the closing vocabulary-count assertion.
+			name: "assets-missing-audio-target",
+			want: ReadinessAssetsMissing,
+			run: func(t *testing.T) Report {
+				st := openTestStore(t)
+				putShow(t, st, "show-1", "Show One")
+				putActiveShow(t, st, "show-1")
+				putAudioNode(t, st, "node-1")
+				declareNode(t, st, "node-1")
+
+				// cue-1 declares ONLY an audio output, naming sequence
+				// "asset-cue-1" (putCueWithAudio's own naming) -- never a
+				// render output, so this drives assetsMissingReadiness
+				// through an audio target alone.
+				putCueWithAudio(t, st, "cue-1", "show-1")
+				hash := hash64("a1")
+				p := simpleFPPPlaylist("show-1", "inst-1", hash, "cue-1")
+				putDefinitionWithEntries(t, st, "inst-1", hash, "", "")
+				putPlaylist(t, st, "playlist-1", p)
+
+				ctx := context.Background()
+
+				// An asset for cue-1's audio sequence genuinely exists in
+				// the store, targeted at node-1 -- created BEFORE the
+				// catalog is resolved and acknowledged below, for the same
+				// reason the render case above does.
+				if _, _, err := st.CreateAsset(ctx, store.AssetRecord{
+					ID: "sha256:audio-missing-node-1", ShowID: "show-1", SequenceID: "asset-cue-1",
+					TargetKind: store.AssetTargetKindNode, TargetID: "node-1", MediaType: "audio",
+					ContentHash: "sha256:audiomissing", RuntimeFilename: "Cue1.wav", SizeBytes: 2048,
+					Backend: "volume", StorageKey: "sha256:audiomissing",
+				}); err != nil {
+					t.Fatalf("create asset: %v", err)
+				}
+
+				active, err := assetsync.ResolveActiveShow(ctx, st)
+				if err != nil {
+					t.Fatalf("ResolveActiveShow: %v", err)
+				}
+				catalog, err := assetsync.ResolveCueCatalog(ctx, st, active, "node-1")
+				if err != nil {
+					t.Fatalf("ResolveCueCatalog: %v", err)
+				}
+				if err := st.PutNodeCueCatalogAck(ctx, store.NodeCueCatalogAckRecord{
+					NodeID: "node-1", Revision: catalog.Revision, ShowID: "show-1", Generation: active.Generation,
+				}); err != nil {
+					t.Fatalf("put node cue catalog ack: %v", err)
+				}
+
+				// node-1's own reported inventory does not hold the asset
+				// above: this is Missing, never Gap (a sequence with no
+				// asset ever registered at all is a separate, separately
+				// tracked defect).
+				if err := st.ReplaceNodeAssetInventory(ctx, "node-1", nil, store.NodeAssetReportRecord{
+					ReportedAt: time.Now(), Complete: true,
+				}); err != nil {
+					t.Fatalf("replace node asset inventory: %v", err)
+				}
+
+				return mustReadiness(t, st, p)
+			},
+		},
 	}
 
 	seen := make(map[ReadinessCondition]bool, len(cases))
