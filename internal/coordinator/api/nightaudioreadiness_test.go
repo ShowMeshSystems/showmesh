@@ -25,7 +25,7 @@ func containsAllSubstrings(s string, substrs ...string) bool {
 }
 
 // nodeViewWithGenericCapabilities builds an [inventory.NodeView] advertising
-// exactly the given capability.IDs at Version 1 — the SM-201 granular
+// exactly the given capability.IDs at Version 1, the granular
 // audio.playback/audio.mix/audio.transition IDs this file's own tests
 // exercise, distinct from audionode_test.go's own
 // nodeViewWithAudioCapabilities (which carries only the two route-bearing
@@ -81,8 +81,8 @@ func TestNightCheckBackgroundAudioItemTransition_SequentialAlwaysPasses(t *testi
 	}
 }
 
-// TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade is SM-201's
-// own defended rule: gapless/crossfade fail when the configured output
+// TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade defends
+// the rule: gapless/crossfade fail when the configured output
 // node has never declared the matching audio.transition.* capability, and
 // pass once it has - proving the check reads real evidence in both
 // directions, not a hardcoded refusal.
@@ -118,7 +118,7 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 	}
 }
 
-// TestNightCheckAudioOutputCapabilities defends SM-201's real check:
+// TestNightCheckAudioOutputCapabilities defends this check's real behavior:
 // failed naming the missing IDs when the output node declares none of
 // them, healthy once it declares every one this configured session
 // requires (background/playlist/gain always, loop only because Repeat is

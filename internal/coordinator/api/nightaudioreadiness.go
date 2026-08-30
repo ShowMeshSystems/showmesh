@@ -44,8 +44,8 @@ func (h *handlers) nightCheckBackgroundAudioAssets(ctx context.Context, show str
 		len(ba.Items))}
 }
 
-// transitionCapabilityID returns the capability.ID that would confirm t
-// (SM-201), and false for [pkgaudio.ItemTransitionSequential], which
+// transitionCapabilityID returns the capability.ID that would confirm t,
+// and false for [pkgaudio.ItemTransitionSequential], which
 // [pkgaudio.ValidateItemTransitionSupport] never gates on output
 // confirmation at all - see [audioNodeConfirmsTransition].
 func transitionCapabilityID(t pkgaudio.ItemTransition) (capability.ID, bool) {
@@ -60,8 +60,8 @@ func transitionCapabilityID(t pkgaudio.ItemTransition) (capability.ID, bool) {
 }
 
 // audioNodeConfirmsTransition reads nodeID's live capability advertisement
-// and reports whether it confirms t, per [transitionCapabilityID] -
-// SM-201's real answer to the outputConfirms bool
+// and reports whether it confirms t, per [transitionCapabilityID] - the
+// real answer to the outputConfirms bool
 // [pkgaudio.ValidateItemTransitionSupport] takes, in place of the
 // hardcoded false this coordinator passed before that capability signal
 // existed. Sequential needs no confirmation and reports true without
@@ -83,8 +83,8 @@ func audioNodeConfirmsTransition(ctx context.Context, nodes NodeLister, now time
 // capability bullet: sequential never needs confirmation and always
 // passes; gapless and crossfade pass only when the configured output
 // node's live Hello capability advertisement declares the matching
-// audio.transition.* ID (SM-201; nightAdvanceBackgroundAudio's identical
-// check at dispatch time reads the same evidence), so a session
+// audio.transition.* ID (nightAdvanceBackgroundAudio's identical check
+// at dispatch time reads the same evidence), so a session
 // configured against an output that never declared it is reported
 // failed HERE, at readiness, rather than only discovered when background
 // audio never starts.
@@ -110,8 +110,8 @@ func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, 
 }
 
 // audioOutputCapabilityIDsForBackgroundAudio returns the capability.IDs
-// SM-201 assigned that a configured resting.backgroundAudio session
-// concretely exercises on its output node, independent of the separate
+// a configured resting.backgroundAudio session concretely exercises on
+// its output node, independent of the separate
 // item-transition ability [nightCheckBackgroundAudioItemTransition]
 // already reports under its own check name: audio.playback.background
 // and audio.playback.playlist always (every apply carries source role
@@ -139,9 +139,9 @@ func audioOutputCapabilityIDsForBackgroundAudio(ba *config.NightSessionBackgroun
 // this configured resting.backgroundAudio session concretely needs (see
 // [audioOutputCapabilityIDsForBackgroundAudio]): healthy when the output
 // node's live Hello capability advertisement declares every one of them,
-// failed naming whichever are missing otherwise. SM-201 gave this a real
-// capability signal to check against; before it, this always reported
-// not_verifiable (docs/build/BUILD-LOG.md).
+// failed naming whichever are missing otherwise. This check now has a
+// real capability signal to check against; before it, this always
+// reported not_verifiable.
 func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	nodeID := ba.OutputNodeID()
 	name := "resting:background-audio-output-capabilities:" + nodeID

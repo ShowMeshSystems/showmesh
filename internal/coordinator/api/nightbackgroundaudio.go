@@ -62,7 +62,7 @@ import (
 // retried indefinitely (a session with genuinely bad configuration would
 // otherwise retry forever); gapless/crossfade item transitions are
 // confirmed against the output node's live capability advertisement
-// (SM-201, [audioNodeConfirmsTransition]) - configuring one against an
+// ([audioNodeConfirmsTransition]) - configuring one against an
 // output that has never declared the matching audio.transition.* ID
 // refuses background audio outright, honestly, rather than approximating
 // it as sequential; and maxGainDb is enforced only at the moment this

@@ -69,13 +69,13 @@ func audioNodeRouteEvidence(ctx context.Context, nodes NodeLister, now time.Time
 }
 
 // audioNodeCapabilitySet reads nodeID's complete, current Hello capability
-// advertisement live from [Dependencies.Nodes] — the same evidence source
+// advertisement live from [Dependencies.Nodes], the same evidence source
 // as [audioNodeRouteEvidence], generalized past the two literal IDs that
-// function reads so a SM-201 caller (item-transition confirmation, the
+// function reads so a caller (item-transition confirmation, the
 // resting:background-audio-output-capabilities readiness check) can look
 // up any granular audio.playback/audio.mix/audio.transition ID against
 // it. Returns nil, nil (not an error) when the node is not in inventory or
-// has never advertised a Hello — the same "no evidence" case
+// has never advertised a Hello, the same "no evidence" case
 // [audioNodeRouteEvidence] folds into nil route slices, left to each
 // caller's own [capability.Set.Lookup] to report as "not declared" rather
 // than distinguished here as a separate failure.

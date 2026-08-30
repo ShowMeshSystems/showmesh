@@ -55,8 +55,8 @@ var knownIDs = map[ID]struct{}{
 	"timecode.ltc.observe":  {},
 	"process.supervise":     {},
 
-	// SM-201: an audio output's granular playback abilities, reserved
-	// 2026-08-30 so ValidateItemTransitionSupport and the
+	// An audio output's granular playback abilities, reserved 2026-08-30
+	// so ValidateItemTransitionSupport and the
 	// resting:background-audio-output-capabilities readiness check have
 	// real identifiers to ask a node's Hello advertisement about instead
 	// of none at all. See internal/agent/audiocapabilities.go for which
