@@ -16,6 +16,7 @@ import {
   FieldGrid,
   Freshness,
   Input,
+  Notice,
   NotWired,
   NotWiredBanner,
   RailBadge,
@@ -315,6 +316,22 @@ export function Specimen() {
             cannot be scrolled away from the button it describes, and the child is forced disabled so the tag can
             never appear on something that works.
           </Callout>
+
+          <div className="sm-strips__title sm-spec-plate-title">
+            <span className="sm-spec-mark">D</span>
+            <span className="sm-subhead">Notice, a refusal in two lines</span>
+            <span className="sm-small sm-muted">Headline plus explanation, bordered so it reads as different from Callout.</span>
+          </div>
+          <Notice
+            tone="bad"
+            headline="This page and the coordinator disagree about which host you are on, so the sign-in was refused as a cross-site request."
+            explanation="Usually a proxy in front of ShowMesh rewriting the Host header. Check that, or use a token instead."
+          />
+          <Notice
+            tone="warn"
+            headline={<>Too many attempts from this network right now. Wait <span className="sm-data">30s</span> and try again.</>}
+            explanation="This is a rate limit on the network you are on, not a lockout on your account. Nothing is disabled."
+          />
         </SpecSection>
 
         <SpecSection number="07 — Shell chrome" id="specimen-shell" title="Rail owns intent. The top bar owns the installation." detail="Mode, session, connection and principal belong in one persistent context bar, not stacked in a rail footer where nothing reads them.">

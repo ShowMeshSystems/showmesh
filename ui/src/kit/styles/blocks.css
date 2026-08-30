@@ -539,6 +539,38 @@ a.sm-tile:hover {
   border-top: 1px solid var(--border);
 }
 
+/* A refusal: headline plus explanation, bordered so it reads as different
+   from `.sm-callout`'s quiet accent rail. */
+.sm-notice {
+  margin: var(--s-3) 0 0;
+  padding: 11px 13px;
+  border: 1px solid;
+  border-radius: 4px;
+  max-width: 78ch;
+}
+
+.sm-notice--bad {
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+}
+
+.sm-notice--warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.sm-notice__headline {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--text);
+}
+
+.sm-notice__explanation {
+  margin: 6px 0 0;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
 /* An announcement row: what it does on the left, its control on the right. */
 .sm-annc {
   display: flex;

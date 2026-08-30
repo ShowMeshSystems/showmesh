@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeApiError, describeSignInState, evaluateAnyScope, evaluateScope } from './session'
+import { describeApiError, describeSignInRefusal, describeSignInState, evaluateAnyScope, evaluateScope } from './session'
 import {
   ApiError,
   CSRFRejectedError,
@@ -164,6 +164,36 @@ describe('describeApiError', () => {
 
   it('falls back to a generic sentence for a non-Error throw', () => {
     expect(describeApiError('a plain string')).toBe('Something went wrong. Try again.')
+  })
+})
+
+describe('describeSignInRefusal', () => {
+  it('gives the cross-site refusal a headline and a separate explanation, matching the Session States mock', () => {
+    const refusal = describeSignInRefusal(new CSRFRejectedError('neither Sec-Fetch-Site nor a matching Origin'))
+    expect(refusal).not.toBeNull()
+    expect(refusal?.kind).toBe('crossSite')
+    expect(refusal?.headline).toBe(
+      'This page and the coordinator disagree about which host you are on, so the sign-in was refused as a cross-site request.',
+    )
+    expect(refusal?.explanation).toBe(
+      'Usually a proxy in front of ShowMesh rewriting the Host header. Check that, or use a token instead.',
+    )
+  })
+
+  it('gives the rate-limit refusal its wait value in the headline, matching the mock', () => {
+    const refusal = describeSignInRefusal(new TooManyRequestsError('too many attempts', 30))
+    expect(refusal).not.toBeNull()
+    expect(refusal?.kind).toBe('rateLimit')
+    expect(refusal?.headline).toBe('Too many attempts from this network right now. Wait 30s and try again.')
+    if (refusal?.kind === 'rateLimit') expect(refusal.waitLabel).toBe('30s')
+    expect(refusal?.explanation).toBe(
+      'This is a rate limit on the network you are on, not a lockout on your account. Nothing is disabled.',
+    )
+  })
+
+  it('is null for any refusal other than the two the mock special-cases', () => {
+    expect(describeSignInRefusal(new UnauthorizedError(true, 'invalid name or password'))).toBeNull()
+    expect(describeSignInRefusal(new ApiError('the coordinator is unreachable'))).toBeNull()
   })
 })
 

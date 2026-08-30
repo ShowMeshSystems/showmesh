@@ -184,6 +184,36 @@ export function evaluateAnyScope(
 // depend on parsing that text.
 // ---------------------------------------------------------------------
 
+// The mock draws the two sign-in refusals as a headline plus a separate
+// explanation. `describeApiError` stays the one-line fallback for every
+// other caller; nothing may re-parse its combined string to get these back.
+
+export type SignInRefusal =
+  | { kind: 'crossSite'; headline: string; explanation: string }
+  | { kind: 'rateLimit'; headline: string; explanation: string; waitLabel: string }
+
+/** Null when `err` is not one of the two refusals the mock special-cases. */
+export function describeSignInRefusal(err: unknown): SignInRefusal | null {
+  if (err instanceof CSRFRejectedError) {
+    return {
+      kind: 'crossSite',
+      headline:
+        'This page and the coordinator disagree about which host you are on, so the sign-in was refused as a cross-site request.',
+      explanation: 'Usually a proxy in front of ShowMesh rewriting the Host header. Check that, or use a token instead.',
+    }
+  }
+  if (err instanceof TooManyRequestsError) {
+    const waitLabel = err.retryAfterSeconds === null ? 'a few seconds' : `${err.retryAfterSeconds}s`
+    return {
+      kind: 'rateLimit',
+      headline: `Too many attempts from this network right now. Wait ${waitLabel} and try again.`,
+      explanation: 'This is a rate limit on the network you are on, not a lockout on your account. Nothing is disabled.',
+      waitLabel,
+    }
+  }
+  return null
+}
+
 export function describeApiError(err: unknown): string {
   if (err instanceof CSRFRejectedError) {
     // ADR-024 decision 6, corrected 2026-08-14. The previous text named

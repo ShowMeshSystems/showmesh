@@ -12,9 +12,9 @@ import {
 } from '../kit'
 import type { ConnectionState, Model } from '../api'
 import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
-import { describeSignInState } from '../domain/session'
+import { describeSignInState, type SignInState } from '../domain/session'
 import { useModelContext } from './ModelContext'
-import { BootstrapBand, SignedOutBand } from './SessionBand'
+import { BootstrapBand, ConnectingBand, SignedOutBand } from './SessionBand'
 
 const CONNECTION_LABEL: Record<Connection, string> = {
   live: 'Live',
@@ -36,12 +36,35 @@ function connectionOf(state: ConnectionState): Connection {
   }
 }
 
+const BLIND_NOW: Partial<Record<SignInState['kind'], string>> = {
+  signed_out: 'Nothing is being read on this device',
+  bootstrap_required: 'Unclaimed coordinator, no administrator exists',
+  loading: 'Reading the coordinator',
+}
+
+const BLIND_PRINCIPAL: Partial<Record<SignInState['kind'], string>> = {
+  signed_out: 'Signed out',
+  bootstrap_required: 'No principal',
+  loading: '\u2014',
+}
+
 /**
  * The now-playing group truncates and never wraps. Cycle and time to next
  * transition come from the night session, so they arrive with Show Night;
  * the show picker and mode badge arrive with Shows and Settings › Mode.
  */
-function NowPlaying({ model }: { model: Model }) {
+function NowPlaying({ model, signInKind }: { model: Model; signInKind: SignInState['kind'] }) {
+  // Without a credential this device cannot read the show, which is not the
+  // same fact as the show being stopped. Never report the second for the first.
+  const blind = BLIND_NOW[signInKind]
+  if (blind !== undefined) {
+    return (
+      <>
+        <span className="sm-meta sm-faint">Now</span>
+        <span className="sm-small sm-faint sm-truncate">{blind}</span>
+      </>
+    )
+  }
   const run = model.currentRuns?.runs[0]
   if (run === undefined) {
     return (
@@ -65,14 +88,14 @@ export function Layout() {
   const model = useModelContext()
   const signIn = describeSignInState(model.session)
   const connection = connectionOf(model.connection)
-  const principal = model.session?.principal?.name ?? 'Not signed in'
+  const principal = BLIND_PRINCIPAL[signIn.kind] ?? model.session?.principal?.name ?? 'Not signed in'
 
   return (
     <div className="sm-shell">
       <ChromeBar
         showPicker={null}
         mode={null}
-        nowPlaying={<NowPlaying model={model} />}
+        nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
         connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
         principal={<span className="sm-small sm-muted">{principal}</span>}
       />
@@ -84,6 +107,7 @@ export function Layout() {
           here is off by roughly that much.
         </ClockSkewStrip>
       )}
+      {signIn.kind === 'loading' && <ConnectingBand liveUpdatesConnected={model.connection.kind === 'live'} />}
       {signIn.kind === 'bootstrap_required' && <BootstrapBand />}
       {signIn.kind === 'signed_out' && <SignedOutBand />}
       <ShellBody>

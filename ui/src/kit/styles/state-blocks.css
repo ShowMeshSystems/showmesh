@@ -155,6 +155,17 @@
   max-width: 64ch;
 }
 
+/* A second (or third) line inside `detail`, when the plate needs more than
+   one sentence. `detail` itself is already a `<p>`, so these are `<span>`s
+   set to block rather than a nested `<p>`. */
+.sm-plate__detail-line {
+  display: block;
+}
+
+.sm-plate__detail-line + .sm-plate__detail-line {
+  margin-top: var(--s-2);
+}
+
 .sm-plate__actions {
   display: flex;
   flex-wrap: wrap;

@@ -39,6 +39,28 @@ export function Callout({ children }: { children: ReactNode }) {
   return <p className="sm-callout">{children}</p>
 }
 
+/**
+ * A refusal, not an information note, so it cannot be mistaken for a
+ * `Callout`. `bad` needs a different approach (a proxy misconfiguration);
+ * `warn` clears on its own (a rate limit).
+ */
+export function Notice({
+  tone,
+  headline,
+  explanation,
+}: {
+  tone: 'bad' | 'warn'
+  headline: ReactNode
+  explanation?: ReactNode
+}) {
+  return (
+    <div className={`sm-notice sm-notice--${tone}`} role="alert">
+      <p className="sm-notice__headline">{headline}</p>
+      {explanation !== undefined && <p className="sm-notice__explanation">{explanation}</p>}
+    </div>
+  )
+}
+
 export type Definition = { term: string; value: ReactNode; detail?: ReactNode }
 
 /** Hairline-separated facts in one row. */
