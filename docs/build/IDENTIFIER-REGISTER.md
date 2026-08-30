@@ -857,6 +857,16 @@ renamed value is a wrong branch taken silently, exactly like an exit code.
 | `output-policy-unsupported` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
 | `exclusive-claim-conflict` | reserved | Lane 16, SM-285 |
 | `plugin-capability-ungated` | reserved | Lane 16, SM-285 — recorded out of scope for this season, see [TRACK-H-cues-and-playlists.md](TRACK-H-cues-and-playlists.md) |
+| `audio-ltc-emitter-ambiguous` | reserved | Lane 20.1, SM-314 |
+| `audio-target-unbound` | reserved | Lane 20.1, SM-314 |
+| `audio-target-unresolved` | reserved | Lane 20.1, SM-314 |
+
+**Lane 20.1's three audio-target conditions are reserved here after the
+fact.** SM-314 shipped them on `dev/multi-audio` (PR #210) without a
+register row, so the names were live in
+`internal/coordinator/fppreconcile/readiness.go` and invisible to any other
+lane minting a condition. They are recorded as reserved on `main` and flip
+to shipped when that branch folds.
 
 **`definition-superseded` and `observation-hash-mismatch` answer different
 questions and must not be merged.** The shipped condition compares the
