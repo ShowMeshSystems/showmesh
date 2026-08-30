@@ -224,14 +224,6 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true')
       expect(screen.getByRole('button', { name: 'Save playlist' })).not.toBeDisabled()
     })
-
-    it('a field with no home in the write schema renders inert rather than pretending to save', async () => {
-      setup()
-      const table = await screen.findByRole('region', { name: 'Playlist entries, scrollable' })
-      await waitFor(() => expect(within(table).getByText('Winter Bed Track 1')).toBeInTheDocument())
-      const resume = screen.getByRole('checkbox', { name: 'Resume where it left off' })
-      expect(resume).toBeDisabled()
-    })
   })
 
   describe('FPP playlist', () => {
@@ -326,6 +318,62 @@ describe('Shows · Playlists tab editing', () => {
       expect(screen.getByRole('combobox', { name: 'Instance' })).toBeDisabled()
       expect(screen.getByRole('combobox', { name: 'FPP playlist' })).toBeDisabled()
       expect(screen.getByRole('button', { name: 'Re-import' })).toBeDisabled()
+    })
+  })
+
+  describe('New playlist draft, the gate case', () => {
+    function withEmptyPlaylists(kind: string, cues: ConfigObjectSummary[]) {
+      if (kind === 'show.playlist') return Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind, objects: [] })
+      return withCues(kind, cues)
+    }
+
+    function setupDraft(scopes: string[] = ['config:write']) {
+      stubs.getShow = showHead
+      stubs.listConfigObjects = (kind: string) => withEmptyPlaylists(kind, [cueSummary(), cueSummary2()])
+      stubs.listAssets = assetsEmpty
+      return renderWorkspace({ session: signedIn(scopes) })
+    }
+
+    it('renders nothing below the runner gate until it is answered, and the footer says Runner required', async () => {
+      setupDraft()
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      expect(screen.getByRole('heading', { name: 'New playlist' })).toBeInTheDocument()
+      expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
+      expect(screen.getByText('Runner required')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Create playlist' })).toBeDisabled()
+    })
+
+    it('picking showmesh-audio swaps the mismatch field for repeat', async () => {
+      setupDraft()
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'showmesh-audio' }))
+      expect(screen.getByLabelText('Name')).toBeInTheDocument()
+      expect(screen.getByRole('group', { name: 'Repeat' })).toBeInTheDocument()
+      expect(screen.queryByRole('group', { name: /If the FPP playlist does not match/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'First entry' })).toBeInTheDocument()
+    })
+
+    it('does not create with a taken id and offers to open the existing playlist', async () => {
+      setupDraft()
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
+      fireEvent.click(screen.getByRole('button', { name: 'showmesh-audio' }))
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Background Music' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Cue' }), { target: { value: 'cue-1' } })
+      stubs.getShowPlaylist = () => Promise.resolve(playlistResponse(audioPlaylist(), 'background-music'))
+      const putSpy = vi.fn(() => Promise.resolve(playlistResponse(audioPlaylist())))
+      stubs.putShowPlaylist = putSpy
+      fireEvent.click(screen.getByRole('button', { name: 'Create playlist' }))
+      await waitFor(() => expect(screen.getByText('Id taken')).toBeInTheDocument())
+      expect(putSpy).not.toHaveBeenCalled()
+    })
+
+    it('keeps New playlist disabled with a stated reason without config:write', async () => {
+      setupDraft([])
+      await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
+      expect(screen.getByRole('button', { name: 'New playlist' })).toBeDisabled()
     })
   })
 })

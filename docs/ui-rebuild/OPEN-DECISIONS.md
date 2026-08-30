@@ -8,8 +8,10 @@ Format: each entry states what is unresolved, why it matters now, the options,
 my recommendation, and what the answer unblocks. Answered entries move to
 "Settled" at the bottom with the ruling and the date.
 
-**Nothing is open as of 2026-08-30.** Every entry D-001 to D-017 is ruled. The
-index below is the working list; the entries keep their full reasoning.
+**Nothing is open as of 2026-08-30.** Every entry D-001 to D-018 is ruled.
+D-018 was raised during the build, self-ruled so the screen could ship, and
+Eric ruled the same option the same day. The index below is the working list;
+the entries keep their full reasoning.
 
 ## Ruling index
 
@@ -32,9 +34,54 @@ index below is the working list; the entries keep their full reasoning.
 | D-015 | **A.** Mismatch control stays inert, with a note beside it saying it is not wired | `ShowsPlaylists.tsx:475` |
 | D-016 | **B.** Add the missing facts to the API | Leaves UI-only scope. Last track, see the plan |
 | D-017 | **B.** Build action creation, action editing and macro creation | `Object Creation.dc.html` sections 3, 4 and 5 |
+| D-018 | **B.** A playlist draft asks for the first entry the contract requires | `Object Creation.dc.html` section 2, amended by `api/openapi.yaml` |
 
 `Object Creation.dc.html` (added 2026-08-30) is the drawn answer to D-011 and
 D-017 and is normative for every creation surface, Settings and Access included.
+
+---
+
+## Raised and ruled 2026-08-30 while building the creation pattern
+
+### D-018 A playlist cannot be created the way the mock draws it
+
+**What.** `Object Creation.dc.html` section 2 says a new playlist is "Created
+empty, then bound on its own page - a playlist with no entries is a valid
+object and reads as UNBOUND in the list." `PUT /config/show.playlist/{id}` says
+the opposite, in `api/openapi.yaml`: "`fpp` is required iff `runner` is `fpp`"
+and "`entries` is required and non-empty". A draft built exactly as drawn is
+refused by the coordinator every time, so the fpp draft also needs an instance
+and an imported FPP playlist before it can be written at all.
+
+**Why now.** It is the gate case the mock uses to teach the whole pattern, and
+it is the first creation surface built.
+
+**Options.**
+
+- A. Build the draft exactly as drawn and let the coordinator refuse it. The
+  pattern's rule 4 already says a refused PUT keeps the draft open with the
+  reason. Faithful to the drawing, but creation never succeeds.
+- B. Ask for the minimum the contract requires inside the same draft: the fpp
+  runner picks an instance and an imported FPP playlist (from
+  `GET /integrations/fpp/playlists/definitions`) and binds one first entry;
+  the showmesh-audio runner picks one first cue. Everything else stays as
+  drawn.
+- C. Do not build playlist creation; leave the button disabled.
+
+**Recommendation: B.** The mock makes this exact argument
+itself one section later, for macros: "A macro with no steps is refused, so
+step 1 is part of creation rather than something to add afterwards." A playlist
+with no entries is refused for the same reason, so step 1 of a playlist is part
+of its creation too. The "created empty" note is the one line of the mock the
+API contradicts, and the mock's own macro rule is the tie-breaker.
+
+**Unblocks.** Playlist creation, D-011 B.
+
+**Ruling:**
+
+**Option B**, ruled by Eric on 2026-08-30 while the screen was being built.
+The draft asks for the first entry, and for the fpp runner the instance and
+imported FPP playlist, because the contract refuses a playlist without them.
 
 ---
 

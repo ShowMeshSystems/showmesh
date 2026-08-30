@@ -5,6 +5,7 @@ import { Button, ButtonRow, Field, Input, NotWired, PageTitle, RuledStrip, Secti
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
+import { guardedSave, type SaveOutcome } from '../domain/save'
 import { fetchShowContents } from './showsData'
 import { activeShowId, contentsCounts, type ShowContentsCounts } from './showsModel'
 
@@ -72,6 +73,7 @@ export function ShowDetail() {
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<ShowConfigResponse>, { kind: 'stale' }> | null>(null)
 
   useEffect(() => {
     if (state.kind === 'loaded') {
@@ -92,12 +94,27 @@ export function ShowDetail() {
   }
 
   const save = () => {
+    if (state.kind === 'loading' || (state.kind === 'failed' && state.response === null)) return
+    const loaded = state.response as ShowConfigResponse
     setSaving(true)
     setSaveError(null)
-    putShow(id, { name, notes })
-      .then((response) => {
-        setResponse(response)
-        setDirty(false)
+    setStale(null)
+    guardedSave({
+      loaded,
+      read: () => getShow(id),
+      write: () => putShow(id, { name, notes }),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          setResponse(outcome.response)
+          setDirty(false)
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
       })
       .catch((err: unknown) => setSaveError(describeApiError(err)))
       .finally(() => setSaving(false))
@@ -240,6 +257,28 @@ export function ShowDetail() {
           {formatClock(updatedAt) ?? 'at an unrecorded time'}
         </span>
       </ButtonRow>
+      {stale !== null && (
+        <RuledStrip
+          absence="failed"
+          label="Stale write"
+          fact={`Revision ${stale.loadedRevision} was loaded, but revision ${stale.currentRevision} is now current, saved by ${stale.changedBy ?? 'unknown principal'} ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
+          detail={
+            <>
+              Changed: <span className="sm-data">{stale.changedFields.join(', ')}</span>.{' '}
+              <button
+                type="button"
+                className="sm-linkbutton"
+                onClick={() => {
+                  setStale(null)
+                  reload()
+                }}
+              >
+                Reload and start again
+              </button>
+            </>
+          }
+        />
+      )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
 
       <Section id="sh-danger" title="Delete this show">

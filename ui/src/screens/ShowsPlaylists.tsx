@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import {
   getFPPPlaylistDefinitionEntries,
   getFPPPlaylistReadiness,
+  getShowPlaylist,
   listFPPPlaylistDefinitions,
   putShowPlaylist,
   type ConfigObjectSummary,
@@ -14,12 +15,13 @@ import {
   type ShowPlaylistConfigResponse,
 } from '../api'
 import { randomUUIDv4 } from '../api/uuid'
-import { Button, ButtonRow, Callout, Choice, DefinitionStrip, Field, NotWired, NotWiredBanner, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, NotWired, NotWiredBanner, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
+import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
-import { cueLabel, fppInstanceLabel, fppInstanceRoute, newerDefinition, playlistRows } from './showsModel'
+import { cueLabel, fppInstanceLabel, fppInstanceRoute, newerDefinition, playlistRows, slugify } from './showsModel'
 
 type Playlist = ShowPlaylistConfigResponse
 
@@ -113,11 +115,13 @@ export function ShowsPlaylists() {
   const model = useModelContext()
   const { state, reload, updatePlaylist } = usePlaylists(showId)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [drafting, setDrafting] = useState(false)
 
   const playlists = state.kind === 'loaded' ? state.playlists : []
   const selected = playlists.find((p) => p.id === selectedId) ?? playlists[0] ?? null
-  const evidence = useFPPEvidence(selected !== null && selected.payload.runner === 'fpp' ? selected : null)
-  const readiness = useReadiness(selected?.id ?? null)
+  const evidence = useFPPEvidence(!drafting && selected !== null && selected.payload.runner === 'fpp' ? selected : null)
+  const readiness = useReadiness(drafting ? null : (selected?.id ?? null))
+  const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
   if (state.kind === 'loading') {
     return (
@@ -152,7 +156,11 @@ export function ShowsPlaylists() {
         id="pl-list"
         title="Playlists in this show"
         aside={
-          <Button title="Playlist creation needs a runner-selection form the mock does not draw; see docs/ui-rebuild/OPEN-DECISIONS.md D-011." disabled>
+          <Button
+            onClick={() => setDrafting(true)}
+            disabled={drafting || !createGate.allowed}
+            title={!createGate.allowed ? createGate.reason : undefined}
+          >
             New playlist
           </Button>
         }
@@ -188,11 +196,29 @@ export function ShowsPlaylists() {
         </Callout>
       )}
 
-      {selected !== null && selected.payload.runner === 'fpp' && (
+      {drafting && (
+        <PlaylistDraft
+          showId={showId}
+          cues={state.kind === 'loaded' ? state.cues : []}
+          model={model}
+          onCreated={(response) => {
+            setSelectedId(response.id)
+            setDrafting(false)
+            reload()
+          }}
+          onDiscard={() => setDrafting(false)}
+          onOpenExisting={(id) => {
+            setSelectedId(id)
+            setDrafting(false)
+          }}
+        />
+      )}
+
+      {!drafting && selected !== null && selected.payload.runner === 'fpp' && (
         <FPPPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} evidence={evidence} readiness={readiness} model={model} onSaved={updatePlaylist} />
       )}
 
-      {selected !== null && selected.payload.runner === 'showmesh-audio' && (
+      {!drafting && selected !== null && selected.payload.runner === 'showmesh-audio' && (
         <AudioPlaylistEditor playlist={selected} cues={state.kind === 'loaded' ? state.cues : []} model={model} onSaved={updatePlaylist} />
       )}
     </>
@@ -230,6 +256,7 @@ function FPPPlaylistEditor({
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<Playlist>, { kind: 'stale' }> | null>(null)
 
   useEffect(() => {
     const map: Record<string, string> = {}
@@ -240,6 +267,7 @@ function FPPPlaylistEditor({
     setSafeCueRef(playlist.payload.safeCueRef ?? '')
     setDirty(false)
     setSaveError(null)
+    setStale(null)
   }, [playlist])
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -291,10 +319,23 @@ function FPPPlaylistEditor({
     }
     setSaving(true)
     setSaveError(null)
-    putShowPlaylist(playlist.id, payload)
-      .then((response) => {
-        onSaved(response)
-        setDirty(false)
+    setStale(null)
+    guardedSave({
+      loaded: playlist,
+      read: () => getShowPlaylist(playlist.id),
+      write: () => putShowPlaylist(playlist.id, payload),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onSaved(outcome.response)
+          setDirty(false)
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
       })
       .catch((err: unknown) => setSaveError(describeApiError(err)))
       .finally(() => setSaving(false))
@@ -508,6 +549,28 @@ function FPPPlaylistEditor({
           {formatClock(playlist.updatedAt) ?? 'at an unrecorded time'}
         </span>
       </ButtonRow>
+      {stale !== null && (
+        <RuledStrip
+          absence="failed"
+          label="Stale write"
+          fact={`Revision ${stale.loadedRevision} was loaded, but revision ${stale.currentRevision} is now current, saved by ${stale.changedBy ?? 'unknown principal'} ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
+          detail={
+            <>
+              Changed: <span className="sm-data">{stale.changedFields.join(', ')}</span>.{' '}
+              <button
+                type="button"
+                className="sm-linkbutton"
+                onClick={() => {
+                  setStale(null)
+                  getShowPlaylist(playlist.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
+                }}
+              >
+                Reload and start again
+              </button>
+            </>
+          }
+        />
+      )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
     </Section>
   )
@@ -532,12 +595,14 @@ function AudioPlaylistEditor({
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<Playlist>, { kind: 'stale' }> | null>(null)
   useEffect(() => {
     setEntries(playlist.payload.entries.map((e) => ({ id: e.id, cue: e.cue })))
     setRepeat(playlist.payload.showmeshAudio?.repeat ?? 'none')
     setAddCueId('')
     setDirty(false)
     setSaveError(null)
+    setStale(null)
   }, [playlist])
 
   const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
@@ -589,10 +654,23 @@ function AudioPlaylistEditor({
     }
     setSaving(true)
     setSaveError(null)
-    putShowPlaylist(playlist.id, payload)
-      .then((response) => {
-        onSaved(response)
-        setDirty(false)
+    setStale(null)
+    guardedSave({
+      loaded: playlist,
+      read: () => getShowPlaylist(playlist.id),
+      write: () => putShowPlaylist(playlist.id, payload),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          onSaved(outcome.response)
+          setDirty(false)
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
       })
       .catch((err: unknown) => setSaveError(describeApiError(err)))
       .finally(() => setSaving(false))
@@ -624,13 +702,6 @@ function AudioPlaylistEditor({
             setDirty(true)
           }}
         />
-        <NotWired label="No stored field">
-          <Choice type="checkbox" label="Resume where it left off" />
-        </NotWired>
-        <span className="sm-small sm-muted">
-          Resume where it left off has no home in <span className="sm-data">show.playlist.showmeshAudio</span>; see
-          docs/ui-rebuild/OPEN-DECISIONS.md D-012.
-        </span>
       </div>
 
       <div className="sm-inline-row sm-stack-4">
@@ -724,7 +795,400 @@ function AudioPlaylistEditor({
           {formatClock(playlist.updatedAt) ?? 'at an unrecorded time'}
         </span>
       </ButtonRow>
+      {stale !== null && (
+        <RuledStrip
+          absence="failed"
+          label="Stale write"
+          fact={`Revision ${stale.loadedRevision} was loaded, but revision ${stale.currentRevision} is now current, saved by ${stale.changedBy ?? 'unknown principal'} ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
+          detail={
+            <>
+              Changed: <span className="sm-data">{stale.changedFields.join(', ')}</span>.{' '}
+              <button
+                type="button"
+                className="sm-linkbutton"
+                onClick={() => {
+                  setStale(null)
+                  getShowPlaylist(playlist.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
+                }}
+              >
+                Reload and start again
+              </button>
+            </>
+          }
+        />
+      )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+    </Section>
+  )
+}
+
+// ---------------------------------------------------------------------
+// D-011 B / D-017 B / D-018: playlist creation, the creation pattern's gate
+// case. The runner decides which policy field and which first-entry shape
+// exist; nothing below it renders until it is answered.
+// ---------------------------------------------------------------------
+
+type Runner = 'fpp' | 'showmesh-audio'
+
+const RUNNER_OPTIONS: readonly { value: Runner; label: string }[] = [
+  { value: 'fpp', label: 'fpp' },
+  { value: 'showmesh-audio', label: 'showmesh-audio' },
+]
+
+/** The newest definition per playlist name, for one instance: what "the FPP playlist" picker offers. */
+function latestDefinitionsByName(definitions: readonly FPPPlaylistDefinitionMetadata[], instanceUuid: string): FPPPlaylistDefinitionMetadata[] {
+  const byName = new Map<string, FPPPlaylistDefinitionMetadata>()
+  for (const definition of definitions) {
+    if (definition.instanceUuid !== instanceUuid) continue
+    const existing = byName.get(definition.playlistName)
+    if (existing === undefined || definition.capturedAt > existing.capturedAt) byName.set(definition.playlistName, definition)
+  }
+  return Array.from(byName.values()).sort((a, b) => a.playlistName.localeCompare(b.playlistName))
+}
+
+function PlaylistDraft({
+  showId,
+  cues,
+  model,
+  onCreated,
+  onDiscard,
+  onOpenExisting,
+}: {
+  showId: string
+  cues: ConfigObjectSummary[]
+  model: ReturnType<typeof useModelContext>
+  onCreated: (response: Playlist) => void
+  onDiscard: () => void
+  onOpenExisting: (id: string) => void
+}) {
+  const [runner, setRunner] = useState<Runner | ''>('')
+  const [name, setName] = useState('')
+  const [id, setId] = useState('')
+  const [idTouched, setIdTouched] = useState(false)
+  const [mismatchPolicy, setMismatchPolicy] = useState<MismatchPolicy>('hold')
+  const [safeCueRef, setSafeCueRef] = useState('')
+  const [repeat, setRepeat] = useState<'none' | 'all'>('none')
+  const [instanceUuid, setInstanceUuid] = useState('')
+  const [definitions, setDefinitions] = useState<{ state: 'idle' | 'loading' | 'loaded' | 'failed'; items: FPPPlaylistDefinitionMetadata[] }>({
+    state: 'idle',
+    items: [],
+  })
+  const [playlistHash, setPlaylistHash] = useState('')
+  const [entries, setEntries] = useState<{ state: 'idle' | 'loading' | 'loaded' | 'failed'; items: FPPPlaylistDefinitionEntry[] }>({
+    state: 'idle',
+    items: [],
+  })
+  const [boundCue, setBoundCue] = useState('')
+  const [audioCue, setAudioCue] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [taken, setTaken] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (runner !== 'fpp') return
+    let cancelled = false
+    setDefinitions({ state: 'loading', items: [] })
+    listFPPPlaylistDefinitions()
+      .then((response) => {
+        if (!cancelled) setDefinitions({ state: 'loaded', items: response.definitions })
+      })
+      .catch(() => {
+        if (!cancelled) setDefinitions({ state: 'failed', items: [] })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [runner])
+
+  useEffect(() => {
+    if (runner !== 'fpp' || instanceUuid === '' || playlistHash === '') {
+      setEntries({ state: 'idle', items: [] })
+      return
+    }
+    let cancelled = false
+    setEntries({ state: 'loading', items: [] })
+    getFPPPlaylistDefinitionEntries(instanceUuid, playlistHash)
+      .then((response) => {
+        if (!cancelled) setEntries({ state: 'loaded', items: response.entries })
+      })
+      .catch(() => {
+        if (!cancelled) setEntries({ state: 'failed', items: [] })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [runner, instanceUuid, playlistHash])
+
+  const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+
+  const onNameChange = (value: string) => {
+    setName(value)
+    if (!idTouched) setId(slugify(value))
+  }
+  const onIdChange = (value: string) => {
+    setId(value)
+    setIdTouched(true)
+  }
+
+  const fppInstances = model.fpp.filter((instance): instance is typeof instance & { instanceUuid: string } => instance.instanceUuid !== null)
+  const availableDefinitions = instanceUuid === '' ? [] : latestDefinitionsByName(definitions.items, instanceUuid)
+  const chosenDefinition = availableDefinitions.find((d) => d.playlistHash === playlistHash) ?? null
+  const firstEntry = entries.items[0] ?? null
+
+  const canCreate =
+    runner !== '' &&
+    id !== '' &&
+    (runner === 'showmesh-audio'
+      ? audioCue !== ''
+      : chosenDefinition !== null && firstEntry !== null && boundCue !== '' && (mismatchPolicy !== 'safeCue' || safeCueRef !== ''))
+
+  const create = () => {
+    const activeRunner: Runner | '' = runner
+    if (!canCreate || activeRunner === '') return
+    const payload: ConfigShowPlaylist =
+      activeRunner === 'fpp'
+        ? {
+            show: showId,
+            name,
+            runner: 'fpp',
+            fpp: { instanceUuid: chosenDefinition!.instanceUuid, playlistName: chosenDefinition!.playlistName, playlistHash: chosenDefinition!.playlistHash },
+            mismatchPolicy,
+            ...(mismatchPolicy === 'safeCue' ? { safeCueRef } : {}),
+            entries: [{ id: randomUUIDv4(), cue: boundCue, fpp: { section: firstEntry!.section, position: firstEntry!.position } }],
+          }
+        : {
+            show: showId,
+            name,
+            runner: 'showmesh-audio',
+            showmeshAudio: { repeat },
+            entries: [{ id: randomUUIDv4(), cue: audioCue }],
+          }
+    setCreating(true)
+    setTaken(false)
+    setCreateError(null)
+    guardedCreate({
+      read: () => getShowPlaylist(id),
+      write: () => putShowPlaylist(id, payload),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'taken') {
+          setTaken(true)
+          return
+        }
+        if (outcome.kind === 'unreadable') {
+          setCreateError(outcome.reason)
+          return
+        }
+        onCreated(outcome.response)
+      })
+      .catch((err: unknown) => setCreateError(describeApiError(err)))
+      .finally(() => setCreating(false))
+  }
+
+  return (
+    <Section id="pl-draft" title="New playlist" eyebrow={runner === '' ? 'Draft · gate unanswered' : `Draft · ${runner}`}>
+      <Segmented<Runner | ''>
+        label="Runner"
+        value={runner}
+        options={RUNNER_OPTIONS}
+        onChange={(value) => {
+          setRunner(value as Runner)
+          setInstanceUuid('')
+          setPlaylistHash('')
+          setBoundCue('')
+          setAudioCue('')
+        }}
+      />
+      <p className="sm-small sm-faint">
+        Immutable once created, like the id: an fpp playlist and an audio playlist are different objects with different bindings.
+      </p>
+
+      {runner === '' && (
+        <p className="sm-small sm-muted">
+          The rest of the form appears once a runner is picked. It is not shown disabled: half of it would be fields this playlist can never have.
+        </p>
+      )}
+
+      {runner !== '' && (
+        <div className="sm-grid sm-form-column">
+          <Field label="Name">{(props) => <Input {...props} value={name} onChange={(e) => onNameChange(e.target.value)} />}</Field>
+          <Field label="Id" help="From the name, editable until created. Night session definitions bind playlists by id.">
+            {(props) => <Input {...props} className="sm-data" value={id} onChange={(e) => onIdChange(e.target.value)} />}
+          </Field>
+
+          {runner === 'fpp' ? (
+            <div>
+              <Segmented label="If the FPP playlist does not match" value={mismatchPolicy} options={MISMATCH_OPTIONS} onChange={setMismatchPolicy} />
+              <p className="sm-small sm-muted">
+                fpp only. What the coordinator does when the captured definition&rsquo;s hash is not the one this playlist binds.
+              </p>
+              {mismatchPolicy === 'safeCue' && (
+                <Field label="Safe cue">
+                  {(props) => (
+                    <Select {...props} value={safeCueRef} onChange={(e) => setSafeCueRef(e.target.value)}>
+                      <option value="">Select a cue</option>
+                      {cues.map((cue) => (
+                        <option key={cue.id} value={cue.id}>
+                          {cue.label}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                </Field>
+              )}
+            </div>
+          ) : (
+            <div>
+              <Segmented
+                label="Repeat"
+                value={repeat}
+                options={[
+                  { value: 'none', label: 'None' },
+                  { value: 'all', label: 'All' },
+                ]}
+                onChange={setRepeat}
+              />
+              <p className="sm-small sm-muted">An audio playlist carries its own order rather than binding an FPP capture.</p>
+            </div>
+          )}
+
+          <div>
+            <h3 className="sm-subsection__title">First entry</h3>
+            <p className="sm-small sm-muted">
+              The coordinator refuses a playlist with no entries, the same way it refuses a macro with no steps, so the first entry is part of creation.
+            </p>
+            {runner === 'fpp' ? (
+              <div className="sm-grid sm-grid--auto sm-stack-3">
+                {fppInstances.length === 0 ? (
+                  <RuledStrip absence="empty" label="None" fact="No FPP instance is configured." />
+                ) : (
+                  <Field label="Instance">
+                    {(props) => (
+                      <Select
+                        {...props}
+                        value={instanceUuid}
+                        onChange={(e) => {
+                          setInstanceUuid(e.target.value)
+                          setPlaylistHash('')
+                          setBoundCue('')
+                        }}
+                      >
+                        <option value="">Select an instance</option>
+                        {fppInstances.map((instance) => (
+                          <option key={instance.instanceUuid} value={instance.instanceUuid}>
+                            {instance.instanceId}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                )}
+                {instanceUuid !== '' &&
+                  (definitions.state === 'loading' ? (
+                    <RuledStrip absence="loading" label="Reading" fact="Fetching this instance's imported FPP playlist definitions." />
+                  ) : definitions.state === 'failed' ? (
+                    <RuledStrip absence="failed" label="Read failed" fact="Could not read this instance's imported FPP playlist definitions." />
+                  ) : availableDefinitions.length === 0 ? (
+                    <RuledStrip absence="empty" label="None" fact="This instance has no imported FPP playlist definition." />
+                  ) : (
+                    <Field label="FPP playlist">
+                      {(props) => (
+                        <Select
+                          {...props}
+                          value={playlistHash}
+                          onChange={(e) => {
+                            setPlaylistHash(e.target.value)
+                            setBoundCue('')
+                          }}
+                        >
+                          <option value="">Select an FPP playlist</option>
+                          {availableDefinitions.map((definition) => (
+                            <option key={definition.playlistHash} value={definition.playlistHash}>
+                              {definition.playlistName}
+                            </option>
+                          ))}
+                        </Select>
+                      )}
+                    </Field>
+                  ))}
+                {playlistHash !== '' &&
+                  (entries.state === 'loading' ? (
+                    <RuledStrip absence="loading" label="Reading" fact="Fetching the chosen definition's entries." />
+                  ) : entries.state === 'failed' ? (
+                    <RuledStrip absence="failed" label="Read failed" fact="Could not read the chosen definition's entries." />
+                  ) : firstEntry === null ? (
+                    <RuledStrip absence="empty" label="None" fact="The chosen definition has no entries." />
+                  ) : (
+                    <Field label="Bound cue">
+                      {(props) => (
+                        <Select {...props} value={boundCue} onChange={(e) => setBoundCue(e.target.value)}>
+                          <option value="">Select a cue</option>
+                          {cues.map((cue) => (
+                            <option key={cue.id} value={cue.id}>
+                              {cue.label}
+                            </option>
+                          ))}
+                        </Select>
+                      )}
+                    </Field>
+                  ))}
+              </div>
+            ) : (
+              <Field label="Cue">
+                {(props) => (
+                  <Select {...props} value={audioCue} onChange={(e) => setAudioCue(e.target.value)}>
+                    <option value="">Select a cue</option>
+                    {cues.map((cue) => (
+                      <option key={cue.id} value={cue.id}>
+                        {cue.label}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            )}
+          </div>
+        </div>
+      )}
+
+      {taken && (
+        <RuledStrip
+          absence="failed"
+          label="Id taken"
+          fact={
+            <>
+              <span className="sm-data">{id}</span> already names a playlist.{' '}
+              <button type="button" className="sm-linkbutton" onClick={() => onOpenExisting(id)}>
+                Open it
+              </button>
+            </>
+          }
+        />
+      )}
+      {createError !== null && <RuledStrip absence="failed" label="Save failed" fact={createError} />}
+
+      <ButtonRow>
+        <Button
+          variant="primary"
+          onClick={create}
+          disabled={!canCreate || creating || !createGate.allowed}
+          title={!createGate.allowed ? createGate.reason : undefined}
+        >
+          {creating ? 'Creating…' : 'Create playlist'}
+        </Button>
+        <Button variant="quiet" onClick={onDiscard} disabled={creating}>
+          Discard
+        </Button>
+        <span className="sm-small sm-muted sm-push-end">
+          {runner === '' ? (
+            'Runner required'
+          ) : (
+            <>
+              Creates <span className="sm-data">{id === '' ? '(no id yet)' : id}</span>
+            </>
+          )}
+        </span>
+      </ButtonRow>
     </Section>
   )
 }

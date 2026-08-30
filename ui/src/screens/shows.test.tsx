@@ -222,6 +222,27 @@ describe('Shows · Identity', () => {
     expect(save).toBeDisabled()
   })
 
+  it('refuses a stale save, writes nothing, and names the changed fields', async () => {
+    let calls = 0
+    stubs.getShow = () => {
+      calls += 1
+      return calls === 1
+        ? showResponse({ revision: 47 })
+        : showResponse({ revision: 48, notes: 'Someone else changed this.' })
+    }
+    stubs.listConfigObjects = () => contentsEmpty()
+    stubs.listAssets = assetsEmpty
+    const putSpy = vi.fn(() => showResponse())
+    stubs.putShow = putSpy
+    renderDetail('winter-ridge-2026', { session: signedIn(['config:write']) })
+    await waitFor(() => expect(screen.getByDisplayValue('Winter Ridge 2026')).toBeInTheDocument())
+    fireEvent.change(screen.getByDisplayValue('Winter Ridge 2026'), { target: { value: 'Winter Ridge 2027' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save show/ }))
+    await waitFor(() => expect(screen.getByText('Stale write')).toBeInTheDocument())
+    expect(putSpy).not.toHaveBeenCalled()
+    expect(screen.getByText('notes', { selector: '.sm-data' })).toBeInTheDocument()
+  })
+
   it('separates the delete control from the save path and leaves it inert with no endpoint', async () => {
     stubs.getShow = showResponse
     stubs.listConfigObjects = () => contentsEmpty()

@@ -13,6 +13,7 @@ import { MonitorCapabilities } from '../screens/MonitorCapabilities'
 import { MonitorManifest } from '../screens/MonitorManifest'
 import { ShowNight } from '../screens/ShowNight'
 import { Shows } from '../screens/Shows'
+import { ShowDraft } from '../screens/ShowDraft'
 import { ShowDetail } from '../screens/ShowDetail'
 import { ShowsWorkspace } from '../screens/ShowsWorkspace'
 import { ShowsPlaylists } from '../screens/ShowsPlaylists'
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="monitor/capabilities" element={<MonitorCapabilities />} />
             <Route path="monitor/manifest" element={<MonitorManifest />} />
             <Route path="shows" element={<Shows />} />
+            <Route path="shows/new" element={<ShowDraft />} />
             <Route path="shows/:id" element={<ShowDetail />} />
             <Route path="shows/:id" element={<ShowsWorkspace />}>
               <Route path="playlists" element={<ShowsPlaylists />} />

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { listConfigObjects } from '../api'
 import { Button, PageTitle, RuledStrip, Section, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
-import { describeApiError } from '../domain/session'
+import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
 import type { ConfigObjectSummary } from '../api'
 import { fetchAllShowContents } from './showsData'
@@ -75,10 +75,12 @@ function useContentsCounts(ids: readonly string[]): Map<string, ShowContentsCoun
 
 export function Shows() {
   const model = useModelContext()
+  const navigate = useNavigate()
   const { state } = useShowList()
   const objects = state.kind === 'loading' ? [] : state.objects
   const rows = showRows(objects, model)
   const counts = useContentsCounts(rows.map((r) => r.id))
+  const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
   return (
     <>
@@ -97,10 +99,7 @@ export function Shows() {
         id="sh-list"
         title="All shows"
         aside={
-          <Button
-            title="Show creation needs an id and name form the mock does not draw; see docs/ui-rebuild/OPEN-DECISIONS.md D-011."
-            disabled
-          >
+          <Button onClick={() => navigate('/shows/new')} disabled={!createGate.allowed} title={createGate.allowed ? undefined : createGate.reason}>
             New show
           </Button>
         }
