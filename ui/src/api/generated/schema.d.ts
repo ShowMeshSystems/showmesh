@@ -4994,6 +4994,8 @@ export interface components {
             state: "recorded" | "unknown" | "not_configured" | "not_available";
             reason: string;
             steps: components["schemas"]["NightBackgroundAudioStep"][];
+            /** @description The background-audio ceiling the RUNNING session pinned when it started (resting.backgroundAudio.maxGainDb on the session's own pinned configRevision) - never the value night.session's config currently holds, which can differ across a later revision (owner ruling 2026-08-28: the useful number during a show is the limit the session pinned, not the limit currently configured). Absent or null when no session is running, or when the pinned revision configures no background audio at all; `state` and `reason` say why. Never a fallback to the currently configured value. */
+            pinnedMaxGainDb?: number | null;
         };
         /** @description The night-session lifecycle controller's own persisted state - a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
         NightSessionState: {

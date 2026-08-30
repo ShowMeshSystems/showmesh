@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -660,5 +661,79 @@ func TestNightBackgroundAudioRevisionNeverRewindsPastAnUnrecognizedRow(t *testin
 	applyRow := pub.dispatched[len(pub.dispatched)-1]
 	if applyRow.Params["revision"].(float64) <= 99 {
 		t.Fatalf("apply dispatched at revision %v, want above the legacy row's 99", applyRow.Params["revision"])
+	}
+}
+
+// TestMapNightBackgroundAudio_PinnedMaxGainDb proves SM-202's own ruling
+// directly: the GET /night/session projection reports the maxGainDb the
+// RUNNING session pinned at its own configRevision, and keeps reporting
+// that value unchanged after a later revision reconfigures the ceiling -
+// never the value night.session.resting's config currently holds.
+func TestMapNightBackgroundAudio_PinnedMaxGainDb(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec)
+	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+		t.Fatalf("PinnedMaxGainDb = %v, want -10", got.PinnedMaxGainDb)
+	}
+
+	// A later revision reconfigures the ceiling. The running session stays
+	// pinned to revision 1, so the response must not move.
+	reconfigured := *ba
+	reconfigured.MaxGainDb = -3
+	payload := config.NightSessionPayload{
+		Show: "halloween", Label: "Halloween main loop",
+		ShowPlaylist: config.NightSessionFPPPlaylist{FPPInstanceID: "fpp-main", Playlist: "halloween-show"},
+		Resting: config.NightSessionResting{
+			FPPInstanceID: "fpp-main", Playlist: "halloween-resting",
+			TimelineAsset:   config.NightSessionAssetRef{Show: "halloween", Sequence: "resting-loop", Target: "fpp-main"},
+			BackgroundAudio: &reconfigured,
+		},
+		EnterShow:                 config.NightSessionEnterShow{Cues: nil, BlackoutHoldMs: 0},
+		EnterResting:              config.NightSessionEnterResting{Cues: nil, BlackoutAfterShowMs: 0},
+		AnnouncementDefaultPolicy: config.NightSessionAnnouncementPolicyDefault,
+	}
+	raw, err := config.EncodeNightSessionPayload(payload)
+	if err != nil {
+		t.Fatalf("encode revision 2 payload: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := st.CreateConfigRevision(ctx, store.ConfigRevisionRecord{
+		Kind: config.NightSessionConfigKind, ObjectID: "halloween-main", Revision: 2, PayloadJSON: raw,
+		CreatedByPrincipalID: "test", CreatedByPrincipalName: "test", Source: "api",
+	}); err != nil {
+		t.Fatalf("create night.session revision 2: %v", err)
+	}
+	if _, err := st.ActivateConfigRevision(ctx, config.NightSessionConfigKind, "halloween-main", 2); err != nil {
+		t.Fatalf("activate night.session revision 2: %v", err)
+	}
+
+	got = mapNightBackgroundAudio(ctx, h.deps, rec)
+	if got.PinnedMaxGainDb == nil || *got.PinnedMaxGainDb != -10 {
+		t.Fatalf("PinnedMaxGainDb after reconfiguration = %v, want still -10 (the pinned revision), not the newly configured -3", got.PinnedMaxGainDb)
+	}
+
+	// No session running: the field is absent, never a fallback value.
+	if none := mapNightBackgroundAudio(ctx, h.deps, store.NightSessionRecord{}); none.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb with no session = %v, want nil", none.PinnedMaxGainDb)
+	}
+}
+
+// TestMapNightBackgroundAudio_NoBackgroundAudioConfigured proves a session
+// pinned to a revision that configures no backgroundAudio at all reports
+// State "recorded" (a legitimate reading, not a read failure) with
+// PinnedMaxGainDb nil rather than a defaulted or fallback value.
+func TestMapNightBackgroundAudio_NoBackgroundAudioConfigured(t *testing.T) {
+	h, st, _, _ := nightBackgroundAudioTestHandlers(t)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", nil, nightStateRestingIntershow)
+
+	got := mapNightBackgroundAudio(context.Background(), h.deps, rec)
+	if got.State != v1.NightEvidenceRecorded {
+		t.Fatalf("state with no backgroundAudio configured = %q, want recorded", got.State)
+	}
+	if got.PinnedMaxGainDb != nil {
+		t.Fatalf("PinnedMaxGainDb with no backgroundAudio configured = %v, want nil", got.PinnedMaxGainDb)
 	}
 }

@@ -168,7 +168,15 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 // getPinnedNightSessionPayload reads outside any HTTP request's own
 // transaction, unlike nightsessioncontrol.go's tx-bound equivalent.
 func (h *handlers) getPinnedNightSessionPayload(ctx context.Context, rec store.NightSessionRecord) (config.NightSessionPayload, error) {
-	rev, err := h.deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
+	return nightPinnedNightSessionPayload(ctx, h.deps, rec)
+}
+
+// nightPinnedNightSessionPayload is [handlers.getPinnedNightSessionPayload]
+// as a package function taking deps directly, for the (non-method) wire
+// mapping functions in nightsessioncontrol.go that only have deps, not a
+// *handlers.
+func nightPinnedNightSessionPayload(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) (config.NightSessionPayload, error) {
+	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
 	if err != nil {
 		return config.NightSessionPayload{}, fmt.Errorf("api: get pinned night.session revision %s/%d: %w", rec.ConfigObjectID, rec.ConfigRevision, err)
 	}

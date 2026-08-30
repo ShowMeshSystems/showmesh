@@ -110,6 +110,9 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
 		printNightAudioSteps(w, background)
 	}
+	if s.BackgroundAudio.PinnedMaxGainDb != nil {
+		_, _ = fmt.Fprintf(w, "  Pinned max gain: %.1f dB\n", *s.BackgroundAudio.PinnedMaxGainDb)
+	}
 	if len(announcement) > 0 {
 		_, _ = fmt.Fprintf(w, "\nAnnouncement sessions:\n")
 		printNightAudioSteps(w, announcement)

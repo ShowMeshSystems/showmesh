@@ -119,6 +119,16 @@ type NightBackgroundAudio struct {
 	State  NightEvidenceState         `json:"state"`
 	Reason string                     `json:"reason"`
 	Steps  []NightBackgroundAudioStep `json:"steps"`
+
+	// PinnedMaxGainDb is the background-audio ceiling the RUNNING session
+	// pinned when it started (config.NightSessionBackgroundAudio.MaxGainDb
+	// at rec.ConfigRevision) - never the value night.session.resting's
+	// config currently holds, which can differ across a later revision
+	// (owner ruling 2026-08-28). Nil when no session is running, or when
+	// background audio is not configured for the pinned revision; State
+	// and Reason already say why in both cases, so this is never defaulted
+	// to a plausible-looking value.
+	PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb,omitempty"`
 }
 
 // NightSessionState is the full lifecycle resource.

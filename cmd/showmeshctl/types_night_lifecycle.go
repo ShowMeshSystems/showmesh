@@ -61,9 +61,10 @@ type nightBackgroundAudioStepWire struct {
 }
 
 type nightBackgroundAudioWire struct {
-	State  string                         `json:"state"`
-	Reason string                         `json:"reason"`
-	Steps  []nightBackgroundAudioStepWire `json:"steps"`
+	State           string                         `json:"state"`
+	Reason          string                         `json:"reason"`
+	Steps           []nightBackgroundAudioStepWire `json:"steps"`
+	PinnedMaxGainDb *float64                       `json:"pinnedMaxGainDb,omitempty"`
 }
 
 type nightSessionStateWire struct {

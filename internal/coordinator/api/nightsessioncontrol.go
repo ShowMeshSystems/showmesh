@@ -1506,7 +1506,30 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 		}
 		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind))
 	}
-	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+	pinnedMaxGainDb, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
+	if err != nil {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "failed to read the pinned background-audio configuration: " + err.Error(), Steps: out}
+	}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
+}
+
+// nightPinnedBackgroundMaxGainDb is the background-audio ceiling the
+// RUNNING session pinned when it started - rec's own pinned night.session
+// revision's resting.backgroundAudio.maxGainDb, never the value
+// night.session.resting's config currently holds, which can differ across
+// a later revision (owner ruling 2026-08-28). Nil, nil means that pinned
+// revision configures no background audio at all - a legitimate reading,
+// not a read failure.
+func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) (*float64, error) {
+	payload, err := nightPinnedNightSessionPayload(ctx, deps, rec)
+	if err != nil {
+		return nil, err
+	}
+	if payload.Resting.BackgroundAudio == nil {
+		return nil, nil
+	}
+	gain := payload.Resting.BackgroundAudio.MaxGainDb
+	return &gain, nil
 }
 
 // mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read
