@@ -15,7 +15,7 @@ export type RailStep = {
   key: string
   label: string
   detail: string
-  status: 'done' | 'now' | 'ahead' | 'unknown'
+  status: 'done' | 'now' | 'ahead' | 'unknown' | 'notWired'
 }
 
 export function cycleRail(session: NightSessionState, nowIso: string | null): RailStep[] {
@@ -39,18 +39,32 @@ export function cycleRail(session: NightSessionState, nowIso: string | null): Ra
 }
 
 /**
- * What the night has left. Per-cycle history is not in `NightSessionState`,
- * so this states the current cycle and what is still open, and does not
- * reconstruct earlier cycles it was never told about.
+ * The whole-night timeline the mock draws. `NightSessionState` reports only
+ * the cycle the session is in, so cycles before it are placeholders: the
+ * step exists because the cycle happened, but nothing about it is reported.
  */
 export function nightRail(session: NightSessionState): RailStep[] {
+  const cycleSteps: RailStep[] = []
+  for (let cycle = 1; cycle <= session.cycle; cycle += 1) {
+    if (cycle < session.cycle) {
+      cycleSteps.push({
+        key: `cycle-${cycle}`,
+        label: `Cycle ${cycle}`,
+        detail: 'not reported',
+        status: 'notWired',
+      })
+    } else {
+      cycleSteps.push({
+        key: `cycle-${cycle}`,
+        label: `Cycle ${cycle}`,
+        detail: session.state,
+        status: 'now',
+      })
+    }
+  }
+
   const rail: RailStep[] = [
-    {
-      key: 'cycle',
-      label: `Cycle ${session.cycle}`,
-      detail: session.state,
-      status: 'now',
-    },
+    ...cycleSteps,
     {
       key: 'more',
       label: 'More cycles',

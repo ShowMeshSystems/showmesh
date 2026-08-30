@@ -26,18 +26,18 @@ comes back and where.
 **Options, one per item.**
 
 - **Presentation path** (which surfaces are carrying the show). A. Fold into
-  System health as a fifth tile. B. Give it to Monitor › Fleet, which already
-  owns per-surface state. C. Drop it.
+System health as a fifth tile. B. Give it to Monitor › Fleet, which already
+owns per-surface state. C. Drop it.
 - **Recent activity** (the last few events). A. Drop it here; Monitor › Activity
-  is the stream and the rail badge is the attention path. B. Fold three lines
-  into Needs you. C. Restore as a fourth block.
+is the stream and the rail badge is the attention path. B. Fold three lines
+into Needs you. C. Restore as a fourth block.
 - **Tonight's lifecycle** (the night session's phase strip). A. Drop it here;
-  Show Night owns the lifecycle and Readiness already names the state.
-  B. Restore as a fourth block.
+Show Night owns the lifecycle and Readiness already names the state.
+B. Restore as a fourth block.
 - **Clock-skew warning.** A. Move it to the chrome bar, where it affects every
-  age on every screen. B. Keep it on Dashboard. C. Monitor › Fleet.
+age on every screen. B. Keep it on Dashboard. C. Monitor › Fleet.
 - **Data-freshness notice.** Already folded in: the page lede reads "Snapshot
-  1.1 s ago". No decision needed unless you want the old banner back.
+1.1 s ago". No decision needed unless you want the old banner back.
 
 **Recommendation.** Presentation path B, Recent activity A, Tonight's lifecycle
 A, clock skew A. That leaves Dashboard at the mock's three blocks and puts each
@@ -46,6 +46,37 @@ fact on the screen that owns it.
 **Unblocks.** Nothing. Dashboard shipped without them.
 
 **Ruling:**
+
+**Presentation path → B.** Monitor › Fleet. It already carries per-surface state
+per row; a second copy on Dashboard is the same fact twice.
+
+**Recent activity → A.** Drop from Dashboard. Monitor › Activity is the stream
+and the rail badge is the attention path.
+
+**Tonight's lifecycle → A.** Drop from Dashboard. Show Night owns the lifecycle
+strip, and Readiness already names the state in words.
+
+**Clock skew → A.** Chrome bar. It invalidates every age on every screen, so it
+belongs to the chrome that renders those ages, not to one screen.
+
+**Data freshness → no change.** The lede (`Snapshot 0.4 s ago · Winter Ridge
+2026 is the active show`) is the whole treatment. No banner.
+
+Dashboard stays at the mock's three blocks. That was already the intent of
+drawing three blocks.
+
+**What each ruling cost to build, checked 2026-08-29.**
+
+- *Presentation path.* Nothing to build. Monitor Fleet's resource table already
+  carries every row the old block had, and more: one row per FPP instance, node
+  and Resolume instance, each with its health, its last report, and the same
+  `/monitor/fleet/<kind>/<id>` destination the old block linked to
+  (`screens/monitorModel.ts` `fleetRows`). The old block's render-endpoint count
+  survives as the node row's `render · N surfaces` detail.
+- *Recent activity, Tonight's lifecycle, data freshness.* Already as ruled.
+- *Clock skew.* Built into the chrome as a strip under the bar. It is not an
+  item inside the bar: the bar must not wrap, and D-002 protects the
+  now-playing group's horizontal room.
 
 ---
 
@@ -60,11 +91,12 @@ show depends on. The coordinator reports each resource's own health; it does not
 report that dependency, so the claim cannot be derived today.
 
 **Options.**
+
 - A. Keep "2 items". The caveat lives in the empty state, where it already does.
 - B. Say it only when the night session reports `degraded: false` and no item
-  names a resource the current run targets. This is derivable from
-  `CurrentRun.targets`, but only for the FPP runner, and only while a run is
-  in progress.
+names a resource the current run targets. This is derivable from
+`CurrentRun.targets`, but only for the FPP runner, and only while a run is
+in progress.
 - C. Say it whenever the night session is live and not degraded.
 
 **Recommendation.** A now, B when Show Night is rebuilt and the targets list has
@@ -75,6 +107,19 @@ matters.
 operator".
 
 **Ruling:**
+
+**A now, B when it is derivable. Never C.**
+
+Render `2 items` alone. The "neither is stopping tonight's show" clause is a
+claim about dependency, and the coordinator does not report dependency — so the
+UI does not get to say it. When `CurrentRun.targets` can be read against real
+hardware, add the clause under B's exact condition (`degraded: false` **and** no
+item names a targeted resource), and only while a run is in progress. Outside a
+run, no clause.
+
+Same rule on Monitor's "Needs an operator" aside. C is the version that lies on
+the one night it matters; it is off the table permanently, not deferred.
+
 
 ---
 
@@ -92,12 +137,13 @@ guards across many branches, and a second copy in the UI would drift. What the
 UI can honestly disable today is only what `NightSessionState` reports directly.
 
 **Options.**
+
 - A. Leave as built. Every command is enabled; a refusal is shown with the
-  coordinator's own reason. Honest, but the operator finds out by pressing.
+coordinator's own reason. Honest, but the operator finds out by pressing.
 - B. Add `allowedCommands` (or per-command `withheldReason`) to
-  `NightSessionState`, and disable from that. One source of truth, and the mock
-  becomes buildable exactly as drawn. Needs a coordinator change and an
-  OpenAPI change.
+`NightSessionState`, and disable from that. One source of truth, and the mock
+becomes buildable exactly as drawn. Needs a coordinator change and an
+OpenAPI change.
 - C. Reimplement the state table client-side. Cheapest today, wrong later.
 
 **Recommendation.** A now, B when the coordinator work can be scheduled. Not C.
@@ -106,6 +152,24 @@ UI can honestly disable today is only what `NightSessionState` reports directly.
 Night.
 
 **Ruling:**
+
+**A now. B is the target — open it as an issue. Not C.**
+
+Ship every command enabled and report the coordinator's refusal verbatim. Do
+not build a second state table in the browser.
+
+The mock's disabled states are not a request to predict validity — they are the
+drawing of what B looks like once `NightSessionState` reports it. So keep the
+mock's copy as the string template, ready to take real data:
+
+- `Not valid from <code>live</code>.`
+- `Not valid from <code>live</code>. The night is already running.`
+- `Withheld by interlock <code>projector-cooldown</code> — lamp above 40 °C.
+  Needs an authorized override.`
+
+When B lands it should be a data swap into those strings, not a layout change.
+Prefer per-command `withheldReason` over a bare `allowedCommands` list: the
+reason is the whole value of the treatment.
 
 ---
 
@@ -121,6 +185,7 @@ previous build shipped a disabled Fire button with a "planned" stamp, which is
 the invented-design pattern you rejected.
 
 **Options.**
+
 - A. Ship the list plus the stated absence, as built. No control that cannot work.
 - B. Add a fire endpoint to the coordinator and build the button.
 - C. Drop the section from Live Control entirely.
@@ -131,6 +196,28 @@ a real operator need, so B is worth its own issue; C loses the visibility.
 **Unblocks.** Nothing. The screen shipped.
 
 **Ruling:**
+
+**A now, and open B as its own issue.**
+
+List the cues with their duck/interrupt policy and state the absence. No
+disabled Fire stamped "planned".
+
+Two things the mock is already saying, keep them straight:
+
+1. The **enabled** announcement buttons are the target shape for when a fire
+   endpoint exists (`POST /cues/{id}/fire` or equivalent). Firing must not
+   advance the run — that sentence is in the mock's lede and it is a
+   requirement, not flavour.
+2. The **disabled** third card ("Its audio asset has not been uploaded") is
+   disabled from a *reported* fact — asset deliverability — not from a missing
+   endpoint. That one is buildable today and should be built: a cue whose asset
+   is undeliverable is disabled with that reason and an Upload link, regardless
+   of what happens with B.
+
+C is refused. Firing an announcement mid-show is a real operator need; losing
+the visibility is worse than shipping a list.
+
+
 
 ---
 
@@ -146,13 +233,13 @@ been requested, and says in the footnote that earlier cycles are not listed.
 reads as a timeline of the night.
 
 **Options.**
+
 - A. Leave as built. The rail states what the session reports.
 - B. Reconstruct earlier cycles from the event stream (`night.session` events
-  carry each state change). Possible today, but the stream is bounded by
-  retention, so an early-evening cycle can be gone by midnight and the rail
-  would silently show a partial night.
-- C. Add per-cycle history to `NightSessionState` or a `GET /night/session/
-  cycles`, and build the rail as drawn.
+carry each state change). Possible today, but the stream is bounded by
+retention, so an early-evening cycle can be gone by midnight and the rail
+would silently show a partial night.
+- C. Add per-cycle history to `NightSessionState` or a `GET /night/session/ cycles`, and build the rail as drawn.
 
 **Recommendation.** A now. C if the timeline matters to you on the night; B
 only with the retention gap shown, never silently.
@@ -160,6 +247,69 @@ only with the retention gap shown, never silently.
 **Unblocks.** Nothing. The screen shipped.
 
 **Ruling:**
+
+**A now. C is the fix. B only with the gap shown, and only if C is not coming.**
+
+The rail as built is correct: current cycle, whether more cycles are open,
+whether end of night has been requested, plus the footnote that earlier cycles
+are not listed.
+
+The mock's full-night rail is what we want, so C — per-cycle history on
+`NightSessionState` or `GET /night/session/cycles` — is the real answer; open it
+as an issue. If B is ever used as a stopgap, the retention boundary must be
+drawn in the rail itself ("earlier than 18:40 not retained"), never a silently
+partial night. A rail that looks complete and is not is worse than the honest
+one shipped today.
+
+
+---
+
+## D-010 The standing rule for a control the API cannot serve
+
+**Ruled 2026-08-29 by Eric, and it supersedes the rebuild plan's earlier rule.**
+
+Where a mock draws a control or a design element the coordinator cannot serve,
+**build it to its final drawn shape, render it inert, and warn loudly that it
+does nothing yet.** Do not state the absence in prose instead of drawing the
+control, and do not quietly leave the mock's element out.
+
+The kit carries the treatment, so it is the same everywhere:
+
+- `NotWiredBanner` sits above the section. It names what the control would do
+  and the endpoint that does not exist, verbatim.
+- `NotWired` wraps a single control, forces `disabled` on it, and tags it in
+  place so the warning cannot be scrolled away from the button it describes.
+- Amber, not red. Nothing has failed; the coordinator is simply not finished.
+
+Two limits on the rule, both from Eric's own standing rules and neither in
+tension with it:
+
+1. **It covers controls, not data.** A number, a time or a row the coordinator
+   never reported is still never invented. Where a mock draws a timeline the API
+   cannot fill, the timeline is built and its unknown entries are marked
+   unreported. They are not filled in with plausible values.
+2. **A control that is disabled from a reported fact is not "not wired".** It is
+   an ordinary disabled control with its real reason. Only a missing endpoint
+   earns the not-wired treatment.
+
+No coordinator or `api/openapi.yaml` work is in scope for the UI rebuild. The
+missing endpoints are recorded here and get their own issues.
+
+**Correction to D-009 as originally written.** Its option B claimed
+`night.session` events carry each state change and that earlier cycles could be
+reconstructed from the event stream. That is wrong. The night-session controller
+never calls `store.AppendEvent`; the only event categories that exist are
+`asset_sync`, `control_plane`, `render_pipeline` and `macro.run.prior_failure`.
+There is no night-session history in `GET /events`, so B was never available.
+
+---
+
+## Also settled, unasked
+
+The **Show Night Session** definition editor, the **Show Assets** coverage
+roll-up, **Settings** node routing as list+detail, and **Monitor**'s playlist
+definitions drill-down are drawn and in the mocks as of this round. They are not
+open questions.
 
 ---
 
@@ -184,17 +334,17 @@ that screen. The now-playing group keeps its horizontal room.
 layout for them and do not leave them on the old stylesheets.
 
 - **Playlist readiness** (`/monitor/readiness`) folds into the playlist
-  configuration page, not Show Night. It is an authoring-time verdict about a
-  playlist.
+configuration page, not Show Night. It is an authoring-time verdict about a
+playlist.
 - **FPP playlist definitions** (`/monitor/fleet/playlist-definitions/...`) fold
-  into the same playlist configuration page.
+into the same playlist configuration page.
 - **Night sessions** (`shows/:id/night-sessions*`) are Show Night. The list and
-  detail routes fold into the Show Night screen.
+detail routes fold into the Show Night screen.
 - **Asset manifest** (`/assets/manifest`) becomes a new Monitor facet. This
-  amends the guide's four-facet list in §3.
+amends the guide's four-facet list in §3.
 - **Top-level `/assets`** stays a rail destination, per the guide's §3 Author
-  group, rebuilt from the `Show Assets` mock. (Not raised in the question; I am
-  recording the reading I am building to. Say so if it is wrong.)
+group, rebuilt from the `Show Assets` mock. (Not raised in the question; I am
+recording the reading I am building to. Say so if it is wrong.)
 
 ### D-004 Execution shape — 2026-08-29
 

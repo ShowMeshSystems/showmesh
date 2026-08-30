@@ -89,6 +89,35 @@ describe('app shell', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('No page at this address')
     expect(screen.getByRole('link', { name: 'Go to Monitor › Activity' })).toBeInTheDocument()
   })
+
+  it('shows no clock skew strip when the skew has not been observed', () => {
+    renderShell({ clockSkewMs: null })
+    expect(screen.queryByText('Clock skew', { exact: false })).not.toBeInTheDocument()
+  })
+
+  it('shows no clock skew strip when the skew is under the threshold', () => {
+    renderShell({ clockSkewMs: 4_999 })
+    expect(screen.queryByText('Clock skew', { exact: false })).not.toBeInTheDocument()
+  })
+
+  it('shows the strip when the skew is exactly at the threshold', () => {
+    renderShell({ clockSkewMs: 5_000 })
+    expect(screen.getByRole('status')).toHaveTextContent('Clock skew')
+  })
+
+  it('names the coordinator as ahead when clockSkewMs is positive', () => {
+    renderShell({ clockSkewMs: 90_000 })
+    const strip = screen.getByRole('status')
+    expect(strip).toHaveTextContent('Clock skew')
+    expect(strip).toHaveTextContent('behind the coordinator')
+  })
+
+  it('names the browser as ahead when clockSkewMs is negative', () => {
+    renderShell({ clockSkewMs: -90_000 })
+    const strip = screen.getByRole('status')
+    expect(strip).toHaveTextContent('Clock skew')
+    expect(strip).toHaveTextContent('ahead of the coordinator')
+  })
 })
 
 /* The old design is gone only when it is unreachable and a test says so. */

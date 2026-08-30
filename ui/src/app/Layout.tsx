@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import {
   ChromeBar,
   ChromeProgress,
+  ClockSkewStrip,
   ConnectionPill,
   Rail,
   RailGroup,
@@ -10,6 +11,7 @@ import {
   type Connection,
 } from '../kit'
 import type { ConnectionState, Model } from '../api'
+import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
 import { describeSignInState } from '../domain/session'
 import { useModelContext } from './ModelContext'
 import { BootstrapBand, SignedOutBand } from './SessionBand'
@@ -75,6 +77,13 @@ export function Layout() {
         principal={<span className="sm-small sm-muted">{principal}</span>}
       />
       <ChromeProgress value={null} label="Position of the current item" />
+      {model.clockSkewMs !== null && Math.abs(model.clockSkewMs) >= CLOCK_SKEW_WARNING_THRESHOLD_MS && (
+        <ClockSkewStrip>
+          This browser&rsquo;s clock is {model.clockSkewMs > 0 ? 'behind' : 'ahead of'} the coordinator&rsquo;s, the
+          reference clock, by about {formatDuration(Math.abs(model.clockSkewMs))}. Every age and relative time shown
+          here is off by roughly that much.
+        </ClockSkewStrip>
+      )}
       {signIn.kind === 'bootstrap_required' && <BootstrapBand />}
       {signIn.kind === 'signed_out' && <SignedOutBand />}
       <ShellBody>

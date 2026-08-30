@@ -4,6 +4,7 @@ import {
   dispatchNightCommand,
   invokeAction,
   getShowCue,
+  listAssets,
   listConfigObjects,
   nextFPPPlaylistItem,
   pauseFPPPlaylist,
@@ -24,6 +25,8 @@ import {
   Callout,
   Field,
   Input,
+  NotWired,
+  NotWiredBanner,
   RuledStrip,
   Section,
   Segmented,
@@ -352,13 +355,23 @@ export function LiveControl() {
 }
 
 /**
- * Cues that declare an announcement output. This coordinator advertises no
- * way to fire one outside a Show Night transition (no POST /cues/{id}/fire
- * or equivalent in api/openapi.yaml), so this states that rather than
- * offering a control that cannot work.
+ * Cues that declare an announcement output. The mock's Fire button is drawn
+ * here to its final shape and is inert: the API has no POST /cues/{id}/fire
+ * or equivalent. Ruled 2026-08-29, D-008.
  */
+type AnnouncementCue = {
+  id: string
+  policy: string
+  duckGainDb?: number
+  fadeMillis: number
+  /** The logical sequence the cue's audio resolves through, or null when it declares none. */
+  sequence: string | null
+  /** False only when the lookup ran and found no current asset for that sequence. */
+  uploaded: boolean
+}
+
 function Announcements({ show }: { show: string | null }) {
-  const [cues, setCues] = useState<{ id: string; policy: string; duckGainDb?: number; fadeMillis: number }[] | null>(null)
+  const [cues, setCues] = useState<AnnouncementCue[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -370,18 +383,29 @@ function Announcements({ show }: { show: string | null }) {
     listConfigObjects('show.cue', show)
       .then(async (response) => {
         const loaded = await Promise.all(response.objects.map((object) => getShowCue(object.id)))
+        const announcing = loaded.filter((cue) => cue.payload.outputs.announcement !== undefined)
+        // A cue's audio asset resolves by sequence id, never by asset id
+        // (assetsync/cuecatalog.go resolveAssetFor). Uploaded means a current
+        // asset exists for that sequence in this show.
+        const assets = await listAssets({ show })
         if (cancelled) return
+        const currentSequences = new Set(
+          assets.assets.filter((asset) => asset.current).map((asset) => asset.sequence),
+        )
         setCues(
-          loaded
-            .filter((cue) => cue.payload.outputs.announcement !== undefined)
-            .map((cue) => ({
+          announcing.map((cue) => {
+            const sequence = cue.payload.outputs.audio?.asset ?? null
+            return {
               id: cue.id,
               policy: cue.payload.outputs.announcement?.policy ?? 'unknown',
               ...(cue.payload.outputs.announcement?.duckGainDb === undefined
                 ? {}
                 : { duckGainDb: cue.payload.outputs.announcement.duckGainDb }),
               fadeMillis: cue.payload.outputs.announcement?.fadeMillis ?? 0,
-            })),
+              sequence,
+              uploaded: sequence !== null && currentSequences.has(sequence),
+            }
+          }),
         )
       })
       .catch((err: unknown) => {
@@ -414,26 +438,50 @@ function Announcements({ show }: { show: string | null }) {
           detail="Shows › Cues is where an announcement output is added to a cue."
         />
       ) : (
-        <ul className="sm-plain-list">
-          {cues.map((cue) => (
-            <li key={cue.id}>
-              <span className="sm-data">{cue.id}</span>{' '}
-              <span className="sm-small sm-muted">
-                {cue.policy === 'duck' && cue.duckGainDb !== undefined
-                  ? `Ducks the bed to ${cue.duckGainDb} dB`
-                  : cue.policy === 'interrupt'
-                    ? 'Interrupts the bed'
-                    : `Mixes with the bed`}
-                {` · ${(cue.fadeMillis / 1000).toFixed(1)} s fade`}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <NotWiredBanner
+            what="Firing an announcement"
+            missing="POST /cues/{id}/fire"
+            detail="Until it exists, an announcement runs only when its Show Night transition runs."
+          />
+          <ul className="sm-plain-list">
+            {cues.map((cue) => (
+              <li key={cue.id} className="sm-annc">
+                <div>
+                  <p>
+                    <span className="sm-data">{cue.id}</span>
+                  </p>
+                  <p className="sm-small sm-muted">
+                    {cue.policy === 'duck' && cue.duckGainDb !== undefined
+                      ? `Ducks the bed to ${cue.duckGainDb} dB`
+                      : cue.policy === 'interrupt'
+                        ? 'Interrupts the bed'
+                        : `Mixes with the bed`}
+                    {` · ${(cue.fadeMillis / 1000).toFixed(1)} s fade`}
+                  </p>
+                  {!cue.uploaded && (
+                    <p className="sm-small sm-muted">
+                      {cue.sequence === null
+                        ? 'This cue declares no audio output, so there is nothing to play.'
+                        : 'Its audio asset has not been uploaded.'}{' '}
+                      <Link to="/assets">Show Assets</Link>
+                    </p>
+                  )}
+                </div>
+                {cue.uploaded ? (
+                  <NotWired>
+                    <Button variant="primary">Fire</Button>
+                  </NotWired>
+                ) : (
+                  <Button variant="primary" disabled title="Its audio asset has not been uploaded.">
+                    Fire
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
-      <Callout>
-        This coordinator advertises no way to fire an announcement directly: the API has no endpoint for firing a cue
-        outside a Show Night transition. These run when their transition runs.
-      </Callout>
     </Section>
   )
 }

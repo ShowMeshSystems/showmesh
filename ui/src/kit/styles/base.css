@@ -45,3 +45,16 @@ samp {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Text for a screen reader only. The one utility class in the kit. */
+.sm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}

@@ -87,13 +87,14 @@ visual language.
 | Live Control | Done | #197 |
 | Show Night | Done | #198 |
 | Monitor · Fleet, facet tabs, inspector | Done | #199 |
-| Monitor · Signals, Activity, Capabilities, Manifest | Next | |
+| Apply the D-005 to D-010 rulings | Done | |
+| Session states: signed out, bootstrap, connecting, not found | Next | |
+| Monitor · Signals, Activity, Capabilities, Manifest | | |
 | Shows workspace, five tabs | | |
 | Node detail | | |
 | Settings, seven tabs | | |
 | Access | | |
 | Resolume Config | | |
-| Session states | | |
 | Delete the old system | | |
 
 Each PR is stacked on the one before it, so its diff is only its own screen.
@@ -188,6 +189,10 @@ unreachable.
   behind it. Check `DESIGN-DECISIONS-AND-API-FACTS.md` before typing a mono string.
 - A control the principal may not use renders disabled with a stated reason,
   never hidden.
+- A control the API cannot serve is still built, to the shape the mock draws,
+  inert, and marked with the kit's `NotWiredBanner` and `NotWired` (D-010).
+  Data the coordinator never reported is still never invented: the element is
+  drawn and its unknown entries are marked unreported.
 - Night commands answer 202. The UI says accepted, never done.
 - Rail badges are attention counts. Tab counts are inventory counts.
 - Signed-out and bootstrap are bands in the document flow, not a full-screen

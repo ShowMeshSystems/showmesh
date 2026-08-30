@@ -9,12 +9,15 @@ import {
   ChoiceRow,
   ChromeBar,
   ChromeProgress,
+  ClockSkewStrip,
   ConnectionPill,
   DefinitionStrip,
   Field,
   FieldGrid,
   Freshness,
   Input,
+  NotWired,
+  NotWiredBanner,
   RailBadge,
   RuledStrip,
   Segmented,
@@ -288,6 +291,30 @@ export function Specimen() {
             The dashed stamp and dashed underline do the same job the dashed badge does elsewhere: absent evidence
             never borrows the shape of a settled state. Solid edges are reserved for facts the coordinator asserted.
           </Callout>
+
+          <div className="sm-strips__title sm-spec-plate-title">
+            <span className="sm-spec-mark">C</span>
+            <span className="sm-subhead">Not wired, a control with no endpoint</span>
+            <span className="sm-small sm-muted">Drawn to its final shape, inert, and loud about it.</span>
+          </div>
+          <NotWiredBanner
+            what="Firing an announcement"
+            missing="POST /cues/{id}/fire"
+            detail="This is not an absence of evidence. The screen is complete and the coordinator is not."
+          />
+          <ButtonRow>
+            <NotWired>
+              <Button variant="primary">Fire</Button>
+            </NotWired>
+            <NotWired>
+              <Button>Fire and hold the bed</Button>
+            </NotWired>
+          </ButtonRow>
+          <Callout>
+            Amber, not red: nothing is broken and nothing has failed. The tag rides on the control so the warning
+            cannot be scrolled away from the button it describes, and the child is forced disabled so the tag can
+            never appear on something that works.
+          </Callout>
         </SpecSection>
 
         <SpecSection number="07 — Shell chrome" id="specimen-shell" title="Rail owns intent. The top bar owns the installation." detail="Mode, session, connection and principal belong in one persistent context bar, not stacked in a rail footer where nothing reads them.">
@@ -307,6 +334,7 @@ export function Specimen() {
               principal={<span className="sm-small sm-muted">erbartos</span>}
             />
             <ChromeProgress value={0.61} label="Position in the current item" />
+            <ClockSkewStrip>This browser&rsquo;s clock is behind the coordinator&rsquo;s, the reference clock, by about 4 m 12 s. Every age and relative time shown here is off by roughly that much.</ClockSkewStrip>
             <div className="sm-spec-shell__body">
               <nav className="sm-spec-rail" aria-label="Rail specimen">
                 <p className="sm-rail__group">Operate</p>

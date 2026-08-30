@@ -17,8 +17,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/show-night` | #198 | Show Night |
 | `ui-rebuild/monitor` | #199 | Monitor · Fleet |
 
-#196 was green on all ten checks. #197, #198 and #199 were still running when
-the session ended: check them before doing anything else.
+All four are green on all ten checks, verified 2026-08-29.
 
 Nothing has been merged. Eric reviews and merges; do not merge for him unless
 he says so in that session.
@@ -44,11 +43,12 @@ stands.
 3. Shows workspace, five tabs. Then Node detail, Settings, Access, Resolume
    Config, then the Phase 2 deletion check.
 
-## Five decisions are waiting for Eric
+## The decisions are ruled
 
-D-005 through D-009 in `OPEN-DECISIONS.md`, all filed with options and a
-recommendation. None blocks a screen. Read them at the start of every screen:
-a ruling there overrides the guide.
+D-005 through D-009 are answered in `OPEN-DECISIONS.md`, and D-010 records the
+standing rule Eric added on top of them: a control the API cannot serve is built
+anyway, inert, and loudly marked. Read that file at the start of every screen; a
+ruling there overrides the guide.
 
 ## How to run and verify
 
@@ -88,9 +88,11 @@ Traps that cost time this session, in the order they will bite again:
 - The goal is not feature parity. A control with no home in a mock goes to
   `OPEN-DECISIONS.md` for Eric with options and a recommendation. Never shove it
   in, and never drop it silently.
-- Never invent a control the API cannot serve. State the absence instead, and
-  file the question. This has already happened three times: the installation
-  E-stop, firing an announcement cue, and predicting night-command validity.
+- A control the API cannot serve is still built, to the shape the mock draws,
+  inert, and marked with the kit's `NotWiredBanner` and `NotWired`. Ruled by
+  Eric 2026-08-29 as D-010; it replaces the earlier "state the absence instead"
+  rule. Data is the exception: a number, time or row the coordinator never
+  reported is still never invented.
 - Anything in `--t-data` or `--t-meta` is a literal identifier: trace it to a
   file before typing it, and never change its case.
 - The dashed edge means never-collected, only. A settled state that has not

@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
-import { BlankingPlate, Button, Field, Input, RuledStrip, Segmented, StatusPair } from './index'
+import { BlankingPlate, Button, ClockSkewStrip, Field, Input, RuledStrip, Segmented, StatusPair } from './index'
 
 afterEach(cleanup)
 
@@ -43,6 +43,16 @@ describe('RuledStrip', () => {
     const fact = screen.getByText('Pipeline state is old')
     const detail = screen.getByText('Stale is unknown, never healthy.')
     expect(fact.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('ClockSkewStrip', () => {
+  it('is a status region carrying a state word and a glyph, not colour alone', () => {
+    render(<ClockSkewStrip>The clock is off.</ClockSkewStrip>)
+    const strip = screen.getByRole('status')
+    expect(strip).toHaveTextContent('⚠')
+    expect(strip).toHaveTextContent('Clock skew')
+    expect(strip).toHaveTextContent('The clock is off.')
   })
 })
 

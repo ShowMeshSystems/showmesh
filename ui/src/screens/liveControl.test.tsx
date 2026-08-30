@@ -7,9 +7,20 @@ import { ModelContext } from '../app/ModelContext'
 import { LiveControl } from './LiveControl'
 import { describeFPPOutcome, formatPosition, outputRows, transportState } from './liveControlModel'
 
+const stubs = vi.hoisted(() => ({
+  listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+}))
+
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
-  return { ...actual, listConfigObjects: () => new Promise(() => {}), getShowCue: () => new Promise(() => {}) }
+  return {
+    ...actual,
+    listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
+    getShowCue: (...args: never[]) => stubs.getShowCue(...args),
+    listAssets: (...args: never[]) => stubs.listAssets(...args),
+  }
 })
 
 const observation = (signal: string, value: unknown, state = 'current', kind = 'surface', id = 'front') =>
@@ -50,8 +61,34 @@ function renderScreen(model: Partial<Model>) {
   )
 }
 
+const cue = (id: string, sequence: string) => ({
+  id,
+  payload: {
+    outputs: {
+      audio: { asset: sequence, startOffsetMillis: 0 },
+      announcement: { policy: 'duck', duckGainDb: -18, fadeMillis: 500 },
+    },
+  },
+})
+
+/** Two announcement cues: one whose audio sequence has a current asset, one whose does not. */
+async function renderAnnouncements() {
+  const cues = [cue('welcome', 'welcome-vo'), cue('closing', 'closing-vo')]
+  stubs.listConfigObjects = () => Promise.resolve({ objects: cues.map((c) => ({ id: c.id })) })
+  stubs.getShowCue = ((id: string) => Promise.resolve(cues.find((c) => c.id === id))) as never
+  stubs.listAssets = () =>
+    Promise.resolve({ assets: [{ sequence: 'welcome-vo', current: true }, { sequence: 'closing-vo', current: false }] })
+  renderScreen({ currentRuns: { activeShow: { configured: true, show: 'winter-ridge-2026' } } as never })
+  await screen.findByText(/Firing an announcement does nothing yet/)
+}
+
 describe('Live Control', () => {
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    stubs.listConfigObjects = () => new Promise(() => {})
+    stubs.getShowCue = () => new Promise(() => {})
+    stubs.listAssets = () => new Promise(() => {})
+  })
 
   it('renders the mock’s six blocks, in order', () => {
     renderScreen({})
@@ -71,9 +108,20 @@ describe('Live Control', () => {
     expect(screen.queryByRole('button', { name: /emergency/i })).not.toBeInTheDocument()
   })
 
-  it('states that an announcement cannot be fired directly', () => {
-    renderScreen({})
-    expect(screen.getByText(/no way to fire an announcement directly/)).toBeInTheDocument()
+  it('draws the mock’s Fire button, warns that it is not wired, and leaves it inert', async () => {
+    await renderAnnouncements()
+    expect(screen.getByText(/Firing an announcement does nothing yet/)).toBeInTheDocument()
+    expect(screen.getByText('POST /cues/{id}/fire')).toBeInTheDocument()
+    const fire = screen.getAllByRole('button', { name: 'Fire' })
+    expect(fire).toHaveLength(2)
+    for (const button of fire) expect(button).toBeDisabled()
+  })
+
+  it('disables an announcement whose audio asset has not been uploaded, with that reason', async () => {
+    await renderAnnouncements()
+    // welcome resolves to an uploaded sequence, so only it carries the not-wired tag.
+    expect(document.querySelectorAll('.sm-nowire-tag__chip')).toHaveLength(1)
+    expect(screen.getByText(/Its audio asset has not been uploaded/)).toBeInTheDocument()
   })
 
   it('disables a command with its reason when the principal lacks the scope', () => {

@@ -160,6 +160,23 @@
   background: var(--accent);
 }
 
+/* Full-width warning strip under the chrome, shown only past the skew threshold. */
+.sm-skewstrip {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-5);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
+  color: var(--warn-fg);
+  font: var(--t-small);
+}
+
+.sm-skewstrip__word {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 /* Rail and page spine. */
 .sm-shell-body {
   display: grid;

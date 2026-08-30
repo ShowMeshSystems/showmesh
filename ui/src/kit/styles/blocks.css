@@ -359,6 +359,15 @@ a.sm-tile:hover {
   color: var(--text-muted);
 }
 
+.sm-rail-strip__step--notWired {
+  border-left: 1px dashed var(--warn-border);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--warn-bg) 6px 12px);
+}
+
+.sm-rail-strip__step--notWired .sm-rail-strip__label {
+  color: var(--warn-fg);
+}
+
 /* Now playing beside the next transition. */
 .sm-nownext {
   display: grid;
@@ -528,4 +537,16 @@ a.sm-tile:hover {
   margin-top: var(--s-4);
   padding-top: var(--s-3);
   border-top: 1px solid var(--border);
+}
+
+/* An announcement row: what it does on the left, its control on the right. */
+.sm-annc {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.sm-annc > div > p {
+  margin: 0;
 }

@@ -5,7 +5,7 @@ import type { FPPInstance, Model, NightSessionState } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { ShowNight } from './ShowNight'
-import { evidenceReadouts, nextTransition, runOfShow } from './showNightModel'
+import { evidenceReadouts, nextTransition, nightRail, runOfShow } from './showNightModel'
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -133,5 +133,45 @@ describe('Show Night', () => {
     const next = nextTransition({ ...initialModel(), fpp: [instance] })
     expect(next.known).toBe(false)
     if (!next.known) expect(next.reason).toContain('unknown rather than assumed')
+  })
+
+  it('renders a placeholder for every earlier cycle and the live one for the current cycle', () => {
+    const rail = nightRail(session({ cycle: 3, state: 'live' }))
+    const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
+    expect(cycleSteps.map((step) => step.key)).toEqual(['cycle-1', 'cycle-2', 'cycle-3'])
+    expect(cycleSteps[0]?.status).toBe('notWired')
+    expect(cycleSteps[0]?.detail).toBe('not reported')
+    expect(cycleSteps[1]?.status).toBe('notWired')
+    expect(cycleSteps[1]?.detail).toBe('not reported')
+    expect(cycleSteps[2]?.status).toBe('now')
+    expect(cycleSteps[2]?.detail).toBe('live')
+  })
+
+  it('never puts a clock time on an earlier-cycle placeholder', () => {
+    const rail = nightRail(session({ cycle: 3, state: 'live' }))
+    const earlier = rail.filter((step) => step.status === 'notWired')
+    expect(earlier).not.toHaveLength(0)
+    for (const step of earlier) {
+      expect(step.detail).not.toMatch(/\d{1,2}:\d{2}/)
+    }
+  })
+
+  it('renders the not-wired banner and placeholder steps on the page when earlier cycles exist', () => {
+    renderScreen({ nightSession: session({ cycle: 3, state: 'live' }) })
+    expect(screen.getByText('The night timeline does nothing yet.')).toBeInTheDocument()
+    expect(screen.getByText('Cycle 1')).toBeInTheDocument()
+    expect(screen.getAllByText('not reported').length).toBeGreaterThan(0)
+  })
+
+  it('has no earlier cycles and no not-wired banner when the session is on cycle 1', () => {
+    const rail = nightRail(session({ cycle: 1, state: 'live' }))
+    const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
+    expect(cycleSteps).toHaveLength(1)
+    expect(cycleSteps[0]?.status).toBe('now')
+    expect(rail.some((step) => step.status === 'notWired')).toBe(false)
+
+    renderScreen({ nightSession: session({ cycle: 1, state: 'live' }) })
+    expect(screen.queryByText('The night timeline does nothing yet.')).not.toBeInTheDocument()
+    expect(screen.queryByText('not reported')).not.toBeInTheDocument()
   })
 })

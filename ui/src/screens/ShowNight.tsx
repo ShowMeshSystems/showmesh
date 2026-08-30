@@ -6,6 +6,7 @@ import {
   Button,
   ButtonRow,
   DefinitionStrip,
+  NotWiredBanner,
   RuledStrip,
   Section,
   StatusPair,
@@ -55,7 +56,9 @@ function Rail({ title, steps }: { title: string; steps: readonly RailStep[] }) {
       {steps.map((step) => (
         <div key={step.key} className={`sm-rail-strip__step sm-rail-strip__step--${step.status}`}>
           <p className="sm-rail-strip__label">
-            <span aria-hidden="true">{step.status === 'done' ? '✓ ' : step.status === 'now' ? '● ' : ''}</span>
+            <span aria-hidden="true">
+              {step.status === 'done' ? '✓ ' : step.status === 'now' ? '● ' : step.status === 'notWired' ? '⚠ ' : ''}
+            </span>
             {step.label}
           </p>
           <p className="sm-rail-strip__detail">{step.detail}</p>
@@ -77,6 +80,8 @@ export function ShowNight() {
       .then(() => setOutcome(`${command} was accepted. What the session then does is what this page reports.`))
       .catch((err: unknown) => setOutcome(`${command} was refused: ${describeApiError(err)}`))
   }, [])
+
+  const tonight = session === null ? [] : nightRail(session)
 
   if (session === null) {
     return (
@@ -122,13 +127,21 @@ export function ShowNight() {
         </ButtonRow>
       </div>
 
+      {tonight.some((step) => step.status === 'notWired') && (
+        <NotWiredBanner
+          what="The night timeline"
+          missing="GET /night/session/cycles"
+          detail="The rail is drawn to its final shape, but this session reports only the cycle it is in, so earlier cycles read as unreported rather than being reconstructed or invented."
+        />
+      )}
+
       <div role="group" aria-label="Night lifecycle" className="sm-rails">
-        <Rail title="Tonight" steps={nightRail(session)} />
+        <Rail title="Tonight" steps={tonight} />
         <Rail title={`Cycle ${session.cycle}`} steps={cycleRail(session, nowIso)} />
         <p className="sm-section__footnote">
           The bottom row repeats: rest, then show, then rest again, for as many cycles as the night allows.{' '}
           <strong>Request final show</strong> closes admission and sends the last cycle to end-of-night instead of back
-          to resting. Earlier cycles are not listed: this session reports the cycle it is in, not a per-cycle history.
+          to resting.
         </p>
       </div>
 
