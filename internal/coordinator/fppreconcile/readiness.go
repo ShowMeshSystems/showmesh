@@ -200,6 +200,17 @@ const (
 	// any role; an installation with two or more audio nodes and no
 	// program+ltc among them leaves that output pointing nowhere.
 	ReadinessAudioTargetUnresolved ReadinessCondition = "audio-target-unresolved"
+
+	// ReadinessAssetsMissing: a node that must render or play one of this
+	// Show's Cues does not currently hold an asset that has actually been
+	// uploaded and resolved to it — [assetsync.BuildNodeManifest]'s Missing
+	// list is non-empty for that node. This is a different question from
+	// [ReadinessAudioTargetUnbound]/[ReadinessAudioTargetUnresolved]: those
+	// ask whether a Cue's output resolves to a node AT ALL; this asks
+	// whether the node it already resolved to actually holds the file.
+	// See [assetsMissingReadiness]'s own doc comment for what this
+	// condition deliberately leaves out.
+	ReadinessAssetsMissing ReadinessCondition = "assets-missing"
 )
 
 // Report is [PlaylistReadiness]'s result.
@@ -461,6 +472,18 @@ func PlaylistReadiness(ctx context.Context, st *store.Store, logger *slog.Logger
 	// Cue's audio, LTC and announcement outputs must resolve to a node
 	// that can receive them (ADR-045 decisions 1 and 2).
 	if cond, reason, err := audioTargetReadiness(ctx, st, logger, p); err != nil {
+		return Report{}, err
+	} else if cond != "" {
+		report.Ready = false
+		report.FailingCondition = cond
+		report.Reason = reason
+		return report, nil
+	}
+
+	// Condition 11: every node that must render or play one of this Show's
+	// Cues actually holds the asset that Cue resolves to, per
+	// [assetsync.BuildNodeManifest].
+	if cond, reason, err := assetsMissingReadiness(ctx, st, p); err != nil {
 		return Report{}, err
 	} else if cond != "" {
 		report.Ready = false
