@@ -4,6 +4,7 @@ import { useModel } from '../api'
 import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
 import { useDensity, useTheme } from './useTheme'
+import { Assets } from '../screens/Assets'
 import { Dashboard } from '../screens/Dashboard'
 import { LiveControl } from '../screens/LiveControl'
 import { Monitor } from '../screens/Monitor'
@@ -54,7 +55,6 @@ function ScrollToTop() {
  * waiting on, so the queue is readable from the running app.
  */
 const QUEUE: readonly { path: string; title: string; mock: string }[] = [
-  { path: '/assets/*', title: 'Assets', mock: 'Show Assets.dc.html' },
   { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
 ]
 
@@ -105,6 +105,7 @@ export default function App() {
               <Route path="node-routing" element={<SettingsNodeRouting />} />
               <Route path="mode" element={<SettingsMode />} />
             </Route>
+            <Route path="assets" element={<Assets />} />
             <Route path="access" element={<Access />} />
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />

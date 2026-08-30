@@ -221,6 +221,7 @@ export function assetIdentityKey(asset: Pick<Asset, 'show' | 'sequence' | 'targe
 }
 
 export type AssetGroup = {
+  show: string
   sequence: string
   mediaType: Asset['mediaType']
   runtimeFilename: string
@@ -231,21 +232,23 @@ export type AssetGroup = {
  * The current asset for every distinct (sequence, targetKind, target) this
  * show holds, grouped by logical sequence for display, because one
  * sequence produces a different file per target and xLights gives every
- * one of them the same runtime filename (ADR-028 decision 1).
+ * one of them the same runtime filename (ADR-028 decision 1). The key
+ * includes the show so a caller spanning every show never merges two
+ * shows' same-named sequences into one group.
  */
 export function assetGroups(assets: readonly Asset[]): AssetGroup[] {
-  const bySequence = new Map<string, AssetGroup>()
+  const byKey = new Map<string, AssetGroup>()
   for (const asset of assets) {
     if (!asset.current) continue
-    const key = `${asset.sequence}\u0000${asset.mediaType}`
-    const existing = bySequence.get(key)
+    const key = `${asset.show}\u0000${asset.sequence}\u0000${asset.mediaType}`
+    const existing = byKey.get(key)
     if (existing !== undefined) {
       existing.current.push(asset)
       continue
     }
-    bySequence.set(key, { sequence: asset.sequence, mediaType: asset.mediaType, runtimeFilename: asset.runtimeFilename, current: [asset] })
+    byKey.set(key, { show: asset.show, sequence: asset.sequence, mediaType: asset.mediaType, runtimeFilename: asset.runtimeFilename, current: [asset] })
   }
-  return Array.from(bySequence.values()).sort((a, b) => a.sequence.localeCompare(b.sequence))
+  return Array.from(byKey.values()).sort((a, b) => a.show.localeCompare(b.show) || a.sequence.localeCompare(b.sequence))
 }
 
 /** Every asset row (current and superseded) sharing one identity, newest first. */
