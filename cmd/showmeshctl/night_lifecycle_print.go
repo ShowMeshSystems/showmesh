@@ -119,7 +119,16 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	announcement := nightAudioStepsForSequence(s.BackgroundAudio.Steps, "announcement")
 
 	if len(background) == 0 {
-		_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+		// A non-nil PinnedMaxGainDb is proof the pinned revision DOES
+		// configure background audio (found by review: printing "not
+		// configured, or never started" right under a real pinned ceiling
+		// offered a false reading), so narrow the header to the one
+		// reading that is still possible.
+		if s.BackgroundAudio.PinnedMaxGainDb != nil {
+			_, _ = fmt.Fprintf(w, "\nBackground audio: never started this cycle\n")
+		} else {
+			_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+		}
 	} else {
 		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
 		printNightAudioSteps(w, background)

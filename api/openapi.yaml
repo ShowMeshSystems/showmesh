@@ -13966,6 +13966,12 @@ components:
           enum: [recorded, unknown, not_configured, not_available]
         reason:
           type: string
+          description: >-
+            Usually only meaningful when state is not "recorded". The one
+            exception: reason may be non-empty while state is "recorded",
+            in which case it describes pinnedMaxGainDb alone (why that one
+            field is null) and says nothing about steps, which are
+            unaffected and reported as read.
         steps:
           type: array
           items:
@@ -13973,21 +13979,27 @@ components:
         pinnedMaxGainDb:
           type: [number, "null"]
           description: >-
-            The background-audio ceiling the RUNNING session pinned when
-            it started (resting.backgroundAudio.maxGainDb on the session's
-            own pinned configRevision) - never the value night.session's
+            The background-audio ceiling the session pinned when it
+            started (resting.backgroundAudio.maxGainDb on the session's
+            own pinned configRevision), never the value night.session's
             config currently holds, which can differ across a later
-            revision (owner ruling 2026-08-28: the useful number during a
-            show is the limit the session pinned, not the limit currently
-            configured). Populated ONLY while the top-level state is one
-            of preshow, transition-to-show, live, transition-to-resting,
-            resting-intershow, end-of-night-resting, or fading-out.
-            Absent or null in every other state (including inactive,
-            preparing, and stopped, so the last night's ceiling is never
-            reported as live once the night has ended or before it has
-            begun), and null when the pinned revision configures no
-            background audio at all, in which case `reason` says so.
-            Never a fallback to the currently configured value.
+            revision (owner ruling 2026-08-28). Null when the pinned
+            revision configures no background audio at all, in which case
+            `reason` says so. Never a fallback to the currently configured
+            value. This schema is shared by two endpoints that populate
+            it differently (owner ruling 2026-08-30): on GET
+            /night/session (the current-session views, including the
+            SSE nightSession.changed frame and a night command's own
+            response), it is the ceiling the RUNNING session pinned, so
+            it is populated ONLY while the top-level state is one of
+            preshow, transition-to-show, live, transition-to-resting,
+            resting-intershow, end-of-night-resting, or fading-out, and
+            is otherwise null (including inactive, preparing, and
+            stopped, so a past night's ceiling is never reported as
+            live). On GET /night/sessions/{id}, it is that record's own
+            pinned ceiling, historical by construction, so it is
+            populated regardless of state, including preparing and
+            stopped.
     NightSessionState:
       type: object
       description: >-

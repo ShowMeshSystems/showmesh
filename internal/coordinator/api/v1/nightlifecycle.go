@@ -116,18 +116,28 @@ type NightBackgroundAudioStep struct {
 // configured at all, or has never been started this cycle - both
 // legitimate, distinct from a read failure.
 type NightBackgroundAudio struct {
-	State  NightEvidenceState         `json:"state"`
+	State NightEvidenceState `json:"state"`
+
+	// Reason is usually only meaningful when State is not "recorded". The
+	// one exception: Reason may be non-empty while State is "recorded",
+	// in which case it describes PinnedMaxGainDb alone (why that one
+	// field is nil) and says nothing about Steps, which are unaffected
+	// and reported as read.
 	Reason string                     `json:"reason"`
 	Steps  []NightBackgroundAudioStep `json:"steps"`
 
-	// PinnedMaxGainDb is the background-audio ceiling the RUNNING session
-	// pinned when it started (config.NightSessionBackgroundAudio.MaxGainDb
-	// at rec.ConfigRevision) - never the value night.session.resting's
-	// config currently holds, which can differ across a later revision
-	// (owner ruling 2026-08-28). Nil when no session is running, or when
-	// background audio is not configured for the pinned revision; State
-	// and Reason already say why in both cases, so this is never defaulted
-	// to a plausible-looking value.
+	// PinnedMaxGainDb is the ceiling a session pinned when it started
+	// (config.NightSessionBackgroundAudio.MaxGainDb at rec.ConfigRevision),
+	// never the value night.session.resting's config currently holds,
+	// which can differ across a later revision (owner ruling 2026-08-28).
+	// Nil when the pinned revision configures no background audio, or on
+	// a read failure (Reason explains which); State stays "recorded" in
+	// both cases. On the current-session endpoints it is also nil for
+	// every non-running state (Reason says nothing there; read the
+	// top-level State instead); GET /night/sessions/{id} has no such gate
+	// and reports the record's own pinned ceiling regardless of state
+	// (owner ruling 2026-08-30). Never defaulted to a plausible-looking
+	// value.
 	PinnedMaxGainDb *float64 `json:"pinnedMaxGainDb,omitempty"`
 }
 
