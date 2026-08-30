@@ -1,10 +1,20 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
-import { MonitorCapabilities } from './MonitorCapabilities'
+
+// D-002: this page also reads GET / (getServiceDescriptor) for the
+// coordinator build string. Stubbed here so these tests never make a real
+// network call; a build state of "loading" forever renders nothing extra,
+// which is what every assertion below already expects.
+vi.mock('../api', async () => {
+  const actual = await vi.importActual<typeof import('../api')>('../api')
+  return { ...actual, getServiceDescriptor: () => new Promise(() => {}) }
+})
+
+const { MonitorCapabilities } = await import('./MonitorCapabilities')
 
 function node(nodeId: string, capabilities: Node['capabilities'] = []): Node {
   return {

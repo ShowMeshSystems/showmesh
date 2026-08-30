@@ -22,6 +22,14 @@ import { ShowsCues } from '../screens/ShowsCues'
 import { ShowsAssets } from '../screens/ShowsAssets'
 import { ShowsPresentation } from '../screens/ShowsPresentation'
 import { ShowsAutomation } from '../screens/ShowsAutomation'
+import { Settings } from '../screens/Settings'
+import { SettingsConnections } from '../screens/SettingsConnections'
+import { SettingsDelivery } from '../screens/SettingsDelivery'
+import { SettingsRecovery } from '../screens/SettingsRecovery'
+import { SettingsAppearance } from '../screens/SettingsAppearance'
+import { SettingsAudioDefaults } from '../screens/SettingsAudioDefaults'
+import { SettingsNodeRouting } from '../screens/SettingsNodeRouting'
+import { SettingsMode } from '../screens/SettingsMode'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
@@ -47,7 +55,6 @@ const QUEUE: readonly { path: string; title: string; mock: string }[] = [
   { path: '/assets/*', title: 'Assets', mock: 'Show Assets.dc.html' },
   { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
   { path: '/monitor/fleet/resolume/*', title: 'Resolume Config', mock: 'Resolume Config.dc.html' },
-  { path: '/settings/*', title: 'Settings', mock: 'Settings.dc.html' },
   { path: '/access', title: 'Access', mock: 'Access.dc.html' },
 ]
 
@@ -68,7 +75,6 @@ export default function App() {
           <Route path="/" element={<Shell />}>
             <Route path="_specimen" element={<Specimen />} />
             <Route path="monitor" element={<Navigate replace to="/monitor/fleet" />} />
-            <Route path="settings" element={<Navigate replace to="/settings/connections" />} />
             <Route index element={<Dashboard />} />
             <Route path="control" element={<LiveControl />} />
             <Route path="night" element={<ShowNight />} />
@@ -87,6 +93,16 @@ export default function App() {
               <Route path="assets" element={<ShowsAssets />} />
               <Route path="presentation" element={<ShowsPresentation />} />
               <Route path="automation" element={<ShowsAutomation />} />
+            </Route>
+            <Route path="settings" element={<Settings />}>
+              <Route index element={<Navigate replace to="/settings/connections" />} />
+              <Route path="connections" element={<SettingsConnections />} />
+              <Route path="delivery" element={<SettingsDelivery />} />
+              <Route path="recovery" element={<SettingsRecovery />} />
+              <Route path="appearance" element={<SettingsAppearance />} />
+              <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
+              <Route path="node-routing" element={<SettingsNodeRouting />} />
+              <Route path="mode" element={<SettingsMode />} />
             </Route>
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />

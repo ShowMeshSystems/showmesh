@@ -208,6 +208,28 @@
   gap: var(--s-5);
 }
 
+/* A radio option drawn as a card, its own consequence line beneath it: idle output, installation mode. */
+.sm-option {
+  display: block;
+  cursor: pointer;
+}
+
+.sm-option input {
+  width: 15px;
+  height: 15px;
+  margin-right: var(--s-2);
+  accent-color: var(--accent);
+}
+
+.sm-option--selected {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.sm-option--selected .sm-subhead {
+  color: var(--accent);
+}
+
 /* Segmented control. Each segment needs aria-pressed. */
 .sm-segmented {
   display: inline-flex;
