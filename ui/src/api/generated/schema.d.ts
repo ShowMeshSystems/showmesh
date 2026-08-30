@@ -3987,8 +3987,8 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
-            /** @description audio-only: the target audio node id. */
-            audioNodeId?: string;
+            /** @description audio-only: the target audio node id(s), widened from one node to a list: a bare string (one node - the shape every payload stored before that change already used) or an array of distinct, non-empty node ids. A show.action bound to a night-session announcement, or the night-mode resting bed, may name more than one; every other consumer of an audio-integration show.action reads only the first. */
+            audioNodeId?: string | string[];
             /** @description audio-only: the target pkg/audio session id. */
             audioSessionId?: string;
             /** @description audio-only: one of the reserved audio.session.*\/audio.gain.*\/ audio.output.* operation names (docs/build/IDENTIFIER-REGISTER.md's "Agent operation names" table) - never a new operation name. `params` is otherwise opaque here and validated by the node, with one exception: `audio.gain.set` requires `params.gainDb` and `audio.gain.fade` requires `params.targetGainDb`, both in DECIBELS on the same scale as the gain endpoints (0 dB unity, -60 dB silence, +12 dB the most accepted). The pre-decibel `params.gain`/`params.targetGain` are refused here at authoring time, naming the replacement, rather than discovered when the Cue fires mid-show. */
@@ -4010,7 +4010,8 @@ export interface components {
             ref?: {
                 [key: string]: unknown;
             };
-            audioNodeId?: string;
+            /** @description audio-only: the target audio node id(s) - a bare string or an array of distinct, non-empty node ids. See ConfigShowActionTarget's own audioNodeId description. */
+            audioNodeId?: string | string[];
             audioSessionId?: string;
             audioAction?: string;
         };
@@ -4719,9 +4720,10 @@ export interface components {
             itemId: string;
             show: string;
             sequence: string;
+            /** @description The audio.node id this item plays on. Items are not required to share one target - every distinct target among them is its own node the bed plays on, each with its own independent playback progress. */
             target: string;
         };
-        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. */
+        /** @description night.session.resting.backgroundAudio: a ShowMesh `background` playback session (RESTING-MODE.md §8), playing on every distinct node its own items[].target names (a list of target nodes, derived from the items themselves - there is no separate "which output(s)" field). Present only when the deployment configures background audio at all; its absence is valid and is not degraded. `resume` and `itemTransition` are pinned against pkg/audio's vocabulary on Track C's branch (track-c/audio-node). crossfadeMs is required when itemTransition is "crossfade" and must be absent otherwise (server-side; not expressible here). maxGainDb must be <= 0. */
         ConfigNightSessionBackgroundAudio: {
             items: components["schemas"]["ConfigNightSessionBackgroundAudioItem"][];
             /** @enum {string} */
@@ -4988,7 +4990,7 @@ export interface components {
             reason: string;
             cues: components["schemas"]["NightCue"][];
         };
-        /** @description One durable audio step Track F seam F5's own controller has recorded, across every cycle the session has lived through: either the resting bed's own playback sequence or an announcement session's clear and start. */
+        /** @description One durable audio step Track F seam F5's own controller has recorded, across every cycle the session has lived through: either the resting bed's own playback sequence or an announcement session's clear, apply, and start. The bed and an announcement each accept a list of target nodes, and every one of them, including the first, reports through this array with its own nodeId - never a first-node exception. */
         NightBackgroundAudioStep: {
             /**
              * @description Which of the controller's two audio sequences this step belongs to, so a failure is attributable without reading the internal phase string.
@@ -4998,8 +5000,10 @@ export interface components {
             /** @description The internal outbox phase this step was recorded under - a diagnostic identifier, not a value to round-trip back into a request. */
             phase: string;
             cueName: string;
+            /** @description The audio.node this step addressed. A refused or stalled step on one node is answerable from this field alone, without reading phase or relying on any array ordering. */
+            nodeId: string;
             /** @enum {string} */
-            kind: "apply" | "gain" | "start" | "pause" | "resume" | "stop" | "announcementClear" | "announcementStart";
+            kind: "apply" | "gain" | "start" | "pause" | "resume" | "stop" | "announcementClear" | "announcementApply" | "announcementStart";
             actionRevision: number;
             /** @enum {string} */
             state: "pending" | "dispatched" | "resolved" | "ambiguous";

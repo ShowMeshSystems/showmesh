@@ -51,6 +51,7 @@ type nightBackgroundAudioStepWire struct {
 	Sequence       string  `json:"sequence"`
 	Phase          string  `json:"phase"`
 	CueName        string  `json:"cueName"`
+	NodeID         string  `json:"nodeId"`
 	Kind           string  `json:"kind"`
 	ActionRevision int64   `json:"actionRevision"`
 	State          string  `json:"state"`

@@ -32,8 +32,55 @@ func TestDecodeShowActionPayloadAudioValid(t *testing.T) {
 	if p.Target.Integration != ShowActionIntegrationAudio {
 		t.Fatalf("integration = %q, want %q", p.Target.Integration, ShowActionIntegrationAudio)
 	}
-	if p.Target.AudioNodeID != "node-a" || p.Target.AudioSessionID != "resting-bg" || p.Target.AudioAction != "audio.session.stop" {
+	if len(p.Target.AudioNodeIDs) != 1 || p.Target.AudioNodeIDs[0] != "node-a" || p.Target.AudioSessionID != "resting-bg" || p.Target.AudioAction != "audio.session.stop" {
 		t.Fatalf("target = %+v", p.Target)
+	}
+}
+
+// TestDecodeShowActionPayloadAudioAcceptsNodeIDArray proves the
+// widening: target.audioNodeId as a JSON array of strings decodes to the
+// same AudioNodeIDs list a caller (the night controller) fans out to.
+func TestDecodeShowActionPayloadAudioAcceptsNodeIDArray(t *testing.T) {
+	raw := `{
+		"show": "halloween-2026",
+		"label": "Announce on two nodes",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": ["node-a", "node-b"],
+			"audioSessionId": "announce-1",
+			"audioAction": "audio.session.apply"
+		}
+	}`
+	p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	if len(p.Target.AudioNodeIDs) != 2 || p.Target.AudioNodeIDs[0] != "node-a" || p.Target.AudioNodeIDs[1] != "node-b" {
+		t.Fatalf("AudioNodeIDs = %+v", p.Target.AudioNodeIDs)
+	}
+}
+
+// TestDecodeShowActionPayloadAudioRejectsEmptyNodeIDArray defends the
+// "at least one node" floor for the widened array form.
+func TestDecodeShowActionPayloadAudioRejectsEmptyNodeIDArray(t *testing.T) {
+	raw := `{
+		"show": "halloween-2026",
+		"label": "Empty node list",
+		"safetyClass": "none",
+		"target": {
+			"integration": "audio",
+			"audioNodeId": [],
+			"audioSessionId": "announce-1",
+			"audioAction": "audio.session.apply"
+		}
+	}`
+	_, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+	if verr == nil {
+		t.Fatal("expected a validation error for an empty audioNodeId array")
+	}
+	if verr.Field != "target.audioNodeId" {
+		t.Fatalf("Field = %q, want target.audioNodeId", verr.Field)
 	}
 }
 

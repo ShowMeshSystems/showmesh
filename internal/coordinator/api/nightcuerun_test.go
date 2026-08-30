@@ -95,7 +95,7 @@ func TestNightCueConfirmable(t *testing.T) {
 		{"mqttNoExpect", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT}, false},
 		{"mqttExpectNone", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT, Expect: &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindNone}}, false},
 		{"mqttExpectBoolean", config.ShowActionTarget{Integration: config.ShowActionIntegrationMQTT, Expect: &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindBoolean, Value: &yes}}, true},
-		{"audio", config.ShowActionTarget{Integration: config.ShowActionIntegrationAudio, AudioNodeID: "node-a", AudioSessionID: "resting-bg", AudioAction: "audio.session.apply"}, true},
+		{"audio", config.ShowActionTarget{Integration: config.ShowActionIntegrationAudio, AudioNodeIDs: config.AudioNodeIDList{"node-a"}, AudioSessionID: "resting-bg", AudioAction: "audio.session.apply"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

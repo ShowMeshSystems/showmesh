@@ -43,8 +43,8 @@ func nightAudioCueTestHandlers(t *testing.T) (*handlers, *store.Store, *fakeAudi
 
 func audioCueTarget() config.ShowActionTarget {
 	return config.ShowActionTarget{
-		Integration: config.ShowActionIntegrationAudio,
-		AudioNodeID: "node-a", AudioSessionID: "resting-bg", AudioAction: "audio.session.stop",
+		Integration:  config.ShowActionIntegrationAudio,
+		AudioNodeIDs: config.AudioNodeIDList{"node-a"}, AudioSessionID: "resting-bg", AudioAction: "audio.session.stop",
 	}
 }
 

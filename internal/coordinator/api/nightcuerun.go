@@ -408,6 +408,12 @@ func (h *handlers) nightAdvanceCueList(ctx context.Context, now time.Time, rec s
 			firstCommitted = true
 		}
 		if cue.Role == config.NightSessionCueRoleAnnouncement {
+			// Every node beyond the bound action's own first
+			// (which nightRunCue, just above, already applied) applies
+			// here - unconditional, since nightAdvanceAnnouncementStart
+			// gates each node's own start on that SAME node's own apply,
+			// never on node 0's.
+			h.nightAdvanceAnnouncementApplyExtra(ctx, now, rec, phase, cue)
 			// Unconditional, exactly like the dispatch above: an
 			// announcement whose apply did not confirm still gets its
 			// start, so a silent announcement is never the quiet
