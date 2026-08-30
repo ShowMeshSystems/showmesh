@@ -26,6 +26,7 @@ const stubs = vi.hoisted(() => ({
   putAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioNodeConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getServiceDescriptor: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getCurrentNightSession: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -52,6 +53,7 @@ vi.mock('../api', async () => {
     putAudioNode: (...args: never[]) => stubs.putAudioNode(...args),
     getAudioNodeConfigRevisions: (...args: never[]) => stubs.getAudioNodeConfigRevisions(...args),
     getServiceDescriptor: (...args: never[]) => stubs.getServiceDescriptor(...args),
+    getCurrentNightSession: (...args: never[]) => stubs.getCurrentNightSession(...args),
   }
 })
 
@@ -206,7 +208,7 @@ describe('Settings › Content delivery', () => {
 
     renderAt('/settings/delivery')
 
-    await waitFor(() => expect(screen.getByText('2 assets across all shows.')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/2 assets across all shows\./)).toBeInTheDocument())
     expect(screen.getByText(/does not report store size or capacity/)).toBeInTheDocument()
     expect(screen.queryByText(/GB/)).not.toBeInTheDocument()
   })
@@ -390,7 +392,28 @@ describe('Settings › Mode', () => {
     expect(screen.getByRole('button', { name: /Apply mode/ })).toBeDisabled()
   })
 
+  it('seeds the night session itself, because the model only ever gets one from a stream frame', async () => {
+    stubs.getShowModeConfig = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.mode',
+        revision: 6,
+        payload: { mode: 'show' },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+        resolumeWebSocketEffect: 'The Resolume WebSocket stays connected in show mode.',
+      })
+    stubs.getCurrentNightSession = () => Promise.resolve({ session: { state: 'live', cycle: 3 } })
+
+    renderAt('/settings/mode', { nightSession: null })
+
+    await waitFor(() => expect(screen.getByText('Cycle 3 is live.')).toBeInTheDocument())
+  })
+
   it('renders no in-progress warning when the session reports no live cycle', async () => {
+    stubs.getCurrentNightSession = () => new Promise(() => {})
     stubs.getShowModeConfig = () =>
       Promise.resolve({
         serverTime: '2026-08-30T21:00:00Z',

@@ -154,15 +154,16 @@ export function SettingsDelivery() {
         <RuledStrip
           absence="unobserved"
           label="Disk"
-          fact={
-            assetCountFailed
-              ? 'Asset count could not be read just now.'
-              : assetCount === null
-                ? 'Counting assets across all shows.'
-                : `${assetCount} ${assetCount === 1 ? 'asset' : 'assets'} across all shows.`
-          }
-          detail="The coordinator does not report store size or capacity. No byte total or percentage is shown because none is reported."
+          fact="The coordinator does not report store size or capacity."
+          detail="No byte total and no percentage is shown, because none is reported."
         />
+        <p className="sm-small sm-muted">
+          {assetCountFailed
+            ? 'The asset count could not be read just now.'
+            : assetCount === null
+              ? 'Counting assets across all shows.'
+              : `${assetCount} ${assetCount === 1 ? 'asset' : 'assets'} across all shows. That count is reported; its total size is not.`}
+        </p>
       </Section>
 
       {state.kind === 'loading' ? (
@@ -184,7 +185,7 @@ export function SettingsDelivery() {
                 />
               )}
             </Field>
-            <Field label="Max upload size" help={`${formatBytes(Number(maxUploadBytes) || 0)}, title carries the exact byte count.`}>
+            <Field label="Max upload size" help={`Currently ${formatBytes(Number(maxUploadBytes) || 0)}.`}>
               {(props) => (
                 <Input
                   {...props}

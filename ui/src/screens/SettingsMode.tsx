@@ -1,11 +1,38 @@
 import { useEffect, useState } from 'react'
-import { getShowModeConfig, putShowModeConfig, type ConfigShowModePayload, type ShowModeConfigResponse } from '../api'
-import { Button, ButtonRow, RuledStrip, Section } from '../kit'
+import { getCurrentNightSession, getShowModeConfig, putShowModeConfig, type ConfigShowModePayload, type NightSessionState, type ShowModeConfigResponse } from '../api'
+import { Button, ButtonRow, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { liveCycle } from './settingsModel'
+
+/**
+ * `model.nightSession` is only ever set by a `nightSession.changed` frame, so
+ * a tab that only read the model would never show the in-progress warning.
+ * Seeded the way Dashboard seeds it; a streamed session still wins.
+ */
+function useNightSession(): NightSessionState | null {
+  const model = useModelContext()
+  const [seeded, setSeeded] = useState<NightSessionState | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getCurrentNightSession()
+      .then((response) => {
+        if (!cancelled) setSeeded(response.session)
+      })
+      .catch(() => {
+        // A failed seed leaves the warning off, which is what an unread
+        // session is. It never claims a show is or is not in progress.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return model.nightSession ?? seeded
+}
 
 type LoadState =
   | { kind: 'loading' }
@@ -27,6 +54,7 @@ const MODE_OPTIONS: readonly { value: ConfigShowModePayload['mode']; title: stri
 
 export function SettingsMode() {
   const model = useModelContext()
+  const nightSession = useNightSession()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
@@ -52,7 +80,7 @@ export function SettingsMode() {
     }
   }, [attempt])
 
-  const cycle = liveCycle(model.nightSession)
+  const cycle = liveCycle(nightSession)
 
   const apply = () => {
     if (state.kind !== 'loaded') return
@@ -104,11 +132,12 @@ export function SettingsMode() {
                       <input
                         type="radio"
                         name="show-mode"
+                        value={option.value}
                         checked={requestedMode === option.value}
                         onChange={() => setRequestedMode(option.value)}
                       />
                       <span className="sm-subhead">{option.title}</span>
-                      {isActive && <span className="sm-status sm-status--good">Active</span>}
+                      {isActive && <StatusPair tone="good" label="Active" />}
                     </div>
                     <p className="sm-small sm-muted">{option.consequence}</p>
                   </label>

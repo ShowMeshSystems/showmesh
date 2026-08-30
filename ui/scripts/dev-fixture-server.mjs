@@ -37,7 +37,9 @@ const node = (nodeId, label, state, lastHeardMs, signals) => ({
   updatedAt: ago(lastHeardMs),
   capabilities: nodeId === 'media-garage'
     ? [{ id: 'matrix.render', version: 1, attributes: { surfaces: 1 } }, { id: 'display.hdmi', version: 1, attributes: { outputs: 2 } }, { id: 'media.cache', version: 1 }]
-    : [{ id: 'transport.ndi.send', version: 1 }],
+    : nodeId === 'barn-controller'
+      ? [{ id: 'audio.output.local', version: 1, attributes: { routes: ['hw:CARD=USB,DEV=0', 'hw:CARD=PCH,DEV=0'] } }, { id: 'audio.output.ltc', version: 1, attributes: { routes: ['hw:CARD=USB,DEV=0'] } }]
+      : [{ id: 'transport.ndi.send', version: 1 }],
   controlPlane: { state, reason: state === 'offline' ? 'No heartbeat within the expected interval.' : null },
   evidence: {
     hello: evidence('node.hello', true, 'current', ago(86_400_000)),
@@ -232,6 +234,54 @@ createServer((req, res) => {
     { section: 'mainPlaylist', position: 0, sequenceName: 'carol-of-the-bells.fseq', mediaName: '' },
     { section: 'mainPlaylist', position: 1, sequenceName: 'wizards-in-winter.fseq', mediaName: '' },
   ] })
+  if (p === '/config/fpp.endpoints') return json(res, {
+    serverTime: NOW(), kind: 'fpp.endpoints', revision: 12,
+    payload: { endpoints: [{ id: 'main-player', url: 'http://198.51.100.11' }, { id: 'barn-player', url: 'http://198.51.100.12' }] },
+    updatedAt: ago(604_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', restartRequired: false, restartRequiredReason: '',
+  })
+  if (p === '/config/resolume.instances') return json(res, {
+    serverTime: NOW(), kind: 'resolume.instances', revision: 3,
+    payload: { instances: [{ id: 'arena-main', url: 'http://10.20.0.30:8080' }] },
+    updatedAt: ago(604_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+  })
+  if (p === '/config/fpp.mqtt') return json(res, {
+    serverTime: NOW(), kind: 'fpp.mqtt', revision: 5,
+    payload: { brokerURL: 'tcp://10.20.0.5:1883', username: 'showmesh', topicPrefix: 'fpp', hosts: { 'main-player': '198.51.100.11' }, passwordSet: true },
+    updatedAt: ago(604_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+  })
+  if (p === '/config/assets.settings') return json(res, {
+    serverTime: NOW(), kind: 'assets.settings', revision: 7,
+    payload: { contentBaseUrl: 'http://10.20.0.5:8080/assets', maxUploadBytes: 2_147_483_648, syncIntervalSeconds: 900, inventoryIntervalSeconds: 3_600 },
+    updatedAt: ago(1_382_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+  })
+  if (p === '/config/render.settings') return json(res, {
+    serverTime: NOW(), kind: 'render.settings', revision: 4,
+    payload: { idleOutput: 'black', restartPolicy: { initialDelaySeconds: 2, maxDelaySeconds: 60, maxConsecutiveFastFailures: 5 } },
+    updatedAt: ago(1_555_200_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    idleOutputEffectiveNote: 'Black is in effect on every render surface.',
+  })
+  if (p === '/config/audio.settings') return json(res, {
+    serverTime: NOW(), kind: 'audio.settings', revision: 9,
+    payload: { driftIgnoreThresholdMs: 12, defaultFadeCurve: 'linear', defaultFadeDurationMs: 400, defaultMaxBackgroundGainDb: -6, duckTargetGainDb: -18, ltcFrameRate: '30', ltcDefaultStartOffset: '00:00:00:00' },
+    updatedAt: ago(864_000_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+  })
+  if (p === '/config/show.mode') return json(res, {
+    serverTime: NOW(), kind: 'show.mode', revision: 6, payload: { mode: 'show' },
+    updatedAt: ago(10_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    resolumeWebSocketEffect: 'The Resolume WebSocket stays connected in show mode.',
+  })
+  if (p.startsWith('/config/audio.node/') && !p.endsWith('/revisions')) {
+    const id = p.split('/').pop()
+    return json(res, {
+      serverTime: NOW(), kind: 'audio.node', id, revision: 4,
+      payload: { programRoute: 'hw:CARD=USB,DEV=0', ltcRoute: 'hw:CARD=USB,DEV=0', programChannels: [1, 2], ltcChannel: 3, clockDomain: 'usb-audio-0', clockDomainProvenance: 'Declared by erbartos after checking the interface clock on 22 Aug.' },
+      updatedAt: ago(950_000_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
+  if (p.endsWith('/revisions')) return json(res, { serverTime: NOW(), revisions: [
+    { revision: 4, updatedAt: ago(950_000_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api' },
+    { revision: 3, updatedAt: ago(1_296_000_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api' },
+  ] })
   if (p.startsWith('/nodes/') && p.endsWith('/assets')) return json(res, { serverTime: NOW(), manifest: {
     node: 'media-garage', state: 'not_ready', reason: 'One expected asset is not held and one sequence has no coverage.',
     missing: [{ assetId: 'a2', sequence: 'rooftop-finale', filename: 'rooftop-finale.fseq', contentHash: 'b1e7c0a7b6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e035', sizeBytes: 30_100_000 }],
@@ -270,8 +320,8 @@ createServer((req, res) => {
     { name: 'setLayerMaster', params: [{ name: 'layer', kind: 'string', required: true }, { name: 'master', kind: 'number', required: true }], auditExempt: false, coordinatorRequired: true },
   ] })
   if (p === '/config/audio.node') return json(res, { serverTime: NOW(), kind: 'audio.node', objects: [
-    { id: 'audio-node-01', label: 'audio-node-01', show: '', currentRevision: 4, updatedAt: ago(86_400_000) },
-    { id: 'barn-player', label: 'barn-player', show: '', currentRevision: 2, updatedAt: ago(86_400_000) },
+    { id: 'barn-controller', label: 'barn-controller', show: '', currentRevision: 4, updatedAt: ago(86_400_000) },
+    { id: 'media-garage', label: 'media-garage', show: '', currentRevision: 2, updatedAt: ago(86_400_000) },
   ] })
   if (p.startsWith('/config/show.action/')) {
     const id = p.split('/').pop()

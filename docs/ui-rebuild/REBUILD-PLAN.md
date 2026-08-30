@@ -99,8 +99,8 @@ visual language.
 | Creation pattern: new show, new playlist (D-011) | Done | #207 |
 | Creation pattern: new action, edit action, new macro (D-017) | Done | #211 |
 | Node detail | Done | #212 |
-| Settings, seven tabs | Next | |
-| Access | | |
+| Settings, seven tabs | Done | #213 |
+| Access | Next | |
 | Resolume Config | | |
 | Assets library (`/assets`) | | |
 | Stale-write guard retrofit (D-014 B) | | |

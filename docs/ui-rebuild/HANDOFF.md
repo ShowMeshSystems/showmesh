@@ -23,6 +23,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/creation-1` | #207 | New show, new playlist, the stale-write guard |
 | `ui-rebuild/creation-2` | #211 | New action, action editing, new macro |
 | `ui-rebuild/node` | #212 | Node detail |
+| `ui-rebuild/settings` | #213 | Settings, seven tabs, and the D-002 build string |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
@@ -38,13 +39,12 @@ Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
 `OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
 order. In short:
 
-1. Settings, seven tabs. Node detail is done (#212).
-2. Access.
-3. Resolume Config.
-4. The Assets library at `/assets`.
-5. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
-6. Phase 2: delete the old system and add the check that keeps it deleted.
-7. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
+1. Access. Settings is done (#213).
+2. Resolume Config.
+3. The Assets library at `/assets`.
+4. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
+5. Phase 2: delete the old system and add the check that keeps it deleted.
+6. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
 
 ## How to run and verify
 
@@ -156,6 +156,27 @@ plan retrofits the remaining editors onto it.
   did not read first would silently overwrite.
 - `ui/src/screens/StaleWrite.tsx` renders the refusal, so the wording cannot
   drift between editors. Retrofit uses it.
+
+## Three places the mocks and the coordinator disagree
+
+Each was settled by reading the coordinator's own source, never the drawing
+and never the published description. Follow the code.
+
+- **A resolume action target carries no `instanceId`.** `decodeResolumeTarget`
+  reads only `action` and `ref`, and `ShowActionTarget.InstanceID`'s comment
+  says fpp-only.
+- **`audioSessionId` is required**, though the Object Creation mock labels it
+  optional. `decodeAudioTarget` calls `decodeRequiredString` for it.
+- **`audio-node-route-mismatch` refuses `ltcRoute` DIFFERING from
+  `programRoute`**, not naming the same one. `api/openapi.yaml`'s own
+  description of that problem type says the opposite and is wrong; the Settings
+  node-routing tab derives its verdict from `DecodeAudioNodePayload` instead.
+  Filed as its own issue; the contract is still wrong until that lands.
+
+Also: `model.nightSession` is only ever set by a `nightSession.changed` stream
+frame. A screen that needs the night session seeds it with
+`getCurrentNightSession()` the way Dashboard and Settings Mode do. Reading the
+model alone means the value is almost always null.
 
 ## What `NotWiredBanner` is for, exactly
 
