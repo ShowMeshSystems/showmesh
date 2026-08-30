@@ -397,6 +397,20 @@ func Run() int {
 		return 1
 	}
 
+	// A binding arriving, failing to build, or later recovering all
+	// change what audioEngineAvailable() (and so the reserved audio
+	// playback/mix/transition capability set alongside "audio.engine")
+	// would now report; without this, the retained hello only reflects that
+	// evidence as of the last MQTT (re)connect, so a binding delivered
+	// after connect ships no capability signal at all until the next
+	// reconnect, and a binding lost after connect leaves a stale positive
+	// standing indefinitely. Set here, after conn exists, rather than at
+	// audioRebuilder's own construction above: scheduleCapabilityDetection
+	// needs a live Publisher, which does not exist yet at that point.
+	audioRebuilder.SetAvailabilityChangeCallback(func() {
+		go scheduleCapabilityDetection(sigCtx, conn, cfg, bootID, startedAt, logger)
+	})
+
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)

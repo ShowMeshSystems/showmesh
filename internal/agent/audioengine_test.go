@@ -453,6 +453,76 @@ func TestAudioEngineRebuilderBindReleasesTheEngineItReplaces(t *testing.T) {
 	}
 }
 
+// TestAudioEngineRebuilderFiresAvailabilityChangeOnlyWhenBindHappens
+// proves the capability-freshness hook: the installed callback
+// fires exactly on the two rebuildLocked paths that actually call bind
+// (a successful build, and the "no probe evidence" refusal that binds an
+// explicitly unavailable engine), never on a path that leaves the
+// currently bound engine untouched (an older revision dropped, or a
+// structurally invalid binding rejected before anything is torn down).
+// Without this, a coordinator-delivered binding that arrives after this
+// node's one per-connect capability detection already ran would never
+// get its capabilities advertised until the next MQTT reconnect, and a
+// binding that later fails to build would leave a stale positive
+// standing in the retained hello for the rest of the connection.
+func TestAudioEngineRebuilderFiresAvailabilityChangeOnlyWhenBindHappens(t *testing.T) {
+	origNewEngine := newGstEngine
+	origDiscoverer := audioDiscoverer
+	t.Cleanup(func() {
+		newGstEngine = origNewEngine
+		audioDiscoverer = origDiscoverer
+	})
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+
+	var fired int
+	r.SetAvailabilityChangeCallback(func() { fired++ })
+
+	// A structurally invalid binding (no ProgramChannels): rejected
+	// before bind is ever reached.
+	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", Revision: 1})
+	if fired != 0 {
+		t.Fatalf("fired=%d after a structurally invalid binding, want 0: bind was never called", fired)
+	}
+
+	// A successful build (fakesink, so no real device is touched, and
+	// newGstEngine stubbed to succeed): bind(engine) runs, must fire once.
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		return audio.NewFakeEngine(time.Now), nil
+	}
+	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 2})
+	if fired != 1 {
+		t.Fatalf("fired=%d after a successful rebuild, want 1", fired)
+	}
+
+	// An older revision than the one just bound: dropped before bind.
+	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1})
+	if fired != 1 {
+		t.Fatalf("fired=%d after a dropped older revision, want 1 (unchanged)", fired)
+	}
+
+	// A newer binding against the real sink factory, with no discovery
+	// evidence at all for its route: buildGstEngineConfig resolves
+	// SampleRate/ChannelCount to 0 (no fallback applies off fakesink), so
+	// rebuildLocked binds an explicitly unavailable engine without ever
+	// calling newGstEngine. Must fire again.
+	t.Setenv(envGstAudioSinkOverride, "")
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery {
+		return audio.Discovery{}
+	}
+	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 3})
+	if fired != 2 {
+		t.Fatalf("fired=%d after a rebuild that bound an unavailable engine (no probe evidence), want 2", fired)
+	}
+	if ok, _ := switchable.Available(); ok {
+		t.Fatal("switchable reports available after a no-probe-evidence rebuild, want unavailable")
+	}
+}
+
 // orderedCloseEngine is an [audio.Engine] double that records whether it
 // was ever closed, safe for concurrent use: TestRebuildSerializesConcurrentRebuilds
 // closes it from whichever goroutine's rebuild call displaces it.

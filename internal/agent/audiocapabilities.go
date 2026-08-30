@@ -62,9 +62,14 @@ const minLTCChannels = audio.MinLTCChannels
 // [audio.Session.advanceLocked] always stops the completed item and
 // starts its successor in sequence, only MEASURING the resulting gap
 // (docs/build/IDENTIFIER-REGISTER.md's inter-item gap), never eliminating
-// it, true for every engine this repository ships, gstengine included.
-// There is no evidence any node built from this repository could ever
-// honestly confirm either ability, so only "audio.transition.sequential"
+// it, true for every engine this repository ships, gstengine included -
+// proven directly by
+// internal/agent/audio's own
+// TestAdvanceReleasesThePredecessorBeforeTheSuccessorEverLoadsRegardlessOfRequestedTransition,
+// which asserts the actual engine call order for both requested
+// transitions, not merely their absence from this list. There is no
+// evidence any node built from this repository could ever honestly
+// confirm either ability, so only "audio.transition.sequential"
 // ships until an engine actually implements one of the other two.
 var audioSessionCapabilityIDs = []capability.ID{
 	"audio.playback.background",

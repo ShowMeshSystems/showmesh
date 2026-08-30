@@ -241,13 +241,23 @@ func TestFakeAudioEngineNeverAdvertisesPlaybackCapability(t *testing.T) {
 	}
 }
 
-// TestDetectAudioCapabilitiesNeverAdvertisesUnimplementedTransitions
-// proves gapless/crossfade never ship regardless of engine availability:
-// no engine in this repository ever eliminates the inter-item gap
-// [audio.Session.advanceLocked] measures, so there is no evidence path
-// that could ever add either ID to [audioSessionCapabilityIDs] and this
-// test would catch it if one did.
-func TestDetectAudioCapabilitiesNeverAdvertisesUnimplementedTransitions(t *testing.T) {
+// TestDetectAudioCapabilitiesShipsOnlySequentialTransition is a
+// packaging check, not a behavioral one: it proves detectAudioCapabilities
+// ships exactly what [audioSessionCapabilityIDs] lists, no more, so a
+// careless edit adding "audio.transition.gapless" or
+// "audio.transition.crossfade" to that literal list is caught here. It
+// canNOT, by itself, prove either ability is actually unimplemented -
+// that is [audio.Session.advanceLocked]'s own behavior, which this
+// package cannot observe. The real, behavioral proof of that claim -
+// the one that would actually break if a future change made
+// advanceLocked genuinely overlap two items - lives in
+// internal/agent/audio's own
+// TestAdvanceReleasesThePredecessorBeforeTheSuccessorEverLoadsRegardlessOfRequestedTransition,
+// which drives a real Manager/Session/FakeEngine through a natural
+// playlist advance and asserts the engine call order directly, the same
+// way [TestFakeAudioEngineNeverAdvertisesPlaybackCapability] drives a
+// real [audio.FakeEngine.Available] rather than a literal.
+func TestDetectAudioCapabilitiesShipsOnlySequentialTransition(t *testing.T) {
 	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true})
 

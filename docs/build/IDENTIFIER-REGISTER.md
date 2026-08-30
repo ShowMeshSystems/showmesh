@@ -344,18 +344,18 @@ above was added for.
 | `audio.output.dante` | shipped | ARCHITECTURE section 6 |
 | `timecode.ltc.observe` | shipped | ARCHITECTURE section 6 |
 | `process.supervise` | shipped | ARCHITECTURE section 6 |
-| `audio.playback.background` | reserved | Lane 17a SM-201 |
-| `audio.playback.announcement` | reserved | Lane 17a SM-201 |
-| `audio.playback.playlist` | reserved | Lane 17a SM-201 |
-| `audio.playback.loop` | reserved | Lane 17a SM-201 |
-| `audio.playback.gain` | reserved | Lane 17a SM-201 |
-| `audio.playback.fade` | reserved | Lane 17a SM-201 |
-| `audio.playback.seek` | reserved | Lane 17a SM-201 |
-| `audio.playback.position` | reserved | Lane 17a SM-201 |
-| `audio.mix.concurrent` | reserved | Lane 17a SM-201 |
-| `audio.mix.duck` | reserved | Lane 17a SM-201 |
-| `audio.mix.interrupt` | reserved | Lane 17a SM-201 |
-| `audio.transition.sequential` | reserved | Lane 17a SM-201 |
+| `audio.playback.background` | shipped | Lane 17a SM-201 |
+| `audio.playback.announcement` | shipped | Lane 17a SM-201 |
+| `audio.playback.playlist` | shipped | Lane 17a SM-201 |
+| `audio.playback.loop` | shipped | Lane 17a SM-201 |
+| `audio.playback.gain` | shipped | Lane 17a SM-201 |
+| `audio.playback.fade` | shipped | Lane 17a SM-201 |
+| `audio.playback.seek` | shipped | Lane 17a SM-201 |
+| `audio.playback.position` | shipped | Lane 17a SM-201 |
+| `audio.mix.concurrent` | shipped | Lane 17a SM-201 |
+| `audio.mix.duck` | shipped | Lane 17a SM-201 |
+| `audio.mix.interrupt` | shipped | Lane 17a SM-201 |
+| `audio.transition.sequential` | shipped | Lane 17a SM-201 |
 | `audio.transition.gapless` | reserved | Lane 17a SM-201 |
 | `audio.transition.crossfade` | reserved | Lane 17a SM-201 |
 
@@ -368,12 +368,26 @@ rather than being dropped. They are not free to re-mint.
 one identifier per ability it names.** That section requires a configured
 audio output to declare the background, announcement, playlist, mix, duck,
 interrupt, loop, gain, fade, seek, position and requested item-transition
-abilities a night session needs, and
+abilities a night session needs. Twelve of the fourteen ship: a node
+advertises them alongside `audio.engine` whenever its bound session engine
+reports itself available (`internal/agent/audiocapabilities.go`), and
 `internal/coordinator/api/nightaudioreadiness.go` reports
-`resting:background-audio-output-capabilities:<node>` as `not_verifiable`
-naming exactly those, because none of them exists. `audio.mix.concurrent` is
-the section's bare "mix": whether the output can carry more than one session
-at once, which is a different statement from `audio.mix.duck`.
+`resting:background-audio-output-capabilities:<node>` as `healthy` or
+`failed` against that real advertisement, narrowed to what a configured
+`resting.backgroundAudio` session concretely needs on its own output
+node (`audio.playback.background`/`playlist`/`gain` always, `loop` only
+when a repeat mode is configured); it no longer reports `not_verifiable`
+for a configured output. `audio.transition.gapless` and
+`audio.transition.crossfade` remain reserved and unshipped: no engine
+this repository binds ever eliminates the inter-item gap
+`Session.advanceLocked` measures, so no node can honestly confirm
+either, and `resting:background-audio-item-transition` (the separate,
+pre-existing check for the requested item-transition ability) reports
+`unknown` for an output this coordinator has no current evidence for,
+and `failed` for one whose live advertisement genuinely omits the
+requested ability, never a blanket refusal. `audio.mix.concurrent` is
+the section's bare "mix": whether the output can carry more than one
+session at once, which is a different statement from `audio.mix.duck`.
 
 **They are split across three namespaces deliberately.** `audio.playback.*`
 is what one session can be asked to do, `audio.mix.*` is what happens when

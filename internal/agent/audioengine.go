@@ -164,6 +164,21 @@ type audioEngineRebuilder struct {
 	mgr        *audio.Manager
 	logger     *slog.Logger
 
+	// onAvailabilityChange, when set, is called after every rebuildLocked
+	// call that actually bound an engine (either branch that calls
+	// [audioEngineRebuilder.bind]), so the reserved capability
+	// advertisement re-detects and republishes on the same event that
+	// changed what [audio.SwitchableEngine.Available] would now report,
+	// never on a separate poll or timer. This is the only place
+	// [audio.SwitchableEngine.Set] is ever called (see rebuildLocked), so
+	// hooking it here catches every availability transition this node can
+	// produce: a binding arriving, a rebind that fails to build (route
+	// change, no probe evidence), and a later rebind that recovers.
+	// Set via [audioEngineRebuilder.SetAvailabilityChangeCallback], never
+	// passed to the constructor: it needs the MQTT connection built after
+	// this rebuilder is (see agent.go).
+	onAvailabilityChange func()
+
 	mu            sync.Mutex
 	haveBuilt     bool
 	builtRevision int64
@@ -171,6 +186,19 @@ type audioEngineRebuilder struct {
 
 func newAudioEngineRebuilder(ctx context.Context, assetDir string, switchable *audio.SwitchableEngine, mgr *audio.Manager, logger *slog.Logger) *audioEngineRebuilder {
 	return &audioEngineRebuilder{ctx: ctx, assetDir: assetDir, switchable: switchable, mgr: mgr, logger: logger}
+}
+
+// SetAvailabilityChangeCallback installs f as [audioEngineRebuilder]'s own
+// onAvailabilityChange hook, matching [audioBinding.SetNodeBrokenCheck]'s
+// own post-construction setter convention (both need a dependency built
+// after their owning struct). Guarded by r.mu, the same lock bind reads
+// it under (via rebuildLocked's callers), so this is safe to call
+// concurrently with an in-flight rebuild racing in from an already-
+// subscribed connection; agent.go still calls it exactly once.
+func (r *audioEngineRebuilder) SetAvailabilityChangeCallback(f func()) {
+	r.mu.Lock()
+	r.onAvailabilityChange = f
+	r.mu.Unlock()
 }
 
 // validationSampleRate is a placeholder used only to satisfy
@@ -340,6 +368,9 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 // this node held before probing and building the replacement.
 func (r *audioEngineRebuilder) bind(engine audio.Engine) {
 	closeReplacedEngine(r.mgr.RebindEngine(r.ctx, r.switchable, engine, audio.RebindReasonEngineRebind), r.logger)
+	if r.onAvailabilityChange != nil {
+		r.onAvailabilityChange()
+	}
 }
 
 // audioSettingsFromWire converts a decoded "audio.settings.configure"

@@ -64,19 +64,29 @@ func transitionCapabilityID(t pkgaudio.ItemTransition) (capability.ID, bool) {
 // real answer to the outputConfirms bool
 // [pkgaudio.ValidateItemTransitionSupport] takes, in place of the
 // hardcoded false this coordinator passed before that capability signal
-// existed. Sequential needs no confirmation and reports true without
-// reading inventory at all.
-func audioNodeConfirmsTransition(ctx context.Context, nodes NodeLister, now time.Time, nodeID string, t pkgaudio.ItemTransition) (bool, error) {
+// existed. Sequential needs no confirmation and reports (true, a
+// synthetic Live evidence, nil) without reading inventory at all. For
+// gapless or crossfade, the returned [audioNodeCapabilityEvidence] tells
+// a caller whether that answer is trustworthy as current
+// (evidence.Live); [nightAdvanceBackgroundAudio] (deciding whether to
+// actually dispatch a session) can ignore that and just treat confirmed
+// as the answer - refusing on unconfirmable evidence is the safe default
+// either way - but a readiness check needs it to report unknown rather
+// than failed.
+func audioNodeConfirmsTransition(ctx context.Context, nodes NodeLister, now time.Time, nodeID string, t pkgaudio.ItemTransition) (confirmed bool, evidence audioNodeCapabilityEvidence, err error) {
 	id, needsConfirmation := transitionCapabilityID(t)
 	if !needsConfirmation {
-		return true, nil
+		return true, audioNodeCapabilityEvidence{Live: true}, nil
 	}
-	caps, err := audioNodeCapabilitySet(ctx, nodes, now, nodeID)
+	evidence, err = audioNodeCapabilitySet(ctx, nodes, now, nodeID)
 	if err != nil {
-		return false, err
+		return false, audioNodeCapabilityEvidence{}, err
 	}
-	_, confirmed := caps.Lookup(id)
-	return confirmed, nil
+	if !evidence.Live {
+		return false, evidence, nil
+	}
+	_, confirmed = evidence.Capabilities.Lookup(id)
+	return confirmed, evidence, nil
 }
 
 // nightCheckBackgroundAudioItemTransition is §13's own item-transition
@@ -84,28 +94,35 @@ func audioNodeConfirmsTransition(ctx context.Context, nodes NodeLister, now time
 // passes; gapless and crossfade pass only when the configured output
 // node's live Hello capability advertisement declares the matching
 // audio.transition.* ID (nightAdvanceBackgroundAudio's identical check
-// at dispatch time reads the same evidence), so a session
-// configured against an output that never declared it is reported
-// failed HERE, at readiness, rather than only discovered when background
-// audio never starts.
+// at dispatch time reads the same evidence). A session configured
+// against an output that has current evidence and genuinely lacks the
+// ability is reported failed HERE, at readiness, rather than only
+// discovered when background audio never starts; a session configured
+// against an output this coordinator cannot currently confirm anything
+// about (never seen, never advertised, or not currently online) is
+// reported unknown, matching api/openapi.yaml's NightReadinessCheck rule
+// that missing evidence is never "failed".
 func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	name := "resting:background-audio-item-transition"
 	t := pkgaudio.ItemTransition(ba.ItemTransition)
 	nodeID := ba.OutputNodeID()
-	confirms, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, t)
+	confirms, evidence, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, t)
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
 			"could not read audio.node %q's capability advertisement: %s", nodeID, err.Error())}
-	}
-	if verr := pkgaudio.ValidateItemTransitionSupport(t, confirms); verr != nil {
-		id, _ := transitionCapabilityID(t)
-		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
-			"itemTransition %q requires output %q to declare %q, and its current capability advertisement does not; background audio will refuse to start until this is changed to \"sequential\" or the output ships that capability", ba.ItemTransition, nodeID, id)}
 	}
 	if t == pkgaudio.ItemTransitionSequential {
 		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "sequential requires no output confirmation"}
 	}
 	id, _ := transitionCapabilityID(t)
+	if !evidence.Live {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"cannot confirm whether output %q declares %q: %s", nodeID, id, evidence.NotLiveReason)}
+	}
+	if verr := pkgaudio.ValidateItemTransitionSupport(t, confirms); verr != nil {
+		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(
+			"itemTransition %q requires output %q to declare %q, and its current capability advertisement does not; background audio will refuse to start until this is changed to \"sequential\" or the output ships that capability", ba.ItemTransition, nodeID, id)}
+	}
 	return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: fmt.Sprintf("output %q declares %q", nodeID, id)}
 }
 
@@ -139,21 +156,29 @@ func audioOutputCapabilityIDsForBackgroundAudio(ba *config.NightSessionBackgroun
 // this configured resting.backgroundAudio session concretely needs (see
 // [audioOutputCapabilityIDsForBackgroundAudio]): healthy when the output
 // node's live Hello capability advertisement declares every one of them,
-// failed naming whichever are missing otherwise. This check now has a
-// real capability signal to check against; before it, this always
-// reported not_verifiable.
+// failed naming whichever a node with CURRENT evidence genuinely does
+// not declare, and unknown whenever that evidence cannot be trusted as
+// current at all (never seen, never advertised, or not presently
+// online) - api/openapi.yaml's own NightReadinessCheck rule that missing
+// evidence is never "failed". This check now has a real capability
+// signal to check against; before it, this always reported
+// not_verifiable.
 func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	nodeID := ba.OutputNodeID()
 	name := "resting:background-audio-output-capabilities:" + nodeID
-	caps, err := audioNodeCapabilitySet(ctx, h.deps.Nodes, now, nodeID)
+	evidence, err := audioNodeCapabilitySet(ctx, h.deps.Nodes, now, nodeID)
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
 			"could not read audio.node %q's capability advertisement: %s", nodeID, err.Error())}
 	}
+	if !evidence.Live {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"cannot confirm which capabilities audio.node %q declares: %s", nodeID, evidence.NotLiveReason)}
+	}
 	needed := audioOutputCapabilityIDsForBackgroundAudio(ba)
 	var missing []string
 	for _, id := range needed {
-		if _, ok := caps.Lookup(id); !ok {
+		if _, ok := evidence.Capabilities.Lookup(id); !ok {
 			missing = append(missing, string(id))
 		}
 	}

@@ -411,7 +411,7 @@ func (h *handlers) nightAdvanceBackgroundAudio(ctx context.Context, now time.Tim
 	nodeID := ba.OutputNodeID()
 	sessionID := nightBackgroundAudioSessionID(rec)
 
-	confirms, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, pkgaudio.ItemTransition(ba.ItemTransition))
+	confirms, _, err := audioNodeConfirmsTransition(ctx, h.deps.Nodes, now, nodeID, pkgaudio.ItemTransition(ba.ItemTransition))
 	if err != nil {
 		h.logWarn("night loop: background audio: failed to read output node's capability advertisement", "sessionId", rec.ID, "nodeId", nodeID, "error", err)
 		return

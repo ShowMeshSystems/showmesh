@@ -25,17 +25,31 @@ func containsAllSubstrings(s string, substrs ...string) bool {
 }
 
 // nodeViewWithGenericCapabilities builds an [inventory.NodeView] advertising
-// exactly the given capability.IDs at Version 1, the granular
-// audio.playback/audio.mix/audio.transition IDs this file's own tests
-// exercise, distinct from audionode_test.go's own
+// exactly the given capability.IDs at Version 1, live (Liveness online),
+// the granular audio.playback/audio.mix/audio.transition IDs this file's
+// own tests exercise, distinct from audionode_test.go's own
 // nodeViewWithAudioCapabilities (which carries only the two route-bearing
-// audio.output.* IDs placement validation reads).
+// audio.output.* IDs placement validation reads). Use
+// nodeViewWithGenericCapabilitiesOffline for a node whose retained hello
+// must NOT be trusted as current.
 func nodeViewWithGenericCapabilities(nodeID string, ids ...capability.ID) inventory.NodeView {
 	caps := make(capability.Set, 0, len(ids))
 	for _, id := range ids {
 		caps = append(caps, capability.Capability{ID: id, Version: 1})
 	}
-	return inventory.NodeView{NodeID: nodeID, Hello: &store.HelloRecord{Capabilities: caps}}
+	return inventory.NodeView{NodeID: nodeID, Hello: &store.HelloRecord{Capabilities: caps}, Liveness: inventory.LivenessOnline}
+}
+
+// nodeViewWithGenericCapabilitiesOffline is
+// [nodeViewWithGenericCapabilities] with Liveness LivenessOffline
+// instead: a node that DID once advertise the given capabilities, but
+// whose retained hello this coordinator can no longer confirm is
+// current, per [audioNodeCapabilityEvidence]'s own doc comment.
+func nodeViewWithGenericCapabilitiesOffline(nodeID string, ids ...capability.ID) inventory.NodeView {
+	nv := nodeViewWithGenericCapabilities(nodeID, ids...)
+	nv.Liveness = inventory.LivenessOffline
+	nv.LivenessReason = "last-will evidence reports offline"
+	return nv
 }
 
 // TestNightCheckBackgroundAudioAssets_MissingAssetFails proves a
@@ -82,10 +96,16 @@ func TestNightCheckBackgroundAudioItemTransition_SequentialAlwaysPasses(t *testi
 }
 
 // TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade defends
-// the rule: gapless/crossfade fail when the configured output
-// node has never declared the matching audio.transition.* capability, and
-// pass once it has - proving the check reads real evidence in both
-// directions, not a hardcoded refusal.
+// the rule across all three reachable states, proving the check reads
+// real evidence rather than a hardcoded refusal: unknown when this
+// coordinator has no current evidence for the output at all (it has
+// never appeared in inventory - api/openapi.yaml's own NightReadinessCheck
+// rule that missing evidence is never "failed"), failed when a LIVE
+// node's own advertisement genuinely omits the matching
+// audio.transition.* ID, and healthy once it declares one. Also proves a
+// node whose retained hello DOES name the ability but whose liveness is
+// not currently online reports unknown, never healthy: stale evidence is
+// not current evidence.
 func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) {
 	cases := []struct {
 		transition   string
@@ -103,8 +123,24 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 			}
 
 			check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			if check.health != nightHealthUnknown() {
+				t.Fatalf("output never seen in inventory: check = %+v, want unknown", check)
+			}
+
+			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+				nodeViewWithGenericCapabilities("node-a"),
+			})
+			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
 			if check.health != nightHealthFailed() {
-				t.Fatalf("undeclared output: check = %+v, want failed", check)
+				t.Fatalf("live output declaring nothing: check = %+v, want failed", check)
+			}
+
+			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+				nodeViewWithGenericCapabilitiesOffline("node-a", tc.confirmingID),
+			})
+			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
+			if check.health != nightHealthUnknown() {
+				t.Fatalf("offline output whose retained hello DOES declare %q: check = %+v, want unknown (stale evidence must not read as healthy or failed)", tc.confirmingID, check)
 			}
 
 			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
@@ -112,17 +148,21 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 			})
 			check = h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
 			if check.health != nightHealthHealthy() {
-				t.Fatalf("output declaring %q: check = %+v, want healthy", tc.confirmingID, check)
+				t.Fatalf("live output declaring %q: check = %+v, want healthy", tc.confirmingID, check)
 			}
 		})
 	}
 }
 
-// TestNightCheckAudioOutputCapabilities defends this check's real behavior:
-// failed naming the missing IDs when the output node declares none of
-// them, healthy once it declares every one this configured session
-// requires (background/playlist/gain always, loop only because Repeat is
-// configured here).
+// TestNightCheckAudioOutputCapabilities defends this check's real
+// behavior: unknown when this coordinator has never seen the output node
+// at all (missing evidence is never "failed"), failed naming the missing
+// IDs once a LIVE node's own advertisement is evaluated and genuinely
+// omits some of them, and healthy once it declares every one this
+// configured session requires (background/playlist/gain always, loop
+// only because Repeat is configured here). Also proves a node that WOULD
+// satisfy every requirement but is not currently online still reports
+// unknown, not healthy.
 func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
 	ba := &config.NightSessionBackgroundAudio{
@@ -131,8 +171,16 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	}
 
 	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	if check.health != nightHealthUnknown() {
+		t.Fatalf("node never seen in inventory: check = %+v, want unknown", check)
+	}
+
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithGenericCapabilities("node-a"),
+	})
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
 	if check.health != nightHealthFailed() {
-		t.Fatalf("no capability advertisement: check = %+v, want failed", check)
+		t.Fatalf("live node declaring nothing: check = %+v, want failed", check)
 	}
 	if !containsAllSubstrings(check.reason, "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop") {
 		t.Fatalf("reason does not name every missing capability; reason: %s", check.reason)
@@ -150,11 +198,19 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	}
 
 	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		nodeViewWithGenericCapabilitiesOffline("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop"),
+	})
+	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	if check.health != nightHealthUnknown() {
+		t.Fatalf("offline node whose retained hello declares every required capability: check = %+v, want unknown", check)
+	}
+
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 		nodeViewWithGenericCapabilities("node-a", "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop"),
 	})
 	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
 	if check.health != nightHealthHealthy() {
-		t.Fatalf("every required capability declared: check = %+v, want healthy", check)
+		t.Fatalf("every required capability declared by a live node: check = %+v, want healthy", check)
 	}
 }
 
