@@ -12,6 +12,40 @@ my recommendation, and what the answer unblocks. Answered entries move to
 
 ## Open
 
+### D-011 Shows/Playlists: creation flows the mocks draw a button for but not a form
+
+**What.** `Shows.dc.html` draws a "New show" button and `Show Authoring.dc.html`
+draws a "New playlist" button. Neither mock draws the form behind it: what
+fields it asks for, how a show's id is chosen (it is immutable once created,
+per the Identity tab's own copy), or how a playlist's runner is picked before
+anything else about it can be configured. `PUT /config/show/{id}` and
+`PUT /config/show.playlist/{id}` can both serve the write once a client has an
+id and a payload; the gap is a UI design one, not an API one, so this is not
+the D-010 not-wired treatment.
+
+**Why now.** Both buttons are drawn controls in blocks this change builds. Per
+the rebuild plan step 3, a control with no home in a mock block goes here
+before the page ships, rather than getting invented layout.
+
+**Options.**
+
+- A. Ship both buttons disabled with a stated reason ("needs a form the mock
+  does not draw"), as built. Honest, but creation is not usable from the UI
+  yet, even though the API could serve it.
+- B. Design a minimal creation form (id, name for a show; runner, name for a
+  playlist) not drawn in either mock, and wire it to the real PUT.
+- C. Drop the buttons.
+
+**Recommendation.** A now. B is a small, well-scoped follow-up once a
+creation-form pattern exists somewhere in the kit (Settings and Access will
+likely need the same shape). C loses the visibility the mock intends.
+
+**Unblocks.** Nothing; both screens ship at the mock's drawn state either way.
+
+**Ruling:**
+
+---
+
 ### D-005 Dashboard: the five blocks the mock does not have
 
 **What.** `Dashboard.dc.html` has three blocks: Readiness, Needs you, System

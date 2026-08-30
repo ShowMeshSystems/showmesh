@@ -12,6 +12,10 @@ import { MonitorActivity } from '../screens/MonitorActivity'
 import { MonitorCapabilities } from '../screens/MonitorCapabilities'
 import { MonitorManifest } from '../screens/MonitorManifest'
 import { ShowNight } from '../screens/ShowNight'
+import { Shows } from '../screens/Shows'
+import { ShowDetail } from '../screens/ShowDetail'
+import { ShowsWorkspace, ShowsTabPlaceholder } from '../screens/ShowsWorkspace'
+import { ShowsPlaylists } from '../screens/ShowsPlaylists'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
@@ -34,7 +38,6 @@ function ScrollToTop() {
  * waiting on, so the queue is readable from the running app.
  */
 const QUEUE: readonly { path: string; title: string; mock: string }[] = [
-  { path: '/shows/*', title: 'Shows', mock: 'Shows.dc.html' },
   { path: '/assets/*', title: 'Assets', mock: 'Show Assets.dc.html' },
   { path: '/monitor/fleet/node/:nodeId', title: 'Node', mock: 'Node.dc.html' },
   { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
@@ -69,6 +72,15 @@ export default function App() {
             <Route path="monitor/activity" element={<MonitorActivity />} />
             <Route path="monitor/capabilities" element={<MonitorCapabilities />} />
             <Route path="monitor/manifest" element={<MonitorManifest />} />
+            <Route path="shows" element={<Shows />} />
+            <Route path="shows/:id" element={<ShowDetail />} />
+            <Route path="shows/:id" element={<ShowsWorkspace />}>
+              <Route path="playlists" element={<ShowsPlaylists />} />
+              <Route path="cues" element={<ShowsTabPlaceholder tab="Cues" />} />
+              <Route path="assets" element={<ShowsTabPlaceholder tab="Assets" />} />
+              <Route path="presentation" element={<ShowsTabPlaceholder tab="Presentation" />} />
+              <Route path="automation" element={<ShowsTabPlaceholder tab="Automation" />} />
+            </Route>
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />
             ))}

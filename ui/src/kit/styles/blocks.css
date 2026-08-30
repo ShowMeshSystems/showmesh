@@ -582,3 +582,22 @@ a.sm-tile:hover {
 .sm-annc > div > p {
   margin: 0;
 }
+
+/* Spacing on the 4px rhythm, so a screen never needs an inline pixel value. */
+.sm-stack-2 { margin-top: var(--s-2); }
+.sm-stack-3 { margin-top: var(--s-3); }
+.sm-stack-4 { margin-top: var(--s-4); }
+.sm-stack-5 { margin-top: var(--s-5); }
+.sm-flat { margin: 0; }
+.sm-push-end { margin-left: auto; }
+
+/* A row of items that wraps rather than overflowing its block. */
+.sm-inline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+/* A form column that stays readable rather than stretching to the page width. */
+.sm-form-column { max-width: 660px; }
