@@ -1,7 +1,18 @@
-import type { Event, Model, Node } from '../api'
-import type { Tone } from '../kit'
-import { countSignals } from '../domain/evidence'
-import { ageMs, formatClock, formatDuration } from '../domain/time'
+import type { AuditEntry, Evidence, Event, Model, Node } from '../api'
+import type { Connection, Tone } from '../kit'
+import { countSignals, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
+import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
+
+/** Connection state, in the terms Monitor's own pill labels use. */
+export function monitorConnection(model: Model): Connection {
+  return model.connection.kind === 'live'
+    ? 'live'
+    : model.connection.kind === 'reconnecting'
+      ? 'degraded'
+      : model.connection.kind === 'connecting'
+        ? 'unknown'
+        : 'lost'
+}
 
 export type FleetKind = 'all' | 'node' | 'fpp' | 'resolume'
 
@@ -123,22 +134,24 @@ const SEVERITY_TONE: Record<Event['severity'], Tone> = {
   critical: 'bad',
 }
 
+const SEVERITY_LABEL: Record<Event['severity'], string> = {
+  informational: 'Informational',
+  warning: 'Warning',
+  critical: 'Critical',
+}
+
 export type ActivityRow = {
   key: string
   time: string
   summary: string
   source: string
+  /** The state word, only when there is one worth showing. Colour never travels alone. */
+  state: string | null
   tone: Tone
 }
 
 export function activityRows(events: readonly Event[], limit: number): ActivityRow[] {
-  return events.slice(0, limit).map((event) => ({
-    key: String(event.seq),
-    time: formatClock(event.occurredAt ?? event.recordedAt) ?? 'unrecorded',
-    summary: event.summary,
-    source: event.source,
-    tone: SEVERITY_TONE[event.severity],
-  }))
+  return mergedActivityRows(events.slice(0, limit), [])
 }
 
 export type FacetCounts = { fleet: number; signals: number; capabilities: number }
@@ -244,4 +257,180 @@ export function nodeInspector(node: Node, nowIso: string | null): { title: strin
       },
     ],
   }
+}
+
+// ---------------------------------------------------------------------
+// Signals facet: every observation across every resource, in one table.
+// ---------------------------------------------------------------------
+
+export type SignalRow = {
+  key: string
+  resource: string
+  resourceTo: string
+  kind: Exclude<FleetKind, 'all'>
+  signal: string
+  value: string
+  tone: Tone
+  state: string
+  observed: string
+}
+
+function signalValue(entry: Evidence): string {
+  if (entry.value === null) return 'not reported'
+  return entry.unit === null || entry.unit === '' ? String(entry.value) : `${entry.value} ${entry.unit}`
+}
+
+function signalObserved(entry: Evidence, nowIso: string | null): string {
+  if (entry.observedAt === null) return 'never'
+  const age = ageMs(entry.observedAt, nowIso)
+  return age === null ? (formatClock(entry.observedAt) ?? 'unrecorded') : `${formatDuration(age)} ago`
+}
+
+function evidenceRows(
+  entries: readonly Evidence[],
+  keyPrefix: string,
+  resource: string,
+  resourceTo: string,
+  kind: Exclude<FleetKind, 'all'>,
+  nowIso: string | null,
+): SignalRow[] {
+  return entries.map((entry, index) => ({
+    key: `${keyPrefix}:${index}`,
+    resource,
+    resourceTo,
+    kind,
+    signal: entry.signal,
+    value: signalValue(entry),
+    tone: EVIDENCE_TONE[entry.state],
+    state: EVIDENCE_LABEL[entry.state],
+    observed: signalObserved(entry, nowIso),
+  }))
+}
+
+/**
+ * Every observation the coordinator holds, across nodes, FPP and Resolume,
+ * in the Fleet table's own idiom: resource, kind and last report as
+ * columns, kind as the narrowing dimension.
+ */
+export function signalRows(model: Model, nowIso: string | null): SignalRow[] {
+  const rows: SignalRow[] = []
+  for (const node of model.nodes) {
+    const resource = node.label ?? node.nodeId
+    const to = `/monitor/fleet/node/${node.nodeId}`
+    rows.push(...evidenceRows(node.render, `node:${node.nodeId}:render`, resource, to, 'node', nowIso))
+    rows.push(...evidenceRows(node.audio, `node:${node.nodeId}:audio`, resource, to, 'node', nowIso))
+    rows.push(...evidenceRows(node.fppConnect, `node:${node.nodeId}:fppConnect`, resource, to, 'node', nowIso))
+  }
+  for (const instance of model.fpp) {
+    rows.push(
+      ...evidenceRows(
+        instance.observations,
+        `fpp:${instance.instanceId}`,
+        instance.instanceId,
+        `/monitor/fleet/fpp/${instance.instanceId}`,
+        'fpp',
+        nowIso,
+      ),
+    )
+  }
+  for (const instance of model.resolume) {
+    rows.push(
+      ...evidenceRows(
+        instance.observations,
+        `resolume:${instance.instanceId}`,
+        instance.instanceId,
+        `/monitor/fleet/resolume/${instance.instanceId}`,
+        'resolume',
+        nowIso,
+      ),
+    )
+  }
+  return rows
+}
+
+export function signalSummary(rows: readonly SignalRow[]): string {
+  const byLabel = (label: string) => rows.filter((row) => row.state === label).length
+  const current = byLabel(EVIDENCE_LABEL.current)
+  const stale = byLabel(EVIDENCE_LABEL.stale)
+  const unobserved = byLabel(EVIDENCE_LABEL.not_collected)
+  const failed = byLabel(EVIDENCE_LABEL.collection_failed)
+  const unavailable = byLabel(EVIDENCE_LABEL.unsupported) + byLabel(EVIDENCE_LABEL.unknown_age)
+  return `${rows.length} signals · ${current} current, ${stale} stale, ${unobserved} unobserved, ${failed} failed, ${unavailable} unavailable.`
+}
+
+// ---------------------------------------------------------------------
+// Capabilities facet: what each node has advertised, grouped by node.
+// ---------------------------------------------------------------------
+
+export type CapabilityGroup = {
+  key: string
+  node: string
+  nodeTo: string
+  capabilities: readonly { id: string; version: number }[]
+}
+
+export function capabilityGroups(model: Model): CapabilityGroup[] {
+  return model.nodes.map((node) => ({
+    key: node.nodeId,
+    node: node.label ?? node.nodeId,
+    nodeTo: `/monitor/fleet/node/${node.nodeId}`,
+    capabilities: node.capabilities,
+  }))
+}
+
+// ---------------------------------------------------------------------
+// Activity facet: system events (open) and operator actions (need
+// audit:read), merged into one time-ordered stream.
+// ---------------------------------------------------------------------
+
+type TimedRow = ActivityRow & { atMs: number }
+
+const AUDIT_TONE: Record<string, Tone> = {
+  current: 'good',
+  stale: 'warn',
+  unknown_age: 'unknown',
+  not_collected: 'unknown',
+  collection_failed: 'bad',
+  unsupported: 'unknown',
+}
+
+function eventRow(event: Event): TimedRow {
+  const at = event.occurredAt ?? event.recordedAt
+  return {
+    key: `event:${event.seq}`,
+    time: formatClock(at) ?? 'unrecorded',
+    summary: event.summary,
+    source: event.source,
+    state: event.severity === 'informational' ? null : SEVERITY_LABEL[event.severity],
+    tone: SEVERITY_TONE[event.severity],
+    atMs: parseIsoMs(at) ?? 0,
+  }
+}
+
+function auditSummary(entry: AuditEntry): string {
+  const fact = entry.outcomeReason !== '' ? entry.outcomeReason : `${entry.action} on ${entry.target}`
+  return entry.outcome === '' ? fact : `${fact} (${entry.outcome})`
+}
+
+function auditRow(entry: AuditEntry): TimedRow {
+  return {
+    key: `audit:${entry.id}`,
+    time: formatClock(entry.timestamp) ?? 'unrecorded',
+    summary: auditSummary(entry),
+    source: entry.principalName,
+    state: entry.outcomeState === '' ? null : (EVIDENCE_LABEL[entry.outcomeState as Evidence['state']] ?? entry.outcomeState),
+    tone: entry.outcomeState === '' ? 'pending' : (AUDIT_TONE[entry.outcomeState] ?? 'unknown'),
+    atMs: parseIsoMs(entry.timestamp) ?? 0,
+  }
+}
+
+/**
+ * System events and operator actions, in one time-ordered table. Audit
+ * entries are supplied only when the caller could read them; an empty
+ * `audit` array never means "no operator acted", only "not merged in".
+ */
+export function mergedActivityRows(events: readonly Event[], audit: readonly AuditEntry[]): ActivityRow[] {
+  const rows = [...events.map(eventRow), ...audit.map(auditRow)]
+  rows.sort((a, b) => b.atMs - a.atMs)
+  return rows.map((row) => ({ key: row.key, time: row.time, summary: row.summary, source: row.source, state: row.state, tone: row.tone }))
 }

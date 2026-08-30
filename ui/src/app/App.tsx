@@ -7,6 +7,10 @@ import { useDensity, useTheme } from './useTheme'
 import { Dashboard } from '../screens/Dashboard'
 import { LiveControl } from '../screens/LiveControl'
 import { Monitor } from '../screens/Monitor'
+import { MonitorSignals } from '../screens/MonitorSignals'
+import { MonitorActivity } from '../screens/MonitorActivity'
+import { MonitorCapabilities } from '../screens/MonitorCapabilities'
+import { MonitorManifest } from '../screens/MonitorManifest'
 import { ShowNight } from '../screens/ShowNight'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
@@ -35,10 +39,6 @@ const QUEUE: readonly { path: string; title: string; mock: string }[] = [
   { path: '/monitor/fleet/node/:nodeId', title: 'Node', mock: 'Node.dc.html' },
   { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
   { path: '/monitor/fleet/resolume/*', title: 'Resolume Config', mock: 'Resolume Config.dc.html' },
-  { path: '/monitor/signals', title: 'Monitor · Signals', mock: 'Monitor.dc.html' },
-  { path: '/monitor/activity', title: 'Monitor · Activity', mock: 'Monitor.dc.html' },
-  { path: '/monitor/capabilities', title: 'Monitor · Capabilities', mock: 'Monitor.dc.html' },
-  { path: '/monitor/manifest', title: 'Monitor · Manifest', mock: 'the kit' },
   { path: '/settings/*', title: 'Settings', mock: 'Settings.dc.html' },
   { path: '/access', title: 'Access', mock: 'Access.dc.html' },
 ]
@@ -65,6 +65,10 @@ export default function App() {
             <Route path="control" element={<LiveControl />} />
             <Route path="night" element={<ShowNight />} />
             <Route path="monitor/fleet" element={<Monitor />} />
+            <Route path="monitor/signals" element={<MonitorSignals />} />
+            <Route path="monitor/activity" element={<MonitorActivity />} />
+            <Route path="monitor/capabilities" element={<MonitorCapabilities />} />
+            <Route path="monitor/manifest" element={<MonitorManifest />} />
             {QUEUE.map((entry) => (
               <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />
             ))}

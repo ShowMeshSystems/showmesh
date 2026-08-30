@@ -48,13 +48,16 @@ export function Notice({
   tone,
   headline,
   explanation,
+  live = 'alert',
 }: {
   tone: 'bad' | 'warn'
   headline: ReactNode
   explanation?: ReactNode
+  /** `status` for a standing condition. `alert` interrupts, so keep it for a refusal. */
+  live?: 'alert' | 'status'
 }) {
   return (
-    <div className={`sm-notice sm-notice--${tone}`} role="alert">
+    <div className={`sm-notice sm-notice--${tone}`} role={live}>
       <p className="sm-notice__headline">{headline}</p>
       {explanation !== undefined && <p className="sm-notice__explanation">{explanation}</p>}
     </div>

@@ -16,12 +16,14 @@ import {
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { effectiveServerTimeIso } from '../domain/time'
+import type { Model } from '../api'
 import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
 import {
   activityRows,
   facetCounts,
   fleetRows,
   fleetSummary,
+  monitorConnection,
   nodeInspector,
   type FleetKind,
   type FleetRow,
@@ -63,28 +65,9 @@ export function MonitorFacets({ counts }: { counts: { fleet: number; signals: nu
   )
 }
 
-export function Monitor() {
-  const model = useModelContext()
-  const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
-  const [kind, setKind] = useState<FleetKind>('all')
-  const [selected, setSelected] = useState<string | null>(null)
-
-  const counts = fleetCounts(model)
-  const rows = fleetRows(model, nowIso)
-  const shown = kind === 'all' ? rows : rows.filter((row) => row.kind === kind)
-  const items = attentionItems(model, nowIso)
-  const activity = activityRows(model.events, 5)
-  const connection: Connection =
-    model.connection.kind === 'live'
-      ? 'live'
-      : model.connection.kind === 'reconnecting'
-        ? 'degraded'
-        : model.connection.kind === 'connecting'
-          ? 'unknown'
-          : 'lost'
-
-  const selectedNode = model.nodes.find((node) => `node:${node.nodeId}` === selected)
-
+/** The page head and facet tabs every Monitor facet shares. */
+export function MonitorHead({ model }: { model: Model }) {
+  const connection = monitorConnection(model)
   return (
     <>
       <div className="sm-page__head">
@@ -98,6 +81,27 @@ export function Monitor() {
       </div>
 
       <MonitorFacets counts={facetCounts(model)} />
+    </>
+  )
+}
+
+export function Monitor() {
+  const model = useModelContext()
+  const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
+  const [kind, setKind] = useState<FleetKind>('all')
+  const [selected, setSelected] = useState<string | null>(null)
+
+  const counts = fleetCounts(model)
+  const rows = fleetRows(model, nowIso)
+  const shown = kind === 'all' ? rows : rows.filter((row) => row.kind === kind)
+  const items = attentionItems(model, nowIso)
+  const activity = activityRows(model.events, 5)
+
+  const selectedNode = model.nodes.find((node) => `node:${node.nodeId}` === selected)
+
+  return (
+    <>
+      <MonitorHead model={model} />
 
       <Panes>
         <div>
@@ -228,10 +232,11 @@ export function Monitor() {
                       {activity.map((row) => (
                         <tr key={row.key}>
                           <td className="sm-data">{row.time}</td>
-                          <td>{row.summary}</td>
                           <td>
-                            <StatusPair tone={row.tone} label={row.source} />
+                            {row.state !== null && <StatusPair tone={row.tone} label={row.state} />}
+                            {row.summary}
                           </td>
+                          <td>{row.source}</td>
                         </tr>
                       ))}
                     </tbody>
