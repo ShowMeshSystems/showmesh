@@ -101,8 +101,8 @@ visual language.
 | Node detail | Done | #212 |
 | Settings, seven tabs | Done | #213 |
 | Access | Done | #214 |
-| Resolume Config | Next | |
-| Assets library (`/assets`) | | |
+| Resolume Config | Done | #215 |
+| Assets library (`/assets`) | Next | |
 | Stale-write guard retrofit (D-014 B) | | |
 | Phase 2: delete the old system and lock it out | | |
 | Track C: the API facts D-016 asks for | | |

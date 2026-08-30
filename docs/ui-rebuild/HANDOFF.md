@@ -25,6 +25,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/node` | #212 | Node detail |
 | `ui-rebuild/settings` | #213 | Settings, seven tabs, and the D-002 build string |
 | `ui-rebuild/access` | #214 | Access |
+| `ui-rebuild/resolume` | #215 | Resolume Config |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
@@ -40,11 +41,12 @@ Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
 `OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
 order. In short:
 
-1. Resolume Config. Access is done (#214).
-2. The Assets library at `/assets`.
-3. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
-4. Phase 2: delete the old system and add the check that keeps it deleted.
-5. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
+1. The Assets library at `/assets`. Resolume Config is done (#215).
+2. The stale-write guard (D-014 B) retrofitted onto the shipped editors, the
+   four folded addresses the not-found map is missing, and Phase 2: delete the
+   old system and add the check that keeps it deleted.
+3. Track C: the API facts D-016 asks for. This one leaves UI-only scope, and
+   its FPP-staleness half is a question for Eric, not a build.
 
 ## How to run and verify
 
@@ -172,6 +174,14 @@ and never the published description. Follow the code.
   description of that problem type says the opposite and is wrong; the Settings
   node-routing tab derives its verdict from `DecodeAudioNodePayload` instead.
   Filed as its own issue; the contract is still wrong until that lands.
+
+- **`resolume.layer.<id>.ready` reports a string, never a boolean.**
+  `formatReadiness` emits `ready`, `not_ready: <terms>` or
+  `unknown: <reasons>`. The same shape applies to
+  `resolume.composition.identified`, whose value is the coordinator's own
+  finished sentence prefixed `identified`, `deck_mismatch: `,
+  `not_identified: ` or `unknown: `. Dispatch on the prefix; never recompute
+  the verdict.
 
 Also: `model.nightSession` is only ever set by a `nightSession.changed` stream
 frame. A screen that needs the night session seeds it with

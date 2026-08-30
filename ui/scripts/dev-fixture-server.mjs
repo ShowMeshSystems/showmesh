@@ -93,7 +93,19 @@ const SNAPSHOT = () => ({
   },
   collectors: [],
   macroRuns: [],
-  resolume: [{ instanceId: 'arena-main', health: 'healthy', observations: signalSet(6, 'current', 'resolume.layer'), composition: { name: 'WinterRidge.avc' } }],
+  resolume: [{ instanceId: 'arena-main', health: 'healthy', composition: { name: 'WinterRidge.avc' }, observations: [
+    { ...evidence('resolume.reachable', true, 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.layer.layer-2.ready', 'unknown: this layer has no layer group in the uploaded composition', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.product', 'Resolume Arena 7.17.3', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.composition.name', null, 'unsupported', ago(2_100)), reason: "Resolume's own API does not expose the composition name.", resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.composition.identified', 'identified', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.composition.decks', 3, 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.composition.selected_deck', 'Winter', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.layer.layer-1.ready', 'ready', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.layer.layer-1.active_clip', 'Winter Base Loop', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.layer.layer-3.ready', 'not_ready: layer.bypassed', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+    { ...evidence('resolume.layer.layer-3.active_clip', 'Countdown 5', 'current', ago(2_100)), resource: { kind: 'resolume', id: 'arena-main' } },
+  ] }],
 })
 
 const SESSION = {
@@ -234,6 +246,57 @@ createServer((req, res) => {
     { section: 'mainPlaylist', position: 0, sequenceName: 'carol-of-the-bells.fseq', mediaName: '' },
     { section: 'mainPlaylist', position: 1, sequenceName: 'wizards-in-winter.fseq', mediaName: '' },
   ] })
+  if (p === '/config/resolume/composition') return json(res, {
+    serverTime: NOW(), revision: 3, activatedAt: ago(1_555_200_000),
+    composition: {
+      name: 'WinterRidge.avc', sourceFilename: 'WinterRidge.avc',
+      contentHash: 'c0a7b6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f91a2b',
+      sizeBytes: 4_820_000,
+      writtenBy: { product: 'Resolume Arena', major: 7, minor: 17, micro: 3, revision: 25_048 },
+      canvas: { width: 1920, height: 1080 },
+      decks: [{ id: 'deck-1', name: 'Winter' }, { id: 'deck-2', name: 'Hallowed' }, { id: 'deck-3', name: 'Test' }],
+      layerCount: 6, layerGroupCount: 2, columnCount: 14, clipCount: 68, persistentClipCount: 4,
+    },
+    decks: [{ id: 'deck-1', name: 'Winter' }, { id: 'deck-2', name: 'Hallowed' }, { id: 'deck-3', name: 'Test' }],
+    layerGroups: [{ id: 'lg-1', name: 'Base group' }],
+    layers: [
+      { id: 'layer-1', name: 'Base', nameGenerated: false, index: 0 },
+      { id: 'layer-2', name: 'Ambience', nameGenerated: false, index: 1 },
+      { id: 'layer-3', name: 'Text', nameGenerated: false, index: 2 },
+      { id: 'layer-4', name: 'Overlay', nameGenerated: false, index: 3 },
+    ],
+    columns: [{ id: 'col-3', name: 'Column 3', index: 2 }, { id: 'col-9', name: 'Column 9', index: 8 }],
+    clips: [
+      { id: 'clip-1f04', deckId: 'deck-1', layerIndex: 1, columnIndex: 2, name: 'Snow', nameGenerated: false, ambiguous: true },
+      { id: 'clip-9b72', deckId: 'deck-1', layerIndex: 1, columnIndex: 8, name: 'Snow', nameGenerated: false, ambiguous: true },
+      { id: 'clip-2201', deckId: 'deck-1', layerIndex: 0, columnIndex: 0, name: 'Winter Base Loop', nameGenerated: false, ambiguous: false },
+    ],
+    persistentClips: [{ id: 'clip-p1', layerIndex: 0, columnIndex: 0, name: 'Persistent clip 1', nameGenerated: true, ambiguous: false }],
+  })
+  if (p === '/resolume/recovery') return json(res, {
+    serverTime: NOW(), resolumeConfigured: true, autoRestoreEnabled: true, autoRestoreConfigured: true, settleDelaySeconds: 8,
+    record: [
+      { layer: 'Base', layerNameGenerated: false, state: 'clip', clip: 'Winter Base Loop', clipNameGenerated: false, deck: 'Winter', establishedAt: ago(2_678_000), source: 'action' },
+      { layer: 'Ambience', layerNameGenerated: false, state: 'clip', clip: 'Snow', clipNameGenerated: false, deck: 'Winter', establishedAt: ago(2_678_000), source: 'survey' },
+      { layer: 'Text', layerNameGenerated: false, state: 'clip', clip: 'Countdown 5', clipNameGenerated: false, deck: 'Winter', establishedAt: ago(2_678_000), source: 'action' },
+      { layer: 'Overlay', layerNameGenerated: false, state: 'clip', clip: 'Sponsor Card', clipNameGenerated: false, deck: 'Winter', establishedAt: ago(2_678_000), source: 'action' },
+      { layer: 'Spare', layerNameGenerated: false, state: 'dark', establishedAt: ago(2_678_000), source: 'survey' },
+      { layer: 'Layer 6', layerNameGenerated: true, state: 'unknown', reason: 'The layer did not answer during the survey.' },
+    ],
+    lastRestore: {
+      startedAt: ago(3_930_000), finishedAt: ago(3_925_000), trigger: 'automatic', outcome: 'partial', principal: 'coordinator',
+      layers: [
+        { layer: 'Base', layerNameGenerated: false, result: 'restored', clip: 'Winter Base Loop', actionOutcome: 'confirmed' },
+        { layer: 'Ambience', layerNameGenerated: false, result: 'skipped', clip: 'Snow', reason: 'its name is ambiguous' },
+        { layer: 'Text', layerNameGenerated: false, result: 'restored', clip: 'Countdown 5', actionOutcome: 'unconfirmable' },
+        { layer: 'Overlay', layerNameGenerated: false, result: 'restored', clip: 'Sponsor Card', actionOutcome: 'confirmed' },
+      ],
+    },
+  })
+  if (p === '/config/resolume.recovery') return json(res, {
+    serverTime: NOW(), kind: 'resolume.recovery', revision: 3, payload: { autoRestoreEnabled: true },
+    updatedAt: ago(1_555_000_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+  })
   if (p === '/principals') return json(res, { serverTime: NOW(), principals: [
     { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin', disabled: false, hasPassword: true, reserved: false, createdAt: ago(1_555_200_000) },
     { id: 'p2', name: 'scheduler-host', kind: 'machine', role: 'scheduler', disabled: false, hasPassword: false, reserved: false, createdAt: ago(1_382_400_000) },
