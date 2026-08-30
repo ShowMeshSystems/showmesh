@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/pkg/coordsig"
@@ -69,6 +71,101 @@ func TestLoadOrGenerate_CorruptFileReportsErrorNotPanic(t *testing.T) {
 	_, err := LoadOrGenerate(dataDir, WithLogger(slog.New(slog.DiscardHandler)))
 	if !errors.Is(err, ErrCorruptKeyFile) {
 		t.Fatalf("LoadOrGenerate() = %v, want ErrCorruptKeyFile", err)
+	}
+}
+
+func TestLoadOrGenerate_SemanticallyCorruptFileReportsErrorNotSign(t *testing.T) {
+	dataDir := t.TempDir()
+	path := filepath.Join(dataDir, FileName)
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	// A structurally valid 64-byte key whose stored public half (bytes
+	// 32:64) has been corrupted by a single flipped bit. The length check
+	// alone accepts this; only comparing against ed25519.NewKeyFromSeed's
+	// own derivation catches it.
+	corrupt := append([]byte(nil), priv...)
+	corrupt[len(corrupt)-1] ^= 0x01
+
+	if err := os.WriteFile(path, corrupt, filePerm); err != nil {
+		t.Fatalf("seed semantically corrupt key file: %v", err)
+	}
+
+	_, err = LoadOrGenerate(dataDir, WithLogger(slog.New(slog.DiscardHandler)))
+	if !errors.Is(err, ErrCorruptKeyFile) {
+		t.Fatalf("LoadOrGenerate() = %v, want ErrCorruptKeyFile for a 64-byte file with a corrupted public half", err)
+	}
+}
+
+func TestLoadOrGenerate_ZeroLengthFileReportsError(t *testing.T) {
+	dataDir := t.TempDir()
+	path := filepath.Join(dataDir, FileName)
+	if err := os.WriteFile(path, []byte{}, filePerm); err != nil {
+		t.Fatalf("seed zero-length key file: %v", err)
+	}
+
+	_, err := LoadOrGenerate(dataDir, WithLogger(slog.New(slog.DiscardHandler)))
+	if !errors.Is(err, ErrCorruptKeyFile) {
+		t.Fatalf("LoadOrGenerate() = %v, want ErrCorruptKeyFile for a zero-length key file", err)
+	}
+}
+
+func TestLoadOrGenerate_ConcurrentFirstStartProducesOneKey(t *testing.T) {
+	dataDir := t.TempDir()
+
+	const concurrency = 8
+	var wg sync.WaitGroup
+	results := make([]*Manager, concurrency)
+	errs := make([]error, concurrency)
+
+	for i := range concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = LoadOrGenerate(dataDir, WithLogger(slog.New(slog.DiscardHandler)))
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: LoadOrGenerate() = %v, want nil", i, err)
+		}
+	}
+
+	want := results[0].PublicKey()
+	for i, mgr := range results {
+		if !bytes.Equal(mgr.PublicKey(), want) {
+			t.Fatalf("goroutine %d produced public key %x, want %x (every concurrent first start must agree on one key)",
+				i, mgr.PublicKey(), want)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dataDir, FileName+tmpFileSuffix)); !os.IsNotExist(err) {
+		t.Fatalf("leftover temporary key file after a concurrent first start: stat error = %v", err)
+	}
+}
+
+func TestLoadOrGenerate_WarnsOnGeneratePathWhenPermissionCheckFails(t *testing.T) {
+	dataDir := t.TempDir()
+
+	original := checkFilePermissionsFn
+	checkFilePermissionsFn = func(string) error {
+		return errors.New("forced failure for this test")
+	}
+	t.Cleanup(func() { checkFilePermissionsFn = original })
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	if _, err := LoadOrGenerate(dataDir, WithLogger(logger)); err != nil {
+		t.Fatalf("LoadOrGenerate() = %v, want nil (a failing permission check must warn, not fail construction)", err)
+	}
+
+	if !strings.Contains(buf.String(), "on-disk protection") {
+		t.Fatalf("expected a warning naming the on-disk protection problem on the FIRST run (the generate path), got log output:\n%s", buf.String())
 	}
 }
 

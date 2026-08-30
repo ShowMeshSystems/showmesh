@@ -7,7 +7,7 @@
 //
 // This package holds NO verification logic. ADR-025's verify function
 // must be callable identically by this coordinator and by internal/agent
-// (Track J seam J3), and internal/agent must never import
+// (Track J), and internal/agent must never import
 // internal/coordinator. See pkg/coordsig's package comment for the
 // shared package both sides depend on instead, the same role
 // pkg/cuecatalog and pkg/fppidentity already play for other
@@ -15,7 +15,7 @@
 //
 // Node-side key pinning, the node key set, key rotation, and enrollment
 // delivery of the public key (ADR-025 decisions 3, 4's node half, 5, and
-// 7) are Track J seam J3, not this package. This package only generates,
+// 7) are Track J work, not this package. This package only generates,
 // stores, signs with, and exposes the public half of the coordinator's
 // own key.
 package signingkey

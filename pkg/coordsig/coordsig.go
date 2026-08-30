@@ -12,7 +12,7 @@
 // third place both sides depend on instead.
 //
 // A verifying key's delivery and pinning on a node (ADR-025 decisions 3,
-// 4, 5, and 7) are Track J seam J3, not this package. This package's job
+// 4, 5, and 7) are Track J work, not this package. This package's job
 // ends at "does this signature verify against this public key for this
 // payload"; it holds no opinion about what a failed verification means
 // to its caller.
@@ -46,8 +46,8 @@ var ErrSignatureInvalid = errors.New("coordsig: signature does not verify")
 
 // Signature is the wire shape of one Ed25519 signature: raw bytes,
 // ed25519.SignatureSize (64) long. A caller embeds Signature directly as a
-// field in whatever larger payload it signs (for example, Track J seam
-// J1's fallback program) rather than this package prescribing an envelope
+// field in whatever larger payload it signs (for example, ADR-048's
+// fallback program) rather than this package prescribing an envelope
 // shape it does not own.
 type Signature []byte
 
