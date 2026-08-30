@@ -268,7 +268,50 @@ describe('Shows · Cues tab', () => {
     expect(create).toHaveAttribute('title', 'Audio needs an asset selected.')
   })
 
+  it('refuses to create a cue whose id already names one, rather than writing over it', async () => {
+    let wrote = false
+    stubs.getShowCue = (id: string) => Promise.resolve(cueResponse(cuePayload(), id))
+    stubs.putShowCue = () => {
+      wrote = true
+      return new Promise(() => {})
+    }
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (kind: string) => withContents(kind, [], [])
+    stubs.listAssets = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        assets: [
+          {
+            id: 'a1',
+            show: 'winter-ridge-2026',
+            sequence: 'sponsor-read',
+            targetKind: 'show',
+            target: '',
+            mediaType: 'audio',
+            contentHash: 'sha256:' + 'a'.repeat(64),
+            runtimeFilename: 'sponsor-read.wav',
+            sizeBytes: 100,
+            createdAt: '2026-08-30T18:00:00Z',
+            createdByPrincipalId: 'p1',
+            createdByPrincipalName: 'erbartos',
+            supersededAt: null,
+            current: true,
+          },
+        ],
+      })
+    renderWorkspace({ session: signedIn(['config:write']) })
+    fireEvent.click(await screen.findByRole('button', { name: 'New cue' }))
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Sponsor Read' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Audience audio/ }))
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Audio asset' }), { target: { value: 'sponsor-read' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create cue' }))
+
+    await waitFor(() => expect(screen.getByText(/already names a cue in this show/)).toBeInTheDocument())
+    expect(wrote).toBe(false)
+  })
+
   it('switching the announcement policy off duck omits duckGainDb from the payload', async () => {
+    stubs.getShowCue = () => Promise.reject(new ApiError('no such cue', 404, 'https://showmesh.dev/problems/resource-not-found'))
     stubs.getShow = showHead
     stubs.listConfigObjects = (kind: string) => withContents(kind, [], [])
     stubs.listAssets = () =>

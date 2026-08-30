@@ -10,7 +10,7 @@ import { Button, Field, Input, Panes, RuledStrip, Section, Segmented, Select, St
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
-import { guardedSave, type SaveOutcome } from '../domain/save'
+import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowSurfaces } from './showsData'
 import { channelsPerPixel, channelSpans, renderCapableNodes, slugify, surfaceRenderStatus } from './showsModel'
@@ -321,8 +321,18 @@ function SurfaceEditor({
     setSaveError(null)
     setStale(null)
     if (surface === null) {
-      putShowSurface(id.trim(), payload)
-        .then((response) => onSaved(response))
+      guardedCreate({ read: () => getShowSurface(id.trim()), write: () => putShowSurface(id.trim(), payload) })
+        .then((outcome) => {
+          if (outcome.kind === 'created') {
+            onSaved(outcome.response)
+            return
+          }
+          setSaveError(
+            outcome.kind === 'taken'
+              ? `${id.trim()} already names a surface in this show. Creating it here would write over that one.`
+              : outcome.reason,
+          )
+        })
         .catch((err: unknown) => setSaveError(describeApiError(err)))
         .finally(() => setSaving(false))
       return

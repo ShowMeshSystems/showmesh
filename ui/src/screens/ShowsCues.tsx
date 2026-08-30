@@ -12,7 +12,7 @@ import {
 import { Button, Choice, Field, Input, Panes, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { guardedSave, type SaveOutcome } from '../domain/save'
+import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowCues, fetchShowPlaylists } from './showsData'
 import { CUE_OUTPUT_CHIP, type CueOutputKind, type CueRow, cueRows, formatBytes, slugify } from './showsModel'
@@ -390,8 +390,18 @@ function CueEditor({
     setSaveError(null)
     setStale(null)
     if (cue === null) {
-      putShowCue(id.trim(), payload)
-        .then((response) => onSaved(response))
+      guardedCreate({ read: () => getShowCue(id.trim()), write: () => putShowCue(id.trim(), payload) })
+        .then((outcome) => {
+          if (outcome.kind === 'created') {
+            onSaved(outcome.response)
+            return
+          }
+          setSaveError(
+            outcome.kind === 'taken'
+              ? `${id.trim()} already names a cue in this show. Creating it here would write over that one.`
+              : outcome.reason,
+          )
+        })
         .catch((err: unknown) => setSaveError(describeApiError(err)))
         .finally(() => setSaving(false))
       return

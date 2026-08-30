@@ -51,13 +51,17 @@ const ALSO_MOVED = [
   { prefixes: ['/config'], to: '/settings/connections', label: 'Settings › Connections' },
   { prefixes: ['/monitor/readiness'], to: '/shows/playlists', label: 'Shows › Playlists' },
   { prefixes: ['/monitor/fleet/playlist-definitions'], to: '/shows/playlists', label: 'Shows › Playlists' },
-  { prefixes: ['/night-sessions'], to: '/night', label: 'Show Night' },
+  { prefixes: [], contains: ['/night-sessions'], to: '/night', label: 'Show Night' },
   { prefixes: ['/assets/manifest'], to: '/monitor/manifest', label: 'Monitor › Manifest' },
 ]
 
 export function NotFound() {
   const { pathname } = useLocation()
-  const matches = (entry: { prefixes: readonly string[] }) => entry.prefixes.some((prefix) => pathname.includes(prefix))
+  // `contains` is for the one folded address with a variable show id in the
+  // middle of it. Everything else matches on its own prefix, as before.
+  const matches = (entry: { prefixes: readonly string[]; contains?: readonly string[] }) =>
+    entry.prefixes.some((prefix) => pathname.startsWith(prefix)) ||
+    (entry.contains ?? []).some((part) => pathname.includes(part))
   const moved = MOVED.find(matches) ?? ALSO_MOVED.find(matches)
 
   return (

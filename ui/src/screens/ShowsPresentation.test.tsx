@@ -278,6 +278,23 @@ describe('Shows · Presentation tab', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
+  it('refuses to create a surface whose id already names one, rather than writing over it', async () => {
+    let wrote = false
+    setup()
+    stubs.putShowSurface = () => {
+      wrote = true
+      return new Promise(() => {})
+    }
+    fireEvent.click(await screen.findByRole('button', { name: 'New surface' }))
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Side wall' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Node' }), { target: { value: node().nodeId } })
+    fireEvent.change(screen.getByLabelText('NDI source name'), { target: { value: 'ShowMesh Side wall' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create surface' }))
+
+    await waitFor(() => expect(screen.getByText(/already names a surface in this show/)).toBeInTheDocument())
+    expect(wrote).toBe(false)
+  })
+
   it('a new surface needs a node and an NDI source name before it can be created', async () => {
     setup()
     fireEvent.click(await screen.findByRole('button', { name: 'New surface' }))

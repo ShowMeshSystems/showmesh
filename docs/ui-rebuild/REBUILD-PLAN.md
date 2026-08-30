@@ -103,9 +103,9 @@ visual language.
 | Access | Done | #214 |
 | Resolume Config | Done | #215 |
 | Assets library (`/assets`) | Done | #216 |
-| Stale-write guard retrofit (D-014 B) | Next | |
-| Phase 2: delete the old system and lock it out | | |
-| Track C: the API facts D-016 asks for | | |
+| Stale-write guard retrofit (D-014 B) | Done | #217 |
+| Phase 2: delete the old system and lock it out | Done | #217 |
+| Track C: the API facts D-016 asks for | Waiting on Eric | |
 
 Each PR is stacked on the one before it, so its diff is only its own screen.
 
