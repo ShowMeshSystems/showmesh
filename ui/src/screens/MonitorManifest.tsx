@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { getAssetManifest, type NodeAssetManifest } from '../api'
 import { Button, Panes, RuledStrip, Section, StatusPair, Table, TableWrap } from '../kit'
 import type { Tone } from '../kit'
+import { formatBytes } from './showsModel'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -198,7 +199,7 @@ function ManifestDetail({ manifest }: { manifest: NodeAssetManifest }) {
               <span className="sm-inspector__label sm-data">sequence {asset.sequence}</span>
               <div>
                 <p className="sm-inspector__value sm-data">{asset.filename}</p>
-                <p className="sm-inspector__detail">{asset.sizeBytes} bytes · {asset.contentHash}</p>
+                <p className="sm-inspector__detail" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)} · {asset.contentHash}</p>
               </div>
             </div>
           ))
@@ -233,7 +234,7 @@ function ManifestDetail({ manifest }: { manifest: NodeAssetManifest }) {
             <div key={asset.contentHash} className="sm-inspector__row">
               <span className="sm-inspector__label sm-data">{asset.filename}</span>
               <div>
-                <p className="sm-inspector__value sm-data">{asset.sizeBytes} bytes</p>
+                <p className="sm-inspector__value sm-data" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</p>
                 <p className="sm-inspector__detail">Never an error and never a basis for deletion. No delete control is offered here.</p>
               </div>
             </div>

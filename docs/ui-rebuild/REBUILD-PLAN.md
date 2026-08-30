@@ -98,8 +98,8 @@ visual language.
 | Shows workspace: Presentation, Automation | Done | #204 |
 | Creation pattern: new show, new playlist (D-011) | Done | #207 |
 | Creation pattern: new action, edit action, new macro (D-017) | Done | #211 |
-| Node detail | Next | |
-| Settings, seven tabs | | |
+| Node detail | Done | #212 |
+| Settings, seven tabs | Next | |
 | Access | | |
 | Resolume Config | | |
 | Assets library (`/assets`) | | |

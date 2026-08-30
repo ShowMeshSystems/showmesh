@@ -5,7 +5,7 @@ import { Button, Callout, Field, Input, Panes, RuledStrip, Section, Segmented, S
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatDateClock } from '../domain/time'
-import { type AssetGroup, assetGroups, assetHistory, assetIdentityKey, targetLabel } from './showsModel'
+import { type AssetGroup, assetGroups, assetHistory, assetIdentityKey, formatBytes, hashLabel, targetLabel } from './showsModel'
 
 type ListState =
   | { kind: 'loading' }
@@ -32,12 +32,6 @@ function useShowAssets(showId: string): { state: ListState; reload: () => void }
   }, [showId, attempt])
 
   return { state, reload: () => setAttempt((n) => n + 1) }
-}
-
-function hashLabel(contentHash: string): string {
-  const hex = contentHash.startsWith('sha256:') ? contentHash.slice('sha256:'.length) : contentHash
-  if (hex.length <= 8) return hex
-  return `${hex.slice(0, 4)}…${hex.slice(-2)}`
 }
 
 const MEDIA_FILTERS: readonly { value: 'all' | Asset['mediaType']; label: string }[] = [
@@ -205,7 +199,7 @@ function AssetGroupRows({
               {selectedIdentity === identity && <span className="sm-viewing">Viewing</span>}
             </td>
             <td className="sm-data sm-small sm-muted">{hashLabel(asset.contentHash)}</td>
-            <td className="sm-data sm-small sm-muted">{asset.sizeBytes} bytes</td>
+            <td className="sm-data sm-small sm-muted" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
           </tr>
         )
       })}

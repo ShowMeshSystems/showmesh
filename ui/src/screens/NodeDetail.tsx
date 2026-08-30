@@ -32,7 +32,7 @@ import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { ageMs, effectiveServerTimeIso, formatClock, formatDateClock, formatDuration } from '../domain/time'
 import { signalRows, signalSummary } from './monitorModel'
-import { surfaceRenderStatus } from './showsModel'
+import { formatBytes, hashLabel, surfaceRenderStatus } from './showsModel'
 import type { Node } from '../api'
 
 const CONTROL_TONE: Record<Node['controlPlane']['state'], Tone> = { online: 'good', offline: 'bad', unknown: 'unknown' }
@@ -41,11 +41,7 @@ const CONTROL_WORD: Record<Node['controlPlane']['state'], string> = { online: 'O
 const MANIFEST_TONE: Record<NodeAssetManifest['state'], Tone> = { ready: 'good', not_ready: 'warn', unknown: 'unknown' }
 const MANIFEST_LABEL: Record<NodeAssetManifest['state'], string> = { ready: 'Ready', not_ready: 'Not ready', unknown: 'Unknown' }
 
-// ---------------------------------------------------------------------
-// On-demand reads: this node's surfaces (across every show) and its own
-// asset manifest. Neither is part of the live model.
-// ---------------------------------------------------------------------
-
+/** This node's surfaces and its asset manifest: on-demand reads, not part of the live model. */
 type SurfacesState =
   | { kind: 'loading' }
   | { kind: 'loaded'; surfaces: ShowSurfaceConfigResponse[] }
@@ -199,7 +195,10 @@ export function NodeDetail() {
 
   const notReporting = node.controlPlane.state !== 'online'
   const lastWill = node.evidence.lastWill
-  const lastWillReceived = lastWill.state !== 'not_collected'
+  // The signal's value is the node's own online flag from its last-will topic,
+  // so a departure is a collected record whose value is false, not any record.
+  const lastWillCollected = lastWill.state !== 'not_collected'
+  const lastWillSaysGone = lastWillCollected && lastWill.value === false
 
   const nodeSignalRows = signalRows(model, nowIso).filter((row) => row.resourceTo === `/monitor/fleet/node/${node.nodeId}`)
   const signalsLine = signalSummary(nodeSignalRows)
@@ -289,9 +288,11 @@ export function NodeDetail() {
           absence="failed"
           label="Not reporting"
           fact={
-            lastWillReceived
+            lastWillSaysGone
               ? `Last will received at ${formatClock(lastWill.observedAt) ?? 'an unrecorded time'}, so the agent went away rather than the network dropping.`
-              : 'This node is not reporting. No last will was received, so nothing here distinguishes the agent going away from the network dropping.'
+              : lastWillCollected
+                ? 'This node is not reporting. Its last-will record still says the agent was online, so nothing here explains the absence.'
+                : 'This node is not reporting. No last will was received, so nothing here distinguishes the agent going away from the network dropping.'
           }
           detail="Everything below is its last known state: configuration is still stored and still valid."
         />
@@ -526,8 +527,8 @@ export function NodeDetail() {
                       <tr key={asset.assetId}>
                         <td className="sm-data">{asset.sequence}</td>
                         <td>{asset.filename}</td>
-                        <td className="sm-data sm-small sm-muted">{asset.contentHash}</td>
-                        <td className="sm-data sm-small sm-muted">{asset.sizeBytes} bytes</td>
+                        <td className="sm-data sm-small sm-muted">{hashLabel(asset.contentHash)}</td>
+                        <td className="sm-data sm-small sm-muted" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
                         <td>
                           <StatusPair tone="bad" label="Not held" />
                         </td>
@@ -580,8 +581,8 @@ export function NodeDetail() {
                     {manifestData.extra.map((asset) => (
                       <tr key={asset.contentHash}>
                         <td>{asset.filename}</td>
-                        <td className="sm-data sm-small sm-muted">{asset.contentHash}</td>
-                        <td className="sm-data sm-small sm-muted">{asset.sizeBytes} bytes</td>
+                        <td className="sm-data sm-small sm-muted">{hashLabel(asset.contentHash)}</td>
+                        <td className="sm-data sm-small sm-muted" title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</td>
                         <td className="sm-small sm-muted">Never an error and never a basis for deletion.</td>
                       </tr>
                     ))}

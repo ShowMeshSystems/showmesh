@@ -35,14 +35,18 @@ const node = (nodeId, label, state, lastHeardMs, signals) => ({
   startedAt: ago(86_400_000),
   firstSeenAt: ago(86_400_000),
   updatedAt: ago(lastHeardMs),
-  capabilities: [{ id: nodeId === 'media-garage' ? 'display.hdmi' : 'transport.ndi.send', version: 1 }],
+  capabilities: nodeId === 'media-garage'
+    ? [{ id: 'matrix.render', version: 1, attributes: { surfaces: 1 } }, { id: 'display.hdmi', version: 1, attributes: { outputs: 2 } }, { id: 'media.cache', version: 1 }]
+    : [{ id: 'transport.ndi.send', version: 1 }],
   controlPlane: { state, reason: state === 'offline' ? 'No heartbeat within the expected interval.' : null },
   evidence: {
     hello: evidence('node.hello', true, 'current', ago(86_400_000)),
-    lastWill: evidence('node.last_will', false, 'not_collected', null),
+    lastWill: state === 'offline'
+      ? evidence('node.control_plane.last_will', false, 'current', ago(lastHeardMs))
+      : evidence('node.control_plane.last_will', true, 'not_collected', null),
     heartbeat: evidence('node.heartbeat', true, state === 'offline' ? 'stale' : 'current', ago(lastHeardMs)),
   },
-  declaration: { declared: true, discoveryState: 'present', discoveryReason: '', lastDiscoveryRunId: null, lastDiscoveredAt: ago(3_600_000), notSeenAsOfRunId: null, notSeenAsOfRunFinishedAt: null },
+  declaration: { declared: true, label, notes: null, declaredAt: ago(1_555_200_000), declaredByPrincipalId: 'p1', declaredByPrincipalName: 'erbartos', discoveryState: 'present', discoveryReason: '', lastDiscoveryRunId: null, lastDiscoveredAt: ago(3_600_000), notSeenAsOfRunId: null, notSeenAsOfRunFinishedAt: null },
   render: signals.render ?? [],
   audio: signals.audio ?? [],
   fppConnect: signals.fppConnect ?? [],
@@ -228,6 +232,30 @@ createServer((req, res) => {
     { section: 'mainPlaylist', position: 0, sequenceName: 'carol-of-the-bells.fseq', mediaName: '' },
     { section: 'mainPlaylist', position: 1, sequenceName: 'wizards-in-winter.fseq', mediaName: '' },
   ] })
+  if (p.startsWith('/nodes/') && p.endsWith('/assets')) return json(res, { serverTime: NOW(), manifest: {
+    node: 'media-garage', state: 'not_ready', reason: 'One expected asset is not held and one sequence has no coverage.',
+    missing: [{ assetId: 'a2', sequence: 'rooftop-finale', filename: 'rooftop-finale.fseq', contentHash: 'b1e7c0a7b6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e035', sizeBytes: 30_100_000 }],
+    gaps: [{ sequence: 'wizards-in-winter', surfaces: ['garage-door'] }],
+    extra: [{ contentHash: 'e2d0c0a7b6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e088', filename: 'carol-of-the-bells.fseq', sizeBytes: 19_400_000 }],
+    observedAt: ago(1_560_000),
+  } })
+  if (p === '/config/show.surface' && url.searchParams.get('node') !== null) return json(res, { serverTime: NOW(), kind: 'show.surface', objects: [
+    { id: 'garage-door', label: 'Garage door', show: 'winter-ridge-2026', currentRevision: 5, updatedAt: ago(86_400_000) },
+  ] })
+  if (p.startsWith('/config/show.surface/')) {
+    const id = p.split('/').pop()
+    return json(res, {
+      serverTime: NOW(), kind: 'show.surface', id, revision: 5,
+      payload: {
+        show: 'winter-ridge-2026', name: 'Garage door', node: 'media-garage',
+        channelRange: { startChannel: 15_361, channelCount: 4_096 },
+        geometry: { width: 32, height: 32, pixelFormat: 'rgbw' },
+        frameRate: 40,
+        output: { transport: 'hdmi', hdmi: { display: 'HDMI-1' } },
+      },
+      updatedAt: ago(86_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
   if (p === '/actions/bindings' || p.startsWith('/actions/bindings?')) return json(res, { serverTime: NOW(), bindings: [
     { actionId: 'resting-fade-out', label: 'Resting fade-out', show: 'winter-ridge-2026', state: 'ok', reason: 'Layer "Ambience" resolved against the stored composition.' },
     { actionId: 'strike-garage-projector', label: 'Strike garage projector', show: 'winter-ridge-2026', state: 'unknown', reason: 'media-garage has not reported since 20:41:07, so the sweep could not resolve this target.' },

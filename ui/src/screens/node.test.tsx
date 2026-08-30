@@ -166,12 +166,27 @@ describe('Node detail', () => {
         evidence: {
           heartbeat: { observedAt: '2026-08-30T20:15:00Z', state: 'stale' },
           hello: { observedAt: '2026-08-12T09:41:00Z', state: 'current' },
-          lastWill: { observedAt: '2026-08-30T20:41:07Z', state: 'current' },
+          lastWill: { observedAt: '2026-08-30T20:41:07Z', state: 'current', value: false },
         } as unknown as Node['evidence'],
       }),
     ])
     expect(screen.getByText(/Last will received at/)).toBeInTheDocument()
     expect(screen.getByText(/so the agent went away rather than the network dropping/)).toBeInTheDocument()
+  })
+
+  it('does not claim the agent went away when the last-will record still says online', () => {
+    renderScreen([
+      node({
+        controlPlane: { state: 'offline', reason: 'No heartbeat within the expected interval.' },
+        evidence: {
+          heartbeat: { observedAt: '2026-08-30T20:15:00Z', state: 'stale' },
+          hello: { observedAt: '2026-08-12T09:41:00Z', state: 'current' },
+          lastWill: { observedAt: '2026-08-30T20:41:07Z', state: 'current', value: true },
+        } as unknown as Node['evidence'],
+      }),
+    ])
+    expect(screen.queryByText(/Last will received at/)).not.toBeInTheDocument()
+    expect(screen.getByText(/still says the agent was online/)).toBeInTheDocument()
   })
 
   it('does not claim a last will when the evidence is not_collected', () => {

@@ -22,6 +22,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/shows-tabs-2` | #204 | Shows · Presentation, Automation |
 | `ui-rebuild/creation-1` | #207 | New show, new playlist, the stale-write guard |
 | `ui-rebuild/creation-2` | #211 | New action, action editing, new macro |
+| `ui-rebuild/node` | #212 | Node detail |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
@@ -37,14 +38,13 @@ Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
 `OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
 order. In short:
 
-1. Node detail. The whole creation pattern is done (#207 and #211).
-2. Settings, seven tabs.
-3. Access.
-4. Resolume Config.
-5. The Assets library at `/assets`.
-6. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
-7. Phase 2: delete the old system and add the check that keeps it deleted.
-8. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
+1. Settings, seven tabs. Node detail is done (#212).
+2. Access.
+3. Resolume Config.
+4. The Assets library at `/assets`.
+5. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
+6. Phase 2: delete the old system and add the check that keeps it deleted.
+7. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
 
 ## How to run and verify
 
@@ -156,6 +156,13 @@ plan retrofits the remaining editors onto it.
   did not read first would silently overwrite.
 - `ui/src/screens/StaleWrite.tsx` renders the refusal, so the wording cannot
   drift between editors. Retrofit uses it.
+
+## What `NotWiredBanner` is for, exactly
+
+Its `missing` prop is a `ReactNode`, not a string, and the banner does not
+wrap it in a `<code>`. Pass `<code className="sm-data">POST /cues/{'{id}'}/fire</code>`
+when a path is known, and plain prose when the absence has no path to name, as
+the node page's asset re-sync does. Never write a path that does not exist.
 
 ## What is not verified
 

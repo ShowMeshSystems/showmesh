@@ -12,7 +12,7 @@ import { Button, Choice, Field, Input, Panes, RuledStrip, Section, Segmented, Se
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { fetchShowContents, fetchShowCues, fetchShowPlaylists } from './showsData'
-import { CUE_OUTPUT_CHIP, type CueOutputKind, type CueRow, cueRows, slugify } from './showsModel'
+import { CUE_OUTPUT_CHIP, type CueOutputKind, type CueRow, cueRows, formatBytes, slugify } from './showsModel'
 
 type ListState =
   | { kind: 'loading' }
@@ -460,7 +460,7 @@ function CueEditor({
                 <option value="">Choose an asset…</option>
                 {audioAssets.map((asset) => (
                   <option key={asset.id} value={asset.sequence}>
-                    {asset.sequence} · {asset.sizeBytes} bytes
+                    {asset.sequence} · <span title={`${asset.sizeBytes} bytes`}>{formatBytes(asset.sizeBytes)}</span>
                   </option>
                 ))}
               </Select>

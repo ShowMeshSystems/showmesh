@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { audioDerivedSafetyClass, fppDerivedSafetyClass, macroUsagesForAction, resolumeDerivedSafetyClass } from './showsModel'
+import { audioDerivedSafetyClass, formatBytes, fppDerivedSafetyClass, hashLabel, macroUsagesForAction, resolumeDerivedSafetyClass } from './showsModel'
 
 describe('the safety-class derivation tables', () => {
   it('derives fpp: only stopPlaylist and stopPlaylistGracefully are stop', () => {
@@ -62,5 +62,22 @@ describe('macroUsagesForAction', () => {
   it('returns nothing for an action no macro references', () => {
     const macros = [{ payload: { label: 'Weather Hold', steps: [{ id: 's1', action: 'other-action' } as never] } }]
     expect(macroUsagesForAction(macros, 'unused-action')).toEqual([])
+  })
+})
+
+describe('formatBytes', () => {
+  it('reports a small count in bytes and larger ones in decimal units', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(999)).toBe('999 B')
+    expect(formatBytes(1000)).toBe('1.0 kB')
+    expect(formatBytes(30_100_000)).toBe('30.1 MB')
+    expect(formatBytes(1_800_000_000)).toBe('1.8 GB')
+  })
+})
+
+describe('hashLabel', () => {
+  it('shortens a hash and strips a sha256 prefix', () => {
+    expect(hashLabel('sha256:b1e7c0a7b6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e035')).toBe('b1e7…35')
+    expect(hashLabel('abcd')).toBe('abcd')
   })
 })

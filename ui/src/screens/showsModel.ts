@@ -468,3 +468,23 @@ export function audioDerivedSafetyClass(audioAction: string): SafetyClass {
   if (audioAction === 'audio.output.mute') return 'blackout'
   return 'none'
 }
+
+/** A content hash, shortened the one way every screen shows it. */
+export function hashLabel(contentHash: string): string {
+  const hex = contentHash.startsWith('sha256:') ? contentHash.slice('sha256:'.length) : contentHash
+  if (hex.length <= 8) return hex
+  return `${hex.slice(0, 4)}…${hex.slice(-2)}`
+}
+
+/** A reported byte count, shown the one way every screen shows it. Derived, never rounded away: the exact figure stays in the title. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`
+  const units = ['kB', 'MB', 'GB', 'TB']
+  let value = bytes / 1000
+  let unit = 0
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000
+    unit += 1
+  }
+  return `${value.toFixed(1)} ${units[unit]}`
+}
