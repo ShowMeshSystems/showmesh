@@ -63,6 +63,7 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
+	{version: 23, sql: schemaV23},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1340,6 +1341,64 @@ CREATE TABLE node_cue_catalog_ack (
 const schemaV18 = `
 ALTER TABLE fpp_playlist_entry_observations
     ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
+`
+
+// schemaV23 is Track J's J1 own migration (ADR-048,
+// TRACK-J-fpp-fallback.md J1): the coordinator-side store for a
+// compiled, signed fallback program and its per-FPP-host
+// acknowledgement, one row per fpp_instance_uuid in each table, on
+// node_cue_catalog_ack's exact upsert shape (schemaV17) next door:
+// "the fact this host was last given/acknowledged," never re-derived
+// from the coordinator's current state.
+//
+// fallback_programs holds the LAST PUBLISHED package for a host, not a
+// history: publication is a wholesale replacement (ADR-048 decision 1,
+// "It is a complete replacement, not a patch"), so a fresh compile
+// upserts this row rather than appending one. program_json is the
+// signed program's [fallbackprogram.SignedProgram], marshaled whole, so
+// a re-fetch (a plugin re-polling GET) always reproduces exactly the
+// bytes that were signed. A second, independent re-serialization at
+// read time could not be guaranteed byte-identical to the signed
+// payload the way replaying the stored bytes can.
+//
+// fallback_program_acknowledgements holds the host's own evidence of
+// what it verified and installed, reported separately from
+// fallback_programs for the identical reason node_cue_catalog_ack is
+// its own table rather than a column on the resolved catalog: an
+// acknowledgement is a report of a past fact from the other side, and
+// the comparison against "what the coordinator has published now"
+// happens at read time, never at write time.
+//
+// Both CREATE TABLE statements use IF NOT EXISTS, unlike every other
+// bare CREATE TABLE in this file: internal/coordinator/audioconfigpush's
+// own tests deliberately stamp PRAGMA user_version back to 18 or 19 and
+// reopen the store to force migrations 19 and 20 (Go functions that
+// rewrite payloads, safe to replay) to run again. schemaV23 is the first
+// SQL migration to sit above that rewind point, so replaying it against
+// a database that already has these tables must tolerate finding them
+// present rather than fail. The other 31 CREATE TABLEs in this file
+// have never sat above a rewind point a test actually exercises.
+const schemaV23 = `
+CREATE TABLE IF NOT EXISTS fallback_programs (
+    fpp_instance_uuid TEXT PRIMARY KEY,
+    package_id        TEXT NOT NULL,
+    revision          TEXT NOT NULL,
+    show_id           TEXT NOT NULL,
+    generation        INTEGER NOT NULL,
+    program_json      TEXT NOT NULL,
+    signature_b64     TEXT NOT NULL,
+    expires_at        TEXT NOT NULL,
+    compiled_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fallback_program_acknowledgements (
+    fpp_instance_uuid    TEXT PRIMARY KEY,
+    package_id           TEXT NOT NULL,
+    revision             TEXT NOT NULL,
+    verification_result  TEXT NOT NULL,
+    installed_at         TEXT NOT NULL,
+    acknowledged_at       TEXT NOT NULL
+);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across

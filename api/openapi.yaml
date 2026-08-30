@@ -7177,6 +7177,122 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+  /fallback-programs:
+    get:
+      operationId: listFallbackPrograms
+      summary: Every FPP host's last published fallback program, metadata only (ADR-048, Track J's J1)
+      description: >-
+        Behind `observation:read`. Metadata only - package id, revision,
+        show, generation, and timestamps - never the signed payload
+        itself, matching `GET /integrations/fpp/playlist-definitions`'s
+        identical list-metadata/read-full-by-id split. Use `GET
+        /fallback-programs/{fppInstanceId}` for one host's full signed
+        program.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FallbackProgramListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /fallback-programs/{fppInstanceId}:
+    get:
+      operationId: getFallbackProgram
+      summary: One FPP host's current signed fallback program (ADR-048, Track J's J1)
+      description: >-
+        Behind `fpp:fallback`: the installed FPP plugin fetching the
+        program it must verify and install before it may take over on
+        confirmed coordinator loss. Never recomputed on request - this
+        route only ever returns what
+        `internal/coordinator/fallbackreconcile`'s own background loop
+        already compiled, signed, and stored, so two fetches against an
+        unchanged coordinator state return byte-identical signed material.
+
+
+        `published` is `false`, with `program` absent, exactly when this
+        coordinator has never successfully compiled and published a
+        program for this host - the honest-absence case, never a
+        fabricated empty program that could be mistaken for a real grant.
+      parameters:
+        - name: fppInstanceId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The FPP instance UUID (`instanceUuid`, contracts section 1.2).
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FallbackProgramResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /fallback-programs/{fppInstanceId}/acknowledge:
+    post:
+      operationId: postFallbackProgramAcknowledge
+      summary: An FPP host reports the package it verified and installed (ADR-048, Track J's J1)
+      description: >-
+        Behind `fpp:fallback`: the installed FPP plugin reporting the
+        package id, revision, verification result, and installed time of
+        the program it now holds locally - the plugin's own evidence,
+        never re-derived from the coordinator's current state. A missing,
+        stale, mismatched, or unacknowledged package is a readiness
+        failure before showtime (ADR-048 decision 1).
+      parameters:
+        - name: fppInstanceId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The FPP instance UUID (`instanceUuid`, contracts section 1.2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FallbackProgramAcknowledgeRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FallbackProgramAcknowledgeResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   responses:
     UnsupportedAPIVersion:
@@ -14648,4 +14764,244 @@ components:
             publish failed before reaching the wire.
         resolvedAt:
           type: [string, "null"]
+          format: date-time
+    FallbackProgramRenderActivation:
+      type: object
+      description: >-
+        One node target's render activation within a fallback program
+        (ADR-048, Track J's J1). filename is the runtime filename a
+        node must open (and verify against assetHashes) to render it;
+        sequence is a logical identity only.
+      additionalProperties: false
+      required: [sequence, filename, assetHashes]
+      properties:
+        sequence:
+          type: string
+        filename:
+          type: string
+        assetHashes:
+          type: array
+          items:
+            type: string
+    FallbackProgramAudioActivation:
+      type: object
+      description: One node target's audio activation within a fallback program.
+      additionalProperties: false
+      required: [asset, filename, startOffsetMillis, assetHashes]
+      properties:
+        asset:
+          type: string
+        filename:
+          type: string
+        startOffsetMillis:
+          type: integer
+        assetHashes:
+          type: array
+          items:
+            type: string
+        ltcStartOffsetMillis:
+          type: integer
+          description: >-
+            Present only when the Cue also declares an LTC output for
+            this node - derived from this same audio asset, never a
+            second file.
+    FallbackProgramTarget:
+      type: object
+      description: >-
+        One named node target and the exact output activation it may
+        perform (ADR-048 decision 1). At least one of render/audio is
+        always present.
+      additionalProperties: false
+      required: [nodeId]
+      properties:
+        nodeId:
+          type: string
+        render:
+          $ref: "#/components/schemas/FallbackProgramRenderActivation"
+        audio:
+          $ref: "#/components/schemas/FallbackProgramAudioActivation"
+    FallbackProgramEntry:
+      type: object
+      description: >-
+        One deterministic playlist-entry key and its resolved Cue
+        identity and node targets (ADR-048 decision 1).
+      additionalProperties: false
+      required: [entryKey, cueId, cueRevision, targets]
+      properties:
+        entryKey:
+          type: string
+        cueId:
+          type: string
+        cueRevision:
+          type: integer
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/FallbackProgramTarget"
+    FallbackProgramRules:
+      type: object
+      description: >-
+        The fallback start, rest/hold, local-shutdown, and recovery-boundary
+        rules (ADR-048 decisions 1 and 4). Every program this coordinator
+        compiles carries the identical fixed values - Track J's J1
+        reserves no configuration kind for a per-show override of any of
+        them.
+      additionalProperties: false
+      required: [fallbackBoundary, restHold, localShutdown, recoveryBoundary]
+      properties:
+        fallbackBoundary:
+          type: string
+        restHold:
+          type: string
+        localShutdown:
+          type: string
+        recoveryBoundary:
+          type: string
+    FallbackProgramBody:
+      type: object
+      description: >-
+        The signed fallback program itself. A verifier checks
+        signatureBase64 against exactly the canonicalized fields present
+        here.
+      additionalProperties: false
+      required:
+        [schemaVersion, packageId, revision, expiresAt, compiledAt,
+         fppInstanceUuid, show, generation, playlistRevisions,
+         catalogRevisions, entries, rules, signatureBase64]
+      properties:
+        schemaVersion:
+          type: integer
+        packageId:
+          type: string
+        revision:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        compiledAt:
+          type: string
+          format: date-time
+        fppInstanceUuid:
+          type: string
+        show:
+          type: string
+        generation:
+          type: integer
+        playlistRevisions:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Every fpp-runner show.playlist object id this program drew entries from, mapped to its compiled config revision.
+        catalogRevisions:
+          type: object
+          additionalProperties:
+            type: string
+          description: Every node target's resolved Cue-catalog revision at compile time, keyed by node id.
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/FallbackProgramEntry"
+        rules:
+          $ref: "#/components/schemas/FallbackProgramRules"
+        signatureBase64:
+          type: string
+          description: The coordinator's Ed25519 signature over this program's canonical bytes, base64-encoded.
+    FallbackProgramResponse:
+      type: object
+      description: >-
+        The body of GET /fallback-programs/{fppInstanceId} (ADR-048,
+        Track J's J1). published is false, with program absent,
+        exactly when this coordinator has never successfully compiled and
+        published a program for this host. acknowledgedPackageId and
+        acknowledgedAt are both absent exactly when acknowledgedStatus is
+        "fallback-program-unacknowledged".
+      additionalProperties: false
+      required: [serverTime, fppInstanceUuid, published, acknowledgedStatus]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        fppInstanceUuid:
+          type: string
+        published:
+          type: boolean
+        program:
+          $ref: "#/components/schemas/FallbackProgramBody"
+        acknowledgedStatus:
+          type: string
+          enum: [fallback-program-current, fallback-program-stale, fallback-program-unacknowledged]
+        acknowledgedPackageId:
+          type: string
+        acknowledgedAt:
+          type: string
+          format: date-time
+    FallbackProgramListEntry:
+      type: object
+      description: One row of GET /fallback-programs - metadata only, never the signed payload.
+      additionalProperties: false
+      required: [fppInstanceUuid, packageId, revision, show, generation, expiresAt, compiledAt]
+      properties:
+        fppInstanceUuid:
+          type: string
+        packageId:
+          type: string
+        revision:
+          type: string
+        show:
+          type: string
+        generation:
+          type: integer
+        expiresAt:
+          type: string
+          format: date-time
+        compiledAt:
+          type: string
+          format: date-time
+    FallbackProgramListResponse:
+      type: object
+      description: The body of GET /fallback-programs.
+      additionalProperties: false
+      required: [serverTime, programs]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        programs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FallbackProgramListEntry"
+    FallbackProgramAcknowledgeRequest:
+      type: object
+      description: >-
+        The body of POST /fallback-programs/{fppInstanceId}/acknowledge
+        (ADR-048 decision 1). age is not a field: it is derived from
+        installedAt at read time.
+      additionalProperties: false
+      required: [packageId, revision, verificationResult, installedAt]
+      properties:
+        packageId:
+          type: string
+          minLength: 1
+        revision:
+          type: string
+          minLength: 1
+        verificationResult:
+          type: string
+          enum: [verified, signature-invalid, mismatched-program]
+        installedAt:
+          type: string
+          format: date-time
+    FallbackProgramAcknowledgeResponse:
+      type: object
+      description: The response body of POST /fallback-programs/{fppInstanceId}/acknowledge.
+      additionalProperties: false
+      required: [serverTime, fppInstanceUuid, acknowledgedAt]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        fppInstanceUuid:
+          type: string
+        acknowledgedAt:
+          type: string
           format: date-time

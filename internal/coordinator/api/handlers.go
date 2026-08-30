@@ -324,10 +324,10 @@ func parseObservationFilter(query url.Values) (ObservationFilter, *v1.Problem) {
 	if raw := query.Get("resourceKind"); raw != "" {
 		kind := observation.ResourceKind(raw)
 		switch kind {
-		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface, observation.ResourceAudioSession:
+		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface, observation.ResourceAudioSession, observation.ResourceFallbackProgram:
 			filter.ResourceKind = &kind
 		default:
-			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", \"audio_session\", got " + strconv.Quote(raw))
+			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", \"audio_session\", \"fallback_program\", got " + strconv.Quote(raw))
 			return ObservationFilter{}, &p
 		}
 	}

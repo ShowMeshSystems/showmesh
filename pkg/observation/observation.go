@@ -89,6 +89,16 @@ const (
 	// the kind and registers it; it emits no audio_session.* signals yet.
 	// See internal/coordinator/collector/nodeaudio.
 	ResourceAudioSession ResourceKind = "audio_session"
+
+	// ResourceFallbackProgram identifies one FPP host's own ADR-048
+	// fallback-program standing (Track J's J1). The resource id is the
+	// FPP host identity (its instance UUID), not the program's own
+	// package id: a host holds one current program at a time, and an
+	// operator asking whether that host can survive a coordinator outage
+	// is asking about the host, exactly the reasoning
+	// IDENTIFIER-REGISTER.md records for this kind. See
+	// internal/coordinator/fallbackreconcile.
+	ResourceFallbackProgram ResourceKind = "fallback_program"
 )
 
 // ResourceRef identifies the subject of an observation.

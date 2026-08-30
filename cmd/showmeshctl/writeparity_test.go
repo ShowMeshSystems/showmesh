@@ -50,6 +50,16 @@ var exemptWritePaths = map[string]string{
 		"/integrations/fpp/playlist-definitions/{instanceUuid}/{playlistHash} — IS covered: " +
 		"cmd_fpp_playlist_definition.go (showmeshctl fpp playlist-definitions list|get). TRACK-H-H2-SPEC.md " +
 		"section 7 is the stated reason to grow it, exactly as this file's own comment anticipated.",
+	"/fallback-programs/{fppInstanceId}/acknowledge": "POST is the installed FPP plugin's own evidence " +
+		"about itself, the package id, revision, verification result, and installed time of the fallback " +
+		"program it actually holds (ADR-048 decision 1), not an operator capability, the identical shape " +
+		"the two /integrations/fpp/... POST exemptions above state for their own sibling routes. The " +
+		"argument is stronger here, not merely identical: ADR-048 makes a missing, stale, or unacknowledged " +
+		"package a readiness failure before showtime, so a hand-typed acknowledgement would let an operator " +
+		"silence that readiness check by asserting a host holds a package it does not, rather than merely " +
+		"forging a low-stakes observation. The READ half, GET /fallback-programs and GET " +
+		"/fallback-programs/{fppInstanceId}, is open to any operator (observation:read / fpp:fallback) and " +
+		"needs no CLI verb of its own in this PR; growing one is future work, not a gap this exemption hides.",
 }
 
 // pathSegment is one "/"-delimited piece of a URL path as this test sees
