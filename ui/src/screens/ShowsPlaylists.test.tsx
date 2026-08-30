@@ -302,7 +302,7 @@ describe('Shows · Playlists tab editing', () => {
       setup({ storedMismatchPolicy: 'blackAndSilence' })
       await waitFor(() => expect(screen.getByText('wizards-in-winter.fseq')).toBeInTheDocument())
       expect(screen.getByRole('button', { name: 'Black & silence' })).toBeDisabled()
-      expect(screen.getByText(/Show vs Program mode/)).toBeInTheDocument()
+      expect(screen.getByText(/Show versus Program mode/)).toBeInTheDocument()
     })
 
     it('save and discard are disabled without config:write and are actually inert', async () => {
@@ -348,7 +348,7 @@ describe('Shows · Playlists tab editing', () => {
       setupDraft()
       await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
-      fireEvent.click(screen.getByRole('button', { name: 'showmesh-audio' }))
+      fireEvent.click(screen.getByRole('button', { name: 'ShowMesh audio' }))
       expect(screen.getByLabelText('Name')).toBeInTheDocument()
       expect(screen.getByRole('group', { name: 'Repeat' })).toBeInTheDocument()
       expect(screen.queryByRole('group', { name: /If the FPP playlist does not match/ })).not.toBeInTheDocument()
@@ -359,7 +359,7 @@ describe('Shows · Playlists tab editing', () => {
       setupDraft()
       await waitFor(() => expect(screen.getByText('This show has no playlist configured.')).toBeInTheDocument())
       fireEvent.click(screen.getByRole('button', { name: 'New playlist' }))
-      fireEvent.click(screen.getByRole('button', { name: 'showmesh-audio' }))
+      fireEvent.click(screen.getByRole('button', { name: 'ShowMesh audio' }))
       fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Background Music' } })
       fireEvent.change(screen.getByRole('combobox', { name: 'Cue' }), { target: { value: 'cue-1' } })
       stubs.getShowPlaylist = () => Promise.resolve(playlistResponse(audioPlaylist(), 'background-music'))

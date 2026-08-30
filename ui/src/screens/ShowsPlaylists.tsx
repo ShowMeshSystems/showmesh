@@ -15,11 +15,12 @@ import {
   type ShowPlaylistConfigResponse,
 } from '../api'
 import { randomUUIDv4 } from '../api/uuid'
-import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, NotWired, NotWiredBanner, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
+import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents, fetchShowPlaylists } from './showsData'
 import { cueLabel, fppInstanceLabel, fppInstanceRoute, newerDefinition, playlistRows, slugify } from './showsModel'
 
@@ -515,14 +516,11 @@ function FPPPlaylistEditor({
       <div className="sm-attn sm-stack-5">
         <span className="sm-strip__label">On mismatch</span>
         <div>
-          <NotWiredBanner
-            what="Setting the mismatch policy here"
-            missing="a per-playlist setting the design does not want"
-            detail="The mock draws this control and says it is expected to follow Show vs Program mode rather than being set per playlist. The stored value is shown and is written back unchanged, so nothing set by showmeshctl is lost."
-          />
-          <NotWired>
-            <Segmented label="On mismatch" value={storedMismatch ?? 'hold'} options={MISMATCH_OPTIONS} onChange={() => {}} />
-          </NotWired>
+          <Segmented label="On mismatch" value={storedMismatch ?? 'hold'} options={MISMATCH_OPTIONS} onChange={() => {}} disabled />
+          <p className="sm-small sm-muted sm-stack-2">
+            <strong>Not settable here yet:</strong> mismatch handling is expected to follow Show versus Program mode rather than
+            being set per playlist. The stored value is shown and written back unchanged, so nothing set by showmeshctl is lost.
+          </p>
           <p className="sm-small sm-muted sm-stack-2">
             {storedMismatch === undefined
               ? 'No policy is stored for this playlist, so the coordinator applies its own default.'
@@ -550,25 +548,12 @@ function FPPPlaylistEditor({
         </span>
       </ButtonRow>
       {stale !== null && (
-        <RuledStrip
-          absence="failed"
-          label="Stale write"
-          fact={`Revision ${stale.loadedRevision} was loaded, but revision ${stale.currentRevision} is now current, saved by ${stale.changedBy ?? 'unknown principal'} ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
-          detail={
-            <>
-              Changed: <span className="sm-data">{stale.changedFields.join(', ')}</span>.{' '}
-              <button
-                type="button"
-                className="sm-linkbutton"
-                onClick={() => {
-                  setStale(null)
-                  getShowPlaylist(playlist.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
-                }}
-              >
-                Reload and start again
-              </button>
-            </>
-          }
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            getShowPlaylist(playlist.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
+          }}
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
@@ -796,25 +781,12 @@ function AudioPlaylistEditor({
         </span>
       </ButtonRow>
       {stale !== null && (
-        <RuledStrip
-          absence="failed"
-          label="Stale write"
-          fact={`Revision ${stale.loadedRevision} was loaded, but revision ${stale.currentRevision} is now current, saved by ${stale.changedBy ?? 'unknown principal'} ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
-          detail={
-            <>
-              Changed: <span className="sm-data">{stale.changedFields.join(', ')}</span>.{' '}
-              <button
-                type="button"
-                className="sm-linkbutton"
-                onClick={() => {
-                  setStale(null)
-                  getShowPlaylist(playlist.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
-                }}
-              >
-                Reload and start again
-              </button>
-            </>
-          }
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            getShowPlaylist(playlist.id).then(onSaved).catch((err: unknown) => setSaveError(describeApiError(err)))
+          }}
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
@@ -822,17 +794,12 @@ function AudioPlaylistEditor({
   )
 }
 
-// ---------------------------------------------------------------------
-// D-011 B / D-017 B / D-018: playlist creation, the creation pattern's gate
-// case. The runner decides which policy field and which first-entry shape
-// exist; nothing below it renders until it is answered.
-// ---------------------------------------------------------------------
-
+/** The creation pattern's gate case: nothing below the runner renders until it is answered. */
 type Runner = 'fpp' | 'showmesh-audio'
 
 const RUNNER_OPTIONS: readonly { value: Runner; label: string }[] = [
-  { value: 'fpp', label: 'fpp' },
-  { value: 'showmesh-audio', label: 'showmesh-audio' },
+  { value: 'fpp', label: 'FPP' },
+  { value: 'showmesh-audio', label: 'ShowMesh audio' },
 ]
 
 /** The newest definition per playlist name, for one instance: what "the FPP playlist" picker offers. */
@@ -865,8 +832,6 @@ function PlaylistDraft({
   const [name, setName] = useState('')
   const [id, setId] = useState('')
   const [idTouched, setIdTouched] = useState(false)
-  const [mismatchPolicy, setMismatchPolicy] = useState<MismatchPolicy>('hold')
-  const [safeCueRef, setSafeCueRef] = useState('')
   const [repeat, setRepeat] = useState<'none' | 'all'>('none')
   const [instanceUuid, setInstanceUuid] = useState('')
   const [definitions, setDefinitions] = useState<{ state: 'idle' | 'loading' | 'loaded' | 'failed'; items: FPPPlaylistDefinitionMetadata[] }>({
@@ -940,7 +905,7 @@ function PlaylistDraft({
     id !== '' &&
     (runner === 'showmesh-audio'
       ? audioCue !== ''
-      : chosenDefinition !== null && firstEntry !== null && boundCue !== '' && (mismatchPolicy !== 'safeCue' || safeCueRef !== ''))
+      : chosenDefinition !== null && firstEntry !== null && boundCue !== '')
 
   const create = () => {
     const activeRunner: Runner | '' = runner
@@ -952,8 +917,6 @@ function PlaylistDraft({
             name,
             runner: 'fpp',
             fpp: { instanceUuid: chosenDefinition!.instanceUuid, playlistName: chosenDefinition!.playlistName, playlistHash: chosenDefinition!.playlistHash },
-            mismatchPolicy,
-            ...(mismatchPolicy === 'safeCue' ? { safeCueRef } : {}),
             entries: [{ id: randomUUIDv4(), cue: boundCue, fpp: { section: firstEntry!.section, position: firstEntry!.position } }],
           }
         : {
@@ -986,7 +949,7 @@ function PlaylistDraft({
   }
 
   return (
-    <Section id="pl-draft" title="New playlist" eyebrow={runner === '' ? 'Draft · gate unanswered' : `Draft · ${runner}`}>
+    <Section id="pl-draft" title="New playlist" eyebrow={runner === '' ? 'Draft · gate unanswered' : runner === 'fpp' ? 'Draft · FPP' : 'Draft · ShowMesh audio'}>
       <Segmented<Runner | ''>
         label="Runner"
         value={runner}
@@ -1000,7 +963,8 @@ function PlaylistDraft({
         }}
       />
       <p className="sm-small sm-faint">
-        Immutable once created, like the id: an fpp playlist and an audio playlist are different objects with different bindings.
+        Stored as <span className="sm-data">fpp</span> or <span className="sm-data">showmesh-audio</span>, and immutable once
+        created, like the id: an FPP playlist and an audio playlist are different objects with different bindings.
       </p>
 
       {runner === '' && (
@@ -1018,24 +982,12 @@ function PlaylistDraft({
 
           {runner === 'fpp' ? (
             <div>
-              <Segmented label="If the FPP playlist does not match" value={mismatchPolicy} options={MISMATCH_OPTIONS} onChange={setMismatchPolicy} />
+              <Segmented label="If the FPP playlist does not match" value="hold" options={MISMATCH_OPTIONS} onChange={() => {}} disabled />
               <p className="sm-small sm-muted">
-                fpp only. What the coordinator does when the captured definition&rsquo;s hash is not the one this playlist binds.
+                fpp only. What the coordinator does when the captured definition&rsquo;s hash is not the one this playlist binds.{' '}
+                <strong>Not settable here yet:</strong> mismatch handling is expected to follow Show versus Program mode rather than
+                being set per playlist, so a draft is created with no stored policy and the coordinator applies its own default.
               </p>
-              {mismatchPolicy === 'safeCue' && (
-                <Field label="Safe cue">
-                  {(props) => (
-                    <Select {...props} value={safeCueRef} onChange={(e) => setSafeCueRef(e.target.value)}>
-                      <option value="">Select a cue</option>
-                      {cues.map((cue) => (
-                        <option key={cue.id} value={cue.id}>
-                          {cue.label}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                </Field>
-              )}
             </div>
           ) : (
             <div>
@@ -1184,7 +1136,7 @@ function PlaylistDraft({
             'Runner required'
           ) : (
             <>
-              Creates <span className="sm-data">{id === '' ? '(no id yet)' : id}</span>
+              Creates {id === '' ? 'nothing until an id is entered' : <span className="sm-data">{id}</span>}
             </>
           )}
         </span>

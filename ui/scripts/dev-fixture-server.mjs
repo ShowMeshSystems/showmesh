@@ -205,6 +205,56 @@ createServer((req, res) => {
       updatedAt: ago(86_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
     })
   }
+  if (p === '/config/show') return json(res, { serverTime: NOW(), kind: 'show', objects: [
+    { id: 'winter-ridge-2026', label: 'Winter Ridge 2026', show: 'winter-ridge-2026', currentRevision: 47, updatedAt: ago(10_800_000) },
+    { id: 'hallowed-hollow-2026', label: 'Hallowed Hollow 2026', show: 'hallowed-hollow-2026', currentRevision: 12, updatedAt: ago(864_000_000) },
+  ] })
+  if (p === '/config/show.playlist') return json(res, { serverTime: NOW(), kind: 'show.playlist', objects: [
+    { id: 'main-show', label: 'Main Show', show: 'winter-ridge-2026', currentRevision: 3, updatedAt: ago(86_400_000) },
+    { id: 'late-bed', label: 'Late Bed', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: ago(86_400_000) },
+  ] })
+  if (p === '/config/show.surface') return json(res, { serverTime: NOW(), kind: 'show.surface', objects: [
+    { id: 'garage-door', label: 'Garage door', show: 'winter-ridge-2026', currentRevision: 5, updatedAt: ago(86_400_000) },
+  ] })
+  if (p === '/assets') return json(res, { serverTime: NOW(), assets: [
+    { assetId: 'a1', show: 'winter-ridge-2026', sequence: 'carol-of-the-bells', targetKind: 'node', target: 'media-front', hash: '9c41ab77c0d3e5f6a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f6072f', sizeBytes: 41_200_000, runtimeFilename: 'carol-of-the-bells.fseq', current: true, uploadedAt: ago(604_800_000), uploadedByPrincipalName: 'erbartos', source: 'manual' },
+    { assetId: 'a2', show: 'winter-ridge-2026', sequence: 'rooftop-finale', targetKind: 'node', target: 'media-front', hash: '5518c0a7b6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e09d', sizeBytes: 44_600_000, runtimeFilename: 'rooftop-finale.fseq', current: true, uploadedAt: ago(345_600_000), uploadedByPrincipalName: 'erbartos', source: 'manual' },
+  ] })
+  if (p === '/integrations/fpp/playlist-definitions') return json(res, { serverTime: NOW(), definitions: [
+    { instanceUuid: 'u1', playlistName: 'WinterRidge_Main', playlistHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90', capturedAt: ago(86_400_000), receivedAt: ago(86_400_000), entryCount: 6, referenced: true },
+    { instanceUuid: 'u1', playlistName: 'WinterRidge_Rest', playlistHash: 'b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1', capturedAt: ago(86_400_000), receivedAt: ago(86_400_000), entryCount: 2, referenced: false },
+  ] })
+  if (/^\/integrations\/fpp\/playlist-definitions\/[^/]+\/[^/]+\/entries$/.test(p)) return json(res, { serverTime: NOW(), entries: [
+    { section: 'mainPlaylist', position: 0, sequenceName: 'carol-of-the-bells.fseq', mediaName: '' },
+    { section: 'mainPlaylist', position: 1, sequenceName: 'wizards-in-winter.fseq', mediaName: '' },
+  ] })
+  if (p.startsWith('/config/show.playlist/')) {
+    const id = p.split('/').pop()
+    const fppBound = id !== 'late-bed'
+    return json(res, {
+      serverTime: NOW(), kind: 'show.playlist', id, revision: fppBound ? 3 : 1,
+      payload: fppBound
+        ? { show: 'winter-ridge-2026', name: 'Main Show', runner: 'fpp', fpp: { instanceUuid: 'u1', playlistName: 'WinterRidge_Main', playlistHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90' }, entries: [{ id: 'e1', cue: 'main-cue', fpp: { section: 'mainPlaylist', position: 0 } }] }
+        : { show: 'winter-ridge-2026', name: 'Late Bed', runner: 'showmesh-audio', showmeshAudio: { repeat: 'all' }, entries: [{ id: 'e9', cue: 'sponsor-announcement' }] },
+      updatedAt: ago(86_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
+  if (p.startsWith('/config/show/')) {
+    const id = p.split('/').pop()
+    if (id !== 'winter-ridge-2026' && id !== 'hallowed-hollow-2026') {
+      return json(res, { type: 'about:blank', title: 'Not Found', status: 404, detail: `No config object ${id}` }, 404)
+    }
+    return json(res, {
+      serverTime: NOW(), kind: 'show', id, revision: 47,
+      payload: { name: id === 'winter-ridge-2026' ? 'Winter Ridge 2026' : 'Hallowed Hollow 2026', notes: 'Two projectors, one audio node, LTC on channel 3.' },
+      updatedAt: ago(10_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
+  if (p === '/config/show.active') return json(res, {
+    serverTime: NOW(), kind: 'show.active', id: 'show.active', revision: 7,
+    payload: { show: 'winter-ridge-2026' },
+    updatedAt: ago(10_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+  })
   if (p === '/') return json(res, { name: 'showmesh-coordinator', version: '0.9.4-fixture', commit: 'a3f91c2', apiVersion: 'v1' })
   return json(res, { type: 'about:blank', title: 'Not Found', status: 404, detail: `No fixture for ${p}` }, 404)
 }).listen(PORT, () => console.log(`fixture coordinator on http://localhost:${PORT}`))

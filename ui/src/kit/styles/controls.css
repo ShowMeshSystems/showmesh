@@ -240,3 +240,21 @@
   background: var(--accent);
   color: var(--on-accent);
 }
+
+/* Same rule as .sm-btn:disabled: an inert segment must not read as a live one. */
+.sm-segmented__item:disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.sm-segmented__item:disabled:hover {
+  background: var(--surface);
+  color: var(--text-faint);
+}
+
+.sm-segmented__item:disabled[aria-pressed='true'],
+.sm-segmented__item:disabled[aria-pressed='true']:hover {
+  background: var(--sunken);
+  color: var(--text-muted);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}

@@ -6,6 +6,7 @@ import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
 import { guardedSave, type SaveOutcome } from '../domain/save'
+import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents } from './showsData'
 import { activeShowId, contentsCounts, type ShowContentsCounts } from './showsModel'
 
@@ -258,25 +259,12 @@ export function ShowDetail() {
         </span>
       </ButtonRow>
       {stale !== null && (
-        <RuledStrip
-          absence="failed"
-          label="Stale write"
-          fact={`Revision ${stale.loadedRevision} was loaded, but revision ${stale.currentRevision} is now current, saved by ${stale.changedBy ?? 'unknown principal'} ${formatClock(stale.changedAt) ?? 'at an unrecorded time'}. Nothing was written.`}
-          detail={
-            <>
-              Changed: <span className="sm-data">{stale.changedFields.join(', ')}</span>.{' '}
-              <button
-                type="button"
-                className="sm-linkbutton"
-                onClick={() => {
-                  setStale(null)
-                  reload()
-                }}
-              >
-                Reload and start again
-              </button>
-            </>
-          }
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            reload()
+          }}
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}

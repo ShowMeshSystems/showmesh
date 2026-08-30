@@ -96,8 +96,8 @@ visual language.
 | Shows workspace: shell, show list, Identity, Playlists | Done | #202 |
 | Shows workspace: Cues, Assets | Done | #203 |
 | Shows workspace: Presentation, Automation | Done | #204 |
-| Creation pattern: new show, new playlist (D-011) | Next | |
-| Creation pattern: new action, edit action, new macro (D-017) | | |
+| Creation pattern: new show, new playlist (D-011) | Done | #205 |
+| Creation pattern: new action, edit action, new macro (D-017) | Next | |
 | Node detail | | |
 | Settings, seven tabs | | |
 | Access | | |
@@ -202,14 +202,21 @@ the Show Cues two-pane composer, and does not change.
 - **D-012.** Delete the "Resume where it left off" checkbox
   (`ShowsPlaylists.tsx:628`) and its test, rather than shipping it inert.
 - **D-015.** The "On mismatch" control stays inert and gains a note beside it
-  saying it is not wired yet.
+  saying it is not settable yet. It is a plain disabled control with its
+  reason, not the `NotWired` treatment: D-010's own limit says only a missing
+  endpoint earns that, and `mismatchPolicy` has an endpoint. The playlist
+  draft renders the same control the same way and writes no policy at all.
 - **D-014 B.** A config editor re-reads the object immediately before its write
   and refuses the save when `currentRevision` moved since load, showing what
   changed. Build it once in a shared save path with the creation pattern, then
   retrofit the shipped editors. C, the `409` precondition on the API, is its own
   issue and is not this rebuild's work.
 - **D-013, D-007, D-008, D-009, D-014 C, D-016.** Issues, not rebuild work.
-  Search before filing so a duplicate is not created.
+  Filed 2026-08-30. D-008 was already covered by an existing issue and was not
+  duplicated.
+- **D-018.** A playlist draft asks for the first entry, and for the fpp runner
+  the instance and imported playlist, because `PUT /config/show.playlist/{id}`
+  requires them. Raised and ruled during the build.
 
 ## Track C: the API facts D-016 asks for
 
