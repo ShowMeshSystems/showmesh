@@ -110,9 +110,9 @@ Directories: `sequences` for FSEQ, `effects` for `.eseq`, `music` for audio, `vi
 
 ### 9.6 Model and playlist upload are opt-in and default-off
 
-**Narrowed by section 10.6.** The playlist endpoints remain optional in xLights, but ShowMesh serves them deliberately: the playlist dropdown is how an operator names the ShowMesh show an upload belongs to. The models and universe-output endpoints stay deferred as stated here.
+**Narrowed by section 10.6, and by section 9.7c below.** The playlist endpoints remain optional in xLights, but ShowMesh serves them deliberately: the playlist dropdown is how an operator names the ShowMesh show an upload belongs to. `POST /api/models` and the universe-output endpoints stay deferred as stated here. **`GET /api/models` no longer belongs in this deferred set**: section 9.7c records a direct observation, made 2026-08-30 against a real xLights, that it is called unprompted during an ordinary upload and is not, in practice, optional for "select target, upload FSEQ."
 
-`POST /api/models`, `POST /api/playlist/{name}`, and the universe-output endpoints all exist, and all three are per-target dropdowns **defaulting to "None"** in the FPP Connect dialog. None is required for "select target, upload FSEQ". They serve FPP-as-pixel-controller deployments, not a render node that receives an FSEQ and plays it under ShowMesh's control.
+`POST /api/models`, `POST /api/playlist/{name}`, and the universe-output endpoints all exist, and all three are per-target dropdowns **defaulting to "None"** in the FPP Connect dialog. None of the three `POST`s is required for "select target, upload FSEQ". They serve FPP-as-pixel-controller deployments, not a render node that receives an FSEQ and plays it under ShowMesh's control. This paragraph's own source-reading conclusion was never about `GET /api/models`: see section 9.7c for what changed there.
 
 ### 9.7 Smallest viable surface, in build order
 
