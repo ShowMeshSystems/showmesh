@@ -144,30 +144,59 @@ func capabilitiesForImmediateHello(cfg config.Config) capability.Set {
 	return cached
 }
 
-// scheduleCapabilityDetection runs real capability detection in the
-// background, outside advertiseTimeout's budget, and republishes hello
-// with the result — the other half of review finding 14's fix. It is a
-// no-op when cfg.Capabilities holds an operator override, matching
+// scheduleCapabilityDetection arranges for real capability detection to
+// run (outside advertiseTimeout's budget) and republish hello with the
+// result: the other half of review finding 14's fix. It is a no-op when
+// cfg.Capabilities holds an operator override, matching
 // capabilitiesForImmediateHello: an override is never probed for, so there
 // is nothing to detect and nothing to republish.
 //
-// Called once per successful connect (including every reconnect), same as
-// publishAdvertisement itself, so a capability that becomes available
+// Every call is a trigger on [capabilityGate], not a direct run: this
+// function is called both once per successful connect (same as
+// publishAdvertisement) and once per real audio-engine availability
+// transition (agent.go's rebuild hook), so two triggers close enough
+// together must never run concurrently or let the slower one's stale
+// result overwrite the faster one's current one. See
+// [capabilityDetectionGate]'s own doc comment for the single-flight and
+// generation-stamping this relies on. Calling this once per connect
+// (including every reconnect) means a capability that becomes available
 // later (e.g. the NDI runtime gets installed) is still picked up with no
-// agent restart. ctx is expected to be the agent's own lifetime context
-// (not a connection-scoped one — see mqtt.go's OnConnectionUp, which
-// passes the same ctx to publishAdvertisement), so this goroutine survives
-// past advertiseTimeout and past the connect that spawned it; a hung probe
-// only ever costs capabilityDetectionTimeout, never the agent's ability to
-// have published a hello.
+// agent restart.
+//
+// ctx is expected to be the agent's own lifetime context (not a
+// connection-scoped one, see mqtt.go's OnConnectionUp, which passes the
+// same ctx to publishAdvertisement, and agent.go's rebuild hook, which
+// passes sigCtx), so the detection goroutine survives past
+// advertiseTimeout and past whichever connect or rebuild spawned it; a
+// hung probe only ever costs capabilityDetectionTimeout, never the
+// agent's ability to have published a hello.
 func scheduleCapabilityDetection(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger) {
 	if len(cfg.Capabilities) != 0 {
 		return
 	}
+	capabilityGate.trigger(func(gen uint64) {
+		runCapabilityDetection(ctx, pub, cfg, bootID, startedAt, logger, gen)
+	})
+}
 
+// runCapabilityDetection is [capabilityDetectionGate]'s own run body for
+// one detect+publish cycle tagged with gen: it probes, then checks gen is
+// still current BEFORE storing or publishing anything, so a cycle a
+// newer trigger has already superseded drops its own result silently
+// instead of overwriting a fresher one that finished first (or will
+// finish after it). Called only via [capabilityDetectionGate.trigger],
+// never directly.
+func runCapabilityDetection(ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger, gen uint64) {
 	detectCtx, cancel := context.WithTimeout(ctx, capabilityDetectionTimeout)
 	defer cancel()
 	caps := capabilityDetector(detectCtx)
+
+	if !capabilityGate.isCurrent(gen) {
+		if logger != nil {
+			logger.Info("dropped a superseded capability detection result", "node_id", cfg.NodeID, "generation", gen)
+		}
+		return
+	}
 	detectedCapabilityCache.store(caps)
 
 	pubCtx, cancel2 := context.WithTimeout(ctx, advertiseTimeout)
@@ -212,7 +241,11 @@ func publishAdvertisement(ctx context.Context, pub Publisher, cfg config.Config,
 		logger.Info("published lwt online=true", "node_id", cfg.NodeID)
 	}
 
-	go scheduleCapabilityDetection(ctx, pub, cfg, bootID, startedAt, logger)
+	// No "go" here: scheduleCapabilityDetection only ever triggers
+	// capabilityGate, which decides for itself whether to start a new
+	// detection goroutine or coalesce this into an already-running one,
+	// and returns immediately either way.
+	scheduleCapabilityDetection(ctx, pub, cfg, bootID, startedAt, logger)
 }
 
 // logPublishFailure logs a failed publish of what (a short description,

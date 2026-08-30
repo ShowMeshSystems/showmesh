@@ -4,11 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/capability"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // containsAllSubstrings reports whether s contains every one of substrs,
@@ -231,6 +234,83 @@ func TestNightCheckAudioOutputCapabilities_NoRepeatDoesNotRequireLoop(t *testing
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("check = %+v, want healthy (repeat=none never requires loop)", check)
 	}
+}
+
+// nodeAudioEngineStateObservation builds one node.audio.engine.state
+// observation.Observation reading value, current as of observedAt (no
+// ValidFor set, matching a caller that wants StateAt(now) == StateCurrent
+// for any now at or after observedAt).
+func nodeAudioEngineStateObservation(nodeID, value string, observedAt time.Time) observation.Observation {
+	return observation.Observation{
+		Resource:   observation.ResourceRef{Kind: observation.ResourceNode, ID: nodeID},
+		Signal:     nodeaudio.SignalEngineState,
+		Value:      value,
+		ObservedAt: &observedAt,
+	}
+}
+
+// TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown proves
+// finding C/4's fix: a live node whose Hello capability set is entirely
+// empty reads unknown, not failed, when independent evidence
+// (node.audio.engine.state, a much faster, separate signal than the
+// Hello capability cycle) confirms its session engine is usable right
+// now (the shape of a node that has connected and started its
+// post-connect capability detection but has not finished it yet). Once
+// that independent evidence says the engine is NOT usable (or is simply
+// absent), the identical empty Hello capability set goes back to
+// reading failed: an empty set is only excused as "still probing" when
+// there is real corroborating evidence for that specific story, never
+// merely because the set happens to be empty.
+func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T) {
+	ba := &config.NightSessionBackgroundAudio{
+		Items:  []config.NightSessionBackgroundAudioItem{{Asset: config.NightSessionAssetRef{Target: "node-a"}}},
+		Repeat: config.NightSessionBackgroundRepeatPlaylist,
+	}
+
+	t.Run("engine confirmed usable, hello empty: unknown", func(t *testing.T) {
+		h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+		h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+			nodeViewWithGenericCapabilities("node-a"),
+		})
+		h.deps.Audio.(*fakeNodeAudioLister).setObservations("node-a", []observation.Observation{
+			nodeAudioEngineStateObservation("node-a", nodeaudio.StateUsable, testNow),
+		})
+
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		if check.health != nightHealthUnknown() {
+			t.Fatalf("engine confirmed usable, hello capabilities empty: check = %+v, want unknown", check)
+		}
+	})
+
+	t.Run("engine confirmed unavailable, hello empty: failed", func(t *testing.T) {
+		h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+		h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+			nodeViewWithGenericCapabilities("node-a"),
+		})
+		h.deps.Audio.(*fakeNodeAudioLister).setObservations("node-a", []observation.Observation{
+			nodeAudioEngineStateObservation("node-a", nodeaudio.StateUnavailable, testNow),
+		})
+
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		if check.health != nightHealthFailed() {
+			t.Fatalf("engine confirmed unavailable, hello capabilities empty: check = %+v, want failed (no probing evidence excuses this)", check)
+		}
+	})
+
+	t.Run("no node.audio.engine.state evidence at all, hello empty: failed", func(t *testing.T) {
+		h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+		h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+			nodeViewWithGenericCapabilities("node-a"),
+		})
+		// fakeNodeAudioLister returns nil for a node with no observations
+		// set at all - matches a coordinator that has never received an
+		// audioreport for this node.
+
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		if check.health != nightHealthFailed() {
+			t.Fatalf("no independent engine-state evidence at all: check = %+v, want failed", check)
+		}
+	})
 }
 
 // TestNightCheckAnnouncementAssets_NeverInventsAPass mirrors the same

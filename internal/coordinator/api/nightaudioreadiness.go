@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/capability"
+	"github.com/showmeshsystems/showmesh/pkg/observation"
 )
 
 // Track F seam F5's own readiness checks (RESTING-MODE.md §13), added to
@@ -25,6 +27,21 @@ import (
 // configuration surface for a synchronized third-party output at all
 // (RES-016 remains open research, not a shipped config kind) - there is
 // nothing here to check either claim against.
+
+// capabilityDetectionTimeoutMirror is this file's own copy of
+// internal/agent/advertise.go's capabilityDetectionTimeout (120s as of
+// this writing), for the reason string
+// audioNodeEngineConfirmedUsableNow's caller states when a node's
+// capability detection appears still in flight. This package cannot
+// import internal/agent (it pulls in internal/agent/audio/gstengine's
+// cgo dependency, which the coordinator's CGO_ENABLED=0 static build
+// must never gain), so this is a literal, human-kept mirror rather than
+// a shared constant, matching internal/agent/audiocapabilities.go's own
+// minLTCChannels mirror of audio.MinLTCChannels one file over. Purely
+// informational text in a reason string: nothing here gates behavior on
+// this value, so a stale mirror only makes an operator-facing message
+// slightly wrong, never a wrong health verdict.
+const capabilityDetectionTimeoutMirror = "120s"
 
 // nightCheckBackgroundAudioAssets is §13's "required audio ... assets
 // local and hash-current" bullet, narrowed to what this coordinator's own
@@ -152,17 +169,56 @@ func audioOutputCapabilityIDsForBackgroundAudio(ba *config.NightSessionBackgroun
 	return ids
 }
 
+// audioNodeEngineConfirmedUsableNow reports whether nodeID's most recent
+// node.audio.engine.state observation (internal/coordinator/collector/
+// nodeaudio) is CURRENT and reads nodeaudio.StateUsable: independent,
+// fast-cadence evidence (the agent's own audioreport tick,
+// nodeaudio.DefaultPollInterval, five seconds) that this node's session
+// engine is genuinely bound and working RIGHT NOW, entirely apart from
+// the Hello capability advertisement's own much slower cycle (up to
+// capabilityDetectionTimeout, 120s in this build, after a binding
+// change). Consulted ONLY to distinguish "the engine is confirmed
+// usable but its Hello capability set has not caught up to that yet"
+// (still probing) from "the engine is genuinely unavailable" when a
+// live node's Hello capability set declares none of what a check needs;
+// never used to invent a capability the Hello envelope itself never
+// declared, and never a timestamp-derived guess (deliberately not
+// StartedAt-based), since an inferred window is wrong across a restart,
+// wrong under clock skew, and wrong whenever detection outruns whatever
+// window was picked.
+//
+// This reads node.audio.engine.state's two EXISTING values as a new
+// corroborating consumer, rather than adding a third value to that
+// signal's own vocabulary: its own doc comment
+// (nodeaudio.StateUsable/StateUnavailable) already states the
+// "not known yet" case belongs to [observation.StateNotCollected] on
+// Absence, not a third state string, so a "probing" member there would
+// contradict that signal's own documented shape. See this repository's
+// PR history for the consumer survey that confirmed no reader anywhere
+// switches on this signal's string value at all (only its presence is
+// checked in one UI test fixture), so introducing this reader risks no
+// existing default-branch misread.
+func audioNodeEngineConfirmedUsableNow(audio NodeAudioLister, nodeID string, now time.Time) bool {
+	for _, o := range audio.NodeAudioObservations(nodeID) {
+		if o.Signal != nodeaudio.SignalEngineState {
+			continue
+		}
+		return o.StateAt(now) == observation.StateCurrent && o.Value == nodeaudio.StateUsable
+	}
+	return false
+}
+
 // nightCheckAudioOutputCapabilities is §13's own bullet, narrowed to what
 // this configured resting.backgroundAudio session concretely needs (see
 // [audioOutputCapabilityIDsForBackgroundAudio]): healthy when the output
 // node's live Hello capability advertisement declares every one of them,
 // failed naming whichever a node with CURRENT evidence genuinely does
 // not declare, and unknown whenever that evidence cannot be trusted as
-// current at all (never seen, never advertised, or not presently
-// online) - api/openapi.yaml's own NightReadinessCheck rule that missing
-// evidence is never "failed". This check now has a real capability
-// signal to check against; before it, this always reported
-// not_verifiable.
+// current at all (never seen, never advertised, not presently online, or
+// merely still probing per [audioNodeEngineConfirmedUsableNow]) -
+// api/openapi.yaml's own NightReadinessCheck rule that missing evidence
+// is never "failed". This check now has a real capability signal to
+// check against; before it, this always reported not_verifiable.
 func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now time.Time, ba *config.NightSessionBackgroundAudio) nightReadinessCheck {
 	nodeID := ba.OutputNodeID()
 	name := "resting:background-audio-output-capabilities:" + nodeID
@@ -181,6 +237,11 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 		if _, ok := evidence.Capabilities.Lookup(id); !ok {
 			missing = append(missing, string(id))
 		}
+	}
+	if len(missing) == len(needed) && audioNodeEngineConfirmedUsableNow(h.deps.Audio, nodeID, now) {
+		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+			"audio.node %q's node.audio.engine.state confirms its session engine is usable right now, but its Hello capability advertisement declares none of %v yet; this node has likely not finished its post-connect capability detection, which can take up to %s",
+			nodeID, needed, capabilityDetectionTimeoutMirror)}
 	}
 	if len(missing) > 0 {
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(

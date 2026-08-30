@@ -372,12 +372,16 @@ abilities a night session needs. Twelve of the fourteen ship: a node
 advertises them alongside `audio.engine` whenever its bound session engine
 reports itself available (`internal/agent/audiocapabilities.go`), and
 `internal/coordinator/api/nightaudioreadiness.go` reports
-`resting:background-audio-output-capabilities:<node>` as `healthy` or
-`failed` against that real advertisement, narrowed to what a configured
-`resting.backgroundAudio` session concretely needs on its own output
-node (`audio.playback.background`/`playlist`/`gain` always, `loop` only
-when a repeat mode is configured); it no longer reports `not_verifiable`
-for a configured output. `audio.transition.gapless` and
+`resting:background-audio-output-capabilities:<node>` as `healthy`,
+`failed`, or `unknown` against that real advertisement, narrowed to what
+a configured `resting.backgroundAudio` session concretely needs on its
+own output node (`audio.playback.background`/`playlist`/`gain` always,
+`loop` only when a repeat mode is configured): `unknown` when there is
+no current evidence for the output at all (never seen, never
+advertised, or advertised but not currently confirmed online), `failed`
+naming whichever abilities a currently-confirmed node's own live
+advertisement genuinely omits, `healthy` once it declares every one; it
+no longer reports `not_verifiable` for a configured output. `audio.transition.gapless` and
 `audio.transition.crossfade` remain reserved and unshipped: no engine
 this repository binds ever eliminates the inter-item gap
 `Session.advanceLocked` measures, so no node can honestly confirm
