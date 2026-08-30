@@ -189,6 +189,18 @@ Three traps in that exchange, all facts:
 - Whether absent keys in a model entry degrade cleanly or throw on FPP's side. The code path was read but not run.
 - Which FPP version introduced the POST-wrapper versus GET-bare-array asymmetry.
 
+### 9.7c `GET /api/models` is called unprompted during an ordinary upload (L2, direct observation, 2026-08-30)
+
+**Fact, and it is a direct client observation, not a source-reading inference: promoted straight to L2 per this record's evidence ladder, the same way a real bench run promotes any other finding here.** During the first real FPP Connect upload runs against a live ShowMesh render node (2026-08-30), xLights called `GET /api/models` on its own, before any file transfer, and logged:
+
+```
+ERROR - Error on GET "http://192.168.130.244/api/models"    Response Code: 404
+```
+
+**This narrows section 9.6's source-reading conclusion.** That conclusion, read from `FPP::SetOutputs()` and the dialog's dropdown wiring, was that the models push is opt-in and defaults to "None" — true of the `POST`, and still true of it. It did not anticipate xLights issuing an unconditional `GET` as part of the ordinary upload flow regardless of that dropdown's state. The two facts do not contradict each other; the second was simply never traced, because nothing in section 9's or 9.7b's call-graph reading followed the `GET` side of the models exchange at all.
+
+**Consequence for this listener.** `GET /api/models` must be served (a bare JSON array, `[]` for a node with no configured surface, `200` always), or every otherwise-successful upload reports a red error to the operator. `POST /api/models` remains exactly as deferred as section 9.6 and TRACK-E-FPP-CONNECT.md's explicitly-deferred list state: nothing about this observation touches the `/config.php` identity gate or the upstream vendor-listing question, since xLights' `GET` never reaches `AuthenticateAndUpdateVersions()`.
+
 ### 9.8 What this research could not determine
 
 Recorded because an honest unknown is worth more than a plausible guess.
