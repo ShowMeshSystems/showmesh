@@ -12,6 +12,66 @@ my recommendation, and what the answer unblocks. Answered entries move to
 
 ## Open
 
+### D-016 Cues and Assets: mock elements with no evidence behind them
+
+**What.** `Show Cues.dc.html` and `Show Assets.dc.html` each draw an element
+with no coordinator-reported fact behind it, distinct from D-010's
+missing-endpoint controls (every item here is data, not a control):
+
+1. **A cue's "Sequence changed in FPP" badge.** The Cues mock marks one cue
+   row (`Rooftop Finale`) with a warning that its render sequence changed in
+   FPP. Nothing in `api/openapi.yaml` ties a `show.cue`'s
+   `outputs.render.sequence` to FPP's imported playlist definitions the way
+   `ConfigShowPlaylistFPPBinding.playlistHash` does for a playlist; there is
+   no captured-hash history for a bare sequence name to compare against. The
+   rebuilt tab omits this badge rather than inventing a staleness signal.
+2. **The Assets tab's "On node" column and the top summary strip** (`On
+   target` / `Hash mismatch` / `Not synced` / `Last sync`). This is exactly
+   the asset-manifest concept D-003 already ruled onto Monitor as its own
+   facet (`MonitorManifest.tsx`, built). `GET /assets/manifest` reports
+   `missing` / `gaps` / `extra` per node, not a per-asset "matches / mismatch
+   / not synced" verdict, and `ExtraAsset` carries no `assetId`: joining it
+   to a specific asset row would mean matching on `runtimeFilename`, which
+   `Asset`'s own description says is not identity. The rebuilt tab reports
+   the asset store's own facts (identity, hash, current/superseded, size,
+   history) and links to Monitor › Manifest for node-by-node sync state
+   instead of re-deriving it here with a join the schema itself warns
+   against.
+3. **The History pane's "Rolled back" badge on a group header.** The mock
+   shows this as a standing badge on an asset's group row. `Asset` carries no
+   "this became current via a rollback" flag; only the `AssetResponse` from
+   the specific `POST /assets` call that performed the rollback reports
+   `rolledBack`. The rebuilt tab reports `rolledBack` honestly at upload time
+   (the moment the coordinator states it) and does not persist it as a
+   standing badge on rows loaded from `GET /assets`, which carries no such
+   field.
+
+**Why now.** All three are drawn in blocks this change builds. Per the
+rebuild plan step 3, a mock element with no home in reported evidence is
+recorded here rather than invented.
+
+**Options.**
+
+- A. Ship the tabs without these three elements, as built.
+- B. Add the missing facts to the API: an FPP-sequence staleness signal for
+  cues, a per-asset sync verdict (or a `wasRolledBack` flag) for the asset
+  store.
+- C. Infer them client-side from filename or timestamp correlation.
+
+**Recommendation.** A now. B is real work with its own design questions (does
+the FPP staleness check need showmesh-node evidence per section/position, the
+way a playlist binding does, since a cue's `render.sequence` has no per-entry
+hash the way an imported FPP playlist entry does). C is refused: it would
+mean joining on `runtimeFilename`, which ADR-028's own identity model says is
+not identity, or on wall-clock proximity, which is a guess dressed as
+evidence.
+
+**Unblocks.** Nothing. Both tabs ship at this state either way.
+
+**Ruling:**
+
+---
+
 ### D-014 A config write can silently erase another writer's work
 
 **What.** `PUT /config/show.playlist/{id}` and `PUT /config/show/{id}` are both

@@ -4,9 +4,11 @@
  * the network, matching `MonitorManifest.tsx`'s own split.
  */
 import {
+  getShowCue,
   getShowPlaylist,
   listAssets,
   listConfigObjects,
+  type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
 import type { ShowContents } from './showsModel'
@@ -68,4 +70,14 @@ export async function fetchShowContents(showId: string): Promise<ShowContents> {
 /** The full config response, revision included: an edit form needs it to report a save, not just the payload. */
 export async function fetchShowPlaylists(playlists: readonly { id: string }[]): Promise<ShowPlaylistConfigResponse[]> {
   return Promise.all(playlists.map((p) => getShowPlaylist(p.id)))
+}
+
+/**
+ * `listConfigObjects('show.cue', ...)` returns id/label/revision only, not
+ * outputs: the Cues tab needs each cue's declared outputs to group and chip
+ * them, and there is no bulk `show.cue` read that carries them. Bounded by
+ * this show's own cue count, matching [fetchShowPlaylists]'s own fan-out.
+ */
+export async function fetchShowCues(cues: readonly { id: string }[]): Promise<ShowCueConfigResponse[]> {
+  return Promise.all(cues.map((c) => getShowCue(c.id)))
 }

@@ -16,6 +16,8 @@ import { Shows } from '../screens/Shows'
 import { ShowDetail } from '../screens/ShowDetail'
 import { ShowsWorkspace, ShowsTabPlaceholder } from '../screens/ShowsWorkspace'
 import { ShowsPlaylists } from '../screens/ShowsPlaylists'
+import { ShowsCues } from '../screens/ShowsCues'
+import { ShowsAssets } from '../screens/ShowsAssets'
 import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
@@ -76,8 +78,8 @@ export default function App() {
             <Route path="shows/:id" element={<ShowDetail />} />
             <Route path="shows/:id" element={<ShowsWorkspace />}>
               <Route path="playlists" element={<ShowsPlaylists />} />
-              <Route path="cues" element={<ShowsTabPlaceholder tab="Cues" />} />
-              <Route path="assets" element={<ShowsTabPlaceholder tab="Assets" />} />
+              <Route path="cues" element={<ShowsCues />} />
+              <Route path="assets" element={<ShowsAssets />} />
               <Route path="presentation" element={<ShowsTabPlaceholder tab="Presentation" />} />
               <Route path="automation" element={<ShowsTabPlaceholder tab="Automation" />} />
             </Route>

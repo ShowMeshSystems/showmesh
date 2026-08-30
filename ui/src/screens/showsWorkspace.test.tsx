@@ -104,7 +104,7 @@ describe('Shows workspace shell', () => {
     vi.restoreAllMocks()
   })
 
-  it('lists all five tabs and marks the four not yet rebuilt', async () => {
+  it('lists all five tabs and marks the two not yet rebuilt', async () => {
     stubs.getShow = showHead
     stubs.listConfigObjects = () => contentsEmpty()
     stubs.listAssets = assetsEmpty
@@ -115,7 +115,7 @@ describe('Shows workspace shell', () => {
     expect(tabs.map((t) => t.textContent?.replace(/\d+/, '').trim().split('Soon')[0]?.trim())).toEqual(
       expect.arrayContaining(['Playlists', 'Cues', 'Assets', 'Presentation', 'Automation']),
     )
-    expect(within(nav).getAllByText('Soon')).toHaveLength(4)
+    expect(within(nav).getAllByText('Soon')).toHaveLength(2)
   })
 
   it('shows the not-yet-rebuilt plate inside the shell, not a bare blank page, for a queued tab', async () => {

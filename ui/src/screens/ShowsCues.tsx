@@ -1,0 +1,517 @@
+import { useEffect, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import {
+  putShowCue,
+  type Asset,
+  type ConfigShowCue,
+  type ConfigShowCueOutputs,
+  type ShowCueConfigResponse,
+  type ShowPlaylistConfigResponse,
+} from '../api'
+import { Button, Choice, Field, Input, Panes, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
+import { useModelContext } from '../app/ModelContext'
+import { describeApiError, evaluateScope } from '../domain/session'
+import { fetchShowContents, fetchShowCues, fetchShowPlaylists } from './showsData'
+import { CUE_OUTPUT_CHIP, type CueOutputKind, type CueRow, cueRows, slugify } from './showsModel'
+
+type ListState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; cues: ShowCueConfigResponse[]; playlists: ShowPlaylistConfigResponse[]; assets: Asset[] }
+  | { kind: 'failed'; reason: string }
+
+function useCues(showId: string): { state: ListState; reload: () => void; upsertCue: (response: ShowCueConfigResponse) => void } {
+  const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<ListState>({ kind: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    fetchShowContents(showId)
+      .then(async (contents) => {
+        const [cues, playlists] = await Promise.all([fetchShowCues(contents.cues), fetchShowPlaylists(contents.playlists)])
+        if (!cancelled) setState({ kind: 'loaded', cues, playlists, assets: contents.assets })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [showId, attempt])
+
+  const upsertCue = (response: ShowCueConfigResponse) => {
+    setState((prev) => {
+      if (prev.kind !== 'loaded') return prev
+      const exists = prev.cues.some((c) => c.id === response.id)
+      return { ...prev, cues: exists ? prev.cues.map((c) => (c.id === response.id ? response : c)) : [...prev.cues, response] }
+    })
+  }
+
+  return { state, reload: () => setAttempt((n) => n + 1), upsertCue }
+}
+
+const KIND_FILTERS: readonly { value: 'all' | CueOutputKind | 'unused'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'render', label: 'Render' },
+  { value: 'audio', label: 'Audio' },
+  { value: 'unused', label: 'Unused' },
+]
+
+export function ShowsCues() {
+  const { id: showId = '' } = useParams<{ id: string }>()
+  const model = useModelContext()
+  const { state, reload, upsertCue } = useCues(showId)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [filterText, setFilterText] = useState('')
+  const [filterKind, setFilterKind] = useState<'all' | CueOutputKind | 'unused'>('all')
+
+  if (state.kind === 'loading') {
+    return (
+      <Section id="cue-list" title="Cues in this show">
+        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for this show's cues." />
+      </Section>
+    )
+  }
+
+  if (state.kind === 'failed') {
+    return (
+      <Section id="cue-list" title="Cues in this show">
+        <RuledStrip
+          absence="failed"
+          label="Read failed"
+          fact={state.reason}
+          detail={
+            <button type="button" className="sm-linkbutton" onClick={reload}>
+              Try again
+            </button>
+          }
+        />
+      </Section>
+    )
+  }
+
+  const rows = cueRows(state.cues, state.playlists)
+  const matches = (row: CueRow) => {
+    if (filterText !== '' && !row.label.toLowerCase().includes(filterText.toLowerCase()) && !row.id.toLowerCase().includes(filterText.toLowerCase())) {
+      return false
+    }
+    if (filterKind === 'all') return true
+    if (filterKind === 'unused') return row.group === 'unreachable'
+    return row.kinds.includes(filterKind)
+  }
+
+  const inPlaylist = rows.filter((r) => r.group === 'playlist' && matches(r))
+  const unreachable = rows.filter((r) => r.group === 'unreachable' && matches(r))
+  const announcements = rows.filter((r) => r.group === 'announcement' && matches(r))
+
+  const selected = selectedId === null ? null : state.cues.find((c) => c.id === selectedId) ?? null
+  const audioAssets = state.assets.filter((a) => a.mediaType === 'audio' && a.current)
+  const existingIds = state.cues.map((c) => c.id)
+
+  return (
+    <Panes>
+      <div>
+        <Section
+          id="cue-list"
+          title="Cues in this show"
+          aside={
+            <Button
+              variant="primary"
+              onClick={() => {
+                setCreating(true)
+                setSelectedId(null)
+              }}
+            >
+              New cue
+            </Button>
+          }
+        >
+          <p className="sm-small sm-muted">Select a cue to edit it in the panel on the right. Editing a cue changes every playlist that uses it.</p>
+          <div className="sm-inline-row sm-stack-3">
+            <Input aria-label="Filter cues" placeholder="Filter cues…" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
+            <Segmented label="Filter by output" value={filterKind} options={KIND_FILTERS} onChange={setFilterKind} />
+          </div>
+
+          <CueTable
+            title="In a playlist"
+            rows={inPlaylist}
+            selectedId={selectedId}
+            usedByColumn
+            onSelect={(id) => {
+              setSelectedId(id)
+              setCreating(false)
+            }}
+          />
+
+          <div className="sm-subsection">
+            <h3 className="sm-subsection__title">
+              Not in any playlist <span className="sm-small sm-muted">· {unreachable.length}</span>
+            </h3>
+            <p className="sm-small sm-muted">Authored but unreachable. Bind it to a playlist entry, or leave it as a safe-cue target.</p>
+            <CueTable
+              title="Not in any playlist"
+              hideTitle
+              rows={unreachable}
+              selectedId={selectedId}
+              stateColumn
+              onSelect={(id) => {
+                setSelectedId(id)
+                setCreating(false)
+              }}
+            />
+          </div>
+
+          <div className="sm-subsection">
+            <h3 className="sm-subsection__title">
+              Directly activatable <span className="sm-small sm-muted">· {announcements.length}</span>
+            </h3>
+            <p className="sm-small sm-muted">
+              Announcements are not playlist entries. An operator fires them from Live Control, and they duck the background bed without touching FPP.
+            </p>
+            <CueTable
+              title="Directly activatable"
+              hideTitle
+              rows={announcements}
+              selectedId={selectedId}
+              policyColumn
+              onSelect={(id) => {
+                setSelectedId(id)
+                setCreating(false)
+              }}
+            />
+          </div>
+        </Section>
+      </div>
+
+      <aside>
+        {(creating || selected !== null) && (
+          <CueEditor
+            key={selected?.id ?? 'new'}
+            showId={showId}
+            cue={selected}
+            existingIds={existingIds}
+            audioAssets={audioAssets}
+            model={model}
+            onSaved={(response) => {
+              upsertCue(response)
+              setSelectedId(response.id)
+              setCreating(false)
+            }}
+            onCancel={() => {
+              setCreating(false)
+              setSelectedId(null)
+            }}
+          />
+        )}
+      </aside>
+    </Panes>
+  )
+}
+
+function CueTable({
+  rows,
+  selectedId,
+  onSelect,
+  usedByColumn = false,
+  stateColumn = false,
+  policyColumn = false,
+  hideTitle = false,
+  title,
+}: {
+  rows: CueRow[]
+  selectedId: string | null
+  onSelect: (id: string) => void
+  usedByColumn?: boolean
+  stateColumn?: boolean
+  policyColumn?: boolean
+  hideTitle?: boolean
+  title: string
+}) {
+  return (
+    <>
+      {!hideTitle && (
+        <h3 className="sm-subsection__title sm-stack-4">
+          {title} <span className="sm-small sm-muted">· {rows.length}</span>
+        </h3>
+      )}
+      <TableWrap label={`${title}, scrollable`}>
+        <Table>
+          <thead>
+            <tr>
+              <th scope="col">Cue</th>
+              <th scope="col">Outputs</th>
+              {usedByColumn && <th scope="col">Used by</th>}
+              {stateColumn && <th scope="col">State</th>}
+              {policyColumn && <th scope="col">Policy</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={3}>
+                  <RuledStrip absence="empty" label="None" fact="No cue matches here." />
+                </td>
+              </tr>
+            ) : (
+              rows.map((row) => (
+                <tr key={row.id} aria-current={selectedId === row.id ? 'true' : undefined} className={selectedId === row.id ? 'sm-table__row--current' : undefined}>
+                  <td>
+                    <button type="button" className="sm-linkbutton" onClick={() => onSelect(row.id)} aria-pressed={selectedId === row.id}>
+                      {row.label}
+                    </button>
+                    {selectedId === row.id && <span className="sm-viewing">Editing</span>}
+                    <br />
+                    <span className="sm-data sm-small sm-faint">{row.id}</span>
+                  </td>
+                  <td>
+                    <span className="sm-chip-row">
+                      {row.kinds.length === 0 ? (
+                        <span className="sm-small sm-faint">none</span>
+                      ) : (
+                        row.kinds.map((kind) => (
+                          <span key={kind} className="sm-chip">
+                            {CUE_OUTPUT_CHIP[kind]}
+                          </span>
+                        ))
+                      )}
+                    </span>
+                  </td>
+                  {usedByColumn && <td className="sm-small sm-muted">{row.usedByPlaylists.join(', ')}</td>}
+                  {stateColumn && (
+                    <td>
+                      <span className="sm-small sm-faint">Unreachable</span>
+                    </td>
+                  )}
+                  {policyColumn && <td className="sm-small sm-muted">{row.announcementPolicy}</td>}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </TableWrap>
+    </>
+  )
+}
+
+type Kinds = Set<CueOutputKind>
+
+function initialKinds(cue: ShowCueConfigResponse | null): Kinds {
+  const set = new Set<CueOutputKind>()
+  if (cue === null) return set
+  if (cue.payload.outputs.render !== undefined) set.add('render')
+  if (cue.payload.outputs.audio !== undefined) set.add('audio')
+  if (cue.payload.outputs.ltc !== undefined) set.add('ltc')
+  if (cue.payload.outputs.announcement !== undefined) set.add('announcement')
+  return set
+}
+
+function CueEditor({
+  showId,
+  cue,
+  existingIds,
+  audioAssets,
+  model,
+  onSaved,
+  onCancel,
+}: {
+  showId: string
+  cue: ShowCueConfigResponse | null
+  existingIds: readonly string[]
+  audioAssets: readonly Asset[]
+  model: ReturnType<typeof useModelContext>
+  onSaved: (response: ShowCueConfigResponse) => void
+  onCancel: () => void
+}) {
+  const isNew = cue === null
+  const [name, setName] = useState(cue?.payload.name ?? '')
+  const [id, setId] = useState(cue?.id ?? '')
+  const [idTouched, setIdTouched] = useState(!isNew)
+  const [kinds, setKinds] = useState<Kinds>(initialKinds(cue))
+  const [renderSequence, setRenderSequence] = useState(cue?.payload.outputs.render?.sequence ?? '')
+  const [audioAsset, setAudioAsset] = useState(cue?.payload.outputs.audio?.asset ?? '')
+  const [announcementPolicy, setAnnouncementPolicy] = useState<'duck' | 'mix' | 'interrupt'>(cue?.payload.outputs.announcement?.policy ?? 'duck')
+  const [duckGainDb, setDuckGainDb] = useState(String(cue?.payload.outputs.announcement?.duckGainDb ?? -18))
+  const [fadeMillis, setFadeMillis] = useState(String(cue?.payload.outputs.announcement?.fadeMillis ?? 400))
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const saveGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+
+  const toggleKind = (kind: CueOutputKind) => {
+    setKinds((prev) => {
+      const next = new Set(prev)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      return next
+    })
+  }
+
+  let blockReason: string | null = null
+  if (kinds.size === 0) blockReason = 'Pick at least one output.'
+  else if (kinds.has('ltc') && !kinds.has('audio')) blockReason = 'LTC requires Audio to also be selected.'
+  else if (kinds.has('announcement') && !kinds.has('audio')) blockReason = 'Announcement requires Audio to also be selected.'
+  else if (kinds.has('render') && renderSequence.trim() === '') blockReason = 'Render needs a sequence name.'
+  else if (kinds.has('audio') && audioAsset === '') blockReason = 'Audio needs an asset selected.'
+  else if (name.trim() === '') blockReason = 'A cue needs a name.'
+  else if (id.trim() === '') blockReason = 'A cue needs an id.'
+  else if (isNew && existingIds.includes(id)) blockReason = `The id "${id}" already names another cue in this show; edit that cue instead or choose a different id.`
+  else if (kinds.has('announcement') && announcementPolicy === 'duck') {
+    const gain = Number(duckGainDb)
+    if (!Number.isFinite(gain) || gain >= 0 || gain < -60) blockReason = 'Duck level must be a negative number, at least -60 dB.'
+  }
+  if (blockReason === null && kinds.has('announcement')) {
+    const fade = Number(fadeMillis)
+    if (!Number.isInteger(fade) || fade < 0 || fade > 60000) blockReason = 'Fade must be a whole number of milliseconds, 0 to 60000.'
+  }
+
+  const save = () => {
+    if (blockReason !== null) return
+    const outputs: ConfigShowCueOutputs = {
+      ...(kinds.has('render') ? { render: { sequence: renderSequence.trim() } } : {}),
+      ...(kinds.has('audio') ? { audio: { asset: audioAsset, startOffsetMillis: cue?.payload.outputs.audio?.startOffsetMillis ?? 0 } } : {}),
+      ...(kinds.has('ltc') ? { ltc: { startOffsetMillis: cue?.payload.outputs.ltc?.startOffsetMillis ?? 0 } } : {}),
+      ...(kinds.has('announcement')
+        ? {
+            announcement: {
+              policy: announcementPolicy,
+              fadeMillis: Number(fadeMillis),
+              ...(announcementPolicy === 'duck' ? { duckGainDb: Number(duckGainDb) } : {}),
+            },
+          }
+        : {}),
+    }
+    const payload: ConfigShowCue = { show: showId, name: name.trim(), outputs }
+    setSaving(true)
+    setSaveError(null)
+    putShowCue(id.trim(), payload)
+      .then((response) => onSaved(response))
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <div className="sm-inspector">
+      <p className="sm-eyebrow sm-eyebrow--accent">{isNew ? 'New cue' : `Editing ${cue.payload.name}`}</p>
+      <p className="sm-small sm-muted">In this show. Cues can only reference this show's own assets.</p>
+
+      <div className="sm-inspector__group">
+        <Field label="Name">
+          {(props) => (
+            <Input
+              {...props}
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value)
+                if (!idTouched) setId(slugify(e.target.value))
+              }}
+            />
+          )}
+        </Field>
+        {isNew && (
+          <Field label="Id" help="From the name, editable.">
+            {(props) => (
+              <Input
+                {...props}
+                className="sm-data"
+                value={id}
+                onChange={(e) => {
+                  setId(e.target.value)
+                  setIdTouched(true)
+                }}
+              />
+            )}
+          </Field>
+        )}
+      </div>
+
+      <div className="sm-inspector__group">
+        <h3 className="sm-subsection__title">What does this cue do?</h3>
+        <p className="sm-small sm-muted">Pick at least one.</p>
+        <div className="sm-form-column">
+          <div className="sm-stack-3">
+            <Choice type="checkbox" checked={kinds.has('render')} onChange={() => toggleKind('render')} label="Render: drive lighting and video from a sequence" />
+          </div>
+          <div className="sm-stack-3">
+            <Choice type="checkbox" checked={kinds.has('audio')} onChange={() => toggleKind('audio')} label="Audience audio: play an audio asset on the program bus" />
+          </div>
+          <div className="sm-stack-3">
+            <Choice type="checkbox" checked={kinds.has('ltc')} onChange={() => toggleKind('ltc')} label="LTC: emit timecode for Resolume" />
+          </div>
+          <div className="sm-stack-3">
+            <Choice type="checkbox" checked={kinds.has('announcement')} onChange={() => toggleKind('announcement')} label="Announcement: speak over the background bed" />
+          </div>
+        </div>
+      </div>
+
+      {kinds.has('render') && (
+        <div className="sm-inspector__group">
+          <Field label="Sequence" help="The logical sequence name, not an FSEQ filename or asset id.">
+            {(props) => <Input {...props} value={renderSequence} onChange={(e) => setRenderSequence(e.target.value)} />}
+          </Field>
+        </div>
+      )}
+
+      {kinds.has('audio') && (
+        <div className="sm-inspector__group">
+          <Field label="Audio asset">
+            {(props) => (
+              <Select {...props} value={audioAsset} onChange={(e) => setAudioAsset(e.target.value)}>
+                <option value="">Choose an asset…</option>
+                {audioAssets.map((asset) => (
+                  <option key={asset.id} value={asset.sequence}>
+                    {asset.sequence} · {asset.sizeBytes} bytes
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <p className="sm-small sm-faint">
+            This show's current audio assets, by logical sequence. A cue stores the sequence, never an asset id:
+            the coordinator resolves it that way in <span className="sm-data">assetsync/cuecatalog.go</span>.
+          </p>
+        </div>
+      )}
+
+      {kinds.has('announcement') && (
+        <div className="sm-inspector__group">
+          <p className="sm-eyebrow">While it plays</p>
+          <Segmented
+            label="While it plays"
+            value={announcementPolicy}
+            onChange={setAnnouncementPolicy}
+            options={[
+              { value: 'duck', label: 'Duck' },
+              { value: 'mix', label: 'Mix' },
+              { value: 'interrupt', label: 'Interrupt' },
+            ]}
+          />
+          <div className="sm-grid sm-grid--auto sm-stack-3">
+            <Field label="Duck to (dB)" help="Applies only to the Duck policy.">
+              {(props) => <Input {...props} value={duckGainDb} onChange={(e) => setDuckGainDb(e.target.value)} disabled={announcementPolicy !== 'duck'} />}
+            </Field>
+            <Field label="Fade (ms)">{(props) => <Input {...props} value={fadeMillis} onChange={(e) => setFadeMillis(e.target.value)} />}</Field>
+          </div>
+        </div>
+      )}
+
+      <div className="sm-inspector__actions">
+        <span className="sm-small sm-muted">{isNew ? 'Creates revision 1' : `Active revision ${cue?.revision}`}</span>
+        <div className="sm-btn-row">
+          <Button variant="quiet" onClick={onCancel} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={save}
+            disabled={saving || !saveGate.allowed || blockReason !== null}
+            title={!saveGate.allowed ? saveGate.reason : (blockReason ?? undefined)}
+          >
+            {saving ? 'Saving…' : isNew ? 'Create cue' : 'Save cue'}
+          </Button>
+        </div>
+      </div>
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+    </div>
+  )
+}

@@ -601,3 +601,49 @@ a.sm-tile:hover {
 
 /* A form column that stays readable rather than stretching to the page width. */
 .sm-form-column { max-width: 660px; }
+
+/* A row of short mono badges naming what a cue or asset declares — RND/AUD/LTC/ANN. */
+.sm-chip-row {
+  display: inline-flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.sm-chip {
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-chip);
+  font: var(--t-meta);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* A group header row inside a table body, separating one logical sequence's rows from the next. */
+.sm-table__group {
+  background: var(--sunken);
+}
+
+.sm-table__group td {
+  padding: 10px 14px;
+}
+
+/* A manual file upload target. */
+.sm-dropzone {
+  display: grid;
+  place-items: center;
+  gap: var(--s-2);
+  padding: var(--s-5) var(--s-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--sunken);
+  text-align: center;
+  cursor: pointer;
+}
+
+.sm-dropzone input[type='file'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

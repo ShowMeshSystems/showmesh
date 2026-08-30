@@ -55,3 +55,13 @@ export function formatClock(iso: string | null): string | null {
   // 24-hour: the operator reads this at night, and 20:41 is unambiguous.
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
 }
+
+/** Date and clock time: "26 Aug 14:02". For history events spanning more than one day. */
+export function formatDateClock(iso: string | null): string | null {
+  const ms = parseIsoMs(iso)
+  if (ms === null) return null
+  const date = new Date(ms)
+  const day = date.toLocaleDateString([], { day: 'numeric', month: 'short' })
+  const clock = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  return `${day} ${clock}`
+}
