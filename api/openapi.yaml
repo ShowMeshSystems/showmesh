@@ -11188,8 +11188,10 @@ components:
         channel index reused within programChannels, or repeated within
         ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a
         channel already claimed by programChannels), and
-        "audio-node-route-mismatch" (programRoute and ltcRoute naming the
-        same device route). Two are this contract's own additions, both scoped to
+        "audio-node-route-mismatch" (a non-empty ltcRoute naming a
+        DIFFERENT device route from programRoute: program and LTC leave
+        through one interface in one clock domain, ADR-018, so the two
+        must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to
         `POST /integrations/fpp/playlist-entry-observations`:
         "unsupported-observation-schema-version" (`schemaVersion` is not
         `1`, `400`) and "observation-entry-key-mismatch" (the coordinator
