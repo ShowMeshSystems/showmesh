@@ -26,6 +26,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/settings` | #213 | Settings, seven tabs, and the D-002 build string |
 | `ui-rebuild/access` | #214 | Access |
 | `ui-rebuild/resolume` | #215 | Resolume Config |
+| `ui-rebuild/assets` | #216 | The Assets library at `/assets` |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
@@ -41,8 +42,7 @@ Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
 `OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
 order. In short:
 
-1. The Assets library at `/assets`. Resolume Config is done (#215).
-2. The stale-write guard (D-014 B) retrofitted onto the shipped editors, the
+1. The stale-write guard (D-014 B) retrofitted onto the shipped editors, the
    four folded addresses the not-found map is missing, and Phase 2: delete the
    old system and add the check that keeps it deleted.
 3. Track C: the API facts D-016 asks for. This one leaves UI-only scope, and
@@ -175,6 +175,10 @@ and never the published description. Follow the code.
   node-routing tab derives its verdict from `DecodeAudioNodePayload` instead.
   Filed as its own issue; the contract is still wrong until that lands.
 
+- **An `Asset`'s hash field is `contentHash`, not `hash`**, and it carries
+  `id`, `mediaType`, `createdAt`, `createdByPrincipalName`, `supersededAt` and
+  `current`. A hand-written fixture that guesses those names renders a blank
+  page, because `hashLabel` throws on `undefined`.
 - **`resolume.layer.<id>.ready` reports a string, never a boolean.**
   `formatReadiness` emits `ready`, `not_ready: <terms>` or
   `unknown: <reasons>`. The same shape applies to
