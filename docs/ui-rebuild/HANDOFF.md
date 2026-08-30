@@ -1,54 +1,35 @@
 # Operator UI rebuild: handoff
 
-Written 2026-08-29 at the end of the first build session. Read this, then
-`REBUILD-PLAN.md`, then `OPEN-DECISIONS.md`. `CONTROL-INVENTORY.md` is the
-record of what the deleted UI could do.
+Read this, then `REBUILD-PLAN.md`, then `OPEN-DECISIONS.md`.
+`CONTROL-INVENTORY.md` is the record of what the deleted UI could do.
 
 ## What state the work is in
 
-Branch stack, each PR based on the one before it so its diff is only its own
+A branch stack, each PR based on the one before it so its diff is only its own
 screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 
-| Branch | PR | Screen |
+| Branch | PR | Contents |
 |---|---|---|
 | (on the feature branch, `1a1eed1`) | none | Clear-out, shell, session bands, not-found |
 | `ui-rebuild/dashboard` | #196 | Dashboard |
 | `ui-rebuild/live-control` | #197 | Live Control |
 | `ui-rebuild/show-night` | #198 | Show Night |
-| `ui-rebuild/monitor` | #199 | Monitor · Fleet |
+| `ui-rebuild/monitor` | #199 | Monitor · Fleet, and the D-005 to D-010 rulings |
+| `ui-rebuild/session-states` | #200 | Session states |
 
-All four are green on all ten checks, verified 2026-08-29.
+All green on all ten checks. Nothing is merged: Eric reviews and merges, and a
+session does not merge for him unless he says so in that session.
 
-Nothing has been merged. Eric reviews and merges; do not merge for him unless
-he says so in that session.
+#199 carries two things rather than one. The rulings commit landed on that
+branch by mistake and Eric ruled "leave it" rather than pay for a force-push to
+split it.
 
 ## What to do next
 
-Eric's ruling at the end of the session: **the login screen comes before the
-remaining Monitor facets.** He could not sign in to look at the rebuild, which
-makes every later screen unverifiable for him. The plan's order otherwise
-stands.
-
-1. **Session States** (`Session States.dc.html`). The signed-out and bootstrap
-   bands already exist in `app/SessionBand.tsx` and work, but they are the
-   minimum: name, password, machine token. The mock adds what is missing: the
-   device-name field (required, and the thing that lets an administrator revoke
-   one device in Access), the "Use a token instead" and "Clear stored token"
-   affordances, the two sign-in refusals (`proxy` and `rate-limit`, both already
-   distinguished by `domain/session.ts`'s `describeApiError`), the connecting
-   state, and the never-collected blanking plate that explains why every
-   destination is empty. `views/NotFound` is already rebuilt; the mock's fuller
-   old-address table is not.
-2. Monitor · Signals, Activity, Capabilities, Manifest.
-3. Shows workspace, five tabs. Then Node detail, Settings, Access, Resolume
-   Config, then the Phase 2 deletion check.
-
-## The decisions are ruled
-
-D-005 through D-009 are answered in `OPEN-DECISIONS.md`, and D-010 records the
-standing rule Eric added on top of them: a control the API cannot serve is built
-anyway, inert, and loudly marked. Read that file at the start of every screen; a
-ruling there overrides the guide.
+1. Monitor · Signals, Activity, Capabilities, Manifest.
+2. Shows workspace, five tabs.
+3. Node detail, Settings, Access, Resolume Config.
+4. Phase 2: delete the old system and add the check that keeps it deleted.
 
 ## How to run and verify
 
@@ -67,7 +48,7 @@ nginx.
 the mock's scenario. Nothing it shows is evidence about the real fleet, and a
 screenshot of it is never hardware or deployment verification. Say so in a PR.
 
-Traps that cost time this session, in the order they will bite again:
+Traps that have cost time, in the order they will bite again:
 
 - **Every fixture response needs a `ShowMesh-API-Version: 1` header.** Without
   it `client.ts` throws `IncompatibleVersionError` on every call and the whole
@@ -99,14 +80,27 @@ Traps that cost time this session, in the order they will bite again:
   happened yet is the kit's `pending` tone.
 - A command reports what the coordinator reported. Night commands answer 202:
   say accepted, never done.
+- Not being able to read something is not the same fact as that thing being
+  absent, stopped or empty. The chrome bar got this wrong until #200.
 - `ui/src/domain` gets one module back at a time, reviewed on the way in, when a
   screen needs it. Nothing returns because it used to exist.
-- Do not say "seam" in anything Eric reads. It is one PR per screen.
+- Never write "canonical" or "seam" in anything Eric reads. It is one PR per
+  screen.
+
+## What builds these screens
+
+Sonnet subagents build one screen at a time against a written brief; the
+orchestrating session reviews the diff rather than the report, fixes what the
+review finds, runs the gates itself, and writes the documentation. Reviews have
+caught, so far: a second `h1` outside `main`, an `aria-expanded` on a button
+controlling no disclosure, a dropped route mapping, a kit element importing app
+domain code, and comments over the three-line limit. Read the diff.
 
 ## What is not verified
 
 No screen has been checked against a real coordinator, real nodes, a real FPP
 instance, a real Resolume instance, or a real night session. Every browser check
-was Chrome against the fixture, in dark, light and contrast, at 1372 or 1421 CSS
-pixels rather than exactly 1280. Hardware and deployment evidence is Eric's, and
+so far was Chrome against the fixture, in dark, light and contrast, at 1372 or
+1421 CSS pixels rather than exactly 1280, and no browser check at all was run
+for #199's rulings work or #200. Hardware and deployment evidence is Eric's, and
 none of it has been collected for this branch.
