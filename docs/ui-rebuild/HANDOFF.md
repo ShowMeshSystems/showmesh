@@ -5,6 +5,22 @@ Read this, then `REBUILD-PLAN.md`, then `OPEN-DECISIONS.md`.
 
 ## What state the work is in
 
+**The whole rebuild is integrated on `feature/operator-ui-overhaul-2` at
+`3695cb7`, 44 commits, merged as a fast-forward of the entire stack on
+2026-08-30.** `main` was not touched and is not involved.
+
+`make check` passes on the integrated branch, which was the first time all
+twenty PRs existed together. Every PR passed all ten of its own GitHub checks
+before the merge.
+
+GitHub could only auto-close #196, because every other PR targeted its parent
+branch rather than the feature branch, and it refuses to retarget a PR whose
+commits are already in the new base. The rest were closed with a comment
+naming the merge commit. Their branches, diffs and bodies all remain readable;
+nothing was discarded.
+
+## How the stack was built
+
 A branch stack, each PR based on the one before it so its diff is only its own
 screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 
