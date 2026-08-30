@@ -53,7 +53,7 @@ var ErrCorruptKeyFile = errors.New("signingkey: key file exists but is not a val
 // signing. A Manager is read-only after construction and safe for
 // concurrent use (ed25519 signing has no mutable state).
 //
-// Verification is deliberately NOT a Manager method — see this package's
+// Verification is deliberately NOT a Manager method; see this package's
 // doc comment. Call [coordsig.Signature.Verify] directly.
 type Manager struct {
 	private ed25519.PrivateKey
@@ -87,7 +87,7 @@ func WithLogger(logger *slog.Logger) Option {
 // this key must remain usable for signing even when its file protection
 // has been loosened by something outside this process. That mirrors
 // ADR-025 decision 6's instinct that a trust-anchor problem degrades and
-// reports rather than stopping something that does not need to stop —
+// reports rather than stopping something that does not need to stop,
 // applied here as "keep signing, but say loudly that the anchor's
 // on-disk protection needs attention," never as a startup failure.
 func LoadOrGenerate(dataDir string, opts ...Option) (*Manager, error) {
@@ -144,11 +144,11 @@ func (m *Manager) PublicKey() ed25519.PublicKey {
 }
 
 // Sign signs payload with the coordinator's private key. It never panics:
-// a Manager whose private key is not exactly ed25519.PrivateKeySize bytes
-// — which [LoadOrGenerate] never itself returns, but which this method
-// still guards against rather than trusting that invariant forever — is
-// reported as [ErrCorruptKeyFile] instead of being passed to
-// crypto/ed25519.Sign, which panics on that input.
+// a Manager whose private key is not exactly ed25519.PrivateKeySize bytes,
+// which [LoadOrGenerate] never itself returns but which this method still
+// guards against rather than trusting that invariant forever, is reported
+// as [ErrCorruptKeyFile] instead of being passed to crypto/ed25519.Sign,
+// which panics on that input.
 func (m *Manager) Sign(payload []byte) (coordsig.Signature, error) {
 	if len(m.private) != ed25519.PrivateKeySize {
 		return nil, ErrCorruptKeyFile

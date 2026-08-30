@@ -9,7 +9,7 @@ import (
 )
 
 // checkFilePermissions verifies that path's mode carries no group or
-// other permission bits (ADR-025 decision 4's coordinator-side intent —
+// other permission bits (ADR-025 decision 4's coordinator-side intent;
 // see [filePerm]'s doc comment) and that its owning uid matches this
 // process's own (os.Getuid()): the coordinator is both the writer and the
 // only legitimate reader of its own signing key, so an owner mismatch

@@ -115,7 +115,7 @@ func Run() int {
 	// generated once per deployment, on first run, and persisted under
 	// cfg.DataDir. It never leaves this data volume. Track J seam J1 (PR 1
 	// of 2) only builds and wires this foundation; nothing in this
-	// coordinator signs anything with it yet — Track J seam J1 PR 2's
+	// coordinator signs anything with it yet. Track J seam J1 PR 2's
 	// fallback program compiler is the first real caller of
 	// signingMgr.Sign, and Track J seam J3 is what delivers
 	// signingMgr.PublicKey() to a node at enrollment.

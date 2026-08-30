@@ -8,13 +8,13 @@
 // shape, the same role pkg/cuecatalog and pkg/fppidentity already play
 // for other coordinator/agent boundaries (see pkg/cuecatalog's own
 // package comment). internal/agent must never import
-// internal/coordinator (or vice versa) — this package is the deliberate
+// internal/coordinator (or vice versa); this package is the deliberate
 // third place both sides depend on instead.
 //
 // A verifying key's delivery and pinning on a node (ADR-025 decisions 3,
 // 4, 5, and 7) are Track J seam J3, not this package. This package's job
 // ends at "does this signature verify against this public key for this
-// payload" — it holds no opinion about what a failed verification means
+// payload"; it holds no opinion about what a failed verification means
 // to its caller.
 package coordsig
 
@@ -38,7 +38,7 @@ var ErrSignatureSize = errors.New("coordsig: signature is not a valid ed25519 si
 // ErrSignatureInvalid reports that a structurally valid signature did not
 // verify: a tampered payload, a signature made with a different key, or a
 // wrong key presented at verification time all report this identical
-// error, by design — ADR-025's threat model (a cloned card, a wrong
+// error, by design. ADR-025's threat model (a cloned card, a wrong
 // restore, a cache from another installation) does not need or want a
 // caller to distinguish which of those happened, only that the payload is
 // not trustworthy under this key.

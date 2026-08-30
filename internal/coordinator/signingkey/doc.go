@@ -8,7 +8,7 @@
 // This package holds NO verification logic. ADR-025's verify function
 // must be callable identically by this coordinator and by internal/agent
 // (Track J seam J3), and internal/agent must never import
-// internal/coordinator — see pkg/coordsig's package comment for the
+// internal/coordinator. See pkg/coordsig's package comment for the
 // shared package both sides depend on instead, the same role
 // pkg/cuecatalog and pkg/fppidentity already play for other
 // coordinator/agent boundaries.
