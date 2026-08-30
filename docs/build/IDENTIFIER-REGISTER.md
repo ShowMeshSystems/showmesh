@@ -1076,7 +1076,7 @@ The store schema version, bumped by migrations in
 | v10 | shipped | Track F seam F2 (night-session lifecycle, ADR-038; cue outbox filled by seam F4) |
 | v11 | reserved | credential storage moves from the data directory into SQLite (owner, 2026-08-18, Linear SM-95) |
 | v12 | reserved, may be released | durable action-invocation attribution and lifecycle state (Linear SM-100/SM-102) |
-| v13 | reserved | rename `commands.requested_revision` to an honest name and formalize its per-family discriminator (owner, 2026-08-19, Linear SM-111) |
+| v13 | released | reserved 2026-08-19 for the `commands.requested_revision` rename and never built; that work runs as v22 |
 | v14 | shipped | SM-150: latest FPP playlist-entry observation per instance (RES-018 section 6) |
 | v15 | shipped | Track H seam H2: FPP playlist definition storage (FPP-PLUGIN-COORDINATOR-CONTRACTS.md §3, TRACK-H-H2-SPEC.md §3) |
 | v16 | shipped | per-endpoint observed FPP instance uuid history (`fpp_instance_uuid_observations`), closing the gap FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.5 recorded between `fpp.endpoints`, the plugin's `instanceUuid`, and `node_declarations` |
@@ -1085,15 +1085,23 @@ The store schema version, bumped by migrations in
 | v19 | shipped | operator-facing audio gain moves to decibels: every stored `audio.settings` revision's `defaultMaxBackgroundGain`/`duckTargetGain` is rewritten to `defaultMaxBackgroundGainDb`/`duckTargetGainDb` so an existing revision reads back at the same audible level |
 | v20 | shipped | every stored `audio.settings` revision is backfilled with any of the seven currently-required top-level keys it is missing, using each field's own stated default, so a revision written before `ltcFrameRate`, `ltcDefaultStartOffset` and `duckTargetGainDb` joined the required set still decodes and can be pushed |
 | v21 | reserved | the multi-node audio branch's `audio_sessions` re-key, from `id` alone to `(node_id, id)`, so two nodes dispatching the same session id keep separate desired state and revision; existing rows migrated in place. Built and merged on `dev/multi-audio` as v20 before v20 was taken on `main`; it renumbers to v21 when that branch takes `main` |
-| v22 | unallocated | free |
+| v22 | reserved | Lane 17a SM-111: renaming `commands.requested_revision` to an honest name and formalizing its per-family discriminator (owner, 2026-08-19). Supersedes the v13 reservation below, which was made before v14 through v21 were taken |
 | v23 | reserved | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, if J1 needs a table (ADR-048, TRACK-J-fpp-fallback.md J1) |
 | v24+ | unallocated | free |
 
-**v23 was taken while v22 was still free, deliberately.** Another
-in-flight branch is holding v22, so J1 took the next number rather than the
-lowest free one. That follows this file's own rule at the top: reserving
-costs nothing and a collision costs a rename across a whole branch. v22's
-row stays `free` here until the branch holding it registers what it is for.
+**v23 was taken while v22 was still free, deliberately.** Lane 17a was
+holding v22 unregistered, so J1 took the next number rather than the lowest
+free one. That follows this file's own rule at the top: reserving costs
+nothing and a collision costs a rename across a whole branch. v22 is now
+registered to SM-111 in the row above, so the gap is closed rather than
+standing.
+
+**SM-111 moves from v13 to v22, and v13 is released.** The rename was
+reserved as v13 on 2026-08-19 and never built; v14 through v21 were taken by
+other work in the eleven days since, so the number is long past. v13's own
+sequencing note below still records why the rename waited, and it is kept
+because it names the three writers a rename has to see at once. The number it
+runs as is v22.
 
 **v13 must not run until PRs #17, #18 and #19 are merged**, and that is a
 sequencing constraint rather than a preference. The column's writers are
