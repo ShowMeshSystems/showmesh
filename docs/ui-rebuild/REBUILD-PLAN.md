@@ -90,8 +90,9 @@ visual language.
 | Apply the D-005 to D-010 rulings | Done | |
 | Session states: signed out, bootstrap, connecting, not found | Done | #200 |
 | Monitor · Signals, Activity, Capabilities, Manifest | Done | #201 |
-| Shows workspace: shell, show list, Identity, Playlists | Done | |
-| Shows workspace: Cues, Assets, Presentation, Automation | Next | |
+| Shows workspace: shell, show list, Identity, Playlists | Done | #202 |
+| Shows workspace: Cues, Assets | Done | #203 |
+| Shows workspace: Presentation, Automation | Next | |
 | Node detail | | |
 | Settings, seven tabs | | |
 | Access | | |
