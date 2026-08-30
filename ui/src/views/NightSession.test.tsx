@@ -348,8 +348,9 @@ describe('NightSession', () => {
           steps: [
             {
               sequence: 'background',
-              phase: 'restingBackgroundStart',
+              phase: 'restingBackground:node-a',
               cueName: 'resting-bed-start',
+              nodeId: 'node-a',
               kind: 'start',
               actionRevision: 3,
               state: 'resolved',
@@ -365,6 +366,7 @@ describe('NightSession', () => {
     await waitFor(() => expect(screen.getByText('resting-bed-start')).toBeVisible())
     expect(screen.getByRole('heading', { name: 'Background audio' })).toBeVisible()
     expect(screen.getByText('background')).toBeVisible()
+    expect(screen.getByText('node-a')).toBeVisible()
     expect(screen.getByText('start')).toBeVisible()
     expect(screen.getByText('3')).toBeVisible()
     expect(screen.getByText('confirmed')).toBeVisible()
@@ -384,8 +386,9 @@ describe('NightSession', () => {
           steps: [
             {
               sequence: 'background',
-              phase: 'restingBackgroundStart',
+              phase: 'restingBackground:node-a',
               cueName: 'resting-bed-start',
+              nodeId: 'node-a',
               kind: 'start',
               actionRevision: 1,
               state: 'resolved',
@@ -394,9 +397,14 @@ describe('NightSession', () => {
               resolvedAt: '2026-08-22T00:00:02Z',
             },
             {
+              // A refused restore on node-b is answerable from its
+              // own nodeId alone, distinct from node-a's confirmed start
+              // above — the two-node acceptance scenario this section
+              // exists to make visible.
               sequence: 'announcement',
-              phase: 'announcementRestore',
+              phase: 'announcementSession:start:enterResting:node-b',
               cueName: 'vo-announcement',
+              nodeId: 'node-b',
               kind: 'resume',
               actionRevision: 2,
               state: 'resolved',
@@ -407,8 +415,9 @@ describe('NightSession', () => {
             },
             {
               sequence: 'background',
-              phase: 'restingBackgroundGain',
+              phase: 'restingBackground:node-a',
               cueName: 'resting-bed-gain',
+              nodeId: 'node-a',
               kind: 'gain',
               actionRevision: 4,
               state: 'resolved',
@@ -442,6 +451,10 @@ describe('NightSession', () => {
     expect(unconfirmed).not.toEqual(refused)
     expect(screen.getByText('node declined to raise gain past the configured ceiling')).toBeVisible()
     expect(screen.getByText('no expected response declared')).toBeVisible()
+    // The refused restore is reported against node-b specifically, while
+    // node-a's own two steps (start, gain) are unaffected by it.
+    expect(screen.getByText('node-b')).toBeVisible()
+    expect(screen.getAllByText('node-a')).toHaveLength(2)
   })
 
   // A session with no background audio configured (or none started this

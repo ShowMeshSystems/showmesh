@@ -97,10 +97,18 @@ type NightBackgroundAudioStep struct {
 	// step belongs to, so a failure is attributable without reading the
 	// internal phase string: "background" for the resting bed's own
 	// apply/gain/start/pause/resume/stop, "announcement" for an
-	// announcement session's clear and start.
-	Sequence       string  `json:"sequence"` // "background" | "announcement"
-	Phase          string  `json:"phase"`
-	CueName        string  `json:"cueName"`
+	// announcement session's clear, apply, and start.
+	Sequence string `json:"sequence"` // "background" | "announcement"
+	Phase    string `json:"phase"`
+	CueName  string `json:"cueName"`
+
+	// NodeID is the audio.node this step addressed. The bed and an
+	// announcement each accept a list of target nodes, and every one
+	// of them, including the first, reports through this SAME array
+	// (owner ruling: uniform reporting, no first-node exception), so a
+	// refused step on one node is answerable from this field alone,
+	// without reading Phase or knowing any sort order.
+	NodeID         string  `json:"nodeId"`
 	Kind           string  `json:"kind"`
 	ActionRevision int64   `json:"actionRevision"`
 	State          string  `json:"state"` // "pending" | "dispatched" | "resolved" | "ambiguous"

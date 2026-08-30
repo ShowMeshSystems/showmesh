@@ -288,8 +288,16 @@ func (h *handlers) nightDispatchCueAudio(ctx context.Context, now time.Time, iss
 	params["invocationId"] = idemKey
 	params["revision"] = uint64(actionRevision)
 
+	// This generic single-target engine only ever reaches ONE node
+	// (nightAnnouncementDeclaredTarget's own doc comment): AudioNodeIDs[0]
+	// for every caller, since every caller either already carries exactly
+	// one node or has already been clamped to its own first.
+	nodeID := ""
+	if len(target.AudioNodeIDs) > 0 {
+		nodeID = target.AudioNodeIDs[0]
+	}
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, audioDispatchInput{
-		Action: target.AudioAction, NodeID: target.AudioNodeID, SessionID: target.AudioSessionID,
+		Action: target.AudioAction, NodeID: nodeID, SessionID: target.AudioSessionID,
 		Params: params, Revision: uint64(actionRevision), IdempotencyKey: idemKey,
 		IssuerID: issuer.PrincipalID, IssuerName: issuer.PrincipalName,
 		IssuerForm: issuer.Form, IssuerCredentialID: issuer.CredentialID, ClientAddr: issuer.ClientAddr,

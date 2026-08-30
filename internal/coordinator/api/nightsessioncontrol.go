@@ -1285,7 +1285,9 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	if ba := payload.Resting.BackgroundAudio; ba != nil {
 		checks = append(checks, h.nightCheckBackgroundAudioAssets(ctx, payload.Show, ba))
 		checks = append(checks, nightCheckBackgroundAudioItemTransition(ba))
-		checks = append(checks, nightCheckAudioOutputCapabilities(ba.OutputNodeID()))
+		for _, nodeID := range ba.OutputNodeIDs() {
+			checks = append(checks, nightCheckAudioOutputCapabilities(nodeID))
+		}
 	}
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
 	checks = append(checks, nightCheckAnnouncementAssets(allCues))
@@ -1493,20 +1495,84 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 	}
 	out := make([]v1.NightBackgroundAudioStep, 0, len(rows)+len(announcementRows))
 	for _, row := range rows {
-		step, ok := nightParseBackgroundAudioRow(row)
+		step, nodeID, ok := nightParseBackgroundAudioRow(row)
 		if !ok {
 			continue
 		}
-		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceBackground, step.Kind))
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceBackground, step.Kind, nodeID))
 	}
 	for _, row := range announcementRows {
-		kind, ok := nightParseAnnouncementRow(row)
+		kind, nodeID, ok := nightParseAnnouncementRow(row)
 		if !ok {
 			continue
 		}
-		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind))
+		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind, nodeID))
 	}
+	out = append(out, mapNightAnnouncementPrimaryApplySteps(ctx, deps, rec)...)
 	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+}
+
+// mapNightAnnouncementPrimaryApplySteps mirrors each announcement cue's
+// own bound-action apply outcome - already recorded in cues[] via the
+// generic per-cue engine (nightRunCue), under no node suffix at all, for
+// reasons unrelated to this array (barrier satisfaction gates on that
+// same row) - into backgroundAudio.steps[], tagged with that action's
+// own FIRST target node. Owner ruling: every node a cue's own action
+// names, including its first, is answerable from backgroundAudio.steps[]
+// alone; this never dispatches anything, it only projects a row
+// [mapNightCues] and barrier evaluation already depend on, unchanged,
+// into this array too.
+func mapNightAnnouncementPrimaryApplySteps(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) []v1.NightBackgroundAudioStep {
+	if rec.ID == "" || rec.ConfigObjectID == "" {
+		return nil
+	}
+	rev, err := deps.Config.GetConfigRevision(ctx, config.NightSessionConfigKind, rec.ConfigObjectID, rec.ConfigRevision)
+	if err != nil {
+		return nil
+	}
+	var payload config.NightSessionPayload
+	if err := jsonUnmarshalStrict(rev.PayloadJSON, &payload); err != nil {
+		return nil
+	}
+	rows, err := deps.NightSessions.ListNightCueOutboxRows(ctx, rec.ID, rec.Cycle)
+	if err != nil {
+		return nil
+	}
+	byKey := make(map[string]store.NightCueOutboxRecord, len(rows))
+	for _, row := range rows {
+		byKey[row.Phase+"\x00"+row.CueName] = row
+	}
+
+	type phaseCues struct {
+		phase string
+		cues  []config.NightSessionCue
+	}
+	lists := []phaseCues{
+		{nightPhaseEnterShow, payload.EnterShow.Cues},
+		{nightPhaseEnterResting, payload.EnterResting.Cues},
+		// fadeOut replays the enterShow cue definitions under its own
+		// phase, mirroring mapNightCues' own appendDispatchedNightCues.
+		{nightPhaseFadeOut, payload.EnterShow.Cues},
+	}
+
+	var out []v1.NightBackgroundAudioStep
+	for _, list := range lists {
+		for _, cue := range list.cues {
+			if cue.Role != config.NightSessionCueRoleAnnouncement {
+				continue
+			}
+			row, has := byKey[list.phase+"\x00"+cue.Name]
+			if !has {
+				continue
+			}
+			action, _, err := nightResolveShowAction(ctx, deps.Config, cue.Action)
+			if err != nil || !nightAnnouncementTargetDeclarable(action.Target) || len(action.Target.AudioNodeIDs) == 0 {
+				continue
+			}
+			out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, nightAnnouncementStepApply, action.Target.AudioNodeIDs[0]))
+		}
+	}
+	return out
 }
 
 // mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read
@@ -1841,9 +1907,9 @@ func (h *handlers) nightReconcileCueOutbox(ctx context.Context, now time.Time, r
 
 // nightMapAudioStep is one durable audio step's wire shape, shared by the
 // background-audio and announcement-session sequences.
-func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind string) v1.NightBackgroundAudioStep {
+func nightMapAudioStep(row store.NightCueOutboxRecord, sequence, kind, nodeID string) v1.NightBackgroundAudioStep {
 	return v1.NightBackgroundAudioStep{
-		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, Kind: kind,
+		Sequence: sequence, Phase: row.Phase, CueName: row.CueName, NodeID: nodeID, Kind: kind,
 		ActionRevision: row.ActionRevision,
 		State:          row.State, Outcome: row.Outcome, Reason: row.OutcomeReason,
 		DispatchedAt: formatTimePtr(row.DispatchedAt), ResolvedAt: formatTimePtr(row.ResolvedAt),

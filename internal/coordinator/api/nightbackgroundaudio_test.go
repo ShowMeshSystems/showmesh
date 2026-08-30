@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
@@ -177,6 +178,103 @@ func TestNightAdvanceBackgroundAudio_AppliesFullPinnedPlaylist(t *testing.T) {
 	}
 	if items[1]["itemId"] != "track-2" || items[1]["assetId"] != "asset-2" {
 		t.Fatalf("playlist.items[1] = %v, want track-2/asset-2", items[1])
+	}
+}
+
+// twoNodeBackgroundAudioConfig builds a resting.backgroundAudio config
+// whose two items name DIFFERENT target nodes - the list-of-targets
+// shape, one item per node.
+func twoNodeBackgroundAudioConfig(nodeA, nodeB string) *config.NightSessionBackgroundAudio {
+	return &config.NightSessionBackgroundAudio{
+		Items: []config.NightSessionBackgroundAudioItem{
+			{ItemID: "track-a", Asset: config.NightSessionAssetRef{Show: "halloween", Sequence: "bg-a", Target: nodeA}},
+			{ItemID: "track-b", Asset: config.NightSessionAssetRef{Show: "halloween", Sequence: "bg-b", Target: nodeB}},
+		},
+		Repeat: config.NightSessionBackgroundRepeatPlaylist, Resume: config.NightSessionBackgroundResumeRestart,
+		ItemTransition: config.NightSessionItemTransitionSequential, MaxGainDb: -10,
+	}
+}
+
+// TestNightAdvanceBackgroundAudio_TwoNodesIndependentProgress is the
+// acceptance proof at unit level: two nodes both play the bed
+// (OutputNodeIDs derives both from the items' own distinct targets), and
+// a refused step on one node is reported against that node while the
+// other's own progress is completely unaffected - never blocked,
+// corrupted, or silently retried on the other's behalf.
+func TestNightAdvanceBackgroundAudio_TwoNodesIndependentProgress(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-a", "node-a", "asset-a")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-b", "node-b", "asset-b")
+	ba := twoNodeBackgroundAudioConfig("node-a", "node-b")
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	pub.resultsByNode = map[string]mqttproto.ResultPayload{
+		"node-a": confirmedResultForAction("apply", sessionID, "position"),
+		"node-b": {
+			Outcome: mqttproto.OutcomeRefused, Reason: "node-b refuses this apply",
+			Evidence: &mqttproto.ResultEvidence{Value: map[string]any{"outcome": "refused", "reason": "node-b refuses this apply"}},
+		},
+	}
+
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+
+	history, err := h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	nodeASteps := nightBackgroundAudioStepsForNode(history, "node-a")
+	nodeBSteps := nightBackgroundAudioStepsForNode(history, "node-b")
+	if len(nodeASteps) != 1 || nodeASteps[0].Row.State != nightCueStateResolved || nodeASteps[0].Row.Outcome != nightCueOutcomeConfirmed {
+		t.Fatalf("node-a steps = %+v, want exactly one resolved/confirmed apply", nodeASteps)
+	}
+	if len(nodeBSteps) != 1 || nodeBSteps[0].Row.State != nightCueStateResolved || nodeBSteps[0].Row.Outcome != nightCueOutcomeRefused {
+		t.Fatalf("node-b steps = %+v, want exactly one resolved/refused apply", nodeBSteps)
+	}
+
+	// A second tick: node-a advances to gain (its own apply confirmed).
+	// node-b's refused apply is left for an operator, never auto-retried
+	// (nightAdvanceBackgroundAudioForNode's "apply did not confirm; not
+	// auto-retrying" rule) - and, crucially, dealing with node-b never
+	// touches node-a's own already-advancing state.
+	before := pub.count()
+	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
+	if pub.lastAction != "audio.gain.set" {
+		t.Fatalf("second tick's last dispatched action = %q, want audio.gain.set (node-a's own next step)", pub.lastAction)
+	}
+	if got := pub.count() - before; got != 1 {
+		t.Fatalf("second tick dispatched %d command(s), want exactly 1 (node-a's own gain; node-b's refused apply must not be retried)", got)
+	}
+
+	history, err = h.nightBackgroundAudioHistory(context.Background(), rec)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	nodeASteps = nightBackgroundAudioStepsForNode(history, "node-a")
+	nodeBSteps = nightBackgroundAudioStepsForNode(history, "node-b")
+	if len(nodeASteps) != 2 || nodeASteps[1].Step.Kind != nightBGStepGain {
+		t.Fatalf("node-a steps after its second tick = %+v, want apply then gain", nodeASteps)
+	}
+	if len(nodeBSteps) != 1 {
+		t.Fatalf("node-b steps after node-a's own second tick = %+v, want still exactly 1 (unaffected by node-a's own progress)", nodeBSteps)
+	}
+
+	// GET /night/session's own wire mapping: every node reports through
+	// backgroundAudio.steps[] with its own nodeId (owner ruling: uniform
+	// reporting, no first-node exception).
+	wire := mapNightBackgroundAudio(context.Background(), h.deps, rec)
+	nodeIDs := map[string]int{}
+	for _, step := range wire.Steps {
+		if step.Sequence != v1.NightAudioSequenceBackground {
+			continue
+		}
+		nodeIDs[step.NodeID]++
+	}
+	if nodeIDs["node-a"] != 2 {
+		t.Fatalf("wire steps tagged node-a = %d, want 2 (apply, gain)", nodeIDs["node-a"])
+	}
+	if nodeIDs["node-b"] != 1 {
+		t.Fatalf("wire steps tagged node-b = %d, want 1 (its own refused apply, isolated from node-a's)", nodeIDs["node-b"])
 	}
 }
 
@@ -496,7 +594,7 @@ func TestNightAdvanceBackgroundAudio_CrashAfterCommitBeforeDispatch(t *testing.T
 	if pub.count() != 0 {
 		t.Fatalf("publish count = %d, want 0 (crash landed before dispatch)", pub.count())
 	}
-	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackground, "bg-0001-apply")
+	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackgroundNode("node-a"), "bg-0001-apply")
 	if err != nil {
 		t.Fatalf("GetNightCueOutboxRow: %v", err)
 	}
@@ -538,7 +636,7 @@ func TestNightAdvanceBackgroundAudio_CrashAfterDispatchBeforePersist(t *testing.
 	pub.result = confirmedResultForAction("apply", sessionID, "position")
 	h.nightAdvanceBackgroundAudio(context.Background(), testNow, rec)
 
-	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackground, "bg-0001-apply")
+	row, err := st.GetNightCueOutboxRow(context.Background(), rec.ID, rec.Cycle, nightPhaseRestingBackgroundNode("node-a"), "bg-0001-apply")
 	if err != nil {
 		t.Fatalf("GetNightCueOutboxRow: %v", err)
 	}

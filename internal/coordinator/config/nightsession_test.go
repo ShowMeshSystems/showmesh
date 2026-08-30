@@ -525,6 +525,49 @@ func TestDecodeNightSessionPayloadTwoBackgroundAudioItemsSameAssetIsLegal(t *tes
 	}
 }
 
+// TestDecodeNightSessionPayloadDistinctBackgroundAudioTargetsIsLegal
+// proves the relaxation: items no longer need to agree on target.
+// OutputNodeIDs returns every distinct target, sorted, and each node's
+// own items are recoverable via ItemsForTarget.
+func TestDecodeNightSessionPayloadDistinctBackgroundAudioTargetsIsLegal(t *testing.T) {
+	raw := strings.Replace(validNightSessionJSON,
+		`"items": [
+        {"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-1"}
+      ]`,
+		`"items": [
+        {"itemId": "track-1", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-2"},
+        {"itemId": "track-2", "show": "halloween-2026", "sequence": "bg-track-1", "target": "audio-node-1"}
+      ]`, 1)
+	p, verr := DecodeNightSessionPayload(raw, nightSessionTestEndpoints, alwaysTrueAssetCurrent, alwaysTrueActionResolver, alwaysTrueInterlockSignalResolver)
+	if verr != nil {
+		t.Fatalf("unexpected error: %+v", verr)
+	}
+	ba := p.Resting.BackgroundAudio
+	nodes := ba.OutputNodeIDs()
+	if len(nodes) != 2 || nodes[0] != "audio-node-1" || nodes[1] != "audio-node-2" {
+		t.Fatalf("OutputNodeIDs = %+v, want [audio-node-1 audio-node-2]", nodes)
+	}
+	node1Items := ba.ItemsForTarget("audio-node-1")
+	if len(node1Items) != 1 || node1Items[0].ItemID != "track-2" {
+		t.Fatalf("ItemsForTarget(audio-node-1) = %+v", node1Items)
+	}
+	node2Items := ba.ItemsForTarget("audio-node-2")
+	if len(node2Items) != 1 || node2Items[0].ItemID != "track-1" {
+		t.Fatalf("ItemsForTarget(audio-node-2) = %+v", node2Items)
+	}
+}
+
+// TestDecodeNightSessionPayloadSingleTargetOutputNodeIDs pins the
+// single-node case's OutputNodeIDs shape - existing installations must
+// keep behaving exactly as OutputNodeID's old singular contract did.
+func TestDecodeNightSessionPayloadSingleTargetOutputNodeIDs(t *testing.T) {
+	p := decodeValidNightSession(t)
+	nodes := p.Resting.BackgroundAudio.OutputNodeIDs()
+	if len(nodes) != 1 || nodes[0] != "audio-node-1" {
+		t.Fatalf("OutputNodeIDs = %+v, want [audio-node-1]", nodes)
+	}
+}
+
 func TestDecodeNightSessionPayloadDuplicateCueName(t *testing.T) {
 	raw := strings.Replace(validNightSessionJSON,
 		`{"name": "lighting-fade", "role": "lighting", "action": "lighting-fade-out", "offsetMs": -20000, "barrier": true}`,
