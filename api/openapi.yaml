@@ -14455,7 +14455,9 @@ components:
         inventory report exists, regardless of state - never an error and
         never a basis for deletion. observedAt is null exactly when state
         is "unknown": there is no evidence an unknown verdict rests on, so
-        there is nothing to date it by.
+        there is nothing to date it by. verdicts is additive (D-016 item
+        2): a client that predates it keeps working unchanged reading
+        every other field exactly as before.
       additionalProperties: false
       required: [node, state, reason, missing, gaps, extra, observedAt]
       properties:
@@ -14481,6 +14483,27 @@ components:
         observedAt:
           type: [string, "null"]
           format: date-time
+        verdicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetSyncVerdict"
+          description: >-
+            One entry per asset this node was expected to hold, naming
+            what its own reported inventory says about that asset's
+            bytes. Absent, or an empty array, whenever no fresh inventory
+            report exists for this node - the identical condition extra
+            is populated under, for the identical reason: a stale report
+            is not evidence of what a node currently holds. When present,
+            this array has exactly one entry per asset the node was
+            expected to hold, keyed by assetId - never by
+            runtimeFilename, which Asset's own description already says
+            is not identity. state is "held" (the node's inventory holds
+            this asset's own content hash), "superseded" (the node does
+            not hold that hash, but holds the content hash of a row that
+            used to be current for this exact asset's (show, sequence,
+            targetKind, target) identity before being superseded), or
+            "absent" (the node holds nothing recognizable for this
+            identity at all).
     MissingAsset:
       type: object
       description: One expected asset a manifest found the node does not currently hold.
@@ -14527,6 +14550,29 @@ components:
           type: string
         sizeBytes:
           type: integer
+    AssetSyncVerdict:
+      type: object
+      description: >-
+        One expected asset's per-node sync verdict (D-016 item 2): exists
+        only for an asset this node was expected to hold, keyed by
+        assetId, and derived only from facts the manifest already computes
+        for missing/extra - never a filename join and never a timestamp.
+      additionalProperties: false
+      required: [assetId, sequence, filename, contentHash, sizeBytes, state]
+      properties:
+        assetId:
+          type: string
+        sequence:
+          type: string
+        filename:
+          type: string
+        contentHash:
+          type: string
+        sizeBytes:
+          type: integer
+        state:
+          type: string
+          enum: [held, superseded, absent]
     NodeAssetManifestResponse:
       type: object
       description: The body of GET /nodes/{nodeId}/assets.

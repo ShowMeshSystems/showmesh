@@ -5241,7 +5241,7 @@ export interface components {
             /** @description Required, and must name a declared node, when targetKind is "node". */
             target?: string;
         };
-        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. */
+        /** @description One node's asset readiness verdict (Track E seam E5, ADR-020, ADR-028): "what should this node hold" versus "what does it actually hold". state is "ready", "not_ready", or "unknown". reason is null only when state is "ready"; every other state names the specific cause. missing and gaps are populated only when state is "not_ready". extra is populated whenever a fresh inventory report exists, regardless of state - never an error and never a basis for deletion. observedAt is null exactly when state is "unknown": there is no evidence an unknown verdict rests on, so there is nothing to date it by. verdicts is additive (D-016 item 2): a client that predates it keeps working unchanged reading every other field exactly as before. */
         NodeAssetManifest: {
             node: string;
             /** @enum {string} */
@@ -5252,6 +5252,8 @@ export interface components {
             extra: components["schemas"]["ExtraAsset"][];
             /** Format: date-time */
             observedAt: string | null;
+            /** @description One entry per asset this node was expected to hold, naming what its own reported inventory says about that asset's bytes. Absent, or an empty array, whenever no fresh inventory report exists for this node - the identical condition extra is populated under, for the identical reason: a stale report is not evidence of what a node currently holds. When present, this array has exactly one entry per asset the node was expected to hold, keyed by assetId - never by runtimeFilename, which Asset's own description already says is not identity. state is "held" (the node's inventory holds this asset's own content hash), "superseded" (the node does not hold that hash, but holds the content hash of a row that used to be current for this exact asset's (show, sequence, targetKind, target) identity before being superseded), or "absent" (the node holds nothing recognizable for this identity at all). */
+            verdicts?: components["schemas"]["AssetSyncVerdict"][];
         };
         /** @description One expected asset a manifest found the node does not currently hold. */
         MissingAsset: {
@@ -5271,6 +5273,16 @@ export interface components {
             contentHash: string;
             filename: string;
             sizeBytes: number;
+        };
+        /** @description One expected asset's per-node sync verdict (D-016 item 2): exists only for an asset this node was expected to hold, keyed by assetId, and derived only from facts the manifest already computes for missing/extra - never a filename join and never a timestamp. */
+        AssetSyncVerdict: {
+            assetId: string;
+            sequence: string;
+            filename: string;
+            contentHash: string;
+            sizeBytes: number;
+            /** @enum {string} */
+            state: "held" | "superseded" | "absent";
         };
         /** @description The body of GET /nodes/{nodeId}/assets. */
         NodeAssetManifestResponse: {

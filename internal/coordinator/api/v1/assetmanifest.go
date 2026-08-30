@@ -34,6 +34,24 @@ type ExtraAsset struct {
 	SizeBytes   int64  `json:"sizeBytes"`
 }
 
+// AssetSyncVerdict is one expected asset's per-node sync verdict (D-016
+// item 2), added additively (ADR-020): a client that has never heard of
+// this field keeps reading node/state/reason/missing/gaps/extra/observedAt
+// exactly as before. It exists only for an EXPECTED asset, is keyed by
+// assetId (never by filename — ADR-028 decision 1), and state is one of
+// "held", "superseded" (the node holds bytes this exact asset identity
+// used to serve, before being superseded), or "absent" (the node holds
+// nothing recognizable for this identity at all). See
+// assetsync.AssetVerdictState for the derivation.
+type AssetSyncVerdict struct {
+	AssetID     string `json:"assetId"`
+	Sequence    string `json:"sequence"`
+	Filename    string `json:"filename"`
+	ContentHash string `json:"contentHash"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	State       string `json:"state"`
+}
+
 // NodeAssetManifest is one node's asset readiness verdict: the body of
 // GET /nodes/{nodeId}/assets, and one element of GET /assets/manifest's
 // "nodes" array.
@@ -51,14 +69,18 @@ type ExtraAsset struct {
 // node lacks. ObservedAt is null when State is "unknown": there is no
 // evidence an unknown verdict rests on, so there is nothing to date it by
 // — never defaulted to serverTime.
+// Verdicts is additive (ADR-020): absent, or an empty array, whenever no
+// fresh inventory report exists to derive it from — exactly the same
+// condition Extra is populated under. See assetsync.NodeManifest.Verdicts.
 type NodeAssetManifest struct {
-	Node       string         `json:"node"`
-	State      string         `json:"state"`
-	Reason     *string        `json:"reason"`
-	Missing    []MissingAsset `json:"missing"`
-	Gaps       []AssetGap     `json:"gaps"`
-	Extra      []ExtraAsset   `json:"extra"`
-	ObservedAt *string        `json:"observedAt"`
+	Node       string             `json:"node"`
+	State      string             `json:"state"`
+	Reason     *string            `json:"reason"`
+	Missing    []MissingAsset     `json:"missing"`
+	Gaps       []AssetGap         `json:"gaps"`
+	Extra      []ExtraAsset       `json:"extra"`
+	ObservedAt *string            `json:"observedAt"`
+	Verdicts   []AssetSyncVerdict `json:"verdicts,omitempty"`
 }
 
 // NodeAssetManifestResponse is the body of GET /nodes/{nodeId}/assets.

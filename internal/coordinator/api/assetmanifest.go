@@ -183,6 +183,17 @@ func mapNodeAssetManifest(m assetsync.NodeManifest, syncEnabled bool, failures A
 	}
 	out.Extra = extra
 
+	if len(m.Verdicts) > 0 {
+		verdicts := make([]v1.AssetSyncVerdict, 0, len(m.Verdicts))
+		for _, v := range m.Verdicts {
+			verdicts = append(verdicts, v1.AssetSyncVerdict{
+				AssetID: v.AssetID, Sequence: v.SequenceID, Filename: v.Filename,
+				ContentHash: v.ContentHash, SizeBytes: v.SizeBytes, State: string(v.State),
+			})
+		}
+		out.Verdicts = verdicts
+	}
+
 	switch m.State {
 	case assetsync.ManifestUnknown:
 		reason := m.Reason
