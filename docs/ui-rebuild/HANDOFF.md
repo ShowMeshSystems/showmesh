@@ -50,6 +50,45 @@ order. In short:
 3. Track C: the API facts D-016 asks for. This one leaves UI-only scope, and
    its FPP-staleness half is a question for Eric, not a build.
 
+## Verifying against a real coordinator, not the fixture
+
+The fixture is convenient and it lied three times in one session: a screen
+rendered blank because a hand-written payload guessed a field name, and the
+unit tests never caught it because they build payloads with the same guess.
+Run the real thing instead. It needs no broker, no fleet and no Docker:
+
+```
+mkdir -p /tmp/smbench
+SHOWMESH_DATA_DIR=/tmp/smbench SHOWMESH_HTTP_ADDR=:8098 \
+  SHOWMESH_MQTT_BROKER=tcp://127.0.0.1:1 go run ./cmd/showmesh-coordinator
+SHOWMESH_DEV_API=http://localhost:8098 npx vite --port 5175   # from ui/
+```
+
+- **Check `deploy/.env` does not exist before starting anything.** There is
+  only a committed `.env.example`, and every variable in it is commented out,
+  so a coordinator started this way configures zero FPP endpoints and contacts
+  nothing. A `.env` naming real hosts would make it poll the live fleet.
+- Point `SHOWMESH_MQTT_BROKER` at a dead port. Left at its default it finds
+  whatever broker is on `localhost:1883`, which on this machine is a shared
+  one that correctly rejected it. Nothing was published, but do not rely on
+  the broker's ACL to keep a bench isolated.
+- `SHOWMESH_HTTP_PORT` is not the variable. It is `SHOWMESH_HTTP_ADDR`.
+- A fresh data dir reports `bootstrapRequired: true` and writes a one-time
+  code to `bootstrap-code.txt` in that directory. Claiming it creates an
+  administrator and sets a password, so an agent should not: it is the one
+  step that needs a person, and every write-path check is behind it.
+
+Verified this way on 2026-08-30, unclaimed state only: all eighteen routes
+render, none blank, nothing leaks `undefined` or `NaN`, the bootstrap band
+outranks every route as the guide requires, and the empty installation reads
+as a settled zero rather than missing evidence. Every endpoint answers in
+under a millisecond, so a timeout seen while rapidly switching routes is the
+navigation abandoning its own request, not a slow coordinator.
+
+Unauthenticated, `GET /config/*` and `GET /assets` answer 401 while
+`/snapshot` answers 200. Reads being open covers the node inventory, FPP
+state and event history, not configuration or the asset store.
+
 ## How to run and verify
 
 A screenshot of an empty page proves nothing, so the visual gate needs data.
@@ -203,8 +242,12 @@ the node page's asset re-sync does. Never write a path that does not exist.
 
 ## What is not verified
 
-No screen has been checked against a real coordinator, real nodes, a real FPP
-instance, a real Resolume instance, or a real night session. Every browser check
+Every screen's read surface has now been checked against a real coordinator in
+its unclaimed state, per the section above. **No write has been.** Signing in
+needs an administrator, and creating one is the step an agent does not take, so
+every save, create, refusal, upload, issue and revoke in this rebuild rests on
+unit tests alone. No real nodes, no real FPP instance, no real Resolume
+instance and no real night session have been involved at any point. Every browser check
 so far was Chrome against the fixture, and no browser check at all was run for
 #199's rulings work or #200. Hardware and deployment evidence is Eric's, and
 none of it has been collected for this branch.
