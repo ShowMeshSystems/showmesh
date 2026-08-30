@@ -315,6 +315,77 @@ reintroduce the binding the ADR exists to hide. The grant to watch is
 therefore `config:write`, which decides what an action may be bound to, not
 this one.
 
+## Node capability identifiers
+
+`capability.ID` in `pkg/capability/id.go`: what a node advertises it can
+actually do, read by the coordinator and rendered by the Operator UI. The
+syntax is two or more lowercase dot-separated segments, each starting with a
+letter (`idPattern`), so no underscores and no digits in a leading position.
+
+**This section did not exist until 2026-08-30**, which is why the vocabulary
+in `knownIDs` was never reserved anywhere. ADR-002 makes an unknown identifier
+valid, so nothing fails loudly when two branches mint two spellings for one
+ability; that is the same silent condition the audit action strings section
+above was added for.
+
+| Capability | Status | Owner |
+|---|---|---|
+| `matrix.render` | shipped | ARCHITECTURE section 6 |
+| `video.playback` | shipped | ARCHITECTURE section 6 |
+| `media.cache` | shipped | ARCHITECTURE section 6 |
+| `display.hdmi` | shipped | ARCHITECTURE section 6 |
+| `transport.ndi.send` | shipped | ARCHITECTURE section 6 |
+| `transport.ndi.receive` | shipped | ARCHITECTURE section 6 |
+| `audio.engine` | shipped | ARCHITECTURE section 6 |
+| `audio.output.local` | shipped | ARCHITECTURE section 6 |
+| `audio.output.fm` | shipped | ARCHITECTURE section 6 |
+| `audio.output.ltc` | shipped | ARCHITECTURE section 6 |
+| `audio.output.dante` | shipped | ARCHITECTURE section 6 |
+| `timecode.ltc.observe` | shipped | ARCHITECTURE section 6 |
+| `process.supervise` | shipped | ARCHITECTURE section 6 |
+| `audio.playback.background` | reserved | Lane 17a SM-201 |
+| `audio.playback.announcement` | reserved | Lane 17a SM-201 |
+| `audio.playback.playlist` | reserved | Lane 17a SM-201 |
+| `audio.playback.loop` | reserved | Lane 17a SM-201 |
+| `audio.playback.gain` | reserved | Lane 17a SM-201 |
+| `audio.playback.fade` | reserved | Lane 17a SM-201 |
+| `audio.playback.seek` | reserved | Lane 17a SM-201 |
+| `audio.playback.position` | reserved | Lane 17a SM-201 |
+| `audio.mix.concurrent` | reserved | Lane 17a SM-201 |
+| `audio.mix.duck` | reserved | Lane 17a SM-201 |
+| `audio.mix.interrupt` | reserved | Lane 17a SM-201 |
+| `audio.transition.sequential` | reserved | Lane 17a SM-201 |
+| `audio.transition.gapless` | reserved | Lane 17a SM-201 |
+| `audio.transition.crossfade` | reserved | Lane 17a SM-201 |
+
+**`audio.playback`, `audio.multichannel`, `audio.dante` and
+`timecode.ltc.generate` are withdrawn**, recorded in `withdrawnIDs` and
+still syntactically valid so a node advertising one fails informatively
+rather than being dropped. They are not free to re-mint.
+
+**The fourteen Lane 17a rows are RESTING-MODE section 13's own vocabulary,
+one identifier per ability it names.** That section requires a configured
+audio output to declare the background, announcement, playlist, mix, duck,
+interrupt, loop, gain, fade, seek, position and requested item-transition
+abilities a night session needs, and
+`internal/coordinator/api/nightaudioreadiness.go` reports
+`resting:background-audio-output-capabilities:<node>` as `not_verifiable`
+naming exactly those, because none of them exists. `audio.mix.concurrent` is
+the section's bare "mix": whether the output can carry more than one session
+at once, which is a different statement from `audio.mix.duck`.
+
+**They are split across three namespaces deliberately.** `audio.playback.*`
+is what one session can be asked to do, `audio.mix.*` is what happens when
+two sessions meet on one output, and `audio.transition.*` is the closed
+`pkg/audio.ItemTransition` vocabulary `ValidateItemTransitionSupport` already
+gates on. A single flat `audio.*` list would have made the item-transition
+members indistinguishable from the per-session abilities, and the transition
+check is the one with a caller that refuses today.
+
+**A builder ships the rows its declaration actually supports and leaves the
+rest reserved**, on the rule the observation signals section states: releasing
+a name only to re-mint it later is how a spelling drifts.
+
 ## Collector source ids
 
 The `source` field on an observation and the id in `GET /api/v1/snapshot`'s
@@ -769,6 +840,23 @@ here so the choice does not also mint a spelling.
 If the builder takes the readiness-condition or API-refusal shape instead,
 both rows stay reserved and unshipped rather than being released.
 
+**Lane 17a reservation, 2026-08-30.** SM-86 makes audit-store unavailability
+stop refusing actions, which means the condition has to be legible somewhere
+other than the refusal it removes. The shape is the builder's call, on the
+Lane 18b `coordinator.audio.config.push.*` precedent above: a coordinator-level
+observation, a field on an existing response, or both. The pair is reserved
+here so the choice does not also mint a spelling.
+
+| Signal | Status | Owner |
+|---|---|---|
+| `coordinator.audit.store.state` | reserved | Lane 17a SM-86 (whether the coordinator can write to its audit store) |
+| `coordinator.audit.store.reason` | reserved | Lane 17a SM-86 (why it cannot; required whenever the state is not usable) |
+
+If the builder surfaces the condition without an observation, both rows stay
+reserved and unshipped rather than being released. SM-86 mints no audit action
+string, no exit code and no API path: it removes three refusals and records
+`attributionDegraded` the way safety-class actions already do.
+
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the
 signal exists so the threshold can be set from measurement, and a future
@@ -1083,6 +1171,30 @@ to call them. They are excluded from `api/openapi.yaml` by intent per
 [ADR-044](../decisions/ADR-044-agent-inbound-http-listener.md) decision 2,
 specified in [TRACK-E-FPP-CONNECT.md](TRACK-E-FPP-CONNECT.md), and tested
 there. They reserve nothing here and collide with nothing here.
+
+**Lane 17a wave 1 component and field reservations, 2026-08-30.** Schema
+component names and response field names are not otherwise tracked here,
+for the reason this section already gives: two branches editing
+`api/openapi.yaml` collide visibly. These four are recorded anyway because
+Lane 20.1's SM-315 is editing the night-session API on `dev/multi-audio` at
+the same time, so the names have to be agreed before the fold rather than at
+it.
+
+| Name | Status | Owner |
+|---|---|---|
+| `AudioSessionCommandParams` (discriminated on `command`) | reserved | Lane 17a SM-259 |
+| `AudioSessionApplyParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionSeekParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionGainParams` | reserved | Lane 17a SM-259 |
+| `AudioSessionGainFadeParams` | reserved | Lane 17a SM-259 |
+| `pinnedMaxGainDb` on `NightSessionState.backgroundAudio` | reserved | Lane 17a SM-202 |
+
+**`pinnedMaxGainDb` is named apart from the configured `maxGainDb`
+deliberately.** `ConfigNightSessionBackgroundAudio.maxGainDb` is what the
+configuration currently says; this field is the ceiling the running session
+pinned when it started, and the 2026-08-28 ruling turns on the two differing
+across a revision. Reusing the one name for both values would make the read
+side unable to say which it meant.
 
 **The one thing that does not conflict visibly is a shared `enum`.** Track D
 and Track E both added a kind to `ConfigRevisionsResponse` and the union
