@@ -12,6 +12,80 @@ my recommendation, and what the answer unblocks. Answered entries move to
 
 ## Open
 
+### D-014 A config write can silently erase another writer's work
+
+**What.** `PUT /config/show.playlist/{id}` and `PUT /config/show/{id}` are both
+full replacements with no concurrency control: no revision parameter, no
+`If-Match`, and no `409` or `412` in either operation's responses in
+`api/openapi.yaml`. If two writers edit the same object, the second write wins
+and the first is gone. Neither writer is told.
+
+**Why now.** The UI is about to become the easy way to edit configuration, and
+`showmeshctl` keeps parity by design. Two people on a load-in day, or one person
+and a script, is not an exotic case. The window is the whole time a form sits
+open, which on a settings page is minutes.
+
+**Options.**
+
+- A. Leave it. Last write wins, silently. What ships today.
+- B. **UI-side detection.** Re-read the object immediately before writing and
+  refuse the save when `currentRevision` moved since load, showing what changed.
+  Buildable today with no coordinator change. It narrows the window to the
+  round trip rather than closing it, and cannot help `showmeshctl` or any other
+  client.
+- C. **Contract-side prevention.** Accept the read revision on the write and
+  answer 409 when it has moved. Closes the window for every client, not just
+  this one. Needs a coordinator change and an `api/openapi.yaml` change.
+
+**Recommendation.** B now, because it is honest and cheap and turns a silent
+loss into a visible refusal. C is the real fix and deserves its own issue: the
+API is the public contract, and a client that cannot detect a lost update is a
+contract gap, not a UI gap. A is only defensible while the UI is the sole
+writer, which it is not.
+
+**Unblocks.** Nothing. Every config editor ships either way, and every one of
+them carries the hazard until this is ruled.
+
+**Ruling:**
+
+---
+
+### D-015 Playlists: should the mismatch policy be settable per playlist
+
+**What.** `Show Authoring.dc.html` draws the "On mismatch" control (Hold, Black
+and silence, Safe cue) and annotates it: "Not wired yet, this is expected to
+follow Show vs Program mode rather than being set per playlist." But
+`ConfigShowPlaylist` has `mismatchPolicy` today, permitted when the runner is
+`fpp`, with `safeCueRef` required when it is `safeCue`. So the API supports per
+playlist and the design note says it should not be.
+
+**Why now.** The control is on a screen that shipped. It is currently drawn
+inert with the mock's own note, and the stored value is written back unchanged
+so nothing set by `showmeshctl` is lost.
+
+**Options.**
+
+- A. Inert, as built. Matches the mock exactly, including its note. An operator
+  cannot set the policy from the UI, but the coordinator's default applies and
+  `showmeshctl` can still set it.
+- B. Make it live per playlist. The schema serves it today, and it is a real
+  show-safety behaviour: what happens when FPP plays something the playlist
+  cannot resolve. Contradicts the design note.
+- C. Move it to Show vs Program mode, as the note intends, and remove it from
+  this screen. Needs that mode to exist and needs the per-playlist field
+  deprecated or ignored.
+
+**Recommendation.** A now. C is what the note describes and it is a design
+decision, not an implementation one. B only if you want the capability before
+Show vs Program mode exists, and it is worth knowing that a value set per
+playlist now may stop being honoured when C lands.
+
+**Unblocks.** Nothing. The screen shipped.
+
+**Ruling:**
+
+---
+
 ### D-011 Shows/Playlists: creation flows the mocks draw a button for but not a form
 
 **What.** `Shows.dc.html` draws a "New show" button and `Show Authoring.dc.html`
