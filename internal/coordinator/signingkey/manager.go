@@ -180,6 +180,12 @@ func LoadOrGenerate(dataDir string, opts ...Option) (*Manager, error) {
 // name or lost this Link, returns [errConcurrentGenerationInProgress] so
 // [LoadOrGenerate] loops back and loads the winner's key instead of
 // trusting a keypair this call generated but never actually published.
+// Fsyncing the file's contents is not durable on its own: the Link that
+// adds path's directory entry needs its own fsync of the parent
+// directory, or a power cut right after a successful Link can still lose
+// that directory entry, leaving path absent on the next boot. Only once
+// that directory sync below also succeeds is this call's publish actually
+// durable, not merely visible to this process.
 func generateAndPersist(path string, o options) (*Manager, error) {
 	tmpPath := path + tmpFileSuffix
 
@@ -231,6 +237,26 @@ func generateAndPersist(path string, o options) (*Manager, error) {
 		return nil, fmt.Errorf("signingkey: publish key file %q: %w", path, linkErr)
 	}
 	_ = os.Remove(tmpPath)
+
+	// Sync the directory entry the Link above just added. Fsyncing the
+	// temporary file earlier only guarantees its CONTENTS reached disk;
+	// the directory entry that makes path resolve to those contents is a
+	// separate piece of metadata that a power cut can still lose even
+	// after a successful Link, which would silently invalidate every
+	// node's pinned cache the moment this deployment generates a
+	// replacement key on its next start, exactly what ErrCorruptKeyFile's
+	// own doc comment says must never happen as a side effect.
+	dir, dirErr := os.Open(filepath.Dir(path))
+	if dirErr != nil {
+		return nil, fmt.Errorf("signingkey: open key directory to sync publishing %q: %w", path, dirErr)
+	}
+	if syncErr := dir.Sync(); syncErr != nil {
+		_ = dir.Close()
+		return nil, fmt.Errorf("signingkey: sync key directory after publishing %q: %w", path, syncErr)
+	}
+	if closeErr := dir.Close(); closeErr != nil {
+		return nil, fmt.Errorf("signingkey: close key directory after publishing %q: %w", path, closeErr)
+	}
 
 	warnIfPermissionsLoose(path, o)
 
