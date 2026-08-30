@@ -475,9 +475,9 @@ func knownCueRevisions(catalog assetsync.Catalog) map[string]int64 {
 // to special-case it as present, on the theory that an unauthored sequence
 // is an out-of-scope authoring gap rather than a sync failure; that theory
 // is what let this coordinator authorize an activation its own node then
-// refused (internal/agent's own [assetPresent]/ADR-043 decision 6 has
-// always treated an empty filename as absent, never present) — the exact
-// disagreement this coordinator's readiness answer must never produce.
+// refused (internal/agent's own [assetPresent] has always treated an empty
+// filename as absent, never present) — the exact disagreement this
+// coordinator's readiness answer must never produce.
 // [assetsync.ComputeNodeManifest]'s own Missing/Gaps split is unaffected:
 // this function answers a narrower question (can THIS Cue activate on THIS
 // node right now), not that one.
