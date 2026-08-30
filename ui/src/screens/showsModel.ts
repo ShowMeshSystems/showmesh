@@ -427,3 +427,44 @@ export function lastRunForMacro(macroRuns: readonly MacroRunSummary[], macroId: 
     .filter((run) => run.macroObjectId === macroId)
     .reduce<MacroRunSummary | null>((latest, run) => (latest === null || run.createdAt > latest.createdAt ? run : latest), null)
 }
+
+/** One macro's own label plus the 1-based step numbers that reference an action, for an action-edit pane's "Used by" line. */
+export type MacroUsage = { label: string; stepNumbers: number[] }
+
+export function macroUsagesForAction(macros: readonly { payload: { label: string; steps: readonly ConfigShowMacroStep[] } }[], actionId: string): MacroUsage[] {
+  const usages: MacroUsage[] = []
+  for (const macro of macros) {
+    const stepNumbers = macro.payload.steps.reduce<number[]>((acc, step, index) => {
+      if (step.action === actionId) acc.push(index + 1)
+      return acc
+    }, [])
+    if (stepNumbers.length > 0) usages.push({ label: macro.payload.label, stepNumbers })
+  }
+  return usages
+}
+
+/** The coordinator refuses a safetyClass that disagrees with the target's own registered class, so three of the four integrations derive it; mqtt registers none and stays a live choice. */
+export type SafetyClass = 'none' | 'blackout' | 'stop' | 'powerOff'
+
+/** FPPCommandDecision11ClassForAction (internal/coordinator/api/fppcommand_dispatch.go): only stopPlaylist and stopPlaylistGracefully are "stop", every other fpp primitive is "none". */
+const FPP_STOP_PRIMITIVES = new Set(['stopPlaylist', 'stopPlaylistGracefully'])
+
+export function fppDerivedSafetyClass(primitive: string): SafetyClass {
+  return FPP_STOP_PRIMITIVES.has(primitive) ? 'stop' : 'none'
+}
+
+/** resolumeActionDeclaredSafetyClass (internal/coordinator/config/showaction.go): blackout and clearLayer are "blackout", the other five resolume actions are "none". */
+const RESOLUME_BLACKOUT_ACTIONS = new Set(['blackout', 'clearLayer'])
+
+export function resolumeDerivedSafetyClass(action: string): SafetyClass {
+  return RESOLUME_BLACKOUT_ACTIONS.has(action) ? 'blackout' : 'none'
+}
+
+/** audioActionDeclaredSafetyClass (internal/coordinator/config/showaction.go): session.stop and session.clear are "stop", output.mute is "blackout", every other audio action is "none". */
+const AUDIO_STOP_ACTIONS = new Set(['audio.session.stop', 'audio.session.clear'])
+
+export function audioDerivedSafetyClass(audioAction: string): SafetyClass {
+  if (AUDIO_STOP_ACTIONS.has(audioAction)) return 'stop'
+  if (audioAction === 'audio.output.mute') return 'blackout'
+  return 'none'
+}
