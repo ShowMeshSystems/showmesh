@@ -21,6 +21,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/shows-tabs` | #203 | Shows · Cues, Assets |
 | `ui-rebuild/shows-tabs-2` | #204 | Shows · Presentation, Automation |
 | `ui-rebuild/creation-1` | #207 | New show, new playlist, the stale-write guard |
+| `ui-rebuild/creation-2` | #208 | New action, action editing, new macro |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
@@ -36,16 +37,14 @@ Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
 `OPEN-DECISIONS.md` opens with the ruling index; `REBUILD-PLAN.md` carries the
 order. In short:
 
-1. New action, action editing and new macro, from `Object Creation.dc.html`
-   sections 3, 4 and 5. New show and new playlist are done (#207).
-2. Node detail.
-3. Settings, seven tabs.
-4. Access.
-5. Resolume Config.
-6. The Assets library at `/assets`.
-7. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
-8. Phase 2: delete the old system and add the check that keeps it deleted.
-9. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
+1. Node detail. The whole creation pattern is done (#207 and #208).
+2. Settings, seven tabs.
+3. Access.
+4. Resolume Config.
+5. The Assets library at `/assets`.
+6. The stale-write guard (D-014 B) retrofitted onto the shipped editors.
+7. Phase 2: delete the old system and add the check that keeps it deleted.
+8. Track C: the API facts D-016 asks for. This one leaves UI-only scope.
 
 ## How to run and verify
 
@@ -118,6 +117,30 @@ review finds, runs the gates itself, and writes the documentation. Reviews have
 caught, so far: a second `h1` outside `main`, an `aria-expanded` on a button
 controlling no disclosure, a dropped route mapping, a kit element importing app
 domain code, and comments over the three-line limit. Read the diff.
+
+## Where a safety class comes from
+
+`PUT /config/show.action/{id}` refuses a `safetyClass` that disagrees with the
+target's own registered class, so three of the four integrations derive it
+rather than asking. The tables are in `showsModel.ts` with their Go sources
+named beside them, and each has a unit test.
+
+- fpp: `stopPlaylist` and `stopPlaylistGracefully` are `stop`, the other six
+  primitives are `none`.
+- resolume: `blackout` and `clearLayer` are `blackout`, the other five are
+  `none`.
+- audio: `audio.session.stop` and `audio.session.clear` are `stop`,
+  `audio.output.mute` is `blackout`, everything else is `none`.
+- mqtt registers nothing, so the operator declares it. That is the pattern's
+  one legitimate disabled save on an action.
+
+Three facts the Object Creation mock gets wrong against the coordinator's own
+decode functions, all followed to the source rather than to the drawing:
+a resolume target carries no `instanceId` (`decodeResolumeTarget` reads only
+`action` and `ref`), `audioSessionId` is required rather than optional
+(`decodeAudioTarget` calls `decodeRequiredString` for it), and an fpp target's
+instance is `instanceId`, the id `POST /fpp/{instanceId}/commands` uses, not
+the `instanceUuid` a playlist binding carries.
 
 ## The stale-write guard
 

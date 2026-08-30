@@ -228,6 +228,45 @@ createServer((req, res) => {
     { section: 'mainPlaylist', position: 0, sequenceName: 'carol-of-the-bells.fseq', mediaName: '' },
     { section: 'mainPlaylist', position: 1, sequenceName: 'wizards-in-winter.fseq', mediaName: '' },
   ] })
+  if (p === '/actions/bindings' || p.startsWith('/actions/bindings?')) return json(res, { serverTime: NOW(), bindings: [
+    { actionId: 'resting-fade-out', label: 'Resting fade-out', show: 'winter-ridge-2026', state: 'ok', reason: 'Layer "Ambience" resolved against the stored composition.' },
+    { actionId: 'strike-garage-projector', label: 'Strike garage projector', show: 'winter-ridge-2026', state: 'unknown', reason: 'media-garage has not reported since 20:41:07, so the sweep could not resolve this target.' },
+  ] })
+  if (p === '/resolume/actions') return json(res, { serverTime: NOW(), actions: [
+    { name: 'launchClip', params: [{ name: 'layer', kind: 'string', required: true }, { name: 'clip', kind: 'string', required: true }], auditExempt: false, coordinatorRequired: true },
+    { name: 'clearLayer', params: [{ name: 'layer', kind: 'string', required: true }], auditExempt: true, coordinatorRequired: true },
+    { name: 'blackout', params: [], auditExempt: true, coordinatorRequired: true },
+    { name: 'launchColumn', params: [{ name: 'column', kind: 'string', required: true }], auditExempt: false, coordinatorRequired: true },
+    { name: 'selectDeck', params: [{ name: 'deck', kind: 'string', required: true }], auditExempt: false, coordinatorRequired: true },
+    { name: 'setLayerBypass', params: [{ name: 'layer', kind: 'string', required: true }, { name: 'bypassed', kind: 'bool', required: true }], auditExempt: false, coordinatorRequired: true },
+    { name: 'setLayerMaster', params: [{ name: 'layer', kind: 'string', required: true }, { name: 'master', kind: 'number', required: true }], auditExempt: false, coordinatorRequired: true },
+  ] })
+  if (p === '/config/audio.node') return json(res, { serverTime: NOW(), kind: 'audio.node', objects: [
+    { id: 'audio-node-01', label: 'audio-node-01', show: '', currentRevision: 4, updatedAt: ago(86_400_000) },
+    { id: 'barn-player', label: 'barn-player', show: '', currentRevision: 2, updatedAt: ago(86_400_000) },
+  ] })
+  if (p.startsWith('/config/show.action/')) {
+    const id = p.split('/').pop()
+    const resolume = id === 'resting-fade-out'
+    return json(res, {
+      serverTime: NOW(), kind: 'show.action', id, revision: resolume ? 8 : 2,
+      payload: resolume
+        ? { show: 'winter-ridge-2026', label: 'Resting fade-out', description: '', safetyClass: 'none', target: { integration: 'resolume', action: 'launchClip', ref: { layer: 'Ambience', clip: 'Snow' } } }
+        : { show: 'winter-ridge-2026', label: 'Strike garage projector', description: '', safetyClass: 'none', target: { integration: 'mqtt', broker: 'site', publish: { topic: 'proj/garage/power', payload: 'ON', qos: 1, retain: false }, expect: { kind: 'match', topic: 'proj/garage/state', value: 'ON', deadlineSeconds: 20 } } },
+      updatedAt: ago(86_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
+  if (p.startsWith('/config/show.macro/')) {
+    const id = p.split('/').pop()
+    return json(res, {
+      serverTime: NOW(), kind: 'show.macro', id, revision: 3,
+      payload: { show: 'winter-ridge-2026', label: id === 'blackout' ? 'Blackout' : 'Enter intermission', description: 'Takes the wall dark and holds the bed.', steps: [
+        { id: 'step-1', action: 'resting-fade-out', onFailure: 'continue', onUnconfirmed: 'continue', localFallback: { class: 'none', reason: 'Resolume is coordinator-hosted; there is no local fallback for it.' } },
+        { id: 'step-2', action: 'strike-garage-projector', onFailure: 'continue', onUnconfirmed: 'continue', localFallback: { class: 'coordinator-required', reason: 'The projector answers only through the coordinator broker.' } },
+      ] },
+      updatedAt: ago(86_400_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
+    })
+  }
   if (p.startsWith('/config/show.playlist/')) {
     const id = p.split('/').pop()
     const fppBound = id !== 'late-bed'

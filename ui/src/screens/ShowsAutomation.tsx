@@ -334,6 +334,10 @@ export function ShowsAutomation() {
                   setAside({ kind: 'none' })
                 }}
                 onCancel={() => setAside({ kind: 'none' })}
+                onReloadAfterStale={() => {
+                  reload()
+                  setAside({ kind: 'none' })
+                }}
               />
             )
           })()}
@@ -1451,7 +1455,7 @@ function ActionDraft({
           label="Label"
           help={
             <>
-              What a step row and a run row read. Id <span className="sm-data">{id === '' ? 'unset' : id}</span>, from the label, editable until created.
+              What a step row and a run row read. {id === '' ? 'The id comes from the label.' : <>Id <span className="sm-data">{id}</span>, from the label, editable until created.</>}
             </>
           }
         >
@@ -1531,6 +1535,7 @@ function ActionEditor({
   macroUsages,
   onSaved,
   onCancel,
+  onReloadAfterStale,
 }: {
   action: ShowActionConfigResponse
   model: ReturnType<typeof useModelContext>
@@ -1539,6 +1544,7 @@ function ActionEditor({
   macroUsages: readonly { label: string; stepNumbers: number[] }[]
   onSaved: (response: ShowActionConfigResponse) => void
   onCancel: () => void
+  onReloadAfterStale: () => void
 }) {
   const integration = action.payload.target.integration
   const [label, setLabel] = useState(action.payload.label)
@@ -1722,7 +1728,7 @@ function ActionEditor({
           </Button>
         </div>
       </div>
-      {stale !== null && <StaleWriteStrip stale={stale} onReload={onCancel} />}
+      {stale !== null && <StaleWriteStrip stale={stale} onReload={onReloadAfterStale} />}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
     </div>
   )

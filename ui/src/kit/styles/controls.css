@@ -252,9 +252,10 @@
   color: var(--text-faint);
 }
 
+/* Inert, but which segment is selected is still a fact the operator has to read. */
 .sm-segmented__item:disabled[aria-pressed='true'],
 .sm-segmented__item:disabled[aria-pressed='true']:hover {
-  background: var(--sunken);
-  color: var(--text-muted);
-  box-shadow: inset 0 0 0 1px var(--border-strong);
+  background: var(--accent-bg);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
