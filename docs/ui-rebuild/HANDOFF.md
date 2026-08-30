@@ -20,7 +20,7 @@ screen. Base of the stack is `feature/operator-ui-overhaul-2`.
 | `ui-rebuild/shows` | #202 | Shows workspace shell, list, Identity, Playlists |
 | `ui-rebuild/shows-tabs` | #203 | Shows · Cues, Assets |
 | `ui-rebuild/shows-tabs-2` | #204 | Shows · Presentation, Automation |
-| `ui-rebuild/creation-1` | #205 | New show, new playlist, the stale-write guard |
+| `ui-rebuild/creation-1` | #207 | New show, new playlist, the stale-write guard |
 
 #196 to #200 were green on all ten checks when they were opened; re-check the
 later ones rather than assuming. Nothing is merged. Nothing is merged: Eric reviews and merges, and a
@@ -37,7 +37,7 @@ Eric ruled every open decision on 2026-08-30, so nothing is waiting on him.
 order. In short:
 
 1. New action, action editing and new macro, from `Object Creation.dc.html`
-   sections 3, 4 and 5. New show and new playlist are done (#205).
+   sections 3, 4 and 5. New show and new playlist are done (#207).
 2. Node detail.
 3. Settings, seven tabs.
 4. Access.
@@ -147,5 +147,5 @@ none of it has been collected for this branch.
 whatever is requested. Setting `document.documentElement.style.zoom` to
 `window.innerWidth / 1280` gives a layout that is 1269 CSS pixels wide, which
 is a 1280 viewport minus its scrollbar, and media queries respond to it. That
-is what #205's check ran at. Earlier PRs recorded 1372 or 1421 for the same
+is what #207's check ran at. Earlier PRs recorded 1372 or 1421 for the same
 reason and did not have the workaround.
