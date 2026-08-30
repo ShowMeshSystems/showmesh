@@ -99,12 +99,11 @@ func TestInterruptOnlyAffectsLowerPriorityRoles(t *testing.T) {
 	}
 }
 
-// mutation target: removeInterrupterLocked's Resume-policy branch and its
-// use of the frozen bookmark position. A single-media session (no
-// playlist, so interruptResumePolicyLocked defaults to Resume) must come
+// mutation target: removeInterrupterLocked's Resume-route branch and its
+// use of the frozen bookmark position. A single-media session must come
 // back from EXACTLY the position it was suspended at, never 0 and never
 // extrapolated through the interruption — proving both halves of the
-// resume-policy requirement against a deterministic injected clock.
+// resume requirement against a deterministic injected clock.
 func TestInterruptResumePolicyResumeContinuesFromExactPosition(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
@@ -151,10 +150,13 @@ func TestInterruptResumePolicyResumeContinuesFromExactPosition(t *testing.T) {
 	}
 }
 
-// mutation target: removeInterrupterLocked's Restart-policy branch.
-// A playlist session with Resume=Restart must come back at 0 on the SAME
-// current item, never from the position it was suspended at.
-func TestInterruptResumePolicyRestartStartsCurrentItemOver(t *testing.T) {
+// mutation target: removeInterrupterLocked ignoring t's own configured
+// Resume policy. A playlist session with Resume=Restart
+// must still come back from the exact position it was suspended at when
+// an interrupting announcement ends: Restart still means "start over"
+// for a genuine restart request, crash recovery, and the coordinator's
+// end-of-resting-mode decision, but never for an announcement's own end.
+func TestInterruptReleaseIgnoresRestartPolicyAndResumesFromPosition(t *testing.T) {
 	c := newClock(time.Now())
 	dir := t.TempDir()
 	store := NewFileSessionStore(dir)
@@ -188,11 +190,64 @@ func TestInterruptResumePolicyRestartStartsCurrentItemOver(t *testing.T) {
 	show.mu.Lock()
 	defer show.mu.Unlock()
 	if show.state != pkgaudio.StatePlaying || show.currentItemID != "item-a" {
-		t.Fatalf("show after ann stopped: state=%q item=%q, want playing, still on item-a (restarted, not advanced)", show.state, show.currentItemID)
+		t.Fatalf("show after ann stopped: state=%q item=%q, want playing, still on item-a", show.state, show.currentItemID)
 	}
 	snap := show.snapshotLocked(ctx)
-	if !snap.PositionKnown || snap.Position != 0 {
-		t.Fatalf("show position after restart = %v (known=%v), want exactly 0", snap.Position, snap.PositionKnown)
+	if !snap.PositionKnown || snap.Position != 700*time.Millisecond {
+		t.Fatalf("show position after ann stopped = %v (known=%v), want exactly 700ms (its pre-interrupt position), Restart policy notwithstanding", snap.Position, snap.PositionKnown)
+	}
+}
+
+// mutation target: removeInterrupterLocked's branch selector no longer
+// consulting t's Resume policy — a Restart-policy session whose
+// handle is still valid must still take the Resume route, not the
+// release+prepare+Start route, even though Restart's OWN meaning
+// elsewhere is "always re-prepare fresh". FakeEngine mints the same
+// deterministic handle either way, so the one-shot engine failure this
+// test injects lands on whichever call each route makes first — the
+// Resume route fails Paused and recoverable
+// ([TestInterruptedSessionResumeFailureStaysRecoverable] proves this for
+// the Resume route directly), while the release+prepare+Start route's
+// own first call (Release) is best-effort and silently consumes it,
+// leaving the session Playing instead. The two routes are distinguishable
+// by that difference; seeing Paused here, on a Restart-policy session,
+// proves the Resume route was actually taken.
+func TestInterruptReleaseOfARestartPolicySessionStillUsesResumeOnAValidHandle(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	store := NewFileSessionStore(dir)
+	m := NewManager(NewFakeEngine(c.now), store, dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+
+	playlist := twoItemPlaylist(t, dir) // Resume: Restart
+	m.Apply(ctx, "show", "show-apply", 1, pkgaudio.ApplyRequest{
+		SourceRole: pkgaudio.SetField(pkgaudio.SourceRoleShow),
+		Playlist:   pkgaudio.SetField(playlist),
+	})
+	if r := m.Start(ctx, "show", "show-start", 2); r.Outcome == pkgaudio.OutcomeRefused {
+		t.Fatalf("show start: unexpectedly refused: %+v", r)
+	}
+
+	annRef := writeTestAsset(t, dir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
+
+	show, _ := m.get("show")
+	show.mu.Lock()
+	handle := show.handle
+	show.mu.Unlock()
+
+	fake, ok := m.engine.(*FakeEngine)
+	if !ok {
+		t.Fatalf("test manager's engine is %T, want *FakeEngine", m.engine)
+	}
+	fake.InjectFailure(handle, pkgaudio.ErrEnginePipelineCrash)
+
+	m.Stop(ctx, "ann", "inv-ann-stop", 3)
+
+	show.mu.Lock()
+	defer show.mu.Unlock()
+	if show.state != pkgaudio.StatePaused {
+		t.Fatalf("show state after an injected engine failure on release = %q, want still Paused (the Resume route failed, not a reprepare)", show.state)
 	}
 }
 
@@ -386,5 +441,45 @@ func TestInterruptedSessionResumeFailureStaysRecoverable(t *testing.T) {
 	bg.mu.Unlock()
 	if finalState != pkgaudio.StatePlaying {
 		t.Fatalf("bg state after recovery Resume = %q, want Playing", finalState)
+	}
+}
+
+// mutation target: removeInterrupterLocked's fast-Resume success path
+// must not clear a fault it did not itself cause. A session can carry a
+// genuine standing fault (e.g. a freeze from a failed Seek) while paused
+// and interrupted; the announcement's own release succeeding must not
+// erase evidence of a problem that predates and is unrelated to it.
+func TestInterruptReleasePreservesAnUnrelatedStandingFault(t *testing.T) {
+	c := newClock(time.Now())
+	m := newTestManager(t, c)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleShow, pkgaudio.MixPolicyMix)
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyInterrupt)
+
+	bg, _ := m.get("bg")
+	bg.mu.Lock()
+	if bg.state != pkgaudio.StatePaused {
+		state := bg.state
+		bg.mu.Unlock()
+		t.Fatalf("precondition: bg should be paused while interrupted, got %q", state)
+	}
+	// Stands in for a failed Seek while paused: a genuine fault recorded
+	// before the announcement ends, unrelated to the interrupt itself.
+	bg.setFaultLocked(pkgaudio.FaultFreeze, "engine reported a freeze")
+	bg.mu.Unlock()
+
+	m.Stop(ctx, "ann", "inv-ann-stop", 3)
+
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	if bg.state != pkgaudio.StatePlaying {
+		t.Fatalf("bg after ann stopped: state=%q, want playing", bg.state)
+	}
+	if bg.fault != pkgaudio.FaultFreeze {
+		t.Fatalf("bg.fault = %q after the announcement released, want %q (an unrelated standing fault must survive)", bg.fault, pkgaudio.FaultFreeze)
 	}
 }

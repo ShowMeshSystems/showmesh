@@ -98,6 +98,14 @@ func captureLTCTail(capture *ltcLagCapture, stop <-chan struct{}) (snapshot func
 // goes quiet reports evidence consistent with that, never a confident
 // false stop. This is loopback and appsink evidence only, nothing
 // audible, no hardware.
+//
+// The same samples also cover the guard's upper edge -- every
+// sample taken after the captured channel actually went silent must not
+// still claim LTCRunning. ltcTransitionGuardDuration used to be a fixed
+// 2x lead (400ms) against a measured real tail of about 290ms, so for
+// roughly 110ms after the wire actually went quiet, observe() kept
+// reporting the outgoing run as running with an extrapolated timecode;
+// this loop is what catches that.
 func TestLTCStopDoesNotClaimStoppedWhileAudible(t *testing.T) {
 	e, capture := newLTCLagEngine(t)
 	ctx, cancel := context.WithTimeout(context.Background(), ltcOpTimeout)
@@ -161,15 +169,25 @@ func TestLTCStopDoesNotClaimStoppedWhileAudible(t *testing.T) {
 		tail, ltcAppSrcLeadSeconds)
 
 	falseStops := 0
+	falseRunning := 0
 	for _, s := range samples {
-		if !s.at.Before(silenceOnset) {
-			continue // the wire is genuinely silent by the time this sample was taken
+		if s.at.Before(silenceOnset) {
+			if s.obs.State == agentaudio.LTCStopped && !s.obs.TimecodeKnown {
+				falseStops++
+				t.Errorf("ObserveLTC at %s (wire stays audible until %s, %s later) claims LTCStopped with no known timecode: %+v",
+					s.at.Format(time.RFC3339Nano), silenceOnset.Format(time.RFC3339Nano), silenceOnset.Sub(s.at), s.obs)
+			}
+			continue
 		}
-		if s.obs.State == agentaudio.LTCStopped && !s.obs.TimecodeKnown {
-			falseStops++
-			t.Errorf("ObserveLTC at %s (wire stays audible until %s, %s later) claims LTCStopped with no known timecode: %+v",
-				s.at.Format(time.RFC3339Nano), silenceOnset.Format(time.RFC3339Nano), silenceOnset.Sub(s.at), s.obs)
+		// The wire is genuinely silent by the time this sample was
+		// taken, so a guard sized past the real tail must not still be
+		// reporting the outgoing run as running.
+		if s.obs.State == agentaudio.LTCRunning {
+			falseRunning++
+			t.Errorf("ObserveLTC at %s (wire went silent at %s, %s earlier) still claims LTCRunning: %+v",
+				s.at.Format(time.RFC3339Nano), silenceOnset.Format(time.RFC3339Nano), s.at.Sub(silenceOnset), s.obs)
 		}
 	}
 	t.Logf("%d of %d samples taken while the wire was still audible falsely claimed LTCStopped", falseStops, len(samples))
+	t.Logf("%d of %d samples taken after the wire went silent falsely claimed LTCRunning", falseRunning, len(samples))
 }

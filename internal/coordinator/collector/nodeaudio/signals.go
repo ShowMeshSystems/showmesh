@@ -147,6 +147,30 @@ const (
 	SignalSessionFaultKind        observation.SignalID = "audio_session.fault.kind"
 	SignalSessionFaultReason      observation.SignalID = "audio_session.fault.reason"
 
+	// SignalSessionLTCClaimState and SignalSessionLTCClaimReason are this
+	// session's own standing relationship to its node's one LTC run —
+	// "held", "refused", or "none" — the surface that makes a refused
+	// claim legible on its own session, not only as a warn-level line in
+	// the node's log. Reason is present only when State is "refused",
+	// matching SignalSessionFaultReason's identical shape one signal up.
+	SignalSessionLTCClaimState  observation.SignalID = "audio_session.ltc.claim.state"
+	SignalSessionLTCClaimReason observation.SignalID = "audio_session.ltc.claim.reason"
+
+	// SignalSessionRestoreAttempts, SignalSessionRestoreNextAttemptMs,
+	// and SignalSessionRestoreLastReason are this node's own automatic
+	// restore-retry driver's status for a session currently waiting on a
+	// deferred or re-queued restore (see the sibling change that
+	// introduces the pkg/audio.State value "restore_pending" for what
+	// State itself reports while this is happening).
+	// Attempts and NextAttemptMs report [observation.StateNotCollected]
+	// with a stated reason whenever the node reports no restore
+	// currently queued for this session; LastReason is present whenever
+	// Attempts is nonzero, matching SignalSessionFaultReason's identical
+	// shape.
+	SignalSessionRestoreAttempts      observation.SignalID = "audio_session.restore.attempts"
+	SignalSessionRestoreNextAttemptMs observation.SignalID = "audio_session.restore.next_attempt_ms"
+	SignalSessionRestoreLastReason    observation.SignalID = "audio_session.restore.last_reason"
+
 	// SignalSessionItemGapMs and SignalSessionItemGapReason are the
 	// measured interval between one playlist item's natural completion
 	// and its successor's confirmed start — a measurement, never a
@@ -189,6 +213,11 @@ var SessionSignalIDs = []observation.SignalID{
 	SignalSessionAssetProbeReason,
 	SignalSessionFaultKind,
 	SignalSessionFaultReason,
+	SignalSessionLTCClaimState,
+	SignalSessionLTCClaimReason,
+	SignalSessionRestoreAttempts,
+	SignalSessionRestoreNextAttemptMs,
+	SignalSessionRestoreLastReason,
 	SignalSessionItemGapMs,
 	SignalSessionItemGapReason,
 	SignalSessionStale,

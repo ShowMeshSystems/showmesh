@@ -236,6 +236,15 @@ type Session struct {
 	faultAt     time.Time
 	lastProbe   MediaItemResult
 
+	// ltcClaimState and ltcClaimReason are this session's own standing
+	// relationship to this node's one LTC run (audio_session.ltc.claim.
+	// state/.reason) — set only by [Manager.startLTCLocked]'s and
+	// [Manager.stopLTCLocked]'s own claim/release calls, never inferred
+	// from Fault or State. See [LTCClaimState]'s own doc comment for why
+	// this exists.
+	ltcClaimState  LTCClaimState
+	ltcClaimReason string
+
 	// lastObservedAt is when [Engine.Observe] (or an equivalent
 	// state-changing call) last returned a genuine reading, engine-clock
 	// time — never the coordinator's or this process's own wall-clock
@@ -890,6 +899,14 @@ type SessionSnapshot struct {
 	Fault       pkgaudio.SessionFault
 	FaultReason string
 
+	// LTCClaimState and LTCClaimReason are this session's own standing
+	// relationship to this node's one LTC run
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.ltc.claim.state
+	// / .reason) — see [LTCClaimState]'s own doc comment. LTCClaimReason
+	// is only ever meaningful when LTCClaimState is [LTCClaimRefused].
+	LTCClaimState  LTCClaimState
+	LTCClaimReason string
+
 	// GapKnown, Gap, GapReason, and GapObservedAt are the measured
 	// interval between the previous playlist item's natural completion
 	// and this item's confirmed start (docs/build/IDENTIFIER-REGISTER.md
@@ -901,6 +918,28 @@ type SessionSnapshot struct {
 	Gap           time.Duration
 	GapReason     string
 	GapObservedAt time.Time
+
+	// RestorePending is [Manager.sessionPendingRestore]'s own verbatim
+	// answer: this session currently has a restore queued
+	// (m.pendingEngineRestore), whether or not the automatic retry
+	// driver has made an attempt on its behalf yet. This is the
+	// authoritative gate for the three fields below — RestoreAttempts
+	// starting at 0 is genuinely ambiguous between "nothing queued" and
+	// "queued, no attempt yet", and only RestorePending resolves that.
+	RestorePending bool
+
+	// RestoreAttempts, RestoreNextAttempt, and RestoreLastReason are
+	// internal/agent's own automatic restore-retry driver's status for
+	// this specific session (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.restore.attempts/.next_attempt_ms/.last_reason) —
+	// only ever populated while RestorePending is true, zero otherwise.
+	// RestoreNextAttempt is zero both before the driver's first attempt
+	// and after its bounded schedule is exhausted; RestoreAttempts alone
+	// does not distinguish those two — see the driver's own doc comment
+	// (internal/agent/audiorestoreretry.go) for how it marks exhaustion.
+	RestoreAttempts    int
+	RestoreNextAttempt time.Duration
+	RestoreLastReason  string
 
 	// CollectedAt is when this snapshot's own fields were captured --
 	// distinct from ObservedAt, which is specifically Position's engine
@@ -925,20 +964,31 @@ type SessionSnapshot struct {
 // treatment) and leaves PositionKnown false, never a stale reading
 // presented as current.
 //
-// Open question, not yet decided: a session restore.go's
-// queueForRetryLocked deferred (no engine bound yet, or a retry-path
-// engine failure) reports State exactly as persisted — Playing,
-// Preparing, or Paused — with PositionKnown left false and Fault/
-// FaultReason naming why. That state value is part of this package's
-// public [pkgaudio.State] vocabulary, so changing what gets reported
-// for this specific case is a caller-visible contract question, not an
-// internal implementation detail; nothing here decides it unilaterally.
+// A session with a restore queued reports State as
+// [pkgaudio.StateRestorePending] here, snapshot only — s.state itself is
+// never set to that value (see queueForRetryLocked's own doc comment).
 func (s *Session) snapshotLocked(ctx context.Context) SessionSnapshot {
+	reportedState := s.state
+	if s.mgr.sessionHasQueuedRestore(s.id) {
+		reportedState = pkgaudio.StateRestorePending
+	}
 	snap := SessionSnapshot{
-		ID: s.id, State: s.state, DesiredRevision: s.revState.Current(),
+		ID: s.id, State: reportedState, DesiredRevision: s.revState.Current(),
 		FadeState: s.fadeState, Fault: s.fault, FaultReason: s.faultReason,
+		LTCClaimState: s.ltcClaimState, LTCClaimReason: s.ltcClaimReason,
 		GapKnown: s.gapKnown, Gap: s.gap, GapReason: s.gapReason, GapObservedAt: s.gapObservedAt,
 		CollectedAt: s.mgr.now(),
+	}
+
+	// Gated on m.pendingEngineRestore membership, not on s.state: this
+	// branch is cut independently of the sibling PR that changes what
+	// State itself reports for a pending restore, so it must not depend
+	// on a State value that PR alone introduces. Once both land, a
+	// pending session satisfies both this check and that PR's own
+	// State == RestorePending.
+	snap.RestorePending = s.mgr.sessionPendingRestore(s.id)
+	if snap.RestorePending {
+		snap.RestoreAttempts, snap.RestoreNextAttempt, snap.RestoreLastReason = s.mgr.RestoreRetryStatus(s.id, snap.CollectedAt)
 	}
 
 	if s.desired.SourceRole != nil {

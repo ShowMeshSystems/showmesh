@@ -139,6 +139,18 @@ func (b *audioBinding) currentNodeRevision() (revision int64, have bool) {
 	return b.nodeRevision, b.haveNode
 }
 
+// currentNode reports the most recently accepted audio.node binding —
+// this node's own automatic restore-retry driver (audiorestoreretry.go)
+// replays this same, already-accepted config on its own bounded
+// schedule instead of waiting for a redelivery; have is false until the
+// first audio.node.configure ever lands, so the driver has nothing to
+// retry against yet.
+func (b *audioBinding) currentNode() (node audioNodeConfig, have bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.node, b.haveNode
+}
+
 // applySettings mirrors [audioBinding.applyNode] exactly, one
 // configuration kind over.
 func (b *audioBinding) applySettings(p audioSettingsConfig) error {

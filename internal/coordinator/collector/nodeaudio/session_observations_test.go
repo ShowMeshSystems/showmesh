@@ -117,6 +117,74 @@ func TestSessionFaultNoneReportsReasonNotCollected(t *testing.T) {
 	}
 }
 
+// TestSessionLTCClaimRefusedCarriesItsReason proves the surface this
+// package exists to add: a session whose claim on its node's LTC run was
+// refused reports SignalSessionLTCClaimState "refused" with
+// SignalSessionLTCClaimReason present and non-empty — legible from the
+// refused session's own evidence, never only from the node's log.
+func TestSessionLTCClaimRefusedCarriesItsReason(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "show-b", State: "playing", Fault: "none",
+		LTCClaimState: "refused", LTCClaimReason: "this node's one LTC run is held by session show-a",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findSessionObs(t, obs, SignalSessionLTCClaimState)
+	if state.Value != "refused" {
+		t.Errorf("ltc claim state = %v, want %q", state.Value, "refused")
+	}
+	reason := findSessionObs(t, obs, SignalSessionLTCClaimReason)
+	if reason.Absence != "" {
+		t.Errorf("ltc claim reason absence = %q, want a real value since the claim was refused", reason.Absence)
+	}
+	if reason.Value != "this node's one LTC run is held by session show-a" {
+		t.Errorf("ltc claim reason = %v, want the stated refusal reason naming the holder", reason.Value)
+	}
+}
+
+// TestSessionLTCClaimHeldReasonNotCollected proves the converse: a
+// session that holds the run reports state "held" and its reason as
+// not_collected, never an empty string masquerading as "no reason to
+// give."
+func TestSessionLTCClaimHeldReasonNotCollected(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "show-a", State: "playing", Fault: "none",
+		LTCClaimState: "held",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findSessionObs(t, obs, SignalSessionLTCClaimState)
+	if state.Value != "held" {
+		t.Errorf("ltc claim state = %v, want %q", state.Value, "held")
+	}
+	reason := findSessionObs(t, obs, SignalSessionLTCClaimReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("ltc claim reason absence = %q, want %q", reason.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestSessionLTCClaimStateDefaultsToNone proves a session that never sent
+// LTCClaimState (a node predating this signal, or a non-show session that
+// never attempted a claim) reports the literal "none" -- never an empty
+// string, matching SignalSessionFaultKind's identical zero-value rule.
+func TestSessionLTCClaimStateDefaultsToNone(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "bg-1", State: "playing", Fault: "none",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	state := findSessionObs(t, obs, SignalSessionLTCClaimState)
+	if state.Value != "none" {
+		t.Errorf("ltc claim state = %v, want %q", state.Value, "none")
+	}
+}
+
 // TestSessionPositionUnknownIsNotCollectedNeverStale proves a
 // mid-discontinuity session (PositionKnown=false) reports position as
 // not_collected — never a stale prior reading presented as current, and
@@ -273,5 +341,61 @@ func TestClockAlignmentAlwaysNotCollected(t *testing.T) {
 	}
 	if align.Reason == "" {
 		t.Error("clock alignment reason is empty, want a stated explanation")
+	}
+}
+
+// TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt reproduces
+// a review-flagged honesty defect: a session with a restore genuinely
+// queued, but not yet retried by the node's own automatic driver
+// (RestoreAttempts still 0), must not be reported identically to a
+// session with nothing queued at all. Gating on RestoreAttempts > 0
+// alone cannot tell those two apart -- RestorePending is the
+// authoritative signal, and this is exactly the window an operator most
+// needs visibility into.
+func TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "restore_pending", Fault: "other", FaultReason: "no audio engine bound yet",
+		RestorePending: true, RestoreAttempts: 0, RestoreNextAttemptMs: 0, RestoreLastReason: "",
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	attempts := findSessionObs(t, obs, SignalSessionRestoreAttempts)
+	if attempts.Absence != "" {
+		t.Errorf("restore.attempts absence = %q, want collected (a restore IS queued, even with zero attempts so far)", attempts.Absence)
+	}
+	if attempts.Value != int64(0) {
+		t.Errorf("restore.attempts value = %v, want 0", attempts.Value)
+	}
+
+	next := findSessionObs(t, obs, SignalSessionRestoreNextAttemptMs)
+	if next.Absence != "" {
+		t.Errorf("restore.next_attempt_ms absence = %q, want collected", next.Absence)
+	}
+
+	reason := findSessionObs(t, obs, SignalSessionRestoreLastReason)
+	if reason.Absence != observation.StateNotCollected {
+		t.Errorf("restore.last_reason absence = %q, want %q: no attempt has run yet, so there is no reason to report", reason.Absence, observation.StateNotCollected)
+	}
+}
+
+// TestRestoreSignalsAllNotCollectedWhenNothingIsQueued is the negative
+// case TestRestoreSignalsReportQueuedBeforeTheFirstAutomaticAttempt
+// exists to distinguish: an ordinary session with no restore queued at
+// all reports all three restore.* signals as not collected.
+func TestRestoreSignalsAllNotCollectedWhenNothingIsQueued(t *testing.T) {
+	st := NewStore()
+	st.Put("audio-01", samplePayloadWithSession(mqttproto.AudioSessionReport{
+		SessionID: "sess-1", State: "playing", Fault: "none", RestorePending: false,
+	}), time.Now())
+	c := New(st)
+	obs, _ := c.Poll(context.Background())
+
+	for _, sig := range []observation.SignalID{SignalSessionRestoreAttempts, SignalSessionRestoreNextAttemptMs, SignalSessionRestoreLastReason} {
+		o := findSessionObs(t, obs, sig)
+		if o.Absence != observation.StateNotCollected {
+			t.Errorf("%s absence = %q, want %q when no restore is queued", sig, o.Absence, observation.StateNotCollected)
+		}
 	}
 }

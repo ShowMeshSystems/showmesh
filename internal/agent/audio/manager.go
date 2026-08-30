@@ -57,6 +57,15 @@ type Manager struct {
 	// no engine handle and no persisted Failed record to explain why.
 	pendingEngineRestore map[pkgaudio.SessionID]struct{}
 
+	// restoreRetryStatusBySession is internal/agent's own automatic
+	// restore-retry driver's status, per session, never written by this
+	// package itself — see restoreretry.go's
+	// SetRestoreRetryStatus/ClearRestoreRetryStatus and
+	// RestoreRetryStatus. A session in pendingEngineRestore reads its own
+	// entry back on its own snapshot; nil or a missing entry reports all
+	// zero.
+	restoreRetryStatusBySession map[pkgaudio.SessionID]restoreRetryStatus
+
 	// rebindMu makes invalidate-Set-retry one atomic unit across
 	// concurrent RebindEngine calls. Two audio.node.configure commands
 	// delivered back to back produce genuinely concurrent calls (MQTT
@@ -281,7 +290,7 @@ func (m *Manager) gateAvailability(outcome pkgaudio.OutcomeResult) pkgaudio.Outc
 // evidenced
 // by the resulting desired state, not by an engine transition — apply
 // never touches the engine.
-func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, req pkgaudio.ApplyRequest) pkgaudio.OutcomeResult {
+func (m *Manager) Apply(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision, req pkgaudio.ApplyRequest) pkgaudio.OutcomeResult {
 	s := m.getOrCreate(id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -305,6 +314,14 @@ func (m *Manager) Apply(_ context.Context, id pkgaudio.SessionID, invocation pkg
 		}
 		if s.state == pkgaudio.StateUnknown {
 			s.state = pkgaudio.StateReady
+		}
+		// A session that just stopped being a show session (or never was
+		// one) must not keep reporting a stale LTC claim it no longer
+		// earns — the same clear-on-exit stopLTCLocked applies to a
+		// commanded stop, whether or not this session ever actually held
+		// the run.
+		if !isShowSessionLocked(s) && s.ltcClaimState != LTCClaimNone && s.ltcClaimState != "" {
+			m.stopLTCLocked(ctx, s)
 		}
 		return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomePosition})
 	})
@@ -636,13 +653,19 @@ func (m *Manager) Advance(ctx context.Context, id pkgaudio.SessionID, invocation
 // engine evidence (ADR-024 decision 7): an idle or unloaded session
 // still reports Stopped, and a loaded one always attempts the engine
 // call. But a failed Engine.Stop or Release is not silently treated as
-// success either: the handle stays loaded — never released
-// — so a retried Stop can still address it, and the outcome is
-// Unconfirmable with the failure's reason, the same "declared, not
-// refused, not fabricated" shape ADR-024 decision 7's other exempt
-// safety actions use. A duck this session imposed on others is released
-// once the stop is attempted, engine confirmation or not; a session left
-// in StateStopping is re-resolved by [Session.checkStopCompletionLocked].
+// success either: the outcome is Unconfirmable with the failure's
+// reason, the same "declared, not refused, not fabricated" shape
+// ADR-024 decision 7's other exempt safety actions use. A duck this
+// session imposed on others is released once the stop is attempted,
+// engine confirmation or not. A failed Engine.Stop leaves the handle
+// loaded — never released — so a retried Stop can still address it,
+// and a session left in StateStopping that way is re-resolved by
+// [Session.checkStopCompletionLocked] once engine evidence confirms it.
+// A failed Engine.Release is different: Release always discards the
+// handle at the engine regardless of its own outcome, so that evidence
+// can never arrive, and this resolves the session immediately instead
+// of stranding it in StateStopping behind a poll that can never
+// succeed.
 func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pkgaudio.InvocationID, revision pkgaudio.Revision) pkgaudio.OutcomeResult {
 	s, ok := m.get(id)
 	if !ok {
@@ -679,6 +702,22 @@ func (m *Manager) Stop(ctx context.Context, id pkgaudio.SessionID, invocation pk
 		}
 		if err != nil {
 			s.setFaultLocked(pkgaudio.ClassifyFault(err), err.Error())
+			if releaseErr != nil {
+				// Release already discarded the handle at the engine
+				// before attempting teardown, success or not (see
+				// [gstengine.Engine.Release]), so no later Observe will
+				// ever find it again: resolving here is the only way
+				// out, since leaving state at StateStopping would strand
+				// the session behind [Session.checkStopCompletionLocked],
+				// which requires handleLoaded and can never re-confirm a
+				// handle the engine has already forgotten.
+				s.resolveFadePendingStrandedLocked("session stopped before its pending fade resolved")
+				s.handleLoaded = false
+				s.loadedIdentity = ""
+				s.state = pkgaudio.StateStopped
+				s.bookmark = nil
+				s.setGapUnknownLocked("session is stopped")
+			}
 			return m.gateAvailability(pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: err.Error()})
 		}
 		// A fade this Stop interrupted has no engine handle left to

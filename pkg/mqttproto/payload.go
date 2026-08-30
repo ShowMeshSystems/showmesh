@@ -798,6 +798,23 @@ type RenderSurfaceReport struct {
 	// persist" ordering). "" exactly when FSEQFilename is "".
 	FSEQContentHash string `json:"fseqContentHash"`
 
+	// ContentIdentityReason states why this surface's six content-identity
+	// fields (FSEQFilename/FSEQContentHash/CueID/CatalogRevision/Show/
+	// Generation) are all empty even though this surface holds a persisted
+	// assignment: the apply path (renderops.go) always persists a
+	// non-empty fseqContentHash alongside a non-empty fseqFilename, so this
+	// only fires against a hand-edited or pre-content-identity-contract
+	// assignments.json. "" whenever this surface holds no assignment at
+	// all (a genuine absence, not a degradation) or a genuine identity was
+	// applied. internal/agent/renderreport.go's applyContentIdentity
+	// withholds the whole identity rather than publish an unverified
+	// filename with no hash to back it — see that function's doc comment.
+	// Not enforced as required by Validate, matching ContentObservedAt's
+	// identical additive-compatibility reasoning: this field is added
+	// after RenderSurfaceReport first shipped, and a hard requirement here
+	// would reject every fixture and payload built before it existed.
+	ContentIdentityReason string `json:"contentIdentityReason"`
+
 	// CueID is the Cue that authorized this surface's current assignment
 	// ([cueactivation.Activation.CueID], carried on
 	// [pipeline.AssignmentAuth.CueID]): "" whenever the current
@@ -1317,6 +1334,42 @@ type AudioSessionReport struct {
 	Fault       string `json:"fault"`
 	FaultReason string `json:"faultReason"`
 
+	// LTCClaimState is this session's own standing relationship to this
+	// node's one LTC run: "held", "refused", or "none"
+	// (docs/build/IDENTIFIER-REGISTER.md audio_session.ltc.claim.state).
+	// LTCClaimReason is required whenever LTCClaimState is "refused" —
+	// the same one-signal-names-the-other-refusal rule Fault/FaultReason
+	// follow above, distinct from them: a session can hold no fault at
+	// all while its own claim on this node's LTC run was refused by a
+	// session that still holds it.
+	LTCClaimState  string `json:"ltcClaimState"`
+	LTCClaimReason string `json:"ltcClaimReason"`
+
+	// RestorePending is true whenever this session currently has a
+	// restore queued on this node, whether or not the automatic retry
+	// driver has made an attempt on its behalf yet. This is the
+	// authoritative signal for whether a restore is queued at all:
+	// RestoreAttempts starting at 0 is genuinely ambiguous between
+	// "nothing queued" and "queued, no attempt yet", and only this field
+	// resolves that ambiguity.
+	RestorePending bool `json:"restorePending"`
+
+	// RestoreAttempts, RestoreNextAttemptMs, and RestoreLastReason are
+	// this node's own automatic restore-retry driver's status for this
+	// session (docs/build/IDENTIFIER-REGISTER.md
+	// audio_session.restore.attempts/.next_attempt_ms/.last_reason),
+	// meaningful only when RestorePending is true: how many automatic
+	// attempts it has made since this session's restore was last
+	// deferred or re-queued, a countdown in milliseconds to the next
+	// backed-off attempt (0 both before the driver's first attempt and
+	// once its bounded schedule is exhausted), and why the most recent
+	// attempt did not build an engine. RestoreLastReason is required
+	// whenever RestoreAttempts is nonzero. All three are the zero value
+	// whenever RestorePending is false.
+	RestoreAttempts      int64  `json:"restoreAttempts"`
+	RestoreNextAttemptMs int64  `json:"restoreNextAttemptMs"`
+	RestoreLastReason    string `json:"restoreLastReason"`
+
 	// ObservedAt is the engine's own evidence time for PositionMs, nil
 	// when PositionKnown is false. Never the coordinator's or this
 	// node's own receipt time (ADR-011).
@@ -1531,6 +1584,12 @@ func (p AudioPayload) Validate() error {
 		}
 		if sess.Fault != "" && sess.Fault != "none" && sess.FaultReason == "" {
 			return fmt.Errorf("%w: sessions[%d].faultReason (required whenever fault is not \"none\")", ErrPayloadMissingField, i)
+		}
+		if sess.LTCClaimState == "refused" && sess.LTCClaimReason == "" {
+			return fmt.Errorf("%w: sessions[%d].ltcClaimReason (required whenever ltcClaimState is \"refused\")", ErrPayloadMissingField, i)
+		}
+		if sess.RestoreAttempts > 0 && sess.RestoreLastReason == "" {
+			return fmt.Errorf("%w: sessions[%d].restoreLastReason (required whenever restoreAttempts is nonzero)", ErrPayloadMissingField, i)
 		}
 	}
 	if p.ObservedAt == nil {

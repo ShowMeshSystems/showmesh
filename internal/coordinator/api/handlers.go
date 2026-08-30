@@ -522,6 +522,13 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		resolumeInstances = append(resolumeInstances, mapResolumeInstance(rv, resolumeComposition, now))
 	}
 
+	// Coordinator-wide, computed fresh from the same decode a real push
+	// performs — see audioConfigPushStatus's own doc comment. A
+	// config-store failure here degrades this one field (state=unknown)
+	// rather than failing the whole snapshot, matching
+	// resolumeCompositionDegradeOnError's own precedent two calls above.
+	pushState, pushReason := audioConfigPushStatusDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -530,6 +537,9 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		Collectors:     collectors,
 		MacroRuns:      runs,
 		Resolume:       resolumeInstances,
+		AudioConfigPush: v1.AudioConfigPushStatus{
+			State: string(pushState), Reason: pushReason,
+		},
 	})
 }
 

@@ -59,9 +59,14 @@ type Engine struct {
 	mu      sync.Mutex
 	handles map[agentaudio.EngineHandle]*branch
 
-	// elementIndex maps a branch's own element names to itself, for
-	// [Engine.branchForSource] to attribute a bus error to the right
-	// branch. It is populated as soon as a branch's elements exist —
+	// elementIndex maps every one of a branch's own element names (all
+	// eight from [branch.elements], not only filesrc/decodebin — every
+	// one of them is a direct sibling in the shared pipeline, per
+	// branch's own doc comment, so any of them can be a bus error's
+	// source, not only decodebin's dynamically created internal children)
+	// to that branch, for [Engine.branchForSource] to attribute a bus
+	// error to the right branch. It is populated as soon as a branch's
+	// element names are known — before the elements themselves exist and
 	// before the branch is confirmed loaded and added to handles — since
 	// a decode error arrives exactly during that unconfirmed window.
 	elementIndex map[string]*branch
@@ -810,21 +815,24 @@ func (e *Engine) branchForSource(src gst.Object) *branch {
 	return nil
 }
 
-// indexBranch registers b's own element names so a bus error naming any
-// of them, or any of their internal children, attributes back to b — see
-// elementIndex's doc comment for why this happens before b is loaded.
+// indexBranch registers every one of b's own element names so a bus
+// error naming any of them, or any of their internal children, attributes
+// back to b — see elementIndex's doc comment for why this happens before
+// b is loaded.
 func (e *Engine) indexBranch(b *branch) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.elementIndex[b.filesrcName] = b
-	e.elementIndex[b.decodebinName] = b
+	for _, name := range b.elementNames {
+		e.elementIndex[name] = b
+	}
 }
 
 func (e *Engine) unindexBranch(b *branch) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	delete(e.elementIndex, b.filesrcName)
-	delete(e.elementIndex, b.decodebinName)
+	for _, name := range b.elementNames {
+		delete(e.elementIndex, name)
+	}
 }
 
 // classifyBranchError maps a branch-scoped GStreamer error onto this
