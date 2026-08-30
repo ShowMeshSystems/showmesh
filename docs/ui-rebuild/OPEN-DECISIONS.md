@@ -46,6 +46,81 @@ likely need the same shape). C loses the visibility the mock intends.
 
 ---
 
+### D-012 Show Authoring: "Resume where it left off" has no field behind it
+
+**What.** `Show Authoring.dc.html` draws a checkbox beside the ShowMesh-audio
+playlist's Repeat toggle, labelled "Resume where it left off". `showmeshAudio`
+(`ConfigShowPlaylistShowmeshAudio`) has exactly one property, `repeat`
+(`none`/`all`). There is no stored field for resuming a playhead position
+across a restart, so this checkbox has nothing to write to.
+
+**Why now.** The rest of the ShowMesh-audio playlist editor (repeat, entries)
+is being wired in this change; per the rebuild plan and D-010, a drawn control
+the coordinator cannot serve is built to its final shape and rendered inert
+rather than silently dropped.
+
+**Options.**
+
+- A. Ship the checkbox disabled with a stated reason ("no stored field"), as
+  built. Honest, but resuming a playhead position is not settable from the
+  UI, and was never settable from the API either.
+- B. Add a field for it to `ConfigShowPlaylistShowmeshAudio` (a new API
+  surface) and wire the checkbox.
+- C. Drop the checkbox.
+
+**Recommendation.** A now. B is a real feature (playhead resume across a
+coordinator restart) that needs its own design, not something to back into
+from a UI control found by inspection.
+
+**Unblocks.** Nothing; the playlist editor ships at the mock's drawn state
+either way.
+
+**Ruling:**
+
+---
+
+### D-013 Show Authoring: rebinding an FPP playlist to a different imported definition
+
+**What.** The FPP-runner playlist editor draws an "Instance" select, an "FPP
+playlist" select, and a "Re-import" button beside the "Hash changed" warning.
+Read together with the strip's own copy ("every binding below is held until
+you re-import and reconcile"), these three controls describe a reconciliation
+flow: pick a different captured FPP definition (by instance and playlist
+name, or the newer hash under the same name), and carry the existing
+section/position cue bindings forward onto it where they still apply. The
+mock does not draw what happens to a binding whose FPP entry does not exist
+in the new definition, or how a partial carry-over is shown before save.
+`PUT /config/show.playlist/{id}` can store any `fpp.instanceUuid` /
+`fpp.playlistName` / `fpp.playlistHash` triple; the gap is the reconciliation
+behavior, not the write.
+
+**Why now.** All three controls are drawn in the block this change builds.
+Per the rebuild plan, a control with no fully specified behavior goes here
+before the page ships, rather than getting an invented reconciliation rule.
+
+**Options.**
+
+- A. Ship all three disabled with a stated reason ("needs a reconciliation
+  flow the mock does not fully specify"), as built. Per-entry cue binding
+  and the mismatch policy stay editable; only the source rebind is inert.
+- B. Design the carry-over rule (e.g., match on unchanged
+  section/position, drop the rest, flag what was dropped) and wire it.
+- C. Wire only "Re-import" to reload the currently bound instance/playlist
+  at its newest captured hash (no instance/playlist change), dropping any
+  binding whose section/position is no longer present.
+
+**Recommendation.** A now. C is the smallest real version of this and a
+likely next step once the drop behavior in B has an answer; today it would
+silently discard bindings with no confirmation, which the mock does not show
+either.
+
+**Unblocks.** Nothing; the playlist editor ships at the mock's drawn state
+either way.
+
+**Ruling:**
+
+---
+
 ### D-005 Dashboard: the five blocks the mock does not have
 
 **What.** `Dashboard.dc.html` has three blocks: Readiness, Needs you, System

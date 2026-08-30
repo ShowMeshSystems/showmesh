@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
-import { BlankingPlate, Button, ClockSkewStrip, Field, Input, RuledStrip, Segmented, StatusPair } from './index'
+import { BlankingPlate, Button, ClockSkewStrip, Field, Input, NotWired, RuledStrip, Segmented, StatusPair } from './index'
 
 afterEach(cleanup)
 
@@ -53,6 +53,21 @@ describe('ClockSkewStrip', () => {
     expect(strip).toHaveTextContent('⚠')
     expect(strip).toHaveTextContent('Clock skew')
     expect(strip).toHaveTextContent('The clock is off.')
+  })
+})
+
+describe('NotWired', () => {
+  it('makes a Segmented actually inert, not just tagged', async () => {
+    const onChange = vi.fn()
+    render(
+      <NotWired>
+        <Segmented label="Policy" value="a" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} onChange={onChange} />
+      </NotWired>,
+    )
+    const b = screen.getByRole('button', { name: 'B' })
+    expect(b).toBeDisabled()
+    await userEvent.click(b)
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
 

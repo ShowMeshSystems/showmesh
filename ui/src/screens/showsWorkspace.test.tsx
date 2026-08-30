@@ -237,7 +237,8 @@ describe('Shows · Playlists tab', () => {
       Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show.playlist', id, revision: 1, payload: audioPlaylist(), updatedAt: '2026-08-30T18:22:00Z', createdByPrincipalId: null, createdByPrincipalName: null, source: 'api' })
 
     renderWorkspace()
-    await waitFor(() => expect(screen.getByText('Winter Bed Track 1')).toBeInTheDocument())
-    expect(screen.getByText('not reported')).toBeInTheDocument()
+    const table = await screen.findByRole('region', { name: 'Playlist entries, scrollable' })
+    await waitFor(() => expect(within(table).getByText('Winter Bed Track 1')).toBeInTheDocument())
+    expect(within(table).getByText('not reported')).toBeInTheDocument()
   })
 })

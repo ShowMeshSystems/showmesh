@@ -7,7 +7,7 @@ import {
   getShowPlaylist,
   listAssets,
   listConfigObjects,
-  type ConfigShowPlaylist,
+  type ShowPlaylistConfigResponse,
 } from '../api'
 import type { ShowContents } from './showsModel'
 
@@ -65,7 +65,7 @@ export async function fetchShowContents(showId: string): Promise<ShowContents> {
   }
 }
 
-export async function fetchShowPlaylists(playlists: readonly { id: string }[]): Promise<{ id: string; payload: ConfigShowPlaylist }[]> {
-  const full = await Promise.all(playlists.map((p) => getShowPlaylist(p.id)))
-  return full.map((response) => ({ id: response.id, payload: response.payload }))
+/** The full config response, revision included: an edit form needs it to report a save, not just the payload. */
+export async function fetchShowPlaylists(playlists: readonly { id: string }[]): Promise<ShowPlaylistConfigResponse[]> {
+  return Promise.all(playlists.map((p) => getShowPlaylist(p.id)))
 }
