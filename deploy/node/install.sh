@@ -142,6 +142,21 @@ if [ "$SYSTEMD_AVAILABLE" -eq 1 ]; then
   # install would, or the agent falls back to the hostname as its node id
   # and crash-loops against the broker.
   if [ -s "$ENV_FILE" ] && grep -q '^SHOWMESH_NODE_ID=.\+' "$ENV_FILE" 2>/dev/null; then
+    # The FPP Connect HTTP listener binds unconditionally on every node
+    # (see showmesh-agent.service's CAP_NET_BIND_SERVICE grant), so any
+    # node can be an xLights upload target regardless of whether an
+    # operator ever intended it to be. Registering an upload is a WRITE
+    # (asset:write), unrelated to the coordinator's own read policy: a
+    # missing SHOWMESH_AGENT_API_TOKEN here means every upload this node
+    # ever receives will accept, assemble, and hash correctly, then fail
+    # to register, permanently, with nothing visible until an operator
+    # goes looking. Warned here, not refused: a node with no upload
+    # credential still serves reads, renders assigned content, and plays
+    # audio correctly, and this install must not turn that gap into a
+    # stopped agent.
+    if ! grep -q '^SHOWMESH_AGENT_API_TOKEN=.\+' "$ENV_FILE" 2>/dev/null; then
+      echo "install.sh: WARNING: $ENV_FILE has no SHOWMESH_AGENT_API_TOKEN set. This node's FPP Connect HTTP listener accepts uploads unconditionally, but every uploaded sequence will fail to register, permanently, with no visible error at upload time. Provision a machine principal and an admin-role token from the coordinator (showmeshctl principal create ...; showmeshctl token issue <principalId>), set SHOWMESH_AGENT_API_TOKEN in $ENV_FILE, then: systemctl restart $UNIT_NAME" >&2
+    fi
     systemctl "$ACTIVATE_VERB" "$UNIT_NAME"
   else
     echo "install.sh: $ENV_FILE has no SHOWMESH_NODE_ID set yet. Edit it (at minimum SHOWMESH_NODE_ID, SHOWMESH_MQTT_BROKER, SHOWMESH_MQTT_USERNAME, SHOWMESH_MQTT_PASSWORD), then run: systemctl $ACTIVATE_VERB $UNIT_NAME"

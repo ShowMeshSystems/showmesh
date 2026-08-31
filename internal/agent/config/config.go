@@ -76,16 +76,21 @@ type Config struct {
 	// ever grows a real state-directory concept.
 	AssetDir string
 
-	// AgentAPIToken is an optional bearer credential asset.fetch sends when
-	// downloading asset bytes from the coordinator's read API. Only needed
-	// when the coordinator has closed anonymous reads (ADR-024's
-	// CloseReads); empty means send no Authorization header. FC3's FPP
-	// Connect registration (internal/agent/fppconnectregister.go) also
-	// sends this same token on its own POST /api/v1/assets, which is
-	// gated by asset:write, not node:read: on a node that ever receives an
-	// FPP Connect upload, this token must carry asset:write in addition to
-	// whatever scope closed-reads requires, or every registration attempt
-	// fails with a permanent 403.
+	// AgentAPIToken is a bearer credential this agent sends to the
+	// coordinator. asset.fetch sends it when downloading asset bytes from
+	// the coordinator's read API, but that half is only needed when the
+	// coordinator has closed anonymous reads (ADR-024's CloseReads); empty
+	// means send no Authorization header there. FC3's FPP Connect
+	// registration (internal/agent/fppconnectregister.go) also sends this
+	// same token on its own POST /api/v1/assets, which is gated by
+	// asset:write, not node:read, and that listener binds unconditionally
+	// on every node regardless of the coordinator's read policy: a node
+	// that will ever be an FPP Connect target needs this token set to a
+	// credential carrying asset:write REGARDLESS of whether reads are
+	// closed, or registration fails on every upload. An empty token here
+	// draws a 401 the registrar now retries indefinitely (see
+	// fppConnectRegisterTerminalStatuses); a present token lacking
+	// asset:write draws a 403, which is terminal.
 	AgentAPIToken string
 
 	// AssetInventoryInterval is how often this agent publishes its asset
