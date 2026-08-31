@@ -38,6 +38,8 @@ export type {
   ConfigFPPMQTTPayload,
   ConfigFPPMQTTPutRequest,
   FPPMQTTConfigResponse,
+  FPPConnectSettingsConfigResponse,
+  ConfigFPPConnectSettingsPayload,
   // Track G seam G-4 (ADR-039).
   AssetsSettingsConfigResponse,
   ConfigAssetsSettingsPayload,
@@ -268,6 +270,9 @@ export {
   getFPPMQTTConfig,
   putFPPMQTTConfig,
   getFPPMQTTConfigRevisions,
+  getFPPConnectSettingsConfig,
+  putFPPConnectSettingsConfig,
+  getFPPConnectSettingsConfigRevisions,
   getAssetsSettingsConfig,
   putAssetsSettingsConfig,
   getAssetsSettingsConfigRevisions,

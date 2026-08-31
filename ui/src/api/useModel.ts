@@ -27,6 +27,8 @@ import type {
   ConfigAssetsSettingsPutPayload,
   ConfigFPPEndpointsPayload,
   ConfigFPPMQTTPutRequest,
+  ConfigFPPConnectSettingsPayload,
+  FPPConnectSettingsConfigResponse,
   ConfigNightSessionActive,
   ConfigNightSessionWrite,
   ConfigRenderSettingsPayload,
@@ -260,6 +262,18 @@ export function putFPPMQTTConfig(
 
 export function getFPPMQTTConfigRevisions(): Promise<ConfigRevisionsResponse> {
   return store.getFPPMQTTConfigRevisions()
+}
+
+export function getFPPConnectSettingsConfig(): Promise<FPPConnectSettingsConfigResponse> {
+  return store.getFPPConnectSettingsConfig()
+}
+
+export function putFPPConnectSettingsConfig(payload: ConfigFPPConnectSettingsPayload): Promise<FPPConnectSettingsConfigResponse> {
+  return store.putFPPConnectSettingsConfig(payload)
+}
+
+export function getFPPConnectSettingsConfigRevisions(): Promise<ConfigRevisionsResponse> {
+  return store.getFPPConnectSettingsConfigRevisions()
 }
 
 // Track G seam G-4 (ADR-039): the same thin pass-through pattern, for the

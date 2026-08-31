@@ -109,6 +109,8 @@ type SchemaConfigResolumeInstancesPayload = components['schemas']['ConfigResolum
 // Track G seam G-3 (ADR-039).
 type SchemaFPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
 type SchemaConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
+type SchemaFPPConnectSettingsConfigResponse = components['schemas']['FPPConnectSettingsConfigResponse']
+type SchemaConfigFPPConnectSettingsPayload = components['schemas']['ConfigFPPConnectSettingsPayload']
 // Track G seam G-4 (ADR-039).
 type SchemaAssetsSettingsConfigResponse = components['schemas']['AssetsSettingsConfigResponse']
 type SchemaConfigAssetsSettingsPutPayload = components['schemas']['ConfigAssetsSettingsPutPayload']
@@ -961,6 +963,33 @@ export class ApiStore {
     const controller = this.beginSideCall()
     try {
       return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fpp.mqtt/revisions', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async getFPPConnectSettingsConfig(): Promise<SchemaFPPConnectSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaFPPConnectSettingsConfigResponse>('/config/fppconnect.settings', controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async putFPPConnectSettingsConfig(payload: SchemaConfigFPPConnectSettingsPayload): Promise<SchemaFPPConnectSettingsConfigResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.putJson<SchemaFPPConnectSettingsConfigResponse>('/config/fppconnect.settings', payload, controller.signal)
+    } finally {
+      this.endSideCall(controller)
+    }
+  }
+
+  async getFPPConnectSettingsConfigRevisions(): Promise<SchemaConfigRevisionsResponse> {
+    const controller = this.beginSideCall()
+    try {
+      return await this.client.getJson<SchemaConfigRevisionsResponse>('/config/fppconnect.settings/revisions', controller.signal)
     } finally {
       this.endSideCall(controller)
     }

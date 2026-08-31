@@ -8,6 +8,7 @@ import {
   getResolumeRecoveryConfig,
   getResolumeRecoveryConfigRevisions,
   putResolumeRecoveryConfig,
+  restoreResolumeRecovery,
   uploadResolumeComposition,
   type ResolumeCompositionResponse,
   type ResolumeRecoveryConfigResponse,
@@ -168,6 +169,7 @@ export function ResolumeConfig() {
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const instance = findResolumeInstance(model, instanceId)
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const actionGate = evaluateScope(model.session, model.sessionFetchFailed, 'resolume:action')
 
   const { state: compositionState, reload: reloadComposition } = useResolumeComposition()
   const { state: recoveryState, reload: reloadRecovery } = useResolumeRecovery()
@@ -186,6 +188,8 @@ export function ResolumeConfig() {
   const [savingRecovery, setSavingRecovery] = useState(false)
   const [saveRecoveryError, setSaveRecoveryError] = useState<string | null>(null)
   const [staleRecovery, setStaleRecovery] = useState<Extract<SaveOutcome<ResolumeRecoveryConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
 
   // Anyone can see the toggle's value (the open `GET /resolume/recovery`
   // read); only a `config:write` device also loads the gated config it
@@ -285,6 +289,15 @@ export function ResolumeConfig() {
       })
       .catch((err: unknown) => setSaveRecoveryError(describeApiError(err)))
       .finally(() => setSavingRecovery(false))
+  }
+
+  const restoreRecovery = () => {
+    setRestoring(true)
+    setRestoreError(null)
+    restoreResolumeRecovery()
+      .then(() => reloadRecovery())
+      .catch((err: unknown) => setRestoreError(describeApiError(err)))
+      .finally(() => setRestoring(false))
   }
 
   const recoveryDirty =
@@ -588,6 +601,13 @@ export function ResolumeConfig() {
             )}
             <ButtonRow>
               <Button
+                disabled={!actionGate.allowed || restoring}
+                title={actionGate.allowed ? undefined : actionGate.reason}
+                onClick={restoreRecovery}
+              >
+                {restoring ? 'Restoring…' : 'Run restore now'}
+              </Button>
+              <Button
                 variant="primary"
                 onClick={saveRecovery}
                 disabled={!recoveryDirty || savingRecovery || !gate.allowed || recoveryConfigState.kind !== 'loaded'}
@@ -615,6 +635,7 @@ export function ResolumeConfig() {
               />
             )}
             {saveRecoveryError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveRecoveryError} />}
+            {restoreError !== null && <RuledStrip absence="failed" label="Restore refused" fact={restoreError} />}
 
             <h3 className="sm-subsection__title">Last record</h3>
             {recoveryState.response.record.length === 0 ? (

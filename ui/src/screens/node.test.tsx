@@ -12,6 +12,10 @@ const stubs = vi.hoisted(() => ({
   declareNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   deleteNodeDeclaration: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   runDiscovery: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  applyRenderSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  clearRenderSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  restartRenderPipeline: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  probeRenderTransport: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -24,6 +28,10 @@ vi.mock('../api', async () => {
     declareNode: (...args: never[]) => stubs.declareNode(...args),
     deleteNodeDeclaration: (...args: never[]) => stubs.deleteNodeDeclaration(...args),
     runDiscovery: (...args: never[]) => stubs.runDiscovery(...args),
+    applyRenderSurface: (...args: never[]) => stubs.applyRenderSurface(...args),
+    clearRenderSurface: (...args: never[]) => stubs.clearRenderSurface(...args),
+    restartRenderPipeline: (...args: never[]) => stubs.restartRenderPipeline(...args),
+    probeRenderTransport: (...args: never[]) => stubs.probeRenderTransport(...args),
   }
 })
 
@@ -151,6 +159,10 @@ describe('Node detail', () => {
     stubs.declareNode = () => new Promise(() => {})
     stubs.deleteNodeDeclaration = () => new Promise(() => {})
     stubs.runDiscovery = () => new Promise(() => {})
+    stubs.applyRenderSurface = () => new Promise(() => {})
+    stubs.clearRenderSurface = () => new Promise(() => {})
+    stubs.restartRenderPipeline = () => new Promise(() => {})
+    stubs.probeRenderTransport = () => new Promise(() => {})
   })
 
   it('renders the mock’s section labels in order', () => {
@@ -294,6 +306,29 @@ describe('Node detail', () => {
     await waitFor(() => expect(screen.getByText('Garage door')).toBeInTheDocument())
     expect(screen.getByText(/32×32 rgbw/)).toBeInTheDocument()
     expect(screen.getByText('winter-ridge-2026')).toBeInTheDocument()
+  })
+
+  it('dispatches the four render controls against the surface assigned to this node', async () => {
+    stubs.listShowSurfacesForNode = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', kind: 'show.surface', objects: [surfaceSummary()] })
+    stubs.getShowSurface = () => Promise.resolve(surfaceResponse())
+    stubs.getNodeAssetManifest = () => Promise.resolve({ serverTime: '2026-08-30T21:07:00Z', manifest: manifest() })
+    const result = { outcome: 'confirmed', outcomeReason: 'The node reported running.', pipelineFailed: false }
+    stubs.applyRenderSurface = vi.fn().mockResolvedValue(result)
+    stubs.clearRenderSurface = vi.fn().mockResolvedValue(result)
+    stubs.restartRenderPipeline = vi.fn().mockResolvedValue(result)
+    stubs.probeRenderTransport = vi.fn().mockResolvedValue(result)
+    renderScreen([node()], { session: signedIn(['config:write', 'render:command']) })
+
+    await waitFor(() => expect(screen.getByLabelText('Sequence id')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Sequence id'), { target: { value: 'preshow-loop' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(stubs.applyRenderSurface).toHaveBeenCalledWith('media-garage', 'garage-door', 'preshow-loop'))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    await waitFor(() => expect(stubs.clearRenderSurface).toHaveBeenCalledWith('media-garage', 'garage-door'))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart pipeline' }))
+    await waitFor(() => expect(stubs.restartRenderPipeline).toHaveBeenCalledWith('media-garage', 'garage-door'))
+    fireEvent.click(screen.getByRole('button', { name: 'Probe transport' }))
+    await waitFor(() => expect(stubs.probeRenderTransport).toHaveBeenCalledWith('media-garage', 'garage-door'))
   })
 
   it('shows the not-found treatment naming the id when the node is not in the model', () => {

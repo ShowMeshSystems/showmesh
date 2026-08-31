@@ -5,15 +5,18 @@ import {
   getFPPEndpointsConfigRevisions,
   getFPPMQTTConfig,
   getFPPMQTTConfigRevisions,
+  getFPPConnectSettingsConfig,
+  getFPPConnectSettingsConfigRevisions,
   getResolumeInstancesConfig,
   getResolumeInstancesConfigRevisions,
   putFPPEndpointsConfig,
   putFPPMQTTConfig,
+  putFPPConnectSettingsConfig,
   putResolumeInstancesConfig,
   type ConfigFPPEndpoint,
   type ConfigResolumeInstance,
 } from '../api'
-import { Button, ButtonRow, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
+import { Button, ButtonRow, Choice, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -488,6 +491,8 @@ export function SettingsConnections() {
         <RevisionHistory id="st-mqtt-rev" fetch={getFPPMQTTConfigRevisions} reloadKey={attempt} />
       </Section>
 
+      <FPPConnectSettings />
+
       <ButtonRow>
         <Button
           variant="primary"
@@ -506,5 +511,58 @@ export function SettingsConnections() {
         answer at showtime.
       </p>
     </>
+  )
+}
+
+function FPPConnectSettings() {
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const [attempt, setAttempt] = useState(0)
+  const load = useConfigLoad(getFPPConnectSettingsConfig, attempt)
+  const [enabled, setEnabled] = useState(true)
+  const [maxFileBytes, setMaxFileBytes] = useState('')
+  const [maxAssetDirBytes, setMaxAssetDirBytes] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (load.kind !== 'loaded') return
+    setEnabled(load.response.payload.enabled)
+    setMaxFileBytes(String(load.response.payload.maxFileBytes))
+    setMaxAssetDirBytes(String(load.response.payload.maxAssetDirBytes))
+    setDirty(false)
+  }, [load])
+
+  const save = () => {
+    const file = Number(maxFileBytes)
+    const total = Number(maxAssetDirBytes)
+    if (!Number.isSafeInteger(file) || file < 1 || !Number.isSafeInteger(total) || total < file) {
+      setError('Both limits must be whole bytes, and the total asset-directory limit must be at least the per-file limit.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    putFPPConnectSettingsConfig({ enabled, maxFileBytes: file, maxAssetDirBytes: total })
+      .then(() => { setDirty(false); setAttempt((n) => n + 1) })
+      .catch((err: unknown) => setError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <Section id="st-fppconnect" title="FPP Connect" detail="Controls xLights ingestion on the coordinator; byte limits are enforced before files enter a node asset directory.">
+      {load.kind === 'loading' ? <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator for FPP Connect settings." /> : load.kind === 'failed' ? <RuledStrip absence="failed" label="Read failed" fact={load.reason} /> : (
+        <>
+          <Choice type="checkbox" checked={enabled} onChange={(e) => { setEnabled(e.target.checked); setDirty(true) }} label="Enable the xLights ingestion listener" />
+          <div className="sm-grid sm-form-column sm-stack-3">
+            <label className="sm-field"><span className="sm-field__label">Maximum file bytes</span><Input type="number" min="1" value={maxFileBytes} onChange={(e) => { setMaxFileBytes(e.target.value); setDirty(true) }} /></label>
+            <label className="sm-field"><span className="sm-field__label">Maximum asset-directory bytes</span><Input type="number" min="1" value={maxAssetDirBytes} onChange={(e) => { setMaxAssetDirBytes(e.target.value); setDirty(true) }} /></label>
+          </div>
+          <ButtonRow><Button variant="primary" disabled={!dirty || saving || !gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : 'Save FPP Connect settings'}</Button></ButtonRow>
+        </>
+      )}
+      {error !== null && <RuledStrip absence="failed" label="Save failed" fact={error} />}
+      <RevisionHistory id="st-fppconnect-rev" fetch={getFPPConnectSettingsConfigRevisions} reloadKey={attempt} />
+    </Section>
   )
 }

@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
+  applyRenderSurface,
+  clearRenderSurface,
   declareNode,
   deleteNodeDeclaration,
   getShowSurface,
   getNodeAssetManifest,
   listShowSurfacesForNode,
+  probeRenderTransport,
+  restartRenderPipeline,
   runDiscovery,
   type Capability,
   type NodeAssetManifest,
+  type RenderCommandResult,
   type ShowSurfaceConfigResponse,
 } from '../api'
 import {
@@ -140,6 +145,63 @@ function ManifestEmptyRow({ manifest, fact }: { manifest: NodeAssetManifest; fac
   return <RuledStrip absence="empty" label="None" fact={fact} />
 }
 
+type RenderOutcome = { tone: Tone; label: string; detail: string }
+
+function renderOutcome(result: RenderCommandResult): RenderOutcome {
+  if (result.outcome === 'confirmed') return { tone: 'good', label: 'Confirmed', detail: result.outcomeReason }
+  if (result.outcome === 'unconfirmed') return { tone: result.pipelineFailed ? 'bad' : 'warn', label: result.pipelineFailed ? 'Pipeline failed' : 'Not confirmed', detail: result.outcomeReason }
+  return { tone: 'pending', label: 'Still resolving', detail: result.outcomeReason }
+}
+
+/** A surface's four real render commands stay beside the assignment they address. */
+function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; surfaceId: string; gate: ReturnType<typeof evaluateScope> }) {
+  const [sequenceId, setSequenceId] = useState('')
+  const [running, setRunning] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<RenderOutcome | null>(null)
+
+  const run = (label: string, command: () => Promise<RenderCommandResult>) => {
+    setRunning(label)
+    setOutcome(null)
+    command()
+      .then((result) => setOutcome(renderOutcome(result)))
+      .catch((err: unknown) => setOutcome({ tone: 'bad', label: 'Refused', detail: `${label}: ${describeApiError(err)}` }))
+      .finally(() => setRunning(null))
+  }
+
+  return (
+    <div className="sm-stack-2">
+      <Field label="Sequence id" help="The active show resolves this sequence’s current FSEQ asset; FPP’s catalog is not inferred here.">
+        {(field) => <Input {...field} value={sequenceId} onChange={(event) => setSequenceId(event.target.value)} placeholder="e.g. preshow-loop" />}
+      </Field>
+      <ButtonRow>
+        <Button
+          variant="primary"
+          disabled={!gate.allowed || running !== null || sequenceId.trim() === ''}
+          title={!gate.allowed ? gate.reason : sequenceId.trim() === '' ? 'Enter the sequence id to apply.' : undefined}
+          onClick={() => run('Apply', () => applyRenderSurface(nodeId, surfaceId, sequenceId.trim()))}
+        >
+          {running === 'Apply' ? 'Applying…' : 'Apply'}
+        </Button>
+        <Button variant="danger" disabled={!gate.allowed || running !== null} title={gate.allowed ? undefined : gate.reason} onClick={() => run('Clear', () => clearRenderSurface(nodeId, surfaceId))}>
+          {running === 'Clear' ? 'Clearing…' : 'Clear'}
+        </Button>
+        <Button disabled={!gate.allowed || running !== null} title={gate.allowed ? undefined : gate.reason} onClick={() => run('Restart pipeline', () => restartRenderPipeline(nodeId, surfaceId))}>
+          {running === 'Restart pipeline' ? 'Restarting…' : 'Restart pipeline'}
+        </Button>
+        <Button disabled={!gate.allowed || running !== null} title={gate.allowed ? undefined : gate.reason} onClick={() => run('Probe transport', () => probeRenderTransport(nodeId, surfaceId))}>
+          {running === 'Probe transport' ? 'Probing…' : 'Probe transport'}
+        </Button>
+      </ButtonRow>
+      {outcome !== null && (
+        <div className="sm-outcome" role="status">
+          <StatusPair tone={outcome.tone} label={outcome.label} />
+          <p className="sm-outcome__detail">{outcome.detail}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function NodeDetail() {
   const { nodeId = '' } = useParams<{ nodeId: string }>()
   const model = useModelContext()
@@ -151,6 +213,7 @@ export function NodeDetail() {
   const { state: manifestState, reload: reloadManifest } = useNodeAssetManifest(nodeId)
 
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const renderGate = evaluateScope(model.session, model.sessionFetchFailed, 'render:command')
 
   const [labelValue, setLabelValue] = useState(node?.label ?? '')
   const [savingLabel, setSavingLabel] = useState(false)
@@ -449,6 +512,7 @@ export function NodeDetail() {
                           <td className="sm-small sm-muted">{surface.payload.show}</td>
                           <td>
                             <StatusPair tone={status.tone} label={status.label} />
+                            <RenderSurfaceControls nodeId={node.nodeId} surfaceId={surface.id} gate={renderGate} />
                           </td>
                         </tr>
                       )

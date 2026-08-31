@@ -112,6 +112,8 @@ export type ConfigResolumeInstancesPayload = components['schemas']['ConfigResolu
 export type FPPMQTTConfigResponse = components['schemas']['FPPMQTTConfigResponse']
 export type ConfigFPPMQTTPayload = components['schemas']['ConfigFPPMQTTPayload']
 export type ConfigFPPMQTTPutRequest = components['schemas']['ConfigFPPMQTTPutRequest']
+export type FPPConnectSettingsConfigResponse = components['schemas']['FPPConnectSettingsConfigResponse']
+export type ConfigFPPConnectSettingsPayload = components['schemas']['ConfigFPPConnectSettingsPayload']
 // Track G seam G-4 (ADR-039): the assets.settings configuration write
 // surface, aliased for the identical reason as resolume.instances' own
 // shapes above. ConfigAssetsSettingsPutPayload is a SEPARATE type from
