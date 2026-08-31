@@ -356,9 +356,8 @@ func TestCloseStillAttemptsPipelineNullDespiteADeferredBranch(t *testing.T) {
 		t.Fatalf("Close with a deferred branch returned %v, want errCloseIncomplete", closeErr)
 	}
 
-	current, _, _ := e.pipeline.GetState(0)
-	if current != gst.StateNull {
-		t.Fatalf("pipeline state after Close = %v, want StateNull: Close must still attempt its own SetState(NULL) rather than skip it because a branch teardown deferred", current)
+	if e.pipelineStateAtClose != gst.StateNull {
+		t.Fatalf("pipeline state after Close = %v, want StateNull: Close must still attempt its own SetState(NULL) rather than skip it because a branch teardown deferred", e.pipelineStateAtClose)
 	}
 }
 
