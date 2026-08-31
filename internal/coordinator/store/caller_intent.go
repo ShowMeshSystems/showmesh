@@ -24,11 +24,26 @@ import "strings"
 // caller intent to record) and "this row predates schema v26's tagging
 // scheme" (a bare revision digit string, a bare JSON identity struct, or
 // simply ""). The two are indistinguishable from the stored value alone,
-// and this package makes no attempt to tell them apart: a caller must
-// never turn an untagged value into a guess at one of the tagged kinds
-// below by inspecting its shape. A wrong guess there is the exact defect
-// that let four unrelated shapes, two of them structurally similar JSON
-// objects, share one untyped TEXT column in the first place.
+// and this package makes no attempt to tell them apart itself: neither
+// [ParseCallerIntent] nor [CallerIntentPayload] ever returns a guessed
+// kind for an untagged value.
+//
+// That does not, by itself, stop a caller from mis-reading anyway: three
+// read sites (internal/coordinator/api's render, cue-catalog deploy, and
+// action-invoke replay handlers) discard [CallerIntentPayload]'s bool and
+// decode whatever string comes back regardless. What actually prevents a
+// wrong-family read in practice is each of those sites checking the
+// command's own Action or TargetKind FIRST, before ever touching this
+// column, so a row of a different family can never reach the decode
+// through their idempotency-key lookup. A value TAGGED under this scheme
+// (v26 forward) gets a second, incidental layer for free: a lookup under
+// the wrong kind returns the string still wearing its own different tag,
+// which then fails outright to parse as the shape the caller expected.
+// Neither layer covers a pre-v26 untagged JSON value read under the wrong
+// family on purpose, which is why the Action/TargetKind check, not this
+// column's own content, is this package's real guarantee against the
+// defect that let four unrelated shapes, two of them structurally similar
+// JSON objects, share one untyped TEXT column in the first place.
 type CallerIntentKind string
 
 const (
