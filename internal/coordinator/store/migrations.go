@@ -63,20 +63,27 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
-	// v21-v23 are reserved for other, not-yet-merged branches
-	// (docs/build/IDENTIFIER-REGISTER.md): this migration takes v24, the
-	// next free number, rather than the lowest one, to avoid colliding
-	// with them when they land.
+	// v21, v22, and v23 are dead numbers: each sits at or below this
+	// migration's own shipped maximum (24), so migrate()'s own
+	// current == target short-circuit means a migration entry at any of
+	// them can never run for a store some other binary already stamped
+	// at 24 or higher, exactly the failure the v25 entry below this one
+	// exists to fix. Whatever work docs/build/IDENTIFIER-REGISTER.md
+	// currently shows reserved at v21 or v22 will need a fresh number
+	// above the shipped maximum when it actually lands, for the
+	// identical reason v23 was renumbered to v25. This migration itself
+	// took the next free number (24) rather than the lowest one (21)
+	// specifically to avoid colliding with those two reservations when
+	// they land; that choice is left as it shipped rather than rewritten
+	// here, even though a number below the maximum is unusable regardless
+	// of which branch reaches it first.
 	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
-	// docs/build/IDENTIFIER-REGISTER.md still lists Track J's J1 work as
-	// v23 as of this merge; it is taken here as v25, the next free
-	// number after v24 landed on main first, for the identical reason
-	// v24's own comment above states: a migration numbered at or below
-	// an already-shipped maximum can never run for a store a prior
-	// binary already stamped at that maximum (migrate's own
-	// current == target short-circuit trusts that equality means fully
-	// migrated). The register's own row needs updating to match; that is
-	// not this branch's edit to make.
+	// v25 is Track J's J1 (ADR-048, TRACK-J-fpp-fallback.md J1): the next
+	// free number after v24 landed on main first. Nothing at or below the
+	// shipped maximum is ever reserved for future work again after this
+	// point: a reservation below the stamp is a migration that can never
+	// run, which is the exact mechanism this renumbering and v21/v22's
+	// own now-dead reservations both demonstrate.
 	{version: 25, sql: schemaV25},
 }
 
