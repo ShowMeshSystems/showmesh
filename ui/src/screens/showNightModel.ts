@@ -18,13 +18,31 @@ export type RailStep = {
   status: 'done' | 'now' | 'ahead' | 'unknown' | 'notWired'
 }
 
+/** The states outside the repeating cycle, and what to call each on the rail. */
+const OFF_CYCLE_LABEL: Record<string, string> = {
+  inactive: 'Inactive',
+  preparing: 'Preparing',
+  preshow: 'Preshow',
+  'end-of-night-resting': 'End-of-night resting',
+  'fading-out': 'Fading out',
+  stopped: 'Stopped',
+}
+
 export function cycleRail(session: NightSessionState, nowIso: string | null): RailStep[] {
   const currentIndex = CYCLE_STEPS.findIndex((step) => step.state === session.state)
   const inState = ageMs(session.stateEnteredAt, nowIso)
+  if (currentIndex === -1) {
+    const label = OFF_CYCLE_LABEL[session.state] ?? session.state
+    return [
+      {
+        key: session.state,
+        label,
+        detail: `Not in the repeating cycle · ${inState === null ? 'now' : `${formatDuration(inState)} in state`}`,
+        status: 'now' as const,
+      },
+    ]
+  }
   return CYCLE_STEPS.map((step, index) => {
-    if (currentIndex === -1) {
-      return { key: step.state, label: step.label, detail: 'not reported', status: 'unknown' as const }
-    }
     if (index < currentIndex) return { key: step.state, label: step.label, detail: 'done this cycle', status: 'done' as const }
     if (index === currentIndex) {
       return {

@@ -6,6 +6,7 @@ import {
   Button,
   ButtonRow,
   DefinitionStrip,
+  NotWired,
   NotWiredBanner,
   RuledStrip,
   Section,
@@ -16,7 +17,7 @@ import {
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
-import { formatPosition } from './liveControlModel'
+import { formatPosition, type CommandOutcome } from './liveControlModel'
 import {
   cycleRail,
   evidenceReadouts,
@@ -73,12 +74,20 @@ export function ShowNight() {
   const { session, error } = useNightSession()
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'night:command')
-  const [outcome, setOutcome] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
 
   const send = useCallback((command: NightCommandName) => {
     dispatchNightCommand(command)
-      .then(() => setOutcome(`${command} was accepted. What the session then does is what this page reports.`))
-      .catch((err: unknown) => setOutcome(`${command} was refused: ${describeApiError(err)}`))
+      .then(() =>
+        setOutcome({
+          tone: 'warn',
+          label: 'Accepted',
+          detail: `${command} was accepted. What the session then does is what this page reports.`,
+        }),
+      )
+      .catch((err: unknown) =>
+        setOutcome({ tone: 'bad', label: 'Refused', detail: `${command} was refused: ${describeApiError(err)}` }),
+      )
   }, [])
 
   const tonight = session === null ? [] : nightRail(session)
@@ -118,9 +127,11 @@ export function ShowNight() {
           </p>
         </div>
         <ButtonRow>
-          <Link className="sm-btn" to={`/shows/${session.configObjectId}`}>
-            Edit definition
-          </Link>
+          <NotWired>
+            <Button title="There is no night-session definition editor yet. This config object is night.session, not a show.">
+              Edit definition
+            </Button>
+          </NotWired>
           <Button disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={() => send('run-readiness')}>
             Run readiness
           </Button>
@@ -223,8 +234,8 @@ export function ShowNight() {
         </div>
         {outcome !== null && (
           <div className="sm-outcome">
-            <StatusPair tone="warn" label="Accepted" />
-            <p className="sm-outcome__detail">{outcome}</p>
+            <StatusPair tone={outcome.tone} label={outcome.label} />
+            <p className="sm-outcome__detail">{outcome.detail}</p>
           </div>
         )}
       </Section>

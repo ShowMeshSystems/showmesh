@@ -1,15 +1,23 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FPPInstance, Model, NightSessionState } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { ShowNight } from './ShowNight'
-import { evidenceReadouts, nextTransition, nightRail, runOfShow } from './showNightModel'
+import { cycleRail, evidenceReadouts, nextTransition, nightRail, runOfShow } from './showNightModel'
+
+const stubs = vi.hoisted(() => ({
+  dispatchNightCommand: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
+}))
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
-  return { ...actual, getCurrentNightSession: () => new Promise(() => {}) }
+  return {
+    ...actual,
+    getCurrentNightSession: () => new Promise(() => {}),
+    dispatchNightCommand: (...args: never[]) => stubs.dispatchNightCommand(...args),
+  }
 })
 
 function session(overrides: Partial<NightSessionState> = {}): NightSessionState {
@@ -161,6 +169,63 @@ describe('Show Night', () => {
     expect(screen.getByText('The night timeline does nothing yet.')).toBeInTheDocument()
     expect(screen.getByText('Cycle 1')).toBeInTheDocument()
     expect(screen.getAllByText('not reported').length).toBeGreaterThan(0)
+  })
+
+  const allowedSession = {
+    serverTime: '2026-08-28T21:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['night:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
+
+  it('shows a Refused chip, never an Accepted one, when a night command is refused', async () => {
+    stubs.dispatchNightCommand = () => Promise.reject(new Error('no route to host'))
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(await screen.findByText('Refused')).toBeInTheDocument()
+    expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
+    expect(screen.getByText(/was refused: no route to host/)).toBeInTheDocument()
+  })
+
+  it('shows an Accepted chip, never a Refused one, when a night command is accepted', async () => {
+    stubs.dispatchNightCommand = () => Promise.resolve({})
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(await screen.findByText('Accepted')).toBeInTheDocument()
+    expect(screen.queryByText('Refused')).not.toBeInTheDocument()
+  })
+
+  it('renders a single off-cycle row, not a four-row dead rail, for a state outside the repeating cycle', () => {
+    const rail = cycleRail(session({ state: 'preshow' }), '2026-08-28T21:07:00Z')
+    expect(rail).toHaveLength(1)
+    expect(rail[0]?.label).toBe('Preshow')
+    expect(rail[0]?.detail).toContain('Not in the repeating cycle')
+    expect(rail[0]?.status).toBe('now')
+  })
+
+  it('names another off-cycle state honestly instead of four rows of "not reported"', () => {
+    const rail = cycleRail(session({ state: 'fading-out' }), '2026-08-28T21:07:00Z')
+    expect(rail).toHaveLength(1)
+    expect(rail[0]?.label).toBe('Fading out')
+    expect(rail.every((step) => step.detail !== 'not reported')).toBe(true)
+  })
+
+  it('still renders the full four-step cycle rail for a state inside the cycle', () => {
+    const rail = cycleRail(session({ state: 'live' }), '2026-08-28T21:07:00Z')
+    expect(rail).toHaveLength(4)
+    expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting'])
+  })
+
+  it('does not link "Edit definition" to the show config route, and marks it not wired', () => {
+    renderScreen({ nightSession: session({ cycle: 1 }) })
+    expect(screen.queryByRole('link', { name: 'Edit definition' })).not.toBeInTheDocument()
+    const editButton = screen.getByRole('button', { name: 'Edit definition' })
+    expect(editButton).toBeDisabled()
+    expect(screen.getByText('Not wired')).toBeInTheDocument()
   })
 
   it('has no earlier cycles and no not-wired banner when the session is on cycle 1', () => {
