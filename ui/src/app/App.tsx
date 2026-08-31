@@ -15,6 +15,7 @@ import { MonitorCapabilities } from '../screens/MonitorCapabilities'
 import { MonitorManifest } from '../screens/MonitorManifest'
 import { NodeDetail } from '../screens/NodeDetail'
 import { ResolumeConfig } from '../screens/ResolumeConfig'
+import { ResolumeControl } from '../screens/ResolumeControl'
 import { ShowNight } from '../screens/ShowNight'
 import { Shows } from '../screens/Shows'
 import { ShowDraft } from '../screens/ShowDraft'
@@ -89,6 +90,7 @@ export default function App() {
             <Route path="monitor" element={<Navigate replace to="/monitor/fleet" />} />
             <Route index element={<Dashboard />} />
             <Route path="control" element={<LiveControl />} />
+            <Route path="control/resolume" element={<ResolumeControl />} />
             <Route path="night" element={<ShowNight />} />
             <Route path="monitor/fleet" element={<Monitor />} />
             <Route path="monitor/signals" element={<MonitorSignals />} />

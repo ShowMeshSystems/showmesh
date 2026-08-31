@@ -3,12 +3,8 @@ import { Link } from 'react-router-dom'
 import {
   ApiError,
   blackoutResolume,
-  clearResolumeLayer,
   dispatchNightCommand,
-  getResolumeComposition,
   invokeAction,
-  launchResolumeClip,
-  launchResolumeColumn,
   getShowCue,
   listAssets,
   listConfigObjects,
@@ -17,9 +13,6 @@ import {
   prevFPPPlaylistItem,
   resumeFPPPlaylist,
   setFPPVolume,
-  setResolumeLayerBypass,
-  setResolumeLayerMaster,
-  selectResolumeDeck,
   startFPPPlaylist,
   stopFPPPlaylist,
   stopFPPPlaylistGracefully,
@@ -28,7 +21,6 @@ import {
   type FPPCommandResult,
   type NightCommandName,
   type ResolumeActionResult,
-  type ResolumeCompositionResponse,
 } from '../api'
 import {
   Button,
@@ -42,7 +34,6 @@ import {
   NotWiredBanner,
   RuledStrip,
   Section,
-  Select,
   Segmented,
   StatusPair,
   Table,
@@ -376,7 +367,7 @@ export function LiveControl() {
         )}
       </Section>
 
-      <ResolumeControls gate={resolumeGate} />
+      <ResolumeQuickStrip gate={resolumeGate} />
 
       <Section id="lc-lifecycle" title="Night lifecycle" aside={<Link to="/night">Show Night →</Link>}>
         <p className="sm-small sm-muted">
@@ -582,11 +573,26 @@ function Announcements({ show }: { show: string | null }) {
   )
 }
 
-type ResolumeCompositionState =
-  | { kind: 'loading' }
-  | { kind: 'none' }
-  | { kind: 'failed'; reason: string }
-  | { kind: 'loaded'; response: ResolumeCompositionResponse }
+function ResolumeQuickStrip({ gate }: { gate: Gate }) {
+  const [outcome, setOutcome] = useState<ResolumeActionResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const blackout = () => {
+    setError(null)
+    blackoutResolume().then(setOutcome).catch((err: unknown) => setError(describeApiError(err)))
+  }
+
+  return (
+    <Section id="lc-resolume" title="Resolume" aside={<Link to="/control/resolume">Open Resolume control →</Link>}>
+      <p className="sm-small sm-muted">The clip grid and layer controls have their own wide workspace. Blackout remains here for immediate recovery.</p>
+      <ButtonRow>
+        <Button variant="danger" size="gloved" disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={blackout}>Blackout</Button>
+      </ButtonRow>
+      {outcome !== null && <ResolumeOutcome result={outcome} />}
+      {error !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={error} />}
+    </Section>
+  )
+}
 
 function resolumeTone(result: ResolumeActionResult): 'good' | 'warn' | 'bad' | 'unknown' {
   if (result.outcome === 'confirmed') return 'good'
@@ -600,107 +606,12 @@ function resolumeLabel(result: ResolumeActionResult): string {
   return result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)
 }
 
-/** Direct Resolume controls use the stored composition's names, never Arena object ids. */
-function ResolumeControls({ gate }: { gate: Gate }) {
-  const [composition, setComposition] = useState<ResolumeCompositionState>({ kind: 'loading' })
-  const [deck, setDeck] = useState('')
-  const [layer, setLayer] = useState('')
-  const [clip, setClip] = useState('')
-  const [column, setColumn] = useState('')
-  const [master, setMaster] = useState('')
-  const [bypassed, setBypassed] = useState(false)
-  const [outcome, setOutcome] = useState<ResolumeActionResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    getResolumeComposition()
-      .then((response) => {
-        if (!cancelled) setComposition({ kind: 'loaded', response })
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        if (err instanceof ApiError && err.status === 404) {
-          setComposition({ kind: 'none' })
-          return
-        }
-        setComposition({ kind: 'failed', reason: describeApiError(err) })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const run = useCallback((call: () => Promise<ResolumeActionResult>) => {
-    setError(null)
-    call()
-      .then(setOutcome)
-      .catch((err: unknown) => setError(describeApiError(err)))
-  }, [])
-
-  const data = composition.kind === 'loaded' ? composition.response : null
-  const deckNames = data?.decks.map((item) => item.name) ?? []
-  const layerNames = data?.layers.map((item) => item.name) ?? []
-  const columnNames = data?.columns.filter((item) => deck === '' || data.decks.find((candidate) => candidate.id === item.deckId)?.name === deck).map((item) => item.name) ?? []
-  const clipNames = data?.clips
-    .filter((item) => deck === '' || data.decks.find((candidate) => candidate.id === item.deckId)?.name === deck)
-    .map((item) => item.name) ?? []
-  const canAddress = gate.allowed && data !== null
-
+function ResolumeOutcome({ result }: { result: ResolumeActionResult }) {
   return (
-    <Section id="lc-resolume" title="Resolume" aside={<Link to="/monitor/fleet">Stored composition and recovery →</Link>}>
-      <p className="sm-small sm-muted">Direct wall controls resolve the stored composition’s names and report the action’s evidence outcome. They do not infer success from dispatch.</p>
-      {composition.kind === 'loading' ? (
-        <RuledStrip absence="loading" label="Reading" fact="Reading the stored Resolume composition." />
-      ) : composition.kind === 'failed' ? (
-        <RuledStrip absence="failed" label="Read failed" fact={composition.reason} detail="Blackout remains available because it addresses no composition object." />
-      ) : composition.kind === 'none' ? (
-        <RuledStrip absence="unavailable" label="No composition" fact="No stored composition names are available for direct clip or layer controls." detail="Upload a composition from the Resolume fleet detail to address clips, layers, decks, and columns." />
-      ) : (
-        <div className="sm-stack-4">
-          <div className="sm-field-grid">
-            <Field label="Deck">
-              {(field) => <Select {...field} value={deck} onChange={(event) => setDeck(event.target.value)}><option value="">Select a deck</option>{deckNames.map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
-            </Field>
-            <Field label="Layer">
-              {(field) => <Select {...field} value={layer} onChange={(event) => setLayer(event.target.value)}><option value="">Select a layer</option>{layerNames.map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
-            </Field>
-            <Field label="Clip">
-              {(field) => <Select {...field} value={clip} onChange={(event) => setClip(event.target.value)}><option value="">Select a clip</option>{clipNames.map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
-            </Field>
-            <Field label="Column">
-              {(field) => <Select {...field} value={column} onChange={(event) => setColumn(event.target.value)}><option value="">Select a column</option>{columnNames.map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
-            </Field>
-          </div>
-          <ButtonRow>
-            <Button disabled={!canAddress || deck === ''} title={gate.allowed ? undefined : gate.reason} onClick={() => run(() => selectResolumeDeck(deck))}>Select deck</Button>
-            <Button variant="primary" disabled={!canAddress || clip === '' || (deck === '' && data.persistentClips.every((item) => item.name !== clip))} title={gate.allowed ? undefined : gate.reason} onClick={() => run(() => launchResolumeClip({ clip, ...(deck === '' ? { persistent: true } : { deck }), ...(layer === '' ? {} : { layer }) }))}>Launch clip</Button>
-            <Button disabled={!canAddress || column === '' || deck === ''} title={gate.allowed ? undefined : gate.reason} onClick={() => run(() => launchResolumeColumn(column, deck))}>Launch column</Button>
-            <Button variant="danger" disabled={!canAddress || layer === ''} title={gate.allowed ? undefined : gate.reason} onClick={() => run(() => clearResolumeLayer(layer))}>Clear layer</Button>
-          </ButtonRow>
-          <div className="sm-field-grid">
-            <Field label="Layer master" help="Arena validates this layer’s own range; ShowMesh does not clamp it.">
-              {(field) => <Input {...field} type="number" step="any" value={master} onChange={(event) => setMaster(event.target.value)} />}
-            </Field>
-            <Choice type="checkbox" checked={bypassed} onChange={(event) => setBypassed(event.target.checked)} label="Bypass selected layer" />
-          </div>
-          <ButtonRow>
-            <Button disabled={!canAddress || layer === '' || master.trim() === '' || !Number.isFinite(Number(master))} title={gate.allowed ? undefined : gate.reason} onClick={() => run(() => setResolumeLayerMaster(layer, Number(master)))}>Set master</Button>
-            <Button disabled={!canAddress || layer === ''} title={gate.allowed ? undefined : gate.reason} onClick={() => run(() => setResolumeLayerBypass(layer, bypassed))}>{bypassed ? 'Bypass layer' : 'Restore layer'}</Button>
-          </ButtonRow>
-        </div>
-      )}
-      <ButtonRow>
-        <Button variant="danger" size="gloved" disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={() => run(blackoutResolume)}>Blackout</Button>
-      </ButtonRow>
-      {outcome !== null && (
-        <div className="sm-outcome">
-          <StatusPair tone={resolumeTone(outcome)} label={resolumeLabel(outcome)} />
-          <p className="sm-outcome__detail">{outcome.outcomeReason || 'The prior dispatch is still resolving.'}{outcome.replay ? ' This response reuses the original dispatch.' : ''}{outcome.attributionDegraded ? ' Attribution is degraded because the audit record could not be written.' : ''}</p>
-        </div>
-      )}
-      {error !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={error} />}
-    </Section>
+    <div className="sm-outcome">
+      <StatusPair tone={resolumeTone(result)} label={resolumeLabel(result)} />
+      <p className="sm-outcome__detail">{result.outcomeReason || 'The prior dispatch is still resolving.'}{result.replay ? ' This response reuses the original dispatch.' : ''}{result.attributionDegraded ? ' Attribution is degraded because the audit record could not be written.' : ''}</p>
+    </div>
   )
 }
 

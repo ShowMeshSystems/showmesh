@@ -72,9 +72,9 @@ export function RailGroup({ children }: { children: string }) {
  * A badge here is an attention count, never an inventory count: it means an
  * operator has something to do. Without a read there is no badge at all.
  */
-export function RailLink({ to, children, badge }: { to: string; children: string; badge?: ReactNode }) {
+export function RailLink({ to, children, badge, sub }: { to: string; children: string; badge?: ReactNode; sub?: boolean }) {
   return (
-    <NavLink to={to} className="sm-rail__link" end={to === '/'}>
+    <NavLink to={to} className={`sm-rail__link${sub ? ' sm-rail__link--sub' : ''}`} end={to === '/'}>
       {children}
       {badge}
     </NavLink>

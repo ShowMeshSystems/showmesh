@@ -69,7 +69,7 @@ describe('app shell', () => {
   })
   afterEach(cleanup)
 
-  it('renders the seven rail destinations and no eighth', () => {
+  it('renders the Live Control Resolume sublink with the primary rail destinations', () => {
     renderShell({})
     const rail = screen.getByRole('navigation', { name: 'Primary' })
     const labels = [...rail.querySelectorAll('a')].map((link) => link.textContent)
@@ -77,6 +77,7 @@ describe('app shell', () => {
       'Dashboard',
       'Show Night',
       'Live Control',
+      'Resolume',
       'Shows',
       'Assets',
       'Monitor',

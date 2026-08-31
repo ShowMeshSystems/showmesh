@@ -248,6 +248,12 @@
   font-weight: 600;
 }
 
+.sm-rail__link--sub {
+  min-height: 30px;
+  padding-left: 26px;
+  font: var(--t-small);
+}
+
 .sm-rail__link[aria-disabled='true'] {
   color: var(--text-faint);
   cursor: not-allowed;

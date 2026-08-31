@@ -120,7 +120,7 @@ describe('Live Control', () => {
     bootstrapRequired: false,
   } as never
 
-  it('keeps Resolume direct controls between output evidence and night lifecycle', () => {
+  it('keeps the Resolume emergency path between output evidence and night lifecycle', () => {
     renderScreen({})
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Transport',
@@ -131,6 +131,7 @@ describe('Live Control', () => {
       'Announcements',
       'Actions',
     ])
+    expect(screen.getByRole('link', { name: /open resolume control/i })).toHaveAttribute('href', '/control/resolume')
   })
 
   it('dispatches blackout and reports its evidence outcome', async () => {

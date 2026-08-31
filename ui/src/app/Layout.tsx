@@ -158,6 +158,7 @@ export function Layout() {
           <RailLink to="/">Dashboard</RailLink>
           <RailLink to="/night">Show Night</RailLink>
           <RailLink to="/control">Live Control</RailLink>
+          <RailLink to="/control/resolume" sub>Resolume</RailLink>
           <RailGroup>Author</RailGroup>
           <RailLink to="/shows">Shows</RailLink>
           <RailLink to="/assets">Assets</RailLink>
