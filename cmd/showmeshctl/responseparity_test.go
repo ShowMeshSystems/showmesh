@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -564,9 +565,21 @@ func requiredPropertyNames(schema map[string]any) []string {
 // this only weakens the check for a property that is deliberately loosely
 // typed on the Go side, never for one this package encodes as a concrete
 // named struct.
-func checkResponseSchema(root any, schemaNode any, typeName string, fieldPath string, structs map[string]*ast.StructType, stack map[string]bool, t *testing.T, opKey string) {
-	schema := resolveMapNode(root, schemaNode, 0)
-	if schema == nil {
+// schemaWalkerErrorf narrows *testing.T to the one method checkResponseSchema
+// and resolveSchemaNode actually call. A subtest's failure marks every
+// ancestor *testing.T failed too (a documented go/testing behaviour a
+// t.Run bool return cannot suppress), so TestSchemaWalkerCompositionKeywords
+// substitutes a plain recorder satisfying this interface in place of a real
+// *testing.T to observe an expected failure's message without failing this
+// test file's own run; TestEveryGETResponseRequiredField's real *testing.T
+// satisfies it exactly as before.
+type schemaWalkerErrorf interface {
+	Errorf(format string, args ...any)
+}
+
+func checkResponseSchema(root any, schemaNode any, typeName string, fieldPath string, structs map[string]*ast.StructType, stack map[string]bool, t schemaWalkerErrorf, opKey string) {
+	schema, ok := resolveSchemaNode(root, schemaNode, typeName, fieldPath, t, opKey)
+	if !ok {
 		return
 	}
 	required := requiredPropertyNames(schema)
@@ -609,8 +622,8 @@ func checkResponseSchema(root any, schemaNode any, typeName string, fieldPath st
 		if !ok {
 			continue
 		}
-		resolvedProp := resolveMapNode(root, propSchemaNode, 0)
-		if resolvedProp == nil {
+		resolvedProp, ok := resolveSchemaNode(root, propSchemaNode, typeName, fieldPath+"."+propName, t, opKey)
+		if !ok {
 			continue
 		}
 
@@ -636,6 +649,228 @@ func checkResponseSchema(root any, schemaNode any, typeName string, fieldPath st
 			checkResponseSchema(root, propSchemaNode, elemType, fieldPath+"."+propName, structs, stack, t, opKey)
 		}
 	}
+}
+
+// resolveSchemaNode resolves node -- following $ref chains via
+// resolveMapNode -- to the schema checkResponseSchema actually walks.
+// api/openapi.yaml uses "oneOf: [X, {type: null}]" throughout as its
+// nullable-object idiom (e.g. FPPInstance.instanceUuidChange): X-or-absent,
+// exactly what a pointer-typed Go field already models. Landing on that
+// shape collapses through to X's own resolved schema instead of stopping,
+// since checking X's required properties is what closes the gap that idiom
+// would otherwise leave -- before this, a required property shaped this way
+// matched neither isArraySchemaNode nor isObjectSchemaNode below and was
+// silently never checked further. Any other oneOf/anyOf shape, or any
+// allOf, is composition this walker has no merge logic for; ok is false and
+// the failure is reported directly (via t) rather than left for the caller
+// to notice a nil come back silently, matching a genuinely-unresolvable
+// $ref's existing (silent) nil handling only for that one, already-covered
+// case.
+func resolveSchemaNode(root any, node any, typeName, fieldPath string, t schemaWalkerErrorf, opKey string) (map[string]any, bool) {
+	schema := resolveMapNode(root, node, 0)
+	if schema == nil {
+		return nil, false
+	}
+	for _, kw := range []string{"oneOf", "anyOf"} {
+		branches, has := schema[kw].([]any)
+		if !has {
+			continue
+		}
+		if nonNull, ok := nullableIdiomNonNullBranch(branches); ok {
+			return resolveSchemaNode(root, nonNull, typeName, fieldPath, t, opKey)
+		}
+		t.Errorf("%s: response schema at %s uses %q with a shape this test's schema walker does not support "+
+			"(not the two-branch \"X, or null\" nullable idiom) -- extend checkResponseSchema to handle it before "+
+			"this schema ships (Go type %q)", opKey, fieldPath, kw, typeName)
+		return nil, false
+	}
+	if _, has := schema["allOf"]; has {
+		t.Errorf("%s: response schema at %s uses \"allOf\", a composition keyword this test's schema walker does "+
+			"not support -- extend checkResponseSchema to handle it before this schema ships (Go type %q)",
+			opKey, fieldPath, typeName)
+		return nil, false
+	}
+	return schema, true
+}
+
+// nullableIdiomNonNullBranch reports branches' other member when branches is
+// exactly the two-element "X, {type: null}" shape (in either order) --
+// resolveSchemaNode's own doc comment names the idiom this recognizes.
+// Anything else (one branch, three, or neither/both branches being the bare
+// null schema) returns ok=false, leaving the composition unresolved for the
+// caller to report.
+func nullableIdiomNonNullBranch(branches []any) (any, bool) {
+	if len(branches) != 2 {
+		return nil, false
+	}
+	aNull := isNullOnlySchema(asMap(branches[0]))
+	bNull := isNullOnlySchema(asMap(branches[1]))
+	switch {
+	case aNull && !bNull:
+		return branches[1], true
+	case bNull && !aNull:
+		return branches[0], true
+	default:
+		return nil, false
+	}
+}
+
+func isNullOnlySchema(m map[string]any) bool {
+	return m != nil && schemaHasType(m, "null")
+}
+
+// fixtureCompositionStructs declares, via a small Go source string parsed
+// independently of this package's real files, the two struct shapes
+// TestSchemaWalkerCompositionKeywords exercises resolveSchemaNode against: a
+// wrapper decoding two required, pointer-typed nested fields (the shape
+// every nullable "oneOf: [$ref, null]" property in api/openapi.yaml already
+// uses on the Go side -- see types.go's own "optional/absent fields are
+// pointers" convention), and the nested struct itself.
+func fixtureCompositionStructs(t *testing.T) map[string]*ast.StructType {
+	t.Helper()
+	const src = `package fixture
+
+type fixtureWrapper struct {
+	Inner *fixtureInner ` + "`json:\"inner\"`" + `
+	Poly  *fixtureInner ` + "`json:\"poly\"`" + `
+}
+
+type fixtureInner struct {
+	Present string ` + "`json:\"present\"`" + `
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fixture.go", src, 0)
+	if err != nil {
+		t.Fatalf("parsing fixture source: %v", err)
+	}
+	out := map[string]*ast.StructType{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+		if st, ok := ts.Type.(*ast.StructType); ok {
+			out[ts.Name.Name] = st
+		}
+		return true
+	})
+	return out
+}
+
+// errCollector implements schemaWalkerErrorf by recording every Errorf call
+// instead of failing a real *testing.T, so TestSchemaWalkerCompositionKeywords
+// can assert on checkResponseSchema's exact failure messages -- including
+// asserting that NO call happened -- without a subtest's failure marking
+// this test file's own run failed.
+type errCollector struct {
+	errors []string
+}
+
+func (e *errCollector) Errorf(format string, args ...any) {
+	e.errors = append(e.errors, fmt.Sprintf(format, args...))
+}
+
+// TestSchemaWalkerCompositionKeywords is the standing regression check for
+// resolveSchemaNode's fail-closed handling of JSON Schema composition,
+// against a small fixture document rather than api/openapi.yaml so it
+// exercises exactly the shapes that behaviour distinguishes, independent of
+// whatever the real spec happens to contain when this test runs.
+func TestSchemaWalkerCompositionKeywords(t *testing.T) {
+	structs := fixtureCompositionStructs(t)
+
+	nullableRoot := func(innerRequired []any) any {
+		return map[string]any{
+			"components": map[string]any{
+				"schemas": map[string]any{
+					"fixtureInnerSchema": map[string]any{
+						"type":     "object",
+						"required": innerRequired,
+						"properties": map[string]any{
+							"present": map[string]any{"type": "string"},
+							"missing": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		}
+	}
+	nullableSchema := map[string]any{
+		"type":     "object",
+		"required": []any{"inner"},
+		"properties": map[string]any{
+			"inner": map[string]any{
+				"oneOf": []any{
+					map[string]any{"$ref": "#/components/schemas/fixtureInnerSchema"},
+					map[string]any{"type": "null"},
+				},
+			},
+		},
+	}
+
+	t.Run("nullable idiom walks the non-null branch and passes when it matches", func(t *testing.T) {
+		root := nullableRoot([]any{"present"})
+		rec := &errCollector{}
+		checkResponseSchema(root, nullableSchema, "fixtureWrapper", "$", structs, map[string]bool{}, rec, "GET /fixture")
+		if len(rec.errors) != 0 {
+			t.Fatalf("expected a matching nullable-idiom schema to pass with no errors; got %v", rec.errors)
+		}
+	})
+
+	t.Run("nullable idiom still finds a gap inside the non-null branch", func(t *testing.T) {
+		// "missing" has no Go field on fixtureInner. Before resolveSchemaNode
+		// collapsed the oneOf, this required property was reachable only
+		// through the nullable idiom and the walker never checked it at all.
+		root := nullableRoot([]any{"present", "missing"})
+		rec := &errCollector{}
+		checkResponseSchema(root, nullableSchema, "fixtureWrapper", "$", structs, map[string]bool{}, rec, "GET /fixture")
+		if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], `"missing"`) {
+			t.Fatalf("expected exactly one error naming the missing property reached only through the "+
+				"oneOf[$ref, null] nullable idiom; got %v", rec.errors)
+		}
+	})
+
+	t.Run("allOf fails loudly", func(t *testing.T) {
+		schemaNode := map[string]any{
+			"allOf": []any{
+				map[string]any{"type": "object", "required": []any{"present"}},
+			},
+		}
+		rec := &errCollector{}
+		checkResponseSchema(map[string]any{}, schemaNode, "fixtureWrapper", "$", structs, map[string]bool{}, rec, "GET /fixture")
+		if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], `"allOf"`) {
+			t.Fatalf("expected exactly one error naming allOf as an unsupported composition keyword; got %v", rec.errors)
+		}
+	})
+
+	t.Run("multi-branch oneOf fails loudly", func(t *testing.T) {
+		root := map[string]any{
+			"components": map[string]any{
+				"schemas": map[string]any{
+					"fixtureInnerSchema": map[string]any{"type": "object"},
+					"fixtureOtherSchema": map[string]any{"type": "object"},
+				},
+			},
+		}
+		schemaNode := map[string]any{
+			"type":     "object",
+			"required": []any{"poly"},
+			"properties": map[string]any{
+				"poly": map[string]any{
+					"oneOf": []any{
+						map[string]any{"$ref": "#/components/schemas/fixtureInnerSchema"},
+						map[string]any{"$ref": "#/components/schemas/fixtureOtherSchema"},
+					},
+				},
+			},
+		}
+		rec := &errCollector{}
+		checkResponseSchema(root, schemaNode, "fixtureWrapper", "$", structs, map[string]bool{}, rec, "GET /fixture")
+		if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], `"oneOf"`) {
+			t.Fatalf("expected exactly one error naming oneOf as unsupported for a shape that is not the "+
+				"two-branch nullable idiom; got %v", rec.errors)
+		}
+	})
 }
 
 func plural(n int) string {
