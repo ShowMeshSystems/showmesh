@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -106,6 +107,78 @@ func TestMigrateV26RenamesColumnPreservingEveryShape(t *testing.T) {
 		if got != r.value {
 			t.Errorf("commands %q: caller_intent = %q, want %q (byte-for-byte, no backfill)", r.id, got, r.value)
 		}
+	}
+}
+
+// TestMigrateV26ToleratesReplayAfterAUserVersionRewind proves the property
+// this migration exists to satisfy: internal/coordinator/audioconfigpush's
+// own tests rewind PRAGMA user_version below 26 and reopen the store to
+// force later migrations to run again (schemaV25's own doc comment names
+// the identical precedent for migrations 19 and 20). Before this
+// migration checked for its own prior application, that replay failed
+// with "no such column: requested_revision", because the rename had
+// already happened and the column no longer existed under that name.
+// Running v26 a second time against that state must now succeed.
+func TestMigrateV26ToleratesReplayAfterAUserVersionRewind(t *testing.T) {
+	db := openDatabaseAtV25(t)
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("first migrate: %v", err)
+	}
+
+	// Mirrors audioconfigpush's own rewind target (18) exactly, so this
+	// forces every migration above it, including v26, to run a second
+	// time through the ordinary [migrate] loop rather than only calling
+	// this function directly.
+	if _, err := db.ExecContext(context.Background(), `PRAGMA user_version = 18`); err != nil {
+		t.Fatalf("rewind user_version: %v", err)
+	}
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatalf("second migrate after rewind: %v", err)
+	}
+
+	var version int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != maxMigrationVersion() {
+		t.Errorf("user_version after replay = %d, want %d", version, maxMigrationVersion())
+	}
+
+	var callerIntentExists int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name = 'caller_intent'`).Scan(&callerIntentExists); err != nil {
+		t.Fatalf("check caller_intent: %v", err)
+	}
+	if callerIntentExists != 1 {
+		t.Errorf("commands.caller_intent missing after replay")
+	}
+}
+
+// TestMigrateV26RejectsAnUnexpectedColumnState proves the replay tolerance
+// above is narrow: a commands table with NEITHER requested_revision NOR
+// caller_intent (simulating a broken or unrelated schema, not a replay)
+// must fail loudly rather than being silently treated as "already
+// renamed, nothing to do". Checking only "is requested_revision absent"
+// cannot tell these two cases apart; this is what forces the migration to
+// also confirm caller_intent's presence before tolerating anything.
+func TestMigrateV26RejectsAnUnexpectedColumnState(t *testing.T) {
+	db := openDatabaseAtV25(t)
+	ctx := context.Background()
+
+	// Simulate neither column existing: rename requested_revision to
+	// something this migration does not recognize, so the table has a
+	// commands table but not the shape v26 expects either before or
+	// after its own rename.
+	if _, err := db.ExecContext(ctx, `ALTER TABLE commands RENAME COLUMN requested_revision TO neither_name`); err != nil {
+		t.Fatalf("simulate broken state: %v", err)
+	}
+
+	err := migrate(ctx, db)
+	if err == nil {
+		t.Fatalf("migrate: err = nil, want an error naming the unexpected column state")
+	}
+	if !strings.Contains(err.Error(), "unexpected state") {
+		t.Errorf("migrate error = %q, want it to name the unexpected column state", err.Error())
 	}
 }
 

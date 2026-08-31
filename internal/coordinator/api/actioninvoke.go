@@ -257,8 +257,8 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 
 	cmdID := uuid.NewString()
 	// Tagged store.CallerIntentRevision so commands.caller_intent stays
-	// self-describing (Lane 17a SM-111): this endpoint is the one writer
-	// this column's plain-revision family has.
+	// self-describing: this endpoint is the one writer this column's
+	// plain-revision family has.
 	callerIntent := store.FormatCallerIntent(store.CallerIntentRevision, strconv.FormatInt(rev.Revision, 10))
 	dispatchEntry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
@@ -469,9 +469,9 @@ func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, r
 // threaded into the FPP branch's own NeverWithholdOnAuditFailure so
 // dispatchFPPCommand's independent internal audit check agrees with this
 // handler's own outer decision. callerIntent (store.CallerIntentRevision-
-// tagged, Lane 17a SM-111) is threaded into the FPP branch's own child
-// command row, so the nested dispatch carries the SAME pinned revision the
-// outer invocation resolved against.
+// tagged) is threaded into the FPP branch's own child command row, so the
+// nested dispatch carries the SAME pinned revision the outer invocation
+// resolved against.
 //
 // outcomeState is empty for FPP and Resolume (the caller derives a
 // pkg/observation-vocabulary fallback from outcome itself, unchanged) and
@@ -581,7 +581,7 @@ func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time,
 	// caller_intent can only be this endpoint's own revision family:
 	// [store.CallerIntentPayload] strips the store.CallerIntentRevision
 	// tag when present and falls back to the raw value for a row written
-	// before Lane 17a SM-111's tagging scheme existed.
+	// before this tagging scheme existed.
 	revisionPayload, _ := store.CallerIntentPayload(store.CallerIntentRevision, existing.CallerIntent)
 	revision, _ := strconv.ParseInt(revisionPayload, 10, 64)
 

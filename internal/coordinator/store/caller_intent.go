@@ -2,9 +2,9 @@ package store
 
 import "strings"
 
-// This file formalizes commands.caller_intent's discriminator (Lane 17a
-// SM-111, owner ruling 2026-08-19, renaming commands.requested_revision).
-// The column has always held four shapes: a macro run's own "macro:" tag
+// This file formalizes commands.caller_intent's discriminator (owner
+// ruling 2026-08-19, renaming commands.requested_revision). The column
+// has always held four shapes: a macro run's own "macro:" tag
 // (macro_runs.go, present since Step 9), a show.action invocation's plain
 // configuration revision, a render dispatch's caller-identity JSON, and a
 // cue-catalog deploy's own, differently shaped caller-identity JSON. The

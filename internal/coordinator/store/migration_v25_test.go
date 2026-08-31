@@ -26,11 +26,11 @@ import (
 // through a raw connection, never via [Open]/[migrate]: calling Open first
 // would satisfy both assertions below through that open, before any
 // rewind. Every migration through v24 is applied for real (rather than
-// only stamping the version, as this test did before Lane 17a SM-111's
-// v26 landed) because v26's RENAME COLUMN, unlike v25's CREATE TABLE IF
-// NOT EXISTS, depends on a table an earlier migration creates: a stamp
-// with no schema behind it was never a state a real coordinator could
-// reach, only a shortcut that happened to work while every migration
+// only stamping the version, as this test did before v26 landed) because
+// v26's rename depends on a table an earlier migration creates, unlike
+// v25's CREATE TABLE IF NOT EXISTS: a stamp with no schema behind it was
+// never a state a real coordinator could reach, only a shortcut that
+// happened to work while every migration
 // above the stamp was self-contained.
 func TestV25AppliesAfterStoreStampedAtV24Only(t *testing.T) {
 	dir := t.TempDir()

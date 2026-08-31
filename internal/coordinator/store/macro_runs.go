@@ -1360,8 +1360,8 @@ func (t *Tx) ResolveMacroRunStepCommand(ctx context.Context, step MacroRunStepRe
 // for "a step's dispatch writes desired state exactly as a single command
 // does, and requested_revision carries the pinned macro revision, formatted
 // so a macro-issued command is distinguishable from an operator-issued
-// one" (renamed from FormatMacroRunRequestedRevision by Lane 17a SM-111
-// alongside the column itself, commands.caller_intent): it turns a run's
+// one" (renamed from FormatMacroRunRequestedRevision alongside the column
+// itself, commands.caller_intent): it turns a run's
 // pinned (macroObjectID, macroRevision), the SAME two values
 // [MacroRunRecord] itself pins at submission, into the single string a
 // caller (Wave 1b's dispatch seam, via [Store.InsertCommand]'s

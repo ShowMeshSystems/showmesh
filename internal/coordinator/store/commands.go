@@ -28,8 +28,8 @@ import (
 // matching audit_log.outcome_state (schemaV5): an unresolved command
 // carries a state and a reason, never a null that renders as blank.
 //
-// CallerIntent (schemaV26, renamed from RequestedRevision, Lane 17a
-// SM-111) is not always a revision: it holds one of several unrelated
+// CallerIntent (schemaV26, renamed from RequestedRevision) is not always
+// a revision: it holds one of several unrelated
 // shapes depending on which family dispatched the command (a plain
 // show.action revision, a macro run's pinned reference, a render or
 // cue-catalog request's caller-identity JSON, or nothing at all). See

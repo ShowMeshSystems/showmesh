@@ -392,9 +392,9 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 
 // cueCatalogDeployRequestIdentity is the caller's own unresolved request
 // shape, stored in commands.caller_intent tagged
-// store.CallerIntentCueCatalogDeploy (Lane 17a SM-111): mirrors
-// renderRequestIdentity's identical role and reasoning one file over,
-// narrowed to what a replay of THIS action needs to compare.
+// store.CallerIntentCueCatalogDeploy: mirrors renderRequestIdentity's
+// identical role and reasoning one file over, narrowed to what a replay
+// of THIS action needs to compare.
 type cueCatalogDeployRequestIdentity struct {
 	NodeID     string `json:"node"`
 	Show       string `json:"show"`
@@ -454,8 +454,8 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 	// existing.Action is already checked above, so this row's caller_intent
 	// can only be this route's own identity family: [store.CallerIntentPayload]
 	// strips the store.CallerIntentCueCatalogDeploy tag when present and
-	// falls back to the raw value for a row written before Lane 17a
-	// SM-111's tagging scheme existed.
+	// falls back to the raw value for a row written before this tagging
+	// scheme existed.
 	var reqID cueCatalogDeployRequestIdentity
 	payload, _ := store.CallerIntentPayload(store.CallerIntentCueCatalogDeploy, existing.CallerIntent)
 	_ = json.Unmarshal([]byte(payload), &reqID)

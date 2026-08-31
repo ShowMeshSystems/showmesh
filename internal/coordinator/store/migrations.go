@@ -85,13 +85,12 @@ var migrations = []migration{
 	// run, which is the exact mechanism this renumbering and v21/v22's
 	// own now-dead reservations both demonstrate.
 	{version: 25, sql: schemaV25},
-	// v26 is Lane 17a SM-111 (owner ruling 2026-08-19): renaming
-	// commands.requested_revision to commands.caller_intent and
-	// formalizing its per-family discriminator. Renumbered from v22,
-	// itself renumbered from v13, for the identical reason v25 was
-	// renumbered from v23: a reservation at or below the shipped maximum
-	// can never run.
-	{version: 26, sql: schemaV26},
+	// v26 (owner ruling 2026-08-19): renaming commands.requested_revision
+	// to commands.caller_intent and formalizing its per-family
+	// discriminator. Renumbered from v22, itself renumbered from v13, for
+	// the identical reason v25 was renumbered from v23: a reservation at
+	// or below the shipped maximum can never run.
+	{version: 26, fn: migrateV26RenameRequestedRevisionToCallerIntent},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1429,25 +1428,68 @@ CREATE TABLE IF NOT EXISTS fallback_program_acknowledgements (
 );
 `
 
-// schemaV26 renames commands.requested_revision to commands.caller_intent
-// (Lane 17a SM-111, owner ruling 2026-08-19): the column has held four
-// unrelated writer shapes since Step 9. Two are genuinely revision-shaped
-// (a show.action invocation's plain revision, and a macro run's own
-// "macro:" tagged reference, which embeds one); the other two are not
-// revisions at all, but two DIFFERENTLY SHAPED caller-identity JSON
-// structs, one per dispatch route (render, cue-catalog deploy), each
-// carrying no revision at their own top level. A name built around
-// "revision" was never true for those last two writers. RENAME COLUMN is
-// metadata-only (SQLite 3.25+, bundled by this project's
-// modernc.org/sqlite): every existing value, tagged or not, is preserved
-// byte-for-byte, and no backfill runs. See [ParseCallerIntent]
-// (caller_intent.go) for the discriminator this rename exists to make
-// possible, and its own doc comment for why an untagged pre-v26 row is
-// never reinterpreted as one of the tagged kinds, including between these
-// two structurally similar JSON shapes.
-const schemaV26 = `
-ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent;
-`
+// migrateV26RenameRequestedRevisionToCallerIntent renames
+// commands.requested_revision to commands.caller_intent (owner ruling
+// 2026-08-19): the column has held four unrelated writer shapes since
+// Step 9. Two are genuinely revision-shaped (a show.action invocation's
+// plain revision, and a macro run's own "macro:" tagged reference, which
+// embeds one); the other two are not revisions at all, but two
+// DIFFERENTLY SHAPED caller-identity JSON structs, one per dispatch route
+// (render, cue-catalog deploy), each carrying no revision at their own
+// top level. A name built around "revision" was never true for those
+// last two writers. The rename itself is metadata-only (SQLite 3.25+,
+// bundled by this project's modernc.org/sqlite): every existing value,
+// tagged or not, is preserved byte-for-byte, and no backfill runs. See
+// [ParseCallerIntent] (caller_intent.go) for the discriminator this
+// rename exists to make possible, and its own doc comment for why an
+// untagged pre-v26 row is never reinterpreted as one of the tagged kinds,
+// including between these two structurally similar JSON shapes.
+//
+// A Go function rather than bare SQL, unlike every other rename in this
+// file, because this one has to tolerate being replayed against a
+// database that already ran it: internal/coordinator/audioconfigpush's
+// own tests rewind PRAGMA user_version to 18 (see schemaV25's own doc
+// comment for the identical precedent with migrations 19 and 20) and
+// reopen the store to force later migrations to run again. A bare
+// ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent
+// fails outright on that second pass, because the column it names no
+// longer exists under that name; checking first and no-opping when it is
+// already renamed is what makes replay safe, the same property CREATE
+// TABLE IF NOT EXISTS gives schemaV25's own tables.
+//
+// Checking only "does requested_revision still exist" is not enough: that
+// is also 0 if the commands table itself is missing or malformed, which
+// is a genuine problem this migration must surface, not swallow. So this
+// checks BOTH column names and only tolerates the one combination replay
+// can actually produce (caller_intent already there, requested_revision
+// gone); any other combination, including a real failure from the rename
+// itself, is returned as an error rather than treated as "nothing to do".
+func migrateV26RenameRequestedRevisionToCallerIntent(ctx context.Context, tx *sql.Tx) error {
+	var hasOldName, hasNewName int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name = 'requested_revision'`,
+	).Scan(&hasOldName); err != nil {
+		return fmt.Errorf("check commands.requested_revision exists: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name = 'caller_intent'`,
+	).Scan(&hasNewName); err != nil {
+		return fmt.Errorf("check commands.caller_intent exists: %w", err)
+	}
+	switch {
+	case hasOldName == 1 && hasNewName == 0:
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent`); err != nil {
+			return fmt.Errorf("rename commands.requested_revision to caller_intent: %w", err)
+		}
+		return nil
+	case hasOldName == 0 && hasNewName == 1:
+		// Already renamed: the one replay shape this function exists to
+		// tolerate.
+		return nil
+	default:
+		return fmt.Errorf("commands table is in an unexpected state for the caller_intent rename: requested_revision present=%v, caller_intent present=%v", hasOldName == 1, hasNewName == 1)
+	}
+}
 
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):

@@ -117,10 +117,10 @@ type FPPCommandInput struct {
 	// configuration revision this command was issued against, when the
 	// command is revision-sensitive") into the dispatched command's own
 	// store.CommandRecord.CallerIntent column (renamed from
-	// RequestedRevision on both this field and that column by Lane 17a
-	// SM-111, since the value this field carries is not always a
-	// revision). Empty for an ordinary HTTP-dispatched command, which
-	// names no revision. A caller that pins an actual revision tags it
+	// RequestedRevision on both this field and that column, since the
+	// value this field carries is not always a revision). Empty for an
+	// ordinary HTTP-dispatched command, which names no revision. A caller
+	// that pins an actual revision tags it
 	// with [store.FormatCallerIntent] and [store.CallerIntentRevision]
 	// before setting this field. STEP-9-SPEC.md section 6.1 requires a
 	// macro step's dispatch to carry its run's pinned macro revision here,

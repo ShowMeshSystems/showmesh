@@ -647,9 +647,8 @@ type renderDispatchInput struct {
 }
 
 // renderRequestIdentity is the caller's own unresolved request shape,
-// stored in commands.caller_intent tagged store.CallerIntentRenderRequest
-// (Lane 17a SM-111), never in the mutable params_json a resolution
-// produces.
+// stored in commands.caller_intent tagged store.CallerIntentRenderRequest,
+// never in the mutable params_json a resolution produces.
 type renderRequestIdentity struct {
 	Action     string `json:"action"`
 	NodeID     string `json:"node"`
@@ -1157,7 +1156,7 @@ func (h *handlers) resolveRenderCommandReplay(ctx context.Context, now time.Time
 	// caller_intent can only be this route's own render-request family:
 	// [store.CallerIntentPayload] strips the store.CallerIntentRenderRequest
 	// tag when present and falls back to the raw value for a row written
-	// before Lane 17a SM-111's tagging scheme existed.
+	// before this tagging scheme existed.
 	if payload, _ := store.CallerIntentPayload(store.CallerIntentRenderRequest, existing.CallerIntent); payload != "" {
 		if err := json.Unmarshal([]byte(payload), &got); err == nil {
 			matched = got == want
