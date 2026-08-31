@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { FPPInstance, Model, NightSessionState } from '../api'
+import { ApiError, PROBLEM_TYPE, type FPPInstance, type Model, type NightSessionState } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { ShowNight } from './ShowNight'
@@ -10,6 +10,10 @@ import { cycleRail, evidenceReadouts, nextTransition, nightRail, runOfShow } fro
 const stubs = vi.hoisted(() => ({
   dispatchNightCommand: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
 }))
+
+function commandResponse(command: string, outcome: 'applied' | 'idempotent_no_op' = 'applied', attributionDegraded = false) {
+  return { serverTime: '2026-08-28T21:07:00Z', command: { command, outcome, attributionDegraded }, session: {} }
+}
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -171,7 +175,7 @@ describe('Show Night', () => {
     expect(screen.getAllByText('not reported').length).toBeGreaterThan(0)
   })
 
-  const allowedSession = {
+  const allowedSessionBase = {
     serverTime: '2026-08-28T21:07:00Z',
     authenticated: true,
     principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
@@ -180,7 +184,8 @@ describe('Show Night', () => {
     scopes: ['night:command'],
     scopesState: 'current',
     bootstrapRequired: false,
-  } as never
+  }
+  const allowedSession = allowedSessionBase as never
 
   it('shows a Refused chip, never an Accepted one, when a night command is refused', async () => {
     stubs.dispatchNightCommand = () => Promise.reject(new Error('no route to host'))
@@ -192,11 +197,133 @@ describe('Show Night', () => {
   })
 
   it('shows an Accepted chip, never a Refused one, when a night command is accepted', async () => {
-    stubs.dispatchNightCommand = () => Promise.resolve({})
+    stubs.dispatchNightCommand = () => Promise.resolve(commandResponse('end-session', 'applied'))
     renderScreen({ nightSession: session(), session: allowedSession })
     fireEvent.click(screen.getByRole('button', { name: 'End session' }))
     expect(await screen.findByText('Accepted')).toBeInTheDocument()
     expect(screen.queryByText('Refused')).not.toBeInTheDocument()
+  })
+
+  it('renders the three previously missing lifecycle commands, in the contract’s order', () => {
+    renderScreen({ nightSession: session(), session: allowedSession })
+    const names = ['Prepare site', 'Start preshow', 'Start night', 'Request final show', 'Fade out night', 'Power down presentation', 'End session']
+    const buttons = screen.getAllByRole('button').filter((b) => names.includes(b.textContent ?? ''))
+    expect(buttons.map((b) => b.textContent)).toEqual(names)
+  })
+
+  it('leaves a command enabled regardless of session.state: the contract publishes no valid-from-state table for any command', () => {
+    renderScreen({ nightSession: session({ state: 'live' }), session: allowedSession })
+    expect(screen.getByRole('button', { name: 'Start night' })).not.toBeDisabled()
+  })
+
+  it('reports idempotent_no_op distinguishably from applied', async () => {
+    stubs.dispatchNightCommand = () => Promise.resolve(commandResponse('end-session', 'idempotent_no_op'))
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(await screen.findByText('No-op')).toBeInTheDocument()
+    expect(screen.queryByText('Accepted')).not.toBeInTheDocument()
+    expect(screen.getByText(/reports idempotent_no_op/)).toBeInTheDocument()
+  })
+
+  it('surfaces attributionDegraded on the reported outcome', async () => {
+    stubs.dispatchNightCommand = () => Promise.resolve(commandResponse('end-session', 'applied', true))
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'End session' }))
+    await screen.findByText('Accepted')
+    expect(screen.getByText(/attributionDegraded/)).toBeInTheDocument()
+  })
+
+  it('reuses the same idempotencyKey across a double press of prepare-site', () => {
+    const calls: unknown[][] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls.push(args)
+      return new Promise(() => {})
+    }
+    renderScreen({ nightSession: session({ id: '', state: 'inactive' }), session: allowedSession })
+    const button = screen.getByRole('button', { name: 'Prepare site' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.[1]).toEqual(expect.any(String))
+    expect(calls[0]?.[1]).toBe(calls[1]?.[1])
+  })
+
+  it('distinguishes night-not-ready from a plain refusal, and names the withheld reason verbatim', async () => {
+    stubs.dispatchNightCommand = () =>
+      Promise.reject(
+        new ApiError('Withheld by interlock projector-cooldown: lamp above 40 °C.', 409, PROBLEM_TYPE.nightNotReady),
+      )
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    expect(await screen.findByText('Withheld')).toBeInTheDocument()
+    expect(screen.getByText('Withheld by interlock projector-cooldown: lamp above 40 °C.')).toBeInTheDocument()
+  })
+
+  it('distinguishes night-state-rejected from night-not-ready', async () => {
+    stubs.dispatchNightCommand = () =>
+      Promise.reject(new ApiError('start-night is not valid while live.', 409, PROBLEM_TYPE.nightStateRejected))
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Start night' }))
+    expect(await screen.findByText('Refused')).toBeInTheDocument()
+    expect(screen.getByText(/is not valid from the session's current state/)).toBeInTheDocument()
+    expect(screen.queryByText('Withheld')).not.toBeInTheDocument()
+  })
+
+  it('offers the end-session/prepare-site recovery recipe on night-ambiguous', async () => {
+    stubs.dispatchNightCommand = () =>
+      Promise.reject(new ApiError('This session is degraded.', 409, PROBLEM_TYPE.nightAmbiguous))
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Fade out night' }))
+    expect(await screen.findByText('Degraded')).toBeInTheDocument()
+    expect(screen.getByText(/Recover with end-session, then prepare-site\./)).toBeInTheDocument()
+  })
+
+  it('reports the audit-unavailable 503 as not dispatched, not as a failure', async () => {
+    stubs.dispatchNightCommand = () =>
+      Promise.reject(
+        new ApiError('The audit store could not be written.', 503, PROBLEM_TYPE.nightCommandRefusedAuditUnavailable),
+      )
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare site' }))
+    expect(await screen.findByText('Not dispatched')).toBeInTheDocument()
+    expect(screen.getByText(/was not dispatched and nothing was recorded, so this is not a failed command/)).toBeInTheDocument()
+    expect(screen.queryByText('Refused')).not.toBeInTheDocument()
+  })
+
+  it('offers an override retry only after night-not-ready, and only with night:override', async () => {
+    stubs.dispatchNightCommand = () =>
+      Promise.reject(new ApiError('Withheld by interlock projector-cooldown.', 409, PROBLEM_TYPE.nightNotReady))
+    renderScreen({ nightSession: session(), session: allowedSession })
+    fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    await screen.findByText('Withheld')
+    expect(screen.queryByLabelText('Interlock rule')).not.toBeInTheDocument()
+    expect(screen.getByText(/does not include "night:override"/)).toBeInTheDocument()
+  })
+
+  it('offers an override retry with night:override after night-not-ready, and rejects an empty reason', async () => {
+    let calls = 0
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      calls += 1
+      if (calls === 1) return Promise.reject(new ApiError('Withheld by interlock projector-cooldown.', 409, PROBLEM_TYPE.nightNotReady))
+      return Promise.resolve(commandResponse(args[0] as string, 'applied'))
+    }
+    renderScreen({
+      nightSession: session(),
+      session: { ...allowedSessionBase, scopes: ['night:command', 'night:override'] } as never,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Power down presentation' }))
+    await screen.findByText('Withheld')
+    const ruleInput = screen.getByLabelText('Interlock rule')
+    fireEvent.change(ruleInput, { target: { value: 'projector-cooldown' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry power-down-presentation with override' }))
+    expect(await screen.findByText('A reason is required to override an interlock.')).toBeInTheDocument()
+    expect(calls).toBe(1)
+
+    const reasonInput = screen.getByLabelText('Reason')
+    fireEvent.change(reasonInput, { target: { value: 'Lamp confirmed cool by operator.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry power-down-presentation with override' }))
+    expect(await screen.findByText('Accepted')).toBeInTheDocument()
+    expect(calls).toBe(2)
   })
 
   it('renders a single off-cycle row, not a four-row dead rail, for a state outside the repeating cycle', () => {

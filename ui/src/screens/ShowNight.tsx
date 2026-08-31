@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { dispatchNightCommand, getCurrentNightSession, type NightCommandName, type NightSessionState } from '../api'
+import {
+  ApiError,
+  PROBLEM_TYPE,
+  dispatchNightCommand,
+  getCurrentNightSession,
+  randomUUIDv4,
+  type NightCommandName,
+  type NightInterlockOverride,
+  type NightSessionState,
+} from '../api'
 import {
   BlankingPlate,
   Button,
   ButtonRow,
   DefinitionStrip,
+  Field,
+  FieldGrid,
+  Input,
   NotWired,
   NotWiredBanner,
   RuledStrip,
@@ -69,26 +81,94 @@ function Rail({ title, steps }: { title: string; steps: readonly RailStep[] }) {
   )
 }
 
+/** Whichever lifecycle command a `night-not-ready` refusal named, and its server-supplied detail (verbatim; no structured rule field exists). */
+type Withheld = { command: NightCommandName; detail: string }
+
 export function ShowNight() {
   const model = useModelContext()
   const { session, error } = useNightSession()
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'night:command')
+  const overrideGate = evaluateScope(model.session, model.sessionFetchFailed, 'night:override')
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
+  const [withheld, setWithheld] = useState<Withheld | null>(null)
+  const [overrideRule, setOverrideRule] = useState('')
+  const [overrideReason, setOverrideReason] = useState('')
+  const [overrideInvalid, setOverrideInvalid] = useState(false)
+  // prepare-site is the one command the coordinator honors idempotencyKey
+  // for (ADR-038): reused across a double-press so the second press is a
+  // no-op rather than a second dispatch, then rolled once the epoch it
+  // named actually opens so a LATER, genuinely new prepare-site is not
+  // silently folded into the epoch this key already named.
+  const [prepareSiteKey, setPrepareSiteKey] = useState(() => randomUUIDv4())
 
-  const send = useCallback((command: NightCommandName) => {
-    dispatchNightCommand(command)
-      .then(() =>
-        setOutcome({
-          tone: 'warn',
-          label: 'Accepted',
-          detail: `${command} was accepted. What the session then does is what this page reports.`,
-        }),
-      )
-      .catch((err: unknown) =>
-        setOutcome({ tone: 'bad', label: 'Refused', detail: `${command} was refused: ${describeApiError(err)}` }),
-      )
-  }, [])
+  const send = useCallback(
+    (command: NightCommandName, interlockOverrides?: readonly NightInterlockOverride[]) => {
+      const idempotencyKey = command === 'prepare-site' ? prepareSiteKey : undefined
+      dispatchNightCommand(command, idempotencyKey, interlockOverrides)
+        .then((response) => {
+          setWithheld(null)
+          setOverrideRule('')
+          setOverrideReason('')
+          setOverrideInvalid(false)
+          if (command === 'prepare-site') setPrepareSiteKey(randomUUIDv4())
+          const applied = response.command.outcome === 'applied'
+          const parts = [
+            applied
+              ? `${command} was accepted. What the session then does is what this page reports.`
+              : `${command} reports idempotent_no_op: this repeat matched the session's own state and changed nothing.`,
+          ]
+          if (response.command.reason !== undefined && response.command.reason !== '') parts.push(response.command.reason)
+          if (response.command.attributionDegraded) {
+            parts.push('This applied with no recorded audit attribution (attributionDegraded); that flag never clears for this session.')
+          }
+          setOutcome({ tone: 'warn', label: applied ? 'Accepted' : 'No-op', detail: parts.join(' ') })
+        })
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightNotReady) {
+            setWithheld({ command, detail: err.message })
+            setOutcome({ tone: 'bad', label: 'Withheld', detail: err.message })
+            return
+          }
+          setWithheld(null)
+          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightStateRejected) {
+            setOutcome({
+              tone: 'bad',
+              label: 'Refused',
+              detail: `${command} is not valid from the session's current state. ${err.message}`,
+            })
+            return
+          }
+          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightAmbiguous) {
+            setOutcome({
+              tone: 'bad',
+              label: 'Degraded',
+              detail: `${err.message} Recover with end-session, then prepare-site.`,
+            })
+            return
+          }
+          if (err instanceof ApiError && err.problemType === PROBLEM_TYPE.nightCommandRefusedAuditUnavailable) {
+            setOutcome({
+              tone: 'warn',
+              label: 'Not dispatched',
+              detail: `${command} was not dispatched and nothing was recorded, so this is not a failed command. ${err.message}`,
+            })
+            return
+          }
+          setOutcome({ tone: 'bad', label: 'Refused', detail: `${command} was refused: ${describeApiError(err)}` })
+        })
+    },
+    [prepareSiteKey],
+  )
+
+  const submitOverride = useCallback(() => {
+    if (withheld === null) return
+    if (overrideRule.trim() === '' || overrideReason.trim() === '') {
+      setOverrideInvalid(true)
+      return
+    }
+    send(withheld.command, [{ rule: overrideRule.trim(), reason: overrideReason.trim() }])
+  }, [withheld, overrideRule, overrideReason, send])
 
   const tonight = session === null ? [] : nightRail(session)
 
@@ -218,6 +298,9 @@ export function ShowNight() {
         <div className="sm-grid sm-grid--auto">
           {(
             [
+              ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],
+              ['start-preshow', 'Start preshow', 'Enters preshow from a prepared, ready session.'],
+              ['start-night', 'Start night', 'Commits the armed show and starts the first cycle.'],
               ['request-final-show', 'Request final show', 'The next normally timed show becomes the last. Admission closes; this show finishes.'],
               ['fade-out-night', 'Fade out night', 'Arriving mid-show makes this show final and the fade waits for it to finish.'],
               ['power-down-presentation', 'Power down presentation', 'The terminal intent. An interlock can withhold it.'],
@@ -236,6 +319,33 @@ export function ShowNight() {
           <div className="sm-outcome">
             <StatusPair tone={outcome.tone} label={outcome.label} />
             <p className="sm-outcome__detail">{outcome.detail}</p>
+            {withheld !== null &&
+              (overrideGate.allowed ? (
+                <div className="sm-outcome__override">
+                  <FieldGrid>
+                    <Field
+                      label="Interlock rule"
+                      help="Name it exactly as configured; the refusal above names it only in its own detail text."
+                      error={overrideInvalid && overrideRule.trim() === '' ? 'Name the rule to override.' : undefined}
+                    >
+                      {(props) => <Input {...props} value={overrideRule} onChange={(e) => setOverrideRule(e.target.value)} />}
+                    </Field>
+                    <Field
+                      label="Reason"
+                      error={overrideInvalid && overrideReason.trim() === '' ? 'A reason is required to override an interlock.' : undefined}
+                    >
+                      {(props) => <Input {...props} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />}
+                    </Field>
+                  </FieldGrid>
+                  <ButtonRow>
+                    <Button size="gloved" disabled={!gate.allowed} onClick={submitOverride}>
+                      Retry {withheld.command} with override
+                    </Button>
+                  </ButtonRow>
+                </div>
+              ) : (
+                <p className="sm-small sm-muted">{overrideGate.reason}</p>
+              ))}
           </div>
         )}
       </Section>

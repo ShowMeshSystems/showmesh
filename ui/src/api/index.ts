@@ -218,6 +218,7 @@ export type {
   NightAuthorization,
   NightSessionState,
   NightSessionResponse,
+  NightInterlockOverride,
   NightCommandRequest,
   NightCommandResult,
   NightCommandResponse,
@@ -404,6 +405,12 @@ export type { UploadProgress } from './resolumeCompositionUpload'
 // storage contract, which stays owned by token.ts.
 export { getStoredToken } from './token'
 
+// The codebase's one idempotency-key generator (uuid.ts), used by every
+// mutating store method that sends one. ShowNight.tsx needs its own copy
+// to give `prepare-site` a stable key across a double-press, matching
+// the store's own generation rather than inventing a second scheme.
+export { randomUUIDv4 } from './uuid'
+
 // Exported for seam C's error-boundary / advanced testing needs and for
 // this seam's own tests; the real application only ever needs the
 // singleton wired up in useModel.ts.
@@ -425,3 +432,8 @@ export {
   TooManyRequestsError,
   UnauthorizedError,
 } from './errors'
+
+// RFC 9457 `type` values (problem.ts). ShowNight.tsx branches on
+// `ApiError.problemType` against these to render the night command
+// endpoint's three 409s and one 503 distinguishably.
+export { PROBLEM_TYPE } from './problem'

@@ -51,6 +51,7 @@ import type {
   Model,
   NightCommandName,
   NightCommandResponse,
+  NightInterlockOverride,
   NightSessionActiveConfigResponse,
   NightSessionConfigResponse,
   NightSessionResponse,
@@ -841,8 +842,9 @@ export function getNightSessionById(id: string): Promise<NightSessionResponse> {
 export function dispatchNightCommand(
   command: NightCommandName,
   idempotencyKey?: string,
+  interlockOverrides?: readonly NightInterlockOverride[],
 ): Promise<NightCommandResponse> {
-  return store.dispatchNightCommand(command, idempotencyKey)
+  return store.dispatchNightCommand(command, idempotencyKey, interlockOverrides)
 }
 
 export function getNightSessionConfig(id: string): Promise<NightSessionConfigResponse> {

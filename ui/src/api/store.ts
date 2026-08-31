@@ -241,6 +241,7 @@ type SchemaCueCatalogDeployResponse = components['schemas']['CueCatalogDeployRes
 // night.session/night.session.active configuration kinds.
 type SchemaNightSessionResponse = components['schemas']['NightSessionResponse']
 type SchemaNightCommandRequest = components['schemas']['NightCommandRequest']
+type SchemaNightInterlockOverride = components['schemas']['NightInterlockOverride']
 type SchemaNightCommandResponse = components['schemas']['NightCommandResponse']
 type SchemaNightSessionChangedEvent = components['schemas']['NightSessionChangedEvent']
 type SchemaConfigNightSessionWrite = components['schemas']['ConfigNightSessionWrite']
@@ -2346,21 +2347,31 @@ export class ApiStore {
    * `night:command`. Answers `202`, never `200` — accepted and applied,
    * or recognized as an idempotent duplicate. `idempotencyKey` is
    * honored only by `prepare-site`; every other command ignores it.
-   * Throws a typed `ApiError` on the three distinguishable `409`s
-   * (`night-not-ready`, `night-state-rejected`, `night-ambiguous`) and
-   * the `503` (`night-command-refused-audit-unavailable`, `prepare-site`/
+   * `interlockOverrides` (Track F seam F6) is honored by every command
+   * except `request-final-show` and `end-session`, which REFUSE a
+   * non-empty one; each override is consulted only against a rule that
+   * declares `overridePolicy: authorized-operator` and only when the
+   * caller separately holds `night:override` — `night:command` alone
+   * never authorizes a bypass. Throws a typed `ApiError` on the three
+   * distinguishable `409`s (`night-not-ready`, `night-state-rejected`,
+   * `night-ambiguous`) and the `503`
+   * (`night-command-refused-audit-unavailable`, `prepare-site`/
    * `run-readiness`/`start-preshow`/`start-night` only) — see
-   * NightCommandButton.tsx for the caller that branches on
-   * `ApiError.problemType` to render each distinguishably rather than as
-   * one generic failure.
+   * ShowNight.tsx for the caller that branches on `ApiError.problemType`
+   * to render each distinguishably rather than as one generic failure.
    */
   async dispatchNightCommand(
     command: NightCommandName,
     idempotencyKey?: string,
+    interlockOverrides?: readonly SchemaNightInterlockOverride[],
   ): Promise<SchemaNightCommandResponse> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaNightCommandRequest = idempotencyKey === undefined ? {} : { idempotencyKey }
+      const body: SchemaNightCommandRequest = {}
+      if (idempotencyKey !== undefined) body.idempotencyKey = idempotencyKey
+      if (interlockOverrides !== undefined && interlockOverrides.length > 0) {
+        body.interlockOverrides = [...interlockOverrides]
+      }
       return await this.client.postJson<SchemaNightCommandResponse>(
         `/night/commands/${encodeURIComponent(command)}`,
         body,
