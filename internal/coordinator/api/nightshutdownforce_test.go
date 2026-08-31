@@ -41,7 +41,7 @@ func TestApplyNightShutdownEffectWithoutForceStillDefersLiveShow(t *testing.T) {
 		t.Fatalf("applyNightShutdownEffect(force=false) on a live session changed state to %q, want it to stay %q (deferred)", next.State, nightStateLive)
 	}
 	if !next.FinalShowRequested {
-		t.Fatal("applyNightShutdownEffect(force=false) on a live session did not request the final show — the ordinary deferral never ran")
+		t.Fatal("applyNightShutdownEffect(force=false) on a live session did not request the final show: the ordinary deferral never ran")
 	}
 }
 

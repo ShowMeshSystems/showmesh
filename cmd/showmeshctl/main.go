@@ -253,7 +253,7 @@ Commands:
                                        the show by itself (write)
   emergency-stop hard-stop fire       fire the hard stop using --arm-token from "arm": immediate stop,
                                        abandon the active night session with no wait (write; never
-                                       chained with "arm" by one command — see cmd_emergency_stop.go)
+                                       chained with "arm" by one command; see cmd_emergency_stop.go)
   emergency-stop config get           show each level's own optional follow-up action list
   emergency-stop config set           write a new show.emergencystop revision from a JSON payload
                                        (write, full replacement, requires config:write)

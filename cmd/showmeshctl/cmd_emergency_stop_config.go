@@ -9,15 +9,15 @@ import (
 )
 
 // This file is "showmeshctl emergency-stop config get|set|revisions", over
-// GET/PUT /api/v1/config/show.emergencystop and its revisions list —
+// GET/PUT /api/v1/config/show.emergencystop and its revisions list:
 // authoring each level's own optional follow-up action list. The trigger
 // routes ("emergency-stop stop", "stop-power-down", "hard-stop arm|fire",
 // cmd_emergency_stop.go) are "someone presses the button"; this file is
 // "an admin decides what happens when they do." Modeled on
 // cmd_showmode.go's own get/set/revisions shape, with "set" taking a full
 // JSON payload from a file or stdin the way "action put" does
-// (cmd_action.go), since this kind's payload — three level objects, each
-// with its own actions array — has no useful single-flag shorthand.
+// (cmd_action.go), since this kind's payload (three level objects, each
+// with its own actions array) has no useful single-flag shorthand.
 
 type configEmergencyStopLevelPayload struct {
 	Actions []string `json:"actions"`

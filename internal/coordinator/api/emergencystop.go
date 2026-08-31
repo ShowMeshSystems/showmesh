@@ -29,12 +29,12 @@ import (
 //   - stop            (level 1): the immediate stop and its follow-ups.
 //   - stop-power-down (level 2): the immediate stop, PLUS forcing the
 //     active night session's own existing graceful-shutdown sequence to
-//     start now instead of deferring — see nightEmergencyPowerDown's own
-//     doc comment — plus its own follow-ups.
+//     start now instead of deferring (see nightEmergencyPowerDown's own
+//     doc comment), plus its own follow-ups.
 //   - hard-stop       (level 3): the immediate stop, PLUS abandoning the
 //     active night session straight to stopped with no wait (reusing
 //     nightEndSessionDecide unchanged), plus its own follow-ups. Gated by
-//     the arm/fire pair below — this is "the big red button" and the one
+//     the arm/fire pair below. This is "the big red button," the one
 //     level a retry or a redelivered command must never be able to fire
 //     twice.
 //
@@ -46,23 +46,23 @@ import (
 //
 // The deliberate-intent gate lives here, in the API, not the UI alone
 // (standing rule: operator capabilities are API-first, showmeshctl at
-// practical parity — a UI-only gate would let showmeshctl hard-stop the
+// practical parity. A UI-only gate would let showmeshctl hard-stop the
 // show with one command and no gate at all). It is a two-call arm/fire
 // sequence: arm has no side effect on the show and is freely retryable;
 // fire atomically consumes a single-use, short-lived, one-per-principal
 // token before it dispatches anything, so neither an accidental retry nor
 // a redelivered command can fire twice. showmeshctl exposes arm and fire
-// as two distinct subcommands that are NEVER chained by one command —
-// that IS the gate; see cmd_emergency_stop.go's own doc comment.
+// as two distinct subcommands that are NEVER chained by one command.
+// That IS the gate; see cmd_emergency_stop.go's own doc comment.
 
 // scopeShowEmergencyStopInvoke exists only so api.go's route registration
-// can take its address — see scopeActionInvoke's identical pattern.
+// can take its address. See scopeActionInvoke's identical pattern.
 var scopeShowEmergencyStopInvoke = identity.ScopeShowEmergencyStopInvoke
 
 const maxEmergencyStopRequestBodyBytes = 1024
 
 // The three level names on the wire, in URL paths, and in this build's own
-// three minted audit action strings — deliberately the SAME spelling in
+// three minted audit action strings, deliberately the SAME spelling in
 // all three places (config/emergencystop.go's own doc comment states the
 // identical reason for its JSON field names).
 const (
@@ -82,7 +82,7 @@ const (
 // ProblemTypeEmergencyStopHardStopNotArmed is fire's own refusal when the
 // caller presents no valid, unexpired, unconsumed arm token: never armed,
 // the wrong token, or the token expired. Distinct from [ProblemTypeConflict]
-// (both are 409s) because the remedy differs — arm again and fire promptly,
+// (both are 409s) because the remedy differs: arm again and fire promptly,
 // vs. someone else already consumed THIS token and the operator should
 // check whether the hard stop already happened before retrying blindly.
 // cmd_emergency_stop.go maps this type to exitActionRefused directly
@@ -160,12 +160,12 @@ const (
 )
 
 // consume atomically checks and, only on success, marks principalID's own
-// current token consumed — a single mutex-guarded compare-and-set, so two
+// current token consumed, a single mutex-guarded compare-and-set, so two
 // concurrent fire calls presenting the identical token can never both
 // succeed: the second always observes consumed==true already. A caller
 // that armed, let the token expire, and presents it anyway gets
-// emergencyStopArmConsumeNotArmed, the same as never having armed at all —
-// the two are indistinguishable on purpose, since the remedy ("arm again")
+// emergencyStopArmConsumeNotArmed, the same as never having armed at all.
+// The two are indistinguishable on purpose, since the remedy ("arm again")
 // is identical either way.
 func (s *emergencyStopArmStore) consume(principalID, token string, now time.Time) emergencyStopArmConsumeResult {
 	s.mu.Lock()
@@ -226,14 +226,14 @@ func decodeEmergencyStopIdempotencyKeyBody(r *http.Request, maxBytes int64) (ide
 // --- dispatching the immediate stop across every configured FPP instance ---
 
 // emergencyStopAllInstances dispatches [fppActionStopPlaylist] to every
-// configured FPP instance CONCURRENTLY — an emergency stop must not let
+// configured FPP instance CONCURRENTLY. An emergency stop must not let
 // instance N+1's dispatch wait on instance N's own confirm deadline, which
 // existing per-command dispatch can take tens of seconds to reach.
 // idempotencyKey derives a stable, deterministic per-instance idempotency
 // key so a retried emergency-stop request (the SAME top-level
 // idempotencyKey) reproduces the SAME per-instance key and hits
 // dispatchFPPCommand's own existing replay handling instead of dispatching
-// a second stop — the identical protection a broker redelivery gets for
+// a second stop, the identical protection a broker redelivery gets for
 // free from the SAME mechanism.
 func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) []v1.EmergencyStopInstanceOutcome {
 	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
@@ -289,7 +289,7 @@ func emergencyStopInstanceIdempotencyKey(idempotencyKey, instanceID string) stri
 // here is ever allowed to change what emergencyStopAllInstances already
 // reported. cmdID is derived the same deterministic way the per-instance
 // stop's own idempotency key is, so a retried top-level request reproduces
-// the same per-action dispatch identity instead of re-firing it — see
+// the same per-action dispatch identity instead of re-firing it. See
 // [handlers.dispatchActionTarget]'s own use of cmdID to derive its child
 // dispatch's idempotency key.
 func (h *handlers) emergencyStopRunFollowUps(ctx context.Context, idempotencyKey string, actionIDs []string, ac authContext, clientAddr string) []v1.EmergencyStopFollowUpResult {
@@ -334,7 +334,7 @@ func emergencyStopFollowUpCommandID(idempotencyKey, actionID string) string {
 // the SAME power-down-presentation apply step every ordinary
 // power-down-presentation command already runs, immediately, bypassing
 // both the ordinary live-show deferral (applyNightShutdownEffect's own
-// force parameter) and interlock evaluation entirely — mirroring
+// force parameter) and interlock evaluation entirely, mirroring
 // end-session's own existing precedent, "never deferred, never
 // interlocked", for an operator's own explicit emergency command. Reuses
 // nightCommandPowerDownPresentation as its own audit command name (no new
@@ -371,13 +371,13 @@ func (h *handlers) nightEmergencyPowerDown(ctx context.Context, now time.Time, i
 }
 
 // nightEmergencyEndSession is level hard-stop's own "no wait time" night-
-// session component: reuses nightEndSessionDecide UNCHANGED — the
+// session component: reuses nightEndSessionDecide UNCHANGED. It is the
 // existing operator-recovery action that "abandons the current session,
 // reaches stopped, launches nothing", already never deferred and never
 // interlocked (docs/build/IDENTIFIER-REGISTER.md: "end-session... is
 // always the unconditional way to reach stopped"). It sets State directly
 // to stopped with no wait for idle evidence, which is exactly hard-stop's
-// own "no wait time" requirement — unlike stop-power-down, which still
+// own "no wait time" requirement, unlike stop-power-down, which still
 // waits on the night loop's own fading-out tick and its fresh idle
 // evidence (RESTING-MODE.md §4.6/§4.7). Mints no new audit action: this
 // reuses nightCommandEndSession, appearing as "night.end-session".
@@ -423,7 +423,7 @@ func (h *handlers) resolveEmergencyStopPayload(ctx context.Context) (config.Emer
 	if verr != nil {
 		// A stored row this package never wrote in this shape is a
 		// store-integrity error, not a validation outcome to recover
-		// from — the resolver is a no-op here because a value already
+		// from. The resolver is a no-op here because a value already
 		// accepted at write time never needs re-validating at read time.
 		return config.EmergencyStopPayload{}, fmt.Errorf("api: decode show.emergencystop payload: %s", verr.Error())
 	}

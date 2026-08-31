@@ -9,7 +9,7 @@ import (
 // Three trigger levels exist (POST-only, built in internal/coordinator/api;
 // nothing here decides what a level DOES) and every level stops playout
 // immediately; this kind holds only each level's OPTIONAL, best-effort
-// follow-up actions — an ordered list of existing show.action ids to
+// follow-up actions: an ordered list of existing show.action ids to
 // invoke after the stop, never a new place to author an action's own
 // target. The shared show.action pool (already namespace-scoped and
 // validated) with per-level selection here, rather than an independently
@@ -43,7 +43,7 @@ const (
 const emergencyStopActionsMaxCount = 32
 
 // EmergencyStopLevelConfig is one level's own optional, ordered follow-up
-// action list — show.action ids, invoked best-effort, in this order,
+// action list: show.action ids, invoked best-effort, in this order,
 // after that level's own immediate stop.
 type EmergencyStopLevelConfig struct {
 	Actions []string `json:"actions"`
@@ -65,7 +65,7 @@ type EmergencyStopPayload struct {
 
 // EmergencyStopDefaultPayload is the value reported when nothing has ever
 // been written for this kind: every level configured with no follow-up
-// actions, which — per this kind's own opening rule — must work exactly as
+// actions, which (per this kind's own opening rule) must work exactly as
 // well as a fully configured one.
 var EmergencyStopDefaultPayload = EmergencyStopPayload{}
 
@@ -80,8 +80,8 @@ var emergencyStopLevelKeys = map[string]bool{"actions": true}
 
 // EmergencyStopActionResolver reports whether actionID names an existing
 // show.action object, of any show: an emergency stop is installation-wide,
-// never scoped to whichever show happens to be active, so — unlike
-// [ActionResolver] — this checks existence only, not show membership. The
+// never scoped to whichever show happens to be active, so, unlike
+// [ActionResolver], this checks existence only, not show membership. The
 // caller supplies it (this package has no store access, mirroring
 // [ActionResolver] and [InterlockSignalResolver] one field over).
 type EmergencyStopActionResolver func(actionID string) bool
@@ -99,8 +99,8 @@ func EncodeEmergencyStopPayload(p EmergencyStopPayload) (string, error) {
 
 // DecodeEmergencyStopPayload parses and validates raw. PUT is a full
 // replacement: "stop", "stopPowerDown" and "hardStop" are all required on
-// every write, each with its own required (possibly empty) "actions" list —
-// the identical "absent key is refused by name, empty is a real configured
+// every write, each with its own required (possibly empty) "actions" list.
+// The identical "absent key is refused by name, empty is a real configured
 // value" rule ConfigFPPEndpointsPayload.endpoints and ShowModePayload.mode
 // both already state for their own kind.
 func DecodeEmergencyStopPayload(raw string, actionResolver EmergencyStopActionResolver) (EmergencyStopPayload, *ValidationError) {
@@ -191,6 +191,6 @@ func decodeEmergencyStopLevel(top map[string]json.RawMessage, field string, acti
 // appears more than once in one level's own actions list. Its own code
 // rather than the generic ValidationCodeFieldInvalid, on
 // ValidationCodeStepIDDuplicate/ValidationCodeItemIDDuplicate's own
-// precedent — a caller telling two refusals apart must never branch on
+// precedent. A caller telling two refusals apart must never branch on
 // prose.
 const ValidationCodeEmergencyStopActionDuplicate = "emergency-stop-action-duplicate"

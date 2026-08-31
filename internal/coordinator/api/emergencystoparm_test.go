@@ -7,7 +7,7 @@ import (
 )
 
 // Pure unit coverage for [emergencyStopArmStore]: no HTTP, no store, no
-// identity — the deliberate-intent gate's own state machine in isolation.
+// identity: the deliberate-intent gate's own state machine in isolation.
 
 func TestEmergencyStopArmStoreConsumeRequiresPriorArm(t *testing.T) {
 	s := newEmergencyStopArmStore()
@@ -150,6 +150,6 @@ func TestEmergencyStopArmStoreConcurrentConsumeOnlyOneWins(t *testing.T) {
 	}
 	wg.Wait()
 	if oks != 1 {
-		t.Fatalf("%d of %d concurrent consumers saw OK, want exactly 1 — a lost compare-and-swap race must never let two fires both win", oks, racers)
+		t.Fatalf("%d of %d concurrent consumers saw OK, want exactly 1: a lost compare-and-swap race must never let two fires both win", oks, racers)
 	}
 }

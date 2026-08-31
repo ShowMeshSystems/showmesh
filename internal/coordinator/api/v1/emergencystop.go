@@ -1,7 +1,7 @@
 package v1
 
 // The installation-wide emergency-stop surface. Three trigger
-// levels — stop, stop-power-down, hard-stop — each stop playout
+// levels (stop, stop-power-down, hard-stop) each stop playout
 // immediately and each carries its own optional, best-effort follow-up
 // actions. hard-stop additionally requires the arm/fire deliberate-intent
 // pair below; stop and stop-power-down dispatch directly.
@@ -13,14 +13,14 @@ package v1
 // rule). A caller's exit code is driven by StopOutcomes alone.
 
 // ConfigEmergencyStopLevelPayload is one level's own optional, ordered
-// follow-up action list — see [ConfigEmergencyStopPayload].
+// follow-up action list. See [ConfigEmergencyStopPayload].
 type ConfigEmergencyStopLevelPayload struct {
 	Actions []string `json:"actions"`
 }
 
 // ConfigEmergencyStopPayload is the "show.emergencystop" configuration
 // kind's decoded payload: the body PUT /config/show.emergencystop accepts
-// (a full replacement — all three level keys required, each with its own
+// (a full replacement: all three level keys required, each with its own
 // required, possibly empty actions list), and the "payload" member of
 // GET /config/show.emergencystop's response.
 type ConfigEmergencyStopPayload struct {
@@ -62,7 +62,7 @@ type EmergencyStopInstanceOutcome struct {
 
 // EmergencyStopFollowUpResult is one configured follow-up show.action's
 // own best-effort invocation outcome. Outcome is empty (never a
-// zero-value word) when the action id itself could not even be resolved —
+// zero-value word) when the action id itself could not even be resolved.
 // OutcomeReason always explains why.
 type EmergencyStopFollowUpResult struct {
 	ActionID      string `json:"actionId"`
@@ -74,7 +74,7 @@ type EmergencyStopFollowUpResult struct {
 // EmergencyStopNightSessionOutcome reports what, if anything, happened to
 // the active night session as level stop-power-down's own "standard
 // graceful shutdown" component. Present is false when no night session
-// was active — a real, valid, non-degraded outcome, not an error.
+// was active: a real, valid, non-degraded outcome, not an error.
 type EmergencyStopNightSessionOutcome struct {
 	Present   bool   `json:"present"`
 	SessionID string `json:"sessionId,omitempty"`
@@ -110,8 +110,8 @@ type EmergencyStopArmRequest struct {
 
 // EmergencyStopArmResponse carries the single-use token
 // POST .../emergency-stop/hard-stop/fire must present within expiresAt.
-// Arming again before that deadline invalidates THIS token immediately —
-// at most one live token per principal, so a caller cannot accumulate a
+// Arming again before that deadline invalidates THIS token immediately.
+// At most one live token per principal, so a caller cannot accumulate a
 // pocketful of valid tokens and fire on an act that is no longer recent.
 type EmergencyStopArmResponse struct {
 	ServerTime string `json:"serverTime"`

@@ -205,7 +205,7 @@ const (
 	// this scope alone may stop playout, force the active night session's
 	// existing shutdown sequence, and invoke every follow-up action
 	// configured for whichever level it triggers, without also holding
-	// fpp:command, night:command, or show:action:invoke — the operator at
+	// fpp:command, night:command, or show:action:invoke. The operator at
 	// the console during a live show is exactly who must be able to reach
 	// this without first being handed the individual scopes those actions
 	// would otherwise need. It is the ONLY scope check on all four routes;

@@ -1697,8 +1697,8 @@ func New(deps Dependencies, opts Options) *API {
 
 	// The show.emergencystop configuration kind (its own optional,
 	// per-level follow-up action lists) and the four trigger routes.
-	// show:emergencystop:invoke is the only scope check on all four —
-	// see that scope's own doc comment (identity/types.go).
+	// show:emergencystop:invoke is the only scope check on all four.
+	// See that scope's own doc comment (identity/types.go).
 	mux.HandleFunc("GET /api/v1/config/show.emergencystop", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfig))
 	mux.HandleFunc("PUT /api/v1/config/show.emergencystop", h.writeGuard(&scopeConfigWrite, h.handlePutEmergencyStopConfig))
 	mux.HandleFunc("GET /api/v1/config/show.emergencystop/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfigRevisions))

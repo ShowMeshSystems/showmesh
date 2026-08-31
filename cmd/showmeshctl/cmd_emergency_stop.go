@@ -19,10 +19,10 @@ import (
 // retry or a redelivered command safe, but a convenience flag here that
 // silently chained arm then fire would make this CLI's own gate
 // ornamental while still looking present. Do not add one, however often
-// asked — see that file's own doc comment for the same rule stated from
+// asked. See that file's own doc comment for the same rule stated from
 // the server side.
 //
-// Every result's exit code is driven by StopOutcomes ALONE — a follow-up
+// Every result's exit code is driven by StopOutcomes ALONE. A follow-up
 // action's own outcome is printed, but never changes the exit code, so a
 // worklight that failed to turn on can never be misread as "the stop did
 // not happen" (this build's own degrade-safely rule).
@@ -69,11 +69,11 @@ show:emergencystop:invoke.
                      stop playout immediately, abandon the active night
                      session straight to stopped with no wait, and run
                      hard-stop's own follow-ups. There is no single
-                     command that arms and fires — see this file's own
+                     command that arms and fires. See this file's own
                      doc comment for why.
   config get|set|revisions
                      Read or write each level's own optional follow-up
-                     action list (config:write) — see
+                     action list (config:write). See
                      cmd_emergency_stop_config.go.
 
 Every level's own exit code reflects the STOP alone: 0 confirmed, 9
@@ -84,7 +84,7 @@ printed but never changes the exit code.
 }
 
 // emergencyStopInstanceOutcome mirrors
-// v1.EmergencyStopInstanceOutcome field for field — this program's own
+// v1.EmergencyStopInstanceOutcome field for field. This program's own
 // independent transcription, never a shared struct with the coordinator.
 type emergencyStopInstanceOutcome struct {
 	InstanceID    string  `json:"instanceId"`
@@ -196,7 +196,7 @@ func cmdEmergencyStopHardStop(args []string, stdout, stderr io.Writer, clock fun
 func printEmergencyStopHardStopUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, `usage: showmeshctl emergency-stop hard-stop <arm|fire> [flags]
 
-Two separate subcommands, deliberately never chained by one command — see
+Two separate subcommands, deliberately never chained by one command. See
 cmd_emergency_stop.go's own doc comment. Run "arm", then "fire --arm-token
 <token>" using the token "arm" printed, before it expires.
 `)
@@ -254,7 +254,7 @@ func cmdEmergencyStopHardStopFire(args []string, stdout, stderr io.Writer, clock
 	fs, g := newFlagSet(cmdLabel, stderr)
 	// --arm-token, deliberately NOT --token: newFlagSet already registers
 	// --token as the global bearer credential (ADR-024 decision 2), and
-	// this is a different secret with a different lifetime — reusing the
+	// this is a different secret with a different lifetime. Reusing the
 	// name would either collide (flag.FlagSet panics on a redefinition) or
 	// silently overload one flag with two unrelated meanings.
 	var armToken string
@@ -341,7 +341,7 @@ func reportEmergencyStopResult(stdout io.Writer, cmdLabel string, result emergen
 // exitCodeForEmergencyStopResult can take the WORST across every
 // configured instance: failed outranks refused outranks unconfirmed
 // outranks confirmed. This is a severity rank, deliberately NOT the raw
-// exit code integer — exitActionFailed (12) and exitActionRefused (13)
+// exit code integer: exitActionFailed (12) and exitActionRefused (13)
 // do not happen to sort in severity order as exit codes, so comparing the
 // exit codes directly would silently invert this ranking.
 func emergencyStopOutcomeSeverity(outcome string) int {
@@ -361,7 +361,7 @@ func emergencyStopOutcomeSeverity(outcome string) int {
 
 // exitCodeForEmergencyStopResult is driven by StopOutcomes ALONE, taking
 // the worst outcome across every configured instance. FollowUps never
-// participate — see this file's own doc comment for why.
+// participate. See this file's own doc comment for why.
 func exitCodeForEmergencyStopResult(result emergencyStopResult) int {
 	worst := "confirmed"
 	for _, o := range result.StopOutcomes {

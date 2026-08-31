@@ -21,7 +21,7 @@ var errFakeResolumeDispatch = errors.New("emergencystop_test: injected resolume 
 // This file is the emergency-stop feature's own end-to-end coverage: a real store, a real
 // identity service, a real FPP command endpoint (httptest.NewServer,
 // nightShutdownFixture's own pattern), and a fake Resolume dispatcher for
-// follow-up actions — never a hand-built v1 struct asserted against
+// follow-up actions, never a hand-built v1 struct asserted against
 // itself.
 
 type emergencyStopFixture struct {
@@ -136,7 +136,7 @@ func TestEmergencyStopDispatchesFPPStopAndFollowUp(t *testing.T) {
 	}
 }
 
-// A follow-up action's own failure must never fail the stop — the
+// A follow-up action's own failure must never fail the stop. This is the
 // degrade-safely rule this build's PR body states as its own top
 // priority.
 func TestEmergencyStopFollowUpFailureDoesNotFailTheStop(t *testing.T) {
@@ -180,7 +180,7 @@ func TestEmergencyStopWithNoActionsConfiguredHasEmptyFollowUps(t *testing.T) {
 	m := decodeMap(t, body)
 	result := m["result"].(map[string]any)
 	if followUps := result["followUps"].([]any); len(followUps) != 0 {
-		t.Fatalf("followUps = %v, want empty — a level with nothing configured must work exactly as well as a fully configured one", followUps)
+		t.Fatalf("followUps = %v, want empty: a level with nothing configured must work exactly as well as a fully configured one", followUps)
 	}
 	if f.resolume.callCount() != 0 {
 		t.Fatalf("resolume dispatch calls = %d, want 0", f.resolume.callCount())
@@ -260,10 +260,10 @@ func TestEmergencyStopPowerDownForcesALiveNightSessionImmediately(t *testing.T) 
 		t.Fatalf("get current night session: %v", err)
 	}
 	if updated.State != nightStateFadingOut {
-		t.Fatalf("night session state = %q, want %q — an emergency stop must force a LIVE session into fading-out immediately, never defer it the way an ordinary power-down-presentation would", updated.State, nightStateFadingOut)
+		t.Fatalf("night session state = %q, want %q: an emergency stop must force a LIVE session into fading-out immediately, never defer it the way an ordinary power-down-presentation would", updated.State, nightStateFadingOut)
 	}
 	if updated.FinalShowRequested {
-		t.Error("night session has FinalShowRequested set, which is the ORDINARY deferring path's own effect — force must bypass it entirely")
+		t.Error("night session has FinalShowRequested set, which is the ORDINARY deferring path's own effect. Force must bypass it entirely")
 	}
 }
 
@@ -282,7 +282,7 @@ func TestEmergencyStopPowerDownWithNoActiveNightSessionReportsNotPresent(t *test
 	result := m["result"].(map[string]any)
 	ns := result["nightSession"].(map[string]any)
 	if present, _ := ns["present"].(bool); present {
-		t.Fatalf("nightSession.present = %v, want false — a real, valid, non-degraded outcome when no session is active", ns["present"])
+		t.Fatalf("nightSession.present = %v, want false: a real, valid, non-degraded outcome when no session is active", ns["present"])
 	}
 }
 
@@ -337,8 +337,8 @@ func TestEmergencyStopHardStopFireWithoutArmIsRefused(t *testing.T) {
 	}
 }
 
-// THE core anti-double-fire property: firing the SAME token twice — the
-// exact shape of a redelivered command or an accidental retry — must
+// THE core anti-double-fire property: firing the SAME token twice, the
+// exact shape of a redelivered command or an accidental retry, must
 // dispatch the underlying stop AT MOST ONCE.
 func TestEmergencyStopHardStopFiringTheSameTokenTwiceNeverDoubleFires(t *testing.T) {
 	now := time.Now()
@@ -358,7 +358,7 @@ func TestEmergencyStopHardStopFiringTheSameTokenTwiceNeverDoubleFires(t *testing
 		t.Fatalf("first fire: status = %d, want 200; body: %s", resp1.StatusCode, body1)
 	}
 
-	// A second fire presenting the IDENTICAL token — as a redelivered
+	// A second fire presenting the IDENTICAL token, as a redelivered
 	// command or a manual retry would.
 	fireReq2 := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/hard-stop/fire", fireBody,
 		map[string]string{"Authorization": "Bearer " + f.adminToken})
@@ -372,7 +372,7 @@ func TestEmergencyStopHardStopFiringTheSameTokenTwiceNeverDoubleFires(t *testing
 	}
 
 	if got := len(f.sentCommands()); got != 1 {
-		t.Fatalf("FPP commands sent = %d, want exactly 1 — firing the same token twice must never dispatch the stop twice", got)
+		t.Fatalf("FPP commands sent = %d, want exactly 1: firing the same token twice must never dispatch the stop twice", got)
 	}
 }
 

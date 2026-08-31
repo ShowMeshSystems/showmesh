@@ -109,7 +109,7 @@ var errNightCommandRefused = errors.New("api: night command refused")
 // nightShutdownOrdinary and nightShutdownForced are
 // [applyNightShutdownEffect]'s and [handlers.nightPowerDownPresentationApply]'s
 // own force argument, named at every call site rather than passed as a bare
-// true/false literal — see applyNightShutdownEffect's own doc comment for
+// true/false literal. See applyNightShutdownEffect's own doc comment for
 // why.
 const (
 	nightShutdownOrdinary = false // the normal path: defer a live/committed show, evaluate interlocks
@@ -889,13 +889,13 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 // own words ("Only an explicitly configured and invoked emergency/force
 // operation may interrupt playback or remove power immediately") and
 // end-session's existing precedent (nightEndSessionDecide, never deferred,
-// never interlocked) both already carve out exactly this case — an
+// never interlocked) both already carve out exactly this case: an
 // operator's own explicit emergency command is what ADR-038 reserves the
 // exception for, and playout has already been stopped immediately by the
 // caller before this ever runs.
 //
 // Every call site passes [nightShutdownOrdinary] or [nightShutdownForced],
-// never a bare true/false literal — this repo's own established pattern for
+// never a bare true/false literal. That is this repo's own convention for
 // a bool this shape (see callerHasOverrideScope, threaded through roughly
 // ten signatures in this same file and nightinterlock.go): a bare bool
 // TYPE, never a named bool type (none exists anywhere in this repo), but

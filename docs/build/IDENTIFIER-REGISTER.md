@@ -81,9 +81,9 @@ does not fork per surface.
 
 **Lane 17a SM-129 mints no new exit code for the hard-stop arm/fire gate**
 (orchestrator ruling): `showmeshctl emergency-stop hard-stop fire` reuses
-`exitActionRefused` (13) for a refused arm — never armed, the wrong token,
-or the token expired, all one class since the remedy is identical ("arm
-again, then fire promptly") — and `exitConflict` (10) for the compare-and-
+`exitActionRefused` (13) for a refused arm (never armed, the wrong token,
+or the token expired, all one class since the remedy is identical: "arm
+again, then fire promptly"), and `exitConflict` (10) for the compare-and-
 swap-race case, an arm token already consumed by an earlier fire. A new
 code would add vocabulary without adding discrimination a script could
 actually branch on.
@@ -235,7 +235,7 @@ behind `/api/v1/config/resolume/composition` with its own upload path
 (ADR-032), and the path shape differs deliberately.
 
 **`show.emergencystop` (Lane 17a SM-129) holds only the three emergency-stop
-levels' own optional, per-level follow-up action lists** — an ordered list
+levels' own optional, per-level follow-up action lists**: an ordered list
 of existing `show.action` ids per level, invoked best-effort after that
 level's own immediate stop. It is the shared-pool-with-per-level-selection
 design: `show.action` is already the namespace-scoped, validated authoring
@@ -244,7 +244,7 @@ which already-authored actions each level's own list names. Field names
 (`stop`, `stopPowerDown`, `hardStop`) match the wire level names in
 `/api/v1/emergency-stop/*` and this build's own audit action strings below
 exactly. Referenced `show.action` ids are validated to exist at write time,
-of ANY show — this kind is installation-wide, never scoped to whichever show
+of ANY show: this kind is installation-wide, never scoped to whichever show
 happens to be active, unlike `night.session`'s own action references.
 
 ### show.action target integrations
@@ -345,7 +345,7 @@ umbrella-authority precedent, applied to the same problem one layer up.** A
 principal holding it may stop playout, force the active night session's own
 existing shutdown sequence, and invoke every follow-up action configured for
 whichever level it triggers, without separately holding `fpp:command`,
-`night:command`, or `show:action:invoke` — it is granted to `RoleOperator`
+`night:command`, or `show:action:invoke`. It is granted to `RoleOperator`
 (the console operator during a live show is exactly who must be able to
 reach this without first being handed the individual scopes those actions
 would otherwise need), the same reasoning that already puts

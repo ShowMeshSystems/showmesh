@@ -93,7 +93,7 @@ type handlers struct {
 	nightCueHooks nightCueDispatchHooks
 
 	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
-	// intent gate state — see [emergencyStopArmStore]'s own doc comment
+	// intent gate state. See [emergencyStopArmStore]'s own doc comment
 	// for why this is in-memory, unpersisted, and a single-process
 	// assumption (ADR-012, the same one discoveryRunInFlight above
 	// already relies on).

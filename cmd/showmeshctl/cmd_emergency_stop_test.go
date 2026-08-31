@@ -42,7 +42,7 @@ func TestExitCodeForEmergencyStopResultTakesTheWorstStopOutcome(t *testing.T) {
 }
 
 // A follow-up action's own outcome must NEVER change the exit code, even
-// when every stop outcome is confirmed and every follow-up failed — the
+// when every stop outcome is confirmed and every follow-up failed. This is the
 // core degrade-safely property this whole file exists to protect.
 func TestExitCodeForEmergencyStopResultIgnoresFollowUps(t *testing.T) {
 	result := emergencyStopResult{
@@ -53,7 +53,7 @@ func TestExitCodeForEmergencyStopResultIgnoresFollowUps(t *testing.T) {
 		},
 	}
 	if got := exitCodeForEmergencyStopResult(result); got != exitOK {
-		t.Fatalf("exitCodeForEmergencyStopResult = %d, want %d (exitOK) — a failed follow-up must never change the exit code", got, exitOK)
+		t.Fatalf("exitCodeForEmergencyStopResult = %d, want %d (exitOK): a failed follow-up must never change the exit code", got, exitOK)
 	}
 }
 
@@ -166,7 +166,7 @@ func TestCmdEmergencyStopHardStopArmThenFireEndToEnd(t *testing.T) {
 }
 
 // "hard-stop" with no further argument is a usage error, not a stop: there
-// is deliberately no bare/combined form — see cmd_emergency_stop.go's own
+// is deliberately no bare/combined form. See cmd_emergency_stop.go's own
 // doc comment for why.
 func TestCmdEmergencyStopHardStopWithNoSubcommandIsUsageError(t *testing.T) {
 	var fireCalls int
@@ -190,6 +190,6 @@ func TestCmdEmergencyStopHardStopFireRequiresToken(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (exitUsage)", code, exitUsage)
 	}
 	if fireCalls != 0 {
-		t.Fatalf("fire endpoint called %d times, want 0 — a missing --token must never reach the server", fireCalls)
+		t.Fatalf("fire endpoint called %d times, want 0: a missing --arm-token must never reach the server", fireCalls)
 	}
 }

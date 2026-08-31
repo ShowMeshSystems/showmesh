@@ -14,14 +14,14 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
 
-// GET/PUT/revisions for the "show.emergencystop" configuration kind —
+// GET/PUT/revisions for the "show.emergencystop" configuration kind:
 // authoring the three trigger levels' own optional follow-up action
 // lists. The four TRIGGER routes (emergencystop.go) are the "someone
 // presses the button" surface; this file is "an admin decides what
 // happens when they do." Handler shape copied from showmode.go, gated on
 // config:write like the majority of this package's singleton kinds (not
 // show.mode's own open-read exception, which rests on ADR-033 decision
-// 3's persistent-visibility requirement — nothing establishes that for
+// 3's persistent-visibility requirement, and nothing establishes that for
 // this kind).
 
 const maxEmergencyStopConfigRequestBodyBytes = 8192
@@ -49,8 +49,8 @@ func resolveEmergencyStopConfig(ctx context.Context, cs ConfigStore, actionResol
 }
 
 // handleGetEmergencyStopConfig serves GET /api/v1/config/show.emergencystop.
-// "Nothing has ever been written" is never a 404 here — the payload has a
-// well-defined default (every level empty) — so this always answers 200.
+// "Nothing has ever been written" is never a 404 here: the payload has a
+// well-defined default (every level empty), so this always answers 200.
 func (h *handlers) handleGetEmergencyStopConfig(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := r.Context()
@@ -172,7 +172,7 @@ func (h *handlers) handlePutEmergencyStopConfig(w http.ResponseWriter, r *http.R
 }
 
 // emergencyStopActionResolver checks a referenced show.action id EXISTS,
-// of any show — see [config.EmergencyStopActionResolver]'s own doc
+// of any show. See [config.EmergencyStopActionResolver]'s own doc
 // comment for why this kind is never scoped to one show's own namespace.
 func (h *handlers) emergencyStopActionResolver(ctx context.Context) config.EmergencyStopActionResolver {
 	return func(actionID string) bool {

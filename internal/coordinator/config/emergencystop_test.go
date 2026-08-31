@@ -36,7 +36,7 @@ func TestDecodeEmergencyStopPayloadAcceptsConfiguredActions(t *testing.T) {
 }
 
 // Every one of the three level keys is required on a full-replacement PUT,
-// even when its own actions list would be empty — the identical
+// even when its own actions list would be empty. This is the identical
 // absent-key-is-refused rule ConfigFPPEndpointsPayload.endpoints and
 // ShowModePayload.mode both already state for their own kind.
 func TestDecodeEmergencyStopPayloadRefusesAbsentLevelKeys(t *testing.T) {
@@ -94,7 +94,7 @@ func TestDecodeEmergencyStopPayloadRejectsDuplicateActionWithinOneLevel(t *testi
 }
 
 // The SAME action id is explicitly allowed to appear in more than one
-// level's own list — the shared-pool design this kind documents.
+// level's own list, the shared-pool design this kind documents.
 func TestDecodeEmergencyStopPayloadAllowsSameActionAcrossLevels(t *testing.T) {
 	got, verr := DecodeEmergencyStopPayload(fullEmergencyStopBody(`"worklights-on"`, `"worklights-on"`, `"worklights-on"`), alwaysResolvesEmergencyStopAction)
 	if verr != nil {
