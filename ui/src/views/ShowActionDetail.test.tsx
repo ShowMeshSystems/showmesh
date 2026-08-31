@@ -90,6 +90,83 @@ describe('ShowActionDetail (new action authoring)', () => {
     expect(select.value).toBe('')
   })
 
+  // Absent must mean "not declared", never a silent default of
+  // true or false. The select's own default option is "Not declared", and
+  // an action submitted without ever touching this control sends wire
+  // `null`, matching what config.DecodeShowActionPayload's
+  // decodeOptionalTriStateBool treats as "absent" server-side.
+  it('starts idempotent on "Not declared" and submits null when never touched', async () => {
+    putShowAction.mockResolvedValue({
+      serverTime: '2026-08-14T00:00:00Z',
+      kind: 'show.action',
+      id: 'projectors-on',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Projectors on',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'fpp', instanceId: 'fpp-main', primitive: 'startPlaylist' },
+        idempotent: null,
+      },
+      updatedAt: '2026-08-14T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    const select = screen.getByLabelText(/Idempotent/) as HTMLSelectElement
+    expect(select.value).toBe('unset')
+
+    await user.type(screen.getByLabelText('Action id'), 'projectors-on')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Label'), 'Projectors on')
+    await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
+    await user.type(screen.getByLabelText('FPP instance id'), 'fpp-main')
+    await user.selectOptions(screen.getByLabelText('Primitive'), 'startPlaylist')
+    await user.click(screen.getByRole('button', { name: 'Create action' }))
+
+    await waitFor(() => expect(putShowAction).toHaveBeenCalled())
+    expect(putShowAction).toHaveBeenCalledWith('projectors-on', expect.objectContaining({ idempotent: null }))
+  })
+
+  it('submits idempotent true or false once the operator picks one', async () => {
+    putShowAction.mockResolvedValue({
+      serverTime: '2026-08-14T00:00:00Z',
+      kind: 'show.action',
+      id: 'projectors-on',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Projectors on',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'fpp', instanceId: 'fpp-main', primitive: 'startPlaylist' },
+        idempotent: true,
+      },
+      updatedAt: '2026-08-14T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    const user = userEvent.setup()
+    renderNewAction(makeModel({ session: adminSession }))
+
+    await user.type(screen.getByLabelText('Action id'), 'projectors-on')
+    await user.selectOptions(screen.getByLabelText('Show'), 'halloween-2026')
+    await user.type(screen.getByLabelText('Label'), 'Projectors on')
+    await user.selectOptions(screen.getByLabelText('Safety class'), 'none')
+    await user.type(screen.getByLabelText('FPP instance id'), 'fpp-main')
+    await user.selectOptions(screen.getByLabelText('Primitive'), 'startPlaylist')
+    await user.selectOptions(screen.getByLabelText(/Idempotent/), 'true')
+    await user.click(screen.getByRole('button', { name: 'Create action' }))
+
+    await waitFor(() => expect(putShowAction).toHaveBeenCalled())
+    expect(putShowAction).toHaveBeenCalledWith('projectors-on', expect.objectContaining({ idempotent: true }))
+  })
+
   it('refuses to submit with no safety class chosen, even with every other field filled in', async () => {
     const user = userEvent.setup()
     renderNewAction(makeModel({ session: adminSession }))
@@ -365,6 +442,42 @@ describe('ShowActionDetail (Resolume authoring)', () => {
       .map((o) => o.textContent ?? '')
       .filter((t) => t !== 'Choose one')
     expect(clipTexts).toEqual(['Second Deck Clip'])
+  })
+})
+
+// An existing action's declared idempotent value must load back
+// into the correct option, and "declared false" must never render the
+// same as "not declared": the two send an operator to different fixes.
+describe('ShowActionDetail (loading a declared idempotent value)', () => {
+  it('loads a declared-false action onto "Not idempotent", not "Not declared"', async () => {
+    getActionBinding.mockRejectedValue(new Error('not mocked for this test'))
+    getShowAction.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'show.action',
+      id: 'notify',
+      revision: 1,
+      payload: {
+        show: 'halloween-2026',
+        label: 'Notify',
+        description: '',
+        safetyClass: 'none',
+        target: { integration: 'mqtt', broker: 'home-automation', publish: { topic: 't', payload: '', qos: 1, retain: false }, expect: { kind: 'none' } },
+        idempotent: false,
+      },
+      updatedAt: '2026-08-25T00:00:00Z',
+      createdByPrincipalId: 'p-1',
+      createdByPrincipalName: 'admin-1',
+      source: 'api',
+    })
+    getShowActionRevisions.mockResolvedValue({
+      serverTime: '2026-08-25T00:00:00Z',
+      kind: 'show.action',
+      revisions: [],
+    })
+    renderExistingAction(makeModel({ session: adminSession }), 'notify')
+
+    const select = (await screen.findByLabelText(/Idempotent/)) as HTMLSelectElement
+    expect(select.value).toBe('false')
   })
 })
 

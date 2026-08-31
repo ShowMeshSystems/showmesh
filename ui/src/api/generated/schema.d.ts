@@ -4418,7 +4418,7 @@ export interface components {
             audioSessionId?: string;
             audioAction?: string;
         };
-        /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. */
+        /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. idempotent is null when the action has never declared whether repeating its effect is safe - a real, distinct state from a declared false, always present rather than omitted. Only a night.session binding that uses this action as the first outward-facing enterShow cue requires a non-null value; an ordinary action may stay undeclared indefinitely. */
         ConfigShowAction: {
             show: string;
             label: string;
@@ -4426,8 +4426,9 @@ export interface components {
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             target: components["schemas"]["ConfigShowActionTarget"];
+            idempotent: boolean | null;
         };
-        /** @description The WRITE shape of the "show.action" configuration kind's payload: the body PUT /config/show.action/{id} accepts. Identical to ConfigShowAction except that description is not required (an absent key takes its documented default of empty, i.e. no description; a present `null` is rejected as invalid) and target is ConfigShowActionTargetWrite, which allows target.publish.retain to be absent under the same rule. The response to a successful write stores and returns the resolved ConfigShowAction shape, never this one. */
+        /** @description The WRITE shape of the "show.action" configuration kind's payload: the body PUT /config/show.action/{id} accepts. Identical to ConfigShowAction except that description is not required (an absent key takes its documented default of empty, i.e. no description; a present `null` is rejected as invalid) and target is ConfigShowActionTargetWrite, which allows target.publish.retain to be absent under the same rule. idempotent is not required here: absent OR an explicit `null` both mean "leave it undeclared" (unlike every other field on this payload) - the one deliberate exception, so that PUTting an unmodified GET body back (which always carries `idempotent` explicitly, per ConfigShowAction) never fails only because that field round-tripped as `null` rather than being omitted. The response to a successful write stores and returns the resolved ConfigShowAction shape, never this one. */
         ConfigShowActionWrite: {
             show: string;
             label: string;
@@ -4435,6 +4436,7 @@ export interface components {
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             target: components["schemas"]["ConfigShowActionTargetWrite"];
+            idempotent?: boolean | null;
         };
         /** @description The body of GET and PUT /config/show.action/{id}. */
         ShowActionConfigResponse: {

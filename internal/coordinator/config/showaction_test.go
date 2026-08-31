@@ -270,6 +270,115 @@ func TestDecodeShowActionPayloadDescriptionAbsentNullEmpty(t *testing.T) {
 	})
 }
 
+func boolPtr(b bool) *bool { return &b }
+
+// TestDecodeShowActionPayloadIdempotentAbsentNullExplicit defends
+// show.action.idempotent's own tri-state rule: absent and explicit null
+// both decode to nil ("not declared" - never coerced to false), and
+// explicit true/false decode to the value verbatim. Mutation-checked:
+// coercing nil to a &false zero value passes every other assertion in
+// this package but fails TestShowActionPayloadIdempotentRoundTripsThreeStates
+// and this test's own "absent"/"null" cases, which compare against a nil
+// pointer, not a false one.
+func TestDecodeShowActionPayloadIdempotentAbsentNullExplicit(t *testing.T) {
+	base := func(idempotent string) string {
+		return `{"show": "halloween-2026", "label": "x", ` + idempotent + `"safetyClass": "stop", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
+	}
+	t.Run("absent", func(t *testing.T) {
+		p, verr := DecodeShowActionPayload(base(""), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		if verr != nil {
+			t.Fatalf("unexpected error: %+v", verr)
+		}
+		if p.Idempotent != nil {
+			t.Fatalf("expected nil (not declared), got %v", *p.Idempotent)
+		}
+	})
+	t.Run("null", func(t *testing.T) {
+		// idempotent's own deliberate exception: unlike every other
+		// optional field in this file, an explicit null means the same
+		// as absent (decodeOptionalTriStateBool's own doc comment) - a
+		// GET response always carries "idempotent" explicitly, including
+		// null for an undeclared action, so PUTting that same response
+		// back unchanged must not fail only because it round-tripped as
+		// null rather than an omitted key.
+		p, verr := DecodeShowActionPayload(base(`"idempotent": null, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		if verr != nil {
+			t.Fatalf("unexpected error: %+v", verr)
+		}
+		if p.Idempotent != nil {
+			t.Fatalf("expected nil (not declared), got %v", *p.Idempotent)
+		}
+	})
+	t.Run("true", func(t *testing.T) {
+		p, verr := DecodeShowActionPayload(base(`"idempotent": true, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		if verr != nil {
+			t.Fatalf("unexpected error: %+v", verr)
+		}
+		if p.Idempotent == nil || *p.Idempotent != true {
+			t.Fatalf("expected declared true, got %v", p.Idempotent)
+		}
+	})
+	t.Run("false", func(t *testing.T) {
+		p, verr := DecodeShowActionPayload(base(`"idempotent": false, `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		if verr != nil {
+			t.Fatalf("unexpected error: %+v", verr)
+		}
+		if p.Idempotent == nil || *p.Idempotent != false {
+			t.Fatalf("expected declared false, got %v", p.Idempotent)
+		}
+	})
+	t.Run("wrong-type", func(t *testing.T) {
+		_, verr := DecodeShowActionPayload(base(`"idempotent": "yes", `), testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+		if verr == nil || verr.Code != ValidationCodeFieldInvalid || verr.Field != "idempotent" {
+			t.Fatalf("expected idempotent field-invalid error, got %+v", verr)
+		}
+	})
+}
+
+// TestShowActionPayloadIdempotentRoundTripsThreeStates is this task's own
+// named risk: absent must survive storage and reload AS ABSENT, never as
+// a defaulted false. reload mirrors internal/coordinator/api's
+// decodeShowActionPayloadForRead exactly - a plain json.Unmarshal of the
+// stored payload_json, never a second DecodeShowActionPayload call - so
+// this proves the STORED shape, not merely the decoder's own output.
+func TestShowActionPayloadIdempotentRoundTripsThreeStates(t *testing.T) {
+	cases := []struct {
+		name string
+		wire string
+		want *bool
+	}{
+		{"absent", "", nil},
+		{"declared-false", `"idempotent": false, `, boolPtr(false)},
+		{"declared-true", `"idempotent": true, `, boolPtr(true)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"show": "halloween-2026", "label": "x", ` + tc.wire + `"safetyClass": "stop", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`
+			p, verr := DecodeShowActionPayload(raw, testEndpoints(), testBrokers(), newFakeFPPPrimitiveRegistry(), newFakeResolumeReferenceResolver(), alwaysTrueShowExists)
+			if verr != nil {
+				t.Fatalf("decode: %+v", verr)
+			}
+			encoded, err := EncodeShowActionPayload(p)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			var reloaded ShowActionPayload
+			if err := json.Unmarshal([]byte(encoded), &reloaded); err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			if tc.want == nil {
+				if reloaded.Idempotent != nil {
+					t.Fatalf("Idempotent after reload = %v, want nil (not declared)", *reloaded.Idempotent)
+				}
+				return
+			}
+			if reloaded.Idempotent == nil || *reloaded.Idempotent != *tc.want {
+				t.Fatalf("Idempotent after reload = %v, want %v", reloaded.Idempotent, *tc.want)
+			}
+		})
+	}
+}
+
 func TestDecodeShowActionPayloadSafetyClassRequiredAndClosed(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
 		raw := `{"show": "halloween-2026", "label": "x", "target": {"integration": "fpp", "instanceId": "fpp-main", "primitive": "stopPlaylist"}}`

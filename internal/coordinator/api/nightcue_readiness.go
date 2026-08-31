@@ -11,9 +11,14 @@ import (
 // nightComputeReadinessChecks alongside nightasset.go's own checks.
 
 // nightCheckFirstOutwardCueConfirmable is §7.1.1's own gate, surfaced at
-// readiness time: the earliest-offset enterShow cue must resolve to a
-// [nightCueConfirmable] action, because its atomic commit can never be
-// reversed once it dispatches.
+// readiness time: the earliest-offset enterShow cue must resolve to an
+// action [nightCueAllowedAsFirstOutwardCue] accepts - either its own
+// adapter can confirm the effect, or the action itself declares
+// idempotent true - because its atomic commit can never be reversed once
+// it dispatches. The two ways to fail that are refused with distinct
+// reasons: a declared-false action and an undeclared one point an
+// operator at two different fixes, and only the second is fixed by adding
+// a field.
 func (h *handlers) nightCheckFirstOutwardCueConfirmable(ctx context.Context, cues []config.NightSessionCue) nightReadinessCheck {
 	name := "enterShow:first-cue-confirmable"
 	sorted := sortedNightCues(cues)
@@ -25,10 +30,10 @@ func (h *handlers) nightCheckFirstOutwardCueConfirmable(ctx context.Context, cue
 	if err != nil {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf("could not resolve cue %q's action %q: %s", first.Name, first.Action, err.Error())}
 	}
-	if !nightCueConfirmable(action.Target) {
-		reason := fmt.Sprintf("cue %q is the earliest-offset enterShow cue, and its action's own adapter cannot confirm its effect; it may not be the first outward-facing cue", first.Name)
-		if action.Target.Integration == config.ShowActionIntegrationMQTT {
-			reason = fmt.Sprintf("cue %q is the earliest-offset enterShow cue, and its mqtt action has no dispatcher wired into this coordinator build; it may not be the first outward-facing cue", first.Name)
+	if !nightCueAllowedAsFirstOutwardCue(action) {
+		reason := fmt.Sprintf("cue %q is the earliest-offset enterShow cue, and its action does not declare whether it is idempotent; its own adapter cannot confirm its effect, so it may not be the first outward-facing cue until it declares idempotent true or false", first.Name)
+		if action.Idempotent != nil && !*action.Idempotent {
+			reason = fmt.Sprintf("cue %q is the earliest-offset enterShow cue, and its action is declared non-idempotent; its own adapter cannot confirm its effect, so it may not be the first outward-facing cue", first.Name)
 		}
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: reason}
 	}

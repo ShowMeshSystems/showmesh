@@ -90,13 +90,17 @@ type ConfigShowActionTarget struct {
 // ConfigShowAction is the "show.action" configuration kind's decoded
 // payload (STEP-9-SPEC.md section 5.3): the body PUT /config/show.action/{id}
 // accepts, and the "payload" member of GET /config/show.action/{id}'s
-// response.
+// response. Idempotent is null when the action never declared it - a
+// distinct, real state from a declared false, never omitted: the §7.1.1
+// first-outward-cue gate must tell an operator which of those two is
+// blocking a binding.
 type ConfigShowAction struct {
 	Show        string                 `json:"show"`
 	Label       string                 `json:"label"`
 	Description string                 `json:"description"`
 	SafetyClass string                 `json:"safetyClass"`
 	Target      ConfigShowActionTarget `json:"target"`
+	Idempotent  *bool                  `json:"idempotent"`
 }
 
 // ShowActionConfigResponse is the body of GET and PUT
