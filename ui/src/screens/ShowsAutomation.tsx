@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   getMacroRun,
+  getActionBinding,
   getShowAction,
   getShowActionRevisions,
   getShowMacro,
   getShowMacroRevisions,
   invokeAction,
   listConfigObjects,
+  listMacroRuns,
   listResolumeActions,
   putShowAction,
   putShowMacro,
@@ -21,6 +23,7 @@ import {
   type ConfigShowMacro,
   type ConfigShowMacroLocalFallback,
   type MacroRun,
+  type MacroRunSummary,
   type ResolumeAction,
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
@@ -276,6 +279,8 @@ export function ShowsAutomation() {
           )}
         </Section>
 
+        <MacroHistory showId={showId} onOpenRun={(runId) => setAside({ kind: 'run', runId })} />
+
         <Section id="au-actions" title="Actions" aside={<span className="sm-small sm-muted">{visibleActions.length}</span>}>
           <p className="sm-small sm-muted">An action's row edits the action itself, its target, its safety class, and what counts as confirmation.</p>
           <h3 className="sm-subsection__title">
@@ -359,6 +364,12 @@ export function ShowsAutomation() {
       </aside>
     </Panes>
   )
+}
+
+function MacroHistory({ showId, onOpenRun }: { showId: string; onOpenRun: (runId: string) => void }) {
+  const [state, setState] = useState<{ kind: 'loading' } | { kind: 'loaded'; runs: MacroRunSummary[] } | { kind: 'failed'; reason: string }>({ kind: 'loading' })
+  useEffect(() => { let cancelled = false; listMacroRuns({ limit: 20 }).then((response) => { if (!cancelled) setState({ kind: 'loaded', runs: response.runs.filter((run) => run.show === showId) }) }).catch((err: unknown) => { if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) }) }); return () => { cancelled = true } }, [showId])
+  return <Section id="au-history" title="Recent macro runs" aside={<span className="sm-small sm-muted">Coordinator history</span>}>{state.kind === 'loading' ? <RuledStrip absence="loading" label="Reading" fact="Reading recent macro runs." /> : state.kind === 'failed' ? <RuledStrip absence="failed" label="Read failed" fact={state.reason} /> : state.runs.length === 0 ? <RuledStrip absence="empty" label="None" fact="No macro runs are retained for this show." /> : <TableWrap label="Recent macro runs, scrollable"><Table><thead><tr><th>Macro</th><th>Started</th><th>State</th><th /></tr></thead><tbody>{state.runs.map((run) => <tr key={run.id}><td className="sm-data">{run.macroObjectId}</td><td>{formatClock(run.createdAt) ?? 'unrecorded'}</td><td><StatusPair tone={run.state === 'running' ? 'pending' : run.completed === true ? 'good' : 'unknown'} label={run.state === 'running' ? 'Running' : run.completed === true ? 'Completed' : 'Not completed'} /></td><td><button type="button" className="sm-linkbutton" onClick={() => onOpenRun(run.id)}>Run detail</button></td></tr>)}</tbody></Table></TableWrap>}</Section>
 }
 
 function MacroCard({
@@ -519,11 +530,7 @@ function ActionTable({
                       <InvokeButton actionId={action.id} binding={binding} canInvoke={canInvoke} />
                     </td>
                   )}
-                  <td>
-                    <StatusPair tone={bindingTone(binding?.state)} label={bindingLabel(binding?.state)} />
-                    {binding !== undefined && binding.state !== 'ok' && <br />}
-                    {binding !== undefined && binding.state !== 'ok' && <span className="sm-small sm-faint">{binding.reason}</span>}
-                  </td>
+                  <td><BindingRecheck actionId={action.id} binding={binding} /></td>
                 </tr>
               )
             })
@@ -532,6 +539,13 @@ function ActionTable({
       </Table>
     </TableWrap>
   )
+}
+
+function BindingRecheck({ actionId, binding }: { actionId: string; binding: ActionBinding | undefined }) {
+  const [fresh, setFresh] = useState<ActionBinding | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const current = fresh ?? binding
+  return <><StatusPair tone={bindingTone(current?.state)} label={bindingLabel(current?.state)} />{current !== undefined && current.state !== 'ok' && <><br /><span className="sm-small sm-faint">{current.reason}</span></>}<br /><button type="button" className="sm-linkbutton" onClick={() => { setError(null); getActionBinding(actionId).then(setFresh).catch((err: unknown) => setError(describeApiError(err))) }}>Recheck this action</button>{error !== null && <span className="sm-small sm-faint"> {error}</span>}</>
 }
 
 function InvokeButton({ actionId, binding, canInvoke }: { actionId: string; binding: ActionBinding | undefined; canInvoke: { allowed: boolean; reason?: string } }) {
