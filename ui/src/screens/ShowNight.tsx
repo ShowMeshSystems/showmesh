@@ -5,15 +5,21 @@ import {
   PROBLEM_TYPE,
   dispatchNightCommand,
   getCurrentNightSession,
+  getNightSessionConfig,
+  getNightSessionConfigRevision,
+  getNightSessionConfigRevisions,
   getNightSessionActiveConfig,
   getNightSessionActiveConfigRevisions,
   listConfigObjects,
   putNightSessionActiveConfig,
+  putNightSessionConfig,
   randomUUIDv4,
   type ConfigObjectSummary,
+  type ConfigNightSessionWrite,
   type NightCommandName,
   type NightInterlockOverride,
   type NightSessionActiveConfigResponse,
+  type NightSessionConfigResponse,
   type NightSessionState,
 } from '../api'
 import {
@@ -24,7 +30,6 @@ import {
   Field,
   FieldGrid,
   Input,
-  NotWired,
   NotWiredBanner,
   RevisionHistory,
   RuledStrip,
@@ -220,11 +225,7 @@ export function ShowNight() {
           </p>
         </div>
         <ButtonRow>
-          <NotWired>
-            <Button title="There is no night-session definition editor yet. This config object is night.session, not a show.">
-              Edit definition
-            </Button>
-          </NotWired>
+          <a className="sm-btn" href="#sn-definitions">Edit definition</a>
           <Button disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={() => send('run-readiness')}>
             Run readiness
           </Button>
@@ -512,6 +513,7 @@ export function ShowNight() {
       </Section>
 
       <NightSessionActivation />
+      <NightSessionDefinitions />
 
       {session.degraded && (
         <BlankingPlate
@@ -557,9 +559,8 @@ type ActiveLoadState =
 /**
  * `/config/night.session.active` (ADR-039 rule 4): which `night.session`
  * definition is armed for the next `start-night`, and the control to point
- * it at a different one. Activating is in scope; authoring a definition
- * (`putNightSessionConfig`) is not - `Edit definition` above stays not
- * wired for that.
+ * it at a different one. Definition authoring lives directly below it so the
+ * active pointer and the immutable object it names stay visibly distinct.
  */
 function NightSessionActivation() {
   const model = useModelContext()
@@ -715,4 +716,144 @@ function NightSessionActivation() {
       <RevisionHistory fetch={getNightSessionActiveConfigRevisions} reloadKey={attempt} />
     </Section>
   )
+}
+
+type CueDraft = { name: string; role: 'lighting' | 'projection' | 'audio' | 'announcement' | 'other'; action: string; offsetMs: string }
+type DefinitionDraft = {
+  id: string
+  show: string
+  label: string
+  showFpp: string
+  showPlaylist: string
+  restingFpp: string
+  restingPlaylist: string
+  timelineShow: string
+  timelineSequence: string
+  timelineTarget: string
+  enterShow: CueDraft[]
+  enterResting: CueDraft[]
+  base: ConfigNightSessionWrite | null
+}
+
+const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0' })
+const blankDefinition = (): DefinitionDraft => ({ id: '', show: '', label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '', timelineShow: '', timelineSequence: '', timelineTarget: '', enterShow: [], enterResting: [], base: null })
+
+function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDraft {
+  const { payload } = response
+  const cue = (item: (typeof payload.enterShow.cues)[number]): CueDraft => ({ name: item.name, role: item.role, action: item.action, offsetMs: String(item.offsetMs) })
+  return {
+    id: response.id, show: payload.show, label: payload.label,
+    showFpp: payload.showPlaylist.fppInstanceId, showPlaylist: payload.showPlaylist.playlist,
+    restingFpp: payload.resting.fppInstanceId, restingPlaylist: payload.resting.playlist,
+    timelineShow: payload.resting.timelineAsset.show, timelineSequence: payload.resting.timelineAsset.sequence, timelineTarget: payload.resting.timelineAsset.target,
+    enterShow: payload.enterShow.cues.map(cue), enterResting: payload.enterResting.cues.map(cue), base: payload,
+  }
+}
+
+function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { error: string } {
+  const required: readonly [string, string][] = [
+    ['Definition id', draft.id], ['Show', draft.show], ['Label', draft.label], ['Show playlist FPP instance', draft.showFpp], ['Show playlist', draft.showPlaylist],
+    ['Resting FPP instance', draft.restingFpp], ['Resting playlist', draft.restingPlaylist], ['Resting timeline show', draft.timelineShow], ['Resting timeline sequence', draft.timelineSequence], ['Resting timeline target', draft.timelineTarget],
+  ]
+  const missing = required.find(([, value]) => value.trim() === '')
+  if (missing !== undefined) return { error: `${missing[0]} is required.` }
+  const buildCues = (items: CueDraft[], phase: string): { ok: true; cues: ConfigNightSessionWrite['enterShow']['cues'] } | { ok: false; error: string } => {
+    const result: ConfigNightSessionWrite['enterShow']['cues'] = []
+    for (const [index, item] of items.entries()) {
+      const offset = Number(item.offsetMs)
+      if (item.name.trim() === '' || item.action.trim() === '' || !Number.isInteger(offset)) return { ok: false, error: `${phase} transition step ${index + 1} needs a name, action, and whole-millisecond offset.` }
+      result.push({ name: item.name.trim(), role: item.role, action: item.action.trim(), offsetMs: offset })
+    }
+    return { ok: true, cues: result }
+  }
+  const enteringShow = buildCues(draft.enterShow, 'Enter-show')
+  if (!enteringShow.ok) return { error: enteringShow.error }
+  const enteringResting = buildCues(draft.enterResting, 'Enter-resting')
+  if (!enteringResting.ok) return { error: enteringResting.error }
+  const base = draft.base
+  return {
+    ...(base ?? {}), show: draft.show.trim(), label: draft.label.trim(),
+    showPlaylist: { ...(base?.showPlaylist ?? {}), fppInstanceId: draft.showFpp.trim(), playlist: draft.showPlaylist.trim() },
+    resting: {
+      ...(base?.resting ?? {}), fppInstanceId: draft.restingFpp.trim(), playlist: draft.restingPlaylist.trim(),
+      timelineAsset: { ...(base?.resting?.timelineAsset ?? {}), show: draft.timelineShow.trim(), sequence: draft.timelineSequence.trim(), target: draft.timelineTarget.trim() },
+    },
+    enterShow: { ...(base?.enterShow ?? {}), blackoutHoldMs: base?.enterShow?.blackoutHoldMs ?? 0, cues: enteringShow.cues },
+    enterResting: { ...(base?.enterResting ?? {}), blackoutAfterShowMs: base?.enterResting?.blackoutAfterShowMs ?? 0, cues: enteringResting.cues },
+  }
+}
+
+function NightSessionDefinitions() {
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const [objects, setObjects] = useState<ConfigObjectSummary[] | null>(null)
+  const [selected, setSelected] = useState('')
+  const [draft, setDraft] = useState<DefinitionDraft>(blankDefinition)
+  const [loaded, setLoaded] = useState<NightSessionConfigResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [revision, setRevision] = useState<NightSessionConfigResponse | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    listConfigObjects('night.session')
+      .then((response) => { if (!cancelled) setObjects(response.objects) })
+      .catch((err: unknown) => { if (!cancelled) setError(describeApiError(err)) })
+    return () => { cancelled = true }
+  }, [reloadKey])
+
+  const selectDefinition = (id: string) => {
+    setSelected(id); setError(null); setRevision(null)
+    if (id === '') { setLoaded(null); setDraft(blankDefinition()); return }
+    getNightSessionConfig(id)
+      .then((response) => { setLoaded(response); setDraft(draftFromDefinition(response)) })
+      .catch((err: unknown) => setError(describeApiError(err)))
+  }
+  const updateCues = (which: 'enterShow' | 'enterResting', index: number, patch: Partial<CueDraft>) => setDraft((current) => ({ ...current, [which]: current[which].map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
+  const save = () => {
+    const payload = definitionPayload(draft)
+    if ('error' in payload) { setError(payload.error); return }
+    setSaving(true); setError(null)
+    putNightSessionConfig(draft.id.trim(), payload)
+      .then((response) => { setLoaded(response); setDraft(draftFromDefinition(response)); setSelected(response.id); setReloadKey((n) => n + 1) })
+      .catch((err: unknown) => setError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+  const addCue = (which: 'enterShow' | 'enterResting') => setDraft((current) => ({ ...current, [which]: [...current[which], blankCue()] }))
+
+  return (
+    <Section id="sn-definitions" title="Night session definitions" aside={<span className="sm-small sm-muted">Definitions change the next armed night, never the one running now</span>}>
+      {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : (
+        <>
+          <FieldGrid>
+            <Field label="Definition">
+              {(field) => <Select {...field} value={selected} onChange={(event) => selectDefinition(event.target.value)}><option value="">New definition</option>{objects.map((object) => <option key={object.id} value={object.id}>Edit {object.id}</option>)}</Select>}
+            </Field>
+            <Field label="Definition id" help={loaded === null ? 'Used to create this new definition.' : 'Definition ids are stable; editing this field creates a separate definition.'}>
+              {(field) => <Input {...field} value={draft.id} disabled={loaded !== null} onChange={(event) => setDraft((current) => ({ ...current, id: event.target.value }))} />}
+            </Field>
+            <Field label="Show">{(field) => <Input {...field} value={draft.show} onChange={(event) => setDraft((current) => ({ ...current, show: event.target.value, timelineShow: current.timelineShow === '' ? event.target.value : current.timelineShow }))} />}</Field>
+            <Field label="Label">{(field) => <Input {...field} value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} />}</Field>
+            <Field label="Show playlist FPP instance">{(field) => <Input {...field} value={draft.showFpp} onChange={(event) => setDraft((current) => ({ ...current, showFpp: event.target.value }))} />}</Field>
+            <Field label="Show playlist">{(field) => <Input {...field} value={draft.showPlaylist} onChange={(event) => setDraft((current) => ({ ...current, showPlaylist: event.target.value }))} />}</Field>
+            <Field label="Resting FPP instance">{(field) => <Input {...field} value={draft.restingFpp} onChange={(event) => setDraft((current) => ({ ...current, restingFpp: event.target.value }))} />}</Field>
+            <Field label="Resting playlist">{(field) => <Input {...field} value={draft.restingPlaylist} onChange={(event) => setDraft((current) => ({ ...current, restingPlaylist: event.target.value }))} />}</Field>
+            <Field label="Resting timeline sequence">{(field) => <Input {...field} value={draft.timelineSequence} onChange={(event) => setDraft((current) => ({ ...current, timelineSequence: event.target.value }))} />}</Field>
+            <Field label="Resting timeline target">{(field) => <Input {...field} value={draft.timelineTarget} onChange={(event) => setDraft((current) => ({ ...current, timelineTarget: event.target.value }))} />}</Field>
+          </FieldGrid>
+          <TransitionStepEditor title="Enter-show transition steps" steps={draft.enterShow} onChange={(index, patch) => updateCues('enterShow', index, patch)} onAdd={() => addCue('enterShow')} onRemove={(index) => setDraft((current) => ({ ...current, enterShow: current.enterShow.filter((_, itemIndex) => itemIndex !== index) }))} />
+          <TransitionStepEditor title="Enter-resting transition steps" steps={draft.enterResting} onChange={(index, patch) => updateCues('enterResting', index, patch)} onAdd={() => addCue('enterResting')} onRemove={(index) => setDraft((current) => ({ ...current, enterResting: current.enterResting.filter((_, itemIndex) => itemIndex !== index) }))} />
+          <ButtonRow><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></ButtonRow>
+          {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
+          {revision !== null && <DefinitionStrip items={[{ term: 'Viewing revision', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }, { term: 'Show playlist', value: <span className="sm-data">{revision.payload.showPlaylist.playlist}</span> }]} />}
+        </>
+      )}
+      {error !== null && <RuledStrip absence="failed" label="Definition failed" fact={error} />}
+    </Section>
+  )
+}
+
+function TransitionStepEditor({ title, steps, onChange, onAdd, onRemove }: { title: string; steps: CueDraft[]; onChange: (index: number, patch: Partial<CueDraft>) => void; onAdd: () => void; onRemove: (index: number) => void }) {
+  return <section className="sm-subsection" aria-label={title}><h3 className="sm-subsection__title">{title}</h3>{steps.map((step, index) => <div className="sm-field-grid sm-stack-2" key={`${index}:${step.name}`}><Field label="Name">{(field) => <Input {...field} value={step.name} onChange={(event) => onChange(index, { name: event.target.value })} />}</Field><Field label="Role">{(field) => <Select {...field} value={step.role} onChange={(event) => onChange(index, { role: event.target.value as CueDraft['role'] })}>{['lighting', 'projection', 'audio', 'announcement', 'other'].map((role) => <option key={role} value={role}>{role}</option>)}</Select>}</Field><Field label="Action">{(field) => <Input {...field} value={step.action} onChange={(event) => onChange(index, { action: event.target.value })} />}</Field><Field label="Offset (ms)">{(field) => <Input {...field} type="number" step="1" value={step.offsetMs} onChange={(event) => onChange(index, { offsetMs: event.target.value })} />}</Field><Button variant="quiet" onClick={() => onRemove(index)}>Remove step</Button></div>)}<Button variant="quiet" onClick={onAdd}>Add transition step</Button></section>
 }

@@ -4,6 +4,7 @@ import { formatClock } from '../domain/time'
 import { Section } from './Blocks'
 import { RuledStrip } from './StateBlocks'
 import { StatusPair } from './Status'
+import { Button } from './Button'
 
 type Props = {
   /** Bound to whatever object this history belongs to, e.g. `() => getShowRevisions(id)`. */
@@ -24,6 +25,8 @@ type Props = {
    * screen into it without a matching mock.
    */
   mode?: 'compact' | 'list'
+  /** Optional full-payload reader owned by the editor; history itself only fetches metadata. */
+  onSelect?: (revision: ConfigRevisionMeta) => void
 }
 
 type LoadState = 'loading' | 'failed' | ConfigRevisionMeta[]
@@ -33,7 +36,7 @@ type LoadState = 'loading' | 'failed' | ConfigRevisionMeta[]
  * not the D-014 stale-write guard, which re-reads the object itself to
  * detect a moved revision; this reads the revision LIST.
  */
-export function RevisionHistory({ fetch, reloadKey, title = 'Revisions', id = 'st-rev', mode = 'compact' }: Props) {
+export function RevisionHistory({ fetch, reloadKey, title = 'Revisions', id = 'st-rev', mode = 'compact', onSelect }: Props) {
   const [state, setState] = useState<LoadState>('loading')
 
   useEffect(() => {
@@ -62,7 +65,7 @@ export function RevisionHistory({ fetch, reloadKey, title = 'Revisions', id = 's
     ) : mode === 'compact' ? (
       <CompactSummary revisions={state} />
     ) : (
-      <RevisionList revisions={state} />
+      <RevisionList revisions={state} {...(onSelect === undefined ? {} : { onSelect })} />
     )
 
   if (mode === 'compact') return body
@@ -86,7 +89,7 @@ function CompactSummary({ revisions }: { revisions: ConfigRevisionMeta[] }) {
   )
 }
 
-function RevisionList({ revisions }: { revisions: ConfigRevisionMeta[] }) {
+function RevisionList({ revisions, onSelect }: { revisions: ConfigRevisionMeta[]; onSelect?: (revision: ConfigRevisionMeta) => void }) {
   return (
     <div>
       {revisions.map((rev) => (
@@ -96,6 +99,7 @@ function RevisionList({ revisions }: { revisions: ConfigRevisionMeta[] }) {
             {formatClock(rev.createdAt) ?? 'unrecorded time'} by {rev.createdByPrincipalName ?? 'unknown principal'}
             {rev.note !== '' && `. ${rev.note}`}
           </p>
+          {onSelect !== undefined && <Button variant="quiet" onClick={() => onSelect(rev)}>View revision</Button>}
         </div>
       ))}
     </div>

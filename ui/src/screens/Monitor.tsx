@@ -16,7 +16,7 @@ import {
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { effectiveServerTimeIso } from '../domain/time'
-import { acknowledgeFPPInstanceUUIDChange, type FPPInstance, type Model } from '../api'
+import { acknowledgeFPPInstanceUUIDChange, deleteFPPPlaylistEntryObservation, type FPPInstance, type Model } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
 import {
@@ -312,15 +312,23 @@ function FleetTableRow({ row, selected, onSelect }: { row: FleetRow; selected: b
 function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: string | null }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const recoveryGate = evaluateScope(model.session, model.sessionFetchFailed, 'fpp:command')
   const inspector = fppInspector(instance, nowIso)
   const [acknowledging, setAcknowledging] = useState(false)
   const [ackError, setAckError] = useState<string | null>(null)
+  const [clearingObservation, setClearingObservation] = useState(false)
+  const [clearError, setClearError] = useState<string | null>(null)
   const acknowledge = () => {
     setAcknowledging(true)
     setAckError(null)
     acknowledgeFPPInstanceUUIDChange(instance.instanceId)
       .catch((err: unknown) => setAckError(describeApiError(err)))
       .finally(() => setAcknowledging(false))
+  }
+  const clearObservation = () => {
+    if (instance.instanceUuid === null) return
+    setClearingObservation(true); setClearError(null)
+    deleteFPPPlaylistEntryObservation(instance.instanceUuid).catch((err: unknown) => setClearError(describeApiError(err))).finally(() => setClearingObservation(false))
   }
   return (
     <div className="sm-inspector">
@@ -356,8 +364,12 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
             {acknowledging ? 'Acknowledging…' : 'Acknowledge replacement'}
           </Button>
         )}
+        <Button disabled={!recoveryGate.allowed || clearingObservation || instance.instanceUuid === null} title={!recoveryGate.allowed ? recoveryGate.reason : instance.instanceUuid === null ? 'FPP has not reported an instance UUID.' : 'Clears only this FPP UUID’s stored playlist-entry observation and sequence anchor.'} onClick={clearObservation}>
+          {clearingObservation ? 'Clearing observation…' : 'Clear playlist observation'}
+        </Button>
       </div>
       {ackError !== null && <RuledStrip absence="failed" label="Acknowledgement refused" fact={ackError} />}
+      {clearError !== null && <RuledStrip absence="failed" label="Observation reset refused" fact={clearError} />}
     </div>
   )
 }

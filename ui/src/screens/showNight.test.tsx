@@ -104,13 +104,14 @@ describe('Show Night', () => {
     expect(screen.queryByText(/Cycle \d of the night/)).not.toBeInTheDocument()
   })
 
-  it('renders the mock’s three h2 blocks in order, plus activation', () => {
+  it('keeps definition authoring after the mock’s lifecycle and evidence blocks', () => {
     renderScreen({ nightSession: session() })
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Lifecycle commands',
       'Run of Show',
       'Evidence',
       'Night session activation',
+      'Night session definitions',
     ])
   })
 
@@ -379,12 +380,9 @@ describe('Show Night', () => {
     expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting'])
   })
 
-  it('does not link "Edit definition" to the show config route, and marks it not wired', () => {
+  it('links Edit definition to the in-page definition editor', () => {
     renderScreen({ nightSession: session({ cycle: 1 }) })
-    expect(screen.queryByRole('link', { name: 'Edit definition' })).not.toBeInTheDocument()
-    const editButton = screen.getByRole('button', { name: 'Edit definition' })
-    expect(editButton).toBeDisabled()
-    expect(screen.getByText('Not wired')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Edit definition' })).toHaveAttribute('href', '#sn-definitions')
   })
 
   it('has no earlier cycles and no not-wired banner when the session is on cycle 1', () => {

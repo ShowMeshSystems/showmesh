@@ -5,13 +5,17 @@ import {
   clearRenderSurface,
   declareNode,
   deleteNodeDeclaration,
+  deployNodeCueCatalog,
   getShowSurface,
   getNodeAssetManifest,
+  getNodeCueCatalog,
   listShowSurfacesForNode,
   probeRenderTransport,
   restartRenderPipeline,
   runDiscovery,
   type Capability,
+  type CueCatalogDeployResult,
+  type CueCatalogResponse,
   type NodeAssetManifest,
   type RenderCommandResult,
   type ShowSurfaceConfigResponse,
@@ -200,6 +204,19 @@ function RenderSurfaceControls({ nodeId, surfaceId, gate }: { nodeId: string; su
       )}
     </div>
   )
+}
+
+/** The node's copy is a deployable projection; it is never fabricated from capability advertisements. */
+function CueCatalogControls({ nodeId, gate }: { nodeId: string; gate: ReturnType<typeof evaluateScope> }) {
+  const [catalog, setCatalog] = useState<CueCatalogResponse | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<CueCatalogDeployResult | null>(null)
+  const [deploying, setDeploying] = useState(false)
+  const reload = () => getNodeCueCatalog(nodeId).then(setCatalog).catch((err: unknown) => setError(describeApiError(err)))
+  useEffect(() => { reload() }, [nodeId])
+  const deploy = () => { setDeploying(true); setError(null); deployNodeCueCatalog(nodeId).then((response) => { setResult(response); reload() }).catch((err: unknown) => setError(describeApiError(err))).finally(() => setDeploying(false)) }
+  const label = result === null || result.outcome === '' ? 'Still resolving' : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)
+  return <div className="sm-stack-3"><h3 className="sm-subsection__title">Cue catalog</h3>{catalog === null ? <RuledStrip absence={error === null ? 'loading' : 'failed'} label={error === null ? 'Reading' : 'Read failed'} fact={error ?? 'Reading this node’s resolved cue catalog.'} /> : <><p className="sm-small sm-muted">{catalog.configured ? `${catalog.entries.length} entries · ${catalog.acknowledgedStatus.replace('catalog-', '').replace('-', ' ')}` : 'No active-show cue catalog is configured.'}</p><Button disabled={!gate.allowed || deploying || !catalog.configured} title={gate.allowed ? undefined : gate.reason} onClick={deploy}>{deploying ? 'Deploying…' : 'Deploy cue catalog'}</Button></>}{result !== null && <div className="sm-outcome"><StatusPair tone={result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' ? 'warn' : result.outcome === '' ? 'pending' : 'bad'} label={label} /><p className="sm-outcome__detail">{result.reason ?? `Catalog revision ${result.revision} was dispatched.`}</p></div>}</div>
 }
 
 export function NodeDetail() {
@@ -455,6 +472,7 @@ export function NodeDetail() {
             )}
           </p>
         )}
+        <CueCatalogControls nodeId={node.nodeId} gate={gate} />
       </Section>
 
       <Section

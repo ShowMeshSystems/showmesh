@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import { PROBLEM_TYPE } from '../api/problem'
-import type { FPPCommandResult, Model, Node } from '../api'
+import type { FPPCommandResult, Model, Node, ResolumeActionResult } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
 import { LiveControl } from './LiveControl'
@@ -14,6 +14,8 @@ const stubs = vi.hoisted(() => ({
   getShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   startFPPPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getResolumeComposition: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  blackoutResolume: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -24,6 +26,8 @@ vi.mock('../api', async () => {
     getShowCue: (...args: never[]) => stubs.getShowCue(...args),
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     startFPPPlaylist: (...args: never[]) => stubs.startFPPPlaylist(...args),
+    getResolumeComposition: (...args: never[]) => stubs.getResolumeComposition(...args),
+    blackoutResolume: (...args: never[]) => stubs.blackoutResolume(...args),
   }
 })
 
@@ -93,6 +97,8 @@ describe('Live Control', () => {
     stubs.getShowCue = () => new Promise(() => {})
     stubs.listAssets = () => new Promise(() => {})
     stubs.startFPPPlaylist = () => new Promise(() => {})
+    stubs.getResolumeComposition = () => new Promise(() => {})
+    stubs.blackoutResolume = () => new Promise(() => {})
   })
 
   const fppInstance = (playerState = 'stopped') =>
@@ -114,16 +120,30 @@ describe('Live Control', () => {
     bootstrapRequired: false,
   } as never
 
-  it('renders the mock’s six blocks, in order', () => {
+  it('keeps Resolume direct controls between output evidence and night lifecycle', () => {
     renderScreen({})
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Transport',
       'What each output is doing',
+      'Resolume',
       'Night lifecycle',
       'Macros',
       'Announcements',
       'Actions',
     ])
+  })
+
+  it('dispatches blackout and reports its evidence outcome', async () => {
+    stubs.getResolumeComposition = () => Promise.reject(new ApiError('not found', 404))
+    stubs.blackoutResolume = vi.fn(() => Promise.resolve({ outcome: 'confirmed', outcomeReason: 'Arena reported blackout.', replay: false, attributionDegraded: false } as ResolumeActionResult))
+    renderScreen({ session: {
+      serverTime: '2026-08-28T21:07:00Z', authenticated: true,
+      principal: { id: 'p', name: 'op', role: 'operator', disabled: false }, session: null,
+      credentialForm: 'session', scopes: ['resolume:action'], scopesState: 'current', bootstrapRequired: false,
+    } as never })
+    fireEvent.click(screen.getByRole('button', { name: 'Blackout' }))
+    expect(await screen.findByText('Confirmed')).toBeInTheDocument()
+    expect(stubs.blackoutResolume).toHaveBeenCalledTimes(1)
   })
 
   it('distinguishes player stop from the separately gated installation-wide emergency workflow', () => {
