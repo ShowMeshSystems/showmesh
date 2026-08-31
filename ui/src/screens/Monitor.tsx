@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, NavLink } from 'react-router-dom'
+import { Link, NavLink, useSearchParams } from 'react-router-dom'
 import {
   AttentionRow,
   Button,
@@ -16,13 +16,14 @@ import {
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { effectiveServerTimeIso } from '../domain/time'
-import type { Model } from '../api'
+import type { FPPInstance, Model } from '../api'
 import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
 import {
   activityRows,
   facetCounts,
   fleetRows,
   fleetSummary,
+  fppInspector,
   monitorConnection,
   nodeInspector,
   type FleetKind,
@@ -89,7 +90,8 @@ export function Monitor() {
   const model = useModelContext()
   const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
   const [kind, setKind] = useState<FleetKind>('all')
-  const [selected, setSelected] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [selected, setSelected] = useState<string | null>(() => searchParams.get('resource'))
 
   const counts = fleetCounts(model)
   const rows = fleetRows(model, nowIso)
@@ -98,6 +100,12 @@ export function Monitor() {
   const activity = activityRows(model.events, 5)
 
   const selectedNode = model.nodes.find((node) => `node:${node.nodeId}` === selected)
+  const selectedFpp = model.fpp.find((instance) => `fpp:${instance.instanceId}` === selected)
+  const select = (key: string) => {
+    const next = key === selected ? null : key
+    setSelected(next)
+    setSearchParams(next === null ? {} : { resource: next })
+  }
 
   return (
     <>
@@ -194,7 +202,7 @@ export function Monitor() {
                           key={row.key}
                           row={row}
                           selected={row.key === selected}
-                          onSelect={() => setSelected(row.key === selected ? null : row.key)}
+                          onSelect={() => select(row.key)}
                         />
                       ))}
                     </tbody>
@@ -252,15 +260,17 @@ export function Monitor() {
         </div>
 
         <aside>
-          {selectedNode === undefined ? (
+          {selectedNode !== undefined ? (
+            <Inspector nodeKey={selected ?? ''} node={selectedNode} nowIso={nowIso} />
+          ) : selectedFpp !== undefined ? (
+            <FppInspector instance={selectedFpp} nowIso={nowIso} />
+          ) : (
             <RuledStrip
               absence="empty"
               label="Nothing selected"
-              fact="Select a node for its full evidence."
-              detail="FPP and Resolume instances have their own screens; their names link there."
+              fact="Select a resource for its full evidence."
+              detail="FPP transport stays in Live Control. Resolume configuration has its own screen."
             />
-          ) : (
-            <Inspector nodeKey={selected ?? ''} node={selectedNode} nowIso={nowIso} />
           )}
         </aside>
       </Panes>
@@ -272,7 +282,7 @@ function FleetTableRow({ row, selected, onSelect }: { row: FleetRow; selected: b
   return (
     <tr aria-current={selected ? 'true' : undefined} className={selected ? 'sm-table__row--current' : undefined}>
       <td>
-        {row.kind === 'node' ? (
+        {row.kind === 'node' || row.kind === 'fpp' ? (
           <button type="button" className="sm-linkbutton" onClick={onSelect} aria-pressed={selected}>
             {row.name}
           </button>
@@ -295,6 +305,42 @@ function FleetTableRow({ row, selected, onSelect }: { row: FleetRow; selected: b
       </td>
       <td className="sm-data">{row.lastReport}</td>
     </tr>
+  )
+}
+
+function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: string | null }) {
+  const inspector = fppInspector(instance, nowIso)
+  return (
+    <div className="sm-inspector">
+      <p className="sm-eyebrow">FPP</p>
+      <h2 className="sm-inspector__title">{inspector.title}</h2>
+      <p className="sm-small sm-muted">{inspector.subtitle}</p>
+      {inspector.groups.map((group) => (
+        <section key={group.name} aria-labelledby={`inspect-fpp-${group.name}`} className="sm-inspector__group">
+          <h3 id={`inspect-fpp-${group.name}`} className="sm-subsection__title">
+            {group.name}
+          </h3>
+          {group.absent !== null ? (
+            <RuledStrip absence="unobserved" label="Never reported" fact="Nothing to observe" detail={group.absent} />
+          ) : (
+            group.rows.map((row) => (
+              <div key={row.key} className="sm-inspector__row">
+                <span className="sm-inspector__label sm-data">{row.label}</span>
+                <div>
+                  <p className="sm-inspector__value sm-data">{row.value}</p>
+                  {row.state !== null && <p className="sm-inspector__state"><StatusPair tone={row.tone} label={row.state} /></p>}
+                  {row.detail !== null && <p className="sm-inspector__detail">{row.detail}</p>}
+                </div>
+              </div>
+            ))
+          )}
+        </section>
+      ))}
+      <div className="sm-inspector__actions">
+        <Link to="/control">Open Live Control</Link>
+        <Link to="/monitor/signals">All signals</Link>
+      </div>
+    </div>
   )
 }
 

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigationType } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigationType, useParams } from 'react-router-dom'
 import { useModel } from '../api'
 import { ModelContext } from './ModelContext'
 import { Layout } from './Layout'
@@ -33,7 +33,6 @@ import { SettingsAppearance } from '../screens/SettingsAppearance'
 import { SettingsAudioDefaults } from '../screens/SettingsAudioDefaults'
 import { SettingsNodeRouting } from '../screens/SettingsNodeRouting'
 import { SettingsMode } from '../screens/SettingsMode'
-import { NotRebuilt } from '../screens/NotRebuilt'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
 import '../kit/styles/index.css'
@@ -50,13 +49,11 @@ function ScrollToTop() {
   return null
 }
 
-/**
- * Every route the rebuild has not reached. Each one names the mock it is
- * waiting on, so the queue is readable from the running app.
- */
-const QUEUE: readonly { path: string; title: string; mock: string }[] = [
-  { path: '/monitor/fleet/fpp/:instanceId', title: 'FPP instance', mock: 'Node.dc.html' },
-]
+/** Preserve old FPP detail links while the approved Monitor inspector owns FPP evidence. */
+function FppFleetRedirect() {
+  const { instanceId = '' } = useParams<{ instanceId: string }>()
+  return <Navigate replace to={`/monitor/fleet?resource=fpp:${encodeURIComponent(instanceId)}`} />
+}
 
 function Shell() {
   useTheme()
@@ -84,6 +81,7 @@ export default function App() {
             <Route path="monitor/capabilities" element={<MonitorCapabilities />} />
             <Route path="monitor/manifest" element={<MonitorManifest />} />
             <Route path="monitor/fleet/node/:nodeId" element={<NodeDetail />} />
+            <Route path="monitor/fleet/fpp/:instanceId" element={<FppFleetRedirect />} />
             <Route path="monitor/fleet/resolume/:instanceId" element={<ResolumeConfig />} />
             <Route path="shows" element={<Shows />} />
             <Route path="shows/new" element={<ShowDraft />} />
@@ -107,9 +105,6 @@ export default function App() {
             </Route>
             <Route path="assets" element={<Assets />} />
             <Route path="access" element={<Access />} />
-            {QUEUE.map((entry) => (
-              <Route key={entry.path} path={entry.path} element={<NotRebuilt title={entry.title} mock={entry.mock} />} />
-            ))}
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>

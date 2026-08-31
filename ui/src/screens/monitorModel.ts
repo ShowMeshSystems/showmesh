@@ -1,4 +1,4 @@
-import type { AuditEntry, Evidence, Event, Model, Node } from '../api'
+import type { AuditEntry, Evidence, Event, FPPInstance, Model, Node } from '../api'
 import type { Connection, Tone } from '../kit'
 import { countSignals, EVIDENCE_LABEL, EVIDENCE_TONE } from '../domain/evidence'
 import { ageMs, formatClock, formatDuration, parseIsoMs } from '../domain/time'
@@ -253,6 +253,64 @@ export function nodeInspector(node: Node, nowIso: string | null): { title: strin
         absent:
           node.audio.length === 0
             ? 'This node has never claimed an audio capability, so there is nothing to observe. Distinct from an audio path that is failing.'
+            : null,
+      },
+    ],
+  }
+}
+
+/**
+ * FPP remains a row in Fleet, not a separate Monitor destination. Its
+ * inspector deliberately reports coordinator-held evidence without deriving
+ * an FPP verdict or moving transport controls out of Live Control.
+ */
+export function fppInspector(instance: FPPInstance, nowIso: string | null): { title: string; subtitle: string; groups: { name: string; rows: InspectorRow[]; absent: string | null }[] } {
+  const pollAge = ageMs(instance.lastPollAt, nowIso)
+  const observations = instance.observations.slice(0, 12).map((entry, index) => ({
+    key: `fpp:${entry.signal}:${index}`,
+    label: entry.signal,
+    value: signalValue(entry),
+    state: entry.state === 'current' ? null : EVIDENCE_LABEL[entry.state],
+    detail: entry.state === 'current' ? null : entry.reason,
+    tone: EVIDENCE_TONE[entry.state],
+  }))
+
+  const identity: InspectorRow[] = [
+    { key: 'endpoint', label: 'Endpoint', value: instance.endpoint, state: null, detail: null, tone: 'pending' },
+    {
+      key: 'last-poll',
+      label: 'Last poll',
+      value: instance.lastPollAt === null ? 'never reported' : `${formatClock(instance.lastPollAt) ?? 'unrecorded'}${pollAge === null ? '' : ` · ${formatDuration(pollAge)} ago`}`,
+      state: instance.lastPollError === null ? null : 'Collection failed',
+      detail: instance.lastPollError,
+      tone: instance.lastPollError === null ? 'pending' : 'bad',
+    },
+    {
+      key: 'instance-uuid',
+      label: 'Instance UUID',
+      value: instance.instanceUuid ?? 'not observed',
+      state: instance.instanceUuidChange === null ? null : 'Bindings held',
+      detail:
+        instance.instanceUuidChange === null
+          ? instance.instanceUuid === null
+            ? 'The endpoint has not reported a SystemUUID yet.'
+            : null
+          : `Changed from ${instance.instanceUuidChange.previousUuid} at ${formatClock(instance.instanceUuidChange.changedAt) ?? 'an unrecorded time'}. Re-association is held for an explicit inventory decision.`,
+      tone: instance.instanceUuidChange === null ? (instance.instanceUuid === null ? 'unknown' : 'pending') : 'warn',
+    },
+  ]
+
+  return {
+    title: instance.instanceId,
+    subtitle: `FPP player · ${instance.health} as FPP reports`,
+    groups: [
+      { name: 'Instance', rows: identity, absent: null },
+      {
+        name: 'Reported observations',
+        rows: observations,
+        absent:
+          observations.length === 0
+            ? 'This endpoint has not reported an FPP observation. That is not the same as an FPP path that is failing.'
             : null,
       },
     ],

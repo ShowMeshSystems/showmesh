@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Event, FPPInstance, Model, Node } from '../api'
@@ -98,6 +98,25 @@ describe('Monitor · Fleet', () => {
     const rows = fleetRows({ ...initialModel(), fpp: [fpp('barn-player', 'healthy', true)] }, '2026-08-28T21:07:00Z')
     expect(rows[0]?.health).toBe('healthy')
     expect(rows[0]?.detail).toContain('bindings held')
+  })
+
+  it('keeps an FPP deep selection in the Fleet inspector and sends transport to Live Control', () => {
+    renderScreen({
+      fpp: [
+        {
+          ...fpp('barn-player', 'healthy', true),
+          instanceUuid: 'new-uuid',
+          observations: [observation('fpp.playlist.state')],
+        } as FPPInstance,
+      ],
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'barn-player' }))
+    const inspector = screen.getByRole('complementary')
+    expect(within(inspector).getByRole('heading', { name: 'barn-player', level: 2 })).toBeInTheDocument()
+    expect(within(inspector).getByText('FPP player · healthy as FPP reports')).toBeInTheDocument()
+    expect(within(inspector).getByText('Bindings held')).toBeInTheDocument()
+    expect(within(inspector).getByRole('link', { name: 'Open Live Control' })).toHaveAttribute('href', '/control')
   })
 
   it('says what the fleet contains without arithmetic that does not close', () => {
