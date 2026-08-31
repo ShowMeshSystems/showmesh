@@ -119,11 +119,15 @@ var FixedRules = Rules{
 // Program is ADR-048 decision 1's fallback program: everything one FPP
 // host needs to preserve a running show through a coordinator outage,
 // entirely pre-resolved and pre-authorized while the coordinator was
-// healthy. PackageID identifies one publish event (minted fresh per
-// compile); Revision is a pure content hash of everything below that
+// healthy. PackageID identifies package CONTENT identity, not a publish
+// event: [internal/coordinator/fallbackcompile.Compile] mints a fresh
+// uuid only when Revision changes, and preserves the prior PackageID
+// across a pure expiry refresh of an otherwise-unchanged Revision, so an
+// acknowledgement pins content identity rather than exact republished
+// bytes. Revision is a pure content hash of everything below that
 // determines what the plugin may actually do (see [RevisionInput]), two
-// compiles of unchanged inputs share a Revision even when their
-// PackageID, ExpiresAt, and CompiledAt differ.
+// compiles of unchanged inputs share both Revision and PackageID even
+// when their ExpiresAt and CompiledAt differ.
 type Program struct {
 	SchemaVersion int `json:"schemaVersion"`
 
@@ -184,19 +188,24 @@ func (p Program) CanonicalBytes() ([]byte, error) {
 // coordinator recompiled unchanged content, which is exactly what lets a
 // healthy coordinator's periodic reconciliation (ADR-048 decision 1) stay
 // a no-op against unchanged inputs instead of manufacturing a new
-// "changed" package every tick. Entries must be sorted by EntryKey, each
-// Entry's Targets sorted by NodeID, and every AssetHashes slice sorted,
-// by the caller before this type is built, pkg/cuecatalog.RevisionInput's
+// "changed" package every tick. SchemaVersion and Rules are covered too,
+// despite being fixed values today: both are ADR-048 decision 1 program
+// content, not publish metadata, so a future change to either must still
+// bump the revision. Entries must be sorted by EntryKey, each Entry's
+// Targets sorted by NodeID, and every AssetHashes slice sorted, by the
+// caller before this type is built, pkg/cuecatalog.RevisionInput's
 // identical determinism requirement, for the identical reason: JSON
 // Schema canonicalization sorts object member names but never reorders
 // an array.
 type RevisionInput struct {
+	SchemaVersion     int               `json:"schemaVersion"`
 	FPPInstanceUUID   string            `json:"fppInstanceUuid"`
 	Show              string            `json:"show"`
 	Generation        int64             `json:"generation"`
 	PlaylistRevisions map[string]int64  `json:"playlistRevisions"`
 	CatalogRevisions  map[string]string `json:"catalogRevisions"`
 	Entries           []EntryMapping    `json:"entries"`
+	Rules             Rules             `json:"rules"`
 }
 
 // ComputeRevision is the ONE exported function that computes a fallback

@@ -8,16 +8,16 @@ import (
 	"time"
 )
 
-// This file holds schemaV23's fallback_programs and
+// This file holds schemaV25's fallback_programs and
 // fallback_program_acknowledgements repository methods (ADR-048, Track J
-// Track J's J1). See migrations.go's schemaV23 doc comment for the split
+// Track J's J1). See migrations.go's schemaV25 doc comment for the split
 // between the two tables.
 
 // FallbackProgramRecord is one stored, published fallback program: the
 // coordinator's own record of the last package it compiled and signed
 // for one FPP host. ProgramJSON is the complete, marshaled
 // [fallbackprogram.SignedProgram], the exact bytes a re-fetch replays,
-// never re-serialized at read time (see schemaV23's own doc comment).
+// never re-serialized at read time (see schemaV25's own doc comment).
 // SignatureB64 duplicates the signature already embedded in ProgramJSON
 // as its own column so a caller can filter or display it without
 // decoding the whole payload; ProgramJSON remains the sole source of

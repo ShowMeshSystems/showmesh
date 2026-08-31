@@ -8,6 +8,7 @@ import (
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackcompile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/pkg/coordsig"
@@ -203,6 +204,70 @@ func TestServiceReconcileOnceIsANoOpAgainstUnchangedInputs(t *testing.T) {
 	}
 	if publishCount != 1 {
 		t.Fatalf("publish audit entries = %d, want exactly 1 (the second reconcile must be a no-op)", publishCount)
+	}
+}
+
+// TestServiceReconcileOnceRepublishesUnchangedRevisionPastRefreshWindow
+// proves the time arm: an unchanged Revision stays a no-op until
+// RefreshWindow, then republishes with ExpiresAt advanced and PackageID
+// preserved, since PackageID identifies content, not a publish event.
+func TestServiceReconcileOnceRepublishesUnchangedRevisionPastRefreshWindow(t *testing.T) {
+	st, now := newPublishableFixture(t)
+	audit := &recordingAuditWriter{}
+	svc := NewService(st, fakeSigner{}, audit, nil, time.Hour)
+	svc.now = func() time.Time { return now }
+
+	svc.reconcileOnce(context.Background())
+	first, err := st.GetFallbackProgram(context.Background(), testInstanceUUID)
+	if err != nil {
+		t.Fatalf("GetFallbackProgram: %v", err)
+	}
+
+	// Still outside RefreshWindow of first.ExpiresAt: unchanged Revision,
+	// must stay a no-op.
+	stillFresh := now.Add(fallbackcompile.ProgramTTL - RefreshWindow - time.Minute)
+	svc.now = func() time.Time { return stillFresh }
+	svc.reconcileOnce(context.Background())
+	stillNoOp, err := st.GetFallbackProgram(context.Background(), testInstanceUUID)
+	if err != nil {
+		t.Fatalf("GetFallbackProgram: %v", err)
+	}
+	if !stillNoOp.ExpiresAt.Equal(first.ExpiresAt) || stillNoOp.PackageID != first.PackageID {
+		t.Fatalf("a reconcile still outside RefreshWindow of ExpiresAt must stay a no-op: before %+v, after %+v", first, stillNoOp)
+	}
+
+	// Now inside RefreshWindow of first.ExpiresAt: unchanged Revision must
+	// still republish, with ExpiresAt advanced from THIS reconcile's own
+	// clock and Revision/PackageID both preserved.
+	pastWindow := now.Add(fallbackcompile.ProgramTTL - RefreshWindow + time.Minute)
+	svc.now = func() time.Time { return pastWindow }
+	svc.reconcileOnce(context.Background())
+	refreshed, err := st.GetFallbackProgram(context.Background(), testInstanceUUID)
+	if err != nil {
+		t.Fatalf("GetFallbackProgram: %v", err)
+	}
+	if refreshed.Revision != first.Revision {
+		t.Fatalf("a refresh republish of unchanged content must not change Revision: before %q, after %q", first.Revision, refreshed.Revision)
+	}
+	if refreshed.PackageID != first.PackageID {
+		t.Fatalf("a refresh republish of unchanged content must preserve PackageID: before %q, after %q", first.PackageID, refreshed.PackageID)
+	}
+	wantExpiresAt := pastWindow.Add(fallbackcompile.ProgramTTL)
+	if !refreshed.ExpiresAt.Equal(wantExpiresAt) {
+		t.Fatalf("a refresh republish must advance ExpiresAt from the reconcile's own clock: got %s, want %s", refreshed.ExpiresAt, wantExpiresAt)
+	}
+	if !refreshed.ExpiresAt.After(first.ExpiresAt) {
+		t.Fatalf("ExpiresAt must advance past the original publish's own: before %s, after %s", first.ExpiresAt, refreshed.ExpiresAt)
+	}
+
+	publishCount := 0
+	for _, e := range audit.entries {
+		if e.Action == auditActionPublish {
+			publishCount++
+		}
+	}
+	if publishCount != 2 {
+		t.Fatalf("publish audit entries = %d, want exactly 2 (the initial publish and the refresh republish; the still-fresh reconcile must not add one)", publishCount)
 	}
 }
 

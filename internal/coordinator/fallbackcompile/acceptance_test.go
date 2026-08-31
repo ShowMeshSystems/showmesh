@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/pkg/fallbackprogram"
 )
 
 // This file is TRACK-J-fpp-fallback.md J1's own acceptance gate: "unit
@@ -300,4 +301,91 @@ func TestStalePackageIsNotTreatedAsCurrent(t *testing.T) {
 	if stored.Revision == recompiled.Program.Program.Revision {
 		t.Fatalf("the stale stored package's revision must not equal the freshly recompiled one, or staleness becomes undetectable")
 	}
+}
+
+// revisionInputFromProgram rebuilds the RevisionInput Compile's own
+// ComputeRevision call should have been given, from Program's own
+// fields rather than from what ComputeRevision actually received.
+func revisionInputFromProgram(p fallbackprogram.Program) fallbackprogram.RevisionInput {
+	return fallbackprogram.RevisionInput{
+		SchemaVersion: p.SchemaVersion, FPPInstanceUUID: p.FPPInstanceUUID, Show: p.Show, Generation: p.Generation,
+		PlaylistRevisions: p.PlaylistRevisions, CatalogRevisions: p.CatalogRevisions, Entries: p.Entries, Rules: p.Rules,
+	}
+}
+
+// requireRevisionInputFieldCovered proves ONE field of RevisionInput is
+// hashed: it zeroes only that field, holding every other field at its
+// real value, so only the test whose own field was actually dropped fails.
+func requireRevisionInputFieldCovered(t *testing.T, program fallbackprogram.Program, field string, mutate func(*fallbackprogram.RevisionInput)) {
+	t.Helper()
+	in := revisionInputFromProgram(program)
+	mutate(&in)
+	zeroedHash, err := fallbackprogram.ComputeRevision(in)
+	if err != nil {
+		t.Fatalf("ComputeRevision with %s zeroed: %v", field, err)
+	}
+	if zeroedHash == program.Revision {
+		t.Fatalf("zeroing %s alone did not change the computed revision; %s must be part of Compile's own ComputeRevision input (compile.go)", field, field)
+	}
+}
+
+// These four cover fields an end-to-end fixture comparison cannot
+// isolate: varying Generation, Show, or FPPInstanceUUID also varies
+// CatalogRevisions, and Entries is derived from PlaylistRevisions and
+// CatalogRevisions, which are covered separately above.
+func TestRevisionHashCoversFPPInstanceUUID(t *testing.T) {
+	f := newBaseFixture(t)
+	result := f.compile(t)
+	f.requirePublished(t, result)
+	requireRevisionInputFieldCovered(t, result.Program.Program, "FPPInstanceUUID", func(in *fallbackprogram.RevisionInput) {
+		in.FPPInstanceUUID = ""
+	})
+}
+
+func TestRevisionHashCoversShow(t *testing.T) {
+	f := newBaseFixture(t)
+	result := f.compile(t)
+	f.requirePublished(t, result)
+	requireRevisionInputFieldCovered(t, result.Program.Program, "Show", func(in *fallbackprogram.RevisionInput) {
+		in.Show = ""
+	})
+}
+
+func TestRevisionHashCoversGeneration(t *testing.T) {
+	f := newBaseFixture(t)
+	result := f.compile(t)
+	f.requirePublished(t, result)
+	requireRevisionInputFieldCovered(t, result.Program.Program, "Generation", func(in *fallbackprogram.RevisionInput) {
+		in.Generation = 0
+	})
+}
+
+func TestRevisionHashCoversEntries(t *testing.T) {
+	f := newBaseFixture(t)
+	result := f.compile(t)
+	f.requirePublished(t, result)
+	requireRevisionInputFieldCovered(t, result.Program.Program, "Entries", func(in *fallbackprogram.RevisionInput) {
+		in.Entries = nil
+	})
+}
+
+// SchemaVersion and Rules are fixed values today, so no fixture change
+// can vary either one; only this direct RevisionInput-field check can
+// prove they are hashed.
+func TestRevisionHashCoversSchemaVersion(t *testing.T) {
+	f := newBaseFixture(t)
+	result := f.compile(t)
+	f.requirePublished(t, result)
+	requireRevisionInputFieldCovered(t, result.Program.Program, "SchemaVersion", func(in *fallbackprogram.RevisionInput) {
+		in.SchemaVersion = 0
+	})
+}
+
+func TestRevisionHashCoversRules(t *testing.T) {
+	f := newBaseFixture(t)
+	result := f.compile(t)
+	f.requirePublished(t, result)
+	requireRevisionInputFieldCovered(t, result.Program.Program, "Rules", func(in *fallbackprogram.RevisionInput) {
+		in.Rules = fallbackprogram.Rules{}
+	})
 }

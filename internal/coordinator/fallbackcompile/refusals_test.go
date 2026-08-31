@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/showmeshsystems/showmesh/internal/coordinator/assetsync"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 )
@@ -200,14 +201,16 @@ func TestCompileRefusesUnsupportedOutput(t *testing.T) {
 // "never a silently smaller program" rule for a case
 // OutcomeUnresolvableTarget also covers: a playlist has authored FPP
 // entries, but the coordinator has never received the stored FPP
-// playlist definition those entries need to derive entry keys from. A
-// buggy compiler could silently contribute zero entries from this
-// playlist instead; this test proves it refuses the whole compile
-// instead.
+// playlist definition those entries need to derive entry keys from.
+//
+// The fixture needs TWO playlists: with only one, a refusal and a
+// silently skipped playlist both land on OutcomeUnresolvableTarget, so
+// a single-playlist fixture cannot tell them apart.
 func TestCompileRefusesMissingPlaylistDefinition(t *testing.T) {
 	st := openTestStore(t)
 	now := testNow()
 	showID, nodeID := "halloween", "render-01"
+	secondPlaylistHash := strings.Repeat("2", 64)
 
 	putShow(t, st, showID, "Halloween")
 	declareNode(t, st, nodeID)
@@ -226,16 +229,34 @@ func TestCompileRefusesMissingPlaylistDefinition(t *testing.T) {
 			{ID: "entry-0", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
 		},
 	})
-	// Deliberately no putDefinition call: the playlist has an authored
-	// entry, but the coordinator has never stored a definition for it.
+	putDefinition(t, st, testInstanceUUID, testPlaylistHash, "thriller.fseq")
+	// "second" has an authored FPP entry too, but deliberately no
+	// putDefinition call for its own hash: the coordinator has never
+	// stored a definition for it.
+	putPlaylist(t, st, "second", config.ShowPlaylistPayload{
+		Show: showID, Name: "Second", Runner: config.ShowPlaylistRunnerFPP,
+		FPP: &config.ShowPlaylistFPPBinding{
+			InstanceUUID: testInstanceUUID, PlaylistName: "Second", PlaylistHash: secondPlaylistHash,
+		},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-0", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+		},
+	})
 	putActiveShow(t, st, showID)
+
+	active, err := assetsync.ResolveActiveShow(context.Background(), st)
+	if err != nil {
+		t.Fatalf("resolve active show: %v", err)
+	}
+	ackNodeCatalog(t, st, active, nodeID, now)
 
 	result, err := Compile(context.Background(), st, fakeSigner{}, testInstanceUUID, now)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
 	if result.Outcome != OutcomeUnresolvableTarget {
-		t.Fatalf("Compile outcome = %q, want %q; reason: %s", result.Outcome, OutcomeUnresolvableTarget, result.Reason)
+		t.Fatalf("Compile outcome = %q, want %q (the \"main\" playlist alone resolves fine; a program must not silently publish it while skipping \"second\", which has no stored definition); reason: %s",
+			result.Outcome, OutcomeUnresolvableTarget, result.Reason)
 	}
 	if result.Program != nil {
 		t.Fatalf("a refused compile must never carry a Program")
@@ -280,6 +301,65 @@ func TestCompileRefusesWhenNoEntryResolvesToAnyTarget(t *testing.T) {
 	}
 	if result.Outcome != OutcomeUnresolvableTarget {
 		t.Fatalf("Compile outcome = %q, want %q; reason: %s", result.Outcome, OutcomeUnresolvableTarget, result.Reason)
+	}
+	if result.Program != nil {
+		t.Fatalf("a refused compile must never carry a Program")
+	}
+}
+
+// TestCompileRefusesPartialUnresolvableEntry needs TWO entries: with
+// one, a refusal and a silently dropped entry both land on
+// OutcomeUnresolvableTarget via the all-empty guard, indistinguishably.
+func TestCompileRefusesPartialUnresolvableEntry(t *testing.T) {
+	st := openTestStore(t)
+	now := testNow()
+	showID, nodeID := "halloween", "render-01"
+
+	putShow(t, st, showID, "Halloween")
+	declareNode(t, st, nodeID)
+	putSurface(t, st, "garage", showID, nodeID)
+	// Deliberately no putAudioNode: render-01 has render capability only.
+	createAsset(t, st, showID, "thriller", strings.Repeat("a", 64), "thriller.fseq")
+	putCue(t, st, "thriller", showID, config.ShowCuePayload{
+		Name:    "Thriller",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "thriller"}},
+	})
+	putCue(t, st, "spooky-audio", showID, config.ShowCuePayload{
+		Name:    "Spooky Audio",
+		Outputs: config.ShowCueOutputs{Audio: &config.ShowCueAudioOutput{Asset: "spooky"}},
+	})
+	putPlaylist(t, st, "main", config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		FPP: &config.ShowPlaylistFPPBinding{
+			InstanceUUID: testInstanceUUID, PlaylistName: "Main", PlaylistHash: testPlaylistHash,
+		},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-0", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+			{ID: "entry-1", Cue: "spooky-audio", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 1}},
+		},
+	})
+	if _, err := st.PutFPPPlaylistDefinition(context.Background(), store.FPPPlaylistDefinitionRecord{
+		InstanceUUID: testInstanceUUID, PlaylistHash: testPlaylistHash, PlaylistName: "Main",
+		DefinitionJSON: `{"mainPlaylist":[{"type":"sequence","sequenceName":"thriller.fseq"},{"type":"media","mediaName":"spooky.mp3"}]}`,
+		CapturedAt:     now,
+	}); err != nil {
+		t.Fatalf("put fpp playlist definition: %v", err)
+	}
+	putActiveShow(t, st, showID)
+
+	active, err := assetsync.ResolveActiveShow(context.Background(), st)
+	if err != nil {
+		t.Fatalf("resolve active show: %v", err)
+	}
+	ackNodeCatalog(t, st, active, nodeID, now)
+
+	result, err := Compile(context.Background(), st, fakeSigner{}, testInstanceUUID, now)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if result.Outcome != OutcomeUnresolvableTarget {
+		t.Fatalf("Compile outcome = %q, want %q (a program with a resolvable entry-0 and an unresolvable entry-1 must refuse, not publish just entry-0); reason: %s",
+			result.Outcome, OutcomeUnresolvableTarget, result.Reason)
 	}
 	if result.Program != nil {
 		t.Fatalf("a refused compile must never carry a Program")

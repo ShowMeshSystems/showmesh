@@ -2,7 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 // TestV25AppliesAfterStoreStampedAtV24Only is the specific regression
@@ -17,45 +21,48 @@ import (
 // checks version 23 at all. Renumbering to 25, the first number above
 // the already-shipped maximum, is what makes this migration reachable
 // again; this test proves it, rather than only asserting it in a comment.
+//
+// The database is stamped at user_version 24 directly through a raw
+// connection, never via [Open]/[migrate]: calling Open first would
+// satisfy both assertions below through that open, before any rewind.
 func TestV25AppliesAfterStoreStampedAtV24Only(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
+	dbPath := filepath.Join(dir, dbFileName)
 
-	// Simulate exactly that prior binary: open normally (which stamps the
-	// CURRENT maximum, including v25), then force user_version back down
-	// to 24, as if only migrations through v24 had ever actually run.
-	st, err := Open(ctx, dir, nil)
+	raw, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("open raw sqlite file: %v", err)
 	}
-	if _, err := st.db.ExecContext(ctx, `PRAGMA user_version = 24`); err != nil {
+	if _, err := raw.ExecContext(ctx, `PRAGMA user_version = 24`); err != nil {
 		t.Fatalf("stamp user_version to 24: %v", err)
 	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw sqlite file: %v", err)
 	}
 
-	// Reopen with the current binary (v25 in the migrations slice): v25
+	// Open with the current binary (v25 in the migrations slice) against a
+	// database that never ran ANY migration through this package: v25
 	// must apply, not be silently skipped.
-	st2, err := Open(ctx, dir, nil)
+	st, err := Open(ctx, dir, nil)
 	if err != nil {
-		t.Fatalf("reopen a store stamped at v24 only: %v", err)
+		t.Fatalf("open a store stamped at v24 only, with no prior migration history: %v", err)
 	}
-	defer func() { _ = st2.Close() }()
+	defer func() { _ = st.Close() }()
 
 	var version int
-	if err := st2.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+	if err := st.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
 	if version != maxMigrationVersion() {
-		t.Fatalf("user_version after reopen = %d, want %d (maxMigrationVersion)", version, maxMigrationVersion())
+		t.Fatalf("user_version after open = %d, want %d (maxMigrationVersion)", version, maxMigrationVersion())
 	}
 
 	// The real proof, not just the stamp: fallback_programs must actually
 	// exist, since that is what v25 creates and a silently-skipped
 	// migration would leave missing with no error anywhere.
 	var tableName string
-	if err := st2.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name='fallback_programs'`).Scan(&tableName); err != nil {
-		t.Fatalf("fallback_programs table does not exist after reopening a store stamped at v24 only: %v", err)
+	if err := st.db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name='fallback_programs'`).Scan(&tableName); err != nil {
+		t.Fatalf("fallback_programs table does not exist after opening a store stamped at v24 only: %v", err)
 	}
 }

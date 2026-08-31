@@ -2550,7 +2550,7 @@ export interface paths {
          * One FPP host's current signed fallback program (ADR-048, Track J's J1)
          * @description Behind `fpp:fallback`: the installed FPP plugin fetching the program it must verify and install before it may take over on confirmed coordinator loss. Never recomputed on request - this route only ever returns what `internal/coordinator/fallbackreconcile`'s own background loop already compiled, signed, and stored, so two fetches against an unchanged coordinator state return byte-identical signed material.
          *
-         *     `published` is `false`, with `program` absent, exactly when this coordinator has never successfully compiled and published a program for this host - the honest-absence case, never a fabricated empty program that could be mistaken for a real grant.
+         *     `published` is `false`, with `program` and `signatureBase64` both absent, exactly when this coordinator has never successfully compiled and published a program for this host - the honest-absence case, never a fabricated empty program that could be mistaken for a real grant.
          */
         get: operations["getFallbackProgram"];
         put?: never;

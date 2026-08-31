@@ -344,7 +344,9 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 			}
 
 			if len(targets) == 0 {
-				continue // this Cue resolves to nothing on any declared node
+				return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
+					"entry key %q resolves cue %q to zero node targets: absent from every declared node's catalog, or no declared node's catalog resolves a render or audio output for it; publishing this program would silently drop an authored entry rather than refuse",
+					entryKey, authored.Cue), nil
 			}
 			sort.Slice(targets, func(i, j int) bool { return targets[i].NodeID < targets[j].NodeID })
 
@@ -362,16 +364,21 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 	sort.Slice(entries, func(i, j int) bool { return entries[i].EntryKey < entries[j].EntryKey })
 
 	revision, err := fallbackprogram.ComputeRevision(fallbackprogram.RevisionInput{
-		FPPInstanceUUID: fppInstanceUUID, Show: active.ShowID, Generation: active.Generation,
-		PlaylistRevisions: playlistRevisions, CatalogRevisions: catalogRevisions, Entries: entries,
+		SchemaVersion: fallbackprogram.SchemaVersion, FPPInstanceUUID: fppInstanceUUID, Show: active.ShowID, Generation: active.Generation,
+		PlaylistRevisions: playlistRevisions, CatalogRevisions: catalogRevisions, Entries: entries, Rules: fallbackprogram.FixedRules,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("fallbackcompile: compute revision: %w", err)
 	}
 
+	packageID, err := packageIDFor(ctx, st, fppInstanceUUID, revision)
+	if err != nil {
+		return Result{}, err
+	}
+
 	compiledAt := now
 	program := fallbackprogram.Program{
-		SchemaVersion: fallbackprogram.SchemaVersion, PackageID: uuid.NewString(), Revision: revision,
+		SchemaVersion: fallbackprogram.SchemaVersion, PackageID: packageID, Revision: revision,
 		ExpiresAt: compiledAt.Add(ProgramTTL), CompiledAt: compiledAt,
 		FPPInstanceUUID: fppInstanceUUID, Show: active.ShowID, Generation: active.Generation,
 		PlaylistRevisions: playlistRevisions, CatalogRevisions: catalogRevisions,
@@ -391,6 +398,24 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 		FPPInstanceUUID: fppInstanceUUID, Outcome: OutcomePublished,
 		Program: &fallbackprogram.SignedProgram{Program: program, Signature: sig},
 	}, nil
+}
+
+// packageIDFor preserves the prior PackageID when Revision is unchanged
+// (an acknowledgement pins content identity, not exact bytes), and mints
+// a fresh uuid only when Revision actually changes or nothing was
+// published before.
+func packageIDFor(ctx context.Context, st *store.Store, fppInstanceUUID, revision string) (string, error) {
+	existing, err := st.GetFallbackProgram(ctx, fppInstanceUUID)
+	if errors.Is(err, store.ErrFallbackProgramNotFound) {
+		return uuid.NewString(), nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("fallbackcompile: get existing fallback program for %q: %w", fppInstanceUUID, err)
+	}
+	if existing.Revision == revision {
+		return existing.PackageID, nil
+	}
+	return uuid.NewString(), nil
 }
 
 // --- internal helpers ---

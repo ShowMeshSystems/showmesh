@@ -57,9 +57,12 @@ var exemptWritePaths = map[string]string{
 		"argument is stronger here, not merely identical: ADR-048 makes a missing, stale, or unacknowledged " +
 		"package a readiness failure before showtime, so a hand-typed acknowledgement would let an operator " +
 		"silence that readiness check by asserting a host holds a package it does not, rather than merely " +
-		"forging a low-stakes observation. The READ half, GET /fallback-programs and GET " +
-		"/fallback-programs/{fppInstanceId}, is open to any operator (observation:read / fpp:fallback) and " +
-		"needs no CLI verb of its own in this PR; growing one is future work, not a gap this exemption hides.",
+		"forging a low-stakes observation. The READ half: GET /fallback-programs (the listing) is open to " +
+		"any operator (observation:read, readGuard, ADR-024's own open-by-default posture); GET " +
+		"/fallback-programs/{fppInstanceId} (the signed program bytes a host installs) requires fpp:fallback " +
+		"unconditionally (requireScope), the installed FPP plugin principal, not a general operator read " +
+		"scope. Neither needs a CLI verb of its own in this PR; growing one is future work, not a gap this " +
+		"exemption hides.",
 }
 
 // pathSegment is one "/"-delimited piece of a URL path as this test sees

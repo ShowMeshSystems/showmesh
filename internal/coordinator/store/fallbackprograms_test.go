@@ -47,7 +47,7 @@ func TestFallbackProgramRoundTrip(t *testing.T) {
 		t.Fatalf("GetFallbackProgram times = %+v, want %+v", got, rec)
 	}
 	// ProgramJSON and SignatureB64 must round trip byte-for-byte: this is
-	// the exact text a GET route later hands back verbatim (schemaV23's
+	// the exact text a GET route later hands back verbatim (schemaV25's
 	// own doc comment), so a store bug that mangled either column on the
 	// way through must be caught here, not discovered downstream in an
 	// API test.

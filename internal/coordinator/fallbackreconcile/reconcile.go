@@ -243,7 +243,7 @@ func (s *Service) writeAudit(ctx context.Context, entry identity.AuditEntry) {
 // marshalSignedProgram and encodeSignature are this package's one
 // serialization of a [fallbackprogram.SignedProgram] into
 // [store.FallbackProgramRecord]'s two string columns, the same bytes a
-// GET route later hands back verbatim (schemaV23's own doc comment: "the
+// GET route later hands back verbatim (schemaV25's own doc comment: "the
 // exact bytes a re-fetch replays, never re-serialized at read time").
 func marshalSignedProgram(signed *fallbackprogram.SignedProgram) (string, error) {
 	raw, err := json.Marshal(signed)

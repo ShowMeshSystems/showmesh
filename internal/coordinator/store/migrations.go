@@ -1418,7 +1418,7 @@ CREATE TABLE IF NOT EXISTS fallback_program_acknowledgements (
     revision             TEXT NOT NULL,
     verification_result  TEXT NOT NULL,
     installed_at         TEXT NOT NULL,
-    acknowledged_at       TEXT NOT NULL
+    acknowledged_at      TEXT NOT NULL
 );
 `
 
