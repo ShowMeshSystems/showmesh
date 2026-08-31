@@ -356,6 +356,37 @@ func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, 
 	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, 0, channelCount, width, height, stepTime, IdleOutputDiagnostic, nil, logger), nil
 }
 
+// NewIdleFrameWriter builds a frame writer for a real show surface whose
+// assignment carries no usable FSEQ content (internal/agent/renderops.go's
+// buildFSEQAssignment "ok" doc comment: an established assignment with no
+// content resolved yet). Its shape mirrors [NewDiagnosticFrameWriter]
+// exactly — [emptyFrameSource], [unknownTimeline], no assignment — for the
+// identical reason: there is no sequence to extract a frame from, so this
+// writer must be permanently idle, every tick, and say so honestly through
+// [Snapshot.Drawing]/IdleMode rather than a silent content-free pipeline
+// with no frame writer and therefore no draw-state evidence at all.
+//
+// Unlike the fixed-rgb, fixed-diagnostic-pattern standalone diagnostic
+// surface, a real show surface may be rgb or rgbw and carries its own
+// operator-configured idle output (black, hold, or diagnostic) — so this
+// constructor takes pixelFormat and idleOutput directly rather than a
+// pre-computed bytesPerPixel and a hardcoded pattern.
+func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pixelFormat string, frameRate int, idleOutput string, logger Logger) (*FrameWriter, error) {
+	bytesPerPixel, ok := gstBytesPerPixelForPixelFormat(pixelFormat)
+	if !ok {
+		return nil, fmt.Errorf("pipeline: surface %q: pixel format %q is not recognized", surfaceID, pixelFormat)
+	}
+	if width < 1 || height < 1 {
+		return nil, fmt.Errorf("pipeline: surface %q: idle geometry %dx%d is invalid", surfaceID, width, height)
+	}
+	if frameRate < 1 {
+		return nil, fmt.Errorf("pipeline: surface %q: idle frame rate %d is invalid", surfaceID, frameRate)
+	}
+	channelCount := width * height * bytesPerPixel
+	stepTime := time.Second / time.Duration(frameRate)
+	return newFrameWriter(sup, surfaceID, emptyFrameSource{}, unknownTimeline{}, 0, channelCount, width, height, stepTime, idleOutput, nil, logger), nil
+}
+
 // newFrameWriter allocates the writer both constructors above share: every
 // per-frame buffer, the diagnostic bar's geometry, and the alert pattern.
 // It validates nothing, since each exported constructor owns the checks its

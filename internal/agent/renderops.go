@@ -46,11 +46,12 @@ var surfaceIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 // render.surface.apply recognizes, matching this project's
 // reject-unknown-keys convention (internal/coordinator/config/showsurface.go):
 // an unrecognized key is refused rather than silently ignored, because an
-// ignored key reads as an applied one. Only surfaceId is consumed by this
-// seam's fixed test-pattern pipeline; the rest (mirroring
-// internal/coordinator/config.ShowSurfacePayload plus the two FSEQ fields
-// build contract ruling 4 names) are accepted, validated where practical,
-// and persisted verbatim for B3/B4 to read once they exist.
+// ignored key reads as an applied one. surfaceId, channelRange, geometry,
+// and frameRate are consumed by buildFSEQAssignment on every apply,
+// content or not (mirroring internal/coordinator/config.ShowSurfacePayload);
+// fseqFilename and fseqContentHash (build contract ruling 4) are consumed
+// only when both are present; show/name/node are persisted verbatim for a
+// caller that wants them back, never validated here.
 var renderApplyKnownKeys = map[string]bool{
 	"surfaceId": true, "show": true, "name": true, "node": true,
 	"channelRange": true, "geometry": true, "frameRate": true, "output": true,
@@ -416,31 +417,22 @@ func (o *renderOperations) releaseTimelineStepTimeIfOwner(surfaceID string) {
 	o.mu.Unlock()
 }
 
-// buildFSEQAssignment parses the FSEQ-specific fields of a render.surface.
-// apply params map (channelRange, geometry, frameRate, fseqFilename,
-// fseqContentHash, idleOutput). ok is false when fseqFilename is absent —
-// this is not an error: an assignment with no FSEQ information is still a
-// valid request for B2a's test-pattern pipeline, matching
-// renderApplyKnownKeys' existing "accepted and persisted, not yet all
-// consumed" posture.
+// buildFSEQAssignment parses a render.surface.apply params map. channelRange,
+// geometry, frameRate, and idleOutput are REQUIRED regardless of whether
+// this assignment carries real FSEQ content: every real caller (the
+// coordinator's establish-on-deploy path and a resolved render.surface.apply
+// dispatch alike) always sends a surface's complete geometry, and a
+// bare or partial-geometry request is refused outright here rather than
+// silently accepted — there is no longer a "not yet consumed" partial
+// acceptance for these fields (see buildAssignedSpec's own doc comment for
+// why: this seam now builds a real, idle-output-drawing pipeline for the
+// no-content case, which needs real geometry to size itself).
+//
+// ok is false when fseqFilename is absent — this is not an error: an
+// established assignment with no FSEQ content resolved yet is a valid
+// request, matching renderApplyKnownKeys' "accepted, validated where
+// practical" posture for the FSEQ-specific pair alone.
 func buildFSEQAssignment(action, surfaceID string, params map[string]any, logger pipeline.Logger) (a fseqAssignment, ok bool, err error) {
-	rawFilename, has := params["fseqFilename"]
-	if !has {
-		return fseqAssignment{}, false, nil
-	}
-	filename, isStr := rawFilename.(string)
-	if !isStr || filename == "" {
-		return fseqAssignment{}, false, fmt.Errorf("%s: params.fseqFilename must be a non-empty string, got %T", action, rawFilename)
-	}
-	if filepath.Base(filename) != filename {
-		return fseqAssignment{}, false, fmt.Errorf("%s: params.fseqFilename %q must be a bare filename, not a path", action, filename)
-	}
-
-	contentHash, verr := requireString(action, params, "fseqContentHash", "fseqContentHash")
-	if verr != nil {
-		return fseqAssignment{}, false, verr
-	}
-
 	channelRangeRaw, verr := requireObject(action, params, "channelRange", "channelRange")
 	if verr != nil {
 		return fseqAssignment{}, false, verr
@@ -494,17 +486,35 @@ func buildFSEQAssignment(action, surfaceID string, params map[string]any, logger
 		return fseqAssignment{}, false, verr
 	}
 
-	return fseqAssignment{
-		fseqFilename:    filename,
-		fseqContentHash: contentHash,
-		channelStart0:   startChannel1Based - 1,
-		channelCount:    channelCount,
-		width:           width,
-		height:          height,
-		pixelFormat:     pixelFormat,
-		frameRate:       frameRate,
-		idleOutput:      idleOutput,
-	}, true, nil
+	base := fseqAssignment{
+		channelStart0: startChannel1Based - 1,
+		channelCount:  channelCount,
+		width:         width,
+		height:        height,
+		pixelFormat:   pixelFormat,
+		frameRate:     frameRate,
+		idleOutput:    idleOutput,
+	}
+
+	rawFilename, has := params["fseqFilename"]
+	if !has {
+		return base, false, nil
+	}
+	filename, isStr := rawFilename.(string)
+	if !isStr || filename == "" {
+		return fseqAssignment{}, false, fmt.Errorf("%s: params.fseqFilename must be a non-empty string, got %T", action, rawFilename)
+	}
+	if filepath.Base(filename) != filename {
+		return fseqAssignment{}, false, fmt.Errorf("%s: params.fseqFilename %q must be a bare filename, not a path", action, filename)
+	}
+	contentHash, verr := requireString(action, params, "fseqContentHash", "fseqContentHash")
+	if verr != nil {
+		return fseqAssignment{}, false, verr
+	}
+
+	base.fseqFilename = filename
+	base.fseqContentHash = contentHash
+	return base, true, nil
 }
 
 // fseqAssignment is buildFSEQAssignment's parsed, still-0-based-converted
@@ -571,23 +581,36 @@ func requireInt(action string, params map[string]any, key, label string) (int, e
 }
 
 // buildAssignedSpec builds this surface's real (or, absent FSEQ
-// information, test-pattern) pipeline spec and, for the real case, its
-// [pipeline.FrameWriter] — not yet started. assetDir-relative resolution
-// of fseqFilename and content-hash verification both happen here: ADR-028
-// requires a node never resolve an asset by filename alone trusting the
-// coordinator's say-so blindly, so a content-hash mismatch refuses the
-// assignment rather than rendering unverified bytes.
+// information, idle) pipeline spec and, for the real case, its
+// [pipeline.FrameWriter] source — not yet started. assetDir-relative
+// resolution of fseqFilename and content-hash verification both happen
+// here: ADR-028 requires a node never resolve an asset by filename alone
+// trusting the coordinator's say-so blindly, so a content-hash mismatch
+// refuses the assignment rather than rendering unverified bytes.
+//
+// The no-FSEQ-content branch returns a *fseq.File of nil and a populated
+// fseqAssignment (geometry, pixel format, frame rate, idle output): the
+// caller (applySurface/ResumeAssignment's startFrameWriter call) reads a
+// nil file as "start this surface's [pipeline.NewIdleFrameWriter] instead
+// of a real one" and therefore must always call startFrameWriter now, real
+// content or not — this must draw and report its own configured idle
+// output honestly, never a content-free pipeline with no frame writer and
+// no output.mode/output.failure evidence at all.
 func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any, logger pipeline.Logger) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
 	a, ok, err := buildFSEQAssignment(action, surfaceID, params, logger)
 	if err != nil {
 		return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, err
 	}
 	if !ok {
-		spec, sinkOutcome, serr := applyOutputSink(pipeline.DefaultTestPatternSpec(surfaceID), surfaceID, params)
+		idleSpec, serr := pipeline.FSEQSourceSpec(surfaceID, a.width, a.height, a.pixelFormat, a.frameRate, pipeline.FdsrcSupportsIsLive(nil))
 		if serr != nil {
 			return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: %w", action, serr)
 		}
-		return spec, nil, fseqAssignment{}, sinkOutcome, nil
+		spec, sinkOutcome, serr := applyOutputSink(idleSpec, surfaceID, params)
+		if serr != nil {
+			return pipeline.Spec{}, nil, fseqAssignment{}, outputSinkOutcome{}, fmt.Errorf("%s: %w", action, serr)
+		}
+		return spec, nil, a, sinkOutcome, nil
 	}
 
 	path := filepath.Join(assetDir, a.fseqFilename)
@@ -647,10 +670,12 @@ func (o *renderOperations) ResumeAssignment(surfaceID string, params map[string]
 	o.recordDegradedTransportEvidence(surfaceID, sinkOutcome, time.Now().UTC())
 	if f != nil {
 		o.applyTimelineStepTime(surfaceID, f.StepTimeMS())
-		if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+	}
+	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+		if f != nil {
 			_ = f.Close()
-			return fmt.Errorf("%s: starting frame writer: %w", action, err)
 		}
+		return fmt.Errorf("%s: starting frame writer: %w", action, err)
 	}
 	return nil
 }
@@ -744,29 +769,42 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 	if f != nil {
 		// Finding 6: the shared Timeline's step time comes from whichever
 		// surface owns it — see applyTimelineStepTime's own doc comment for
-		// the shared-timeline decision.
+		// the shared-timeline decision. An idle writer (f == nil) owns no
+		// content and therefore no step time to contribute.
 		o.applyTimelineStepTime(surfaceID, f.StepTimeMS())
-		if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+	}
+	if err := o.startFrameWriter(surfaceID, f, a); err != nil {
+		if f != nil {
 			_ = f.Close()
-			return OperationResult{}, fmt.Errorf("%s: starting frame writer: %w", action, err)
 		}
+		return OperationResult{}, fmt.Errorf("%s: starting frame writer: %w", action, err)
 	}
 
 	return o.awaitAndReport(ctx, surfaceID, []pipeline.State{pipeline.StateRunning}, executedAt, baseline)
 }
 
-// startFrameWriter builds and launches surfaceID's [pipeline.FrameWriter]
-// against the already-open fseq file f, wiring it to o.sup and o.timeline.
-// The caller keeps ownership of f on error (closes it itself); on success
-// the writer's own lifetime (via [renderOperations.stopFrameWriter]) owns
-// closing it.
+// startFrameWriter builds and launches surfaceID's [pipeline.FrameWriter],
+// wiring it to o.sup and o.timeline. f is the already-open fseq file for a
+// real assignment, or nil for one with no FSEQ content resolved yet
+// (buildAssignedSpec's own doc comment) — this function ALWAYS starts a
+// writer either way, real or idle, so a surface with nothing to draw still
+// reports its own configured idle output honestly rather than going dark
+// with no draw-state evidence at all. The caller keeps ownership of a
+// non-nil f on error (closes it itself); on success the writer's own
+// lifetime (via [renderOperations.stopFrameWriter]) owns closing it.
 func (o *renderOperations) startFrameWriter(surfaceID string, f *fseq.File, a fseqAssignment) error {
 	idleOutput := o.idleOutputFor(surfaceID, a.idleOutput)
 	if idleOutput != a.idleOutput {
 		o.logger.Info("this node's locally configured diagnostic idle output is overriding the surface's assigned one",
 			"surface_id", surfaceID, "assigned_idle_output", a.idleOutput, "using", idleOutput)
 	}
-	fw, err := pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
+	var fw *pipeline.FrameWriter
+	var err error
+	if f != nil {
+		fw, err = pipeline.NewFrameWriter(o.sup, surfaceID, f, o.timeline, a.channelStart0, a.channelCount, a.width, a.height, idleOutput, o.showMode, o.logger)
+	} else {
+		fw, err = pipeline.NewIdleFrameWriter(o.sup, surfaceID, a.width, a.height, a.pixelFormat, a.frameRate, idleOutput, o.logger)
+	}
 	if err != nil {
 		return err
 	}

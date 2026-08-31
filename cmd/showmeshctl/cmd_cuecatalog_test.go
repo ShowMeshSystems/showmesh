@@ -104,6 +104,136 @@ func TestCmdCueCatalogGetReportsAcknowledgement(t *testing.T) {
 	})
 }
 
+// cueCatalogGetRenderResponseBody carries a render output with both
+// sequence and filename populated (a real, resolved asset) — the entry
+// shape TestCmdCueCatalogGetReportsRenderFilename decodes.
+const cueCatalogGetRenderResponseBody = `{
+	"serverTime":"2026-08-16T21:00:00Z",
+	"node":"node-1",
+	"configured":true,
+	"show":"halloween-2026",
+	"generation":3,
+	"revision":"rev-9",
+	"entries":[
+		{
+			"cueId":"wake-up",
+			"cueRevision":1,
+			"outputs":{
+				"render":{"sequence":"wake-up-mh-test","filename":"wake-up-mh-test.fseq","assetHashes":["sha256:abc"]}
+			}
+		}
+	],
+	"acknowledgedStatus":"catalog-unacknowledged"
+}`
+
+// TestCmdCueCatalogGetReportsRenderFilename proves render.filename
+// survives BOTH output modes, not merely the text line. Against the
+// struct before this fix, cueCatalogRenderOutputRecord declared no
+// Filename field at all, so json.Unmarshal silently dropped it on decode
+// and -output json — which re-marshals the CLI's own decoded struct,
+// never the raw response body — printed a render object with no filename
+// key at all, exactly where an operator reaching for the whole truth
+// would look for it.
+func TestCmdCueCatalogGetReportsRenderFilename(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, cueCatalogGetRenderResponseBody)
+	}))
+	defer ts.Close()
+
+	t.Run("table", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cmdCueCatalog([]string{"get", "--server", ts.URL, "node-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "wake-up-mh-test.fseq") {
+			t.Errorf("table stdout = %q, want it to contain the render filename", out)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cmdCueCatalog([]string{"get", "--server", ts.URL, "-output", "json", "node-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, `"filename"`) {
+			t.Errorf("-output json = %q, want it to contain key \"filename\"", out)
+		}
+		if !strings.Contains(out, "wake-up-mh-test.fseq") {
+			t.Errorf("-output json = %q, want it to contain the render filename value", out)
+		}
+	})
+}
+
+// cueCatalogGetEmptyRenderFilenameResponseBody carries a render output
+// whose sequence is populated but whose filename is empty — the coordinator
+// resolves this exact shape whenever no asset has been uploaded for that
+// sequence (assetsync.resolveAssetFor). This is the one state that made
+// the underlying defect hard to notice: the sequence alone reads as
+// healthy.
+const cueCatalogGetEmptyRenderFilenameResponseBody = `{
+	"serverTime":"2026-08-16T21:00:00Z",
+	"node":"node-1",
+	"configured":true,
+	"show":"halloween-2026",
+	"generation":3,
+	"revision":"rev-9",
+	"entries":[
+		{
+			"cueId":"wake-up",
+			"cueRevision":1,
+			"outputs":{
+				"render":{"sequence":"wake-up-mh-test","filename":"","assetHashes":[]}
+			}
+		}
+	],
+	"acknowledgedStatus":"catalog-unacknowledged"
+}`
+
+// TestCmdCueCatalogGetReportsEmptyRenderFilenameDistinctlyFromSequence
+// proves an empty filename alongside a populated sequence renders
+// distinctly: the table line shows a dash rather than a blank or an
+// omitted field, and -output json still carries the "filename" key (an
+// empty string, never dropped) rather than silently agreeing with the
+// healthy-looking sequence.
+func TestCmdCueCatalogGetReportsEmptyRenderFilenameDistinctlyFromSequence(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		_, _ = fmt.Fprint(w, cueCatalogGetEmptyRenderFilenameResponseBody)
+	}))
+	defer ts.Close()
+
+	t.Run("table", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cmdCueCatalog([]string{"get", "--server", ts.URL, "node-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "sequence=wake-up-mh-test filename=- assets=0") {
+			t.Errorf("table stdout = %q, want the render line to show filename=- distinctly from the populated sequence", out)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cmdCueCatalog([]string{"get", "--server", ts.URL, "-output", "json", "node-1"}, &stdout, &stderr, fixedClock(mustParse(t, "2026-08-16T21:00:00Z")))
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, `"filename": ""`) {
+			t.Errorf("-output json = %q, want key \"filename\" present with an empty value, never dropped", out)
+		}
+	})
+}
+
 // TestCueCatalogResponseMatchesOpenAPIAcknowledgement pins
 // cueCatalogResponse's three acknowledgement fields to
 // api/openapi.yaml's CueCatalogResponse schema so the two cannot drift

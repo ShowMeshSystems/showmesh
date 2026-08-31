@@ -421,13 +421,14 @@ func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surface
 // Omitting fseqFilename/fseqContentHash entirely (never sending them
 // empty) is what makes this a valid render.surface.apply request at all:
 // [renderApplyKnownKeys]' own doc comment (internal/agent/renderops.go)
-// already states "an assignment with no FSEQ information is still a valid
-// request," and buildFSEQAssignment's ok==false branch is exactly the
-// "declared, no content yet" state this half needed and did not have to
-// invent — the agent falls back to its own test-pattern pipeline with no
-// frame writer, which is what draws render.settings.idleOutput until the
-// first activateSurfaceRender (internal/agent/cueactivationrender.go)
-// swaps a real FSEQ onto it.
+// already states an assignment with no FSEQ content is a valid request,
+// and buildFSEQAssignment's ok==false branch is exactly the "declared, no
+// content yet" state this half needed and did not have to invent — the
+// agent starts a [pipeline.NewIdleFrameWriter] with no sequence, which
+// actually draws (and reports, through surface.output.mode/idleMode) this
+// surface's configured render.settings.idleOutput until the first
+// activateSurfaceRender (internal/agent/cueactivationrender.go) swaps a
+// real FSEQ onto it.
 type renderEstablishParamsPayload struct {
 	SurfaceID       string                         `json:"surfaceId"`
 	Show            string                         `json:"show"`
