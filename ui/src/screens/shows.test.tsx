@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api'
 import type { ConfigObjectSummary, Model, SessionResponse } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
@@ -10,6 +11,8 @@ const stubs = vi.hoisted(() => ({
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowActive: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putShowActive: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -20,6 +23,8 @@ vi.mock('../api', async () => {
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     getShow: (...args: never[]) => stubs.getShow(...args),
     putShow: (...args: never[]) => stubs.putShow(...args),
+    getShowActive: (...args: never[]) => stubs.getShowActive(...args),
+    putShowActive: (...args: never[]) => stubs.putShowActive(...args),
   }
 })
 
@@ -89,7 +94,10 @@ describe('Shows · list', () => {
   it('shows the loading absence before the list read completes', () => {
     stubs.listConfigObjects = () => new Promise(() => {})
     renderShows()
-    expect(screen.getByText('Reading')).toBeInTheDocument()
+    // Two "Reading" strips render while loading: the list itself and the
+    // show-activation control's own read of show.active (asserted separately below).
+    expect(screen.getAllByText('Reading').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Asking the coordinator for every configured show.')).toBeInTheDocument()
   })
 
   it('says none is configured, distinct from a read failure', async () => {
@@ -157,6 +165,104 @@ describe('Shows · list', () => {
     renderShows()
     const button = screen.getByRole('button', { name: 'New show' })
     expect(button).toBeDisabled()
+  })
+})
+
+function showActiveResponse(show: string, overrides: Record<string, unknown> = {}) {
+  return {
+    serverTime: '2026-08-30T21:00:00Z',
+    kind: 'show.active',
+    id: 'show.active',
+    revision: 3,
+    payload: { show },
+    updatedAt: '2026-08-30T18:00:00Z',
+    createdByPrincipalId: 'p',
+    createdByPrincipalName: 'erbartos',
+    source: 'api',
+    ...overrides,
+  }
+}
+
+function twoShows() {
+  return Promise.resolve({
+    serverTime: '2026-08-30T21:00:00Z',
+    kind: 'show',
+    objects: [summary(), summary({ id: 'hallowed-hollow-2026', label: 'Hallowed Hollow 2026' })],
+  })
+}
+
+describe('Shows · activation', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('reads the show.active pointer and lists shows to activate', async () => {
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    renderShows()
+    expect(await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Hallowed Hollow 2026 (hallowed-hollow-2026)' })).toBeInTheDocument()
+  })
+
+  it('reports none activated yet, distinct from a read failure, when show.active has never been set', async () => {
+    stubs.listConfigObjects = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show', objects: [] })
+    stubs.getShowActive = () => Promise.reject(new ApiError('not found', 404))
+    renderShows()
+    expect(await screen.findByText(/none - nothing has ever been activated/)).toBeInTheDocument()
+  })
+
+  it('activates a different show', async () => {
+    let calls: unknown[] = []
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    stubs.putShowActive = (...args: unknown[]) => {
+      calls = args
+      return Promise.resolve(showActiveResponse('hallowed-hollow-2026', { revision: 4 }))
+    }
+    renderShows({ session: signedIn(['config:write']) })
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    fireEvent.change(screen.getByLabelText('Activate a show'), { target: { value: 'hallowed-hollow-2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
+    await screen.findByText('hallowed-hollow-2026', { selector: '.sm-data' })
+    expect(calls[0]).toEqual({ show: 'hallowed-hollow-2026' })
+  })
+
+  it('refuses to activate over a stale pointer, matching D-014 for every other config write', async () => {
+    let reads = 0
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => {
+      reads += 1
+      return Promise.resolve(
+        reads === 1
+          ? showActiveResponse('winter-ridge-2026', { revision: 3 })
+          : showActiveResponse('someone-else', { revision: 5, createdByPrincipalName: 'other-operator' }),
+      )
+    }
+    const putSpy = vi.fn(() => Promise.resolve(showActiveResponse('hallowed-hollow-2026')))
+    stubs.putShowActive = putSpy
+    renderShows({ session: signedIn(['config:write']) })
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    fireEvent.change(screen.getByLabelText('Activate a show'), { target: { value: 'hallowed-hollow-2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
+    expect(await screen.findByText('Stale write')).toBeInTheDocument()
+    expect(screen.getByText(/saved by other-operator/)).toBeInTheDocument()
+    expect(putSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps Activate disabled with a stated reason when the principal lacks config:write', async () => {
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    renderShows({ session: signedIn(['node:read']) })
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    fireEvent.change(screen.getByLabelText('Activate a show'), { target: { value: 'hallowed-hollow-2026' } })
+    const button = screen.getByRole('button', { name: 'Activate' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title')
   })
 })
 
