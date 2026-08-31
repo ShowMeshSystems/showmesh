@@ -36,6 +36,14 @@ const (
 	// envTestFPPComposeOverride names an extra compose file to layer over
 	// the bench base file. See benchComposeFiles.
 	envTestFPPComposeOverride = "SHOWMESH_TEST_FPP_COMPOSE_OVERRIDE"
+
+	// envTestFPPComposeProject names the compose project (`docker compose
+	// -p`) scripts/test-integration-fpp.sh started fpp-master under. See
+	// runCompose and the destructive test's skip guard below: a caller that
+	// names the project is vouching that a non-default envTestFPPURL still
+	// points at this repo's own bench container, just isolated under that
+	// project rather than the plain compose default.
+	envTestFPPComposeProject = "SHOWMESH_TEST_FPP_COMPOSE_PROJECT"
 )
 
 func testFPPURL() string {
@@ -209,13 +217,16 @@ func TestIntegrationLivePollMatchesRealDaemon(t *testing.T) {
 // --- The destructive sub-test: actually stopping the container ----------
 //
 // This is the one test in this package that changes real infrastructure
-// state. It is gated to run ONLY against this repo's own bench container
-// (testFPPURL() must be the untouched default — an operator-overridden
-// SHOWMESH_TEST_FPP_URL is never assumed to be a container this suite is
-// allowed to stop) and only when bench/fpp-multisync/docker-compose.yml is
-// found relative to this package, which it always is inside this repo. It
-// restores the container to running before returning, via t.Cleanup, on
-// every exit path including a failing assertion.
+// state. It is gated to run ONLY against this repo's own bench container:
+// testFPPURL() must either be the untouched default, or a non-default URL
+// paired with envTestFPPComposeProject naming the compose project that URL
+// belongs to (scripts/test-integration-fpp.sh's per-run isolation), an
+// operator-set SHOWMESH_TEST_FPP_URL with no named project is never assumed
+// to be a container this suite is allowed to stop. It also requires
+// bench/fpp-multisync/docker-compose.yml to be found relative to this
+// package, which it always is inside this repo. It restores the container
+// to running before returning, via t.Cleanup, on every exit path including
+// a failing assertion.
 
 // benchComposeFiles returns the compose file paths to layer, relative to
 // this test file's own directory (internal/coordinator/collector/fpp), and
@@ -257,6 +268,9 @@ func absOrOriginal(t *testing.T, path string) string {
 func runCompose(t *testing.T, composeFiles []string, args ...string) error {
 	t.Helper()
 	full := []string{"compose"}
+	if project := os.Getenv(envTestFPPComposeProject); project != "" {
+		full = append(full, "-p", project)
+	}
 	for _, f := range composeFiles {
 		full = append(full, "-f", f)
 	}
@@ -312,8 +326,8 @@ func probeOnce(url string) bool {
 func TestIntegrationStoppingContainerProducesCollectionFailedNeverStaleOrFabricated(t *testing.T) {
 	url := requireLiveFPP(t)
 
-	if os.Getenv(envTestFPPURL) != "" {
-		t.Skipf("%s is set to a non-default URL; this test only stops/starts this repo's own bench container, never an operator-supplied endpoint — skipping", envTestFPPURL)
+	if os.Getenv(envTestFPPURL) != "" && os.Getenv(envTestFPPComposeProject) == "" {
+		t.Skipf("%s is set to a non-default URL with no %s naming the compose project it belongs to; this test only stops/starts this repo's own bench container, never an operator-supplied endpoint, skipping", envTestFPPURL, envTestFPPComposeProject)
 	}
 	composeFiles, ok := benchComposeFiles(t)
 	if !ok {
