@@ -9429,6 +9429,8 @@ export interface operations {
         parameters: {
             query?: {
                 macroId?: string;
+                /** @description Narrow the list to runs of this show id; an id matching no run is a legitimate, empty answer, never a refusal. */
+                show?: string;
                 state?: "running" | "finished";
                 limit?: number;
             };
