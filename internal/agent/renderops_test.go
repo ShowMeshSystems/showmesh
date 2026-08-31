@@ -39,8 +39,8 @@ func newRenderTestSupervisor(t *testing.T, clock *fakeClock) *pipeline.Superviso
 // minimalRenderApplyParams returns the render.surface.apply params map a
 // real caller always sends: complete geometry, no FSEQ content.
 // buildFSEQAssignment (renderops.go) now requires channelRange, geometry,
-// and frameRate unconditionally — a bare or partial-geometry request is
-// refused, not defaulted — because every real dispatcher (the
+// and frameRate unconditionally: a bare or partial-geometry request is
+// refused, not defaulted, because every real dispatcher (the
 // coordinator's catalog-deploy establishment and a resolved sequence apply
 // alike, internal/coordinator/api/renderdispatch.go) already sends a
 // surface's complete geometry whether or not a sequence is assigned yet.
@@ -165,9 +165,9 @@ func TestHandleMessageRenderSurfaceApplyMissingSurfaceID(t *testing.T) {
 // bare or partial-geometry render.surface.apply is refused visibly
 // (OutcomeFailed, a stated reason, nothing persisted, nothing started)
 // rather than silently accepted or defaulted. No real caller ever omits
-// channelRange, geometry, or frameRate — internal/coordinator/api/
+// channelRange, geometry, or frameRate: internal/coordinator/api/
 // renderdispatch.go resolves a surface's complete geometry before every
-// dispatch, content assigned or not — so buildFSEQAssignment now requires
+// dispatch, content assigned or not, so buildFSEQAssignment now requires
 // them unconditionally instead of deferring their validation to "once
 // B3/B4 exist," which they now do.
 func TestHandleMessageRenderSurfaceApplyRefusesIncompleteGeometry(t *testing.T) {

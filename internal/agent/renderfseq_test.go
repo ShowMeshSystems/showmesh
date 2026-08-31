@@ -512,7 +512,7 @@ func TestBuildFSEQAssignmentCarriesIdleOutput(t *testing.T) {
 
 // TestBuildFSEQAssignmentCarriesGeometryWhenNoSequence proves the "not ok"
 // (no fseqFilename) branch still returns a fully populated fseqAssignment
-// — channelRange/geometry/frameRate/idleOutput — rather than the zero
+// (channelRange/geometry/frameRate/idleOutput) rather than the zero
 // value: buildAssignedSpec's own idle fallback needs real geometry to size
 // [pipeline.NewIdleFrameWriter], and this is the one place that value is
 // built.
@@ -536,7 +536,7 @@ func TestBuildFSEQAssignmentCarriesGeometryWhenNoSequence(t *testing.T) {
 
 // TestApplySurfaceEstablishWithNoSequenceDrawsIdleHonestly proves
 // buildAssignedSpec's no-FSEQ-content fallback starts a REAL, continuously
-// reporting frame writer — [pipeline.NewIdleFrameWriter] — rather than a
+// reporting frame writer ([pipeline.NewIdleFrameWriter]) rather than a
 // content-free pipeline with no frame writer at all. Before this fix,
 // surface.output.mode had no evidence stream here whatsoever (Drawing ==
 // ""), which is indistinguishable from "the collector has not reported
