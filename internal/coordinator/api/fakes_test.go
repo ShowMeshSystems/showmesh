@@ -44,6 +44,29 @@ func (f *fakeNodeLister) setViews(views []inventory.NodeView) {
 	f.views = views
 }
 
+// fakeNodeAudioLister is [NodeAudioLister]'s test double, for a test that
+// needs to drive audioNodeEngineConfirmedUsableNow against controlled
+// node.audio.* observations without a real collector.
+type fakeNodeAudioLister struct {
+	mu     sync.Mutex
+	byNode map[string][]observation.Observation
+}
+
+func (f *fakeNodeAudioLister) NodeAudioObservations(nodeID string) []observation.Observation {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.byNode[nodeID]
+}
+
+func (f *fakeNodeAudioLister) setObservations(nodeID string, obs []observation.Observation) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.byNode == nil {
+		f.byNode = map[string][]observation.Observation{}
+	}
+	f.byNode[nodeID] = obs
+}
+
 type fakeFPPLister struct {
 	views []FPPInstanceView
 	err   error

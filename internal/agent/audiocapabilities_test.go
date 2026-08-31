@@ -31,6 +31,20 @@ func withAudioEngineAvailable(t *testing.T, ok bool, reason string) {
 	t.Cleanup(func() { audioEngineAvailable = orig })
 }
 
+// withAudioEngineHeldNode drives [audioEngineHeldNode] deterministically,
+// matching withAudioEngineAvailable's own injection convention. Every
+// test in this file that predates the busy-device fix calls this with
+// ok=false (the zero value's own default), so it need not call this
+// helper explicitly; TestWithHeldRouteTrusted and
+// TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe are what
+// actually exercise it.
+func withAudioEngineHeldNode(t *testing.T, node audioNodeConfig, ok bool) {
+	t.Helper()
+	orig := audioEngineHeldNode
+	audioEngineHeldNode = func() (audioNodeConfig, bool) { return node, ok }
+	t.Cleanup(func() { audioEngineHeldNode = orig })
+}
+
 // TestDetectAudioCapabilitiesNoEngineReturnsNil proves a node with no
 // usable audio engine (every render node, the development laptop)
 // advertises no audio capability at all.
@@ -63,6 +77,11 @@ func TestDetectAudioCapabilitiesEngineOnlyNoHardware(t *testing.T) {
 	set := detectAudioCapabilities(context.Background())
 	if _, ok := set.Lookup("audio.engine"); !ok {
 		t.Error("audio.engine not advertised, want present")
+	}
+	for _, id := range audioSessionCapabilityIDs {
+		if _, ok := set.Lookup(id); !ok {
+			t.Errorf("%s not advertised alongside audio.engine, want present", id)
+		}
 	}
 	if _, ok := set.Lookup("audio.output.local"); ok {
 		t.Error("audio.output.local advertised from a route that never reached PLAYING, want absent")
@@ -229,9 +248,42 @@ func TestFakeAudioEngineNeverAdvertisesPlaybackCapability(t *testing.T) {
 		t.Error(`"audio.engine" advertised while the only Engine is FakeEngine (Available() == false); this must never happen`)
 	}
 	for _, c := range set {
-		if strings.HasPrefix(string(c.ID), "audio.session") || strings.HasPrefix(string(c.ID), "audio.playback") {
+		if strings.HasPrefix(string(c.ID), "audio.session") || strings.HasPrefix(string(c.ID), "audio.playback") ||
+			strings.HasPrefix(string(c.ID), "audio.mix") || strings.HasPrefix(string(c.ID), "audio.transition") {
 			t.Errorf("capability set advertises %q while the only Engine is FakeEngine; this must never happen", c.ID)
 		}
+	}
+}
+
+// TestDetectAudioCapabilitiesShipsOnlySequentialTransition is a
+// packaging check, not a behavioral one: it proves detectAudioCapabilities
+// ships exactly what [audioSessionCapabilityIDs] lists, no more, so a
+// careless edit adding "audio.transition.gapless" or
+// "audio.transition.crossfade" to that literal list is caught here. It
+// canNOT, by itself, prove either ability is actually unimplemented -
+// that is [audio.Session.advanceLocked]'s own behavior, which this
+// package cannot observe. The real, behavioral proof of that claim -
+// the one that would actually break if a future change made
+// advanceLocked genuinely overlap two items - lives in
+// internal/agent/audio's own
+// TestAdvanceReleasesThePredecessorBeforeTheSuccessorEverLoadsRegardlessOfRequestedTransition,
+// which drives a real Manager/Session/FakeEngine through a natural
+// playlist advance and asserts the engine call order directly, the same
+// way [TestFakeAudioEngineNeverAdvertisesPlaybackCapability] drives a
+// real [audio.FakeEngine.Available] rather than a literal.
+func TestDetectAudioCapabilitiesShipsOnlySequentialTransition(t *testing.T) {
+	withAudioEngineAvailable(t, true, "")
+	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true})
+
+	set := detectAudioCapabilities(context.Background())
+	if _, ok := set.Lookup("audio.transition.gapless"); ok {
+		t.Error(`"audio.transition.gapless" advertised, want absent: no engine in this repository implements it`)
+	}
+	if _, ok := set.Lookup("audio.transition.crossfade"); ok {
+		t.Error(`"audio.transition.crossfade" advertised, want absent: no engine in this repository implements it`)
+	}
+	if _, ok := set.Lookup("audio.transition.sequential"); !ok {
+		t.Error(`"audio.transition.sequential" not advertised while the engine is available, want present`)
 	}
 }
 
@@ -250,13 +302,180 @@ func TestDetectAudioCapabilitiesEngineGatedOnAvailability(t *testing.T) {
 
 	withAudioEngineAvailable(t, false, "no audio.node binding delivered yet")
 	withAudioDiscoverer(t, discovery)
-	if _, ok := detectAudioCapabilities(context.Background()).Lookup("audio.engine"); ok {
+	unavailable := detectAudioCapabilities(context.Background())
+	if _, ok := unavailable.Lookup("audio.engine"); ok {
 		t.Error(`"audio.engine" advertised while audioEngineAvailable() == false, want absent`)
+	}
+	for _, id := range audioSessionCapabilityIDs {
+		if _, ok := unavailable.Lookup(id); ok {
+			t.Errorf("%s advertised while audioEngineAvailable() == false, want absent", id)
+		}
 	}
 
 	withAudioEngineAvailable(t, true, "")
 	withAudioDiscoverer(t, discovery)
-	if _, ok := detectAudioCapabilities(context.Background()).Lookup("audio.engine"); !ok {
+	available := detectAudioCapabilities(context.Background())
+	if _, ok := available.Lookup("audio.engine"); !ok {
 		t.Error(`"audio.engine" not advertised while audioEngineAvailable() == true, want present`)
+	}
+	for _, id := range audioSessionCapabilityIDs {
+		if _, ok := available.Lookup(id); !ok {
+			t.Errorf("%s not advertised while audioEngineAvailable() == true, want present", id)
+		}
+	}
+}
+
+// TestWithHeldRouteTrusted proves the busy-device fix directly: a route
+// matching the held node's ProgramRoute is reported Available regardless
+// of what this run's own probe found for it (including Busy, or absence
+// entirely), using the held node's own declared channel count rather
+// than a guess, while an UNRELATED route's genuine result passes through
+// untouched. With no held node, every route passes through unchanged.
+func TestWithHeldRouteTrusted(t *testing.T) {
+	held := audioNodeConfig{ProgramRoute: "hw:0,0", LTCRoute: "hw:0,0", ProgramChannels: []int{1, 2}, LTCChannel: 3}
+
+	t.Run("busy held route overridden, unrelated route untouched", func(t *testing.T) {
+		lastKnownGoodRoutes.reset()
+		t.Cleanup(lastKnownGoodRoutes.reset)
+		// The coordinator's own placement validation never accepts an
+		// ltcRoute binding unless that device was already among this
+		// node's advertised LTC-capable routes, so a genuine prior
+		// successful probe is guaranteed to exist by the time an
+		// LTC-configured binding can ever be delivered here, seeded
+		// directly, matching that real precondition.
+		lastKnownGoodRoutes.update([]audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+		}, true)
+
+		routes := []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+			{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: false, Reason: "could not open audio device"}},
+		}
+		out := withHeldRouteTrusted(routes, held, true)
+		var got0, got1 *audio.RouteEvidence
+		for i := range out {
+			switch out[i].Device {
+			case "hw:0,0":
+				got0 = &out[i]
+			case "hw:1,0":
+				got1 = &out[i]
+			}
+		}
+		if got0 == nil || !got0.Available || got0.Channels != 3 || got0.LTCChannels != 3 {
+			t.Fatalf("held route hw:0,0 = %+v, want Available=true Channels=3 (the held node's own declared floor) LTCChannels=3 (the last known-good probe)", got0)
+		}
+		if got1 == nil || got1.Available {
+			t.Fatalf("unrelated route hw:1,0 = %+v, want its own genuine (unavailable) result untouched", got1)
+		}
+	})
+
+	t.Run("held route absent from this pass is still added", func(t *testing.T) {
+		lastKnownGoodRoutes.reset()
+		t.Cleanup(lastKnownGoodRoutes.reset)
+
+		out := withHeldRouteTrusted(nil, held, true)
+		if len(out) != 1 || out[0].Device != "hw:0,0" || !out[0].Available {
+			t.Fatalf("out = %+v, want one trusted entry for the held route even though this pass enumerated nothing", out)
+		}
+	})
+
+	t.Run("no held node: routes pass through unchanged", func(t *testing.T) {
+		routes := []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true}},
+		}
+		out := withHeldRouteTrusted(routes, audioNodeConfig{}, false)
+		if len(out) != 1 || out[0].Available {
+			t.Fatalf("out = %+v, want the original busy result untouched when heldOK is false", out)
+		}
+	})
+
+	// Round 7 finding 1: a PROGRAM-ONLY held fixture (LTCRoute/LTCChannel
+	// both unset, the shape every earlier case here omitted) used to make
+	// trusted() special-case LTCChannels to 0 unconditionally, silently
+	// stripping audio.output.ltc from a device this node already proved
+	// LTC-capable the moment an operator bound it program-only, with no
+	// way back short of deleting and recreating the audio.node object.
+	t.Run("held program-only route still reports LTC from a prior good probe", func(t *testing.T) {
+		lastKnownGoodRoutes.reset()
+		t.Cleanup(lastKnownGoodRoutes.reset)
+		lastKnownGoodRoutes.update([]audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+		}, true)
+
+		programOnly := audioNodeConfig{ProgramRoute: "hw:0,0", ProgramChannels: []int{1, 2}}
+		routes := []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+		}
+		out := withHeldRouteTrusted(routes, programOnly, true)
+		if len(out) != 1 || !out[0].Available || out[0].LTCChannels != 3 {
+			t.Fatalf("held program-only route hw:0,0 = %+v, want Available=true LTCChannels=3 preserved from the last known-good probe even though this binding declares no LTC role", out[0])
+		}
+	})
+}
+
+// TestRouteEvidenceCacheEvictsOnlyOnACompleteEnumeration proves round 7's
+// busy-vs-absent distinction: a device missing from a complete pass
+// (successful, untruncated enumeration) is evicted, since gone hardware
+// must not keep asserting a capability, but a device merely missing from
+// an incomplete (truncated or failed) pass is left alone, since that
+// pass never had a chance to see it either way.
+func TestRouteEvidenceCacheEvictsOnlyOnACompleteEnumeration(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+	}, true)
+	if _, ok := lastKnownGoodRoutes.get("hw:0,0"); !ok {
+		t.Fatal("hw:0,0 not cached after seeding, want present")
+	}
+
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
+	}, false)
+	if _, ok := lastKnownGoodRoutes.get("hw:0,0"); !ok {
+		t.Fatal("hw:0,0 evicted by an incomplete (truncated/failed) enumeration pass that omitted it, want still cached")
+	}
+
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
+	}, true)
+	if _, ok := lastKnownGoodRoutes.get("hw:0,0"); ok {
+		t.Fatal("hw:0,0 still cached after a complete enumeration pass that no longer found it, want evicted")
+	}
+
+	// End to end: once evicted, a held program-only route with nothing
+	// left to trust reports LTCChannels honestly as 0, not fabricated.
+	programOnly := audioNodeConfig{ProgramRoute: "hw:0,0", ProgramChannels: []int{1, 2}}
+	routes := []audio.RouteEvidence{
+		{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+	}
+	out := withHeldRouteTrusted(routes, programOnly, true)
+	if len(out) != 1 || out[0].LTCChannels != 0 {
+		t.Fatalf("held route hw:0,0 after eviction = %+v, want LTCChannels=0 (no real evidence left to substitute)", out[0])
+	}
+}
+
+// TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe proves the
+// fix end to end through detectAudioCapabilities itself: a route this
+// run's own probe reports busy still ships as audio.output.local when it
+// matches the node an actively-available engine was built from.
+func TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe(t *testing.T) {
+	held := audioNodeConfig{ProgramRoute: "hw:0,0", ProgramChannels: []int{1, 2}}
+	withAudioEngineAvailable(t, true, "")
+	withAudioEngineHeldNode(t, held, true)
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+		},
+	})
+
+	set := detectAudioCapabilities(context.Background())
+	local, ok := set.Lookup("audio.output.local")
+	if !ok {
+		t.Fatal("audio.output.local not advertised for a busy route the engine actively holds, want present")
+	}
+	if local.Attributes["outputCount"] != 1 {
+		t.Errorf("outputCount = %v, want 1", local.Attributes["outputCount"])
 	}
 }
