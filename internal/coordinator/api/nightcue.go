@@ -97,6 +97,16 @@ func nightCueConfirmable(target config.ShowActionTarget) bool {
 	}
 }
 
+// nightCueAllowedAsFirstOutwardCue reports whether action may sit at
+// §7.1.1's own commit boundary: either its adapter can confirm the effect
+// ([nightCueConfirmable]), or the action itself declares idempotent true.
+// A declared-false or undeclared idempotency never substitutes for
+// confirmability - see [config.ShowActionPayload.Idempotent]'s own doc
+// comment for why absent must never read as true.
+func nightCueAllowedAsFirstOutwardCue(action config.ShowActionPayload) bool {
+	return nightCueConfirmable(action.Target) || (action.Idempotent != nil && *action.Idempotent)
+}
+
 // nightCueRetryableByIdentity reports whether recovery may safely re-issue
 // target under the SAME identity after an unresolved crash. fpp and audio
 // both qualify: dispatchFPPCommand's and executeAudioSessionDispatch's own

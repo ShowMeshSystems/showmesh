@@ -30,6 +30,14 @@ const READ_SCOPES = ['show:macro:run', 'config:write']
 const CONFIG_WRITE_SCOPE = 'config:write'
 
 const SAFETY_CLASSES: SafetyClass[] = ['none', 'blackout', 'stop', 'powerOff']
+
+// The tri-state UI form for idempotent: a plain boolean control
+// cannot represent "not declared" without picking one of true/false as its
+// own initial state, which is exactly the silent default the wire field
+// exists to forbid, so this is its own three-member union, mapped to
+// wire null/true/false only in buildPayload/formFromPayload, never
+// defaulted here either.
+type IdempotentChoice = 'unset' | 'true' | 'false'
 // The eight primitives Step 8 registered (docs/bench/fpp-command-vocabulary.md
 // section 4's registry, as also enumerated in FPPCommandOutcome's own
 // sibling controls) — this form does not invent a ninth, and the
@@ -69,6 +77,7 @@ interface FormState {
   label: string
   description: string
   safetyClass: SafetyClass | ''
+  idempotent: IdempotentChoice
   integration: ActionIntegration
   // fpp fields
   instanceId: string
@@ -103,6 +112,7 @@ function emptyForm(): FormState {
     label: '',
     description: '',
     safetyClass: '',
+    idempotent: 'unset',
     integration: 'fpp',
     instanceId: '',
     primitive: '',
@@ -149,6 +159,7 @@ function formFromPayload(payload: ConfigShowAction): FormState {
     label: payload.label,
     description: payload.description,
     safetyClass: payload.safetyClass,
+    idempotent: payload.idempotent === true ? 'true' : payload.idempotent === false ? 'false' : 'unset',
     integration: target.integration,
     instanceId: target.instanceId ?? '',
     primitive: target.primitive ?? '',
@@ -208,6 +219,9 @@ function buildPayload(
         'Safety class is required and is never defaulted; pick the one that matches what this action actually does.',
     }
   }
+  // null means "not declared" on the wire, never coerced from an absent
+  // choice to false (config.ShowActionPayload.Idempotent's own rule).
+  const idempotent: boolean | null = form.idempotent === 'unset' ? null : form.idempotent === 'true'
 
   if (form.integration === 'fpp') {
     if (form.instanceId.trim() === '') return { error: 'FPP instance id is required.' }
@@ -230,6 +244,7 @@ function buildPayload(
         label: form.label.trim(),
         description: form.description,
         safetyClass: form.safetyClass,
+        idempotent,
         target: {
           integration: 'fpp',
           instanceId: form.instanceId.trim(),
@@ -305,6 +320,7 @@ function buildPayload(
         label: form.label.trim(),
         description: form.description,
         safetyClass: form.safetyClass,
+        idempotent,
         target: {
           integration: 'resolume',
           action: form.resolumeAction,
@@ -352,6 +368,7 @@ function buildPayload(
       label: form.label.trim(),
       description: form.description,
       safetyClass: form.safetyClass,
+      idempotent,
       target: {
         integration: 'mqtt',
         broker: form.broker.trim(),
@@ -643,6 +660,22 @@ export function ShowActionDetail({ isNew = false }: ShowActionDetailProps) {
               </option>
             ))}
           </select>
+        </label>
+        <label className="form-field">
+          Idempotent (safe to repeat this action&rsquo;s effect)
+          <select
+            value={form.idempotent}
+            onChange={(e) => setForm({ ...form, idempotent: e.target.value as IdempotentChoice })}
+          >
+            <option value="unset">Not declared</option>
+            <option value="true">Idempotent: repeating it is safe</option>
+            <option value="false">Not idempotent: repeating it is not safe</option>
+          </select>
+          <p className="text-muted">
+            Not declared is never treated as idempotent. Only a declared-idempotent action may be
+            bound as a first outward-facing enterShow cue when its own adapter cannot confirm the
+            effect (e.g. an mqtt action with no expected response).
+          </p>
         </label>
 
         <label className="form-field">

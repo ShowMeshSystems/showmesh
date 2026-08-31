@@ -224,6 +224,7 @@ export function makeConfigShowAction(overrides: Partial<ConfigShowAction> = {}):
       primitive: 'startPlaylist',
       params: { playlist: 'Halloween Main', repeat: false, ifBusy: 'refuse' },
     },
+    idempotent: null,
     ...overrides,
   }
 }
