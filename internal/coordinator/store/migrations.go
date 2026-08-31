@@ -63,11 +63,28 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
-	// v21-v23 are reserved for other, not-yet-merged branches
-	// (docs/build/IDENTIFIER-REGISTER.md): this migration takes v24, the
-	// next free number, rather than the lowest one, to avoid colliding
-	// with them when they land.
+	// v21, v22, and v23 are dead numbers: each sits at or below this
+	// migration's own shipped maximum (24), so migrate()'s own
+	// current == target short-circuit means a migration entry at any of
+	// them can never run for a store some other binary already stamped
+	// at 24 or higher, exactly the failure the v25 entry below this one
+	// exists to fix. Whatever work docs/build/IDENTIFIER-REGISTER.md
+	// currently shows reserved at v21 or v22 will need a fresh number
+	// above the shipped maximum when it actually lands, for the
+	// identical reason v23 was renumbered to v25. This migration itself
+	// took the next free number (24) rather than the lowest one (21)
+	// specifically to avoid colliding with those two reservations when
+	// they land; that choice is left as it shipped rather than rewritten
+	// here, even though a number below the maximum is unusable regardless
+	// of which branch reaches it first.
 	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
+	// v25 is Track J's J1 (ADR-048, TRACK-J-fpp-fallback.md J1): the next
+	// free number after v24 landed on main first. Nothing at or below the
+	// shipped maximum is ever reserved for future work again after this
+	// point: a reservation below the stamp is a migration that can never
+	// run, which is the exact mechanism this renumbering and v21/v22's
+	// own now-dead reservations both demonstrate.
+	{version: 25, sql: schemaV25},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1345,6 +1362,64 @@ CREATE TABLE node_cue_catalog_ack (
 const schemaV18 = `
 ALTER TABLE fpp_playlist_entry_observations
     ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
+`
+
+// schemaV25 is Track J's J1 own migration (ADR-048,
+// TRACK-J-fpp-fallback.md J1): the coordinator-side store for a
+// compiled, signed fallback program and its per-FPP-host
+// acknowledgement, one row per fpp_instance_uuid in each table, on
+// node_cue_catalog_ack's exact upsert shape (schemaV17) next door:
+// "the fact this host was last given/acknowledged," never re-derived
+// from the coordinator's current state.
+//
+// fallback_programs holds the LAST PUBLISHED package for a host, not a
+// history: publication is a wholesale replacement (ADR-048 decision 1,
+// "It is a complete replacement, not a patch"), so a fresh compile
+// upserts this row rather than appending one. program_json is the
+// signed program's [fallbackprogram.SignedProgram], marshaled whole, so
+// a re-fetch (a plugin re-polling GET) always reproduces exactly the
+// bytes that were signed. A second, independent re-serialization at
+// read time could not be guaranteed byte-identical to the signed
+// payload the way replaying the stored bytes can.
+//
+// fallback_program_acknowledgements holds the host's own evidence of
+// what it verified and installed, reported separately from
+// fallback_programs for the identical reason node_cue_catalog_ack is
+// its own table rather than a column on the resolved catalog: an
+// acknowledgement is a report of a past fact from the other side, and
+// the comparison against "what the coordinator has published now"
+// happens at read time, never at write time.
+//
+// Both CREATE TABLE statements use IF NOT EXISTS, unlike every other
+// bare CREATE TABLE in this file: internal/coordinator/audioconfigpush's
+// own tests deliberately stamp PRAGMA user_version back to 18 or 19 and
+// reopen the store to force migrations 19 and 20 (Go functions that
+// rewrite payloads, safe to replay) to run again. schemaV25 is the first
+// SQL migration to sit above that rewind point, so replaying it against
+// a database that already has these tables must tolerate finding them
+// present rather than fail. The other 31 CREATE TABLEs in this file
+// have never sat above a rewind point a test actually exercises.
+const schemaV25 = `
+CREATE TABLE IF NOT EXISTS fallback_programs (
+    fpp_instance_uuid TEXT PRIMARY KEY,
+    package_id        TEXT NOT NULL,
+    revision          TEXT NOT NULL,
+    show_id           TEXT NOT NULL,
+    generation        INTEGER NOT NULL,
+    program_json      TEXT NOT NULL,
+    signature_b64     TEXT NOT NULL,
+    expires_at        TEXT NOT NULL,
+    compiled_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fallback_program_acknowledgements (
+    fpp_instance_uuid    TEXT PRIMARY KEY,
+    package_id           TEXT NOT NULL,
+    revision             TEXT NOT NULL,
+    verification_result  TEXT NOT NULL,
+    installed_at         TEXT NOT NULL,
+    acknowledged_at      TEXT NOT NULL
+);
 `
 
 // maxMigrationVersion is the maximum [migration.version] across
