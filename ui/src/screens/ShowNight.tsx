@@ -220,7 +220,7 @@ export function ShowNight() {
           <p className="sm-eyebrow">Show Night · <span className="sm-data">{session.id}</span></p>
           <h1 className="sm-page__title">Cycle {session.cycle} of the night</h1>
           <p className="sm-page__lede">
-            FPP owns the schedule, playlist selection and progression. ShowMesh advances the transitions between shows
+            FPP owns the schedule, playlist selection, and progression. ShowMesh advances the transitions between shows
             and records what it observed.
           </p>
         </div>
