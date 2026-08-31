@@ -335,6 +335,18 @@ func TestWithHeldRouteTrusted(t *testing.T) {
 	held := audioNodeConfig{ProgramRoute: "hw:0,0", LTCRoute: "hw:0,0", ProgramChannels: []int{1, 2}, LTCChannel: 3}
 
 	t.Run("busy held route overridden, unrelated route untouched", func(t *testing.T) {
+		lastKnownGoodRoutes.reset()
+		t.Cleanup(lastKnownGoodRoutes.reset)
+		// The coordinator's own placement validation never accepts an
+		// ltcRoute binding unless that device was already among this
+		// node's advertised LTC-capable routes, so a genuine prior
+		// successful probe is guaranteed to exist by the time an
+		// LTC-configured binding can ever be delivered here, seeded
+		// directly, matching that real precondition.
+		lastKnownGoodRoutes.update([]audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+		})
+
 		routes := []audio.RouteEvidence{
 			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
 			{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: false, Reason: "could not open audio device"}},
@@ -350,7 +362,7 @@ func TestWithHeldRouteTrusted(t *testing.T) {
 			}
 		}
 		if got0 == nil || !got0.Available || got0.Channels != 3 || got0.LTCChannels != 3 {
-			t.Fatalf("held route hw:0,0 = %+v, want Available=true Channels=3 LTCChannels=3 (from the held node's own declared channels, not a guess)", got0)
+			t.Fatalf("held route hw:0,0 = %+v, want Available=true Channels=3 (the held node's own declared floor) LTCChannels=3 (the last known-good probe)", got0)
 		}
 		if got1 == nil || got1.Available {
 			t.Fatalf("unrelated route hw:1,0 = %+v, want its own genuine (unavailable) result untouched", got1)
@@ -358,6 +370,9 @@ func TestWithHeldRouteTrusted(t *testing.T) {
 	})
 
 	t.Run("held route absent from this pass is still added", func(t *testing.T) {
+		lastKnownGoodRoutes.reset()
+		t.Cleanup(lastKnownGoodRoutes.reset)
+
 		out := withHeldRouteTrusted(nil, held, true)
 		if len(out) != 1 || out[0].Device != "hw:0,0" || !out[0].Available {
 			t.Fatalf("out = %+v, want one trusted entry for the held route even though this pass enumerated nothing", out)
@@ -371,6 +386,29 @@ func TestWithHeldRouteTrusted(t *testing.T) {
 		out := withHeldRouteTrusted(routes, audioNodeConfig{}, false)
 		if len(out) != 1 || out[0].Available {
 			t.Fatalf("out = %+v, want the original busy result untouched when heldOK is false", out)
+		}
+	})
+
+	// Round 7 finding 1: a PROGRAM-ONLY held fixture (LTCRoute/LTCChannel
+	// both unset, the shape every earlier case here omitted) used to make
+	// trusted() special-case LTCChannels to 0 unconditionally, silently
+	// stripping audio.output.ltc from a device this node already proved
+	// LTC-capable the moment an operator bound it program-only, with no
+	// way back short of deleting and recreating the audio.node object.
+	t.Run("held program-only route still reports LTC from a prior good probe", func(t *testing.T) {
+		lastKnownGoodRoutes.reset()
+		t.Cleanup(lastKnownGoodRoutes.reset)
+		lastKnownGoodRoutes.update([]audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+		})
+
+		programOnly := audioNodeConfig{ProgramRoute: "hw:0,0", ProgramChannels: []int{1, 2}}
+		routes := []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+		}
+		out := withHeldRouteTrusted(routes, programOnly, true)
+		if len(out) != 1 || !out[0].Available || out[0].LTCChannels != 3 {
+			t.Fatalf("held program-only route hw:0,0 = %+v, want Available=true LTCChannels=3 preserved from the last known-good probe even though this binding declares no LTC role", out[0])
 		}
 	})
 }

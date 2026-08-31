@@ -13792,12 +13792,22 @@ components:
         (`resting:background-audio-item-transition`). Both can report
         `not_verifiable` for an output that has never published a
         capability advertisement at all (an agent built before that
-        signal existed makes no claim either way), `unknown` for one this
-        coordinator cannot currently confirm is online, or is online but
-        has not finished reporting since it connected, `failed` for a
+        signal existed makes no claim either way), `failed` for a
         currently-confirmed output whose advertisement genuinely omits
         what is needed, and `healthy` once it declares everything
-        needed.
+        needed. Both also report `unknown` for an output this coordinator
+        cannot currently confirm is online. Only
+        `resting:background-audio-output-capabilities:<node>` additionally
+        reports `unknown`, rather than `failed`, for an output that is
+        online but has not finished reporting since it connected: it
+        cross-checks a second, independent signal
+        (`node.audio.engine.state`) before concluding a missing
+        capability is genuinely absent rather than merely not yet
+        advertised, since post-connect capability detection can take up
+        to two minutes. `resting:background-audio-item-transition` has no
+        second signal to cross-check against, so once an output is
+        online, a missing item-transition capability reads `failed`
+        immediately, even during that same post-connect window.
       required: [name, state, reason]
       properties:
         name:

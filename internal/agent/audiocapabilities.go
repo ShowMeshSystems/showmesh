@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 
 	"github.com/showmeshsystems/showmesh/internal/agent/audio"
 	"github.com/showmeshsystems/showmesh/pkg/capability"
@@ -43,6 +44,54 @@ var audioEngineAvailable = func() (bool, string) { return false, "no playback en
 // agent.go always wires both together, but still the honest zero value)
 // never claims to hold anything.
 var audioEngineHeldNode = func() (audioNodeConfig, bool) { return audioNodeConfig{}, false }
+
+// routeEvidenceCache remembers each device's most recent probe result
+// where the probe genuinely succeeded (Available true), across
+// detectAudioCapabilities calls. A single call's own [audio.Discover] pass
+// never remembers an earlier one, so once the engine binds a device and
+// holds it open, every later probe of that SAME device reports ALSA
+// EBUSY (Available false, Channels 0, LTCChannels 0 - see
+// [withHeldRouteTrusted]'s own doc comment), and without this cache that
+// busy reading is the only "evidence" left for a device this node already
+// proved LTC-capable before the bind. Never invalidated except by a newer
+// genuinely-successful probe of the same device: a device's physical
+// channel layout does not change because a later binding stops asking for
+// LTC on it (see round 7's program-only fix in withHeldRouteTrusted).
+type routeEvidenceCache struct {
+	mu     sync.Mutex
+	routes map[string]audio.RouteEvidence
+}
+
+func (c *routeEvidenceCache) update(routes []audio.RouteEvidence) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, r := range routes {
+		if r.Available {
+			c.routes[r.Device] = r
+		}
+	}
+}
+
+func (c *routeEvidenceCache) get(device string) (audio.RouteEvidence, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, ok := c.routes[device]
+	return r, ok
+}
+
+// reset returns the cache to empty. Test-only, matching
+// capabilityGate/detectedCapabilityCache's own convention: this is
+// process-lifetime state shared across every test in this package.
+func (c *routeEvidenceCache) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.routes = map[string]audio.RouteEvidence{}
+}
+
+// lastKnownGoodRoutes is this node's single route-evidence cache,
+// process-lifetime state shared across every detectAudioCapabilities
+// call, matching detectedCapabilityCache's own package-level convention.
+var lastKnownGoodRoutes = &routeEvidenceCache{routes: map[string]audio.RouteEvidence{}}
 
 // minLTCChannels mirrors [audio.MinLTCChannels]: the channel count both
 // detectAudioCapabilities and buildAudioPayload use to decide whether a
@@ -136,6 +185,7 @@ var audioSessionCapabilityIDs = []capability.ID{
 // audio.node configuration (ADR-039), not anything this agent reports.
 func detectAudioCapabilities(ctx context.Context) capability.Set {
 	d := audioDiscoverer(ctx, audioEnumerator)
+	lastKnownGoodRoutes.update(d.Routes)
 	if !d.EngineUsable {
 		return nil
 	}
@@ -183,25 +233,49 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 // working," dropping audio.output.local/audio.output.ltc for the one
 // route that is demonstrably fine, on every single successful bind.
 //
-// The substituted evidence is never guessed: Channels is the highest
+// The substituted evidence is never guessed and never special-cased on
+// the held binding's own shape: Channels is the HIGHER of this pass's own
+// probed value (when the probe found anything at all) and the highest
 // program/LTC channel index heldNode itself declares
 // (audioNodeChannelCount), the exact floor buildGstEngineConfig already
 // used to build the engine that is now actually running, real evidence
-// from the accepted binding, not a probe fabrication. LTCChannels is set
-// to that same count only for the device matching heldNode.LTCRoute,
-// and only when heldNode.LTCChannel is actually set (a program-only
-// binding claims no LTC capability here either).
+// from the accepted binding, not a probe fabrication, substituted only as
+// a floor under whatever this pass genuinely measured. LTCChannels keeps
+// whatever real value this pass's own entry already carried (a route can
+// be LTC-capable independent of whether the CURRENT binding assigns it an
+// LTC role - that is a hardware fact, not a configuration choice), and
+// when this pass has nothing for it (the busy case
+// [withHeldRouteTrusted] exists for: a route the engine already holds
+// open reports zero on every field, including a route this same device
+// proved LTC-capable before the bind), falls back to
+// [lastKnownGoodRoutes]'s own most recent genuinely-successful probe of
+// that device instead of silently reporting zero. This is what makes a
+// PROGRAM-ONLY binding (heldNode.LTCRoute/LTCChannel both unset) keep
+// reporting a real, previously-proven LTC-capable route as
+// audio.output.ltc: round 7 found the prior "only when this binding
+// itself declares an LTC role" gate here silently and permanently
+// stripped audio.output.ltc from a node's own Hello the moment an
+// operator bound it program-only, with no way back short of deleting and
+// recreating the audio.node object, since the coordinator's own
+// placement validation then refuses the very ltcRoute a later PUT tries
+// to add back (it is no longer among this node's advertised
+// LTC-capable routes).
 func withHeldRouteTrusted(routes []audio.RouteEvidence, heldNode audioNodeConfig, heldOK bool) []audio.RouteEvidence {
 	if !heldOK || (heldNode.ProgramRoute == "" && heldNode.LTCRoute == "") {
 		return routes
 	}
-	trusted := func(device string) audio.RouteEvidence {
-		ev := audio.RouteEvidence{
-			Device:      device,
-			ProbeResult: audio.ProbeResult{Available: true, Channels: audioNodeChannelCount(heldNode)},
+	declared := audioNodeChannelCount(heldNode)
+	trusted := func(r audio.RouteEvidence, device string) audio.RouteEvidence {
+		ev := r
+		ev.Device = device
+		ev.Available = true
+		if ev.Channels < declared {
+			ev.Channels = declared
 		}
-		if heldNode.LTCChannel > 0 && device == heldNode.LTCRoute {
-			ev.LTCChannels = audioNodeChannelCount(heldNode)
+		if ev.LTCChannels == 0 {
+			if good, ok := lastKnownGoodRoutes.get(device); ok {
+				ev.LTCChannels = good.LTCChannels
+			}
 		}
 		return ev
 	}
@@ -210,7 +284,7 @@ func withHeldRouteTrusted(routes []audio.RouteEvidence, heldNode audioNodeConfig
 	seen := map[string]bool{}
 	for _, r := range routes {
 		if r.Device == heldNode.ProgramRoute || (heldNode.LTCRoute != "" && r.Device == heldNode.LTCRoute) {
-			out = append(out, trusted(r.Device))
+			out = append(out, trusted(r, r.Device))
 			seen[r.Device] = true
 			continue
 		}
@@ -218,7 +292,7 @@ func withHeldRouteTrusted(routes []audio.RouteEvidence, heldNode audioNodeConfig
 	}
 	for _, dev := range []string{heldNode.ProgramRoute, heldNode.LTCRoute} {
 		if dev != "" && !seen[dev] {
-			out = append(out, trusted(dev))
+			out = append(out, trusted(audio.RouteEvidence{}, dev))
 			seen[dev] = true
 		}
 	}
