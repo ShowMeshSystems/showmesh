@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -168,7 +169,7 @@ func TestCueCatalogDeployUnconfirmedDoesNotRecordAnAcknowledgement(t *testing.T)
 // original command's own recorded result rather than dispatching a
 // second time.
 func TestCueCatalogDeployReplayReturnsExistingOutcomeWithoutRepublishing(t *testing.T) {
-	api, _, pub, token := newCueCatalogDeployFixture(t)
+	api, st, pub, token := newCueCatalogDeployFixture(t)
 	auth := map[string]string{"Authorization": "Bearer " + token}
 	mustPutShowActive(t, api, token, "halloween-2026")
 
@@ -202,9 +203,10 @@ func TestCueCatalogDeployReplayReturnsExistingOutcomeWithoutRepublishing(t *test
 
 	var result2 struct {
 		Command struct {
-			Replay   bool   `json:"replay"`
-			Outcome  string `json:"outcome"`
-			Revision string `json:"revision"`
+			CommandID string `json:"commandId"`
+			Replay    bool   `json:"replay"`
+			Outcome   string `json:"outcome"`
+			Revision  string `json:"revision"`
 		} `json:"command"`
 	}
 	if err := json.Unmarshal(body2, &result2); err != nil {
@@ -223,6 +225,21 @@ func TestCueCatalogDeployReplayReturnsExistingOutcomeWithoutRepublishing(t *test
 	// revision was actually deployed.
 	if result2.Command.Revision != revision {
 		t.Fatalf("replayed deploy revision = %q, want %q", result2.Command.Revision, revision)
+	}
+
+	// The stored value must carry store.CallerIntentCueCatalogDeploy's own
+	// tag, not the bare identity JSON: an untagged pair of writer and
+	// replay-reader round-trips fine on its own and would not catch a
+	// future writer silently dropping the tag, which is exactly the
+	// ambiguity this column's rename exists to close.
+	rec, err := st.GetCommand(context.Background(), result2.Command.CommandID)
+	if err != nil {
+		t.Fatalf("get command: %v", err)
+	}
+	wantCallerIntent := fmt.Sprintf(
+		`cuecatalog-deploy:{"node":"render-01","show":"halloween-2026","generation":1,"revision":%q}`, revision)
+	if rec.CallerIntent != wantCallerIntent {
+		t.Errorf("commands.caller_intent = %q, want %q", rec.CallerIntent, wantCallerIntent)
 	}
 }
 
@@ -244,7 +261,7 @@ func TestCueCatalogDeployReplayOfAnInFlightCommandReportsAbsentOutcome(t *testin
 		ID: "cmd-inflight", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
 		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
 		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
-		RequestedRevision:  `{"node":"render-01","show":"halloween-2026","generation":1}`,
+		CallerIntent:       `{"node":"render-01","show":"halloween-2026","generation":1}`,
 		ConfirmationMethod: "evidence", State: "pending",
 	})
 	if err != nil {

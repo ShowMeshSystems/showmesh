@@ -210,15 +210,15 @@ func TestFPPCommandSafetyClassForAction(t *testing.T) {
 	}
 }
 
-// TestFPPCommandDispatcherThreadsRequestedRevisionAndRunID proves
-// [FPPCommandInput.RequestedRevision] reaches the dispatched command's own
+// TestFPPCommandDispatcherThreadsCallerIntentAndRunID proves
+// [FPPCommandInput.CallerIntent] reaches the dispatched command's own
 // store row and [FPPCommandIssuer.RunID] reaches every audit entry that
 // row's dispatch writes (STEP-9-SPEC.md section 6.1's "commands.
 // requested_revision carries the pinned macro revision" and section 2.9's
 // "each step's commands row records the issuing principal and the run
 // id" - the run id, absent a dedicated column, travels in the audit
 // entry's own Params instead; see [FPPCommandIssuer.RunID]'s doc comment).
-func TestFPPCommandDispatcherThreadsRequestedRevisionAndRunID(t *testing.T) {
+func TestFPPCommandDispatcherThreadsCallerIntentAndRunID(t *testing.T) {
 	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Stopped")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
@@ -230,11 +230,11 @@ func TestFPPCommandDispatcherThreadsRequestedRevisionAndRunID(t *testing.T) {
 	})
 
 	outcome, problem, err := dispatcher.Dispatch(context.Background(), FPPCommandInput{
-		InstanceID:        "bench-fpp",
-		Action:            "stopPlaylist",
-		IdempotencyKey:    "key-revision-runid",
-		RequestedRevision: "macro:begin-set@3",
-		Issuer:            FPPCommandIssuer{PrincipalID: "op-1", PrincipalName: "operator-1", RunID: "run-abc123"},
+		InstanceID:     "bench-fpp",
+		Action:         "stopPlaylist",
+		IdempotencyKey: "key-revision-runid",
+		CallerIntent:   "macro:begin-set@3",
+		Issuer:         FPPCommandIssuer{PrincipalID: "op-1", PrincipalName: "operator-1", RunID: "run-abc123"},
 	})
 	if err != nil || problem != nil {
 		t.Fatalf("Dispatch: err=%v problem=%+v", err, problem)
@@ -244,8 +244,8 @@ func TestFPPCommandDispatcherThreadsRequestedRevisionAndRunID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCommand: %v", err)
 	}
-	if rec.RequestedRevision != "macro:begin-set@3" {
-		t.Errorf("commands.requested_revision = %q, want %q", rec.RequestedRevision, "macro:begin-set@3")
+	if rec.CallerIntent != "macro:begin-set@3" {
+		t.Errorf("commands.caller_intent = %q, want %q", rec.CallerIntent, "macro:begin-set@3")
 	}
 
 	entries, err := setup.svc.ListAudit(context.Background(), 0, 100)

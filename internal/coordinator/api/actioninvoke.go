@@ -256,7 +256,10 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmdID := uuid.NewString()
-	requestedRevisionStr := strconv.FormatInt(rev.Revision, 10)
+	// Tagged store.CallerIntentRevision so commands.caller_intent stays
+	// self-describing: this endpoint is the one writer this column's
+	// plain-revision family has.
+	callerIntent := store.FormatCallerIntent(store.CallerIntentRevision, strconv.FormatInt(rev.Revision, 10))
 	dispatchEntry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
@@ -267,7 +270,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 		ID: cmdID, IdempotencyKey: idempotencyKey, Action: auditAction,
 		TargetKind: actionInvokeTargetKind, TargetID: id,
 		IssuerPrincipalID: ac.result.Principal.ID, IssuerPrincipalName: ac.result.Principal.Name,
-		RequestedRevision:  requestedRevisionStr,
+		CallerIntent:       callerIntent,
 		ConfirmationMethod: string(command.ConfirmationEvidence), State: "pending",
 		OutcomeReason: actionInvokePendingOutcomeReason,
 	}
@@ -355,7 +358,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	dispatchCtx, dispatchCancel := context.WithTimeout(bgCtx, actionInvokeHTTPWriteDeadline-actionInvokeBookkeepingBudget)
 	defer dispatchCancel()
 
-	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, requestedRevisionStr, ac, h.clientAddr(r), auditExempt)
+	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, callerIntent, ac, h.clientAddr(r), auditExempt)
 
 	// evidenceState is currently unused on the wire directly but kept for
 	// parity with the outcome-audit entry below, which does carry it.
@@ -465,23 +468,24 @@ func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, r
 // dispatch seam its own integration already uses. auditExempt is
 // threaded into the FPP branch's own NeverWithholdOnAuditFailure so
 // dispatchFPPCommand's independent internal audit check agrees with this
-// handler's own outer decision. requestedRevision is threaded into the
-// FPP branch's own child command row, so the nested dispatch
-// carries the SAME pinned revision the outer invocation resolved against.
+// handler's own outer decision. callerIntent (store.CallerIntentRevision-
+// tagged) is threaded into the FPP branch's own child command row, so the
+// nested dispatch carries the SAME pinned revision the outer invocation
+// resolved against.
 //
 // outcomeState is empty for FPP and Resolume (the caller derives a
 // pkg/observation-vocabulary fallback from outcome itself, unchanged) and
 // carries DispatchMQTTAction's own mqttActionState* vocabulary for MQTT —
 // macro/vocab.go's identical split, applied here instead of re-deriving a
 // second classification for the same dispatch.
-func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID, requestedRevision string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
+func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID, callerIntent string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
 	target := payload.Target
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP:
 		in := FPPCommandInput{
 			InstanceID: target.InstanceID, Action: target.Primitive, Params: target.Params,
-			IdempotencyKey:    actionInvokeFPPChildIdempotencyKeyPrefix + cmdID,
-			RequestedRevision: requestedRevision,
+			IdempotencyKey: actionInvokeFPPChildIdempotencyKeyPrefix + cmdID,
+			CallerIntent:   callerIntent,
 			Issuer: FPPCommandIssuer{
 				PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 				Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
@@ -573,7 +577,13 @@ func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time,
 	var payload actionInvokeResultPayload
 	_ = json.Unmarshal([]byte(existing.ResultJSON), &payload)
 
-	revision, _ := strconv.ParseInt(existing.RequestedRevision, 10, 64)
+	// existing.TargetKind is already checked above, so this row's
+	// caller_intent can only be this endpoint's own revision family:
+	// [store.CallerIntentPayload] strips the store.CallerIntentRevision
+	// tag when present and falls back to the raw value for a row written
+	// before this tagging scheme existed.
+	revisionPayload, _ := store.CallerIntentPayload(store.CallerIntentRevision, existing.CallerIntent)
+	revision, _ := strconv.ParseInt(revisionPayload, 10, 64)
 
 	state := actionInvokeStatePending
 	var outcomePtr *string

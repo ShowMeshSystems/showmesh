@@ -1273,9 +1273,10 @@ and break when the other two land. Merge first, then rename with every
 writer visible.
 
 Note the column already carries an informal discriminator: values written by
-a macro run begin with `macro:` (`macroRequestedRevisionPrefix`,
-`store/macro_runs.go`). Three shapes now share the column, so v13 should
-formalize that convention rather than leave a fourth reader guessing.
+a macro run begin with `macro:` (`store/macro_runs.go`; formalized as
+`store.CallerIntentMacroRun` when v26 landed). Three shapes now share the
+column, so v13 should formalize that convention rather than leave a fourth
+reader guessing.
 
 **v12 is reserved defensively and may well come back.** SM-100's lifecycle
 state and SM-102's durable dispatch and outcome attribution may fit in the
