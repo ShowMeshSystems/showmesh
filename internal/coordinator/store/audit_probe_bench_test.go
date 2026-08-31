@@ -2,7 +2,8 @@ package store
 
 import (
 	"context"
-	"os"
+	"database/sql"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,17 +16,23 @@ import (
 // internal/coordinator/api) fails at BeginTx, earlier than the INSERT, so
 // it cannot tell a real write-probe apart from a degenerate one (a PRAGMA
 // check, a scratch table, a no-op transaction) that would pass every
-// other test in this PR while no longer detecting a full disk. A
-// read-only database FILE is the one fixture that reaches all the way
-// into appendAuditEntry's own real INSERT before failing, on this
-// platform: chmod-ing the *directory* read-only fails open() itself (WAL
-// setup needs to create/check a -wal file), too early to prove anything
-// about the write path; chmod-ing only the .db file lets open() and
-// BeginTx both succeed, and the failure lands exactly on the INSERT,
-// with a real SQLite "attempt to write a readonly database" error. If
-// that stops being true on some other platform or SQLite build, the
-// right response is to say so here, not to force this test green some
-// other way.
+// other test in this PR while no longer detecting a full disk.
+//
+// Opens a SECOND connection to the same already-migrated database file
+// with SQLite's own mode=ro URI parameter, rather than chmod-ing the
+// file: CI runs this suite as root inside a container, where chmod's
+// 0444 is enforced against every OTHER uid and is a no-op against the
+// one actually running the test, so a chmod-based version of this test
+// passed locally and passed vacuously in CI, proving nothing there. This
+// version does not depend on OS permission bits or uid at all - mode=ro
+// is a connection-level restriction SQLite itself enforces
+// (SQLITE_OPEN_READONLY), so root refusing to be stopped by chmod is not
+// a way around it. The failure still lands exactly on the real INSERT
+// (confirmed locally: "attempt to write a readonly database"), so a
+// degenerate probe still fails this test the same way a chmod-based one
+// would have on a non-root platform. If mode=ro ever stops producing
+// that failure on some platform or SQLite build, the right response is
+// to say so here, not to force this test green some other way.
 func TestProbeAuditWriteFailsAgainstARealReadOnlyDatabaseFile(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -38,24 +45,32 @@ func TestProbeAuditWriteFailsAgainstARealReadOnlyDatabaseFile(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(dir, dbFileName)
-	if err := os.Chmod(dbPath, 0o444); err != nil {
-		t.Fatalf("chmod %s read-only: %v", dbPath, err)
-	}
-	// Directory permissions are left alone (t.TempDir's own cleanup needs
-	// to remove dbPath afterward, which only requires write access on the
-	// directory, never on the file itself, on this platform).
-
-	st2, err := open(ctx, dir, nil, time.Now)
+	roDSN := "file:" + dbPath + "?" + url.Values{
+		"mode":          {"ro"},
+		"_journal_mode": {"WAL"},
+		"_foreign_keys": {"on"},
+		"_busy_timeout": {"5000"},
+	}.Encode()
+	roDB, err := sql.Open("sqlite", roDSN)
 	if err != nil {
-		t.Fatalf("reopen against a read-only .db file failed at open(), before ProbeAuditWrite ever ran: %v "+
+		t.Fatalf("sql.Open mode=ro: %v", err)
+	}
+	t.Cleanup(func() { _ = roDB.Close() })
+	roDB.SetMaxOpenConns(1)
+	if err := roDB.PingContext(ctx); err != nil {
+		t.Fatalf("ping mode=ro connection failed, before ProbeAuditWrite ever ran: %v "+
 			"(this is not the failure this test means to exercise; if this is now expected on this platform, "+
 			"say so rather than working around it)", err)
 	}
-	t.Cleanup(func() { _ = st2.Close() })
 
-	err = st2.ProbeAuditWrite(ctx)
+	// A bare literal, not open()/Open(): the only thing this test needs
+	// from Store is db and now, and going through open() would run
+	// migrate(), which itself may need to write.
+	roStore := &Store{db: roDB, now: time.Now}
+
+	err = roStore.ProbeAuditWrite(ctx)
 	if err == nil {
-		t.Fatal("ProbeAuditWrite against a read-only database file = nil error, want a real write failure; " +
+		t.Fatal("ProbeAuditWrite against a mode=ro connection = nil error, want a real write failure; " +
 			"a degenerate probe (a PRAGMA check, a scratch table, a no-op transaction) could pass every other " +
 			"test in this file while returning nil here")
 	}
