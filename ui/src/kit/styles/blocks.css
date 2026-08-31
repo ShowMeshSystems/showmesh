@@ -1036,7 +1036,7 @@ a.sm-tile:hover {
    where one asset or one ordered transition group needs containment. */
 .sm-night-definition-editor {
   max-width: 1012px;
-  padding-top: 22px;
+  padding: 22px 28px 0;
 }
 
 .sm-night-definition-head {
@@ -1069,6 +1069,15 @@ a.sm-tile:hover {
   scroll-margin-top: 96px;
 }
 
+.sm-night-definition-section > .sm-subsection__title,
+.sm-night-definition-section__head > .sm-subsection__title {
+  margin: 0;
+  color: var(--text-faint);
+  font: var(--t-meta);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
 .sm-night-definition-section > .sm-small {
   max-width: 74ch;
   margin: 6px 0 0;
@@ -1080,6 +1089,38 @@ a.sm-tile:hover {
   gap: var(--s-4);
   max-width: 760px;
   margin-top: 12px;
+}
+
+.sm-night-definition-editor .sm-field {
+  gap: 5px;
+}
+
+.sm-night-definition-editor .sm-field__help {
+  color: var(--text-faint);
+}
+
+.sm-night-definition-editor .sm-input,
+.sm-night-definition-editor .sm-select {
+  height: 34px;
+  border-color: var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.sm-night-definition-editor .sm-input {
+  font: var(--t-body);
+}
+
+.sm-night-definition-editor .sm-select,
+.sm-night-definition-editor .sm-input.sm-data {
+  font: var(--t-data);
+}
+
+.sm-night-definition-editor .sm-input:disabled,
+.sm-night-definition-editor .sm-select:disabled {
+  border-color: var(--border);
+  background: var(--sunken);
+  color: var(--text-muted);
 }
 
 .sm-night-definition-asset {
@@ -1146,11 +1187,12 @@ a.sm-tile:hover {
 
 .sm-night-definition-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
   max-width: 760px;
-  margin-top: 30px;
-  padding-top: var(--s-4);
-  border-top: 1px solid var(--border-strong);
+  margin-top: 26px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
 }
 
 @media (max-width: 900px) {
