@@ -16,7 +16,8 @@ import {
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { effectiveServerTimeIso } from '../domain/time'
-import type { FPPInstance, Model } from '../api'
+import { acknowledgeFPPInstanceUUIDChange, type FPPInstance, type Model } from '../api'
+import { describeApiError, evaluateScope } from '../domain/session'
 import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
 import {
   activityRows,
@@ -309,7 +310,18 @@ function FleetTableRow({ row, selected, onSelect }: { row: FleetRow; selected: b
 }
 
 function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: string | null }) {
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const inspector = fppInspector(instance, nowIso)
+  const [acknowledging, setAcknowledging] = useState(false)
+  const [ackError, setAckError] = useState<string | null>(null)
+  const acknowledge = () => {
+    setAcknowledging(true)
+    setAckError(null)
+    acknowledgeFPPInstanceUUIDChange(instance.instanceId)
+      .catch((err: unknown) => setAckError(describeApiError(err)))
+      .finally(() => setAcknowledging(false))
+  }
   return (
     <div className="sm-inspector">
       <p className="sm-eyebrow">FPP</p>
@@ -339,7 +351,13 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
       <div className="sm-inspector__actions">
         <Link to="/control">Open Live Control</Link>
         <Link to="/monitor/signals">All signals</Link>
+        {instance.instanceUuidChange !== null && (
+          <Button disabled={!gate.allowed || acknowledging} title={gate.allowed ? undefined : gate.reason} onClick={acknowledge}>
+            {acknowledging ? 'Acknowledging…' : 'Acknowledge replacement'}
+          </Button>
+        )}
       </div>
+      {ackError !== null && <RuledStrip absence="failed" label="Acknowledgement refused" fact={ackError} />}
     </div>
   )
 }
