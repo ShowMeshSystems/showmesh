@@ -36,6 +36,33 @@ func newRenderTestSupervisor(t *testing.T, clock *fakeClock) *pipeline.Superviso
 	return sup
 }
 
+// minimalRenderApplyParams returns the render.surface.apply params map a
+// real caller always sends: complete geometry, no FSEQ content.
+// buildFSEQAssignment (renderops.go) now requires channelRange, geometry,
+// and frameRate unconditionally: a bare or partial-geometry request is
+// refused, not defaulted, because every real dispatcher (the
+// coordinator's catalog-deploy establishment and a resolved sequence apply
+// alike, internal/coordinator/api/renderdispatch.go) already sends a
+// surface's complete geometry whether or not a sequence is assigned yet.
+// Tests that only care about some OTHER aspect of an apply (auth tuple,
+// output sink, unknown-key rejection, ...) start from this rather than a
+// bare {"surfaceId": ...} map, which no real caller can produce.
+func minimalRenderApplyParams(surfaceID string) map[string]any {
+	return map[string]any{
+		"surfaceId": surfaceID,
+		"channelRange": map[string]any{
+			"startChannel": float64(1),
+			"channelCount": float64(12),
+		},
+		"geometry": map[string]any{
+			"width":       float64(2),
+			"height":      float64(2),
+			"pixelFormat": "rgb",
+		},
+		"frameRate": float64(40),
+	}
+}
+
 func renderCmd(action, commandID, idempotencyKey string, params map[string]any) mqttproto.CmdPayload {
 	return mqttproto.CmdPayload{
 		CommandID:          commandID,
@@ -63,7 +90,7 @@ func TestHandleMessageRenderSurfaceApplyConfirmed(t *testing.T) {
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
-	cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
+	cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", minimalRenderApplyParams("surface-1"))
 	topic, payload := buildCmdMessage(t, clock, cmd)
 
 	h.HandleMessage(context.Background(), pub, topic, payload)
@@ -134,6 +161,71 @@ func TestHandleMessageRenderSurfaceApplyMissingSurfaceID(t *testing.T) {
 	}
 }
 
+// TestHandleMessageRenderSurfaceApplyRefusesIncompleteGeometry proves a
+// bare or partial-geometry render.surface.apply is refused visibly
+// (OutcomeFailed, a stated reason, nothing persisted, nothing started)
+// rather than silently accepted or defaulted. No real caller ever omits
+// channelRange, geometry, or frameRate: internal/coordinator/api/
+// renderdispatch.go resolves a surface's complete geometry before every
+// dispatch, content assigned or not, so buildFSEQAssignment now requires
+// them unconditionally instead of deferring their validation to "once
+// B3/B4 exist," which they now do.
+func TestHandleMessageRenderSurfaceApplyRefusesIncompleteGeometry(t *testing.T) {
+	cases := []struct {
+		name             string
+		params           map[string]any
+		wantReasonSubstr string
+	}{
+		{"no geometry at all", map[string]any{"surfaceId": "surface-1"}, "params.channelRange is required"},
+		{"channelRange but no geometry or frameRate", map[string]any{
+			"surfaceId":    "surface-1",
+			"channelRange": map[string]any{"startChannel": float64(1), "channelCount": float64(12)},
+		}, "params.geometry is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			clock := &fakeClock{t: time.Now()}
+			sup := newRenderTestSupervisor(t, clock)
+			store := pipeline.NewAssignmentStore(dir)
+			renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+			h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
+			pub := newFakePublisher()
+
+			cmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", tc.params)
+			topic, payload := buildCmdMessage(t, clock, cmd)
+			h.HandleMessage(context.Background(), pub, topic, payload)
+
+			result := decodeResultFromCall(t, pub.snapshot()[0])
+			if result.Outcome != mqttproto.OutcomeFailed {
+				t.Fatalf("Outcome = %q, want %q for %s; reason = %q", result.Outcome, mqttproto.OutcomeFailed, tc.name, result.Reason)
+			}
+			// Pinned to the SPECIFIC field this subtest's own params leave
+			// missing, not merely "some reason was given": a bare
+			// substring shared across subtests would let one subtest pass
+			// on the other's diagnostic, or on an unrelated downstream
+			// failure (e.g. pipeline.FSEQSourceSpec rejecting an empty
+			// pixelFormat) rather than the refusal buildFSEQAssignment
+			// itself is supposed to produce.
+			if !strings.Contains(result.Reason, tc.wantReasonSubstr) {
+				t.Fatalf("Reason = %q for %s, want it to contain %q", result.Reason, tc.name, tc.wantReasonSubstr)
+			}
+
+			reloaded, err := store.Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if len(reloaded) != 0 {
+				t.Fatalf("persisted assignments = %+v, want none (an incomplete-geometry apply must not persist)", reloaded)
+			}
+			if _, ok := sup.Snapshot("surface-1"); ok {
+				t.Fatalf("a supervisor snapshot exists for surface-1, want none (nothing should have started)")
+			}
+		})
+	}
+}
+
 // TestHandleMessageRenderSurfaceApplyRejectsUnknownKey proves the
 // reject-unknown-keys allowlist actually runs: a typo'd param key fails the
 // command rather than being silently ignored.
@@ -173,7 +265,7 @@ func TestHandleMessageRenderSurfaceClearRemovesAssignment(t *testing.T) {
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
-	applyCmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
+	applyCmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", minimalRenderApplyParams("surface-1"))
 	topic, payload := buildCmdMessage(t, clock, applyCmd)
 	h.HandleMessage(context.Background(), pub, topic, payload)
 	if result := decodeResultFromCall(t, pub.snapshot()[0]); result.Outcome != mqttproto.OutcomeConfirmed {
@@ -215,9 +307,12 @@ func TestHandleMessageRenderPipelineRestart(t *testing.T) {
 	h := newCommandHandler(testNodeID, dir, "", nil, renderOps, nil, nil, nil, nil, nil, clock.now, discardLogger())
 	pub := newFakePublisher()
 
-	applyCmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", map[string]any{"surfaceId": "surface-1"})
+	applyCmd := renderCmd("render.surface.apply", "cmd-1", "idem-1", minimalRenderApplyParams("surface-1"))
 	topic, payload := buildCmdMessage(t, clock, applyCmd)
 	h.HandleMessage(context.Background(), pub, topic, payload)
+	if result := decodeResultFromCall(t, pub.snapshot()[0]); result.Outcome != mqttproto.OutcomeConfirmed {
+		t.Fatalf("setup apply Outcome = %q, want confirmed; reason = %q", result.Outcome, result.Reason)
+	}
 
 	restartCmd := renderCmd("render.pipeline.restart", "cmd-2", "idem-2", map[string]any{"surfaceId": "surface-1"})
 	topic2, payload2 := buildCmdMessage(t, clock, restartCmd)
@@ -253,7 +348,7 @@ func TestHandleMessageRenderTriggerSignalsOnlyForRenderActions(t *testing.T) {
 	default:
 	}
 
-	applyCmd := renderCmd("render.surface.apply", "cmd-2", "idem-2", map[string]any{"surfaceId": "surface-1"})
+	applyCmd := renderCmd("render.surface.apply", "cmd-2", "idem-2", minimalRenderApplyParams("surface-1"))
 	topic2, payload2 := buildCmdMessage(t, clock, applyCmd)
 	h.HandleMessage(context.Background(), pub, topic2, payload2)
 
@@ -285,7 +380,7 @@ func TestParseSurfaceIDRejectsUnsafeCharacters(t *testing.T) {
 // a standing hazard in this codebase (see assets.go's parseAssetFetchParams
 // doc comment on the same issue).
 func TestRenderOperationsRoundTripJSONParams(t *testing.T) {
-	raw := []byte(`{"surfaceId":"surface-1","frameRate":40}`)
+	raw := []byte(`{"surfaceId":"surface-1","channelRange":{"startChannel":1,"channelCount":12},"geometry":{"width":2,"height":2,"pixelFormat":"rgb"},"frameRate":40}`)
 	var params map[string]any
 	if err := json.Unmarshal(raw, &params); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
@@ -337,12 +432,10 @@ func TestApplySurfaceWithUnsupportedTransportNeverReportsSilentRunning(t *testin
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	params := map[string]any{
-		"surfaceId": "surface-1",
-		"output": map[string]any{
-			"transport": "hdmi",
-			"hdmi":      map[string]any{"display": "HDMI-1"},
-		},
+	params := minimalRenderApplyParams("surface-1")
+	params["output"] = map[string]any{
+		"transport": "hdmi",
+		"hdmi":      map[string]any{"display": "HDMI-1"},
 	}
 	result, err := renderOps.applySurface(context.Background(), params, clock.now)
 	if err != nil {
@@ -398,12 +491,10 @@ func TestApplySurfaceWithRealNDISinkNeverTouchesTransportAvailable(t *testing.T)
 	store := pipeline.NewAssignmentStore(dir)
 	renderOps := newTestRenderOperations(sup, store, dir, clock)
 
-	params := map[string]any{
-		"surfaceId": "surface-1",
-		"output": map[string]any{
-			"transport": "ndi",
-			"ndi":       map[string]any{"sourceName": "garage-window"},
-		},
+	params := minimalRenderApplyParams("surface-1")
+	params["output"] = map[string]any{
+		"transport": "ndi",
+		"ndi":       map[string]any{"sourceName": "garage-window"},
 	}
 	if _, err := renderOps.applySurface(context.Background(), params, clock.now); err != nil {
 		t.Fatalf("applySurface: %v", err)
