@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { PageTitle } from '../kit'
+import { useModelContext } from '../app/ModelContext'
 
 const TABS: readonly { path: string; label: string }[] = [
   { path: 'connections', label: 'Connections' },
@@ -11,8 +12,10 @@ const TABS: readonly { path: string; label: string }[] = [
   { path: 'mode', label: 'Mode' },
 ]
 
-/** The seven-tab shell (guide §3). Access is an eighth tab that leaves for `/access` rather than a child route. */
+/** Settings owns installation configuration; Access remains a leaving tab at `/access`. */
 export function Settings() {
+  const model = useModelContext()
+  const resolume = model.resolume[0]
   return (
     <>
       <PageTitle
@@ -26,6 +29,9 @@ export function Settings() {
             {tab.label}
           </NavLink>
         ))}
+        <NavLink to={resolume === undefined ? '/settings/resolume' : `/settings/resolume/${encodeURIComponent(resolume.instanceId)}`} className="sm-facets__tab">
+          Resolume
+        </NavLink>
         <Link to="/access" className="sm-facets__tab">
           Access<span aria-hidden="true"> ↗</span>
         </Link>

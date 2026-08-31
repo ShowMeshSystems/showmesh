@@ -313,6 +313,9 @@ export function Shows() {
                       <tr key={row.id} aria-current={row.active ? 'true' : undefined} className={row.active ? 'sm-table__row--current' : undefined}>
                         <td>
                           <Link to={`/shows/${row.id}`}>{row.label}</Link>{' '}
+                          <Link className="sm-linkbutton" to={`/shows/${row.id}/playlists`}>
+                            Edit show
+                          </Link>{' '}
                           {row.active && <StatusPair tone="good" label="Active" />}
                           <br />
                           <span className="sm-data sm-small sm-faint">

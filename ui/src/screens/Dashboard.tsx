@@ -176,7 +176,7 @@ export function Dashboard() {
             label="Resolume"
             value={`${counts.resolumeHealthy} / ${counts.resolumeTotal}`}
             detail={counts.resolumeTotal === 0 ? 'none configured' : 'healthy'}
-            to="/monitor/fleet/resolume"
+            to="/settings/resolume"
           />
           <StatTile
             label="Signals current"

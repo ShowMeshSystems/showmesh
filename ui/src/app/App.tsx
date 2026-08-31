@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigationType, useParams } from 'react-router-dom'
 import { useModel } from '../api'
 import { ModelContext } from './ModelContext'
+import { useModelContext } from './ModelContext'
 import { Layout } from './Layout'
 import { useDensity, useTheme } from './useTheme'
 import { Assets } from '../screens/Assets'
@@ -35,6 +36,7 @@ import { SettingsNodeRouting } from '../screens/SettingsNodeRouting'
 import { SettingsMode } from '../screens/SettingsMode'
 import { NotFound } from '../screens/NotFound'
 import { Specimen } from '../kit/Specimen'
+import { BlankingPlate } from '../kit'
 import '../kit/styles/index.css'
 
 /** A new page starts at the top, except on a browser back or forward. */
@@ -53,6 +55,19 @@ function ScrollToTop() {
 function FppFleetRedirect() {
   const { instanceId = '' } = useParams<{ instanceId: string }>()
   return <Navigate replace to={`/monitor/fleet?resource=fpp:${encodeURIComponent(instanceId)}`} />
+}
+
+/** Resolume is configured under Settings; Fleet remains an evidence-only view. */
+function ResolumeFleetRedirect() {
+  const { instanceId = '' } = useParams<{ instanceId: string }>()
+  return <Navigate replace to={`/settings/resolume/${encodeURIComponent(instanceId)}`} />
+}
+
+function ResolumeSettingsIndex() {
+  const model = useModelContext()
+  const first = model.resolume[0]
+  if (first !== undefined) return <Navigate replace to={`/settings/resolume/${encodeURIComponent(first.instanceId)}`} />
+  return <BlankingPlate absence="empty" stamp="None" eyebrow="Resolume · no instance" title="No Resolume instance is configured" detail="Add an instance in Settings › Connections before configuring its stored composition or recovery." />
 }
 
 function Shell() {
@@ -82,7 +97,8 @@ export default function App() {
             <Route path="monitor/manifest" element={<MonitorManifest />} />
             <Route path="monitor/fleet/node/:nodeId" element={<NodeDetail />} />
             <Route path="monitor/fleet/fpp/:instanceId" element={<FppFleetRedirect />} />
-            <Route path="monitor/fleet/resolume/:instanceId" element={<ResolumeConfig />} />
+            <Route path="monitor/fleet/resolume" element={<Navigate replace to="/settings/resolume" />} />
+            <Route path="monitor/fleet/resolume/:instanceId" element={<ResolumeFleetRedirect />} />
             <Route path="shows" element={<Shows />} />
             <Route path="shows/new" element={<ShowDraft />} />
             <Route path="shows/:id" element={<ShowDetail />} />
@@ -102,6 +118,8 @@ export default function App() {
               <Route path="audio-defaults" element={<SettingsAudioDefaults />} />
               <Route path="node-routing" element={<SettingsNodeRouting />} />
               <Route path="mode" element={<SettingsMode />} />
+              <Route path="resolume" element={<ResolumeSettingsIndex />} />
+              <Route path="resolume/:instanceId" element={<ResolumeConfig />} />
             </Route>
             <Route path="assets" element={<Assets />} />
             <Route path="access" element={<Access />} />

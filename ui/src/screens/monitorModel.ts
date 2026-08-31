@@ -109,7 +109,7 @@ export function fleetRows(model: Model, nowIso: string | null): FleetRow[] {
         ),
         nowIso,
       ),
-      to: `/monitor/fleet/resolume/${instance.instanceId}`,
+      to: `/settings/resolume/${instance.instanceId}`,
     })
   }
 

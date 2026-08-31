@@ -124,7 +124,7 @@ describe('Settings tab strip', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders seven tabs plus the Access link, which navigates out rather than rendering a panel', () => {
+  it('renders the Resolume settings tab and the Access link, which navigates out rather than rendering a panel', () => {
     stubs.getFPPEndpointsConfig = () => notConfigured('nothing has ever been configured')
     stubs.getResolumeInstancesConfig = () => notConfigured('nothing has ever been configured')
     stubs.getFPPMQTTConfig = () => notConfigured('nothing has ever been configured')
@@ -132,7 +132,7 @@ describe('Settings tab strip', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Settings tabs' })
     const tabs = within(nav).getAllByRole('link')
-    expect(tabs).toHaveLength(8)
+    expect(tabs).toHaveLength(9)
     expect(tabs.map((t) => t.textContent)).toEqual([
       'Connections',
       'Content delivery',
@@ -141,6 +141,7 @@ describe('Settings tab strip', () => {
       'Audio defaults',
       'Node routing',
       'Mode',
+      'Resolume',
       'Access ↗',
     ])
 
