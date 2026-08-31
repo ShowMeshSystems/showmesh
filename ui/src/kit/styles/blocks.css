@@ -840,6 +840,12 @@ a.sm-tile:hover {
 
 .sm-nownext .sm-defs {
   margin-top: var(--s-4);
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.sm-nownext .sm-defs > div {
+  border-right: 0;
 }
 
 .sm-nownext__evidence--good {
@@ -973,7 +979,7 @@ a.sm-tile:hover {
 /* One evidence readout: state word, then the fact. */
 .sm-readout {
   display: grid;
-  grid-template-columns: 158px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   gap: 0 20px;
   align-items: start;
   padding: 14px 0;
@@ -991,7 +997,7 @@ a.sm-tile:hover {
   border: 0;
   border-radius: 0;
   background: transparent;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .sm-readout .sm-status--good { color: var(--good-fg); }
