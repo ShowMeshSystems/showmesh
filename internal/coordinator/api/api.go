@@ -1488,6 +1488,7 @@ func New(deps Dependencies, opts Options) *API {
 		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
 		fppCommandPollInterval:    opts.FPPCommandPollInterval,
 		nightReadinessMaxAge:      opts.NightReadinessMaxAge,
+		emergencyStopArms:         newEmergencyStopArmStore(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
 
@@ -1693,6 +1694,18 @@ func New(deps Dependencies, opts Options) *API {
 	// comment (identity/types.go) for why. No state change here is
 	// reachable by GET — see actioninvoke.go.
 	mux.HandleFunc("POST /api/v1/actions/{id}/invocations", h.writeGuard(&scopeActionInvoke, h.handleInvokeAction))
+
+	// The show.emergencystop configuration kind (its own optional,
+	// per-level follow-up action lists) and the four trigger routes.
+	// show:emergencystop:invoke is the only scope check on all four —
+	// see that scope's own doc comment (identity/types.go).
+	mux.HandleFunc("GET /api/v1/config/show.emergencystop", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfig))
+	mux.HandleFunc("PUT /api/v1/config/show.emergencystop", h.writeGuard(&scopeConfigWrite, h.handlePutEmergencyStopConfig))
+	mux.HandleFunc("GET /api/v1/config/show.emergencystop/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfigRevisions))
+	mux.HandleFunc("POST /api/v1/emergency-stop/stop", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStop))
+	mux.HandleFunc("POST /api/v1/emergency-stop/stop-power-down", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopPowerDown))
+	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/arm", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopArm))
+	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/fire", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopFire))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an

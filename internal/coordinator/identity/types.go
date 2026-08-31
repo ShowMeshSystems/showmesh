@@ -197,6 +197,24 @@ const (
 	// actions alike, matching how show:macro:run already authorizes a
 	// macro's own steps across every integration with one scope.
 	ScopeShowActionInvoke Scope = "show:action:invoke"
+
+	// ScopeShowEmergencyStopInvoke gates the four emergency-stop trigger
+	// routes (POST .../emergency-stop/stop, .../stop-power-down, and the
+	// hard-stop arm/fire pair), on [ScopeShowActionInvoke]'s own
+	// precedent: umbrella authority, not conjunctive. A principal holding
+	// this scope alone may stop playout, force the active night session's
+	// existing shutdown sequence, and invoke every follow-up action
+	// configured for whichever level it triggers, without also holding
+	// fpp:command, night:command, or show:action:invoke — the operator at
+	// the console during a live show is exactly who must be able to reach
+	// this without first being handed the individual scopes those actions
+	// would otherwise need. It is the ONLY scope check on all four routes;
+	// the dispatch primitives underneath (dispatchFPPCommand,
+	// dispatchActionTarget, the night-session store update) authorize
+	// nothing of their own for an in-process caller, the same shape
+	// ScopeShowActionInvoke's own doc comment already states for its
+	// route.
+	ScopeShowEmergencyStopInvoke Scope = "show:emergencystop:invoke"
 )
 
 // readScopes is every scope [RoleViewer] holds, and the read-scope subset
@@ -208,7 +226,7 @@ var readScopes = []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, Scop
 // "the show, device, and FPP action scopes" — extended by Track D seam D-3
 // to include [ScopeResolumeAction], the identical class of action scope for
 // a second vendor.
-var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand}
+var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke}
 
 // adminOnlyScopes is what [RoleAdmin] adds on top of everything
 // [RoleOperator] holds: "everything, including principal:write and
