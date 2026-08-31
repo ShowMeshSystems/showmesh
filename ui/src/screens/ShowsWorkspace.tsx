@@ -98,6 +98,7 @@ const TABS: readonly { path: string; label: string; built: boolean }[] = [
   { path: 'assets', label: 'Assets', built: true },
   { path: 'presentation', label: 'Presentation', built: true },
   { path: 'automation', label: 'Automation', built: true },
+  { path: 'night-session', label: 'Night session', built: true },
 ]
 
 function tabCount(tab: string, counts: ShowContentsCounts | null): number | null {

@@ -104,15 +104,15 @@ describe('Show Night', () => {
     expect(screen.queryByText(/Cycle \d of the night/)).not.toBeInTheDocument()
   })
 
-  it('keeps definition authoring after the mock’s lifecycle and evidence blocks', () => {
+  it('keeps activation on Show Night but moves definition authoring to the Show workspace', () => {
     renderScreen({ nightSession: session() })
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Lifecycle commands',
       'Run of Show',
       'Evidence',
       'Night session activation',
-      'Night session definitions',
     ])
+    expect(screen.queryByRole('heading', { name: 'Night session definitions' })).not.toBeInTheDocument()
   })
 
   it('titles the page with the cycle the session reports', () => {
@@ -379,9 +379,9 @@ describe('Show Night', () => {
     expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting', 'Back to resting'])
   })
 
-  it('links Edit definition to the in-page definition editor', () => {
-    renderScreen({ nightSession: session({ cycle: 1 }) })
-    expect(screen.getByRole('link', { name: 'Edit definition' })).toHaveAttribute('href', '#sn-definitions')
+  it('links Edit definition to the armed Show’s Night session tab', () => {
+    renderScreen({ nightSession: session({ cycle: 1, armedShowId: 'halloween-2026' }) })
+    expect(screen.getByRole('link', { name: 'Edit definition' })).toHaveAttribute('href', '/shows/halloween-2026/night-session')
   })
 
   it('keeps three structural cycle slots when the session is on cycle 1', () => {

@@ -31,6 +31,7 @@ vi.mock('../api', async () => {
 
 const { ShowsWorkspace, ShowsTabPlaceholder } = await import('./ShowsWorkspace')
 const { ShowsPlaylists } = await import('./ShowsPlaylists')
+const { ShowsNightSession } = await import('./ShowsNightSession')
 
 function summary(overrides: Partial<ConfigObjectSummary> = {}): ConfigObjectSummary {
   return { id: 'p1', label: 'Main Show', show: 'winter-ridge-2026', currentRevision: 1, updatedAt: '2026-08-30T18:22:00Z', ...overrides }
@@ -91,6 +92,7 @@ function renderWorkspace(model: Partial<Model> = {}, path = '/shows/winter-ridge
             <Route path="assets" element={<ShowsTabPlaceholder tab="Assets" />} />
             <Route path="presentation" element={<ShowsTabPlaceholder tab="Presentation" />} />
             <Route path="automation" element={<ShowsTabPlaceholder tab="Automation" />} />
+            <Route path="night-session" element={<ShowsNightSession />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -104,7 +106,7 @@ describe('Shows workspace shell', () => {
     vi.restoreAllMocks()
   })
 
-  it('lists all five tabs, none marked as still queued now every tab is rebuilt', async () => {
+  it('lists all six tabs, including Night session, with none marked as still queued', async () => {
     stubs.getShow = showHead
     stubs.listConfigObjects = () => contentsEmpty()
     stubs.listAssets = assetsEmpty
@@ -113,8 +115,9 @@ describe('Shows workspace shell', () => {
     const nav = screen.getByRole('navigation', { name: 'Show workspace tabs' })
     const tabs = within(nav).getAllByRole('link')
     expect(tabs.map((t) => t.textContent?.replace(/\d+/, '').trim())).toEqual(
-      expect.arrayContaining(['Playlists', 'Cues', 'Assets', 'Presentation', 'Automation']),
+      expect.arrayContaining(['Playlists', 'Cues', 'Assets', 'Presentation', 'Automation', 'Night session']),
     )
+    expect(tabs).toHaveLength(6)
     expect(within(nav).queryAllByText('Soon')).toHaveLength(0)
   })
 
@@ -135,6 +138,18 @@ describe('Shows workspace shell', () => {
     await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Winter Ridge 2026' })).toBeInTheDocument())
     expect(screen.getByText(/Revision/)).toBeInTheDocument()
     expect(screen.getByText(/erbartos/)).toBeInTheDocument()
+  })
+
+  it('renders Night session definitions inside the current Show workspace and fixes the Show field to that Show', async () => {
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (...args: never[]) => Promise.resolve({ serverTime: '', kind: args[0], objects: [] })
+    stubs.listAssets = assetsEmpty
+    renderWorkspace({}, '/shows/winter-ridge-2026/night-session')
+    expect(await screen.findByRole('heading', { name: 'Night session definitions' })).toBeInTheDocument()
+    const showField = await screen.findByLabelText('Show')
+    expect(showField).toHaveValue('winter-ridge-2026')
+    expect(showField).toBeDisabled()
+    expect(screen.getByRole('link', { name: 'Night session' })).toHaveAttribute('aria-current', 'page')
   })
 })
 

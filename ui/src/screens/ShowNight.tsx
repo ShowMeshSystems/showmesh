@@ -231,7 +231,11 @@ export function ShowNight() {
           </p>
         </div>
         <ButtonRow>
-          <a className="sm-btn" href="#sn-definitions">Edit definition</a>
+          {session.armedShowId !== '' ? (
+            <Link className="sm-btn" to={`/shows/${encodeURIComponent(session.armedShowId)}/night-session`}>Edit definition</Link>
+          ) : (
+            <Link className="sm-btn" to="/shows">Edit definition</Link>
+          )}
           <Button disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={() => send('run-readiness')}>
             Run readiness
           </Button>
@@ -533,7 +537,6 @@ export function ShowNight() {
       </Section>
 
       <NightSessionActivation />
-      <NightSessionDefinitions />
 
       {session.degraded && (
         <BlankingPlate
@@ -756,7 +759,7 @@ type DefinitionDraft = {
 }
 
 const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0' })
-const blankDefinition = (): DefinitionDraft => ({ id: '', show: '', label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '', timelineShow: '', timelineSequence: '', timelineTarget: '', enterShow: [], enterResting: [], base: null })
+const blankDefinition = (show = ''): DefinitionDraft => ({ id: '', show, label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '', timelineShow: show, timelineSequence: '', timelineTarget: '', enterShow: [], enterResting: [], base: null })
 
 function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDraft {
   const { payload } = response
@@ -803,12 +806,12 @@ function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { 
   }
 }
 
-function NightSessionDefinitions() {
+export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [objects, setObjects] = useState<ConfigObjectSummary[] | null>(null)
   const [selected, setSelected] = useState('')
-  const [draft, setDraft] = useState<DefinitionDraft>(blankDefinition)
+  const [draft, setDraft] = useState<DefinitionDraft>(() => blankDefinition(showId))
   const [loaded, setLoaded] = useState<NightSessionConfigResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -818,14 +821,14 @@ function NightSessionDefinitions() {
   useEffect(() => {
     let cancelled = false
     listConfigObjects('night.session')
-      .then((response) => { if (!cancelled) setObjects(response.objects) })
+      .then((response) => { if (!cancelled) setObjects(showId === undefined ? response.objects : response.objects.filter((object) => object.show === showId)) })
       .catch((err: unknown) => { if (!cancelled) setError(describeApiError(err)) })
     return () => { cancelled = true }
-  }, [reloadKey])
+  }, [reloadKey, showId])
 
   const selectDefinition = (id: string) => {
     setSelected(id); setError(null); setRevision(null)
-    if (id === '') { setLoaded(null); setDraft(blankDefinition()); return }
+    if (id === '') { setLoaded(null); setDraft(blankDefinition(showId)); return }
     getNightSessionConfig(id)
       .then((response) => { setLoaded(response); setDraft(draftFromDefinition(response)) })
       .catch((err: unknown) => setError(describeApiError(err)))
@@ -853,7 +856,7 @@ function NightSessionDefinitions() {
             <Field label="Definition id" help={loaded === null ? 'Used to create this new definition.' : 'Definition ids are stable; editing this field creates a separate definition.'}>
               {(field) => <Input {...field} value={draft.id} disabled={loaded !== null} onChange={(event) => setDraft((current) => ({ ...current, id: event.target.value }))} />}
             </Field>
-            <Field label="Show">{(field) => <Input {...field} value={draft.show} onChange={(event) => setDraft((current) => ({ ...current, show: event.target.value, timelineShow: current.timelineShow === '' ? event.target.value : current.timelineShow }))} />}</Field>
+            <Field label="Show">{(field) => <Input {...field} value={draft.show} disabled={showId !== undefined} onChange={(event) => setDraft((current) => ({ ...current, show: event.target.value, timelineShow: current.timelineShow === '' ? event.target.value : current.timelineShow }))} />}</Field>
             <Field label="Label">{(field) => <Input {...field} value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} />}</Field>
             <Field label="Show playlist FPP instance">{(field) => <Input {...field} value={draft.showFpp} onChange={(event) => setDraft((current) => ({ ...current, showFpp: event.target.value }))} />}</Field>
             <Field label="Show playlist">{(field) => <Input {...field} value={draft.showPlaylist} onChange={(event) => setDraft((current) => ({ ...current, showPlaylist: event.target.value }))} />}</Field>
