@@ -126,6 +126,19 @@ type nightCommandOutcome struct {
 	outcome string
 	persist string // "" | "create" | "update"
 
+	// readiness, when non-nil, is a night_readiness_results row decide
+	// wants created alongside persist. Review round 5, finding 1: decide
+	// used to call tx.CreateNightReadiness directly, invisibly to
+	// nightRunGated, so on an audit failure the fallback (which only
+	// knows about persist) redid the night_sessions write pointing at a
+	// readiness_id whose row had been rolled back with the failed
+	// transaction and never recreated - a false "applied" outcome with a
+	// dangling reference nothing errors on, worse than the refusal it
+	// replaced. nightRunGated now performs this write itself, in both the
+	// transactional path and the fallback path, so a decide function
+	// describes it as data here rather than issuing it directly.
+	readiness *store.NightReadinessRecord
+
 	// auditParams, when non-nil, is folded into this command's own audit
 	// entry (ADR-024's Params field). Track F seam F6's only user: an
 	// applied interlock override, which RESTING-MODE.md §10.1 requires the
@@ -459,6 +472,11 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 		if problem != nil {
 			return identity.AuditEntry{}, errNightCommandRefused
 		}
+		if out.readiness != nil {
+			if err := tx.CreateNightReadiness(ctx, *out.readiness); err != nil {
+				return identity.AuditEntry{}, err
+			}
+		}
 		switch out.persist {
 		case "create":
 			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
@@ -488,9 +506,18 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 		}
 		if errors.Is(auditErr, identity.ErrAuditWrite) {
 			// ADR-024 decision 11, amended 2026-08-26 (owner ruling): redo
-			// the persist step non-transactionally (decide's own decision
-			// above is still valid; only the audit append failed) and
-			// proceed with degraded attribution.
+			// every write the rolled-back transaction made non-
+			// transactionally (decide's own decision above is still valid;
+			// only the audit append failed), and proceed with degraded
+			// attribution. readiness is redone before persist: persist's
+			// own out.result can reference its ID (out.readiness's own doc
+			// comment on nightCommandOutcome explains why this can no
+			// longer be decide's own problem to remember).
+			if out.readiness != nil {
+				if err := h.deps.NightSessions.CreateNightReadiness(ctx, *out.readiness); err != nil {
+					return nightCommandOutcome{}, nil, err
+				}
+			}
 			switch out.persist {
 			case "create":
 				if err := h.deps.NightSessions.CreateNightSession(ctx, out.result, now); err != nil {
@@ -1205,12 +1232,9 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 			ID: uuid.NewString(), SessionID: curTx.ID, EpochID: curTx.ID,
 			CompletedAt: now, Outcome: outcome, ChecksJSON: string(checksJSON),
 		}
-		if err := tx.CreateNightReadiness(ctx, rec); err != nil {
-			return nightCommandOutcome{}, nil, err
-		}
 		next := *curTx
 		next.ReadinessID = rec.ID
-		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update", readiness: &rec}
 		if len(overrideAuditParams) > 0 {
 			out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
 		}

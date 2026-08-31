@@ -16,8 +16,8 @@ import (
 // probe (identity/audit.go) is itself a write against that same store on
 // every GET /api/v1/snapshot request. If a hard failure of that probe
 // could fail the snapshot request, audit trouble would have become a way
-// to block visibility of everything else in the snapshot — the exact
-// shape this task removed from five other request paths, reintroduced on
+// to block visibility of everything else in the snapshot (the exact
+// shape this task removed from five other request paths), reintroduced on
 // the one surface that is supposed to report the outage.
 //
 // The failure here is real, not injected via the fail_audit trigger (a

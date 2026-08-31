@@ -682,7 +682,7 @@ func TestResolumeActionEndToEndSafetyClassSurvivesTranslationUnderAuditFailure(t
 		t.Errorf("arena never received the blackout dispatch (POST /api/v1/composition/disconnect-all); requests = %v", arena.requestLog())
 	}
 
-	// launchClip: NOT exempt, so it degrades rather than exempts — ADR-024
+	// launchClip: NOT exempt, so it degrades rather than exempts. ADR-024
 	// decision 11's amendment (owner ruling, 2026-08-26) removed the
 	// fail-closed default this test used to assert for every non-exempt
 	// action: it must still dispatch (a 200, and a real connect request

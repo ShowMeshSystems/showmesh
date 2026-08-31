@@ -193,11 +193,12 @@ const (
 	// a wire flag) but never refuses the command.
 	fppSafetyClassExempt
 
-	// fppSafetyClassNotExempt means this primitive fails closed on a
-	// pre-dispatch audit-write failure: the command is refused, and
-	// (because the whole transaction already rolled back — see
-	// [identity.ErrAuditWrite]'s own doc comment) nothing is re-inserted
-	// and nothing is dispatched to FPP.
+	// fppSafetyClassNotExempt means this primitive is not a member of
+	// ADR-024 decision 11's blackout/stop/power-off safety class. A
+	// pre-dispatch audit-write failure still degrades attribution and
+	// still dispatches (decision 11's amendment, owner ruling
+	// 2026-08-26); the only effect of this value is which reason string
+	// reportDegradedAttribution reports, never whether the command runs.
 	fppSafetyClassNotExempt
 )
 

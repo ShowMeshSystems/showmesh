@@ -794,6 +794,16 @@ know to fix it before the next show, but again it should NOT stop the show
 or any actions from running. If the audit log being down currently blocks
 actions, that must be corrected."
 
+This exemption is scoped to the `ErrAuditWrite` class specifically: an
+audit_log append that itself failed. A `BeginTx`-class failure (the
+store's one connection could not even open a transaction) or an
+audit-params marshal failure still returns a 500 on all five paths below,
+because neither is the sentinel each path's fallback recognizes. This is
+defensible rather than an oversight: `InsertCommand` shares the identical
+SQLite file, so nothing could have been durably recorded either way, and
+a fallback for a failure this narrow amendment's own mechanism cannot
+even detect is not the same claim as the `ErrAuditWrite` fallback makes.
+
 Five request paths still failed closed on the pre-dispatch write, contrary
 to that rule: `POST /api/v1/actions/{id}/invocations` (direct show.action
 invoke) for an action whose stored `safetyClass` was `"none"`, the audio
@@ -838,12 +848,17 @@ without having to act first to find out. So the coordinator also carries a
 standing, coordinator-wide signal on `GET /api/v1/snapshot`
 (`auditStore.state` / `auditStore.reason`, shipped in
 IDENTIFIER-REGISTER.md as `coordinator.audit.store.state` /
-`coordinator.audit.store.reason`), live from the most recent audit_log
-append attempt made anywhere in the coordinator: `"usable"`, `"unusable"`
-with a reason, or `"unknown"` before any attempt has been made since
-startup. That is the surface an operator can see without touching a
-control at all, matching decision 9's identical "loud and persistent"
-requirement for an unclaimed bootstrap state.
+`coordinator.audit.store.reason`), computed fresh on every request via a
+real probe write to audit_log (an INSERT inside a transaction always
+rolled back, never committed), not read from a latch fed by whatever
+command traffic happened to pass through recently: `"usable"` if that
+probe just now succeeded, `"unusable"` with a reason if it did not. There
+is no third state; a probe always produces a definitive answer, so a
+coordinator that has made no real audit write since startup still reports
+its true state rather than a placeholder for one. That is the surface an
+operator can see without touching a control at all, matching decision 9's
+identical "loud and persistent" requirement for an unclaimed bootstrap
+state.
 
 `config:write` and `principal:write` are unaffected: the paragraph above
 keeping them fail-closed is not one of the five paths this amendment
