@@ -1668,6 +1668,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show.emergencystop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The three emergency-stop levels' own optional follow-up action lists
+         * @description Requires `config:write`, on `fpp.endpoints`/`show.action`'s own majority precedent (not `show.mode`'s open-read exception, which rests on ADR-033 decision 3's persistent-visibility requirement - nothing establishes that for this kind). Never `404`s: the payload has a well-defined default (every level configured with no follow-up actions), reported with `revision` `0` and `source` `"default"` when nothing has ever been written.
+         */
+        get: operations["getEmergencyStopConfig"];
+        /**
+         * Set the three emergency-stop levels' own optional follow-up action lists
+         * @description Requires `config:write` (admin only). A full replacement: `stop`, `stopPowerDown` and `hardStop` are all required, each with its own required (possibly empty) `actions` array of existing `show.action` ids - an absent level key, or an absent/null `actions` key inside one, is refused by name rather than silently defaulted; an empty array is how "no follow-up actions" is deliberately configured for a level. Every referenced `show.action` id must already exist, of ANY show - this kind is installation-wide and is never scoped to one show's own namespace. The SAME action id may appear in more than one level's own list; the same id twice within ONE level's own list is refused. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putEmergencyStopConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.emergencystop/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * show.emergencystop revision history, newest first
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/show.mode/revisions`.
+         */
+        get: operations["getEmergencyStopConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 1: stop playout immediately
+         * @description Behind `show:emergencystop:invoke` - umbrella authority over the underlying FPP stop dispatch and every configured follow-up action, the identical shape `show:action:invoke` already has over its own dispatch (see that scope's own doc comment, `internal/coordinator/identity/types.go`). Dispatches FPP's "Stop Now" to every configured FPP instance CONCURRENTLY, then invokes this level's own configured `show.emergencystop.stop.actions` best-effort, in order. A follow-up action's own failure is reported per-action in `result.followUps` and NEVER changes `result.stopOutcomes` or this response's own success: the operator pressed the button to stop the show, and a follow-up that failed must never read as "the stop did not happen". NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read the configured FPP instance list is reported as one `failed` entry in `result.stopOutcomes` (never a silent empty array; see `result.noInstancesConfigured` for the actual zero-instance signal), and a failure to read this level's own follow-up configuration degrades to no follow-ups (see `result.followUpConfigError`) rather than aborting the stop. No night-session interaction of any kind - see `/emergency-stop/stop-power-down` for level 2.
+         */
+        post: operations["emergencyStop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/stop-power-down": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 2: stop immediately, then force the standard graceful shutdown now
+         * @description Behind `show:emergencystop:invoke`. Everything `POST /emergency-stop/stop` does, PLUS: if a night session is currently active, forces it into the SAME graceful-shutdown sequence an ordinary `power-down-presentation` night command already runs (RESTING-MODE.md section 4.7), immediately - bypassing both the ordinary live-show deferral and interlock evaluation entirely, on RESTING-MODE.md's own words ("Only an explicitly configured and invoked emergency/force operation may interrupt playback or remove power immediately") and `end-session`'s existing precedent. `result.nightSession.present` is `false`, with no error, when no night session was active - a real, valid outcome, not a failure. This still WAITS on the night loop's own fresh idle evidence before that sequence itself reaches `stopped` (RESTING-MODE.md section 4.6/4.7) - see `/emergency-stop/hard-stop/fire` for the level with no wait at all. A failure in this step (a night-session store read or write that does not succeed) is reported in `result.nightSession.error` rather than aborting the stop: the stop dispatch above has already run regardless. Then invokes this level's own configured `show.emergencystop.stopPowerDown.actions` best-effort, in order, on the identical never-fails-the-stop rule `POST /emergency-stop/stop` states in full.
+         */
+        post: operations["emergencyStopPowerDown"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/hard-stop/arm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 3's deliberate-intent gate, call 1 of 2: arm
+         * @description Behind `show:emergencystop:invoke`. THE DELIBERATE-INTENT GATE for level 3 ("the big red button") lives here, in the API, not the UI alone: operator capabilities are API-first with `showmeshctl` at practical parity, so a UI-only gate would let `showmeshctl` hard-stop the show with one command and no gate at all. Mints a single-use, opaque token, valid for a short server-side window (currently 10s), that `POST /emergency-stop/hard-stop/fire` must present to actually fire. Arming has NO side effect on the show by itself and is freely retryable. At most one live token per principal: arming again before a principal's own previous token is consumed or expires invalidates that previous token immediately - arming is evidence of a RECENT deliberate act, and several live tokens per principal would let a caller fire on an act that is no longer recent. This is NOT a confirmation dialog (ruled out by the product owner); the UI is free to present arm+fire as a single double-press gesture with no modal at all, and `showmeshctl` exposes arm and fire as two SEPARATE subcommands that are never chained by one command, carrying the identical gate on the CLI.
+         */
+        post: operations["armEmergencyStopHardStop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/hard-stop/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 3's deliberate-intent gate, call 2 of 2: fire
+         * @description Behind `show:emergencystop:invoke`. Requires `armToken` from a prior `POST /emergency-stop/hard-stop/arm` for the SAME principal, presented while it is still valid, unexpired, and unconsumed. Consuming the token is an atomic compare-and-swap: two concurrent fire requests presenting the identical token can never both succeed. That compare-and-swap is the ONLY guard against firing this level twice; there is no separate request-level `idempotencyKey` replay cache on `fire` itself, so the same already-consumed token presented again is refused with `409` rather than replayed. The token is consumed only once the request is otherwise valid (idempotencyKey and armToken well-formed), and every step after that point - the stop dispatch, the night-session step, and reading this level's own follow-up configuration - degrades and is reported rather than aborting, so a consumed token is never wasted on a request that then fails for an unrelated reason. Downstream, the per-instance FPP dispatch and each follow-up action's own dispatch are independently protected against a REDELIVERED COMMAND (not a redelivered `fire` request) by the existing per-command idempotency-key layer keyed off this request's own `idempotencyKey`; the night-session step consults no key at all and relies solely on the arm/fire gate above. On success, dispatches FPP's "Stop Now" to every configured instance CONCURRENTLY (an unreadable instance list is reported as a `failed` entry in `stopOutcomes`, never a silent empty array), abandons the active night session straight to `stopped` with NO WAIT for idle evidence (reusing the existing `end-session` night command unchanged - RESTING-MODE.md's own "no wait time" requirement for this level; a failure in this step is reported inside `nightSession.error` rather than aborting the stop), then invokes this level's own configured `show.emergencystop.hardStop.actions` best-effort, in order, on the identical never-fails-the-stop rule `POST /emergency-stop/stop` states in full.
+         */
+        post: operations["fireEmergencyStopHardStop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/macros/{id}/runs": {
         parameters: {
             query?: never;
@@ -3549,7 +3673,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3954,6 +4078,100 @@ export interface components {
             /** @description What the CURRENT mode does to the only behaviour that reads the mode in this build: the Resolume WebSocket footprint switch (ADR-033 decision 2), held open in `program` and closed in `show`. Names the mode as the reason, which is ADR-033 decision 3's requirement that a behaviour caused by the mode says so where the operator can see it. Always non-empty. */
             resolumeWebSocketEffect: string;
         };
+        /** @description One emergency-stop level's own optional, ordered follow-up action list - show.action ids, invoked best-effort, in this order, after that level's own immediate stop. */
+        ConfigEmergencyStopLevelPayload: {
+            /** @description Existing show.action ids, of ANY show. Never null - an empty array is how "no follow-up actions" is deliberately configured for this level. The same id may repeat across DIFFERENT levels' own lists, but not twice within one level's own list. */
+            actions: string[];
+        };
+        /** @description The "show.emergencystop" configuration kind's decoded payload: the body PUT /config/show.emergencystop accepts (a full replacement - all three level keys required, each with its own required actions array), and the "payload" member of GET /config/show.emergencystop's response. Field names match the wire level names ("stop", "stopPowerDown", "hardStop") used in /emergency-stop/* paths and this build's own audit action strings exactly, so a reader correlating a PUT body against an audit entry never has to translate between three vocabularies for one level. */
+        ConfigEmergencyStopPayload: {
+            stop: components["schemas"]["ConfigEmergencyStopLevelPayload"];
+            stopPowerDown: components["schemas"]["ConfigEmergencyStopLevelPayload"];
+            hardStop: components["schemas"]["ConfigEmergencyStopLevelPayload"];
+        };
+        /** @description The body of GET and PUT /config/show.emergencystop. Never `404`s: the payload has a well-defined default (every level empty), reported with `revision` `0` and `source` `"default"` when nothing has ever been written. */
+        EmergencyStopConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigEmergencyStopPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        /** @description The body of POST /emergency-stop/stop and POST /emergency-stop/stop-power-down. */
+        EmergencyStopRequest: {
+            idempotencyKey: string;
+        };
+        /** @description One configured FPP instance's own stop dispatch outcome. */
+        EmergencyStopInstanceOutcome: {
+            instanceId: string;
+            /** @enum {string} */
+            outcome: "confirmed" | "unconfirmed" | "refused" | "failed";
+            outcomeReason: string;
+            /** Format: date-time */
+            dispatchedAt: string | null;
+            /** @description True when this instance's own idempotency key was already dispatched; nothing was re-sent. */
+            replay: boolean;
+        };
+        /** @description One configured follow-up show.action's own best-effort invocation outcome. This NEVER affects the response's own success or `stopOutcomes` - a follow-up action's own failure must never read as "the stop did not happen". */
+        EmergencyStopFollowUpResult: {
+            actionId: string;
+            label?: string;
+            /**
+             * @description Absent when the action id itself could not even be resolved - outcomeReason always explains why.
+             * @enum {string}
+             */
+            outcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed";
+            outcomeReason: string;
+        };
+        /** @description What, if anything, happened to the active night session as level stop-power-down's or hard-stop's own night-session component. present is false when no night session was active - a real, valid outcome, not an error. error is non-empty exactly when this component could not be attempted or did not complete; the stop itself still proceeded regardless (this build's own degrade-safely rule, applied to every component that supports the stop, not only to follow-up actions). When error is set, outcome carries whatever partial information is known and may be absent. */
+        EmergencyStopNightSessionOutcome: {
+            present: boolean;
+            sessionId?: string;
+            outcome?: string;
+            error?: string;
+        };
+        /** @description The shared result shape every trigger route (stop, stop-power-down, and hard-stop's own fire) answers with. stopOutcomes and followUps are two SEPARATE arrays, deliberately with no combined success flag: a caller's exit code is driven by stopOutcomes alone. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK THE STOP: reading the configured FPP instance list, the night-session step, and reading this level's own follow-up configuration each degrade independently and are reported here rather than turning a stop that could otherwise proceed into a failed response. */
+        EmergencyStopResult: {
+            /** @enum {string} */
+            level: "stop" | "stop-power-down" | "hard-stop";
+            idempotencyKey: string;
+            /** @description NEVER null and never silently empty on a failure to read the configured instance list, which is instead reported as one "failed" entry here. Empty if and only if noInstancesConfigured is true. */
+            stopOutcomes: components["schemas"]["EmergencyStopInstanceOutcome"][];
+            /** @description The POSITIVE signal that zero FPP instances are configured, distinct from a failure to read the configured instance list. A caller must read this field rather than infer "nothing to stop" from an empty stopOutcomes array. */
+            noInstancesConfigured: boolean;
+            nightSession?: components["schemas"]["EmergencyStopNightSessionOutcome"];
+            followUps: components["schemas"]["EmergencyStopFollowUpResult"][];
+            /** @description Non-empty exactly when this level's own show.emergencystop configuration could not be read or decoded, in which case followUps is empty (no follow-up actions were attempted) but stopOutcomes still reflects a real dispatch attempt: the stop does not need this configuration to proceed. */
+            followUpConfigError?: string;
+        };
+        /** @description The body of POST /emergency-stop/stop, POST /emergency-stop/stop-power-down, and POST /emergency-stop/hard-stop/fire. */
+        EmergencyStopResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            result: components["schemas"]["EmergencyStopResult"];
+        };
+        /** @description The body of POST /emergency-stop/hard-stop/arm. Arming has no side effect on the show itself. */
+        EmergencyStopArmRequest: {
+            idempotencyKey: string;
+        };
+        /** @description Carries the single-use token POST /emergency-stop/hard-stop/fire must present within expiresAt. Arming again before that deadline invalidates THIS token immediately - at most one live token per principal. */
+        EmergencyStopArmResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            armToken: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        /** @description The body of POST /emergency-stop/hard-stop/fire. */
+        EmergencyStopFireRequest: {
+            idempotencyKey: string;
+            armToken: string;
+        };
         /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
@@ -4048,7 +4266,7 @@ export interface components {
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
             title: string;
             status: number;
             detail: string;
@@ -8930,6 +9148,225 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             /** @description `idempotencyKey` was already used for a different action id - `type` `conflict`, remedy "mint a fresh key". */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getEmergencyStopConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putEmergencyStopConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigEmergencyStopPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getEmergencyStopConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    emergencyStop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    emergencyStopPowerDown: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    armEmergencyStopHardStop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopArmRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopArmResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    fireEmergencyStopHardStop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopFireRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Either the arm token is unknown/never armed/expired (`type` `emergency-stop-hard-stop-not-armed`, remedy "arm again, then fire promptly"), or it was already consumed by an earlier fire request (`type` `conflict`, remedy "check whether the hard stop already happened before arming again"). */
             409: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
