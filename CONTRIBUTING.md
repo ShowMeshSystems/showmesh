@@ -117,11 +117,14 @@ by exact job name: `lint`, `vuln`, `ui`, `docker`, `test (1.25.0)`, and
 `test (1.26.6)`. They are deterministic: the same commit produces the same
 result, which is what makes it safe to block merges on them.
 
-`integration`, `integration-fppmqtt`, and `integration-broker` stay advisory.
-They still run and report on every pull request, but a failure does not
-block merge, because their current flakiness would otherwise block `main` on
-failures unrelated to the change under review. They become required once
-that flakiness is fixed.
+The CI workflow's `integration`, `integration-fppmqtt`, and
+`integration-broker` jobs, plus `test-integration-fpp` from the separate
+"FPP Integration (bench fppd)" workflow, stay advisory. They still run and
+report on every pull request, but a failure does not block merge, because
+their current flakiness would otherwise block `main` on failures unrelated
+to the change under review.
+
+The CI workflow's `fpp-plugin-release` job is not on the required list.
 
 A repository administrator may bypass a required check, but only as a
 deliberate, recorded exception, never a routine override. Record what was
