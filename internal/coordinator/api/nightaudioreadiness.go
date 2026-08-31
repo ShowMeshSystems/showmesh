@@ -29,8 +29,8 @@ import (
 // file over.
 const (
 	audioEngineStateSignalID          observation.SignalID = "node.audio.engine.state"
-	audioEngineStateUsable                                 = "usable"
-	audioEngineStateUnavailableMirror                      = "unavailable"
+	audioEngineStateUsable            string               = "usable"
+	audioEngineStateUnavailableMirror string               = "unavailable"
 )
 
 // Track F seam F5's own readiness checks (RESTING-MODE.md §13), added to
