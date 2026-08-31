@@ -272,6 +272,7 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 		_, _ = fmt.Fprintln(stderr, "forward from the previous revision.")
 		_, _ = fmt.Fprintln(stderr, "Validated before activation: an invalid payload is rejected and appends no")
 		_, _ = fmt.Fprintln(stderr, "revision (ADR-009).")
+		_, _ = fmt.Fprintln(stderr, "Accepts either a bare payload, or the full object \"fppconnect settings get --output json\" prints.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -286,6 +287,10 @@ func cmdFPPConnectSettingsSet(args []string, stdout, stderr io.Writer, clock fun
 	}
 
 	raw, err := readConfigPayload(file)
+	if err != nil {
+		return reportError(stderr, "fppconnect settings set", newCLIError(exitUsage, "%v", err))
+	}
+	raw, err = unwrapConfigGetResponse(raw)
 	if err != nil {
 		return reportError(stderr, "fppconnect settings set", newCLIError(exitUsage, "%v", err))
 	}
