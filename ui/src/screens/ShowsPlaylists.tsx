@@ -543,10 +543,9 @@ function FPPPlaylistEditor({
         <Button variant="quiet" onClick={discard} disabled={!dirty || saving || !saveGate.allowed} title={!saveGate.allowed ? saveGate.reason : undefined}>
           Discard changes
         </Button>
-        <span className="sm-small sm-muted sm-push-end">
-          Active revision <span className="sm-data">{playlist.revision}</span> · {playlist.createdByPrincipalName ?? 'unknown principal'}{' '}
-          {formatClock(playlist.updatedAt) ?? 'at an unrecorded time'}
-        </span>
+        <div className="sm-push-end">
+          <RevisionHistory id="pl-rev-fpp" fetch={() => getShowPlaylistRevisions(playlist.id)} reloadKey={`${playlist.id}:${playlist.revision}`} />
+        </div>
       </ButtonRow>
       {stale !== null && (
         <StaleWriteStrip
@@ -558,7 +557,6 @@ function FPPPlaylistEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-      <RevisionHistory id="pl-rev-fpp" fetch={() => getShowPlaylistRevisions(playlist.id)} reloadKey={`${playlist.id}:${playlist.revision}`} />
     </Section>
   )
 }
@@ -777,10 +775,9 @@ function AudioPlaylistEditor({
         <Button variant="quiet" onClick={discard} disabled={!dirty || saving || !saveGate.allowed} title={saveGate.allowed ? undefined : saveGate.reason}>
           Discard changes
         </Button>
-        <span className="sm-small sm-muted sm-push-end">
-          Active revision <span className="sm-data">{playlist.revision}</span> · {playlist.createdByPrincipalName ?? 'unknown principal'}{' '}
-          {formatClock(playlist.updatedAt) ?? 'at an unrecorded time'}
-        </span>
+        <div className="sm-push-end">
+          <RevisionHistory id="pl-rev-audio" fetch={() => getShowPlaylistRevisions(playlist.id)} reloadKey={`${playlist.id}:${playlist.revision}`} />
+        </div>
       </ButtonRow>
       {stale !== null && (
         <StaleWriteStrip
@@ -792,7 +789,6 @@ function AudioPlaylistEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-      <RevisionHistory id="pl-rev-audio" fetch={() => getShowPlaylistRevisions(playlist.id)} reloadKey={`${playlist.id}:${playlist.revision}`} />
     </Section>
   )
 }

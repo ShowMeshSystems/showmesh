@@ -8,7 +8,6 @@ import {
 import { Button, ButtonRow, Field, Input, RevisionHistory, RuledStrip, Section } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { formatClock } from '../domain/time'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 
@@ -233,10 +232,9 @@ export function SettingsRecovery() {
           Discard changes
         </Button>
         {state.kind === 'loaded' && (
-          <span className="sm-small sm-muted sm-push-end">
-            Active revision <span className="sm-data">{state.response.revision}</span> ·{' '}
-            {state.response.createdByPrincipalName ?? 'unknown principal'} {formatClock(state.response.updatedAt) ?? 'at an unrecorded time'}
-          </span>
+          <div className="sm-push-end">
+            <RevisionHistory fetch={getRenderSettingsConfigRevisions} reloadKey={attempt} />
+          </div>
         )}
       </ButtonRow>
       {stale !== null && (
@@ -250,8 +248,6 @@ export function SettingsRecovery() {
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <p className="sm-small sm-faint">Saving does not restart anything now. It changes what happens the next time a pipeline fails.</p>
-
-      <RevisionHistory fetch={getRenderSettingsConfigRevisions} reloadKey={attempt} />
     </>
   )
 }

@@ -9,7 +9,6 @@ import {
 import { Button, ButtonRow, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Select } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { formatClock } from '../domain/time'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { formatBytes } from './showsModel'
@@ -255,10 +254,9 @@ export function SettingsDelivery() {
           Discard changes
         </Button>
         {state.kind === 'loaded' && (
-          <span className="sm-small sm-muted sm-push-end">
-            Active revision <span className="sm-data">{state.response.revision}</span> ·{' '}
-            {state.response.createdByPrincipalName ?? 'unknown principal'} {formatClock(state.response.updatedAt) ?? 'at an unrecorded time'}
-          </span>
+          <div className="sm-push-end">
+            <RevisionHistory fetch={getAssetsSettingsConfigRevisions} reloadKey={attempt} />
+          </div>
         )}
       </ButtonRow>
       {stale !== null && (
@@ -271,8 +269,6 @@ export function SettingsDelivery() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-
-      <RevisionHistory fetch={getAssetsSettingsConfigRevisions} reloadKey={attempt} />
     </>
   )
 }

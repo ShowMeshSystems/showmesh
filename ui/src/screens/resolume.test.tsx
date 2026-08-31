@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -239,7 +239,10 @@ describe('Resolume config', () => {
 
     renderScreen([instance()])
 
-    expect(await screen.findAllByText(/Active revision/)).not.toHaveLength(0)
+    const summary = await screen.findByText(/Active revision/, { selector: 'p' })
+    expect(summary).toBeInTheDocument()
+    expect(within(summary).getByText('3')).toBeInTheDocument()
+    expect(within(summary).getByText(/erbartos/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
   })

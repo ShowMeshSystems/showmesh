@@ -596,12 +596,10 @@ export function ResolumeConfig() {
                 {savingRecovery ? 'Saving…' : 'Save recovery'}
               </Button>
               {recoveryConfigState.kind === 'loaded' && (
-                <span className="sm-small sm-muted sm-push-end">
-                  Active revision <span className="sm-data">{recoveryConfigState.response.revision}</span> ·{' '}
-                  {recoveryConfigState.response.createdByPrincipalName ?? 'unknown principal'}{' '}
-                  {formatDateClock(recoveryConfigState.response.updatedAt) ?? 'at an unrecorded time'} ·{' '}
-                  {recoveryDirty ? 'unsaved change' : 'no unsaved changes'}
-                </span>
+                <div className="sm-push-end sm-inline-row sm-stack-3">
+                  <RevisionHistory id="st-recovery-rev" fetch={getResolumeRecoveryConfigRevisions} reloadKey={recoveryConfigAttempt} />
+                  <span className="sm-small sm-muted">{recoveryDirty ? 'unsaved change' : 'no unsaved changes'}</span>
+                </div>
               )}
               {recoveryConfigState.kind === 'failed' && (
                 <span className="sm-small sm-muted sm-push-end">{recoveryConfigState.reason}</span>
@@ -617,8 +615,6 @@ export function ResolumeConfig() {
               />
             )}
             {saveRecoveryError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveRecoveryError} />}
-
-            <RevisionHistory id="st-recovery-rev" fetch={getResolumeRecoveryConfigRevisions} reloadKey={recoveryConfigAttempt} />
 
             <h3 className="sm-subsection__title">Last record</h3>
             {recoveryState.response.record.length === 0 ? (

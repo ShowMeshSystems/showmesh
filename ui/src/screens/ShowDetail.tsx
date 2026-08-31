@@ -4,7 +4,6 @@ import { getShow, getShowRevisions, putShow, type ShowConfigResponse } from '../
 import { Button, ButtonRow, Field, Input, NotWired, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { formatClock } from '../domain/time'
 import { guardedSave, type SaveOutcome } from '../domain/save'
 import { StaleWriteStrip } from './StaleWrite'
 import { fetchShowContents } from './showsData'
@@ -154,7 +153,7 @@ export function ShowDetail() {
   // Both remaining branches (loaded, or failed with a retained copy) carry a
   // response; only the "failed with nothing ever read" branch above does not.
   const response = state.response as ShowConfigResponse
-  const { payload, revision, updatedAt, createdByPrincipalName: updatedBy } = response
+  const { payload, revision } = response
 
   return (
     <>
@@ -253,10 +252,9 @@ export function ShowDetail() {
         <Button variant="quiet" onClick={discard} disabled={!dirty || saving}>
           Discard changes
         </Button>
-        <span className="sm-small sm-muted sm-push-end">
-          Active revision <span className="sm-data">{revision}</span> · {updatedBy ?? 'unknown principal'}{' '}
-          {formatClock(updatedAt) ?? 'at an unrecorded time'}
-        </span>
+        <div className="sm-push-end">
+          <RevisionHistory fetch={() => getShowRevisions(id)} reloadKey={`${id}:${revision}`} />
+        </div>
       </ButtonRow>
       {stale !== null && (
         <StaleWriteStrip
@@ -268,8 +266,6 @@ export function ShowDetail() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
-
-      <RevisionHistory fetch={() => getShowRevisions(id)} reloadKey={`${id}:${revision}`} />
 
       <Section id="sh-danger" title="Delete this show">
         <div className="sm-panel">

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
@@ -410,7 +410,10 @@ describe('Shows · Identity', () => {
         ],
       })
     renderDetail('winter-ridge-2026')
-    expect(await screen.findAllByText(/Active revision/, { selector: 'p, span' })).not.toHaveLength(0)
+    const summary = await screen.findByText(/Active revision/, { selector: 'p' })
+    expect(summary).toBeInTheDocument()
+    expect(within(summary).getByText('47')).toBeInTheDocument()
+    expect(within(summary).getByText(/erbartos/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
     expect(screen.queryByText('Active · 47')).not.toBeInTheDocument()
     expect(screen.queryByText(/renamed/)).not.toBeInTheDocument()
