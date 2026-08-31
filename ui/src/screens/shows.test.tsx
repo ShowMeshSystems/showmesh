@@ -11,8 +11,10 @@ const stubs = vi.hoisted(() => ({
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowActive: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowActive: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowActiveRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -23,8 +25,10 @@ vi.mock('../api', async () => {
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     getShow: (...args: never[]) => stubs.getShow(...args),
     putShow: (...args: never[]) => stubs.putShow(...args),
+    getShowRevisions: (...args: never[]) => stubs.getShowRevisions(...args),
     getShowActive: (...args: never[]) => stubs.getShowActive(...args),
     putShowActive: (...args: never[]) => stubs.putShowActive(...args),
+    getShowActiveRevisions: (...args: never[]) => stubs.getShowActiveRevisions(...args),
   }
 })
 
@@ -253,6 +257,27 @@ describe('Shows · activation', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
+  it('renders an empty activation history as a settled fact when show.active has never been read a second time', async () => {
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    stubs.getShowActiveRevisions = () => Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'show.active', revisions: [] })
+    renderShows()
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
+  })
+
+  it('does not let a failed activation-history read break Show activation', async () => {
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    stubs.getShowActiveRevisions = () => Promise.reject(new Error('network down'))
+    renderShows()
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Activate' })).toBeInTheDocument()
+  })
+
   it('keeps Activate disabled with a stated reason when the principal lacks config:write', async () => {
     stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
     stubs.listAssets = assetsEmpty
@@ -360,5 +385,22 @@ describe('Shows · Identity', () => {
     expect(deleteButton).toBeDisabled()
     expect(saveSection?.contains(deleteButton)).toBe(false)
     expect(screen.getByText(/no endpoint to delete/)).toBeInTheDocument()
+  })
+
+  it('renders the show object’s own revision history, author and timestamp included', async () => {
+    stubs.getShow = showResponse
+    stubs.listConfigObjects = () => contentsEmpty()
+    stubs.listAssets = assetsEmpty
+    stubs.getShowRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show',
+        revisions: [
+          { revision: 47, createdAt: '2026-08-30T18:22:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: 'renamed', active: true },
+        ],
+      })
+    renderDetail('winter-ridge-2026')
+    expect(await screen.findByText('Active · 47')).toBeInTheDocument()
+    expect(screen.getByText(/renamed/)).toBeInTheDocument()
   })
 })

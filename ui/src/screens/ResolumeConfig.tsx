@@ -6,6 +6,7 @@ import {
   getResolumeInstancesConfig,
   getResolumeRecovery,
   getResolumeRecoveryConfig,
+  getResolumeRecoveryConfigRevisions,
   putResolumeRecoveryConfig,
   uploadResolumeComposition,
   type ResolumeCompositionResponse,
@@ -20,6 +21,7 @@ import {
   DefinitionStrip,
   NotWired,
   NotWiredBanner,
+  RevisionHistory,
   RuledStrip,
   Section,
   Segmented,
@@ -615,6 +617,8 @@ export function ResolumeConfig() {
               />
             )}
             {saveRecoveryError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveRecoveryError} />}
+
+            <RevisionHistory id="st-recovery-rev" fetch={getResolumeRecoveryConfigRevisions} reloadKey={recoveryConfigAttempt} />
 
             <h3 className="sm-subsection__title">Last record</h3>
             {recoveryState.response.record.length === 0 ? (

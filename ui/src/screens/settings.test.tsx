@@ -8,19 +8,26 @@ import { ModelContext } from '../app/ModelContext'
 const stubs = vi.hoisted(() => ({
   getFPPEndpointsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putFPPEndpointsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getFPPEndpointsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getResolumeInstancesConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putResolumeInstancesConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getResolumeInstancesConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPMQTTConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putFPPMQTTConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getFPPMQTTConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAssetsSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAssetsSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAssetsSettingsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getRenderSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putRenderSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getRenderSettingsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioSettingsConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getAudioSettingsConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowModeConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowModeConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowModeConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putAudioNode: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -35,19 +42,26 @@ vi.mock('../api', async () => {
     ...actual,
     getFPPEndpointsConfig: (...args: never[]) => stubs.getFPPEndpointsConfig(...args),
     putFPPEndpointsConfig: (...args: never[]) => stubs.putFPPEndpointsConfig(...args),
+    getFPPEndpointsConfigRevisions: (...args: never[]) => stubs.getFPPEndpointsConfigRevisions(...args),
     getResolumeInstancesConfig: (...args: never[]) => stubs.getResolumeInstancesConfig(...args),
     putResolumeInstancesConfig: (...args: never[]) => stubs.putResolumeInstancesConfig(...args),
+    getResolumeInstancesConfigRevisions: (...args: never[]) => stubs.getResolumeInstancesConfigRevisions(...args),
     getFPPMQTTConfig: (...args: never[]) => stubs.getFPPMQTTConfig(...args),
     putFPPMQTTConfig: (...args: never[]) => stubs.putFPPMQTTConfig(...args),
+    getFPPMQTTConfigRevisions: (...args: never[]) => stubs.getFPPMQTTConfigRevisions(...args),
     getAssetsSettingsConfig: (...args: never[]) => stubs.getAssetsSettingsConfig(...args),
     putAssetsSettingsConfig: (...args: never[]) => stubs.putAssetsSettingsConfig(...args),
+    getAssetsSettingsConfigRevisions: (...args: never[]) => stubs.getAssetsSettingsConfigRevisions(...args),
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     getRenderSettingsConfig: (...args: never[]) => stubs.getRenderSettingsConfig(...args),
     putRenderSettingsConfig: (...args: never[]) => stubs.putRenderSettingsConfig(...args),
+    getRenderSettingsConfigRevisions: (...args: never[]) => stubs.getRenderSettingsConfigRevisions(...args),
     getAudioSettingsConfig: (...args: never[]) => stubs.getAudioSettingsConfig(...args),
     putAudioSettingsConfig: (...args: never[]) => stubs.putAudioSettingsConfig(...args),
+    getAudioSettingsConfigRevisions: (...args: never[]) => stubs.getAudioSettingsConfigRevisions(...args),
     getShowModeConfig: (...args: never[]) => stubs.getShowModeConfig(...args),
     putShowModeConfig: (...args: never[]) => stubs.putShowModeConfig(...args),
+    getShowModeConfigRevisions: (...args: never[]) => stubs.getShowModeConfigRevisions(...args),
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getAudioNode: (...args: never[]) => stubs.getAudioNode(...args),
     putAudioNode: (...args: never[]) => stubs.putAudioNode(...args),
@@ -509,12 +523,127 @@ describe('Settings › Mode', () => {
 
     renderAt('/settings/mode', { nightSession: null })
 
-    await waitFor(() => expect(screen.getByRole('heading', { level: 2 })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'What this installation is for right now' })).toBeInTheDocument())
     const programOption = screen.getByRole('radio', { name: /Program mode/ })
     fireEvent.click(programOption)
     fireEvent.click(screen.getByRole('button', { name: /Apply mode/ }))
 
     expect(await screen.findByText('Stale write')).toBeInTheDocument()
     expect(putCalled).toBe(false)
+  })
+})
+
+describe('RevisionHistory, shared across editors', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  function assetsSettingsConfig() {
+    return {
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'assets.settings',
+      revision: 2,
+      payload: { contentBaseUrl: '', maxUploadBytes: 500000000, syncIntervalSeconds: 900, inventoryIntervalSeconds: 3600 },
+      updatedAt: '2026-08-30T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    }
+  }
+
+  function audioSettingsConfig() {
+    return {
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'audio.settings',
+      revision: 1,
+      payload: {
+        driftIgnoreThresholdMs: 40,
+        defaultFadeCurve: 'linear',
+        defaultFadeDurationMs: 1500,
+        defaultMaxBackgroundGainDb: -6,
+        duckTargetGainDb: -18,
+        duckFadeDurationMs: 250,
+        duckRestoreFadeDurationMs: 1200,
+        ltcFrameRate: '30',
+        ltcDefaultStartOffset: '00:00:00:00',
+      },
+      updatedAt: '2026-08-30T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    }
+  }
+
+  it('renders author and timestamp for each revision, on Content delivery', async () => {
+    stubs.getAssetsSettingsConfig = () => Promise.resolve(assetsSettingsConfig())
+    stubs.listAssets = () => Promise.resolve({ assets: [] })
+    stubs.getAssetsSettingsConfigRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'assets.settings',
+        revisions: [
+          { revision: 2, createdAt: '2026-08-30T18:00:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: 'raised max upload size', active: true },
+          { revision: 1, createdAt: '2026-08-20T14:00:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: false },
+        ],
+      })
+
+    renderAt('/settings/delivery')
+
+    expect(await screen.findByText('Active · 2')).toBeInTheDocument()
+    expect(screen.getByText(/raised max upload size/)).toBeInTheDocument()
+    const revisionsSection = screen.getByRole('heading', { level: 2, name: 'Revisions' }).closest('section') as HTMLElement
+    expect(within(revisionsSection).getAllByText(/erbartos/).length).toBeGreaterThan(0)
+    expect(within(revisionsSection).getByText('1')).toBeInTheDocument()
+  })
+
+  it('renders an empty history as a settled fact, not a read failure, on Audio defaults', async () => {
+    stubs.getAudioSettingsConfig = () => Promise.resolve(audioSettingsConfig())
+    stubs.getAudioSettingsConfigRevisions = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.settings', revisions: [] })
+
+    renderAt('/settings/audio-defaults')
+
+    await waitFor(() => expect(screen.getByText('linear')).toBeInTheDocument())
+    expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
+  })
+
+  it('leaves the editor around it intact when the revisions read fails, on Content delivery', async () => {
+    stubs.getAssetsSettingsConfig = () => Promise.resolve(assetsSettingsConfig())
+    stubs.listAssets = () => Promise.resolve({ assets: [] })
+    stubs.getAssetsSettingsConfigRevisions = () => Promise.reject(new Error('network error'))
+
+    renderAt('/settings/delivery')
+
+    await waitFor(() => expect(screen.getByDisplayValue('900')).toBeInTheDocument())
+    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save delivery' })).toBeInTheDocument()
+  })
+
+  it('is the same element on two different screens', async () => {
+    stubs.getAssetsSettingsConfig = () => Promise.resolve(assetsSettingsConfig())
+    stubs.listAssets = () => Promise.resolve({ assets: [] })
+    stubs.getAssetsSettingsConfigRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'assets.settings',
+        revisions: [{ revision: 2, createdAt: '2026-08-30T18:00:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: true }],
+      })
+
+    const delivery = renderAt('/settings/delivery')
+    expect(await screen.findByRole('heading', { level: 2, name: 'Revisions' })).toBeInTheDocument()
+    delivery.unmount()
+    cleanup()
+
+    stubs.getAudioSettingsConfig = () => Promise.resolve(audioSettingsConfig())
+    stubs.getAudioSettingsConfigRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'audio.settings',
+        revisions: [{ revision: 1, createdAt: '2026-08-20T14:00:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: true }],
+      })
+
+    renderAt('/settings/audio-defaults')
+    expect(await screen.findByRole('heading', { level: 2, name: 'Revisions' })).toBeInTheDocument()
   })
 })

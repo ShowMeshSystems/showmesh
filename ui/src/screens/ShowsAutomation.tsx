@@ -3,7 +3,9 @@ import { useParams } from 'react-router-dom'
 import {
   getMacroRun,
   getShowAction,
+  getShowActionRevisions,
   getShowMacro,
+  getShowMacroRevisions,
   invokeAction,
   listConfigObjects,
   listResolumeActions,
@@ -23,7 +25,7 @@ import {
   type ShowActionConfigResponse,
   type ShowMacroConfigResponse,
 } from '../api'
-import { AttentionRow, BlankingPlate, Button, Choice, Field, Input, Panes, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap, Textarea } from '../kit'
+import { AttentionRow, BlankingPlate, Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap, Textarea } from '../kit'
 import type { Tone } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateAnyScope, evaluateScope } from '../domain/session'
@@ -761,6 +763,7 @@ function StepEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <RevisionHistory fetch={() => getShowMacroRevisions(macro.id)} reloadKey={`${macro.id}:${macro.revision}`} />
     </div>
   )
 }
@@ -1755,6 +1758,7 @@ function ActionEditor({
       </div>
       {stale !== null && <StaleWriteStrip stale={stale} onReload={onReloadAfterStale} />}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <RevisionHistory fetch={() => getShowActionRevisions(action.id)} reloadKey={`${action.id}:${action.revision}`} />
     </div>
   )
 }

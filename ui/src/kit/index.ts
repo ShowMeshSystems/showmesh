@@ -8,6 +8,7 @@ export { Segmented } from './Segmented'
 export { StatusPair } from './Status'
 export { BlankingPlate, RuledStrip, type Absence } from './StateBlocks'
 export { NotWired, NotWiredBanner } from './NotWired'
+export { RevisionHistory } from './RevisionHistory'
 export {
   ChromeBar,
   ChromeProgress,

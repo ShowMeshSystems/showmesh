@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   getShowSurface,
+  getShowSurfaceRevisions,
   putShowSurface,
   type ConfigShowSurface,
   type ShowSurfaceConfigResponse,
 } from '../api'
-import { Button, Field, Input, Panes, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
@@ -499,6 +500,7 @@ function SurfaceEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      {surface !== null && <RevisionHistory fetch={() => getShowSurfaceRevisions(surface.id)} reloadKey={`${surface.id}:${surface.revision}`} />}
     </div>
   )
 }

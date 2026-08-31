@@ -10,6 +10,7 @@ const stubs = vi.hoisted(() => ({
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowSurfaceRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowSurface: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
@@ -21,6 +22,7 @@ vi.mock('../api', async () => {
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     getShow: (...args: never[]) => stubs.getShow(...args),
     getShowSurface: (...args: never[]) => stubs.getShowSurface(...args),
+    getShowSurfaceRevisions: (...args: never[]) => stubs.getShowSurfaceRevisions(...args),
     putShowSurface: (...args: never[]) => stubs.putShowSurface(...args),
   }
 })
@@ -242,6 +244,21 @@ describe('Shows · Presentation tab', () => {
     )
     const region = await screen.findByRole('region', { name: 'Surfaces, scrollable' })
     await waitFor(() => expect(within(region).getByText(/40 fps/)).toBeInTheDocument())
+  })
+
+  it('renders the surface’s own revision history, author and timestamp included', async () => {
+    stubs.getShowSurfaceRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.surface',
+        revisions: [
+          { revision: 6, createdAt: '2026-08-30T20:41:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: true },
+        ],
+      })
+    setup()
+    const row = await screen.findByRole('button', { name: 'Garage door' })
+    fireEvent.click(row)
+    expect(await screen.findByText('Active · 6')).toBeInTheDocument()
   })
 
   it('save is disabled without config:write and is actually inert', async () => {

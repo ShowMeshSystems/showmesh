@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react'
 import {
   ApiError,
   getFPPEndpointsConfig,
+  getFPPEndpointsConfigRevisions,
   getFPPMQTTConfig,
+  getFPPMQTTConfigRevisions,
   getResolumeInstancesConfig,
+  getResolumeInstancesConfigRevisions,
   putFPPEndpointsConfig,
   putFPPMQTTConfig,
   putResolumeInstancesConfig,
   type ConfigFPPEndpoint,
   type ConfigResolumeInstance,
 } from '../api'
-import { Button, ButtonRow, Input, NotWired, NotWiredBanner, RuledStrip, Section, StatusPair } from '../kit'
+import { Button, ButtonRow, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -340,6 +343,7 @@ export function SettingsConnections() {
           <StaleWriteStrip stale={fppOutcome.stale} onReload={() => { setFppOutcome(null); reloadAll() }} />
         )}
         {fppOutcome !== null && 'error' in fppOutcome && <RuledStrip absence="failed" label="Save failed" fact={fppOutcome.error} />}
+        <RevisionHistory id="st-fpp-rev" fetch={getFPPEndpointsConfigRevisions} reloadKey={attempt} />
       </Section>
 
       <Section id="st-res" title="Resolume">
@@ -425,6 +429,7 @@ export function SettingsConnections() {
         {resolumeOutcome !== null && 'error' in resolumeOutcome && (
           <RuledStrip absence="failed" label="Save failed" fact={resolumeOutcome.error} />
         )}
+        <RevisionHistory id="st-res-rev" fetch={getResolumeInstancesConfigRevisions} reloadKey={attempt} />
       </Section>
 
       <Section id="st-mqtt" title="Event feed" detail="How FPP's plugin reaches the coordinator. Playlist-entry identity arrives here.">
@@ -480,6 +485,7 @@ export function SettingsConnections() {
           <StaleWriteStrip stale={mqttOutcome.stale} onReload={() => { setMqttOutcome(null); reloadAll() }} />
         )}
         {mqttOutcome !== null && 'error' in mqttOutcome && <RuledStrip absence="failed" label="Save failed" fact={mqttOutcome.error} />}
+        <RevisionHistory id="st-mqtt-rev" fetch={getFPPMQTTConfigRevisions} reloadKey={attempt} />
       </Section>
 
       <ButtonRow>

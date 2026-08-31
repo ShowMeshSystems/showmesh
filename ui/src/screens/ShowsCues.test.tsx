@@ -10,6 +10,7 @@ const stubs = vi.hoisted(() => ({
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowCueRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
@@ -22,6 +23,7 @@ vi.mock('../api', async () => {
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     getShow: (...args: never[]) => stubs.getShow(...args),
     getShowCue: (...args: never[]) => stubs.getShowCue(...args),
+    getShowCueRevisions: (...args: never[]) => stubs.getShowCueRevisions(...args),
     getShowPlaylist: (...args: never[]) => stubs.getShowPlaylist(...args),
     putShowCue: (...args: never[]) => stubs.putShowCue(...args),
   }
@@ -208,6 +210,21 @@ describe('Shows · Cues tab', () => {
     stubs.putShowCue = putSpy
     fireEvent.click(save)
     expect(putSpy).not.toHaveBeenCalled()
+  })
+
+  it('renders the cue’s own revision history, author and timestamp included', async () => {
+    stubs.getShowCueRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'show.cue',
+        revisions: [
+          { revision: 1, createdAt: '2026-08-30T18:22:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: true },
+        ],
+      })
+    setup()
+    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    fireEvent.click(row)
+    expect(await screen.findByText('Active · 1')).toBeInTheDocument()
   })
 
   it('a stale cue save is refused, writes nothing, and names the changed fields', async () => {

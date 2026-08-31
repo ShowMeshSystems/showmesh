@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ApiError, getShowActive, listConfigObjects, putShowActive } from '../api'
-import { Button, ButtonRow, DefinitionStrip, Field, FieldGrid, PageTitle, RuledStrip, Section, Select, StatusPair, Table, TableWrap } from '../kit'
+import { ApiError, getShowActive, getShowActiveRevisions, listConfigObjects, putShowActive } from '../api'
+import { Button, ButtonRow, DefinitionStrip, Field, FieldGrid, PageTitle, RevisionHistory, RuledStrip, Section, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -228,9 +228,6 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
           <p className="sm-small sm-faint">
             The show.active pointer cannot be cleared once set: the contract requires a non-empty show name.
           </p>
-          <p className="sm-small sm-faint">
-            Activation revision history is not rendered here yet: no shared revision-history element exists in this build.
-          </p>
         </>
       )}
       {stale !== null && (
@@ -243,6 +240,7 @@ function ShowActivation({ objects }: { objects: ConfigObjectSummary[] }) {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <RevisionHistory fetch={getShowActiveRevisions} reloadKey={attempt} />
     </Section>
   )
 }

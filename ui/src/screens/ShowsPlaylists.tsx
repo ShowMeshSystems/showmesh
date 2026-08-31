@@ -4,6 +4,7 @@ import {
   getFPPPlaylistDefinitionEntries,
   getFPPPlaylistReadiness,
   getShowPlaylist,
+  getShowPlaylistRevisions,
   listFPPPlaylistDefinitions,
   putShowPlaylist,
   type ConfigObjectSummary,
@@ -15,7 +16,7 @@ import {
   type ShowPlaylistConfigResponse,
 } from '../api'
 import { randomUUIDv4 } from '../api/uuid'
-import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
+import { Button, ButtonRow, Callout, DefinitionStrip, Field, Input, RevisionHistory, RuledStrip, Section, Segmented, Select, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -557,6 +558,7 @@ function FPPPlaylistEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <RevisionHistory id="pl-rev-fpp" fetch={() => getShowPlaylistRevisions(playlist.id)} reloadKey={`${playlist.id}:${playlist.revision}`} />
     </Section>
   )
 }
@@ -790,6 +792,7 @@ function AudioPlaylistEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <RevisionHistory id="pl-rev-audio" fetch={() => getShowPlaylistRevisions(playlist.id)} reloadKey={`${playlist.id}:${playlist.revision}`} />
     </Section>
   )
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { getShow, putShow, type ShowConfigResponse } from '../api'
-import { Button, ButtonRow, Field, Input, NotWired, PageTitle, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
+import { getShow, getShowRevisions, putShow, type ShowConfigResponse } from '../api'
+import { Button, ButtonRow, Field, Input, NotWired, PageTitle, RevisionHistory, RuledStrip, Section, StatTile, StatusPair, Textarea, Tiles } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -268,6 +268,8 @@ export function ShowDetail() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+
+      <RevisionHistory fetch={() => getShowRevisions(id)} reloadKey={`${id}:${revision}`} />
 
       <Section id="sh-danger" title="Delete this show">
         <div className="sm-panel">

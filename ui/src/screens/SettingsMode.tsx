@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
-import { getCurrentNightSession, getShowModeConfig, putShowModeConfig, type ConfigShowModePayload, type NightSessionState, type ShowModeConfigResponse } from '../api'
-import { Button, ButtonRow, RuledStrip, Section, StatusPair } from '../kit'
+import {
+  getCurrentNightSession,
+  getShowModeConfig,
+  getShowModeConfigRevisions,
+  putShowModeConfig,
+  type ConfigShowModePayload,
+  type NightSessionState,
+  type ShowModeConfigResponse,
+} from '../api'
+import { Button, ButtonRow, RevisionHistory, RuledStrip, Section, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedSave, type SaveOutcome } from '../domain/save'
@@ -188,6 +196,8 @@ export function SettingsMode() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+
+      <RevisionHistory fetch={getShowModeConfigRevisions} reloadKey={attempt} />
     </>
   )
 }

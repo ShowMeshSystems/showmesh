@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
-import { getAssetsSettingsConfig, listAssets, putAssetsSettingsConfig, type AssetsSettingsConfigResponse } from '../api'
-import { Button, ButtonRow, Field, Input, NotWired, NotWiredBanner, RuledStrip, Section, Select } from '../kit'
+import {
+  getAssetsSettingsConfig,
+  getAssetsSettingsConfigRevisions,
+  listAssets,
+  putAssetsSettingsConfig,
+  type AssetsSettingsConfigResponse,
+} from '../api'
+import { Button, ButtonRow, Field, Input, NotWired, NotWiredBanner, RevisionHistory, RuledStrip, Section, Select } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -265,6 +271,8 @@ export function SettingsDelivery() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+
+      <RevisionHistory fetch={getAssetsSettingsConfigRevisions} reloadKey={attempt} />
     </>
   )
 }

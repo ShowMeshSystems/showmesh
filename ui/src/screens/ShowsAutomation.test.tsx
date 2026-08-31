@@ -18,7 +18,9 @@ const stubs = vi.hoisted(() => ({
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShow: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowMacro: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowMacroRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowActionRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listActionBindings: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowMacro: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
@@ -35,7 +37,9 @@ vi.mock('../api', async () => {
     listAssets: (...args: never[]) => stubs.listAssets(...args),
     getShow: (...args: never[]) => stubs.getShow(...args),
     getShowMacro: (...args: never[]) => stubs.getShowMacro(...args),
+    getShowMacroRevisions: (...args: never[]) => stubs.getShowMacroRevisions(...args),
     getShowAction: (...args: never[]) => stubs.getShowAction(...args),
+    getShowActionRevisions: (...args: never[]) => stubs.getShowActionRevisions(...args),
     listActionBindings: (...args: never[]) => stubs.listActionBindings(...args),
     putShowMacro: (...args: never[]) => stubs.putShowMacro(...args),
     putShowAction: (...args: never[]) => stubs.putShowAction(...args),
@@ -433,6 +437,22 @@ describe('Shows · Automation tab', () => {
       expect(usedByFact?.textContent).toContain('Preshow Lights Up')
       expect(usedByFact?.textContent).toContain('step')
       expect(usedByFact?.textContent).toContain('1')
+    })
+
+    it('renders the action’s own revision history, author and timestamp included', async () => {
+      stubs.getShowActionRevisions = () =>
+        Promise.resolve({
+          serverTime: '2026-08-30T21:00:00Z',
+          kind: 'show.action',
+          revisions: [
+            { revision: 1, createdAt: '2026-08-22T11:09:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: true },
+          ],
+        })
+      setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
+      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      fireEvent.click(editButton)
+      const aside = screen.getByRole('complementary')
+      expect(await within(aside).findByText('Active · 1')).toBeInTheDocument()
     })
 
     it('a stale save is refused and writes nothing', async () => {

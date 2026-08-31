@@ -6,6 +6,7 @@ import {
   dispatchNightCommand,
   getCurrentNightSession,
   getNightSessionActiveConfig,
+  getNightSessionActiveConfigRevisions,
   listConfigObjects,
   putNightSessionActiveConfig,
   randomUUIDv4,
@@ -25,6 +26,7 @@ import {
   Input,
   NotWired,
   NotWiredBanner,
+  RevisionHistory,
   RuledStrip,
   Section,
   Select,
@@ -698,9 +700,6 @@ function NightSessionActivation() {
             </div>
           )}
 
-          <p className="sm-small sm-faint">
-            Activation revision history is not rendered here yet: no shared revision-history element exists in this build.
-          </p>
         </>
       )}
       {stale !== null && (
@@ -713,6 +712,7 @@ function NightSessionActivation() {
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      <RevisionHistory fetch={getNightSessionActiveConfigRevisions} reloadKey={attempt} />
     </Section>
   )
 }

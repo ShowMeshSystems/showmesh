@@ -6,9 +6,8 @@ import {
   putAudioNode,
   type AudioNodeConfigResponse,
   type ConfigObjectSummary,
-  type ConfigRevisionMeta,
 } from '../api'
-import { Button, ButtonRow, Field, Input, NotWiredBanner, RuledStrip, Section, Select, StatusPair } from '../kit'
+import { Button, ButtonRow, Field, Input, NotWiredBanner, RevisionHistory, RuledStrip, Section, Select, StatusPair } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope, type ScopeGateResult } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -106,7 +105,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
 
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<NodeState>({ kind: 'loading' })
-  const [revisions, setRevisions] = useState<ConfigRevisionMeta[] | null>(null)
 
   const [programRoute, setProgramRoute] = useState('')
   const [programChannelsText, setProgramChannelsText] = useState('')
@@ -136,20 +134,6 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
       })
       .catch((err: unknown) => {
         if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [nodeId, attempt])
-
-  useEffect(() => {
-    let cancelled = false
-    getAudioNodeConfigRevisions(nodeId)
-      .then((response) => {
-        if (!cancelled) setRevisions(response.revisions)
-      })
-      .catch(() => {
-        if (!cancelled) setRevisions(null)
       })
     return () => {
       cancelled = true
@@ -411,25 +395,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
 
-      <Section id="st-rev" title="Revisions">
-        {revisions === null ? (
-          <RuledStrip absence="unobserved" label="Unread" fact="Revision history could not be read just now." />
-        ) : revisions.length === 0 ? (
-          <RuledStrip absence="empty" label="None" fact="No prior revision recorded." />
-        ) : (
-          <div>
-            {revisions.map((rev) => (
-              <div key={rev.revision} className="sm-inline-row sm-stack-3">
-                <StatusPair tone={rev.active ? 'good' : 'pending'} label={rev.active ? `Active · ${rev.revision}` : String(rev.revision)} />
-                <p className="sm-small sm-muted">
-                  {formatClock(rev.createdAt) ?? 'unrecorded time'} by {rev.createdByPrincipalName ?? 'unknown principal'}
-                  {rev.note !== '' && `. ${rev.note}`}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+      <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} />
     </>
   )
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   getShowCue,
+  getShowCueRevisions,
   putShowCue,
   type Asset,
   type ConfigShowCue,
@@ -9,7 +10,7 @@ import {
   type ShowCueConfigResponse,
   type ShowPlaylistConfigResponse,
 } from '../api'
-import { Button, Choice, Field, Input, Panes, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
+import { Button, Choice, Field, Input, Panes, RevisionHistory, RuledStrip, Section, Segmented, Select, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { guardedCreate, guardedSave, type SaveOutcome } from '../domain/save'
@@ -557,6 +558,7 @@ function CueEditor({
         />
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+      {cue !== null && <RevisionHistory fetch={() => getShowCueRevisions(cue.id)} reloadKey={`${cue.id}:${cue.revision}`} />}
     </div>
   )
 }

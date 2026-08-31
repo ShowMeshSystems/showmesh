@@ -20,6 +20,7 @@ const stubs = vi.hoisted(() => ({
   getResolumeRecovery: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getResolumeRecoveryConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putResolumeRecoveryConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getResolumeRecoveryConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   uploadResolumeComposition: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
@@ -32,6 +33,7 @@ vi.mock('../api', async () => {
     getResolumeRecovery: (...args: never[]) => stubs.getResolumeRecovery(...args),
     getResolumeRecoveryConfig: (...args: never[]) => stubs.getResolumeRecoveryConfig(...args),
     putResolumeRecoveryConfig: (...args: never[]) => stubs.putResolumeRecoveryConfig(...args),
+    getResolumeRecoveryConfigRevisions: (...args: never[]) => stubs.getResolumeRecoveryConfigRevisions(...args),
     uploadResolumeComposition: (...args: never[]) => stubs.uploadResolumeComposition(...args),
   }
 })
@@ -218,7 +220,26 @@ describe('Resolume config', () => {
 
     await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument())
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Stored composition', 'Clips that cannot be named', 'Recovery', 'What Arena is reporting'])
+    expect(headings).toEqual(['Stored composition', 'Clips that cannot be named', 'Recovery', 'Revisions', 'What Arena is reporting'])
+  })
+
+  it('renders the recovery config’s revision history, author and timestamp included', async () => {
+    stubs.getResolumeComposition = () => Promise.resolve(composition())
+    stubs.getResolumeRecovery = () => Promise.resolve(recovery())
+    stubs.getResolumeRecoveryConfig = () => Promise.resolve(recoveryConfig())
+    stubs.getResolumeInstancesConfig = () => Promise.resolve(instancesConfig())
+    stubs.getResolumeRecoveryConfigRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'resolume.recovery',
+        revisions: [
+          { revision: 3, createdAt: '2026-08-22T11:09:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: true },
+        ],
+      })
+
+    renderScreen([instance()])
+
+    expect(await screen.findByText('Active · 3')).toBeInTheDocument()
   })
 
   it('lists only the ambiguous clips, reads N of the reported total', async () => {

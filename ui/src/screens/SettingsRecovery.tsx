@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
-import { getRenderSettingsConfig, putRenderSettingsConfig, type RenderSettingsConfigResponse } from '../api'
-import { Button, ButtonRow, Field, Input, RuledStrip, Section } from '../kit'
+import {
+  getRenderSettingsConfig,
+  getRenderSettingsConfigRevisions,
+  putRenderSettingsConfig,
+  type RenderSettingsConfigResponse,
+} from '../api'
+import { Button, ButtonRow, Field, Input, RevisionHistory, RuledStrip, Section } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { formatClock } from '../domain/time'
@@ -245,6 +250,8 @@ export function SettingsRecovery() {
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
       <p className="sm-small sm-faint">Saving does not restart anything now. It changes what happens the next time a pipeline fails.</p>
+
+      <RevisionHistory fetch={getRenderSettingsConfigRevisions} reloadKey={attempt} />
     </>
   )
 }

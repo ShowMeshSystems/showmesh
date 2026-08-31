@@ -11,6 +11,7 @@ const stubs = vi.hoisted(() => ({
   dispatchNightCommand: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
   getNightSessionActiveConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   putNightSessionActiveConfig: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
+  getNightSessionActiveConfigRevisions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listConfigObjects: (() => Promise.resolve({ serverTime: '', kind: 'night.session', objects: [] })) as (
     ...args: never[]
   ) => Promise<unknown>,
@@ -43,6 +44,7 @@ vi.mock('../api', async () => {
     dispatchNightCommand: (...args: never[]) => stubs.dispatchNightCommand(...args),
     getNightSessionActiveConfig: (...args: never[]) => stubs.getNightSessionActiveConfig(...args),
     putNightSessionActiveConfig: (...args: never[]) => stubs.putNightSessionActiveConfig(...args),
+    getNightSessionActiveConfigRevisions: (...args: never[]) => stubs.getNightSessionActiveConfigRevisions(...args),
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
   }
 })
@@ -109,6 +111,7 @@ describe('Show Night', () => {
       'Run of Show',
       'Evidence',
       'Night session activation',
+      'Revisions',
     ])
   })
 
@@ -586,6 +589,20 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session() })
     expect(await screen.findByText('winter-ridge-2026')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Winter Ridge Backup (winter-ridge-backup)' })).toBeInTheDocument()
+  })
+
+  it('renders the activation pointer’s revision history, author and timestamp included', async () => {
+    stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
+    stubs.getNightSessionActiveConfigRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-28T21:07:00Z',
+        kind: 'night.session.active',
+        revisions: [
+          { revision: 3, createdAt: '2026-08-28T16:00:00Z', createdByPrincipalId: 'p', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: true },
+        ],
+      })
+    renderScreen({ nightSession: session() })
+    expect(await screen.findByText('Active · 3')).toBeInTheDocument()
   })
 
   it('activates a different night session definition', async () => {
