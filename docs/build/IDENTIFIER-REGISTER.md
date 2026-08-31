@@ -79,6 +79,15 @@ A pre-show script wants to branch on that difference. Track E seam E7's
 invoke verb reuses 9 and 11 to 13 unchanged — the ADR-020 outcome vocabulary
 does not fork per surface.
 
+**Lane 17a SM-129 mints no new exit code for the hard-stop arm/fire gate**
+(orchestrator ruling): `showmeshctl emergency-stop hard-stop fire` reuses
+`exitActionRefused` (13) for a refused arm (never armed, the wrong token,
+or the token expired, all one class since the remedy is identical: "arm
+again, then fire promptly"), and `exitConflict` (10) for the compare-and-
+swap-race case, an arm token already consumed by an earlier fire. A new
+code would add vocabulary without adding discrimination a script could
+actually branch on.
+
 ## Configuration kinds
 
 `config_objects.kind` and `config_revisions.kind`, used verbatim as the
@@ -107,6 +116,7 @@ second path segment of `/api/v1/config/<kind>`. Defined in
 | `night.session.active` | `default` singleton | reserved | Track F seam F1 |
 | `fppconnect.settings` | `default` singleton | shipped | Track E phase 2 seam FC1a |
 | `node.clock` | operator-chosen (the node id) | reserved | Track I seam I1 |
+| `show.emergencystop` | `default` singleton | shipped | Lane 17a SM-129 |
 
 **Track B deliberately mints no per-surface kind.** `show.surface` already
 exists (Track E) and Track B consumes it unchanged. `render.settings` holds
@@ -224,6 +234,19 @@ Note the Resolume composition is **not** a configuration kind. It is stored
 behind `/api/v1/config/resolume/composition` with its own upload path
 (ADR-032), and the path shape differs deliberately.
 
+**`show.emergencystop` (Lane 17a SM-129) holds only the three emergency-stop
+levels' own optional, per-level follow-up action lists**: an ordered list
+of existing `show.action` ids per level, invoked best-effort after that
+level's own immediate stop. It is the shared-pool-with-per-level-selection
+design: `show.action` is already the namespace-scoped, validated authoring
+surface, so this kind adds no new way to author an action's own target, only
+which already-authored actions each level's own list names. Field names
+(`stop`, `stopPowerDown`, `hardStop`) match the wire level names in
+`/api/v1/emergency-stop/*` and this build's own audit action strings below
+exactly. Referenced `show.action` ids are validated to exist at write time,
+of ANY show: this kind is installation-wide, never scoped to whichever show
+happens to be active, unlike `night.session`'s own action references.
+
 ### show.action target integrations
 
 `show.action.target.integration`, defined in
@@ -273,6 +296,7 @@ bundles of these (ADR-024).
 | `night:override` | shipped | Track F seam F6: interlock override where a rule declares `authorized-operator` (force-power-off instead reuses `show:action:invoke`, see RESTING-MODE.md §10.4) |
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
 | `fpp:fallback` | shipped | Track J seam J1: an FPP host fetches its current fallback program and posts its acknowledgement |
+| `show:emergencystop:invoke` | shipped | Lane 17a SM-129: the four emergency-stop trigger routes (stop, stop-power-down, hard-stop arm/fire) |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -315,6 +339,19 @@ learns which protocol it reaches, so requiring a protocol-named scope would
 reintroduce the binding the ADR exists to hide. The grant to watch is
 therefore `config:write`, which decides what an action may be bound to, not
 this one.
+
+**`show:emergencystop:invoke` (Lane 17a SM-129) is `show:action:invoke`'s own
+umbrella-authority precedent, applied to the same problem one layer up.** A
+principal holding it may stop playout, force the active night session's own
+existing shutdown sequence, and invoke every follow-up action configured for
+whichever level it triggers, without separately holding `fpp:command`,
+`night:command`, or `show:action:invoke`. It is granted to `RoleOperator`
+(the console operator during a live show is exactly who must be able to
+reach this without first being handed the individual scopes those actions
+would otherwise need), the same reasoning that already puts
+`show:action:invoke` in `operatorActionScopes`. It is the ONLY scope check on
+all four emergency-stop routes; the dispatch primitives underneath authorize
+nothing of their own for an in-process caller.
 
 ## Node capability identifiers
 
@@ -571,6 +608,9 @@ register entry comes from the code and never from a plan.
 | `fallback.program.refuse` | shipped | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
 | `fallback.program.acknowledge` | shipped | Track J seam J1: an FPP host acknowledging the installed package |
 | `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
+| `show.emergencystop.stop` | shipped | Lane 17a SM-129: level 1 (stop) dispatch |
+| `show.emergencystop.stop_power_down` | shipped | Lane 17a SM-129: level 2 (stop-power-down) dispatch |
+| `show.emergencystop.hard_stop` | shipped | Lane 17a SM-129: level 3 (hard-stop) dispatch, only after fire consumes its own arm token |
 
 **Two naming conventions are in use and neither is being changed
 retroactively.** Most names are `<noun>.<verb>` with an underscore inside
@@ -578,6 +618,17 @@ the verb (`principal.reset_password`, `fpp.stop_playlist_gracefully`).
 `credential_in_url` has no noun segment at all. Renaming any of them
 rewrites the meaning of history that is already stored, so the rule going
 forward is `<noun>.<verb>`, and the existing outliers stay.
+
+**The three `show.emergencystop.*` names above apply this rule, not the
+orchestrator's own first guess.** Lane 17a SM-129 was handed
+`show.emergencystop.stop-power-down`/`hard-stop` (hyphenated) as a semantic
+placeholder and asked to check this section's own convention before
+committing to a spelling; this section's own words above are unambiguous
+(underscore inside a multi-word verb, matching `stop_playlist_gracefully`
+and `reset_password`), so the shipped spellings use `stop_power_down` and
+`hard_stop` instead. The noun segments (`show.emergencystop`, three dots
+deep) mirror `fallback.program.*`'s own noun.subnoun.verb shape rather than
+inventing a fourth pattern.
 
 **Four of these names are shared with other namespaces, deliberately and
 harmlessly.** `asset.fetch`, the four `render.*` names, and `cue.activate`
@@ -1330,6 +1381,15 @@ That prefix is recorded here rather than the individual paths, because
 `api/openapi.yaml` remains the register for the paths themselves. J1 is
 expected to add a listing, a per-FPP-host current-program read, and an
 acknowledgement write beneath it, guarded by the `fpp:fallback` scope above.
+
+**Lane 17a SM-129 owns every path under `/api/v1/emergency-stop`**, plus
+`/api/v1/config/show.emergencystop` and its `/revisions`. Recorded here on
+the identical `/api/v1/fallback-programs` precedent immediately above;
+`api/openapi.yaml` remains the register for the paths themselves. Its own
+schema components (`EmergencyStop*`, `ConfigEmergencyStop*`) follow the
+existing `<Domain><Verb>Request`/`Response` naming precedent
+(`IssueTokenRequest`/`Response`, `RenderApplyRequest`) rather than a new
+shape.
 
 **Lane 17a wave 1 component and field reservations, 2026-08-30.** Schema
 component names and response field names are not otherwise tracked here,

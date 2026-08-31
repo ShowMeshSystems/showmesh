@@ -92,6 +92,13 @@ type handlers struct {
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
 
+	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
+	// intent gate state. See [emergencyStopArmStore]'s own doc comment
+	// for why this is in-memory, unpersisted, and a single-process
+	// assumption (ADR-012, the same one discoveryRunInFlight above
+	// already relies on).
+	emergencyStopArms *emergencyStopArmStore
+
 	// cueActivationFailToBlackWG owns every dispatchAssetMissingFailToBlack
 	// goroutine cueActivationTickOne has launched but not yet finished (see
 	// that method's own doc comment in cueactivationloop.go for why the

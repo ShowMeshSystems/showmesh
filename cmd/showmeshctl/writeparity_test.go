@@ -168,6 +168,12 @@ var dynamicWritePathCoverage = map[string]string{
 		"cmdAudioSessionLikeDispatch with pathSuffix=output/mute (showmeshctl audio output mute)",
 	"POST /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute": "cmd_audio_gain.go cmdAudioOutput calls " +
 		"cmdAudioSessionLikeDispatch with pathSuffix=output/unmute (showmeshctl audio output unmute)",
+	"POST /emergency-stop/stop": "cmd_emergency_stop.go cmdEmergencyStopLevel builds its own apiPath " +
+		"parameter, called with \"/api/v1/emergency-stop/stop\" from cmdEmergencyStop's own \"stop\" case " +
+		"(showmeshctl emergency-stop stop)",
+	"POST /emergency-stop/stop-power-down": "cmd_emergency_stop.go cmdEmergencyStopLevel builds its own " +
+		"apiPath parameter, called with \"/api/v1/emergency-stop/stop-power-down\" from cmdEmergencyStop's " +
+		"own \"stop-power-down\" case (showmeshctl emergency-stop stop-power-down)",
 }
 
 // unresolved marks a CLI path fragment this test could not reduce to a

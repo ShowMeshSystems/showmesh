@@ -4829,6 +4829,348 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
+  /config/show.emergencystop:
+    get:
+      operationId: getEmergencyStopConfig
+      summary: The three emergency-stop levels' own optional follow-up action lists
+      description: >-
+        Requires `config:write`, on `fpp.endpoints`/`show.action`'s own
+        majority precedent (not `show.mode`'s open-read exception, which
+        rests on ADR-033 decision 3's persistent-visibility requirement -
+        nothing establishes that for this kind). Never `404`s: the payload
+        has a well-defined default (every level configured with no
+        follow-up actions), reported with `revision` `0` and `source`
+        `"default"` when nothing has ever been written.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStopConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: putEmergencyStopConfig
+      summary: Set the three emergency-stop levels' own optional follow-up action lists
+      description: >-
+        Requires `config:write` (admin only). A full replacement: `stop`,
+        `stopPowerDown` and `hardStop` are all required, each with its own
+        required (possibly empty) `actions` array of existing `show.action`
+        ids - an absent level key, or an absent/null `actions` key inside
+        one, is refused by name rather than silently defaulted; an empty
+        array is how "no follow-up actions" is deliberately configured for
+        a level. Every referenced `show.action` id must already exist, of
+        ANY show - this kind is installation-wide and is never scoped to
+        one show's own namespace. The SAME action id may appear in more
+        than one level's own list; the same id twice within ONE level's own
+        list is refused. On success, appends a new immutable revision and
+        activates it in the SAME transaction as its audit log entry
+        (ADR-024 decision 11). A cookie-authenticated request additionally
+        requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a
+        bearer-token-authenticated request is exempt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigEmergencyStopPayload"
+      responses:
+        "200":
+          description: OK. The newly activated revision.
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStopConfigResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >-
+            Either the principal does not hold `config:write`
+            (`forbidden`), or a cookie-authenticated write was missing
+            `Sec-Fetch-Site: same-origin` (`csrf-rejected`).
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /config/show.emergencystop/revisions:
+    get:
+      operationId: getEmergencyStopConfigRevisions
+      summary: show.emergencystop revision history, newest first
+      description: >-
+        Requires `config:write`. Metadata only, mirroring
+        `GET /config/show.mode/revisions`.
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigRevisionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /emergency-stop/stop:
+    post:
+      operationId: emergencyStop
+      summary: "Emergency stop, level 1: stop playout immediately"
+      description: >-
+        Behind `show:emergencystop:invoke` - umbrella authority over the
+        underlying FPP stop dispatch and every configured follow-up action,
+        the identical shape `show:action:invoke` already has over its own
+        dispatch (see that scope's own doc comment,
+        `internal/coordinator/identity/types.go`). Dispatches FPP's "Stop
+        Now" to every configured FPP instance CONCURRENTLY, then invokes
+        this level's own configured `show.emergencystop.stop.actions`
+        best-effort, in order. A follow-up action's own failure is reported
+        per-action in `result.followUps` and NEVER changes
+        `result.stopOutcomes` or this response's own success: the operator
+        pressed the button to stop the show, and a follow-up that failed
+        must never read as "the stop did not happen". NOTHING THAT
+        SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read the
+        configured FPP instance list is reported as one `failed` entry in
+        `result.stopOutcomes` (never a silent empty array; see
+        `result.noInstancesConfigured` for the actual zero-instance
+        signal), and a failure to read this level's own follow-up
+        configuration degrades to no follow-ups (see
+        `result.followUpConfigError`) rather than aborting the stop. No
+        night-session interaction of any kind - see
+        `/emergency-stop/stop-power-down` for level 2.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmergencyStopRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStopResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /emergency-stop/stop-power-down:
+    post:
+      operationId: emergencyStopPowerDown
+      summary: "Emergency stop, level 2: stop immediately, then force the standard graceful shutdown now"
+      description: >-
+        Behind `show:emergencystop:invoke`. Everything
+        `POST /emergency-stop/stop` does, PLUS: if a night session is
+        currently active, forces it into the SAME graceful-shutdown
+        sequence an ordinary `power-down-presentation` night command
+        already runs (RESTING-MODE.md section 4.7), immediately - bypassing
+        both the ordinary live-show deferral and interlock evaluation
+        entirely, on RESTING-MODE.md's own words ("Only an explicitly
+        configured and invoked emergency/force operation may interrupt
+        playback or remove power immediately") and `end-session`'s existing
+        precedent. `result.nightSession.present` is `false`, with no error,
+        when no night session was active - a real, valid outcome, not a
+        failure. This still WAITS on the night loop's own fresh idle
+        evidence before that sequence itself reaches `stopped`
+        (RESTING-MODE.md section 4.6/4.7) - see
+        `/emergency-stop/hard-stop/fire` for the level with no wait at all.
+        A failure in this step (a night-session store read or write that
+        does not succeed) is reported in `result.nightSession.error`
+        rather than aborting the stop: the stop dispatch above has already
+        run regardless. Then invokes this level's own configured
+        `show.emergencystop.stopPowerDown.actions` best-effort, in order,
+        on the identical never-fails-the-stop rule
+        `POST /emergency-stop/stop` states in full.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmergencyStopRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStopResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /emergency-stop/hard-stop/arm:
+    post:
+      operationId: armEmergencyStopHardStop
+      summary: "Emergency stop, level 3's deliberate-intent gate, call 1 of 2: arm"
+      description: >-
+        Behind `show:emergencystop:invoke`. THE DELIBERATE-INTENT GATE for
+        level 3 ("the big red button") lives here, in the API, not the UI
+        alone: operator capabilities are API-first with `showmeshctl` at
+        practical parity, so a UI-only gate would let `showmeshctl`
+        hard-stop the show with one command and no gate at all. Mints a
+        single-use, opaque token, valid for a short server-side window
+        (currently 10s), that `POST /emergency-stop/hard-stop/fire` must
+        present to actually fire. Arming has NO side effect on the show by
+        itself and is freely retryable. At most one live token per
+        principal: arming again before a principal's own previous token is
+        consumed or expires invalidates that previous token immediately -
+        arming is evidence of a RECENT deliberate act, and several live
+        tokens per principal would let a caller fire on an act that is no
+        longer recent. This is NOT a confirmation dialog (ruled out by the
+        product owner); the UI is free to present arm+fire as a single
+        double-press gesture with no modal at all, and `showmeshctl`
+        exposes arm and fire as two SEPARATE subcommands that are never
+        chained by one command, carrying the identical gate on the CLI.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmergencyStopArmRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStopArmResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /emergency-stop/hard-stop/fire:
+    post:
+      operationId: fireEmergencyStopHardStop
+      summary: "Emergency stop, level 3's deliberate-intent gate, call 2 of 2: fire"
+      description: >-
+        Behind `show:emergencystop:invoke`. Requires `armToken` from a
+        prior `POST /emergency-stop/hard-stop/arm` for the SAME principal,
+        presented while it is still valid, unexpired, and unconsumed.
+        Consuming the token is an atomic compare-and-swap: two concurrent
+        fire requests presenting the identical token can never both
+        succeed. That compare-and-swap is the ONLY guard against firing
+        this level twice; there is no separate request-level
+        `idempotencyKey` replay cache on `fire` itself, so the same
+        already-consumed token presented again is refused with `409`
+        rather than replayed. The token is consumed only once the request
+        is otherwise valid (idempotencyKey and armToken well-formed), and
+        every step after that point - the stop dispatch, the night-session
+        step, and reading this level's own follow-up configuration -
+        degrades and is reported rather than aborting, so a consumed token
+        is never wasted on a request that then fails for an unrelated
+        reason. Downstream, the per-instance FPP dispatch and each
+        follow-up action's own dispatch are independently protected
+        against a REDELIVERED COMMAND (not a redelivered `fire` request)
+        by the existing per-command idempotency-key layer keyed off this
+        request's own `idempotencyKey`; the night-session step consults no
+        key at all and relies solely on the arm/fire gate above. On
+        success, dispatches FPP's "Stop Now" to every configured instance
+        CONCURRENTLY (an unreadable instance list is reported as a
+        `failed` entry in `stopOutcomes`, never a silent empty array),
+        abandons the active night session straight to `stopped` with NO
+        WAIT for idle evidence (reusing the existing `end-session` night
+        command unchanged - RESTING-MODE.md's own "no wait time"
+        requirement for this level; a failure in this step is reported
+        inside `nightSession.error` rather than aborting the stop), then
+        invokes this level's own configured
+        `show.emergencystop.hardStop.actions` best-effort,
+        in order, on the identical never-fails-the-stop rule
+        `POST /emergency-stop/stop` states in full.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmergencyStopFireRequest"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmergencyStopResponse"
+        "400":
+          $ref: "#/components/responses/InvalidParameter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: >-
+            Either the arm token is unknown/never armed/expired
+            (`type` `emergency-stop-hard-stop-not-armed`, remedy "arm again,
+            then fire promptly"), or it was already consumed by an earlier
+            fire request (`type` `conflict`, remedy "check whether the hard
+            stop already happened before arming again").
+          headers:
+            ShowMesh-API-Version:
+              $ref: "#/components/headers/ShowMesh-API-Version"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /macros/{id}/runs:
     post:
       operationId: submitMacroRun
@@ -10080,7 +10422,7 @@ components:
           format: date-time
         kind:
           type: string
-          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings]
+          enum: [fpp.endpoints, show.action, show.macro, show, show.surface, show.active, show.mode, show.cue, show.playlist, night.session, night.session.active, resolume.recovery, render.settings, resolume.instances, fpp.mqtt, assets.settings, audio.settings, audio.node, fppconnect.settings, show.emergencystop]
         revisions:
           type: array
           items:
@@ -11076,6 +11418,233 @@ components:
             `show`. Names the mode as the reason, which is ADR-033 decision
             3's requirement that a behaviour caused by the mode says so
             where the operator can see it. Always non-empty.
+    ConfigEmergencyStopLevelPayload:
+      type: object
+      description: >-
+        One emergency-stop level's own optional, ordered follow-up action
+        list - show.action ids, invoked best-effort, in this order, after
+        that level's own immediate stop.
+      required: [actions]
+      properties:
+        actions:
+          type: array
+          items:
+            type: string
+          description: >-
+            Existing show.action ids, of ANY show. Never null - an empty
+            array is how "no follow-up actions" is deliberately configured
+            for this level. The same id may repeat across DIFFERENT
+            levels' own lists, but not twice within one level's own list.
+    ConfigEmergencyStopPayload:
+      type: object
+      description: >-
+        The "show.emergencystop" configuration kind's decoded payload: the
+        body PUT /config/show.emergencystop accepts (a full
+        replacement - all three level keys required, each with its own
+        required actions array), and the "payload" member of GET
+        /config/show.emergencystop's response. Field names match the wire
+        level names ("stop", "stopPowerDown", "hardStop") used in
+        /emergency-stop/* paths and this build's own audit action strings
+        exactly, so a reader correlating a PUT body against an audit entry
+        never has to translate between three vocabularies for one level.
+      required: [stop, stopPowerDown, hardStop]
+      properties:
+        stop:
+          $ref: "#/components/schemas/ConfigEmergencyStopLevelPayload"
+        stopPowerDown:
+          $ref: "#/components/schemas/ConfigEmergencyStopLevelPayload"
+        hardStop:
+          $ref: "#/components/schemas/ConfigEmergencyStopLevelPayload"
+    EmergencyStopConfigResponse:
+      type: object
+      description: >-
+        The body of GET and PUT /config/show.emergencystop. Never `404`s:
+        the payload has a well-defined default (every level empty),
+        reported with `revision` `0` and `source` `"default"` when nothing
+        has ever been written.
+      required:
+        [serverTime, kind, revision, payload, updatedAt,
+         createdByPrincipalId, createdByPrincipalName, source]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        kind:
+          type: string
+        revision:
+          type: integer
+        payload:
+          $ref: "#/components/schemas/ConfigEmergencyStopPayload"
+        updatedAt:
+          type: string
+          format: date-time
+        createdByPrincipalId:
+          type: [string, "null"]
+        createdByPrincipalName:
+          type: [string, "null"]
+        source:
+          type: string
+    EmergencyStopRequest:
+      type: object
+      description: The body of POST /emergency-stop/stop and POST /emergency-stop/stop-power-down.
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey:
+          type: string
+    EmergencyStopInstanceOutcome:
+      type: object
+      description: One configured FPP instance's own stop dispatch outcome.
+      required: [instanceId, outcome, outcomeReason, dispatchedAt, replay]
+      properties:
+        instanceId:
+          type: string
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "refused", "failed"]
+        outcomeReason:
+          type: string
+        dispatchedAt:
+          type: [string, "null"]
+          format: date-time
+        replay:
+          type: boolean
+          description: True when this instance's own idempotency key was already dispatched; nothing was re-sent.
+    EmergencyStopFollowUpResult:
+      type: object
+      description: >-
+        One configured follow-up show.action's own best-effort invocation
+        outcome. This NEVER affects the response's own success or
+        `stopOutcomes` - a follow-up action's own failure must never read
+        as "the stop did not happen".
+      required: [actionId, outcomeReason]
+      properties:
+        actionId:
+          type: string
+        label:
+          type: string
+        outcome:
+          type: string
+          enum: ["confirmed", "unconfirmed", "unconfirmable", "refused", "failed"]
+          description: Absent when the action id itself could not even be resolved - outcomeReason always explains why.
+        outcomeReason:
+          type: string
+    EmergencyStopNightSessionOutcome:
+      type: object
+      description: >-
+        What, if anything, happened to the active night session as level
+        stop-power-down's or hard-stop's own night-session component.
+        present is false when no night session was active - a real, valid
+        outcome, not an error. error is non-empty exactly when this
+        component could not be attempted or did not complete; the stop
+        itself still proceeded regardless (this build's own degrade-safely
+        rule, applied to every component that supports the stop, not only
+        to follow-up actions). When error is set, outcome carries whatever
+        partial information is known and may be absent.
+      required: [present]
+      properties:
+        present:
+          type: boolean
+        sessionId:
+          type: string
+        outcome:
+          type: string
+        error:
+          type: string
+    EmergencyStopResult:
+      type: object
+      description: >-
+        The shared result shape every trigger route (stop, stop-power-down,
+        and hard-stop's own fire) answers with. stopOutcomes and followUps
+        are two SEPARATE arrays, deliberately with no combined success
+        flag: a caller's exit code is driven by stopOutcomes alone.
+        NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK THE STOP: reading
+        the configured FPP instance list, the night-session step, and
+        reading this level's own follow-up configuration each degrade
+        independently and are reported here rather than turning a stop
+        that could otherwise proceed into a failed response.
+      required: [level, idempotencyKey, stopOutcomes, noInstancesConfigured, followUps]
+      properties:
+        level:
+          type: string
+          enum: ["stop", "stop-power-down", "hard-stop"]
+        idempotencyKey:
+          type: string
+        stopOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmergencyStopInstanceOutcome"
+          description: >-
+            NEVER null and never silently empty on a failure to read the
+            configured instance list, which is instead reported as one
+            "failed" entry here. Empty if and only if
+            noInstancesConfigured is true.
+        noInstancesConfigured:
+          type: boolean
+          description: >-
+            The POSITIVE signal that zero FPP instances are configured,
+            distinct from a failure to read the configured instance list.
+            A caller must read this field rather than infer "nothing to
+            stop" from an empty stopOutcomes array.
+        nightSession:
+          $ref: "#/components/schemas/EmergencyStopNightSessionOutcome"
+        followUps:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmergencyStopFollowUpResult"
+        followUpConfigError:
+          type: string
+          description: >-
+            Non-empty exactly when this level's own show.emergencystop
+            configuration could not be read or decoded, in which case
+            followUps is empty (no follow-up actions were attempted) but
+            stopOutcomes still reflects a real dispatch attempt: the stop
+            does not need this configuration to proceed.
+    EmergencyStopResponse:
+      type: object
+      description: >-
+        The body of POST /emergency-stop/stop, POST
+        /emergency-stop/stop-power-down, and POST
+        /emergency-stop/hard-stop/fire.
+      required: [serverTime, result]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        result:
+          $ref: "#/components/schemas/EmergencyStopResult"
+    EmergencyStopArmRequest:
+      type: object
+      description: The body of POST /emergency-stop/hard-stop/arm. Arming has no side effect on the show itself.
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey:
+          type: string
+    EmergencyStopArmResponse:
+      type: object
+      description: >-
+        Carries the single-use token POST /emergency-stop/hard-stop/fire
+        must present within expiresAt. Arming again before that deadline
+        invalidates THIS token immediately - at most one live token per
+        principal.
+      required: [serverTime, armToken, expiresAt]
+      properties:
+        serverTime:
+          type: string
+          format: date-time
+        armToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    EmergencyStopFireRequest:
+      type: object
+      description: The body of POST /emergency-stop/hard-stop/fire.
+      required: [idempotencyKey, armToken]
+      properties:
+        idempotencyKey:
+          type: string
+        armToken:
+          type: string
     ConfigAudioSettingsPayload:
       type: object
       description: >-
@@ -11498,6 +12067,7 @@ components:
             - https://showmesh.dev/problems/show-config-cross-show-reference
             - https://showmesh.dev/problems/unsupported-observation-schema-version
             - https://showmesh.dev/problems/observation-entry-key-mismatch
+            - https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed
         title:
           type: string
         status:
