@@ -200,9 +200,10 @@ describe('Show Night', () => {
     }
   })
 
-  it('renders the not-wired banner and placeholder steps on the page when earlier cycles exist', () => {
+  it('renders the complete timeline without adding a banner that is absent from the approved layout', () => {
     renderScreen({ nightSession: session({ cycle: 3, state: 'live' }) })
-    expect(screen.getByText('The night timeline does nothing yet.')).toBeInTheDocument()
+    expect(screen.queryByText('The night timeline does nothing yet.')).not.toBeInTheDocument()
+    expect(screen.getByText('Preshow')).toBeInTheDocument()
     expect(screen.getByText('Cycle 1')).toBeInTheDocument()
     expect(screen.getAllByText('not reported').length).toBeGreaterThan(0)
   })
@@ -359,25 +360,23 @@ describe('Show Night', () => {
     expect(calls).toBe(2)
   })
 
-  it('renders a single off-cycle row, not a four-row dead rail, for a state outside the repeating cycle', () => {
+  it('keeps the full cycle skeleton visible before the repeating cycle begins', () => {
     const rail = cycleRail(session({ state: 'preshow' }), '2026-08-28T21:07:00Z')
-    expect(rail).toHaveLength(1)
-    expect(rail[0]?.label).toBe('Preshow')
-    expect(rail[0]?.detail).toContain('Not in the repeating cycle')
-    expect(rail[0]?.status).toBe('now')
+    expect(rail).toHaveLength(5)
+    expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting', 'Back to resting'])
+    expect(rail.every((step) => step.status === 'ahead')).toBe(true)
   })
 
-  it('names another off-cycle state honestly instead of four rows of "not reported"', () => {
+  it('does not invent cycle progress for another off-cycle state', () => {
     const rail = cycleRail(session({ state: 'fading-out' }), '2026-08-28T21:07:00Z')
-    expect(rail).toHaveLength(1)
-    expect(rail[0]?.label).toBe('Fading out')
-    expect(rail.every((step) => step.detail !== 'not reported')).toBe(true)
+    expect(rail).toHaveLength(5)
+    expect(rail.slice(0, 4).every((step) => step.detail === 'not started')).toBe(true)
   })
 
-  it('still renders the full four-step cycle rail for a state inside the cycle', () => {
+  it('renders the four cycle phases and the return boundary for a state inside the cycle', () => {
     const rail = cycleRail(session({ state: 'live' }), '2026-08-28T21:07:00Z')
-    expect(rail).toHaveLength(4)
-    expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting'])
+    expect(rail).toHaveLength(5)
+    expect(rail.map((step) => step.label)).toEqual(['Resting', 'To show', 'Live', 'To resting', 'Back to resting'])
   })
 
   it('links Edit definition to the in-page definition editor', () => {
@@ -385,16 +384,23 @@ describe('Show Night', () => {
     expect(screen.getByRole('link', { name: 'Edit definition' })).toHaveAttribute('href', '#sn-definitions')
   })
 
-  it('has no earlier cycles and no not-wired banner when the session is on cycle 1', () => {
+  it('keeps three structural cycle slots when the session is on cycle 1', () => {
     const rail = nightRail(session({ cycle: 1, state: 'live' }))
     const cycleSteps = rail.filter((step) => step.key.startsWith('cycle-'))
-    expect(cycleSteps).toHaveLength(1)
+    expect(cycleSteps).toHaveLength(3)
     expect(cycleSteps[0]?.status).toBe('now')
     expect(rail.some((step) => step.status === 'notWired')).toBe(false)
 
     renderScreen({ nightSession: session({ cycle: 1, state: 'live' }) })
     expect(screen.queryByText('The night timeline does nothing yet.')).not.toBeInTheDocument()
-    expect(screen.queryByText('not reported')).not.toBeInTheDocument()
+    expect(screen.getByText('Cycle 3')).toBeInTheDocument()
+    expect(screen.getAllByText('not started').length).toBeGreaterThan(0)
+  })
+
+  it('renders preshow and three cycle slots even when the coordinator reports cycle zero', () => {
+    const rail = nightRail(session({ cycle: 0, state: 'inactive' }))
+    expect(rail.slice(0, 4).map((step) => step.label)).toEqual(['Preshow', 'Cycle 1', 'Cycle 2', 'Cycle 3'])
+    expect(rail.slice(0, 4).every((step) => step.detail === 'not started')).toBe(true)
   })
 
   it('renders every readiness check with its state and reason, including not_verifiable and not_configured', () => {

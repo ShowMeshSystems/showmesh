@@ -18,31 +18,13 @@ export type RailStep = {
   status: 'done' | 'now' | 'ahead' | 'unknown' | 'notWired'
 }
 
-/** The states outside the repeating cycle, and what to call each on the rail. */
-const OFF_CYCLE_LABEL: Record<string, string> = {
-  inactive: 'Inactive',
-  preparing: 'Preparing',
-  preshow: 'Preshow',
-  'end-of-night-resting': 'End-of-night resting',
-  'fading-out': 'Fading out',
-  stopped: 'Stopped',
-}
-
 export function cycleRail(session: NightSessionState, nowIso: string | null): RailStep[] {
   const currentIndex = CYCLE_STEPS.findIndex((step) => step.state === session.state)
   const inState = ageMs(session.stateEnteredAt, nowIso)
-  if (currentIndex === -1) {
-    const label = OFF_CYCLE_LABEL[session.state] ?? session.state
-    return [
-      {
-        key: session.state,
-        label,
-        detail: `Not in the repeating cycle · ${inState === null ? 'now' : `${formatDuration(inState)} in state`}`,
-        status: 'now' as const,
-      },
-    ]
-  }
-  return CYCLE_STEPS.map((step, index) => {
+  const phases = CYCLE_STEPS.map((step, index) => {
+    if (currentIndex === -1) {
+      return { key: step.state, label: step.label, detail: 'not started', status: 'ahead' as const }
+    }
     if (index < currentIndex) return { key: step.state, label: step.label, detail: 'done this cycle', status: 'done' as const }
     if (index === currentIndex) {
       return {
@@ -54,6 +36,15 @@ export function cycleRail(session: NightSessionState, nowIso: string | null): Ra
     }
     return { key: step.state, label: step.label, detail: 'ahead', status: 'ahead' as const }
   })
+  return [
+    ...phases,
+    {
+      key: 'back-to-resting',
+      label: 'Back to resting',
+      detail: session.cycle > 0 ? `starts cycle ${session.cycle + 1}` : 'next cycle not started',
+      status: 'ahead',
+    },
+  ]
 }
 
 /**
@@ -62,8 +53,16 @@ export function cycleRail(session: NightSessionState, nowIso: string | null): Ra
  * step exists because the cycle happened, but nothing about it is reported.
  */
 export function nightRail(session: NightSessionState): RailStep[] {
+  const cycleActive = CYCLE_STEPS.some((step) => step.state === session.state)
+  const preshowComplete = session.cycle > 0 || cycleActive || ['end-of-night-resting', 'fading-out', 'stopped'].includes(session.state)
+  const preshow: RailStep = session.state === 'preshow'
+    ? { key: 'preshow', label: 'Preshow', detail: 'now', status: 'now' }
+    : preshowComplete
+      ? { key: 'preshow', label: 'Preshow', detail: 'time not reported', status: 'done' }
+      : { key: 'preshow', label: 'Preshow', detail: 'not started', status: 'ahead' }
+
   const cycleSteps: RailStep[] = []
-  for (let cycle = 1; cycle <= session.cycle; cycle += 1) {
+  for (let cycle = 1; cycle <= Math.max(3, session.cycle); cycle += 1) {
     if (cycle < session.cycle) {
       cycleSteps.push({
         key: `cycle-${cycle}`,
@@ -71,17 +70,25 @@ export function nightRail(session: NightSessionState): RailStep[] {
         detail: 'not reported',
         status: 'notWired',
       })
-    } else {
+    } else if (cycle === session.cycle && session.cycle > 0) {
       cycleSteps.push({
         key: `cycle-${cycle}`,
         label: `Cycle ${cycle}`,
         detail: session.state,
         status: 'now',
       })
+    } else {
+      cycleSteps.push({
+        key: `cycle-${cycle}`,
+        label: `Cycle ${cycle}`,
+        detail: 'not started',
+        status: 'ahead',
+      })
     }
   }
 
   const rail: RailStep[] = [
+    preshow,
     ...cycleSteps,
     {
       key: 'more',
