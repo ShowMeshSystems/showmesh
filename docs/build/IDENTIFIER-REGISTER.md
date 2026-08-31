@@ -1084,11 +1084,14 @@ The store schema version, bumped by migrations in
 | v18 | shipped | Track H seam H4 defect fix: `entry_occurrence_sequence` on `fpp_playlist_entry_observations`, the entry-start identity a looping FPP playlist needs to re-activate its Cues |
 | v19 | shipped | operator-facing audio gain moves to decibels: every stored `audio.settings` revision's `defaultMaxBackgroundGain`/`duckTargetGain` is rewritten to `defaultMaxBackgroundGainDb`/`duckTargetGainDb` so an existing revision reads back at the same audible level |
 | v20 | shipped | every stored `audio.settings` revision is backfilled with any of the seven currently-required top-level keys it is missing, using each field's own stated default, so a revision written before `ltcFrameRate`, `ltcDefaultStartOffset` and `duckTargetGainDb` joined the required set still decodes and can be pushed |
-| v21 | reserved | the multi-node audio branch's `audio_sessions` re-key, from `id` alone to `(node_id, id)`, so two nodes dispatching the same session id keep separate desired state and revision; existing rows migrated in place. Built and merged on `dev/multi-audio` as v20 before v20 was taken on `main`; it renumbers to v21 when that branch takes `main` |
-| v22 | reserved | Lane 17a SM-111: renaming `commands.requested_revision` to an honest name and formalizing its per-family discriminator (owner, 2026-08-19). Supersedes the v13 reservation below, which was made before v14 through v21 were taken |
-| v23 | reserved | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, if J1 needs a table (ADR-048, TRACK-J-fpp-fallback.md J1) |
+| v21 | released, dead | was the multi-node audio branch's `audio_sessions` re-key. Released 2026-08-31: v24 shipped, so v21 is at or below the stamped maximum and a migration numbered here can never run. The re-key renumbers to v27 when `dev/multi-audio` takes `main` |
+| v22 | released, dead | was Lane 17a SM-111's `commands.requested_revision` rename. Released 2026-08-31 for the same reason as v21. The rename moves to v26 |
+| v23 | released, dead | was Track J seam J1's fallback-program storage. Released 2026-08-31 for the same reason as v21 and v22. J1 takes v25 |
 | v24 | shipped | every stored `audio.settings` revision is backfilled with `duckFadeDurationMs`/`duckRestoreFadeDurationMs` when either is missing, using each field's own stated default, so a revision written before a duck fade (rather than an instant step) existed still decodes and can be pushed |
-| v25+ | unallocated | free |
+| v25 | reserved | Track J seam J1: signed fallback-program revisions and per-FPP-host acknowledgement storage, `fallback_programs` and `fallback_program_acknowledgements` (ADR-048, TRACK-J-fpp-fallback.md J1). Renumbered from v23 |
+| v26 | reserved | Lane 17a SM-111: renaming `commands.requested_revision` and formalizing its per-family discriminator (owner, 2026-08-19). Renumbered from v22, which was renumbered from v13 |
+| v27 | reserved | the multi-node audio branch's `audio_sessions` re-key, from `id` alone to `(node_id, id)`. Renumbered from v21 |
+| v28+ | unallocated | free |
 
 **v23 was taken while v22 was still free, deliberately.** Lane 17a was
 holding v22 unregistered, so J1 took the next number rather than the lowest
@@ -1096,6 +1099,22 @@ free one. That follows this file's own rule at the top: reserving costs
 nothing and a collision costs a rename across a whole branch. v22 is now
 registered to SM-111 in the row above, so the gap is closed rather than
 standing.
+
+**v21, v22 and v23 are released as dead, and nothing at or below the shipped
+maximum is ever reserved again.** v24 shipped on 2026-08-31. `migrate()` targets
+the MAXIMUM version across the slice and returns early when the database's
+stored version already equals that maximum, so a migration numbered at or below
+an already-shipped number can never run on a store a prior binary has stamped:
+the runner reports the database current, because by its own rule it is, and the
+tables the migration would have created are simply never created. Nothing
+errors. That is why these three moved rather than waiting: a reservation below
+the stamp is not a reservation, it is a migration that will silently do nothing.
+
+This is the rule to apply next time, not just the record of this one. Reserve
+the next number ABOVE the current maximum, never the lowest free one, and
+re-check the maximum before the branch lands rather than when it was written.
+Three reservations went stale here because `main` took a number underneath them
+while they were unmerged, which is ordinary and will happen again.
 
 **SM-111 moves from v13 to v22, and v13 is released.** The rename was
 reserved as v13 on 2026-08-19 and never built; v14 through v21 were taken by
