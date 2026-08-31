@@ -345,7 +345,7 @@ func TestWithHeldRouteTrusted(t *testing.T) {
 		// directly, matching that real precondition.
 		lastKnownGoodRoutes.update([]audio.RouteEvidence{
 			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
-		})
+		}, true)
 
 		routes := []audio.RouteEvidence{
 			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
@@ -400,7 +400,7 @@ func TestWithHeldRouteTrusted(t *testing.T) {
 		t.Cleanup(lastKnownGoodRoutes.reset)
 		lastKnownGoodRoutes.update([]audio.RouteEvidence{
 			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
-		})
+		}, true)
 
 		programOnly := audioNodeConfig{ProgramRoute: "hw:0,0", ProgramChannels: []int{1, 2}}
 		routes := []audio.RouteEvidence{
@@ -411,6 +411,48 @@ func TestWithHeldRouteTrusted(t *testing.T) {
 			t.Fatalf("held program-only route hw:0,0 = %+v, want Available=true LTCChannels=3 preserved from the last known-good probe even though this binding declares no LTC role", out[0])
 		}
 	})
+}
+
+// TestRouteEvidenceCacheEvictsOnlyOnACompleteEnumeration proves round 7's
+// busy-vs-absent distinction: a device missing from a complete pass
+// (successful, untruncated enumeration) is evicted, since gone hardware
+// must not keep asserting a capability, but a device merely missing from
+// an incomplete (truncated or failed) pass is left alone, since that
+// pass never had a chance to see it either way.
+func TestRouteEvidenceCacheEvictsOnlyOnACompleteEnumeration(t *testing.T) {
+	lastKnownGoodRoutes.reset()
+	t.Cleanup(lastKnownGoodRoutes.reset)
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 4}, LTCChannels: 3},
+	}, true)
+	if _, ok := lastKnownGoodRoutes.get("hw:0,0"); !ok {
+		t.Fatal("hw:0,0 not cached after seeding, want present")
+	}
+
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
+	}, false)
+	if _, ok := lastKnownGoodRoutes.get("hw:0,0"); !ok {
+		t.Fatal("hw:0,0 evicted by an incomplete (truncated/failed) enumeration pass that omitted it, want still cached")
+	}
+
+	lastKnownGoodRoutes.update([]audio.RouteEvidence{
+		{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: true, Channels: 2}},
+	}, true)
+	if _, ok := lastKnownGoodRoutes.get("hw:0,0"); ok {
+		t.Fatal("hw:0,0 still cached after a complete enumeration pass that no longer found it, want evicted")
+	}
+
+	// End to end: once evicted, a held program-only route with nothing
+	// left to trust reports LTCChannels honestly as 0, not fabricated.
+	programOnly := audioNodeConfig{ProgramRoute: "hw:0,0", ProgramChannels: []int{1, 2}}
+	routes := []audio.RouteEvidence{
+		{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+	}
+	out := withHeldRouteTrusted(routes, programOnly, true)
+	if len(out) != 1 || out[0].LTCChannels != 0 {
+		t.Fatalf("held route hw:0,0 after eviction = %+v, want LTCChannels=0 (no real evidence left to substitute)", out[0])
+	}
 }
 
 // TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe proves the

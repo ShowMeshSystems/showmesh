@@ -86,26 +86,9 @@ func (g *capabilityDetectionGate) trigger(run func(gen uint64)) {
 // closure are current by then. Always runs on its own goroutine, started
 // by trigger.
 //
-// gen and run are read TOGETHER, under the same lock, at the top of
-// every iteration, never separately. Round 7 found that reading them
-// separately (gen fixed by trigger before this goroutine even started,
-// run re-read fresh each iteration) leaves a window, between trigger's
-// own unlock and this goroutine's first lock acquisition, in which a
-// second trigger can land: it bumps the generation and overwrites
-// latestRun (running is already true, so it only marks pending and
-// returns, it does not start a second goroutine), but this goroutine
-// would still execute that NEWEST closure under the OLDEST generation it
-// was launched with. isCurrent then correctly refuses to publish that
-// result as stale, so nothing is corrupted, but the work was not
-// wasted for free: it cost one full detection pass (up to
-// capabilityDetectionTimeout) before the pending follow-up re-runs the
-// identical closure again, this time under a current generation,
-// doubling the worst-case time to a node's first correct capability
-// publish. Reading gen alongside run here, instead of carrying it in
-// from trigger, closes that window: whatever this goroutine reads on
-// its first iteration already reflects every trigger that landed before
-// that read, consistently, so the closure it executes and the
-// generation it executes under are always the same trigger's.
+// gen and run are read TOGETHER, under the same lock, each iteration:
+// reading gen separately let a trigger landing before this goroutine's
+// first lock acquisition overwrite run while it still ran under a now-stale gen.
 func (g *capabilityDetectionGate) runLoop() {
 	for {
 		g.mu.Lock()
