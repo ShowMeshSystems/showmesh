@@ -472,7 +472,7 @@ func (e *Engine) buildPipeline() error {
 			if err != nil {
 				return fmt.Errorf("could not build LTC chain for channel %d: %w", ch, err)
 			}
-			if ltc.capsfilter.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
+			if ltc.queue.GetStaticPad("src").Link(sinkPad) != gst.PadLinkOK {
 				return fmt.Errorf("could not link LTC chain to interleave for channel %d", ch)
 			}
 			e.ltc = ltc

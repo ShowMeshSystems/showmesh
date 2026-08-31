@@ -44,6 +44,8 @@ const activeConfig = {
     defaultFadeDurationMs: 500,
     defaultMaxBackgroundGainDb: -1.94,
     duckTargetGainDb: -13.98,
+    duckFadeDurationMs: 150,
+    duckRestoreFadeDurationMs: 700,
     ltcFrameRate: '30' as const,
     ltcDefaultStartOffset: '00:00:00:00',
   },
@@ -75,6 +77,8 @@ describe('AudioSettings', () => {
     expect(screen.getByDisplayValue('500')).toBeInTheDocument()
     expect(screen.getByDisplayValue('-1.94')).toBeInTheDocument()
     expect(screen.getByDisplayValue('-13.98')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('150')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('700')).toBeInTheDocument()
     expect(screen.getByLabelText('LTC frame rate')).toHaveValue('30')
     expect(screen.getByDisplayValue('00:00:00:00')).toBeInTheDocument()
     // Gain fields are labelled in dB, never as a linear multiplier (the
@@ -105,6 +109,8 @@ describe('AudioSettings', () => {
         defaultFadeDurationMs: 750,
         defaultMaxBackgroundGainDb: -1.94,
         duckTargetGainDb: -13.98,
+        duckFadeDurationMs: 150,
+        duckRestoreFadeDurationMs: 700,
         ltcFrameRate: '30',
         ltcDefaultStartOffset: '00:00:00:00',
       }),

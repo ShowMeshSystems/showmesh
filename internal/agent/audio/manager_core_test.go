@@ -288,8 +288,10 @@ func TestStopFailureStillReleasesDuckAndAllowsRetry(t *testing.T) {
 		t.Fatalf("bg gain after ann's failed stop = %v, want restored 0.8", bgGain)
 	}
 	// bg.desired.Gain is this package's own bookkeeping; only the
-	// engine's own evidence proves the SetGain call that restores it
-	// actually reached the engine.
+	// engine's own evidence proves the fade that restores it actually
+	// reached the engine. The restore is a fade, not a step: let it
+	// finish before reading the engine's own settled gain.
+	c.advance(900 * time.Millisecond)
 	bgObs, err := m.engine.Observe(ctx, bgHandle)
 	if err != nil {
 		t.Fatalf("Observe(bg): %v", err)

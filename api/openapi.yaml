@@ -11063,6 +11063,12 @@ components:
         heard on the installation's speakers, and the owner picks the
         real one by ear (RES-007). A muted session is unaffected;
         mute silences unconditionally.
+        `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a
+        session takes to fade DOWN into a duck and back UP once its last
+        ducker releases it, instead of stepping instantly: the restore is
+        deliberately the slower of the two (broadcast "fast attack, slow
+        release"), since an announcement is already talking over the bed
+        by the time the duck starts, but nothing is once it ends.
         `ltcFrameRate` is the closed vocabulary Resolume's timecode input
         supports; this ships non-drop-frame at every rate because
         Resolume's drop-frame expectation at 29.97 is unresearched
@@ -11071,8 +11077,8 @@ components:
         point when its own audio.session.apply carries no override.
       required:
         [driftIgnoreThresholdMs, defaultFadeCurve, defaultFadeDurationMs,
-         defaultMaxBackgroundGainDb, duckTargetGainDb, ltcFrameRate,
-         ltcDefaultStartOffset]
+         defaultMaxBackgroundGainDb, duckTargetGainDb, duckFadeDurationMs,
+         duckRestoreFadeDurationMs, ltcFrameRate, ltcDefaultStartOffset]
       properties:
         driftIgnoreThresholdMs:
           type: integer
@@ -11096,6 +11102,20 @@ components:
           description: >-
             Decibels a ducked session is driven to. Must be negative;
             -60 dB is silence. Provisional value, not measured.
+        duckFadeDurationMs:
+          type: integer
+          description: >-
+            How long a session takes to fade DOWN to duckTargetGainDb once
+            a higher-priority session starts ducking it. Fast by design:
+            an announcement is already talking over the bed once the duck
+            starts.
+        duckRestoreFadeDurationMs:
+          type: integer
+          description: >-
+            How long a session takes to fade back UP once its last ducker
+            releases it. Slower than duckFadeDurationMs by design: an
+            abrupt return to full level once nothing is talking over the
+            bed reads as jarring in a way the duck-down does not.
         ltcFrameRate:
           type: string
           enum: ["24", "25", "29.97", "30"]

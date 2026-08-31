@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/fppconnect"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
@@ -147,6 +148,20 @@ const (
 	fppConnectPathMultiSyncSystems = "/api/fppd/multiSyncSystems"
 	fppConnectPathPlaylists        = "/api/playlists"
 
+	// fppConnectPathModels is GET /api/models: xLights calls it, unprompted,
+	// during every upload to learn what models the target already holds
+	// (observed against a real xLights on 2026-08-30; RES-003's traced
+	// schema for it). GET only: POST /api/models stays deferred behind the
+	// /config.php identity gate (TRACK-E-FPP-CONNECT.md's explicitly
+	// deferred list), so this listener never claims to accept one.
+	fppConnectPathModels = "/api/models"
+
+	// fppConnectPathFPPDRestart is GET /api/system/fppd/restart, matched
+	// without its query string (route() dispatches on r.URL.EscapedPath(),
+	// which never includes it): xLights calls this with and without
+	// "?quick=1" to end an upload, and both forms reach the same handler.
+	fppConnectPathFPPDRestart = "/api/system/fppd/restart"
+
 	// fppConnectPlaylistPrefix is the fourth route's fixed prefix; route()
 	// matches anything after it as the (still escaped) playlist name.
 	fppConnectPlaylistPrefix = "/api/playlist/"
@@ -226,6 +241,16 @@ type fppConnectView interface {
 	// asset-directory byte cap (ADR-044 decision 4's third bound). Read
 	// fresh per upload chunk, matching Enabled's fresh-per-request read.
 	MaxAssetDirBytes() int64
+
+	// Assignments returns every currently-persisted render surface
+	// assignment (pipeline.AssignmentStore.Load), GET /api/models' one
+	// data source: each entry's RawParams carries the show.surface fields
+	// (name, channelRange, geometry) render.surface.apply persisted
+	// verbatim. A node with no configured surface returns a nil or empty
+	// slice and a nil error; handleModels never turns a read failure into
+	// anything but an empty array, since a client polling this endpoint
+	// mid-upload must never see a 404 or a 5xx for it.
+	Assignments() ([]pipeline.Assignment, error)
 }
 
 // fppConnectDefaultMaxFileBytes and fppConnectDefaultMaxAssetDirBytes
@@ -255,22 +280,27 @@ const (
 // below and panic unpredictably on whichever route is hit first, instead
 // of failing clearly at construction.
 type fppConnectStateView struct {
-	state *fppConnectState
+	state       *fppConnectState
+	assignments *pipeline.AssignmentStore
 }
 
-// newFPPConnectStateView builds a fppConnectStateView over state, panicking
-// if state is nil. A nil holder here is a construction bug, never a
-// runtime condition this listener should degrade through: agent.go always
-// builds the real *fppConnectState before starting this listener, so the
-// only way state is nil is a future call site wiring an empty
+// newFPPConnectStateView builds a fppConnectStateView over state and
+// assignmentStore, panicking if either is nil. A nil holder here is a
+// construction bug, never a runtime condition this listener should degrade
+// through: agent.go always builds both the real *fppConnectState and the
+// real *pipeline.AssignmentStore before starting this listener, so the
+// only way either is nil is a future call site wiring an empty
 // fppConnectStateView{} literal (or an equivalent nil) into a handler,
 // which would otherwise fail unpredictably per-route instead of loudly at
 // startup.
-func newFPPConnectStateView(state *fppConnectState) fppConnectStateView {
+func newFPPConnectStateView(state *fppConnectState, assignmentStore *pipeline.AssignmentStore) fppConnectStateView {
 	if state == nil {
 		panic("fppconnect: newFPPConnectStateView called with a nil *fppConnectState")
 	}
-	return fppConnectStateView{state: state}
+	if assignmentStore == nil {
+		panic("fppconnect: newFPPConnectStateView called with a nil *pipeline.AssignmentStore")
+	}
+	return fppConnectStateView{state: state, assignments: assignmentStore}
 }
 
 func (v fppConnectStateView) ChannelRanges() string { return v.state.ChannelRanges() }
@@ -305,6 +335,10 @@ func (v fppConnectStateView) MaxAssetDirBytes() int64 {
 		return fppConnectDefaultMaxAssetDirBytes
 	}
 	return settings.MaxAssetDirBytes
+}
+
+func (v fppConnectStateView) Assignments() ([]pipeline.Assignment, error) {
+	return v.assignments.Load()
 }
 
 // fppConnectLocalAddrKey is the context key runFPPConnectHTTPListener's
@@ -421,6 +455,129 @@ type fppConnectPlaylistResponse struct {
 	PlaylistInfo fppConnectPlaylistInfo    `json:"playlistInfo"`
 }
 
+// fppConnectModelPixelFormats maps show.surface.geometry.pixelFormat to the
+// channels-per-pixel GET /api/models' ChannelCountPerNode field carries.
+// Independently reproduced from internal/coordinator/config/showsurface.go's
+// identical map, not imported: this codebase's standing convention (see
+// renderops.go's idleOutputKnown) is that each side of a wire boundary
+// decodes independently rather than importing the other side's package.
+var fppConnectModelPixelFormats = map[string]int{
+	"rgb":  3,
+	"rgbw": 4,
+}
+
+// fppConnectModelEntry is one GET /api/models array element. Field names
+// and casing, and the fixed values below, match what RES-003's traced
+// xLights source records for the model schema (POST's shape; GET serves
+// the identical per-model fields as a bare array, RES-003's "three traps"
+// note). ShowMesh does not model per-pixel wiring (physical string counts,
+// strand routing, or scan orientation): the fields below that carry that
+// information are given a fixed, documented default rather than left
+// absent, since xLights' schema requires them present to accept the entry
+// at all.
+type fppConnectModelEntry struct {
+	Name         string `json:"Name"`
+	ChannelCount int    `json:"ChannelCount"`
+	StartChannel int    `json:"StartChannel"`
+	// ChannelCountPerNode is fppConnectModelPixelFormats[geometry.pixelFormat]:
+	// the only field below actually derived from this surface's own
+	// configuration rather than a fixed default.
+	ChannelCountPerNode int `json:"ChannelCountPerNode"`
+	// XLights true marks every entry this listener serves as xLights-owned
+	// (RES-003: xLights folds forward, on its own client-side POST merge,
+	// any entry whose xLights flag is not true). This listener never
+	// receives a POST, so the flag only documents provenance here.
+	XLights bool `json:"xLights"`
+	// Orientation is derived from geometry.width vs geometry.height
+	// (horizontal when width >= height, vertical otherwise): the one piece
+	// of wiring information this surface's configuration actually implies,
+	// a wide surface is far more likely scanned row-major than column-major.
+	Orientation string `json:"Orientation"`
+	// StringCount is geometry.height: one string per row is a reasonable
+	// default for a surface with no wiring metadata of its own, and keeps
+	// this field's value tied to something this surface actually reports
+	// rather than a bare constant.
+	StringCount int `json:"StringCount"`
+	// StrandsPerString is always 1: this surface's config carries no
+	// strand-level wiring, and 1 is the only value that does not invent one.
+	StrandsPerString int `json:"StrandsPerString"`
+	// StartCorner is always "TL" (top-left): this surface's config carries
+	// no wiring-start metadata, and top-left is the schema's most common
+	// default for a model with no other information to go on.
+	StartCorner string `json:"StartCorner"`
+	// Type is always "Channel", per RES-003: xLights' own CreateModelMemoryMap
+	// never sends any other value for this field.
+	Type string `json:"Type"`
+}
+
+// fppConnectModelSourceParams is the subset of render.surface.apply's
+// persisted params (renderops.go's renderApplyKnownKeys,
+// pipeline.Assignment.RawParams) that GET /api/models needs. Decoded
+// independently from renderops.go's own map[string]any handling, matching
+// this codebase's per-boundary decode convention (see
+// fppConnectModelPixelFormats' doc comment).
+type fppConnectModelSourceParams struct {
+	Name         string `json:"name"`
+	ChannelRange struct {
+		StartChannel int `json:"startChannel"`
+		ChannelCount int `json:"channelCount"`
+	} `json:"channelRange"`
+	Geometry struct {
+		Width       int    `json:"width"`
+		Height      int    `json:"height"`
+		PixelFormat string `json:"pixelFormat"`
+	} `json:"geometry"`
+}
+
+// fppConnectModelEntryFromAssignment decodes a's RawParams into one GET
+// /api/models entry. ok is false when RawParams cannot be decoded at all,
+// or names a pixel format this listener does not recognize: either way the
+// caller skips this assignment rather than serving a nonsense entry,
+// logging why so an operator can see it. StartChannel is a.RawParams'
+// channelRange.startChannel taken as-is: it is ALREADY 1-based
+// (ShowSurfaceChannelRange's own doc comment), so this must never be
+// passed through the channelRanges formatter's 1-based-to-0-based
+// conversion (system info's ChannelRanges field) by accident.
+func fppConnectModelEntryFromAssignment(a pipeline.Assignment, logger *slog.Logger) (fppConnectModelEntry, bool) {
+	var p fppConnectModelSourceParams
+	if err := json.Unmarshal(a.RawParams, &p); err != nil {
+		logger.Warn("fppconnect: skipping a render assignment with unparseable params for GET /api/models",
+			"surface_id", a.SurfaceID, "error", err)
+		return fppConnectModelEntry{}, false
+	}
+
+	channelsPerPixel, ok := fppConnectModelPixelFormats[p.Geometry.PixelFormat]
+	if !ok {
+		logger.Warn("fppconnect: skipping a render assignment with an unrecognized pixel format for GET /api/models",
+			"surface_id", a.SurfaceID, "pixel_format", p.Geometry.PixelFormat)
+		return fppConnectModelEntry{}, false
+	}
+
+	name := p.Name
+	if name == "" {
+		name = a.SurfaceID
+	}
+	name = strings.ReplaceAll(name, " ", "_")
+
+	orientation := "vertical"
+	if p.Geometry.Width >= p.Geometry.Height {
+		orientation = "horizontal"
+	}
+
+	return fppConnectModelEntry{
+		Name:                name,
+		ChannelCount:        p.ChannelRange.ChannelCount,
+		StartChannel:        p.ChannelRange.StartChannel,
+		ChannelCountPerNode: channelsPerPixel,
+		XLights:             true,
+		Orientation:         orientation,
+		StringCount:         p.Geometry.Height,
+		StrandsPerString:    1,
+		StartCorner:         "TL",
+		Type:                "Channel",
+	}, true
+}
+
 // fppConnectServer holds the fixed, per-node values this listener's
 // handlers serve, computed once at construction rather than per request.
 type fppConnectServer struct {
@@ -435,12 +592,15 @@ type fppConnectServer struct {
 // newFPPConnectHandler builds the complete handler for this node's FPP
 // Connect HTTP listener: the six routes ADR-044 decision 1 names for this
 // seam (FC1's four discovery routes plus FC2's chunked upload and
-// playlist-write routes), the enabled-flag gate that 404s every route when
-// this node's fppconnect.settings.enabled is false, and a request body
-// size cap on FC1's four fixed routes (FC2's upload and playlist-POST
-// routes bound their own, much larger, bodies themselves; see route's own
-// doc comment). Anything not matching one of the six routes gets route's
-// own 404: a short plain-text body, never HTML and never a stack trace.
+// playlist-write routes) plus two further FC1-compatibility-only fixed GET
+// routes (/api/models and /api/system/fppd/restart, added once a real
+// xLights run showed it calls both unprompted and errors on their 404),
+// the enabled-flag gate that 404s every route when this node's
+// fppconnect.settings.enabled is false, and a request body size cap on
+// FC1's fixed routes (FC2's upload and playlist-POST routes bound their
+// own, much larger, bodies themselves; see route's own doc comment).
+// Anything not matching one of these routes gets route's own 404: a short
+// plain-text body, never HTML and never a stack trace.
 // held is FC2's upload/binding state; now is this server's clock,
 // threaded through rather than read from time.Now directly so a test can
 // control it.
@@ -464,8 +624,8 @@ func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHe
 // GET /api/playlist/../system/info both come back as a 301 to the cleaned
 // path with a text/html body), regardless of which patterns are
 // registered, since the cleaning check runs before pattern matching. ADR-044
-// decision 1 permits only 404 for a request outside the six named routes,
-// and this package's own doc comment promises no served content is HTML;
+// decision 1 permits only 404 for a request outside its named routes, and
+// this package's own doc comment promises no served content is HTML;
 // a redirect breaks both. Matching r.URL.EscapedPath() by hand, and never
 // handing a request to anything that performs its own path cleaning, makes
 // that redirect path structurally unreachable rather than merely unobserved.
@@ -485,7 +645,7 @@ func newFPPConnectHandler(view fppConnectView, nodeID string, held *fppConnectHe
 // Content-Length reflects the real body size, the body itself is empty),
 // so no handler below needs its own HEAD case. Every other method on a
 // fixed route is a plain 404: ADR-044 decision 1 says everything outside
-// the six routes is 404, not the 405 + Allow header http.ServeMux would
+// its named routes is 404, not the 405 + Allow header http.ServeMux would
 // answer with for a wrong method on a registered path.
 func (s *fppConnectServer) route(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
@@ -532,8 +692,9 @@ func fppConnectSetWriteDeadline(w http.ResponseWriter, d time.Duration, logger *
 	}
 }
 
-// routeFixed is FC1's original four-route dispatch table: GET/HEAD only,
-// wrapped by route() in fppConnectLimitBody's small body cap.
+// routeFixed is FC1's fixed-path dispatch table (its original four
+// discovery routes, plus /api/models and /api/system/fppd/restart): GET/HEAD
+// only, wrapped by route() in fppConnectLimitBody's small body cap.
 func (s *fppConnectServer) routeFixed(w http.ResponseWriter, r *http.Request) {
 	fppConnectSetReadDeadline(w, fppConnectDiscoveryReadDeadline, s.logger)
 	// Safe to set up front on this route: every branch below responds
@@ -552,6 +713,10 @@ func (s *fppConnectServer) routeFixed(w http.ResponseWriter, r *http.Request) {
 		s.handleMultiSyncSystems(w, r)
 	case fppConnectPathPlaylists:
 		s.handlePlaylists(w, r)
+	case fppConnectPathModels:
+		s.handleModels(w, r)
+	case fppConnectPathFPPDRestart:
+		s.handleFPPDRestart(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -732,6 +897,52 @@ func (s *fppConnectServer) handlePlaylists(w http.ResponseWriter, r *http.Reques
 		names = []string{}
 	}
 	fppConnectWriteJSON(w, http.StatusOK, names)
+}
+
+// handleModels serves GET /api/models: a bare JSON array (never wrapped in
+// {"models":[...]}, RES-003's own "three traps" note), one entry per
+// currently-applied render surface assignment this node holds. A node with
+// no configured surface, or a view.Assignments() read failure, serves an
+// empty array with 200, never a 404 or an error status: xLights calls this
+// endpoint unprompted during every upload, and a red error here is exactly
+// what this handler exists to stop.
+func (s *fppConnectServer) handleModels(w http.ResponseWriter, r *http.Request) {
+	assignments, err := s.view.Assignments()
+	if err != nil {
+		s.logger.Warn("fppconnect: failed to read render assignments for GET /api/models", "error", err)
+		assignments = nil
+	}
+
+	entries := make([]fppConnectModelEntry, 0, len(assignments))
+	for _, a := range assignments {
+		entry, ok := fppConnectModelEntryFromAssignment(a, s.logger)
+		if !ok {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+
+	fppConnectWriteJSON(w, http.StatusOK, entries)
+}
+
+// handleFPPDRestart serves GET /api/system/fppd/restart, with or without
+// "?quick=1": xLights calls it, unconditionally, to end every upload.
+//
+// This handler MUST NEVER take any action. A ShowMesh node has no fppd and
+// needs no restart to serve an uploaded sequence; a render running on this
+// node must keep running across this call, uninterrupted, with no pipeline
+// restart, no audio session interruption, and no other state change of any
+// kind. It exists purely so xLights' own completion check sees success.
+//
+// The response body is deliberately minimal: xLights' FPP::Restart (traced
+// from xLightsSequencer/xLights src-core/controllers/FPP.cpp, the same
+// source-reading method RES-003 used throughout) reads the body into a
+// string it never inspects, and FPP::GetURLAsString logs xLights' observed
+// "ERROR - Error on GET" purely from a non-200 response code — the body
+// plays no part in either. A 200 with any body, including this one,
+// satisfies the client.
+func (s *fppConnectServer) handleFPPDRestart(w http.ResponseWriter, r *http.Request) {
+	fppConnectWriteJSON(w, http.StatusOK, map[string]string{"status": "OK"})
 }
 
 // handlePlaylistRoute is the fourth route's method dispatch: GET/HEAD

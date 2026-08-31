@@ -94,6 +94,64 @@ func (m *Manager) applyEffectiveGainBestEffortLocked(ctx context.Context, s *Ses
 	}
 }
 
+// fadeToEffectiveGainLocked ramps s toward its current
+// [Session.effectiveGainLocked] over durationMs, along the operator's
+// configured [Settings.DefaultFadeCurve], instead of stepping it there:
+// [Manager.duckOneLocked]/[Manager.removeDuckerLocked]'s own fix for the
+// duck depth changing instantly and audibly. Dispatched through
+// [Engine.Fade], which ramps from the engine's OWN current gain — never
+// this call's own idea of a starting point — so a fade already in
+// flight (an operator's gain.fade, or an earlier duck transition still
+// ramping) continues from wherever it actually is rather than jumping.
+// Shares fadePending/fadeState/fadeDispatchedTarget with an
+// operator-invoked [Session.startFadeLocked] fade on purpose: the same
+// [Manager.watchTick]/[Session.checkFadeCompletionLocked] polling
+// resolves either kind, and dispatching this while an operator fade is
+// still pending simply overwrites its tracking the same way a second
+// gain.fade already does today, with no separate bookkeeping to invent.
+// This fade carries no invocation of its own: nothing outside this
+// package ever waits on a duck transition's own outcome. Caller holds
+// s.mu.
+func (s *Session) fadeToEffectiveGainLocked(ctx context.Context, durationMs int) pkgaudio.OutcomeResult {
+	effective := s.effectiveGainLocked()
+	if !s.handleLoaded {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain}
+	}
+	fade := pkgaudio.Fade{
+		Curve:      s.mgr.SettingsSnapshot().DefaultFadeCurve,
+		Duration:   time.Duration(durationMs) * time.Millisecond,
+		TargetGain: effective,
+	}
+	if err := fade.Validate(); err != nil {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeRefused, Reason: err.Error()}
+	}
+	dispatchedAt := s.mgr.now()
+	obs, err := s.mgr.engine.Fade(ctx, s.handle, fade)
+	if err != nil {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeFailed, Reason: err.Error()}
+	}
+	s.fadeDispatchedTarget = effective
+	s.fadePending = true
+	s.fadeInvocation = ""
+	s.fadeHandleNeverFaded = false
+	s.fadeState = FadeStateInProgress
+	if obs.ObservedAt.Before(dispatchedAt) {
+		return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeUnconfirmable, Reason: "engine evidence predates this dispatch"}
+	}
+	return pkgaudio.OutcomeResult{Outcome: pkgaudio.OutcomeGain, Reason: "fade dispatched, not yet complete"}
+}
+
+// fadeToEffectiveGainBestEffortLocked is
+// [Session.fadeToEffectiveGainLocked] for a caller with no outcome of
+// its own to report — duck and duck-release are never confirmed back to
+// an invocation, matching [Manager.applyEffectiveGainBestEffortLocked].
+// Caller holds s.mu.
+func (m *Manager) fadeToEffectiveGainBestEffortLocked(ctx context.Context, s *Session, durationMs int) {
+	if result := s.fadeToEffectiveGainLocked(ctx, durationMs); result.Outcome != pkgaudio.OutcomeGain {
+		m.logf("audio session %s: duck fade apply %s: %s", s.id, result.Outcome, result.Reason)
+	}
+}
+
 // clampToCeilingLocked applies s's own declared ceiling if it has one;
 // otherwise, for a background-role session, once a real
 // audio.settings.configure has been delivered
@@ -489,11 +547,16 @@ func (m *Manager) submitToActivePolicies(ctx context.Context, id pkgaudio.Sessio
 	}
 }
 
-// duckOneLocked adds duckerID to t's set of active duckers and applies
-// the resulting effective gain, the configured duck depth, whether this
-// is the first ducker or one more added on top of an existing set. A target
-// already ducked by someone else just gains a second member; the actual
-// gain does not move again until the set is empty, which is
+// duckOneLocked adds duckerID to t's set of active duckers and, only when
+// duckerID is the FIRST ducker, fades t down to the resulting effective
+// gain (the configured duck depth) over [Settings.DuckFadeDurationMs]
+// rather than stepping it there instantly — the audible "instant and
+// jarring" drop this fix exists to remove. A target already ducked by
+// someone else just gains a second member with no new fade dispatched:
+// effectiveGainLocked's duck depth does not change with the size of the
+// set, so a second ducker arriving mid-fade, or after the first fade has
+// settled, has nothing left to move t toward. The actual gain does not
+// move again until the set is empty, which is
 // [Manager.removeDuckerLocked]'s own job (two overlapping announcements
 // must not let the first one to stop restore background gain out from
 // under the second). Caller holds t.mu.
@@ -501,11 +564,14 @@ func (m *Manager) duckOneLocked(ctx context.Context, t *Session, duckerID pkgaud
 	if _, already := t.duckedByAll[duckerID]; already {
 		return
 	}
+	firstDucker := len(t.duckedByAll) == 0
 	if t.duckedByAll == nil {
 		t.duckedByAll = make(map[pkgaudio.SessionID]struct{}, 1)
 	}
 	t.duckedByAll[duckerID] = struct{}{}
-	m.applyEffectiveGainBestEffortLocked(ctx, t)
+	if firstDucker {
+		m.fadeToEffectiveGainBestEffortLocked(ctx, t, m.SettingsSnapshot().DuckFadeDurationMs)
+	}
 	t.persistBestEffortLocked("state change")
 }
 
@@ -526,13 +592,14 @@ func (m *Manager) restoreDucked(ctx context.Context, duckerID pkgaudio.SessionID
 // nothing when duckerID is not a member — that membership check is the
 // entire exactly-once guarantee, since it is the same check
 // [Manager.restoreOne] runs on a crash-recovered session, and there is
-// exactly one code path either caller runs. Once the set is empty, the
-// resulting effective gain is applied: the configured gain, re-clamped
-// to the ceiling in force right now, if t is not muted, or nothing
-// driven to the engine at all if it is, releasing a duck must never
-// make a muted session audible, and mute's own eventual unmute reads the
-// configured gain fresh rather than a value this function would
-// otherwise have to hand it. Caller holds t.mu.
+// exactly one code path either caller runs. Once the set is empty, t is
+// faded to the resulting effective gain over
+// [Settings.DuckRestoreFadeDurationMs] — the configured gain, re-clamped
+// to the ceiling in force right now, if t is not muted, or the muted
+// gain (with nothing audible to ramp) if it is: releasing a duck must
+// never make a muted session audible, and mute's own eventual unmute
+// reads the configured gain fresh rather than a value this function
+// would otherwise have to hand it. Caller holds t.mu.
 func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID pkgaudio.SessionID) {
 	if _, ok := t.duckedByAll[duckerID]; !ok {
 		return
@@ -542,7 +609,7 @@ func (m *Manager) removeDuckerLocked(ctx context.Context, t *Session, duckerID p
 		t.persistBestEffortLocked("state change")
 		return
 	}
-	m.applyEffectiveGainBestEffortLocked(ctx, t)
+	m.fadeToEffectiveGainBestEffortLocked(ctx, t, m.SettingsSnapshot().DuckRestoreFadeDurationMs)
 	t.persistBestEffortLocked("state change")
 }
 

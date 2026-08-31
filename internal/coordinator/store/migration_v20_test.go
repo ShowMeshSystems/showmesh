@@ -47,7 +47,8 @@ func TestMigrateV20LeavesCompletePayloadsAlone(t *testing.T) {
 	// so a mutation that overwrote a present key rather than skipping it
 	// would change this payload and fail the byte-for-byte check below.
 	const complete = `{"driftIgnoreThresholdMs":500,"defaultFadeCurve":"linear","defaultFadeDurationMs":2500,` +
-		`"defaultMaxBackgroundGainDb":-6.0,"duckTargetGainDb":-8.5,"ltcFrameRate":"25","ltcDefaultStartOffset":"01:02:03:04"}`
+		`"defaultMaxBackgroundGainDb":-6.0,"duckTargetGainDb":-8.5,"duckFadeDurationMs":150,` +
+		`"duckRestoreFadeDurationMs":900,"ltcFrameRate":"25","ltcDefaultStartOffset":"01:02:03:04"}`
 
 	db := openDatabaseAtV18(t)
 	seedAudioSettingsRevision(t, db, 1, complete)

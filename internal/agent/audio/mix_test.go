@@ -343,6 +343,9 @@ func TestAnnouncementDucksAndRestoresBackgroundOnStop(t *testing.T) {
 	if !duckedByAnn {
 		t.Fatalf("bg after ann started: duckedByAll=%v, want ducked by ann", bg.duckedByAll)
 	}
+	// The duck-down is a fade, not a step: let it finish before reading
+	// the engine's own settled gain.
+	c.advance(300 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != duckDepth(m) {
 		t.Fatalf("bg engine gain after ann started = %v, want the duck depth %v", got, duckDepth(m))
 	}
@@ -359,6 +362,8 @@ func TestAnnouncementDucksAndRestoresBackgroundOnStop(t *testing.T) {
 	if configured != pkgaudio.Gain(0.8) {
 		t.Fatalf("bg configured gain after restore = %v, want the pre-duck 0.8", configured)
 	}
+	// The restore is also a fade: let it finish too.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != pkgaudio.Gain(0.8) {
 		t.Fatalf("bg engine gain after restore = %v, want the pre-duck 0.8", got)
 	}
@@ -390,6 +395,9 @@ func TestRemoveDuckerLockedIsIdempotentOnItsOwn(t *testing.T) {
 	handle := s.handle
 	s.mu.Unlock()
 
+	// The restore this dispatches is a fade, not a step: let it finish
+	// before reading the engine's own settled gain.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != configured {
 		t.Fatalf("engine gain after the first removal = %v, want the configured %v", got, configured)
 	}
@@ -472,7 +480,9 @@ func TestDuckRestoreExactlyOnce_CrashAfterDuckerStopped(t *testing.T) {
 	}
 	// The engine handle restoreOne re-prepared is fresh and defaults to
 	// unity: it must have been driven to the restored configured gain,
-	// not left there.
+	// not left there. That restore is a fade now, not a step: let it
+	// finish before reading the engine's own settled gain.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m2, ctx, handle); got != pkgaudio.Gain(0.6) {
 		t.Fatalf("bg2 engine gain after restart = %v, want the pre-duck 0.6", got)
 	}
@@ -541,6 +551,9 @@ func TestDuckRestoreExactlyOnce_CrashWhileDuckerStillPlaying(t *testing.T) {
 	if configuredAfter != pkgaudio.Gain(0.9) {
 		t.Fatalf("bg2 configured gain after ann finally stopped = %v, want restored 0.9", configuredAfter)
 	}
+	// The live restore is a fade, not a step: let it finish before
+	// reading the engine's own settled gain.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m2, ctx, handle); got != pkgaudio.Gain(0.9) {
 		t.Fatalf("bg2 engine gain after ann finally stopped = %v, want restored 0.9", got)
 	}
@@ -637,6 +650,9 @@ func TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores(t *testing.T) {
 	if !byAnn1 || !byAnn2 {
 		t.Fatalf("bg after both announcements started: duckedByAll=%v, want ducked by both ann1 and ann2", bg.duckedByAll)
 	}
+	// Only the FIRST ducker's arrival dispatches a fade; let it finish
+	// before reading the engine's own settled gain.
+	c.advance(300 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != duckDepth(m) {
 		t.Fatalf("bg engine gain after both announcements started = %v, want the duck depth %v", got, duckDepth(m))
 	}
@@ -668,6 +684,8 @@ func TestTwoOverlappingDuckersBothMustReleaseBeforeGainRestores(t *testing.T) {
 	if configured != pkgaudio.Gain(0.7) {
 		t.Fatalf("bg configured gain after both announcements stopped = %v, want restored 0.7", configured)
 	}
+	// The restore is a fade too: let it finish before the final check.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != pkgaudio.Gain(0.7) {
 		t.Fatalf("bg engine gain after both announcements stopped = %v, want restored 0.7", got)
 	}
@@ -1164,7 +1182,7 @@ func TestFadePendingResolvedByStopAfterEngineRebind(t *testing.T) {
 // duck depth (ducked by ann) before this returns, while its configured gain stays 0.8
 // throughout, since duck never writes that field in this package's
 // derived design.
-func muteDuckFixture(t *testing.T, m *Manager, ctx context.Context) (bg, ann *Session) {
+func muteDuckFixture(t *testing.T, m *Manager, ctx context.Context, c *clock) (bg, ann *Session) {
 	t.Helper()
 	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
 	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
@@ -1186,6 +1204,9 @@ func muteDuckFixture(t *testing.T, m *Manager, ctx context.Context) (bg, ann *Se
 	if !ducked || configured != pkgaudio.Gain(0.8) {
 		t.Fatalf("precondition failed: bg after ann started = ducked %v configured %v, want ducked with configured gain untouched at 0.8", ducked, configured)
 	}
+	// The duck-down is a fade, not a step: let it finish before reading
+	// the engine's own settled gain.
+	c.advance(300 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != duckDepth(m) {
 		t.Fatalf("precondition failed: bg engine gain after ann started = %v, want the duck depth %v", got, duckDepth(m))
 	}
@@ -1200,7 +1221,7 @@ func TestMuteThenUnmuteDuringDuckThenDuckEndsRestoresConfiguredGain(t *testing.T
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
-	bg, _ := muteDuckFixture(t, m, ctx)
+	bg, _ := muteDuckFixture(t, m, ctx, c)
 	bg.mu.Lock()
 	handle := bg.handle
 	bg.mu.Unlock()
@@ -1233,6 +1254,8 @@ func TestMuteThenUnmuteDuringDuckThenDuckEndsRestoresConfiguredGain(t *testing.T
 	if configured != pkgaudio.Gain(0.8) {
 		t.Fatalf("bg configured gain once mute and duck have both released = %v, want 0.8", configured)
 	}
+	// The restore is a fade: let it finish before the final check.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != pkgaudio.Gain(0.8) {
 		t.Fatalf("bg engine gain once mute and duck have both released = %v, want the configured 0.8", got)
 	}
@@ -1245,7 +1268,7 @@ func TestMuteThenDuckEndsWhileMutedThenUnmuteRestoresConfiguredGain(t *testing.T
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
-	bg, _ := muteDuckFixture(t, m, ctx)
+	bg, _ := muteDuckFixture(t, m, ctx, c)
 	bg.mu.Lock()
 	handle := bg.handle
 	bg.mu.Unlock()
@@ -1419,7 +1442,7 @@ func TestGainSetWhileDuckedDoesNotReachTheEngine(t *testing.T) {
 	c := newClock(time.Now())
 	m := newTestManager(t, c)
 	ctx := context.Background()
-	bg, _ := muteDuckFixture(t, m, ctx)
+	bg, _ := muteDuckFixture(t, m, ctx, c)
 	bg.mu.Lock()
 	handle := bg.handle
 	bg.mu.Unlock()
@@ -1434,6 +1457,8 @@ func TestGainSetWhileDuckedDoesNotReachTheEngine(t *testing.T) {
 	if r := m.Stop(ctx, "ann", "inv-ann-stop", 3); r.Outcome == pkgaudio.OutcomeRefused {
 		t.Fatalf("stop unexpectedly refused: %+v", r)
 	}
+	// The restore is a fade: let it finish before the final check.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != pkgaudio.Gain(0.6) {
 		t.Fatalf("engine gain once the duck released = %v, want the gain.set that landed mid-duck, 0.6", got)
 	}
@@ -1665,6 +1690,8 @@ func TestMuteUnmuteAcrossDuckNeverExceedsCeiling(t *testing.T) {
 	}
 	assertNeverAboveCeiling("after duck ends")
 
+	// The restore is a fade: let it finish before the final exact check.
+	c.advance(900 * time.Millisecond)
 	if got := observedGain(t, m, ctx, handle); got != pkgaudio.Gain(ceiling) {
 		t.Fatalf("final engine gain = %v, want clamped to ceiling %v", got, ceiling)
 	}

@@ -1640,7 +1640,7 @@ func TestFPPConnectRegisterCollidingAwaitingShowIDCompetesFairly(t *testing.T) {
 		defer fakeSrv.Close()
 
 		_, state, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "")
-		srv := startFPPConnectTestServer(t, newFPPConnectStateView(state), "node-1", held)
+		srv := startFPPConnectTestServer(t, newFPPConnectStateView(state, newTestAssignmentStore(t)), "node-1", held)
 		defer srv.Close()
 
 		// The show's name is known, but not yet its config object id: a
