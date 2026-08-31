@@ -194,11 +194,16 @@ const (
 	fppSafetyClassExempt
 
 	// fppSafetyClassNotExempt means this primitive is not a member of
-	// ADR-024 decision 11's blackout/stop/power-off safety class. A
-	// pre-dispatch audit-write failure still degrades attribution and
-	// still dispatches (decision 11's amendment, owner ruling
-	// 2026-08-26); the only effect of this value is which reason string
-	// reportDegradedAttribution reports, never whether the command runs.
+	// ADR-024 decision 11's blackout/stop/power-off safety class. On the
+	// invoke path itself, a pre-dispatch audit-write failure still
+	// degrades attribution and still dispatches (decision 11's amendment,
+	// owner ruling 2026-08-26); this value never withholds dispatch, only
+	// selects which reason string reportDegradedAttribution reports. It
+	// also still feeds FPPCommandSafetyClassForAction and
+	// FPPCommandDecision11ClassForAction (fppcommand_dispatch.go), which
+	// config/showaction.go uses to refuse a show.action write whose
+	// declared safetyClass disagrees with this primitive's real one - a
+	// config-time refusal decision 11's amendment never touched.
 	fppSafetyClassNotExempt
 )
 

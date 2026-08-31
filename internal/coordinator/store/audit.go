@@ -96,7 +96,7 @@ func appendAuditEntry(ctx context.Context, q querier, s *Store, rec AuditRecord)
 	// transaction later rolls back (review round 5 finding 2:
 	// [Store.ProbeAuditWrite] always does) cannot undo either one. That
 	// is exactly why the probe calls [insertAuditRow] directly instead of
-	// this function — never move this bookkeeping to run before q's
+	// this function: never move this bookkeeping to run before q's
 	// caller has committed, and never let the probe reach it.
 	byCount := s.auditAppendCount.Add(1)%pruneEveryNAuditEntries == 0
 	byAge := false
@@ -235,7 +235,7 @@ var errAuditProbeRollback = errors.New("store: audit write probe (deliberately r
 // state a rolled-back transaction cannot undo. Going through
 // AppendAuditEntry here would let every probe permanently consume a
 // prune trigger while the prune itself (the DELETE, run inside this
-// transaction) rolled back with it — the count trigger firing on
+// transaction) rolled back with it: the count trigger firing on
 // probes that throw the prune away, and the age trigger defeated
 // outright, since a probe would keep refreshing lastAuditPruneAtNanos
 // after a prune that never happened. Net effect on a coordinator with

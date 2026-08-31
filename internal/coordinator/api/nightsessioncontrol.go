@@ -395,6 +395,17 @@ func (h *handlers) nightRunExempt(ctx context.Context, now time.Time, cmd string
 		if problem != nil {
 			return nil
 		}
+		if out.readiness != nil {
+			// No exempt decide function sets this today. nightRunExempt has
+			// no ADR-024 decision 11 audit-failure fallback of its own to
+			// make performing this write here safe the way nightRunGated's
+			// own out.readiness handling is (this path's audit write is
+			// best-effort, after commit, never a reason to redo anything).
+			// Fail loudly rather than silently commit a session referencing
+			// a readiness row nobody wrote - the exact trap review round 5
+			// finding 1 fixed one function over.
+			return fmt.Errorf("api: night command %q's decide function set nightCommandOutcome.readiness, which nightRunExempt does not know how to persist", cmd)
+		}
 		switch out.persist {
 		case "create":
 			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
