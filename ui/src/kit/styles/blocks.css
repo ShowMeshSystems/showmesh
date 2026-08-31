@@ -417,6 +417,24 @@ a.sm-tile:hover {
   max-width: 78ch;
 }
 
+/* A readout's own nested verdicts (readiness checks): same idiom, indented and ruled off. */
+.sm-readout__checks {
+  display: grid;
+  gap: 0;
+  margin-top: var(--s-3);
+  padding-left: var(--s-4);
+  border-left: 2px solid var(--border);
+}
+
+.sm-readout__checks .sm-readout {
+  padding: var(--s-2) 0;
+  border-top: none;
+}
+
+.sm-readout__checks .sm-readout:last-child {
+  border-bottom: none;
+}
+
 /* Facet tabs. The count is inventory, never attention. */
 .sm-facets {
   display: flex;

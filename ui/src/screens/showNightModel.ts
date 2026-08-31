@@ -1,4 +1,4 @@
-import type { Model, NightCue, NightSessionState } from '../api'
+import type { Model, NightBackgroundAudio, NightCue, NightReadinessCheck, NightSessionState } from '../api'
 import type { Tone } from '../kit'
 import { ageMs, formatClock, formatDuration } from '../domain/time'
 import { findSignal, transportState } from './liveControlModel'
@@ -136,6 +136,56 @@ const READINESS_WORD: Record<string, string> = {
 export type EvidenceReadout = { key: string; label: string; tone: Tone; fact: string }
 
 /**
+ * `not_verifiable` is structurally incapable of ever reporting anything
+ * else, and `not_configured` means the check's own optional configuration
+ * is absent - neither is a failure, so both read as `pending` rather than
+ * `unknown` or `bad`.
+ */
+const READINESS_CHECK_TONE: Record<NightReadinessCheck['state'], Tone> = {
+  healthy: 'good',
+  degraded: 'warn',
+  failed: 'bad',
+  unknown: 'unknown',
+  not_verifiable: 'pending',
+  not_configured: 'pending',
+}
+
+export type ReadinessCheckReadout = { key: string; label: string; tone: Tone; fact: string }
+
+/**
+ * Every check `run-readiness` recorded, including its own `interlock:<phase>:<name>`
+ * entries - the pre-emptive interlock visibility, not just the aggregate
+ * outcome the readiness readout above already states.
+ */
+export function readinessChecks(checks: readonly NightReadinessCheck[]): ReadinessCheckReadout[] {
+  return checks.map((check, index) => ({
+    key: `${check.name}:${index}`,
+    label: `${check.name} · ${check.state.replace('_', ' ')}`,
+    tone: READINESS_CHECK_TONE[check.state] ?? 'unknown',
+    fact: check.reason !== '' ? check.reason : 'No reason was recorded for this check.',
+  }))
+}
+
+/**
+ * The ceiling this running session pinned when it started
+ * (`resting.backgroundAudio.maxGainDb` on its own pinned `configRevision`),
+ * stated so it is never mistaken for whatever `night.session`'s config
+ * currently holds - that can differ across a later revision (owner ruling
+ * 2026-08-28).
+ */
+export function pinnedCeilingFact(audio: NightBackgroundAudio): string {
+  if (audio.pinnedMaxGainDb === undefined) {
+    return "This build has not reported a pinned ceiling for this session, distinct from night.session's own config."
+  }
+  if (audio.pinnedMaxGainDb === null) {
+    return audio.reason !== ''
+      ? `Pinned ceiling: none. ${audio.reason}`
+      : "This session pinned no background-audio ceiling: its pinned revision configures no background audio."
+  }
+  return `Pinned ceiling for this running session: ${audio.pinnedMaxGainDb} dB - the value this session locked in when it started, not whatever night.session's config currently holds.`
+}
+
+/**
  * `recorded` says evidence exists, never that the phase went well: the
  * reason carries what happened. So the label states the evidence state and
  * the tone never reads as a health verdict.
@@ -151,7 +201,7 @@ function phaseLabel(name: string, state: string): string {
   return `${name} ${state.replace('_', ' ')}`
 }
 
-/** Six readouts. Anything not observed says so, and none of them is inferred. */
+/** Anything not observed says so, and none of these readouts is inferred. */
 export function evidenceReadouts(session: NightSessionState, nowIso: string | null): EvidenceReadout[] {
   const readiness = session.readiness
   const readinessAge = ageMs(readiness.completedAt ?? null, nowIso)
@@ -194,9 +244,11 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
       label: phaseLabel('Background audio', session.backgroundAudio.state),
       tone: PHASE_TONE[session.backgroundAudio.state] ?? 'unknown',
       fact:
-        session.backgroundAudio.reason !== ''
-          ? `${session.backgroundAudio.reason} ${session.backgroundAudio.steps.length} steps this cycle.`
-          : `${session.backgroundAudio.steps.length} steps this cycle.`,
+        session.backgroundAudio.state !== 'recorded'
+          ? session.backgroundAudio.reason !== ''
+            ? session.backgroundAudio.reason
+            : 'Nothing recorded for background audio.'
+          : `${session.backgroundAudio.steps.length} ${session.backgroundAudio.steps.length === 1 ? 'step' : 'steps'} this cycle.`,
     },
     {
       key: 'attribution',
@@ -216,6 +268,37 @@ export function evidenceReadouts(session: NightSessionState, nowIso: string | nu
           : session.authorization.reason !== undefined && session.authorization.reason !== ''
             ? session.authorization.reason
             : 'No authorizing command has been recorded for this session.',
+    },
+    {
+      key: 'definition',
+      label: 'Definition',
+      tone: 'pending',
+      fact: `${session.configObjectId} at revision ${session.configRevision}.`,
+    },
+    {
+      key: 'armed-show',
+      label: session.armedShowId === '' ? 'No show armed' : session.showCommitted ? 'Show committed' : 'Show armed',
+      tone: session.armedShowId === '' ? 'unknown' : session.showCommitted ? 'good' : 'pending',
+      fact:
+        session.armedShowId === ''
+          ? 'No show is armed for this session.'
+          : session.showCommitted
+            ? `${session.armedShowId} is armed and committed for this session.`
+            : `${session.armedShowId} is armed but not yet committed.`,
+    },
+    {
+      key: 'admission',
+      label: session.admissionClosed ? 'Admission closed' : 'Admission open',
+      tone: session.admissionClosed ? 'pending' : 'good',
+      fact: session.admissionClosed
+        ? `Admission closed ${formatClock(session.admissionClosedAt) ?? 'at an unrecorded time'}.`
+        : 'Admission is open.',
+    },
+    {
+      key: 'updated',
+      label: 'Session last updated',
+      tone: 'pending',
+      fact: `${formatClock(session.updatedAt) ?? 'an unrecorded time'}.`,
     },
   ]
 }
@@ -265,6 +348,36 @@ export function runOfShow(session: NightSessionState): RunStep[] {
       tone: outcome === undefined ? (cue.state === 'not_dispatched' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
       state: outcome ?? (cue.state === 'not_dispatched' ? 'Armed' : cue.state.replace('_', ' ')),
       resolved: cue.resolvedAt === null ? (cue.reason ?? null) : formatClock(cue.resolvedAt),
+    }
+  })
+}
+
+export type BackgroundAudioStepRow = {
+  key: string
+  when: string
+  sequence: string
+  cueName: string
+  kind: string
+  detail: string
+  tone: Tone
+  state: string
+  resolved: string | null
+}
+
+/** Every durable audio step this cycle recorded, `not_dispatched` never among them: unlike a cue, a step is only ever logged once dispatched. */
+export function backgroundAudioSteps(audio: NightBackgroundAudio): BackgroundAudioStepRow[] {
+  return audio.steps.map((step, index) => {
+    const outcome = step.outcome
+    return {
+      key: `${step.cueName}:${step.kind}:${index}`,
+      when: step.dispatchedAt === null ? 'Armed' : (formatClock(step.dispatchedAt) ?? 'dispatched'),
+      sequence: step.sequence,
+      cueName: step.cueName,
+      kind: step.kind,
+      detail: `rev ${step.actionRevision}`,
+      tone: outcome === undefined ? (step.state === 'pending' ? 'pending' : 'warn') : (OUTCOME_TONE[outcome] ?? 'unknown'),
+      state: outcome ?? step.state.replace('_', ' '),
+      resolved: step.resolvedAt === null ? (step.reason ?? null) : formatClock(step.resolvedAt),
     }
   })
 }

@@ -9,10 +9,30 @@ import { cycleRail, evidenceReadouts, nextTransition, nightRail, runOfShow } fro
 
 const stubs = vi.hoisted(() => ({
   dispatchNightCommand: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
+  getNightSessionActiveConfig: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  putNightSessionActiveConfig: (() => Promise.resolve({})) as (...args: never[]) => Promise<unknown>,
+  listConfigObjects: (() => Promise.resolve({ serverTime: '', kind: 'night.session', objects: [] })) as (
+    ...args: never[]
+  ) => Promise<unknown>,
 }))
 
 function commandResponse(command: string, outcome: 'applied' | 'idempotent_no_op' = 'applied', attributionDegraded = false) {
   return { serverTime: '2026-08-28T21:07:00Z', command: { command, outcome, attributionDegraded }, session: {} }
+}
+
+function activeConfigResponse(session: string, overrides: Record<string, unknown> = {}) {
+  return {
+    serverTime: '2026-08-28T21:07:00Z',
+    kind: 'night.session.active',
+    id: 'night.session.active',
+    revision: 3,
+    payload: { session },
+    updatedAt: '2026-08-28T16:00:00Z',
+    createdByPrincipalId: 'p',
+    createdByPrincipalName: 'erbartos',
+    source: 'api',
+    ...overrides,
+  }
 }
 
 vi.mock('../api', async () => {
@@ -21,6 +41,9 @@ vi.mock('../api', async () => {
     ...actual,
     getCurrentNightSession: () => new Promise(() => {}),
     dispatchNightCommand: (...args: never[]) => stubs.dispatchNightCommand(...args),
+    getNightSessionActiveConfig: (...args: never[]) => stubs.getNightSessionActiveConfig(...args),
+    putNightSessionActiveConfig: (...args: never[]) => stubs.putNightSessionActiveConfig(...args),
+    listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
   }
 })
 
@@ -66,7 +89,12 @@ function renderScreen(model: Partial<Model>) {
 }
 
 describe('Show Night', () => {
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    stubs.getNightSessionActiveConfig = () => new Promise(() => {})
+    stubs.putNightSessionActiveConfig = () => Promise.resolve({})
+    stubs.listConfigObjects = () => Promise.resolve({ serverTime: '', kind: 'night.session', objects: [] })
+  })
 
   it('says the session has not reported rather than showing a cycle it does not know', () => {
     renderScreen({ nightSession: null })
@@ -74,12 +102,13 @@ describe('Show Night', () => {
     expect(screen.queryByText(/Cycle \d of the night/)).not.toBeInTheDocument()
   })
 
-  it('renders the mock’s three h2 blocks in order', () => {
+  it('renders the mock’s three h2 blocks in order, plus activation', () => {
     renderScreen({ nightSession: session() })
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'Lifecycle commands',
       'Run of Show',
       'Evidence',
+      'Night session activation',
     ])
   })
 
@@ -186,6 +215,7 @@ describe('Show Night', () => {
     bootstrapRequired: false,
   }
   const allowedSession = allowedSessionBase as never
+  const configWriteSession = { ...allowedSessionBase, scopes: ['config:write'] } as never
 
   it('shows a Refused chip, never an Accepted one, when a night command is refused', async () => {
     stubs.dispatchNightCommand = () => Promise.reject(new Error('no route to host'))
@@ -365,5 +395,263 @@ describe('Show Night', () => {
     renderScreen({ nightSession: session({ cycle: 1, state: 'live' }) })
     expect(screen.queryByText('The night timeline does nothing yet.')).not.toBeInTheDocument()
     expect(screen.queryByText('not reported')).not.toBeInTheDocument()
+  })
+
+  it('renders every readiness check with its state and reason, including not_verifiable and not_configured', () => {
+    renderScreen({
+      nightSession: session({
+        readiness: {
+          state: 'recorded',
+          reason: '',
+          outcome: 'ready',
+          completedAt: '2026-08-28T21:00:00Z',
+          sameEpoch: true,
+          fresh: true,
+          checks: [
+            { name: 'interlock:power-on:projector-cooldown', state: 'healthy', reason: 'Lamp below threshold.' },
+            { name: 'interlock:power-on:garage-link', state: 'failed', reason: 'No route to host.' },
+            { name: 'audio-node:reachable', state: 'not_verifiable', reason: 'No audio node is configured to verify.' },
+            { name: 'resolume:composition', state: 'not_configured', reason: 'No composition is configured for this show.' },
+          ],
+        },
+      }),
+    })
+    expect(screen.getByText('interlock:power-on:projector-cooldown · healthy')).toBeInTheDocument()
+    expect(screen.getByText('Lamp below threshold.')).toBeInTheDocument()
+    expect(screen.getByText('interlock:power-on:garage-link · failed')).toBeInTheDocument()
+    expect(screen.getByText('No route to host.')).toBeInTheDocument()
+    expect(screen.getByText('audio-node:reachable · not verifiable')).toBeInTheDocument()
+    expect(screen.getByText('No audio node is configured to verify.')).toBeInTheDocument()
+    expect(screen.getByText('resolume:composition · not configured')).toBeInTheDocument()
+    expect(screen.getByText('No composition is configured for this show.')).toBeInTheDocument()
+  })
+
+  it('says so honestly when readiness recorded no individual checks', () => {
+    renderScreen({
+      nightSession: session({
+        readiness: {
+          state: 'recorded',
+          reason: '',
+          outcome: 'ready',
+          completedAt: '2026-08-28T21:00:00Z',
+          sameEpoch: true,
+          fresh: true,
+          checks: [],
+        },
+      }),
+    })
+    expect(screen.getByText('No individual checks were recorded with this result.')).toBeInTheDocument()
+  })
+
+  it('offers "Run readiness again" inline next to a stale readiness verdict, reusing the same send path', async () => {
+    stubs.dispatchNightCommand = () => new Promise(() => {})
+    renderScreen({
+      nightSession: session(),
+      session: {
+        serverTime: '2026-08-28T21:07:00Z',
+        authenticated: true,
+        principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+        session: null,
+        credentialForm: 'session',
+        scopes: ['night:command'],
+        scopesState: 'current',
+        bootstrapRequired: false,
+      } as never,
+    })
+    const inlineButtons = screen.getAllByRole('button', { name: 'Run readiness again' })
+    expect(inlineButtons).toHaveLength(1)
+    let dispatched: unknown[] = []
+    stubs.dispatchNightCommand = (...args: unknown[]) => {
+      dispatched = args
+      return new Promise(() => {})
+    }
+    fireEvent.click(inlineButtons[0]!)
+    expect(dispatched[0]).toBe('run-readiness')
+  })
+
+  it('does not offer "Run readiness again" when readiness is fresh, same-epoch, and ready', () => {
+    renderScreen({
+      nightSession: session({
+        readiness: {
+          state: 'recorded',
+          reason: '',
+          outcome: 'ready',
+          completedAt: '2026-08-28T21:00:00Z',
+          sameEpoch: true,
+          fresh: true,
+          checks: [],
+        },
+      }),
+    })
+    expect(screen.queryByRole('button', { name: 'Run readiness again' })).not.toBeInTheDocument()
+  })
+
+  it('renders background audio steps with their sequence, cue, kind, and state', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: {
+          state: 'recorded',
+          reason: '',
+          pinnedMaxGainDb: -18,
+          steps: [
+            {
+              sequence: 'background',
+              phase: 'enterShow',
+              cueName: 'duck-bed',
+              kind: 'gain',
+              actionRevision: 4,
+              state: 'resolved',
+              outcome: 'confirmed',
+              dispatchedAt: '2026-08-28T21:02:20Z',
+              resolvedAt: '2026-08-28T21:02:21Z',
+            },
+            {
+              sequence: 'announcement',
+              phase: 'enterResting',
+              cueName: 'welcome-back',
+              kind: 'announcementStart',
+              actionRevision: 1,
+              state: 'resolved',
+              outcome: 'refused',
+              reason: 'No announcement asset configured.',
+              dispatchedAt: '2026-08-28T21:02:25Z',
+              resolvedAt: null,
+            },
+          ],
+        },
+      }),
+    })
+    expect(screen.getByText('background')).toBeInTheDocument()
+    expect(screen.getByText('duck-bed')).toBeInTheDocument()
+    expect(screen.getByText('gain')).toBeInTheDocument()
+    expect(screen.getByText('announcement')).toBeInTheDocument()
+    expect(screen.getByText('welcome-back')).toBeInTheDocument()
+    expect(screen.getByText('announcementStart')).toBeInTheDocument()
+    expect(screen.getByText('No announcement asset configured.')).toBeInTheDocument()
+  })
+
+  it('renders the pinned background-audio ceiling distinctly from the audio.settings config value', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: { state: 'recorded', reason: '', pinnedMaxGainDb: -18, steps: [] },
+      }),
+    })
+    expect(screen.getByText(/Pinned ceiling for this running session: -18 dB/)).toBeInTheDocument()
+    expect(screen.getByText(/not whatever night\.session's config currently holds/)).toBeInTheDocument()
+  })
+
+  it('says so honestly when the pinned ceiling is null because nothing is configured', () => {
+    renderScreen({
+      nightSession: session({
+        backgroundAudio: { state: 'recorded', reason: 'No background audio is configured on the pinned revision.', pinnedMaxGainDb: null, steps: [] },
+      }),
+    })
+    expect(screen.getByText(/Pinned ceiling: none\. No background audio is configured on the pinned revision\./)).toBeInTheDocument()
+  })
+
+  it('renders armedShowId, showCommitted, configRevision, admissionClosedAt, and updatedAt', () => {
+    renderScreen({
+      nightSession: session({
+        configObjectId: 'night.session/winter-ridge',
+        configRevision: 4,
+        armedShowId: 'winter-ridge-2026',
+        showCommitted: true,
+        admissionClosed: true,
+        admissionClosedAt: '2026-08-28T21:05:00Z',
+        updatedAt: '2026-08-28T21:07:00Z',
+      }),
+    })
+    expect(screen.getByText('night.session/winter-ridge at revision 4.')).toBeInTheDocument()
+    expect(screen.getByText('winter-ridge-2026 is armed and committed for this session.')).toBeInTheDocument()
+    expect(screen.getByText(/^Admission closed \d/)).toBeInTheDocument()
+    expect(screen.getByText('Session last updated')).toBeInTheDocument()
+  })
+
+  it('reports no show armed honestly when armedShowId is empty', () => {
+    renderScreen({ nightSession: session({ armedShowId: '', showCommitted: false }) })
+    expect(screen.getByText('No show is armed for this session.')).toBeInTheDocument()
+  })
+
+  it('reads the night session activation pointer and lists definitions to activate', async () => {
+    stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
+    stubs.listConfigObjects = () =>
+      Promise.resolve({
+        serverTime: '2026-08-28T21:07:00Z',
+        kind: 'night.session',
+        objects: [
+          { id: 'winter-ridge-2026', label: 'Winter Ridge 2026', show: '', currentRevision: 2, updatedAt: '2026-08-28T00:00:00Z' },
+          { id: 'winter-ridge-backup', label: 'Winter Ridge Backup', show: '', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' },
+        ],
+      })
+    renderScreen({ nightSession: session() })
+    expect(await screen.findByText('winter-ridge-2026')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Winter Ridge Backup (winter-ridge-backup)' })).toBeInTheDocument()
+  })
+
+  it('activates a different night session definition', async () => {
+    let calls: unknown[] = []
+    stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
+    stubs.putNightSessionActiveConfig = (...args: unknown[]) => {
+      calls = args
+      return Promise.resolve(activeConfigResponse('winter-ridge-backup', { revision: 4 }))
+    }
+    stubs.listConfigObjects = () =>
+      Promise.resolve({
+        serverTime: '2026-08-28T21:07:00Z',
+        kind: 'night.session',
+        objects: [
+          { id: 'winter-ridge-2026', label: 'Winter Ridge 2026', show: '', currentRevision: 2, updatedAt: '2026-08-28T00:00:00Z' },
+          { id: 'winter-ridge-backup', label: 'Winter Ridge Backup', show: '', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' },
+        ],
+      })
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    await screen.findByText('winter-ridge-2026')
+    fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
+    await screen.findByText('winter-ridge-backup')
+    expect(calls[0]).toEqual({ session: 'winter-ridge-backup' })
+  })
+
+  it('refuses to activate over a stale pointer, matching D-014 for every other config write', async () => {
+    let reads = 0
+    stubs.getNightSessionActiveConfig = () => {
+      reads += 1
+      return Promise.resolve(
+        reads === 1
+          ? activeConfigResponse('winter-ridge-2026', { revision: 3 })
+          : activeConfigResponse('someone-else', { revision: 5, createdByPrincipalName: 'other-operator' }),
+      )
+    }
+    stubs.listConfigObjects = () =>
+      Promise.resolve({
+        serverTime: '2026-08-28T21:07:00Z',
+        kind: 'night.session',
+        objects: [{ id: 'winter-ridge-backup', label: 'Backup', show: '', currentRevision: 1, updatedAt: '2026-08-28T00:00:00Z' }],
+      })
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    await screen.findByText('winter-ridge-2026')
+    fireEvent.change(screen.getByLabelText('Activate a definition'), { target: { value: 'winter-ridge-backup' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activate' }))
+    expect(await screen.findByText('Stale write')).toBeInTheDocument()
+    expect(screen.getByText(/saved by other-operator/)).toBeInTheDocument()
+  })
+
+  it('treats clearing the active pointer as a confirmed, deliberate sharp control', async () => {
+    let calls: unknown[] = []
+    stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
+    stubs.putNightSessionActiveConfig = (...args: unknown[]) => {
+      calls = args
+      return Promise.resolve(activeConfigResponse('', { revision: 4 }))
+    }
+    renderScreen({ nightSession: session(), session: configWriteSession })
+    await screen.findByText('winter-ridge-2026')
+    const confirmInput = screen.getByLabelText('Type winter-ridge-2026 to confirm clearing the pointer')
+    const clearButton = screen.getByRole('button', { name: 'Clear active definition' })
+    expect(clearButton).toBeDisabled()
+    fireEvent.change(confirmInput, { target: { value: 'winter-ridge-2026' } })
+    expect(clearButton).not.toBeDisabled()
+    fireEvent.click(clearButton)
+    expect(await screen.findByText('none - the pointer is cleared')).toBeInTheDocument()
+    expect(calls[0]).toEqual({ session: '' })
   })
 })

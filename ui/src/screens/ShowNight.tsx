@@ -5,9 +5,14 @@ import {
   PROBLEM_TYPE,
   dispatchNightCommand,
   getCurrentNightSession,
+  getNightSessionActiveConfig,
+  listConfigObjects,
+  putNightSessionActiveConfig,
   randomUUIDv4,
+  type ConfigObjectSummary,
   type NightCommandName,
   type NightInterlockOverride,
+  type NightSessionActiveConfigResponse,
   type NightSessionState,
 } from '../api'
 import {
@@ -22,20 +27,26 @@ import {
   NotWiredBanner,
   RuledStrip,
   Section,
+  Select,
   StatusPair,
   Table,
   TableWrap,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
-import { effectiveServerTimeIso } from '../domain/time'
+import { guardedSave, type SaveOutcome } from '../domain/save'
+import { effectiveServerTimeIso, formatClock } from '../domain/time'
 import { formatPosition, type CommandOutcome } from './liveControlModel'
+import { StaleWriteStrip } from './StaleWrite'
 import {
+  backgroundAudioSteps,
   cycleRail,
   evidenceReadouts,
   nextTransition,
   nightRail,
   nowPlaying,
+  pinnedCeilingFact,
+  readinessChecks,
   runOfShow,
   type RailStep,
 } from './showNightModel'
@@ -419,10 +430,86 @@ export function ShowNight() {
         {evidenceReadouts(session, nowIso).map((readout) => (
           <div key={readout.key} className="sm-readout">
             <StatusPair tone={readout.tone} label={readout.label} />
-            <p className="sm-readout__fact">{readout.fact}</p>
+            <div>
+              <p className="sm-readout__fact">
+                {readout.fact}
+                {readout.key === 'readiness' && readout.tone !== 'good' && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      className="sm-linkbutton"
+                      disabled={!gate.allowed}
+                      title={gate.allowed ? undefined : gate.reason}
+                      onClick={() => send('run-readiness')}
+                    >
+                      Run readiness again
+                    </button>
+                  </>
+                )}
+              </p>
+              {readout.key === 'readiness' &&
+                (session.readiness.checks.length === 0 ? (
+                  <p className="sm-small sm-faint">No individual checks were recorded with this result.</p>
+                ) : (
+                  <div className="sm-readout__checks">
+                    {readinessChecks(session.readiness.checks).map((check) => (
+                      <div key={check.key} className="sm-readout">
+                        <StatusPair tone={check.tone} label={check.label} />
+                        <p className="sm-readout__fact">{check.fact}</p>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              {readout.key === 'audio' && (
+                <>
+                  <p className="sm-small sm-muted">{pinnedCeilingFact(session.backgroundAudio)}</p>
+                  {session.backgroundAudio.steps.length > 0 && (
+                    <TableWrap label="Background audio steps this cycle, scrollable">
+                      <Table>
+                        <thead>
+                          <tr>
+                            <th scope="col">When</th>
+                            <th scope="col">Sequence</th>
+                            <th scope="col">Cue</th>
+                            <th scope="col">Kind</th>
+                            <th scope="col">State</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backgroundAudioSteps(session.backgroundAudio).map((step) => (
+                            <tr key={step.key}>
+                              <td className="sm-data">{step.when}</td>
+                              <td>{step.sequence}</td>
+                              <td>
+                                {step.cueName}
+                                <br />
+                                <span className="sm-small sm-faint">{step.detail}</span>
+                              </td>
+                              <td>{step.kind}</td>
+                              <td>
+                                <StatusPair tone={step.tone} label={step.state} />
+                                {step.resolved !== null && (
+                                  <>
+                                    <br />
+                                    <span className="sm-small sm-faint">{step.resolved}</span>
+                                  </>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </Table>
+                    </TableWrap>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         ))}
       </Section>
+
+      <NightSessionActivation />
 
       {session.degraded && (
         <BlankingPlate
@@ -435,5 +522,197 @@ export function ShowNight() {
       )}
 
     </>
+  )
+}
+
+/** No `night.session.active` object has ever existed: the 404 the store documents, translated into the same shape every other read produces so `guardedSave` never special-cases it. */
+function emptyActiveConfig(): NightSessionActiveConfigResponse {
+  return {
+    serverTime: '',
+    kind: 'night.session.active',
+    id: 'night.session.active',
+    revision: 0,
+    payload: { session: '' },
+    updatedAt: '',
+    createdByPrincipalId: null,
+    createdByPrincipalName: null,
+    source: 'api',
+  }
+}
+
+function readActiveConfigOrEmpty(): Promise<NightSessionActiveConfigResponse> {
+  return getNightSessionActiveConfig().catch((err: unknown) => {
+    if (err instanceof ApiError && err.status === 404) return emptyActiveConfig()
+    throw err
+  })
+}
+
+type ActiveLoadState =
+  | { kind: 'loading' }
+  | { kind: 'loaded'; response: NightSessionActiveConfigResponse; objects: ConfigObjectSummary[] }
+  | { kind: 'failed'; reason: string }
+
+/**
+ * `/config/night.session.active` (ADR-039 rule 4): which `night.session`
+ * definition is armed for the next `start-night`, and the control to point
+ * it at a different one. Activating is in scope; authoring a definition
+ * (`putNightSessionConfig`) is not - `Edit definition` above stays not
+ * wired for that.
+ */
+function NightSessionActivation() {
+  const model = useModelContext()
+  const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
+  const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<ActiveLoadState>({ kind: 'loading' })
+  const [selected, setSelected] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [stale, setStale] = useState<Extract<SaveOutcome<NightSessionActiveConfigResponse>, { kind: 'stale' }> | null>(null)
+  const [clearConfirmText, setClearConfirmText] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ kind: 'loading' })
+    Promise.all([readActiveConfigOrEmpty(), listConfigObjects('night.session')])
+      .then(([active, list]) => {
+        if (cancelled) return
+        setState({ kind: 'loaded', response: active, objects: list.objects })
+        setSelected(active.payload.session)
+        setClearConfirmText('')
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ kind: 'failed', reason: describeApiError(err) })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [attempt])
+
+  const activate = (session: string) => {
+    if (state.kind !== 'loaded') return
+    setSaving(true)
+    setSaveError(null)
+    setStale(null)
+    guardedSave({
+      loaded: state.response,
+      read: readActiveConfigOrEmpty,
+      write: () => putNightSessionActiveConfig({ session }),
+    })
+      .then((outcome) => {
+        if (outcome.kind === 'saved') {
+          setState({ kind: 'loaded', response: outcome.response, objects: state.objects })
+          setSelected(outcome.response.payload.session)
+          setClearConfirmText('')
+          return
+        }
+        if (outcome.kind === 'stale') {
+          setStale(outcome)
+          return
+        }
+        setSaveError(outcome.reason)
+      })
+      .catch((err: unknown) => setSaveError(describeApiError(err)))
+      .finally(() => setSaving(false))
+  }
+
+  return (
+    <Section
+      id="sn-active"
+      title="Night session activation"
+      aside={<span className="sm-small sm-muted">Which definition start-night arms next</span>}
+    >
+      {state.kind === 'loading' ? (
+        <RuledStrip absence="loading" label="Reading" fact="Asking the coordinator which night session definition is active." />
+      ) : state.kind === 'failed' ? (
+        <RuledStrip absence="failed" label="Read failed" fact={state.reason} />
+      ) : (
+        <>
+          <DefinitionStrip
+            items={[
+              {
+                term: 'Active definition',
+                value:
+                  state.response.payload.session === '' ? (
+                    <span className="sm-muted">none - the pointer is cleared</span>
+                  ) : (
+                    <span className="sm-data">{state.response.payload.session}</span>
+                  ),
+              },
+              {
+                term: 'Revision',
+                value: state.response.revision === 0 ? 'never activated' : <span className="sm-data">{state.response.revision}</span>,
+              },
+              {
+                term: 'Updated',
+                value:
+                  state.response.revision === 0
+                    ? 'never'
+                    : `${formatClock(state.response.updatedAt) ?? 'at an unrecorded time'} by ${state.response.createdByPrincipalName ?? 'an unnamed principal'}`,
+              },
+            ]}
+          />
+
+          <FieldGrid>
+            <Field label="Activate a definition" help="Points start-night at a different night.session object.">
+              {(props) => (
+                <Select {...props} value={selected} onChange={(e) => setSelected(e.target.value)}>
+                  <option value="">Choose a definition…</option>
+                  {state.objects.map((object) => (
+                    <option key={object.id} value={object.id}>
+                      {object.label} ({object.id})
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          </FieldGrid>
+          <ButtonRow>
+            <Button
+              variant="primary"
+              onClick={() => activate(selected)}
+              disabled={!gate.allowed || saving || selected === '' || selected === state.response.payload.session}
+              title={gate.allowed ? undefined : gate.reason}
+            >
+              {saving ? 'Activating…' : 'Activate'}
+            </Button>
+          </ButtonRow>
+
+          {state.response.payload.session !== '' && (
+            <div className="sm-outcome__override">
+              <Field
+                label={`Type ${state.response.payload.session} to confirm clearing the pointer`}
+                help="Clearing is a sharp control: start-night then has no armed definition until another is activated."
+              >
+                {(props) => <Input {...props} value={clearConfirmText} onChange={(e) => setClearConfirmText(e.target.value)} />}
+              </Field>
+              <ButtonRow>
+                <Button
+                  variant="quiet"
+                  disabled={!gate.allowed || saving || clearConfirmText !== state.response.payload.session}
+                  title={gate.allowed ? undefined : gate.reason}
+                  onClick={() => activate('')}
+                >
+                  Clear active definition
+                </Button>
+              </ButtonRow>
+            </div>
+          )}
+
+          <p className="sm-small sm-faint">
+            Activation revision history is not rendered here yet: no shared revision-history element exists in this build.
+          </p>
+        </>
+      )}
+      {stale !== null && (
+        <StaleWriteStrip
+          stale={stale}
+          onReload={() => {
+            setStale(null)
+            setAttempt((n) => n + 1)
+          }}
+        />
+      )}
+      {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
+    </Section>
   )
 }
