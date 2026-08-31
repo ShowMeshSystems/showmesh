@@ -142,7 +142,14 @@ const NIGHT = () => ({
       { name: 'Start resting sequence', phase: 'enterResting', role: 'FPP', action: 'WinterRidge_Rest', actionRevision: 8, state: 'not_dispatched', dispatchedAt: null, resolvedAt: null },
       { name: 'Fade up resting lights', phase: 'enterResting', role: 'Resolume', action: 'resting-fade-in', actionRevision: 8, state: 'not_dispatched', dispatchedAt: null, resolvedAt: null },
     ] },
-    backgroundAudio: { state: 'recorded', reason: 'Ducked to -18 dB at 21:02:20, restore armed for the boundary.', steps: [{}, {}, {}, {}] },
+    backgroundAudio: {
+      state: 'recorded',
+      reason: 'Ducked to -18 dB at 21:02:20, restore armed for the boundary.',
+      steps: [
+        { sequence: 'background', phase: 'enter_show', cueName: 'Duck background bed', kind: 'gain', actionRevision: 4, state: 'resolved', outcome: 'confirmed', dispatchedAt: ago(2_696_000), resolvedAt: ago(2_694_000) },
+        { sequence: 'background', phase: 'enter_show', cueName: 'Start background bed', kind: 'start', actionRevision: 4, state: 'resolved', outcome: 'confirmed', dispatchedAt: ago(2_694_000), resolvedAt: ago(2_692_000) },
+      ],
+    },
     degraded: false, attributionDegraded: true,
     authorization: { state: 'recorded', reason: '', principalId: 'p1', principalName: 'erbartos', command: 'start-night', recordedAt: ago(2_700_000) },
     updatedAt: NOW(),
@@ -216,7 +223,7 @@ createServer((req, res) => {
     { id: 'show-starting-soon', label: 'Show starting soon', show: 'Winter Ridge 2026', currentRevision: 1, updatedAt: ago(86_400_000) },
     { id: 'main-cue', label: 'Main cue', show: 'Winter Ridge 2026', currentRevision: 4, updatedAt: ago(86_400_000) },
   ] })
-  if (p.startsWith('/config/show.cue/')) {
+  if (p.startsWith('/config/show.cue/') && !p.endsWith('/revisions')) {
     const id = p.split('/').pop()
     // SHOWMESH_FIXTURE_STALE=1 makes every cue re-read report a higher
     // revision than the last, which is the only way to exercise the
@@ -268,14 +275,17 @@ createServer((req, res) => {
       layerCount: 6, layerGroupCount: 2, columnCount: 14, clipCount: 68, persistentClipCount: 4,
     },
     decks: [{ id: 'deck-1', name: 'Winter' }, { id: 'deck-2', name: 'Hallowed' }, { id: 'deck-3', name: 'Test' }],
-    layerGroups: [{ id: 'lg-1', name: 'Base group' }],
+    layerGroups: [{ id: 'lg-1', index: 0 }],
     layers: [
       { id: 'layer-1', name: 'Base', nameGenerated: false, index: 0 },
       { id: 'layer-2', name: 'Ambience', nameGenerated: false, index: 1 },
       { id: 'layer-3', name: 'Text', nameGenerated: false, index: 2 },
       { id: 'layer-4', name: 'Overlay', nameGenerated: false, index: 3 },
     ],
-    columns: [{ id: 'col-3', name: 'Column 3', index: 2 }, { id: 'col-9', name: 'Column 9', index: 8 }],
+    columns: [
+      { id: 'col-3', deckId: 'deck-1', name: 'Column 3', nameGenerated: true, index: 2 },
+      { id: 'col-9', deckId: 'deck-1', name: 'Column 9', nameGenerated: true, index: 8 },
+    ],
     clips: [
       { id: 'clip-1f04', deckId: 'deck-1', layerIndex: 1, columnIndex: 2, name: 'Snow', nameGenerated: false, ambiguous: true },
       { id: 'clip-9b72', deckId: 'deck-1', layerIndex: 1, columnIndex: 8, name: 'Snow', nameGenerated: false, ambiguous: true },
@@ -464,6 +474,11 @@ createServer((req, res) => {
     payload: { show: 'winter-ridge-2026' },
     updatedAt: ago(10_800_000), createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api',
   })
-  if (p === '/') return json(res, { name: 'showmesh-coordinator', version: '0.9.4-fixture', commit: 'a3f91c2', apiVersion: 'v1' })
+  if (p === '/') return json(res, {
+    serverTime: NOW(),
+    apiVersion: 1,
+    supportedVersions: [1],
+    coordinator: { version: '0.9.4-fixture', commit: 'a3f91c2', buildDate: ago(86_400_000), goVersion: 'go1.24.2' },
+  })
   return json(res, { type: 'about:blank', title: 'Not Found', status: 404, detail: `No fixture for ${p}` }, 404)
 }).listen(PORT, () => console.log(`fixture coordinator on http://localhost:${PORT}`))

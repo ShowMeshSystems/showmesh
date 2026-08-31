@@ -309,7 +309,7 @@ export function ShowNight() {
         aside={<Link to="/control">Full transport in Live Control →</Link>}
       >
         <p className="sm-small sm-muted">Accepted, never confirmed here. Each one answers 202.</p>
-        <div className="sm-grid sm-grid--auto">
+        <div className="sm-grid sm-grid--auto sm-lifecycle-commands">
           {(
             [
               ['prepare-site', 'Prepare site', 'Opens a preparation epoch. Readiness and start-preshow both need one.'],

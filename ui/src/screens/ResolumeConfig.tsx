@@ -304,7 +304,7 @@ export function ResolumeConfig() {
     recoveryConfigState.kind === 'loaded' && pendingEnabled !== null && pendingEnabled !== recoveryConfigState.response.payload.autoRestoreEnabled
 
   return (
-    <>
+    <div className="sm-resolume-config">
       <p className="sm-small sm-muted">
         <Link to="/monitor/fleet" className="sm-muted">
           Monitor
@@ -700,7 +700,7 @@ export function ResolumeConfig() {
         compositionLayers={compositionState.kind === 'loaded' ? compositionState.response.layers : []}
         nowIso={nowIso}
       />
-    </>
+    </div>
   )
 }
 

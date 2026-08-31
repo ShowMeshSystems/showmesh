@@ -11,13 +11,14 @@ type AttentionProps = {
   fact: ReactNode
   /** The consequence, then the action, at helper size. */
   detail?: ReactNode
+  appearance?: 'chip' | 'word'
 }
 
 /** One thing asking for an operator. The state word carries the colour. */
-export function AttentionRow({ tone, state, fact, detail }: AttentionProps) {
+export function AttentionRow({ tone, state, fact, detail, appearance = 'chip' }: AttentionProps) {
   return (
     <div className="sm-attn">
-      <StatusPair tone={tone} label={state} />
+      <StatusPair tone={tone} label={state} appearance={appearance} />
       <div>
         <p className="sm-attn__fact">{fact}</p>
         {detail !== undefined && <p className="sm-attn__detail">{detail}</p>}

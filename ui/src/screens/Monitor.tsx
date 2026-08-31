@@ -109,7 +109,7 @@ export function Monitor() {
   }
 
   return (
-    <>
+    <div className="sm-monitor">
       <MonitorHead model={model} />
 
       <Panes>
@@ -275,7 +275,7 @@ export function Monitor() {
           )}
         </aside>
       </Panes>
-    </>
+    </div>
   )
 }
 

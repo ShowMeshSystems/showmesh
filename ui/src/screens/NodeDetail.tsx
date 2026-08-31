@@ -334,7 +334,7 @@ export function NodeDetail() {
       : ''
 
   return (
-    <>
+    <div className="sm-node-detail">
       <p className="sm-small sm-muted">
         <Link to="/monitor/fleet" className="sm-muted">
           Monitor
@@ -707,6 +707,6 @@ export function NodeDetail() {
           </ButtonRow>
         </div>
       </Section>
-    </>
+    </div>
   )
 }

@@ -209,6 +209,21 @@
   font: var(--t-body);
 }
 
+/* The ruled state lane is intentionally fixed-width. Long literal status
+   labels must wrap inside that lane, never push into the adjoining fact. */
+.sm-attn > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sm-attn > .sm-status {
+  width: max-content;
+  max-width: 100%;
+  min-height: 20px;
+  height: auto;
+  white-space: normal;
+}
+
 .sm-attn__detail {
   margin: 4px 0 0;
   font: var(--t-small);
@@ -220,25 +235,73 @@
 .sm-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
+  background: var(--border);
 }
 
 .sm-tile {
   display: block;
   padding: 14px var(--s-4);
-  border-right: 1px solid var(--border);
+  border-right: 0;
+  background: var(--surface);
   color: inherit;
   text-decoration: none;
-}
-
-.sm-tile:last-child {
-  border-right: 0;
 }
 
 a.sm-tile:hover {
   background: var(--raised);
   color: inherit;
+}
+
+/* Dashboard is a ledger of show-time facts, not a card grid. Its mock uses
+   150px state columns and a single hairline spine for each related row. */
+.sm-dashboard__verdicts {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-strong);
+}
+
+.sm-dashboard__verdicts > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 0 20px;
+  align-items: start;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-dashboard__verdicts .sm-verdict {
+  margin: 0;
+  max-width: 78ch;
+  font: var(--t-small);
+  color: var(--text-muted);
+}
+
+.sm-dashboard__verdicts .sm-verdict__detail {
+  display: inline;
+  margin: 0;
+}
+
+.sm-dashboard__verdicts .sm-verdict__detail::before {
+  content: ' ';
+}
+
+.sm-dashboard__attention > .sm-attn {
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 0 20px;
+}
+
+.sm-dashboard__attention > .sm-attn:first-child {
+  border-top-color: var(--border-strong);
+}
+
+.sm-dashboard__attention .sm-attn__fact {
+  font: var(--t-subhead);
 }
 
 .sm-tile__label {
@@ -324,6 +387,77 @@ a.sm-tile:hover {
   font: var(--t-body);
 }
 
+/* Transport is one operational surface. Extra live controls stay in their
+   functional order, but never float outside the player they operate. */
+.sm-transport-surface {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.sm-transport-surface__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-bg);
+}
+
+.sm-transport-surface__head .sm-small {
+  margin: 0;
+}
+
+.sm-transport-surface__body {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.sm-transport-surface__body > .sm-btn-row {
+  gap: 10px;
+}
+
+.sm-transport-surface .sm-rule-v {
+  height: var(--ctrl-h-gloved);
+}
+
+.sm-transport-surface > .sm-outcome {
+  margin: 0;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--raised);
+}
+
+.sm-transport-surface .sm-outcome__detail {
+  margin-bottom: 0;
+}
+
+.sm-volume.sm-transport__start,
+.sm-volume.sm-transport__volume {
+  max-width: none;
+  margin: 0;
+}
+
+.sm-volume.sm-transport__start {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-transport__start .sm-field {
+  flex: 1 1 270px;
+  max-width: 420px;
+}
+
+.sm-transport__volume .sm-field {
+  flex: 1 1 220px;
+  max-width: 420px;
+}
+
 .sm-volume {
   display: flex;
   align-items: flex-end;
@@ -338,6 +472,190 @@ a.sm-tile:hover {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--s-5);
+}
+
+/* Shows keeps the live activation control in its existing place, but gives
+   the inventory its own stronger visual rhythm, as in the Shows reference. */
+.sm-shows > .sm-ruled:first-of-type {
+  margin-top: 20px;
+}
+
+.sm-shows #sh-active {
+  margin-top: 22px;
+}
+
+.sm-shows #sh-list {
+  margin-top: 32px;
+}
+
+.sm-shows #sh-list .sm-table th:nth-child(1),
+.sm-shows #sh-list .sm-table td:nth-child(1) {
+  width: 43%;
+}
+
+.sm-shows #sh-list .sm-table th:nth-child(2),
+.sm-shows #sh-list .sm-table td:nth-child(2) {
+  width: 34%;
+}
+
+.sm-shows #sh-list .sm-table th:nth-child(3),
+.sm-shows #sh-list .sm-table td:nth-child(3) {
+  width: 23%;
+}
+
+/* Monitor is the one full-spine evidence surface: its fleet table and
+   inspector use the page width rather than the ordinary form measure. */
+.sm-main:has(.sm-monitor) {
+  max-width: none;
+  padding: 0 0 80px;
+}
+
+/* These reference pages use the complete post-rail spine. The ordinary
+   1120px reading measure remains for narrow detail and form pages. */
+.sm-main:has(.sm-facets[aria-label='Monitor facets']),
+.sm-main:has(.sm-facets[aria-label='Show workspace tabs']),
+.sm-main:has(.sm-rails) {
+  max-width: none;
+}
+
+.sm-main:has(.sm-rc-breadcrumb) {
+  max-width: 1220px;
+}
+
+.sm-main:has(.sm-facets[aria-label='Monitor facets']) {
+  padding-top: 20px;
+}
+
+/* Live Control has the mock's 1160px operational measure: wider than a
+   detail form, narrower than a full monitoring table. */
+.sm-main:has(#lc-transport) {
+  max-width: 1160px;
+}
+
+/* Show workspace and Show Night have their own compact page heads in the
+   approved references. These corrections only change vertical placement. */
+.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > .sm-small:first-child {
+  margin: -2px 0 0;
+}
+
+/* The authoring mock gives the list and editor the whole post-rail spine;
+   only the title block keeps the ordinary 28px page gutter. */
+.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] {
+  margin-inline: -28px;
+}
+
+.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] > .sm-panes {
+  gap: 0;
+}
+
+.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] .sm-table-wrap {
+  margin-inline: 28px;
+}
+
+.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) > [data-panes] .sm-panes > :first-child > .sm-section:first-child {
+  margin-top: 0;
+}
+
+.sm-main:has(.sm-rails) > .sm-page__head .sm-eyebrow {
+  margin-bottom: 4px;
+  font: var(--t-meta);
+}
+
+.sm-main:has(.sm-rails) > .sm-page__head .sm-eyebrow .sm-data {
+  font: inherit;
+}
+
+/* Macro cards name a directly runnable operational object. The approved
+   Automation reference gives that name the action accent, while the
+   supporting revision and binding evidence stays deliberately subdued. */
+.sm-main:has(#au-macros) .sm-section:has(#au-macros) .sm-panel > .sm-section__head .sm-subsection__title {
+  color: var(--accent);
+}
+
+/* Settings is the other wider reference page: its seven direct destinations
+   need the mock's 1160px measure without widening ordinary authoring forms. */
+.sm-main:has(> nav[aria-label='Settings tabs']) {
+  max-width: 1160px;
+}
+
+/* Direct Settings pages keep their navigation spine wide, then narrow into
+   the documented 640px editing column. Resolume configuration is a separate
+   800px evidence surface and retains its explicit measure below. */
+.sm-main:has(> nav[aria-label='Settings tabs']) > nav[aria-label='Settings tabs'] ~ :not(.sm-resolume-config) {
+  max-width: 640px;
+}
+
+/* The Resolume configuration reference is a focused configuration column,
+   not one of the settings pages that uses the full direct-settings measure. */
+.sm-main:has(.sm-resolume-config) {
+  max-width: 1120px !important;
+  padding-top: 48px;
+}
+
+/* The Resolume configuration mock keeps its editable evidence in a focused
+   800px column, while the Settings header and direct-route tabs retain the
+   wider 1120px spine. This is presentation only: all existing controls stay
+   in their current route and order. */
+.sm-resolume-config {
+  max-width: 800px;
+}
+
+/* Node detail is a focused configuration/evidence column in the approved
+   reference, not a full-spine monitoring table. */
+.sm-node-detail {
+  max-width: 760px;
+}
+
+.sm-node-detail > .sm-small:first-child {
+  margin: 0 0 4px;
+}
+
+/* Show identity pages use the compact breadcrumb-to-title rhythm of the
+   approved authoring references. This affects only vertical whitespace. */
+.sm-main:has(a[href='/shows']) > .sm-small:first-child {
+  margin: 0 0 4px;
+}
+
+/* Access keeps the principal inventory on the full spine. Supporting
+   credentials and attribution evidence use the narrower measure shown in the
+   approved page, and the introductory copy remains readable rather than
+   spanning the inventory width. */
+.sm-main:has(#ac-princ) > .sm-page__lede {
+  max-width: 72ch;
+}
+
+.sm-main:has(#ac-princ) > .sm-section:has(#ac-cred),
+.sm-main:has(#ac-princ) > .sm-section:has(#ac-audit),
+.sm-main:has(#ac-princ) > .sm-section:has(#ac-bootstrap) {
+  max-width: 800px;
+}
+
+.sm-monitor > .sm-page__head {
+  padding: 20px 28px 0;
+}
+
+.sm-monitor > .sm-facets {
+  margin: 18px 28px 0;
+}
+
+.sm-monitor > .sm-panes {
+  gap: 0;
+}
+
+.sm-monitor > .sm-panes > :first-child {
+  min-width: 0;
+  padding: 20px 24px 0 28px;
+}
+
+.sm-monitor > .sm-panes > aside {
+  padding: 20px 28px 0 0;
+}
+
+@media (max-width: 1100px) {
+  .sm-monitor > .sm-panes > :first-child,
+  .sm-monitor > .sm-panes > aside {
+    padding: 20px 28px 0;
+  }
 }
 
 /* The lifecycle rails: where the night is, and where this cycle is. */
@@ -418,10 +736,23 @@ a.sm-tile:hover {
 /* Now playing beside the next transition. */
 .sm-nownext {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
-  gap: var(--s-5);
-  margin-top: var(--s-5);
-  align-items: start;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 1px;
+  margin-top: 20px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--border);
+}
+
+.sm-nownext > section {
+  padding: 18px 20px;
+  background: var(--surface);
+}
+
+.sm-nownext > section:last-child {
+  background: var(--raised);
 }
 
 @media (max-width: 1100px) {
@@ -431,8 +762,53 @@ a.sm-tile:hover {
 }
 
 .sm-nownext__title {
-  margin: 6px 0 0;
-  font: var(--t-heading);
+  margin: 8px 0 0;
+  font: var(--t-display);
+  letter-spacing: -0.02em;
+}
+
+.sm-lifecycle-commands {
+  gap: 1px;
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--border);
+}
+
+.sm-lifecycle-commands > div {
+  display: grid;
+  align-content: start;
+  gap: var(--s-2);
+  padding: 14px;
+  background: var(--surface);
+}
+
+.sm-lifecycle-commands .sm-small {
+  margin: 0;
+}
+
+/* Live Control groups individual commands as adjacent operational cells,
+   matching the approved transport, lifecycle, macro, and action treatment. */
+.sm-control-grid {
+  gap: 1px;
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--border);
+}
+
+.sm-control-grid > div {
+  display: grid;
+  align-content: start;
+  gap: var(--s-2);
+  padding: 14px;
+  background: var(--surface);
+}
+
+.sm-control-grid .sm-small {
+  margin: 0;
 }
 
 /* One evidence readout: state word, then the fact. */
@@ -485,39 +861,49 @@ a.sm-tile:hover {
 /* Facet tabs. The count is inventory, never attention. */
 .sm-facets {
   display: flex;
-  gap: 2px;
-  margin-top: var(--s-4);
+  gap: 0;
+  margin-top: 18px;
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 .sm-facets__tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: var(--r-panel) var(--r-panel) 0 0;
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
   color: var(--text-muted);
   font: var(--t-body);
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .sm-facets__tab:hover {
-  background: var(--raised);
   color: var(--text);
+  border-bottom-color: var(--border-strong);
 }
 
 .sm-facets__tab[aria-current='page'] {
-  background: var(--accent-bg);
-  border-color: var(--border);
+  border-bottom-color: var(--accent);
   color: var(--accent);
+  font-weight: 600;
 }
 
 .sm-facets__count {
   font: var(--t-data);
   font-size: 11px;
-  color: var(--text-faint);
+  color: inherit;
+}
+
+@media (max-width: 1100px) {
+  .sm-main:has(> nav[aria-label='Settings tabs']) .sm-facets__tab {
+    padding-inline: 7px;
+  }
 }
 
 /* A row that opens the inspector rather than navigating. */
@@ -534,13 +920,18 @@ a.sm-tile:hover {
 
 .sm-viewing {
   margin-left: 6px;
-  padding: 1px 5px;
-  border: 1px solid var(--accent-border);
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border: 0;
   border-radius: var(--r-chip);
   font: var(--t-meta);
   font-size: 10px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
 .sm-table__row--current {

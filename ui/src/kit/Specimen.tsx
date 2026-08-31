@@ -199,7 +199,7 @@ export function Specimen() {
             ))}
           </div>
           <Callout>
-            The dashed edge on <span className="sm-data sm-spec-tone__token--unknown">Unknown</span> is load-bearing.
+            A dashed edge belongs only to an explicit unobserved state block, never a generic unknown status.
             Absent evidence must not be able to borrow the shape of a settled state, in any theme, at any zoom.
           </Callout>
         </SpecSection>
@@ -289,8 +289,8 @@ export function Specimen() {
             />
           </div>
           <Callout>
-            The dashed stamp and dashed underline do the same job the dashed badge does elsewhere: absent evidence
-            never borrows the shape of a settled state. Solid edges are reserved for facts the coordinator asserted.
+            The dashed stamp and dashed underline mark absent evidence. They never borrow the shape of a settled
+            state; generic unknown statuses retain a solid edge.
           </Callout>
 
           <div className="sm-strips__title sm-spec-plate-title">

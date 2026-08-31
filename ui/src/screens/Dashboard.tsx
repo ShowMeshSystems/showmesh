@@ -54,7 +54,7 @@ function useNightSession(): NightSessionState | null {
 function Verdict({ verdict, action }: { verdict: ReadinessVerdict; action?: React.ReactNode }) {
   return (
     <div>
-      <StatusPair tone={verdict.tone} label={verdict.state} />
+      <StatusPair tone={verdict.tone} label={verdict.state} appearance="word" />
       <p className="sm-verdict">
         {verdict.fact}
         {verdict.detail !== null && <span className="sm-verdict__detail">{verdict.detail}</span>}
@@ -105,7 +105,7 @@ export function Dashboard() {
             detail="The stream announces a change, not a state, so this stays blank until the session reports or a read succeeds."
           />
         ) : (
-          <div className="sm-grid sm-grid--wide">
+          <div className="sm-dashboard__verdicts">
             {inProgress !== null && <Verdict verdict={inProgress} />}
             {nextStart !== null && (
               <Verdict verdict={nextStart} action={<Link to="/night">Open Show Night</Link>} />
@@ -134,23 +134,26 @@ export function Dashboard() {
             detail="No failed, held, or unknown conditions are reported. That is not proof the show looks right, only that nothing has asked for you."
           />
         ) : (
-          items.map((item) => (
-            <AttentionRow
-              key={item.key}
-              tone={item.tone}
-              state={item.state}
-              fact={
-                <>
-                  <Link to={item.to}>{item.subject}</Link> {item.fact}
-                </>
-              }
-              detail={
-                <>
-                  {item.detail} <Link to={item.to}>Open</Link>
-                </>
-              }
-            />
-          ))
+          <div className="sm-dashboard__attention">
+            {items.map((item) => (
+              <AttentionRow
+                key={item.key}
+                tone={item.tone}
+                state={item.state}
+                appearance="word"
+                fact={
+                  <>
+                    <Link to={item.to}>{item.subject}</Link> {item.fact}
+                  </>
+                }
+                detail={
+                  <>
+                    {item.detail} <Link to={item.to}>Open</Link>
+                  </>
+                }
+              />
+            ))}
+          </div>
         )}
       </Section>
 

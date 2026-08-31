@@ -40,7 +40,10 @@ export function resolveTheme(theme: Theme): Exclude<Theme, 'system'> {
 }
 
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(() => read(THEME_KEY, THEMES, 'system'))
+  // Show-time starts dark unless this browser already has an explicit choice.
+  // Light remains a deliberate daylight setting; a stored `system` choice is
+  // preserved for existing operators rather than being silently rewritten.
+  const [theme, setTheme] = useState<Theme>(() => read(THEME_KEY, THEMES, 'dark'))
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolveTheme(theme))

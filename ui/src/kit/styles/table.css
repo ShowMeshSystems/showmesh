@@ -9,7 +9,7 @@
 
 .sm-table-wrap {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-card);
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   background: var(--surface);
@@ -22,7 +22,7 @@
 }
 
 .sm-table th {
-  padding: 9px 14px;
+  padding: 8px 10px;
   text-align: left;
   border-bottom: 1px solid var(--border);
   background: var(--raised);
@@ -34,7 +34,7 @@
 }
 
 .sm-table td {
-  padding: 11px 14px;
+  padding: 10px;
   border-bottom: 1px solid var(--border);
   height: var(--row-h);
 }

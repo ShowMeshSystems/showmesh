@@ -110,7 +110,13 @@ function ShellMode() {
 function ShowPicker({ model }: { model: Model }) {
   const active = model.currentRuns?.activeShow
   if (active?.configured !== true || active.show === null) return null
-  return <Link className="sm-showpicker" to={`/shows/${encodeURIComponent(active.show)}`}>{active.show}</Link>
+  return (
+    <Link className="sm-showpicker" to={`/shows/${encodeURIComponent(active.show)}`}>
+      <span className="sm-showpicker__eyebrow">Show</span>
+      <span className="sm-showpicker__value">{active.show}</span>
+      <span className="sm-showpicker__chevron" aria-hidden="true">▾</span>
+    </Link>
+  )
 }
 
 export function Layout() {

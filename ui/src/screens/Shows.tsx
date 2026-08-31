@@ -255,7 +255,7 @@ export function Shows() {
   const createGate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
 
   return (
-    <>
+    <div className="sm-shows">
       <PageTitle
         title="Shows"
         lede="A show is a namespace. Its cues, playlists, surfaces and assets reference only each other, nothing crosses between shows, at authoring time or at runtime."
@@ -345,6 +345,6 @@ export function Shows() {
           </>
         )}
       </Section>
-    </>
+    </div>
   )
 }

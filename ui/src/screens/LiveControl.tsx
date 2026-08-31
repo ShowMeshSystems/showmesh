@@ -193,116 +193,120 @@ export function LiveControl() {
             detail="Settings › Connections is where an endpoint is added."
           />
         ) : (
-          <>
-            <p className="sm-transport__now">
-              <span className="sm-data">{state.playlist ?? 'No playlist reported'}</span>
-              {state.itemIndex !== null && (
-                <>
-                  {' · '}
-                  <span className="sm-data">
-                    {state.itemIndex}
-                    {state.itemCount === null ? '' : ` / ${state.itemCount}`}
-                  </span>
-                </>
-              )}
-            </p>
-            <p className="sm-small sm-muted">
-              {state.playerState ?? 'Player state not reported'}
-              {state.elapsedSeconds !== null && ` · ${formatPosition(state.elapsedSeconds) ?? ''}`}
-              {state.totalSeconds !== null && ` / ${formatPosition(state.totalSeconds) ?? ''}`}
-            </p>
-            <div className="sm-volume">
-              <Field label="Playlist name" help="FPP's own catalog is not exposed here; type the exact name.">
-                {(field) => (
-                  <Input
-                    {...field}
-                    value={startPlaylistName}
-                    onChange={(event) => setStartPlaylistName(event.target.value)}
-                    placeholder="e.g. Standard Show"
-                  />
+          <div className="sm-transport-surface">
+            <div className="sm-transport-surface__head">
+              <p className="sm-transport__now">
+                <span className="sm-data">{state.playlist ?? 'No playlist reported'}</span>
+                {state.itemIndex !== null && (
+                  <>
+                    {' · '}
+                    <span className="sm-data">
+                      {state.itemIndex}
+                      {state.itemCount === null ? '' : ` / ${state.itemCount}`}
+                    </span>
+                  </>
                 )}
-              </Field>
-              <Choice
-                type="checkbox"
-                checked={startRepeat}
-                onChange={(event) => setStartRepeat(event.target.checked)}
-                label="Repeat"
-              />
-              <Button
-                variant="primary"
-                disabled={!commandGate.allowed || startPlaylistName.trim() === ''}
-                title={commandGate.allowed ? undefined : commandGate.reason}
-                onClick={() => dispatchStartPlaylist(instance.instanceId, startPlaylistName.trim(), startRepeat, 'refuse')}
-              >
-                Start playlist
-              </Button>
+              </p>
+              <p className="sm-small sm-muted">
+                {state.playerState ?? 'Player state not reported'}
+                {state.elapsedSeconds !== null && ` · ${formatPosition(state.elapsedSeconds) ?? ''}`}
+                {state.totalSeconds !== null && ` / ${formatPosition(state.totalSeconds) ?? ''}`}
+              </p>
             </div>
-            {startState.kind === 'busy' && (
-              <div className="sm-outcome" role="alert">
-                <StatusPair tone="warn" label="Busy" />
-                <p className="sm-outcome__detail">{startState.message}</p>
-                <ButtonRow>
-                  <Button
-                    variant="danger"
-                    disabled={!commandGate.allowed}
-                    title={commandGate.allowed ? undefined : commandGate.reason}
-                    onClick={() => dispatchStartPlaylist(instance.instanceId, startState.playlist, startState.repeat, 'replace')}
-                  >
-                    {startState.reason === 'differentPlaylistPlaying'
-                      ? 'Start anyway (replace what is currently playing)'
-                      : 'Start anyway (override the busy check)'}
-                  </Button>
-                </ButtonRow>
+            <div className="sm-transport-surface__body">
+              <div className="sm-volume sm-transport__start">
+                <Field label="Playlist name" help="FPP's own catalog is not exposed here; type the exact name.">
+                  {(field) => (
+                    <Input
+                      {...field}
+                      value={startPlaylistName}
+                      onChange={(event) => setStartPlaylistName(event.target.value)}
+                      placeholder="e.g. Standard Show"
+                    />
+                  )}
+                </Field>
+                <Choice
+                  type="checkbox"
+                  checked={startRepeat}
+                  onChange={(event) => setStartRepeat(event.target.checked)}
+                  label="Repeat"
+                />
+                <Button
+                  variant="primary"
+                  disabled={!commandGate.allowed || startPlaylistName.trim() === ''}
+                  title={commandGate.allowed ? undefined : commandGate.reason}
+                  onClick={() => dispatchStartPlaylist(instance.instanceId, startPlaylistName.trim(), startRepeat, 'refuse')}
+                >
+                  Start playlist
+                </Button>
               </div>
-            )}
-            <ButtonRow>
-              <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Previous item', () => prevFPPPlaylistItem(instance.instanceId))}>
-                <span aria-hidden="true">⏮ </span>Previous item
-              </Button>
-              {state.playerState === 'paused' ? (
-                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Resume', () => resumeFPPPlaylist(instance.instanceId))}>
-                  <span aria-hidden="true">▶ </span>Resume
-                </Button>
-              ) : (
-                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Pause', () => pauseFPPPlaylist(instance.instanceId))}>
-                  <span aria-hidden="true">⏸ </span>Pause
-                </Button>
+              {startState.kind === 'busy' && (
+                <div className="sm-outcome" role="alert">
+                  <StatusPair tone="warn" label="Busy" />
+                  <p className="sm-outcome__detail">{startState.message}</p>
+                  <ButtonRow>
+                    <Button
+                      variant="danger"
+                      disabled={!commandGate.allowed}
+                      title={commandGate.allowed ? undefined : commandGate.reason}
+                      onClick={() => dispatchStartPlaylist(instance.instanceId, startState.playlist, startState.repeat, 'replace')}
+                    >
+                      {startState.reason === 'differentPlaylistPlaying'
+                        ? 'Start anyway (replace what is currently playing)'
+                        : 'Start anyway (override the busy check)'}
+                    </Button>
+                  </ButtonRow>
+                </div>
               )}
-              <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Next item', () => nextFPPPlaylistItem(instance.instanceId))}>
-                <span aria-hidden="true">⏭ </span>Next item
-              </Button>
-              <ButtonRule />
-              <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
-                Stop after this item
-              </Button>
-              <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
-                <span aria-hidden="true">■ </span>Stop now
-              </Button>
-            </ButtonRow>
-            <div className="sm-volume">
-              <Field label="Volume" {...(state.volume === null ? { help: 'This instance does not report its volume.' } : {})}>
-                {(field) => (
-                  <Input
-                    {...field}
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={volume}
-                    placeholder={state.volume === null ? '' : String(state.volume)}
-                    onChange={(event) => setVolume(event.target.value)}
-                  />
+              <ButtonRow>
+                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Previous item', () => prevFPPPlaylistItem(instance.instanceId))}>
+                  <span aria-hidden="true">⏮ </span>Previous item
+                </Button>
+                {state.playerState === 'paused' ? (
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Resume', () => resumeFPPPlaylist(instance.instanceId))}>
+                    <span aria-hidden="true">▶ </span>Resume
+                  </Button>
+                ) : (
+                  <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Pause', () => pauseFPPPlaylist(instance.instanceId))}>
+                    <span aria-hidden="true">⏸ </span>Pause
+                  </Button>
                 )}
-              </Field>
-              <Button
-                disabled={!commandGate.allowed || volume.trim() === ''}
-                title={commandGate.allowed ? undefined : commandGate.reason}
-                onClick={() => run('Set volume', () => setFPPVolume(instance.instanceId, Number(volume)))}
-              >
-                Apply
-              </Button>
+                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Next item', () => nextFPPPlaylistItem(instance.instanceId))}>
+                  <span aria-hidden="true">⏭ </span>Next item
+                </Button>
+                <ButtonRule />
+                <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop after this item', () => stopFPPPlaylistGracefully(instance.instanceId, false))}>
+                  Stop after this item
+                </Button>
+                <Button variant="danger" size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Stop now', () => stopFPPPlaylist(instance.instanceId))}>
+                  <span aria-hidden="true">■ </span>Stop now
+                </Button>
+              </ButtonRow>
+              <div className="sm-volume sm-transport__volume">
+                <Field label="Volume" {...(state.volume === null ? { help: 'This instance does not report its volume.' } : {})}>
+                  {(field) => (
+                    <Input
+                      {...field}
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={volume}
+                      placeholder={state.volume === null ? '' : String(state.volume)}
+                      onChange={(event) => setVolume(event.target.value)}
+                    />
+                  )}
+                </Field>
+                <Button
+                  disabled={!commandGate.allowed || volume.trim() === ''}
+                  title={commandGate.allowed ? undefined : commandGate.reason}
+                  onClick={() => run('Set volume', () => setFPPVolume(instance.instanceId, Number(volume)))}
+                >
+                  Apply
+                </Button>
+              </div>
             </div>
             <Outcome outcome={outcome} />
-          </>
+          </div>
         )}
         <Callout>
           <strong> Stop now</strong> halts this player only; projection and audio hold their last state until their own
@@ -647,7 +651,7 @@ function NightGroup({
       <h3 id={id} className="sm-subsection__title">
         {title}
       </h3>
-      <div className="sm-grid sm-grid--auto">
+      <div className="sm-grid sm-grid--auto sm-control-grid">
         {commands.map(([command, label, detail]) => (
           <div key={command}>
             <Button
@@ -719,7 +723,7 @@ function RunList({
           detail="Shows › Automation is where they are authored."
         />
       ) : (
-        <div className="sm-grid sm-grid--auto">
+        <div className="sm-grid sm-grid--auto sm-control-grid">
           {list.items.map((item) => (
             <div key={item.id}>
               <Button

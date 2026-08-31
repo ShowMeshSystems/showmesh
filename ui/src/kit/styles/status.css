@@ -53,10 +53,21 @@
 }
 
 .sm-status--unknown {
-  border-style: dashed;
   border-color: var(--unk-fg);
   background: var(--unk-bg);
   color: var(--unk-fg);
+}
+
+/* Rows such as Dashboard readiness already carry their own grouping edge.
+   The approved mock uses a literal status word there, not a second chip. */
+.sm-status--word {
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: var(--t-meta);
+  letter-spacing: 0.1em;
 }
 
 /* Evidence panel: the same four tones at region size, for a specimen or a

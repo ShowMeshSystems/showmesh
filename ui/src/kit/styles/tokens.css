@@ -73,7 +73,8 @@
 
   /* Shell geometry. The rail is fixed; the bar must not wrap. */
   --rail-w: 212px;
-  --chrome-h: 49px;
+  /* The 49px chrome includes the separate 3px progress strip. */
+  --chrome-h: 46px;
   --page-max: 1120px;
 }
 

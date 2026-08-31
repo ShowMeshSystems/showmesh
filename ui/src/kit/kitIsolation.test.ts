@@ -56,7 +56,7 @@ describe('kit isolation', () => {
     const dashed = [...status.matchAll(/\.sm-status--([a-z]+)\s*\{([^}]*)\}/g)]
       .filter(([, , body]) => (body ?? '').includes('dashed'))
       .map(([, tone]) => tone)
-    expect(dashed).toEqual(['unknown'])
+    expect(dashed).toEqual([])
   })
 
   it('gives the gloved control the 48px height the guide requires', () => {

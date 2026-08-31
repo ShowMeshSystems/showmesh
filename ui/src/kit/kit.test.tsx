@@ -12,9 +12,10 @@ describe('StatusPair', () => {
     expect(screen.getByText('Offline')).toBeTruthy()
   })
 
-  it('gives only the unknown tone a dashed edge', () => {
+  it('renders unknown as a labelled state without claiming it is unobserved', () => {
     const { container, unmount } = render(<StatusPair tone="unknown" label="Unobserved" />)
     expect(container.querySelector('.sm-status--unknown')).not.toBeNull()
+    expect(container.querySelector('.sm-status--unknown')).not.toHaveStyle({ borderStyle: 'dashed' })
     unmount()
     for (const tone of ['good', 'warn', 'bad'] as const) {
       const settled = render(<StatusPair tone={tone} label="Settled" />)

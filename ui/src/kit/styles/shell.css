@@ -19,13 +19,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 14px;
   flex-wrap: nowrap;
   overflow: hidden;
   height: var(--chrome-h);
-  padding: 0 var(--s-4);
+  padding: var(--s-2) 18px;
   background: var(--surface);
-  border-bottom: 1px solid var(--border);
 }
 
 .sm-chrome__left {
@@ -40,9 +39,24 @@
 .sm-chrome__now {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 11px;
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.sm-chrome__now > .sm-meta:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.sm-chrome__now > .sm-meta:first-child::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+  content: '';
 }
 
 .sm-chrome__right {
@@ -93,6 +107,24 @@
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+}
+
+.sm-showpicker__eyebrow {
+  color: var(--text-faint);
+  font: var(--t-meta);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sm-showpicker__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sm-showpicker__chevron {
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 .sm-showpicker:hover {
@@ -161,6 +193,7 @@
   z-index: 29;
   height: 3px;
   background: var(--sunken);
+  border-bottom: 1px solid var(--border);
 }
 
 .sm-progress__fill {
@@ -198,7 +231,7 @@
   align-self: start;
   /* The divider runs the height of the page, not the height of the links. */
   min-height: calc(100vh - var(--chrome-h));
-  padding: 10px 0;
+  padding: 12px 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
 }
@@ -307,7 +340,7 @@
 /* A sticky pane taller than the viewport would put its own save button out of reach. */
 .sm-panes > aside {
   position: sticky;
-  top: calc(var(--chrome-h) + var(--s-5));
+  top: 0;
   max-height: calc(100vh - var(--chrome-h) - var(--s-5) * 2);
   overflow-y: auto;
   overscroll-behavior-block: contain;
