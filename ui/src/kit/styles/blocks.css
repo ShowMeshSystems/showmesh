@@ -513,8 +513,7 @@ a.sm-tile:hover {
 /* These reference pages use the complete post-rail spine. The ordinary
    1120px reading measure remains for narrow detail and form pages. */
 .sm-main:has(.sm-facets[aria-label='Monitor facets']),
-.sm-main:has(.sm-facets[aria-label='Show workspace tabs']),
-.sm-main:has(.sm-rails) {
+.sm-main:has(.sm-facets[aria-label='Show workspace tabs']) {
   max-width: none;
 }
 
@@ -799,6 +798,76 @@ a.sm-tile:hover {
   letter-spacing: -0.02em;
 }
 
+.sm-nownext .sm-subsection__title {
+  font: var(--t-meta);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sm-nownext > section:last-child .sm-nownext__title {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-nownext__position {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+  font: var(--t-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-nownext__position > span:last-child {
+  color: var(--text-muted);
+}
+
+.sm-nownext__track {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--sunken);
+}
+
+.sm-nownext__track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.sm-nownext .sm-defs {
+  margin-top: var(--s-4);
+}
+
+.sm-nownext__evidence--good {
+  color: var(--good-fg);
+}
+
+.sm-nownext__boundary {
+  margin-top: 14px;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.sm-nownext__boundary p {
+  margin: 0;
+}
+
+.sm-nownext__boundary > p:first-child {
+  font: var(--t-subhead);
+}
+
+.sm-nownext__boundary p + p {
+  margin-top: var(--s-1);
+}
+
+.sm-nownext__derivation {
+  margin: var(--s-3) 0 0;
+}
+
 .sm-lifecycle-commands {
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 1px;
@@ -818,8 +887,37 @@ a.sm-tile:hover {
   background: var(--surface);
 }
 
-.sm-lifecycle-commands > div:nth-child(n + 5) {
+.sm-lifecycle-command--request-final-show { order: 1; }
+.sm-lifecycle-command--fade-out-night { order: 2; }
+.sm-lifecycle-command--power-down-presentation { order: 3; }
+.sm-lifecycle-command--start-night { order: 4; }
+.sm-lifecycle-command--prepare-site { order: 5; }
+.sm-lifecycle-command--start-preshow { order: 6; }
+.sm-lifecycle-command--end-session { order: 7; }
+
+.sm-lifecycle-commands > .sm-lifecycle-command--request-final-show,
+.sm-lifecycle-commands > .sm-lifecycle-command--fade-out-night,
+.sm-lifecycle-commands > .sm-lifecycle-command--power-down-presentation,
+.sm-lifecycle-commands > .sm-lifecycle-command--start-night {
+  grid-column: span 3;
+}
+
+.sm-lifecycle-commands > .sm-lifecycle-command--prepare-site,
+.sm-lifecycle-commands > .sm-lifecycle-command--start-preshow,
+.sm-lifecycle-commands > .sm-lifecycle-command--end-session {
   grid-column: span 4;
+}
+
+.sm-lifecycle-command--fade-out-night .sm-btn:not(:disabled) {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.sm-lifecycle-command--fade-out-night .sm-btn:not(:disabled):hover {
+  border-color: var(--warn-fg);
+  background: var(--warn-fg);
+  color: var(--bg);
 }
 
 .sm-lifecycle-commands .sm-small {
@@ -832,7 +930,13 @@ a.sm-tile:hover {
   }
 
   .sm-lifecycle-commands > div,
-  .sm-lifecycle-commands > div:nth-child(n + 5) {
+  .sm-lifecycle-commands > .sm-lifecycle-command--request-final-show,
+  .sm-lifecycle-commands > .sm-lifecycle-command--fade-out-night,
+  .sm-lifecycle-commands > .sm-lifecycle-command--power-down-presentation,
+  .sm-lifecycle-commands > .sm-lifecycle-command--start-night,
+  .sm-lifecycle-commands > .sm-lifecycle-command--prepare-site,
+  .sm-lifecycle-commands > .sm-lifecycle-command--start-preshow,
+  .sm-lifecycle-commands > .sm-lifecycle-command--end-session {
     grid-column: auto;
   }
 }
@@ -883,10 +987,18 @@ a.sm-tile:hover {
 .sm-readout .sm-status {
   height: auto;
   min-height: 20px;
-  padding-top: 2px;
-  padding-bottom: 2px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   white-space: normal;
 }
+
+.sm-readout .sm-status--good { color: var(--good-fg); }
+.sm-readout .sm-status--warn { color: var(--warn-fg); }
+.sm-readout .sm-status--bad { color: var(--bad-fg); }
+.sm-readout .sm-status--unknown,
+.sm-readout .sm-status--pending { color: var(--text-faint); }
 
 .sm-readout__fact {
   margin: 0;

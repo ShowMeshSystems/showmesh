@@ -212,6 +212,13 @@ export function ShowNight() {
   const next = nextTransition(model)
   const steps = runOfShow(session)
   const armed = steps.filter((step) => step.when === 'Armed').length
+  const nextArmedStep = steps.find((step) => step.when === 'Armed')
+  const elapsedSeconds = state?.elapsedSeconds ?? null
+  const totalSeconds = state?.totalSeconds ?? null
+  const playbackPercent =
+    elapsedSeconds !== null && totalSeconds !== null && totalSeconds > 0
+      ? Math.min(100, Math.max(0, (elapsedSeconds / totalSeconds) * 100))
+      : null
 
   return (
     <>
@@ -265,9 +272,13 @@ export function ShowNight() {
           ) : (
             <>
               <p className="sm-nownext__title">{state.media ?? run?.playback.media ?? 'No item reported'}</p>
-              <p className="sm-small sm-muted">
-                {formatPosition(state.elapsedSeconds) ?? 'not reported'} / {formatPosition(state.totalSeconds) ?? 'not reported'}
-              </p>
+              <div className="sm-nownext__position">
+                <span>{formatPosition(elapsedSeconds) ?? 'not reported'}</span>
+                <span className="sm-nownext__track" aria-hidden="true">
+                  {playbackPercent !== null && <span style={{ width: `${playbackPercent}%` }} />}
+                </span>
+                <span>{formatPosition(totalSeconds) ?? 'not reported'}</span>
+              </div>
               <DefinitionStrip
                 items={[
                   { term: 'Playlist', value: <span className="sm-data">{state.playlist ?? 'not reported'}</span> },
@@ -279,7 +290,16 @@ export function ShowNight() {
                       </span>
                     ),
                   },
-                  { term: 'Player state', value: state.playerState ?? 'not reported' },
+                  {
+                    term: 'Evidence',
+                    value: (
+                      <span className={run?.freshness.state === 'current' ? 'sm-nownext__evidence--good' : 'sm-muted'}>
+                        {run === undefined
+                          ? state.playerState ?? 'not reported'
+                          : `${run.runner.toUpperCase()} · ${run.freshness.state.replace('_', ' ')}`}
+                      </span>
+                    ),
+                  },
                 ]}
               />
             </>
@@ -293,8 +313,14 @@ export function ShowNight() {
             <>
               <p className="sm-nownext__title">{formatPosition(next.remainingSeconds)}</p>
               <p className="sm-small sm-muted">until the sequence ends and the boundary begins.</p>
-              <p className="sm-small sm-muted">
-                {armed} {armed === 1 ? 'step' : 'steps'} armed for the boundary.
+              <div className="sm-nownext__boundary">
+                <p>{nextArmedStep?.name ?? 'No Transition Step is armed'}</p>
+                <p className="sm-small sm-muted">
+                  {nextArmedStep === undefined ? 'The boundary has no recorded next step.' : `${nextArmedStep.detail} · ${armed} ${armed === 1 ? 'step' : 'steps'} armed`}
+                </p>
+              </div>
+              <p className="sm-small sm-faint sm-nownext__derivation">
+                Derived from observed playback, not a clock. If the position goes stale the boundary becomes unknown rather than assumed.
               </p>
             </>
           ) : (
@@ -306,9 +332,12 @@ export function ShowNight() {
       <Section
         id="sn-commands"
         title="Lifecycle commands"
-        aside={<Link to="/control">Full transport in Live Control →</Link>}
+        aside={
+          <span className="sm-small sm-muted">
+            Accepted, never confirmed here. <Link to="/control">Full transport in Live Control →</Link>
+          </span>
+        }
       >
-        <p className="sm-small sm-muted">Accepted, never confirmed here. Each one answers 202.</p>
         <div className="sm-grid sm-grid--auto sm-lifecycle-commands">
           {(
             [
@@ -321,7 +350,7 @@ export function ShowNight() {
               ['end-session', 'End session', 'Abandons the session. Never withheld by an interlock.'],
             ] as const
           ).map(([command, label, detail]) => (
-            <div key={command}>
+            <div key={command} className={`sm-lifecycle-command sm-lifecycle-command--${command}`}>
               <Button size="gloved" disabled={!gate.allowed} title={gate.allowed ? undefined : gate.reason} onClick={() => send(command)}>
                 {label}
               </Button>
