@@ -172,14 +172,15 @@ func TestHandleMessageRenderSurfaceApplyMissingSurfaceID(t *testing.T) {
 // B3/B4 exist," which they now do.
 func TestHandleMessageRenderSurfaceApplyRefusesIncompleteGeometry(t *testing.T) {
 	cases := []struct {
-		name   string
-		params map[string]any
+		name             string
+		params           map[string]any
+		wantReasonSubstr string
 	}{
-		{"no geometry at all", map[string]any{"surfaceId": "surface-1"}},
+		{"no geometry at all", map[string]any{"surfaceId": "surface-1"}, "params.channelRange is required"},
 		{"channelRange but no geometry or frameRate", map[string]any{
 			"surfaceId":    "surface-1",
 			"channelRange": map[string]any{"startChannel": float64(1), "channelCount": float64(12)},
-		}},
+		}, "params.geometry is required"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -200,8 +201,15 @@ func TestHandleMessageRenderSurfaceApplyRefusesIncompleteGeometry(t *testing.T) 
 			if result.Outcome != mqttproto.OutcomeFailed {
 				t.Fatalf("Outcome = %q, want %q for %s; reason = %q", result.Outcome, mqttproto.OutcomeFailed, tc.name, result.Reason)
 			}
-			if result.Reason == "" {
-				t.Fatalf("Reason is empty for a refused incomplete-geometry apply, want a stated reason")
+			// Pinned to the SPECIFIC field this subtest's own params leave
+			// missing, not merely "some reason was given": a bare
+			// substring shared across subtests would let one subtest pass
+			// on the other's diagnostic, or on an unrelated downstream
+			// failure (e.g. pipeline.FSEQSourceSpec rejecting an empty
+			// pixelFormat) rather than the refusal buildFSEQAssignment
+			// itself is supposed to produce.
+			if !strings.Contains(result.Reason, tc.wantReasonSubstr) {
+				t.Fatalf("Reason = %q for %s, want it to contain %q", result.Reason, tc.name, tc.wantReasonSubstr)
 			}
 
 			reloaded, err := store.Load()
