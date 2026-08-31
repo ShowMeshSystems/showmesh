@@ -68,7 +68,7 @@ var migrations = []migration{
 	// next free number, rather than the lowest one, to avoid colliding
 	// with them when they land.
 	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
-	// docs/build/IDENTIFIER-REGISTER.md still lists this seam's work as
+	// docs/build/IDENTIFIER-REGISTER.md still lists Track J's J1 work as
 	// v23 as of this merge; it is taken here as v25, the next free
 	// number after v24 landed on main first, for the identical reason
 	// v24's own comment above states: a migration numbered at or below
