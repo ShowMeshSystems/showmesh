@@ -242,7 +242,7 @@ func Run() int {
 	fppConnectHTTPDone := make(chan struct{})
 	go func() {
 		defer close(fppConnectHTTPDone)
-		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect), cfg.NodeID, fppConnectHeld, fppConnectStatus, logger)
+		runFPPConnectHTTPListener(sigCtx, cfg.FPPConnectListenAddr, newFPPConnectStateView(fppConnect, assignmentStore), cfg.NodeID, fppConnectHeld, fppConnectStatus, logger)
 	}()
 
 	// showMode is ADR-033's installation-wide operating mode as this node

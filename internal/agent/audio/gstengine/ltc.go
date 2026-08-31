@@ -40,29 +40,68 @@ const ltcLivenessTimeout = 10 * ltcSilenceChunk
 // slowest sink pad.
 const ltcAppSrcLeadSeconds = 0.2
 
-// ltcAppSrcLeadDuration is [ltcAppSrcLeadSeconds] as a [time.Duration]: the
-// steady-state amount of already-queued audio a buffer sits behind between
-// being pushed and actually reaching the wire, since block=true keeps the
-// appsrc queue near max-bytes whenever the feeder is keeping up. StartLTC
-// advances a new run's start timecode by this much so the frame that
-// eventually plays at the requested position carries the requested value,
-// and the feeder's own observation reporting subtracts it back out so a
-// reported timecode reflects what is audible rather than what was just
-// pushed ahead of the existing queue.
+// ltcQueueMaxBuffers bounds the queue element decoupling the feeder
+// goroutine's appsrc thread from interleave's aggregation thread (see
+// newLTCChannel) to a single buffer of headroom. GStreamer warns
+// "Pipeline construction is invalid, please add queues" precisely
+// because interleave, like any aggregator, must not have a sink pad fed
+// by a chain call running directly on another element's own streaming
+// thread; a queue element fixes that by giving this branch its own src
+// pad task, regardless of how small its capacity is.
 //
-// This is chosen over flushing the appsrc on a generation change: a flush
-// on one of interleave's sink pads propagates into interleave itself,
-// which has no way to keep pacing the other, unrelated channels while one
-// of its inputs resets: flush and lead-advance are alternatives, not
-// additions, and turning an LTC-only defect into a program-audio glitch
-// is a worse failure than the queue lag this constant corrects for.
+// A time-based limit was tried first and measurably made the audible
+// LTC/program lag in TestLTCSeekRealignsAudioToNewPosition and
+// TestLTCResumeRealignsAudioToNewPosition worse the larger it was set
+// (20ms added roughly a frame of lag, 50ms added roughly two): whenever
+// interleave's aggregation briefly falls behind real time, the queue
+// backs up toward its configured limit and that backlog is what plays
+// out late, so a byte/time budget just gives it more room to do that.
+// Bounding by buffer count instead holds it to the smallest useful
+// backlog regardless of buffer duration.
+const ltcQueueMaxBuffers = 1
+
+// ltcQueueLeadDuration is the worst case one buffer sits in the queue
+// [ltcQueueMaxBuffers] bounds before interleave pulls it: one LTC frame
+// at 24 fps, the slowest rate this project authorizes (see
+// [ltcgen.NewEncoder]'s own doc comment on the same rate). See
+// ltcTotalLeadDuration for why this is folded into the same
+// compensation ltcAppSrcLeadDuration already applies.
+const ltcQueueLeadDuration = time.Second / 24
+
+// ltcTotalLeadDuration is the full steady-state amount of already-queued
+// audio a buffer sits behind between being generated and actually
+// reaching the wire: appsrc's own lead (ltcAppSrcLeadDuration) plus the
+// queue's (ltcQueueLeadDuration). StartLTC and runLTCFeeder must
+// compensate for the whole path, not just the appsrc stage, or the
+// added queue reopens the LTC/program misalignment this compensation
+// exists to prevent: measured directly in
+// TestLTCSeekRealignsAudioToNewPosition and
+// TestLTCResumeRealignsAudioToNewPosition, which regressed by roughly
+// one frame once the queue was added without this term.
+const ltcTotalLeadDuration = ltcAppSrcLeadDuration + ltcQueueLeadDuration
+
+// ltcAppSrcLeadDuration is [ltcAppSrcLeadSeconds] as a [time.Duration]: the
+// steady-state amount of already-queued audio a buffer sits behind
+// appsrc's own pacing between being pushed and actually reaching the
+// wire, since block=true keeps the appsrc queue near max-bytes whenever
+// the feeder is keeping up. See [ltcTotalLeadDuration] for the
+// compensation StartLTC and the feeder actually apply, which is this
+// plus the downstream queue's own lead.
+//
+// Choosing lead-advance over flushing the appsrc on a generation change
+// is why this exists at all: a flush on one of interleave's sink pads
+// propagates into interleave itself, which has no way to keep pacing the
+// other, unrelated channels while one of its inputs resets: flush and
+// lead-advance are alternatives, not additions, and turning an LTC-only
+// defect into a program-audio glitch is a worse failure than the queue
+// lag this constant corrects for.
 const ltcAppSrcLeadDuration = time.Duration(ltcAppSrcLeadSeconds * float64(time.Second))
 
 // ltcTransitionGuardDuration bounds [ltcChannel.beginTransition]'s guard
 // only for StopLTC, which has no future confirmation to end it on sooner
 // (see [ltcChannel.observe]); erring long is the safe direction, since
 // claiming stopped while still audible is the defect this guards against.
-const ltcTransitionGuardDuration = 2 * ltcAppSrcLeadDuration
+const ltcTransitionGuardDuration = 2 * ltcTotalLeadDuration
 
 // ltcFeederShutdownTimeout bounds how long [Engine.Close] waits for the
 // feeder goroutine to exit after unblocking it. It is a backstop, not the
@@ -75,6 +114,7 @@ const ltcFeederShutdownTimeout = 5 * time.Second
 type ltcChannel struct {
 	src        gstapp.AppSrc
 	capsfilter gst.Element
+	queue      gst.Element
 	pipeline   gst.Pipeline
 	sampleRate int
 
@@ -134,9 +174,12 @@ type ltcChannel struct {
 	feedSamples uint64
 }
 
-// newLTCChannel builds the appsrc -> audioconvert -> capsfilter chain for
-// one LTC output channel and adds it to bin, returning it unlinked from
-// the interleave sink pad the caller still owns requesting.
+// newLTCChannel builds the appsrc -> audioconvert -> capsfilter -> queue
+// chain for one LTC output channel and adds it to bin, returning it
+// unlinked from the interleave sink pad the caller still owns requesting.
+// The trailing queue is what decouples the feeder goroutine's appsrc
+// thread from interleave's own aggregation thread; see
+// ltcQueueMaxBuffers.
 //
 // maskBit is the single GstAudioChannelPosition bit [channelPositionBits]
 // assigned this output channel, or 0 when the device's channel count has
@@ -149,7 +192,8 @@ func newLTCChannel(bin gst.Bin, sampleRate int, maskBit uint64) (*ltcChannel, er
 	srcElem := gst.ElementFactoryMake("appsrc", "ltc-appsrc")
 	conv := gst.ElementFactoryMake("audioconvert", "ltc-convert")
 	caps := gst.ElementFactoryMake("capsfilter", "ltc-caps")
-	if srcElem == nil || conv == nil || caps == nil {
+	queueElem := gst.ElementFactoryMake("queue", "ltc-queue")
+	if srcElem == nil || conv == nil || caps == nil || queueElem == nil {
 		return nil, fmt.Errorf("could not construct the LTC appsrc chain")
 	}
 	src, ok := srcElem.(gstapp.AppSrc)
@@ -168,18 +212,26 @@ func newLTCChannel(bin gst.Bin, sampleRate int, maskBit uint64) (*ltcChannel, er
 
 	caps.SetObjectProperty("caps", gst.CapsFromString(channelCapsString(sampleRate, maskBit)))
 
-	for _, el := range []gst.Element{srcElem, conv, caps} {
+	// Byte/time caps disabled so only ltcQueueMaxBuffers bounds this
+	// queue; see its doc comment for why a buffer count, not a time
+	// budget, is what keeps this decoupling stage from adding lag.
+	queueElem.SetObjectProperty("max-size-buffers", uint32(ltcQueueMaxBuffers))
+	queueElem.SetObjectProperty("max-size-bytes", uint32(0))
+	queueElem.SetObjectProperty("max-size-time", uint64(0))
+
+	for _, el := range []gst.Element{srcElem, conv, caps, queueElem} {
 		if !bin.Add(el) {
 			return nil, fmt.Errorf("could not add LTC element %q to pipeline", el.GetName())
 		}
 	}
-	if !srcElem.Link(conv) || !conv.Link(caps) {
+	if !srcElem.Link(conv) || !conv.Link(caps) || !caps.Link(queueElem) {
 		return nil, fmt.Errorf("could not link LTC chain")
 	}
 
 	ch := &ltcChannel{
 		src:        src,
 		capsfilter: caps,
+		queue:      queueElem,
 		sampleRate: sampleRate,
 		stopFeed:   make(chan struct{}),
 		feedDone:   make(chan struct{}),
@@ -190,7 +242,7 @@ func newLTCChannel(bin gst.Bin, sampleRate int, maskBit uint64) (*ltcChannel, er
 	// proof the sink consumed it. Each pushed buffer carries its
 	// generation in Offset (see pushLTCSamples), so the feeder can tell
 	// whether the confirmation belongs to the run it is reporting on.
-	caps.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer, func(_ gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+	queueElem.GetStaticPad("src").AddProbe(gst.PadProbeTypeBuffer, func(_ gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
 		if buf := info.GetBuffer(); buf != nil {
 			ch.emittedGeneration.Store(buf.Offset())
 		}
@@ -298,10 +350,10 @@ func (e *Engine) StartLTC(ctx context.Context, spec agentaudio.LTCSpec) (agentau
 		return e.ltc.observe(now), err
 	}
 
-	// See ltcAppSrcLeadDuration: starting the encoder that far ahead of the
+	// See ltcTotalLeadDuration: starting the encoder that far ahead of the
 	// requested timecode is what makes the frame audible at
 	// spec.StartTimecode's position carry spec.StartTimecode's value.
-	compensatedStart, err := spec.StartTimecode.Advance(ltcAppSrcLeadDuration, spec.FrameRate)
+	compensatedStart, err := spec.StartTimecode.Advance(ltcTotalLeadDuration, spec.FrameRate)
 	if err != nil {
 		obs := agentaudio.LTCObservation{State: agentaudio.LTCFailed, Reason: err.Error()}
 		e.ltc.mu.Lock()
@@ -473,13 +525,13 @@ func (e *Engine) runLTCFeeder(ch *ltcChannel) {
 			return
 		}
 
-		// See ltcAppSrcLeadDuration: tc is the frame just handed to appsrc,
+		// See ltcTotalLeadDuration: tc is the frame just handed to appsrc,
 		// not the frame currently audible, so report it shifted back by the
 		// same lead rather than as pushed. An error here is unreachable in
 		// practice (rate and tc both already validated), so it is reported
 		// as failed evidence rather than silently falling back to the
 		// mirror-image bug this is fixing.
-		played, err := tc.Advance(-ltcAppSrcLeadDuration, rate)
+		played, err := tc.Advance(-ltcTotalLeadDuration, rate)
 		if err != nil {
 			ch.mu.Lock()
 			if ch.generation == gen {

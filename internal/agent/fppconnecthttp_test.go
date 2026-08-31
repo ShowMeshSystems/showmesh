@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/showmeshsystems/showmesh/internal/agent/pipeline"
 	"github.com/showmeshsystems/showmesh/internal/fppconnect"
 	"github.com/showmeshsystems/showmesh/pkg/multisync"
 )
@@ -36,6 +37,9 @@ type fakeFPPConnectView struct {
 
 	maxFileBytes     int64
 	maxAssetDirBytes int64
+
+	assignments    []pipeline.Assignment
+	assignmentsErr error
 }
 
 func (f fakeFPPConnectView) ChannelRanges() string { return f.channelRanges }
@@ -65,6 +69,17 @@ func (f fakeFPPConnectView) MaxAssetDirBytes() int64 {
 		return f.maxAssetDirBytes
 	}
 	return fppConnectDefaultMaxAssetDirBytes
+}
+func (f fakeFPPConnectView) Assignments() ([]pipeline.Assignment, error) {
+	return f.assignments, f.assignmentsErr
+}
+
+// newTestAssignmentStore builds a *pipeline.AssignmentStore rooted at a
+// fresh t.TempDir(), for tests that need a real, non-nil store to construct
+// newFPPConnectStateView but do not care about its persisted contents.
+func newTestAssignmentStore(t *testing.T) *pipeline.AssignmentStore {
+	t.Helper()
+	return pipeline.NewAssignmentStore(t.TempDir())
 }
 
 // newTestFPPConnectHeldStore builds an fppConnectHeldStore rooted at a
@@ -747,7 +762,7 @@ func TestFPPConnectStateViewDisabledEndToEnd(t *testing.T) {
 		SettingsEverSet: true,
 		Settings:        fppConnectSettings{Enabled: false},
 	})
-	view := newFPPConnectStateView(state)
+	view := newFPPConnectStateView(state, newTestAssignmentStore(t))
 
 	if view.Enabled() {
 		t.Fatal("view.Enabled() = true after Apply pushed enabled=false")
@@ -779,5 +794,216 @@ func TestFPPConnectStateViewDisabledEndToEnd(t *testing.T) {
 	fppConnectPollEnabled(view, status)
 	if listening, reason, _ := status.get(); !listening || reason != fppConnectDisabledReason {
 		t.Fatalf("status: listening=%v reason=%q, want true/%q", listening, reason, fppConnectDisabledReason)
+	}
+}
+
+// fppConnectTestAssignmentParams builds a render.surface.apply-shaped
+// RawParams JSON body, matching what renderops.go's applySurface actually
+// persists (pipeline.Assignment.RawParams), for a surface named name with
+// the given 1-based startChannel/channelCount and width/height/pixelFormat.
+func fppConnectTestAssignmentParams(t *testing.T, name string, startChannel, channelCount, width, height int, pixelFormat string) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"name": name,
+		"channelRange": map[string]any{
+			"startChannel": startChannel,
+			"channelCount": channelCount,
+		},
+		"geometry": map[string]any{
+			"width":       width,
+			"height":      height,
+			"pixelFormat": pixelFormat,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal test assignment params: %v", err)
+	}
+	return raw
+}
+
+func TestFPPConnectModelsRouteNoSurfaceIsEmptyArray(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
+
+	resp, body := getBody(t, srv.URL+"/api/models")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("body = %s, want []", body)
+	}
+}
+
+func TestFPPConnectModelsRouteAssignmentReadFailureIsEmptyArrayNot500(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true, assignmentsErr: fmt.Errorf("boom")}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
+
+	resp, body := getBody(t, srv.URL+"/api/models")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("body = %s, want []", body)
+	}
+}
+
+func TestFPPConnectModelsRouteConfiguredSurface(t *testing.T) {
+	view := fakeFPPConnectView{
+		enabled: true,
+		assignments: []pipeline.Assignment{
+			{
+				SurfaceID: "matrix-1",
+				RawParams: fppConnectTestAssignmentParams(t, "Front Matrix", 101, 1200, 40, 10, "rgb"),
+			},
+		},
+	}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
+
+	resp, body := getBody(t, srv.URL+"/api/models")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(body)), "[") {
+		t.Fatalf("body is not a bare JSON array: %s", body)
+	}
+
+	var got []fppConnectModelEntry
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, body)
+	}
+	want := []fppConnectModelEntry{{
+		Name:                "Front_Matrix",
+		ChannelCount:        1200,
+		StartChannel:        101,
+		ChannelCountPerNode: 3,
+		XLights:             true,
+		Orientation:         "horizontal",
+		StringCount:         10,
+		StrandsPerString:    1,
+		StartCorner:         "TL",
+		Type:                "Channel",
+	}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+
+	// StartChannel must be the surface's own 1-based value, never run
+	// through the channelRanges formatter's 1-based-to-0-based conversion
+	// (system info's ChannelRanges field uses that conversion; this field
+	// must not).
+	if got[0].StartChannel != 101 {
+		t.Fatalf("StartChannel = %d, want the raw 1-based 101, not a 0-based conversion", got[0].StartChannel)
+	}
+}
+
+func TestFPPConnectModelsRouteRGBW(t *testing.T) {
+	view := fakeFPPConnectView{
+		enabled: true,
+		assignments: []pipeline.Assignment{
+			{
+				SurfaceID: "matrix-2",
+				RawParams: fppConnectTestAssignmentParams(t, "Tall Panel", 1, 400, 5, 20, "rgbw"),
+			},
+		},
+	}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
+
+	_, body := getBody(t, srv.URL+"/api/models")
+	var got []fppConnectModelEntry
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, body)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1: %s", len(got), body)
+	}
+	if got[0].ChannelCountPerNode != 4 {
+		t.Fatalf("ChannelCountPerNode = %d, want 4 for rgbw", got[0].ChannelCountPerNode)
+	}
+	if got[0].Orientation != "vertical" {
+		t.Fatalf("Orientation = %q, want vertical for a taller-than-wide surface", got[0].Orientation)
+	}
+}
+
+func TestFPPConnectModelsRouteSkipsUnparseableAssignment(t *testing.T) {
+	view := fakeFPPConnectView{
+		enabled: true,
+		assignments: []pipeline.Assignment{
+			{SurfaceID: "broken", RawParams: json.RawMessage(`not json`)},
+		},
+	}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
+
+	resp, body := getBody(t, srv.URL+"/api/models")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	if strings.TrimSpace(string(body)) != "[]" {
+		t.Fatalf("body = %s, want [] for an unparseable assignment", body)
+	}
+}
+
+func TestFPPConnectFPPDRestartRoute(t *testing.T) {
+	view := fakeFPPConnectView{enabled: true}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
+
+	for _, path := range []string{
+		"/api/system/fppd/restart?quick=1",
+		"/api/system/fppd/restart",
+	} {
+		resp, body := getBody(t, srv.URL+path)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200; body=%s", path, resp.StatusCode, body)
+		}
+	}
+}
+
+// fppConnectAssignmentCountingView wraps a fakeFPPConnectView and counts
+// every call to Assignments(), the only view method the restart handler
+// could plausibly need if a future change wired it to inspect render
+// state. handleFPPDRestart must never call it: this proves the handler
+// reads no state and, since fppConnectView carries no mutator at all,
+// stands in for "changes no state."
+type fppConnectAssignmentCountingView struct {
+	fakeFPPConnectView
+	assignmentsCalls *int
+}
+
+func (v fppConnectAssignmentCountingView) Assignments() ([]pipeline.Assignment, error) {
+	*v.assignmentsCalls++
+	return v.fakeFPPConnectView.Assignments()
+}
+
+func TestFPPConnectFPPDRestartChangesNoState(t *testing.T) {
+	calls := 0
+	view := fppConnectAssignmentCountingView{
+		fakeFPPConnectView: fakeFPPConnectView{
+			enabled: true,
+			assignments: []pipeline.Assignment{
+				{SurfaceID: "s1", RawParams: fppConnectTestAssignmentParams(t, "S1", 1, 30, 10, 1, "rgb")},
+			},
+		},
+		assignmentsCalls: &calls,
+	}
+	srv := startFPPConnectTestServer(t, view, "node-1", nil)
+
+	// A real render pipeline's ONLY observable state through this view is
+	// Assignments(); handleFPPDRestart must touch none of it.
+	if _, body := getBody(t, srv.URL+"/api/system/fppd/restart?quick=1"); calls != 0 {
+		t.Fatalf("Assignments() called %d times by GET /api/system/fppd/restart?quick=1, want 0; body=%s", calls, body)
+	}
+	if _, body := getBody(t, srv.URL+"/api/system/fppd/restart"); calls != 0 {
+		t.Fatalf("Assignments() called %d times by GET /api/system/fppd/restart, want 0; body=%s", calls, body)
+	}
+
+	// GET /api/models still sees the untouched assignment afterward,
+	// confirming the restart calls above left the held state exactly as
+	// it was.
+	_, body := getBody(t, srv.URL+"/api/models")
+	var got []fppConnectModelEntry
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, body)
+	}
+	if len(got) != 1 || got[0].Name != "S1" {
+		t.Fatalf("got %+v, want the one untouched S1 assignment", got)
 	}
 }

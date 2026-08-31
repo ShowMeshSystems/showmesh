@@ -43,6 +43,8 @@ interface FormState {
   defaultFadeDurationMs: string
   defaultMaxBackgroundGainDb: string
   duckTargetGainDb: string
+  duckFadeDurationMs: string
+  duckRestoreFadeDurationMs: string
   ltcFrameRate: ConfigAudioSettingsPayload['ltcFrameRate'] | ''
   ltcDefaultStartOffset: string
 }
@@ -54,6 +56,8 @@ function formFromPayload(payload: ConfigAudioSettingsPayload): FormState {
     defaultFadeDurationMs: String(payload.defaultFadeDurationMs),
     defaultMaxBackgroundGainDb: String(payload.defaultMaxBackgroundGainDb),
     duckTargetGainDb: String(payload.duckTargetGainDb),
+    duckFadeDurationMs: String(payload.duckFadeDurationMs),
+    duckRestoreFadeDurationMs: String(payload.duckRestoreFadeDurationMs),
     ltcFrameRate: payload.ltcFrameRate,
     ltcDefaultStartOffset: payload.ltcDefaultStartOffset,
   }
@@ -104,6 +108,20 @@ function buildPayload(form: FormState): { payload: ConfigAudioSettingsPayload } 
     }
   }
 
+  const duckFadeDurationMs = Number(form.duckFadeDurationMs)
+  if (form.duckFadeDurationMs.trim() === '' || !Number.isInteger(duckFadeDurationMs) || duckFadeDurationMs <= 0) {
+    return { error: 'Duck fade duration must be a whole number of milliseconds, greater than zero.' }
+  }
+
+  const duckRestoreFadeDurationMs = Number(form.duckRestoreFadeDurationMs)
+  if (
+    form.duckRestoreFadeDurationMs.trim() === '' ||
+    !Number.isInteger(duckRestoreFadeDurationMs) ||
+    duckRestoreFadeDurationMs <= 0
+  ) {
+    return { error: 'Duck restore fade duration must be a whole number of milliseconds, greater than zero.' }
+  }
+
   if (form.ltcFrameRate === '') {
     return { error: 'LTC frame rate is required.' }
   }
@@ -119,6 +137,8 @@ function buildPayload(form: FormState): { payload: ConfigAudioSettingsPayload } 
       defaultFadeDurationMs,
       defaultMaxBackgroundGainDb,
       duckTargetGainDb,
+      duckFadeDurationMs,
+      duckRestoreFadeDurationMs,
       ltcFrameRate: form.ltcFrameRate,
       ltcDefaultStartOffset: form.ltcDefaultStartOffset.trim(),
     },
@@ -141,6 +161,8 @@ export function AudioSettings() {
     defaultFadeDurationMs: '',
     defaultMaxBackgroundGainDb: '',
     duckTargetGainDb: '',
+    duckFadeDurationMs: '',
+    duckRestoreFadeDurationMs: '',
     ltcFrameRate: '',
     ltcDefaultStartOffset: '',
   })
@@ -303,6 +325,36 @@ export function AudioSettings() {
           <p className="text-muted">
             Provisional: this value has never been heard on the installation&rsquo;s speakers. A
             muted session is unaffected; mute silences unconditionally.
+          </p>
+
+          <label className="form-field">
+            Duck fade duration (milliseconds)
+            <input
+              type="number"
+              min={1}
+              aria-label="Duck fade duration milliseconds"
+              value={form.duckFadeDurationMs}
+              onChange={(e) => setForm({ ...form, duckFadeDurationMs: e.target.value })}
+            />
+          </label>
+          <p className="text-muted">
+            How long a bed takes to fade DOWN into a duck once a higher-priority session starts
+            ducking it.
+          </p>
+
+          <label className="form-field">
+            Duck restore fade duration (milliseconds)
+            <input
+              type="number"
+              min={1}
+              aria-label="Duck restore fade duration milliseconds"
+              value={form.duckRestoreFadeDurationMs}
+              onChange={(e) => setForm({ ...form, duckRestoreFadeDurationMs: e.target.value })}
+            />
+          </label>
+          <p className="text-muted">
+            How long a bed takes to fade back UP once its last ducker releases it. Deliberately
+            longer than the duck fade duration by default: fast down, slower back up.
           </p>
 
           <label className="form-field">

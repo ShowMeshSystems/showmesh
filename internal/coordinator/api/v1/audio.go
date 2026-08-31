@@ -20,8 +20,13 @@ type ConfigAudioSettingsPayload struct {
 	// multiplier once, at its own boundary.
 	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
 	DuckTargetGainDb           float64 `json:"duckTargetGainDb"`
-	LTCFrameRate               string  `json:"ltcFrameRate"`
-	LTCDefaultStartOffset      string  `json:"ltcDefaultStartOffset"`
+	// DuckFadeDurationMs/DuckRestoreFadeDurationMs are how long a session
+	// takes to fade down into a duck and back up out of one — see
+	// config.AudioSettingsPayload's own doc comment for why they differ.
+	DuckFadeDurationMs        int    `json:"duckFadeDurationMs"`
+	DuckRestoreFadeDurationMs int    `json:"duckRestoreFadeDurationMs"`
+	LTCFrameRate              string `json:"ltcFrameRate"`
+	LTCDefaultStartOffset     string `json:"ltcDefaultStartOffset"`
 }
 
 // AudioSettingsConfigResponse is the body of GET and PUT

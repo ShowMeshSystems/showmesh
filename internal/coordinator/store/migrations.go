@@ -63,7 +63,21 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
-	{version: 23, sql: schemaV23},
+	// v21-v23 are reserved for other, not-yet-merged branches
+	// (docs/build/IDENTIFIER-REGISTER.md): this migration takes v24, the
+	// next free number, rather than the lowest one, to avoid colliding
+	// with them when they land.
+	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
+	// docs/build/IDENTIFIER-REGISTER.md still lists this seam's work as
+	// v23 as of this merge; it is taken here as v25, the next free
+	// number after v24 landed on main first, for the identical reason
+	// v24's own comment above states: a migration numbered at or below
+	// an already-shipped maximum can never run for a store a prior
+	// binary already stamped at that maximum (migrate's own
+	// current == target short-circuit trusts that equality means fully
+	// migrated). The register's own row needs updating to match; that is
+	// not this branch's edit to make.
+	{version: 25, sql: schemaV25},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1343,7 +1357,7 @@ ALTER TABLE fpp_playlist_entry_observations
     ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
 `
 
-// schemaV23 is Track J's J1 own migration (ADR-048,
+// schemaV25 is Track J's J1 own migration (ADR-048,
 // TRACK-J-fpp-fallback.md J1): the coordinator-side store for a
 // compiled, signed fallback program and its per-FPP-host
 // acknowledgement, one row per fpp_instance_uuid in each table, on
@@ -1373,12 +1387,12 @@ ALTER TABLE fpp_playlist_entry_observations
 // bare CREATE TABLE in this file: internal/coordinator/audioconfigpush's
 // own tests deliberately stamp PRAGMA user_version back to 18 or 19 and
 // reopen the store to force migrations 19 and 20 (Go functions that
-// rewrite payloads, safe to replay) to run again. schemaV23 is the first
+// rewrite payloads, safe to replay) to run again. schemaV25 is the first
 // SQL migration to sit above that rewind point, so replaying it against
 // a database that already has these tables must tolerate finding them
 // present rather than fail. The other 31 CREATE TABLEs in this file
 // have never sat above a rewind point a test actually exercises.
-const schemaV23 = `
+const schemaV25 = `
 CREATE TABLE IF NOT EXISTS fallback_programs (
     fpp_instance_uuid TEXT PRIMARY KEY,
     package_id        TEXT NOT NULL,

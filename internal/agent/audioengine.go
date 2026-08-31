@@ -349,12 +349,14 @@ func (r *audioEngineRebuilder) bind(engine audio.Engine) {
 // struct literal.
 func audioSettingsFromWire(p audioSettingsConfig) audio.Settings {
 	return audio.Settings{
-		DefaultFadeCurve:         pkgaudio.FadeCurve(p.DefaultFadeCurve),
-		DefaultFadeDurationMs:    p.DefaultFadeDurationMs,
-		DefaultMaxBackgroundGain: pkgaudio.Ceiling(p.DefaultMaxBackgroundGain),
-		DuckTargetGain:           pkgaudio.Gain(p.DuckTargetGain),
-		LTCFrameRate:             pkgaudio.LTCFrameRate(p.LTCFrameRate),
-		LTCDefaultStartOffset:    pkgaudio.LTCTimecode(p.LTCDefaultStartOffset),
+		DefaultFadeCurve:          pkgaudio.FadeCurve(p.DefaultFadeCurve),
+		DefaultFadeDurationMs:     p.DefaultFadeDurationMs,
+		DefaultMaxBackgroundGain:  pkgaudio.Ceiling(p.DefaultMaxBackgroundGain),
+		DuckTargetGain:            pkgaudio.Gain(p.DuckTargetGain),
+		DuckFadeDurationMs:        p.DuckFadeDurationMs,
+		DuckRestoreFadeDurationMs: p.DuckRestoreFadeDurationMs,
+		LTCFrameRate:              pkgaudio.LTCFrameRate(p.LTCFrameRate),
+		LTCDefaultStartOffset:     pkgaudio.LTCTimecode(p.LTCDefaultStartOffset),
 	}
 }
 
