@@ -77,9 +77,9 @@ func TestRoleScopes(t *testing.T) {
 		want []Scope
 	}{
 		{RoleViewer, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead}},
-		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand}},
-		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy}},
-		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve}},
+		{RoleOperator, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke}},
+		{RoleAdmin, []Scope{ScopeNodeRead, ScopeFPPRead, ScopeObservationRead, ScopeEventRead, ScopeShowMacroRun, ScopeDevicePower, ScopeFPPCommand, ScopeResolumeAction, ScopeRenderCommand, ScopeShowActionInvoke, ScopeAudioCommand, ScopeNightCommand, ScopeShowEmergencyStopInvoke, ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback}},
+		{RoleScheduler, []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve, ScopeFPPFallback}},
 	}
 	for _, tc := range cases {
 		got := tc.role.Scopes()
@@ -117,7 +117,7 @@ func TestRoleHas(t *testing.T) {
 		t.Errorf("RoleViewer.Has(principal:write) = true, want false")
 	}
 	if RoleScheduler.Has(ScopeNodeRead) {
-		t.Errorf("RoleScheduler.Has(node:read) = true, want false — scheduler holds only show:macro:run, night:command, and fpp:observe")
+		t.Errorf("RoleScheduler.Has(node:read) = true, want false: scheduler holds only show:macro:run, night:command, fpp:observe, and fpp:fallback")
 	}
 	if !RoleScheduler.Has(ScopeNightCommand) {
 		t.Errorf("RoleScheduler.Has(night:command) = false, want true (ADR-038 decision 1: FPP is the scheduler credential)")

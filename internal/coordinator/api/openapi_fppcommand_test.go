@@ -116,20 +116,23 @@ func TestOpenAPIFPPCommandRequestAndResponseVariantsMatchSchemas(t *testing.T) {
 	}
 }
 
-// TestOpenAPIFPPCommandAuditUnavailableResponseMatchesRealResponse is
-// ProblemTypeFPPCommandRefusedAuditUnavailable's own conformance check —
-// added to api/openapi.yaml's Problem.type enum by this task (Task 2a);
-// this proves a REAL 503 this endpoint actually produces
-// (fppcommand_handler_test.go's own
-// TestFPPCommandNonSafetyClassPrimitiveFailsClosedWithAuditFailing already
-// proves the STATUS CODE and the refusal's own effects — no commands row,
-// no dispatch — this test's own addition is the schema check, not a
-// duplicate of that behavioral proof) validates against the shared
-// Problem schema.
+// TestOpenAPIFPPCommandAuditUnavailableResponseMatchesRealResponse proved
+// ProblemTypeFPPCommandRefusedAuditUnavailable's own conformance until
+// ADR-024 decision 11 was amended 2026-08-26 (owner ruling): this
+// endpoint no longer refuses on an audit-store failure, so that type is
+// no longer produced and was removed from api/openapi.yaml's Problem.type
+// enum in the same change. This test now proves the REPLACEMENT
+// behavior's response still matches FPPCommandResponse (a normal `200`,
+// not a `Problem`), with attributionDegraded true.
+// fppcommand_handler_test.go's own
+// TestFPPCommandNonSafetyClassPrimitiveRunsWithAuditFailing already
+// proves the status code and the dispatch's own effects (a commands row,
+// a desired_state row, an actual FPP hit); this test's own addition is
+// the schema check, not a duplicate of that behavioral proof.
 func TestOpenAPIFPPCommandAuditUnavailableResponseMatchesRealResponse(t *testing.T) {
 	c := newOpenAPICompiler(t)
 
-	fppSrv := newFailIfHitFPPCommandServer(t)
+	fppSrv, _ := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
 	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
@@ -147,14 +150,16 @@ func TestOpenAPIFPPCommandAuditUnavailableResponseMatchesRealResponse(t *testing
 	body := fppCommandBody("startPlaylist", "conf-key-audit-unavailable", `{"playlist":"showmesh-test"}`)
 	req := newFPPCommandRequest(t, "bench-fpp", body, token)
 	resp, respBody := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, respBody)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ADR-024 decision 11 amended 2026-08-26: audit unavailability never blocks "+
+			"a command dispatch); body: %s", resp.StatusCode, respBody)
 	}
-	assertMatchesSchema(t, c, "Problem", respBody)
+	assertMatchesSchema(t, c, "FPPCommandResponse", respBody)
 
 	m := decodeMap(t, respBody)
-	if m["type"] != ProblemTypeFPPCommandRefusedAuditUnavailable {
-		t.Errorf("type = %v, want %v", m["type"], ProblemTypeFPPCommandRefusedAuditUnavailable)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["attributionDegraded"] != true {
+		t.Errorf("attributionDegraded = %v, want true", cmd["attributionDegraded"])
 	}
 }
 

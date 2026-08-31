@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -122,11 +123,25 @@ func (s *Store) InTx(ctx context.Context, fn func(context.Context, *Tx) error) (
 		return ferr
 	}
 	if cerr := sqlTx.Commit(); cerr != nil {
-		return fmt.Errorf("store: commit transaction: %w", cerr)
+		return fmt.Errorf("%w: %v", ErrCommitFailed, cerr)
 	}
 	committed = true
 	return nil
 }
+
+// ErrCommitFailed wraps a failure of the COMMIT statement itself, after fn
+// already returned nil (so every write fn made was accepted by the
+// database up to that point). This is a distinct failure mode from an
+// error fn returns directly: fn's own error means fn decided not to
+// proceed, or hit a problem making one specific write; ErrCommitFailed
+// means every write fn made was individually fine and the failure is in
+// making them durable together, atomically, e.g. a disk that fills
+// between the last write and the fsync COMMIT performs. A caller that
+// treats "the append inside fn failed" and "the whole transaction could
+// not be made durable at commit" as the same class of event (ADR-024
+// decision 11: neither can be attributed) checks for this with errors.Is,
+// the same way it already checks for a sentinel fn itself might return.
+var ErrCommitFailed = errors.New("store: commit failed")
 
 // guardNotInTx panics if ctx carries the in-transaction marker [Store.InTx]
 // stamps. See store.go's [Store.open] doc comment: db.SetMaxOpenConns(1)

@@ -510,6 +510,69 @@ func TestBuildFSEQAssignmentCarriesIdleOutput(t *testing.T) {
 	}
 }
 
+// TestBuildFSEQAssignmentCarriesGeometryWhenNoSequence proves the "not ok"
+// (no fseqFilename) branch still returns a fully populated fseqAssignment
+// (channelRange/geometry/frameRate/idleOutput) rather than the zero
+// value: buildAssignedSpec's own idle fallback needs real geometry to size
+// [pipeline.NewIdleFrameWriter], and this is the one place that value is
+// built.
+func TestBuildFSEQAssignmentCarriesGeometryWhenNoSequence(t *testing.T) {
+	params := minimalRenderApplyParams("surface-1")
+
+	a, ok, err := buildFSEQAssignment("render.surface.apply", "surface-1", params, discardLogger())
+	if err != nil {
+		t.Fatalf("buildFSEQAssignment: %v", err)
+	}
+	if ok {
+		t.Fatalf("buildFSEQAssignment ok = true, want false (no fseqFilename in params)")
+	}
+	if a.fseqFilename != "" || a.fseqContentHash != "" {
+		t.Fatalf("fseqAssignment carries FSEQ fields %+v, want both empty", a)
+	}
+	if a.width != 2 || a.height != 2 || a.pixelFormat != "rgb" || a.frameRate != 40 || a.channelCount != 12 {
+		t.Fatalf("fseqAssignment geometry = %+v, want the geometry minimalRenderApplyParams sent", a)
+	}
+}
+
+// TestApplySurfaceEstablishWithNoSequenceDrawsIdleHonestly proves
+// buildAssignedSpec's no-FSEQ-content fallback starts a REAL, continuously
+// reporting frame writer ([pipeline.NewIdleFrameWriter]) rather than a
+// content-free pipeline with no frame writer at all. Before this fix,
+// surface.output.mode had no evidence stream here whatsoever (Drawing ==
+// ""), which is indistinguishable from "the collector has not reported
+// yet" and, worse, left any PRIOR real content's stale Drawing/TimelineState
+// snapshot in place after a swap away from it. An established surface with
+// no sequence assigned must report Drawing == idle, visibly, with a real
+// idle output named.
+func TestApplySurfaceEstablishWithNoSequenceDrawsIdleHonestly(t *testing.T) {
+	dir := t.TempDir()
+	clock := &fakeClock{t: time.Now()}
+	sup := newRenderTestSupervisor(t, clock)
+	store := pipeline.NewAssignmentStore(dir)
+	renderOps := newTestRenderOperations(sup, store, dir, clock)
+
+	if _, err := renderOps.applySurface(context.Background(), minimalRenderApplyParams("surface-1"), clock.now); err != nil {
+		t.Fatalf("applySurface (establish, no sequence): %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var snap pipeline.Snapshot
+	for time.Now().Before(deadline) {
+		var ok bool
+		snap, ok = sup.Snapshot("surface-1")
+		if ok && snap.Drawing != "" {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if snap.Drawing != pipeline.DrawingIdle {
+		t.Fatalf("Drawing = %q after an establish with no sequence, want %q (idle output must be visible, never silence)", snap.Drawing, pipeline.DrawingIdle)
+	}
+	if snap.IdleMode == "" {
+		t.Fatalf("IdleMode is empty while Drawing = idle, want a real configured idle output named")
+	}
+}
+
 // TestApplySurfaceWithFSEQPersistsIdleOutputForResume proves build contract
 // ruling 4's own requirement end to end: a render.surface.apply carrying
 // idleOutput is persisted to disk VERBATIM (including idleOutput), so a

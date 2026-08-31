@@ -1346,6 +1346,35 @@ function SafetyClassBlock({
   )
 }
 
+type IdempotencyChoice = 'undeclared' | 'yes' | 'no'
+
+function idempotencyChoice(value: boolean | null): IdempotencyChoice {
+  return value === null ? 'undeclared' : value ? 'yes' : 'no'
+}
+
+function idempotencyValue(value: IdempotencyChoice): boolean | null {
+  return value === 'undeclared' ? null : value === 'yes'
+}
+
+function IdempotencyBlock({ value, onChange }: { value: IdempotencyChoice; onChange: (value: IdempotencyChoice) => void }) {
+  return (
+    <div className="sm-inspector__group">
+      <h3 className="sm-subsection__title">Repeat safety</h3>
+      <Segmented<IdempotencyChoice>
+        label="Is repeating this action safe?"
+        value={value}
+        options={[
+          { value: 'undeclared', label: 'Not declared' },
+          { value: 'yes', label: 'Safe to repeat' },
+          { value: 'no', label: 'Not safe to repeat' },
+        ]}
+        onChange={onChange}
+      />
+      <p className="sm-small sm-muted">Leave this undeclared unless the action’s effect has been verified. Some night-session bindings require an explicit declaration.</p>
+    </div>
+  )
+}
+
 function ActionDraft({
   showId,
   model,
@@ -1368,6 +1397,7 @@ function ActionDraft({
   const [resolumeValue, setResolumeValue] = useState<ResolumeTargetValue>(emptyResolumeValue())
   const [audioValue, setAudioValue] = useState<AudioTargetValue>(emptyAudioValue())
   const [mqttSafetyClass, setMqttSafetyClass] = useState<SafetyClass | ''>('')
+  const [idempotent, setIdempotent] = useState<IdempotencyChoice>('undeclared')
   const [resolumeActions, setResolumeActions] = useState<ResolumeActionsState>({ kind: 'loading' })
   const [audioNodes, setAudioNodes] = useState<AudioNodesState>({ kind: 'loading' })
   const [creating, setCreating] = useState(false)
@@ -1451,7 +1481,7 @@ function ActionDraft({
 
   const create = () => {
     if (blockReason !== null || target === null || integration === '') return
-    const payload: ConfigShowAction = { show: showId, label: label.trim(), description: '', safetyClass: safetyClass as SafetyClass, target }
+    const payload: ConfigShowAction = { show: showId, label: label.trim(), description: '', safetyClass: safetyClass as SafetyClass, target, idempotent: idempotencyValue(idempotent) }
     setCreating(true)
     setTaken(false)
     setCreateError(null)
@@ -1523,6 +1553,7 @@ function ActionDraft({
           onMqttChange={setMqttSafetyClass}
         />
       )}
+      <IdempotencyBlock value={idempotent} onChange={setIdempotent} />
 
       {taken && (
         <RuledStrip
@@ -1581,6 +1612,7 @@ function ActionEditor({
   const [resolumeValue, setResolumeValue] = useState<ResolumeTargetValue>(() => (integration === 'resolume' ? resolumeValueFromTarget(action.payload.target) : emptyResolumeValue()))
   const [audioValue, setAudioValue] = useState<AudioTargetValue>(() => (integration === 'audio' ? audioValueFromTarget(action.payload.target) : emptyAudioValue()))
   const [mqttSafetyClass, setMqttSafetyClass] = useState<SafetyClass | ''>(integration === 'mqtt' ? action.payload.safetyClass : '')
+  const [idempotent, setIdempotent] = useState<IdempotencyChoice>(() => idempotencyChoice(action.payload.idempotent))
   const [resolumeActions, setResolumeActions] = useState<ResolumeActionsState>({ kind: 'loading' })
   const [audioNodes, setAudioNodes] = useState<AudioNodesState>({ kind: 'loading' })
   const [saving, setSaving] = useState(false)
@@ -1653,7 +1685,7 @@ function ActionEditor({
 
   const save = () => {
     if (blockReason !== null || target === null) return
-    const payload: ConfigShowAction = { show: action.payload.show, label: label.trim(), description: action.payload.description, safetyClass: safetyClass as SafetyClass, target }
+    const payload: ConfigShowAction = { show: action.payload.show, label: label.trim(), description: action.payload.description, safetyClass: safetyClass as SafetyClass, target, idempotent: idempotencyValue(idempotent) }
     setSaving(true)
     setSaveError(null)
     setStale(null)
@@ -1718,6 +1750,7 @@ function ActionEditor({
         mqttValue={mqttSafetyClass}
         onMqttChange={setMqttSafetyClass}
       />
+      <IdempotencyBlock value={idempotent} onChange={setIdempotent} />
 
       {macroUsages.length === 0 ? (
         <p className="sm-small sm-muted">Not used by any macro in this show.</p>

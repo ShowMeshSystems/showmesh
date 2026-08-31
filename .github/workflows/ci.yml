@@ -16,10 +16,93 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changed-files:
+    # Detects whether this pull request touches only prose, so the required
+    # jobs below can skip their expensive work on a docs-only PR without
+    # ever being skipped themselves. Eric ruled (2026-08-26) that docs-only
+    # pull requests should not burn the full suite, but GitHub cannot skip
+    # a required check by path: a required job a trigger-level path filter
+    # simply never runs sits pending forever instead of reporting a pass.
+    # So the required jobs always run and always report; only the work
+    # inside them is conditional on this job's output.
+    #
+    # "Documentation-only" here is CLAUDE.md's own definition applied
+    # mechanically: every changed path ends in `.md`. Workflows, scripts,
+    # generated files, and api/openapi.yaml are never documentation-only by
+    # that definition, and none of them end in `.md`, so the suffix check
+    # is a faithful proxy for it, not an invented rule.
+    #
+    # The check asks whether ANY changed path falls outside that set, never
+    # a count or a ratio: one code file among ten Markdown files is not
+    # docs-only. `--no-renames` explodes a rename into a delete of the old
+    # path plus an add of the new one, so a code file renamed to a
+    # docs-looking path still surfaces its real, non-.md old path in the
+    # diff instead of hiding behind the new name. The diff is three-dot
+    # (`base...head`): against the merge base of the PR's base and head,
+    # not against head's previous commit, so a stale base can't hide
+    # changes and a force-push or rebase on either side doesn't change what
+    # gets compared.
+    #
+    # A push to `main` is never treated as documentation-only: Eric's
+    # exemption is stated for pull requests, and a post-merge run on `main`
+    # should still get the full suite. If classification itself errors,
+    # this job reports docs_only=false rather than failing outright, and
+    # every job below also treats a missing/empty output as false (see
+    # their own `if: always()` comments) so a broken detector fails toward
+    # running the full suite, never toward silently skipping it.
+    #
+    # No documentation link checker or Markdown linter exists in this
+    # workflow or the Makefile today, so a docs-only PR loses no check it
+    # would otherwise have had. If one is ever added, it must run outside
+    # this short-circuit (its own job, or exempted from the `docs_only`
+    # condition below) or a docs-only PR would skip the one check that
+    # actually covers its content.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify this pull request as documentation-only or not
+        id: classify
+        run: |
+          docs_only=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            if files="$(git diff --no-renames --name-only "$base...$head" 2>&1)"; then
+              docs_only=true
+              while IFS= read -r f; do
+                case "$f" in
+                  "") ;;
+                  *.md) ;;
+                  *) docs_only=false ;;
+                esac
+              done <<< "$files"
+            else
+              echo "could not compute the changed-file list, treating as not documentation-only: $files" >&2
+              docs_only=false
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   test:
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
+    needs: [changed-files]
+    # A job with a `needs:` dependency carries an implicit `if: success()`,
+    # so if `changed-files` itself ever failed, this required job would be
+    # SKIPPED rather than run, and a skipped required check can read as
+    # satisfied instead of blocking (the same trap `test-gate` below
+    # guards against). `if: always()` keeps this job running regardless,
+    # and `needs.changed-files.outputs.docs_only` reads as empty (not
+    # `'true'`) when that job failed or was cancelled, so the steps below
+    # default to running the full suite rather than silently skipping it.
+    if: always()
     # Raised from 15 on 2026-08-21 because this job was already crossing the
     # old limit on `main`, not because of any one branch: run 32506564142's
     # 1.26.6 leg was cancelled at 15m05s and run 32510556351's finished at
@@ -49,6 +132,7 @@ jobs:
       # instead. Debian 13 is also the platform the audio engine was measured
       # green on; Debian 12's GLib 2.74 does not build it at all.
       - name: Install the toolchain and the agent's C dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -90,12 +174,15 @@ jobs:
           cache: true
 
       - name: Download dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: go mod download
 
       - name: Vet
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: go vet ./...
 
       - name: Test the audio engine (race detector)
+        if: needs.changed-files.outputs.docs_only != 'true'
         # gstengine drives real GStreamer pipelines in real time; run it
         # alone, before the rest of the suite claims the runner's other
         # cores, so its timing bounds reflect this package rather than
@@ -118,6 +205,7 @@ jobs:
           go test -race ./internal/agent/audio/gstengine/...
 
       - name: Test (race detector)
+        if: needs.changed-files.outputs.docs_only != 'true'
         # Everything the step above did not run. grep -vx on the full
         # import path, not a substring: an unanchored match would also
         # exclude a future sibling like gstengineltc, which the step above
@@ -136,6 +224,7 @@ jobs:
           go test -race $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
+        if: needs.changed-files.outputs.docs_only != 'true'
         # The agent's real GStreamer/libltc engine is a cgo build; without
         # this step, nothing in CI proves `./...` links with cgo enabled,
         # only that `go test -race` (which forces it on) happens not to
@@ -145,6 +234,7 @@ jobs:
         run: CGO_ENABLED=1 go build ./...
 
       - name: Build CGo-free (ADR-012)
+        if: needs.changed-files.outputs.docs_only != 'true'
         # ADR-012 requires the coordinator build CGo-free so the image can
         # be a static binary on a distroless base and cross-compile cleanly
         # for arm64; `go test -race` above requires cgo and would not catch
@@ -152,6 +242,7 @@ jobs:
         run: CGO_ENABLED=0 go build ./...
 
       - name: Check formatting
+        if: needs.changed-files.outputs.docs_only != 'true'
         # gofmt -l lists files that are not formatted; fail the job if it
         # prints anything, since a clean `-l` output is empty. Scoped to
         # the directories that actually hold this project's Go source
@@ -165,6 +256,41 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "The following files are not gofmt-formatted:"
             echo "$unformatted"
+            exit 1
+          fi
+
+  test-gate:
+    # Required-check aggregate for the `test` go-version matrix. Branch
+    # protection matches required checks by literal name, and the matrix
+    # legs are named `test (1.25.0)` / `test (1.26.6)`, so bumping either
+    # version renames the leg and the old required name stops reporting
+    # forever. This job's name never changes, so it is what branch
+    # protection requires instead of the two version-specific names; bump
+    # the matrix without touching branch protection.
+    runs-on: ubuntu-latest
+    needs: [test]
+    # `needs: [test]` alone runs this job only if `test` succeeded (an
+    # implicit `if: success()`), so on a failed or cancelled matrix leg
+    # this job would be SKIPPED, not failed. A skipped check reports no
+    # failure, and a required check that is merely skipped can read as
+    # satisfied rather than blocking -- which would make this gate pass
+    # exactly when the tests it guards fail. `if: always()` forces the job
+    # to run regardless, and the step below turns any non-success result
+    # (failure, cancelled, or skipped) into an explicit failure instead of
+    # silently not reporting one.
+    if: always()
+    # A docs-only PR does not skip `test` as a job (see `changed-files`
+    # above): `test` always runs and always reports success or failure,
+    # only its expensive steps are conditional, so this job's own success
+    # always means every leg genuinely reported success, never that a leg
+    # quietly never ran.
+    timeout-minutes: 5
+    steps:
+      - name: Require every test matrix leg to have succeeded
+        run: |
+          result="${{ needs.test.result }}"
+          if [ "$result" != "success" ]; then
+            echo "test matrix result was '$result', not success; failing the required gate." >&2
             exit 1
           fi
 
@@ -297,12 +423,19 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
     # Debian 13 for the same reason the test job uses it: golangci-lint type
     # checks every package, and the agent's engine packages are cgo, so
     # linting them at all needs GStreamer 1.26 and libltc present.
     timeout-minutes: 15
     steps:
       - name: Install the toolchain and the agent's C dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -324,6 +457,7 @@ jobs:
           cache: true
 
       - uses: golangci/golangci-lint-action@v9
+        if: needs.changed-files.outputs.docs_only != 'true'
         with:
           # Version pinned so lint results don't drift with an unrelated
           # golangci-lint release; bump deliberately alongside .golangci.yml.
@@ -340,6 +474,12 @@ jobs:
     # TypeScript exception (ADR-015): the two toolchains stay independent
     # in CI the same way they stay independent in the repository layout.
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -357,18 +497,23 @@ jobs:
       # and installs exactly what's locked rather than whatever satisfies
       # the version ranges today.
       - name: Install
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: cd ui && npm ci
 
       - name: Lint
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: cd ui && npm run lint
 
       - name: Typecheck
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: cd ui && npm run typecheck
 
       - name: Unit tests
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: cd ui && npm test
 
       - name: Build
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: cd ui && npm run build
 
       # Regenerates src/api/generated/schema.d.ts from api/openapi.yaml and
@@ -378,18 +523,26 @@ jobs:
       # the Go types" true on every push rather than only at the moment
       # someone remembered to regenerate by hand.
       - name: Generated API types are up to date
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: make ui-gen-check
 
   vuln:
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
     # Debian 13 for the same reason the test job uses it: govulncheck loads
     # every package, and the agent's engine packages are cgo, so scanning
     # them at all needs GStreamer 1.26 and libltc present.
     timeout-minutes: 15
     steps:
       - name: Install the toolchain and the agent's C dependencies
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: |
           set -eux
           apt-get update -o Acquire::Retries=2
@@ -442,13 +595,21 @@ jobs:
       # "fix" a red run here by relaxing it to reporting-only; fix the
       # finding or move the pin above.
       - name: Install govulncheck
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Scan for reachable vulnerabilities
+        if: needs.changed-files.outputs.docs_only != 'true'
         run: govulncheck ./...
 
   docker:
     runs-on: ubuntu-latest
+    needs: [changed-files]
+    # See the `test` job's own comment: `needs:` implies `if: success()`,
+    # which would let a failed `changed-files` job skip this required job
+    # instead of failing it. `if: always()` keeps this job running and
+    # reporting regardless.
+    if: always()
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -462,6 +623,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - name: Build multi-arch image (no push)
+        if: needs.changed-files.outputs.docs_only != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .

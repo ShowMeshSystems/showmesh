@@ -4,6 +4,7 @@ import {
   ChromeProgress,
   ClockSkewStrip,
   ConnectionPill,
+  Notice,
   Rail,
   RailGroup,
   RailLink,
@@ -115,6 +116,14 @@ export function Layout() {
       {signIn.kind === 'loading' && <ConnectingBand liveUpdatesConnected={model.connection.kind === 'live'} />}
       {signIn.kind === 'bootstrap_required' && <BootstrapBand />}
       {signIn.kind === 'signed_out' && <SignedOutBand />}
+      {model.auditStore?.state === 'unusable' && (
+        <Notice
+          tone="warn"
+          live="status"
+          headline="Audit attribution is degraded"
+          explanation={model.auditStore.reason ?? 'Commands continue, but this coordinator cannot durably write their audit entries.'}
+        />
+      )}
       <ShellBody>
         <Rail>
           <RailGroup>Operate</RailGroup>

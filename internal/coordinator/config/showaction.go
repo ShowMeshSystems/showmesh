@@ -637,6 +637,7 @@ const mqttExpectMaxDeadlineSeconds = 120
 // body — see rejectUnknownTopLevelKeys.
 var showActionTopLevelKeys = map[string]bool{
 	"show": true, "label": true, "description": true, "safetyClass": true, "target": true,
+	"idempotent": true,
 }
 
 // ShowActionPayload is config_revisions.payload_json's decoded, VALIDATED
@@ -649,6 +650,14 @@ type ShowActionPayload struct {
 	Description string           `json:"description,omitempty"`
 	SafetyClass string           `json:"safetyClass"`
 	Target      ShowActionTarget `json:"target"`
+
+	// Idempotent is a tri-state declaration: nil means "not declared", as
+	// distinct from a declared false. Never defaulted to true anywhere,
+	// including here - a nil pointer is the zero value, not an assumed
+	// answer. Only §7.1.1's first-outward-cue gate (nightcue_readiness.go,
+	// nightcuerun.go) reads this; an ordinary show.action may leave it
+	// undeclared forever.
+	Idempotent *bool `json:"idempotent,omitempty"`
 }
 
 // ShowActionTarget is show.action.target, flattened exactly as STEP-9-
@@ -799,6 +808,11 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 		return ShowActionPayload{}, verr
 	}
 
+	idempotent, verr := decodeOptionalTriStateBool(top, "idempotent", "idempotent")
+	if verr != nil {
+		return ShowActionPayload{}, verr
+	}
+
 	safetyClass, verr := decodeRequiredString(top, "safetyClass", "safetyClass")
 	if verr != nil {
 		return ShowActionPayload{}, verr
@@ -846,6 +860,7 @@ func DecodeShowActionPayload(raw string, endpoints []FPPEndpoint, brokers []Inte
 		Description: description,
 		SafetyClass: safetyClass,
 		Target:      target,
+		Idempotent:  idempotent,
 	}, nil
 }
 
@@ -1719,6 +1734,34 @@ func decodeDefaultedBool(top map[string]json.RawMessage, key, field string, def 
 		return false, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a boolean", field)}
 	}
 	return b, nil
+}
+
+// decodeOptionalTriStateBool reads key from top as a genuine three-state
+// value: absent OR present-and-null both return nil (not declared - never
+// coerced to false, and never defaulted to true); present-and-non-null is
+// a pointer to the value verbatim. show.action.idempotent is this
+// function's only caller.
+//
+// Deliberately UNLIKE every other optional field in this file (which
+// reject a present null as an error): the read side
+// (ConfigShowAction.idempotent, api/v1) reports "not declared" as a wire
+// null, not an omitted key, because it is always present in a GET
+// response the same way MacroRunSummary.completed/confirmed are (ADR-020:
+// absent evidence is stated, never omitted). A client that fetches an
+// action and PUTs the exact GET body back unchanged must succeed
+// (TestPutShowActionGetThenPutRoundTrips's own standing rule for every
+// field on this payload); rejecting that same null on the way back in
+// would break the one guarantee this field's own read shape depends on.
+func decodeOptionalTriStateBool(top map[string]json.RawMessage, key, field string) (*bool, *ValidationError) {
+	raw, present := top[key]
+	if !present || isJSONNull(raw) {
+		return nil, nil
+	}
+	var b bool
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return nil, &ValidationError{Code: ValidationCodeFieldInvalid, Field: field, Detail: fmt.Sprintf("%s must be a boolean", field)}
+	}
+	return &b, nil
 }
 
 // decodeDefaultedEnum reads key from top: absent takes def; present-and-null

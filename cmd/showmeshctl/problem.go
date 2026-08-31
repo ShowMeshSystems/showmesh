@@ -97,6 +97,15 @@ const (
 	problemNightNotReady      = "https://showmesh.dev/problems/night-not-ready"
 	problemNightStateRejected = "https://showmesh.dev/problems/night-state-rejected"
 	problemNightAmbiguous     = "https://showmesh.dev/problems/night-ambiguous"
+
+	// problemEmergencyStopHardStopNotArmed: "emergency-stop hard-stop fire"
+	// presented no valid, unexpired, unconsumed arm token. Distinct from
+	// problemConflict (both are 409s): the remedy differs, "arm again,
+	// then fire promptly" versus "someone else already consumed THIS
+	// token, check whether the hard stop already happened before retrying
+	// blindly". Mapped to its own exit code below rather than falling
+	// into the generic exitConflict every other 409 in this file shares.
+	problemEmergencyStopHardStopNotArmed = "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed"
 )
 
 // Exit codes, documented in --help (usage.go) so a script wrapping this
@@ -306,6 +315,8 @@ func exitCodeForProblem(status int, p *problem) int {
 			return exitNightStateRejected
 		case problemNightAmbiguous:
 			return exitNightAmbiguous
+		case problemEmergencyStopHardStopNotArmed:
+			return exitActionRefused
 		}
 	}
 	switch status {

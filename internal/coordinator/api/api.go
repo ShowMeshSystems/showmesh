@@ -337,6 +337,18 @@ type Dependencies struct {
 	// panicking on a nil dereference.
 	AssetManifests *store.Store
 
+	// FallbackPrograms is Track J's J1 own dependency for reading a
+	// published fallback program and its acknowledgement, and for storing
+	// a new acknowledgement (ADR-048): *store.Store directly, not an
+	// interface, on [Dependencies.AssetManifests]'s own precedent one
+	// field up: this is read by a background reconciler
+	// (internal/coordinator/fallbackreconcile) that ALSO needs the
+	// concrete *store.Store for its own compile-time reads, so a second,
+	// narrower interface here would still have to be satisfied by the
+	// identical concrete value. A nil field is checked explicitly by each
+	// handler, matching AssetManifests's identical nil-check posture.
+	FallbackPrograms *store.Store
+
 	// AssetSettings is Track G seam G-4's live, no-restart view of the
 	// assets.settings configuration kind (ADR-039): the upload byte limit,
 	// the manifest staleness interval, and (via ContentBaseURL) whether the
@@ -1486,6 +1498,7 @@ func New(deps Dependencies, opts Options) *API {
 		fppCommandConfirmDeadline: opts.FPPCommandConfirmDeadline,
 		fppCommandPollInterval:    opts.FPPCommandPollInterval,
 		nightReadinessMaxAge:      opts.NightReadinessMaxAge,
+		emergencyStopArms:         newEmergencyStopArmStore(),
 	}
 	hub := newHub(deps, opts, opts.Logger)
 
@@ -1695,6 +1708,18 @@ func New(deps Dependencies, opts Options) *API {
 	// comment (identity/types.go) for why. No state change here is
 	// reachable by GET — see actioninvoke.go.
 	mux.HandleFunc("POST /api/v1/actions/{id}/invocations", h.writeGuard(&scopeActionInvoke, h.handleInvokeAction))
+
+	// The show.emergencystop configuration kind (its own optional,
+	// per-level follow-up action lists) and the four trigger routes.
+	// show:emergencystop:invoke is the only scope check on all four.
+	// See that scope's own doc comment (identity/types.go).
+	mux.HandleFunc("GET /api/v1/config/show.emergencystop", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfig))
+	mux.HandleFunc("PUT /api/v1/config/show.emergencystop", h.writeGuard(&scopeConfigWrite, h.handlePutEmergencyStopConfig))
+	mux.HandleFunc("GET /api/v1/config/show.emergencystop/revisions", h.requireScope(identity.ScopeConfigWrite, h.handleGetEmergencyStopConfigRevisions))
+	mux.HandleFunc("POST /api/v1/emergency-stop/stop", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStop))
+	mux.HandleFunc("POST /api/v1/emergency-stop/stop-power-down", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopPowerDown))
+	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/arm", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopArm))
+	mux.HandleFunc("POST /api/v1/emergency-stop/hard-stop/fire", h.writeGuard(&scopeShowEmergencyStopInvoke, h.handleEmergencyStopFire))
 
 	// Step 9 wave 2: the run surface (STEP-9-SPEC.md section 6.6). POST is
 	// gated on show:macro:run specifically, never "OR config:write" — an
@@ -1929,6 +1954,24 @@ func New(deps Dependencies, opts Options) *API {
 	// an acknowledgement is not a configuration write.
 	mux.HandleFunc("GET /api/v1/nodes/{nodeId}/cue-catalog", h.readGuard(identity.ScopeObservationRead, h.handleGetNodeCueCatalog))
 	mux.HandleFunc("POST /api/v1/nodes/{nodeId}/cue-catalog/acknowledge", h.writeGuard(&scopeNodeObserve, h.handlePostNodeCueCatalogAcknowledge))
+
+	// ADR-048, Track J's J1: the signed fallback-program listing and
+	// per-host read, and the host's own acknowledgement write. The listing
+	// stays under observation:read, matching every other list-metadata
+	// read surface in this file; the per-host read carries the signed
+	// payload material a specific host consumes and, like the
+	// acknowledgement write, is gated by fpp:fallback
+	// (IDENTIFIER-REGISTER.md's own reservation): the installed FPP
+	// plugin principal, never a general operator read scope.
+	mux.HandleFunc("GET /api/v1/fallback-programs", h.readGuard(identity.ScopeObservationRead, h.handleListFallbackPrograms))
+	// GET on the per-host path is deliberately requireScope, never
+	// readGuard: readGuard is a no-op unless CloseReads is set
+	// (auth.go's own posture), and this route serves the actual signed
+	// program bytes, not observation metadata. requireScope enforces
+	// fpp:fallback unconditionally, the same always-on guard GET
+	// /api/v1/audit uses for equivalently sensitive material.
+	mux.HandleFunc("GET /api/v1/fallback-programs/{fppInstanceId}", h.requireScope(identity.ScopeFPPFallback, h.handleGetFallbackProgram))
+	mux.HandleFunc("POST /api/v1/fallback-programs/{fppInstanceId}/acknowledge", h.writeGuard(&scopeFPPFallback, h.handlePostFallbackProgramAcknowledge))
 	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
 	// resolve, dispatch cuecatalog.deploy, and record the node's own
 	// reported revision through the same PutNodeCueCatalogAck path the

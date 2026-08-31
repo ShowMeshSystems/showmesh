@@ -92,6 +92,13 @@ type handlers struct {
 	// value is a no-op; only a test ever sets it.
 	nightCueHooks nightCueDispatchHooks
 
+	// emergencyStopArms is the emergency-stop feature's own hard-stop arm/fire deliberate-
+	// intent gate state. See [emergencyStopArmStore]'s own doc comment
+	// for why this is in-memory, unpersisted, and a single-process
+	// assumption (ADR-012, the same one discoveryRunInFlight above
+	// already relies on).
+	emergencyStopArms *emergencyStopArmStore
+
 	// cueActivationFailToBlackWG owns every dispatchAssetMissingFailToBlack
 	// goroutine cueActivationTickOne has launched but not yet finished (see
 	// that method's own doc comment in cueactivationloop.go for why the
@@ -324,10 +331,10 @@ func parseObservationFilter(query url.Values) (ObservationFilter, *v1.Problem) {
 	if raw := query.Get("resourceKind"); raw != "" {
 		kind := observation.ResourceKind(raw)
 		switch kind {
-		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface, observation.ResourceAudioSession:
+		case observation.ResourceNode, observation.ResourceFPP, observation.ResourceCoordinator, observation.ResourceResolume, observation.ResourceSurface, observation.ResourceAudioSession, observation.ResourceFallbackProgram:
 			filter.ResourceKind = &kind
 		default:
-			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", \"audio_session\", got " + strconv.Quote(raw))
+			p := invalidParameterProblem("resourceKind must be one of \"node\", \"fpp\", \"coordinator\", \"resolume\", \"surface\", \"audio_session\", \"fallback_program\", got " + strconv.Quote(raw))
 			return ObservationFilter{}, &p
 		}
 	}
@@ -529,6 +536,16 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	// resolumeCompositionDegradeOnError's own precedent two calls above.
 	pushState, pushReason := audioConfigPushStatusDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
 
+	// Computed fresh via a real probe write to audit_log (always rolled
+	// back), never cached: see [identity.Service.AuditWriteStatus]'s own
+	// doc comment for why a stale, traffic-fed latch alone was not
+	// answerable enough for this standing signal.
+	auditState, auditReasonStr := h.deps.Identity.AuditWriteStatus(ctx)
+	var auditReason *string
+	if auditReasonStr != "" {
+		auditReason = &auditReasonStr
+	}
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -537,6 +554,9 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		Collectors:     collectors,
 		MacroRuns:      runs,
 		Resolume:       resolumeInstances,
+		AuditStore: v1.AuditStoreStatus{
+			State: auditState, Reason: auditReason,
+		},
 		AudioConfigPush: v1.AudioConfigPushStatus{
 			State: string(pushState), Reason: pushReason,
 		},

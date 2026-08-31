@@ -608,7 +608,7 @@ func mapShowActionConfigResponse(now time.Time, rev store.ConfigRevisionRecord, 
 func mapConfigShowAction(p config.ShowActionPayload) v1.ConfigShowAction {
 	return v1.ConfigShowAction{
 		Show: p.Show, Label: p.Label, Description: p.Description, SafetyClass: p.SafetyClass,
-		Target: mapConfigShowActionTarget(p.Target),
+		Target: mapConfigShowActionTarget(p.Target), Idempotent: p.Idempotent,
 	}
 }
 

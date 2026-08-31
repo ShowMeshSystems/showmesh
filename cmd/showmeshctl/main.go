@@ -72,6 +72,8 @@ func run(args []string, stdout, stderr io.Writer, clock func() time.Time) int {
 		return cmdPlaylist(rest, stdout, stderr, clock)
 	case "night":
 		return cmdNight(rest, stdout, stderr, clock)
+	case "emergency-stop":
+		return cmdEmergencyStop(rest, stdout, stderr, clock)
 	case "resolume":
 		return cmdResolume(rest, stdout, stderr, clock)
 	case "render":
@@ -243,6 +245,19 @@ Commands:
                                        without clearing its degraded record (write, requires
                                        night:command; the only lifecycle command accepted while
                                        degraded besides the three above)
+  emergency-stop stop                 stop playout immediately on every configured FPP instance
+                                       (write, requires show:emergencystop:invoke)
+  emergency-stop stop-power-down      stop playout immediately, then force the active night
+                                       session's own standard graceful shutdown to start now (write)
+  emergency-stop hard-stop arm        arm the hard stop: mint a single-use token, no effect on
+                                       the show by itself (write)
+  emergency-stop hard-stop fire       fire the hard stop using --arm-token from "arm": immediate stop,
+                                       abandon the active night session with no wait (write; never
+                                       chained with "arm" by one command; see cmd_emergency_stop.go)
+  emergency-stop config get           show each level's own optional follow-up action list
+  emergency-stop config set           write a new show.emergencystop revision from a JSON payload
+                                       (write, full replacement, requires config:write)
+  emergency-stop config revisions     list show.emergencystop revision history, newest first
   resolume composition upload <path>   parse and store a Resolume composition file (write)
   resolume composition show            show the stored composition (requires config:write)
   resolume action list                 show the Resolume action vocabulary this coordinator supports

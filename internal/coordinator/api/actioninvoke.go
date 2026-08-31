@@ -31,8 +31,12 @@ import (
 // uses. AuditExempt is read from the stored action's own SafetyClass,
 // never re-derived.
 //
-// A non-exempt audit failure refuses before dispatch; an exempt one
-// re-inserts non-transactionally and proceeds with degraded attribution.
+// ADR-024 decision 11, amended 2026-08-26 (owner ruling): a pre-dispatch
+// audit failure never refuses this endpoint, exempt or not. It re-inserts
+// non-transactionally and proceeds with degraded attribution either way.
+// AuditExempt now only selects which justification is reported
+// (degradedAttributionReasonSafetyClassExemption vs.
+// degradedAttributionReasonAuditNeverBlocks).
 
 // scopeActionInvoke exists only so api.go's route registration can take
 // its address — see scopeResolumeAction's identical pattern.
@@ -109,25 +113,6 @@ const actionInvokeFPPChildIdempotencyKeyPrefix = "action-invoke:"
 const actionInvokeHTTPWriteDeadline = 150 * time.Second
 
 const actionInvokeBookkeepingBudget = 5 * time.Second
-
-// ProblemTypeActionInvokeRefusedAuditUnavailable mirrors
-// [ProblemTypeResolumeActionRefusedAuditUnavailable]'s identical shape:
-// a non-exempt action's pre-dispatch audit write failed, the whole
-// transaction rolled back, and nothing was recorded or dispatched.
-const ProblemTypeActionInvokeRefusedAuditUnavailable = problemBaseURI + "action-invoke-refused-audit-unavailable"
-
-func actionInvokeAuditUnavailableProblem(actionID string, cause error) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeActionInvokeRefusedAuditUnavailable,
-		Title:  "Action refused: it could not be durably recorded",
-		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf(
-			"action %q was refused before anything was dispatched: it must be durably recorded before dispatch, and "+
-				"this coordinator's audit store is currently unavailable (%v). Nothing was recorded and nothing was "+
-				"dispatched; retry once the audit store is writable again.",
-			actionID, cause),
-	}
-}
 
 // actionInvokeReplayConflictProblem mirrors resolumeActionReplayConflictProblem's
 // identical reasoning: an idempotency key reused against a DIFFERENT
@@ -271,7 +256,10 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmdID := uuid.NewString()
-	requestedRevisionStr := strconv.FormatInt(rev.Revision, 10)
+	// Tagged store.CallerIntentRevision so commands.caller_intent stays
+	// self-describing: this endpoint is the one writer this column's
+	// plain-revision family has.
+	callerIntent := store.FormatCallerIntent(store.CallerIntentRevision, strconv.FormatInt(rev.Revision, 10))
 	dispatchEntry := identity.AuditEntry{
 		Timestamp: now, PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 		Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: h.clientAddr(r),
@@ -282,7 +270,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 		ID: cmdID, IdempotencyKey: idempotencyKey, Action: auditAction,
 		TargetKind: actionInvokeTargetKind, TargetID: id,
 		IssuerPrincipalID: ac.result.Principal.ID, IssuerPrincipalName: ac.result.Principal.Name,
-		RequestedRevision:  requestedRevisionStr,
+		CallerIntent:       callerIntent,
 		ConfirmationMethod: string(command.ConfirmationEvidence), State: "pending",
 		OutcomeReason: actionInvokePendingOutcomeReason,
 	}
@@ -293,6 +281,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	auditExempt := payload.SafetyClass != config.ShowSafetyClassNone
 
 	var dispatchDegraded bool
+	dispatchDegradedReason := degradedAttributionReasonAuditNeverBlocks
 	auditErr := h.deps.Identity.AuditedWrite(ctx, func(ctx context.Context, tx *store.Tx) (identity.AuditEntry, error) {
 		if _, err := tx.InsertCommand(ctx, rec); err != nil {
 			return identity.AuditEntry{}, err
@@ -311,15 +300,10 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 		jsonWrite(w, v1.ActionInvocationResponse{ServerTime: formatTime(h.now()), Result: result})
 		return
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if !auditExempt {
-			// Fail closed: the transaction above already rolled back in
-			// full, so nothing is re-inserted and nothing is dispatched —
-			// ADR-024 decision 11's default rule for every action outside
-			// the three-member safety class.
-			writeProblem(w, h.logger, now, actionInvokeAuditUnavailableProblem(id, auditErr))
-			return
-		}
-		// Safety-class exemption: redo the insert through the plain,
+		// ADR-024 decision 11, amended 2026-08-26 (owner ruling): an
+		// audit-store outage never blocks a command dispatch, for any
+		// action, not only the three-member safety class read off
+		// auditExempt. Redo the insert through the plain,
 		// non-transactional store method and proceed with degraded
 		// attribution — mirroring dispatchFPPCommand/handleDispatchResolumeAction's
 		// identical fallback.
@@ -336,7 +320,10 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 			h.writeInternalError(w, now, "insert action invocation command", err)
 			return
 		}
-		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedAttributionReasonSafetyClassExemption)
+		if auditExempt {
+			dispatchDegradedReason = degradedAttributionReasonSafetyClassExemption
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, dispatchDegradedReason)
 		dispatchDegraded = true
 	case auditErr != nil:
 		h.writeInternalError(w, now, "insert action invocation command", auditErr)
@@ -345,7 +332,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 
 	dispatchAttribution, dispatchAttributionReason := attributionStateComplete, actionInvokeDispatchCompleteReason
 	if dispatchDegraded {
-		dispatchAttribution, dispatchAttributionReason = attributionStateDegraded, degradedAttributionReasonSafetyClassExemption
+		dispatchAttribution, dispatchAttributionReason = attributionStateDegraded, dispatchDegradedReason
 	}
 
 	// --- From here on, a detached context: an abandoned client must not
@@ -371,7 +358,7 @@ func (h *handlers) handleInvokeAction(w http.ResponseWriter, r *http.Request) {
 	dispatchCtx, dispatchCancel := context.WithTimeout(bgCtx, actionInvokeHTTPWriteDeadline-actionInvokeBookkeepingBudget)
 	defer dispatchCancel()
 
-	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, requestedRevisionStr, ac, h.clientAddr(r), auditExempt)
+	outcome, outcomeState, outcomeReason, dispatchedAt, resolvedAt := h.dispatchActionTarget(dispatchCtx, payload, cmdID, callerIntent, ac, h.clientAddr(r), auditExempt)
 
 	// evidenceState is currently unused on the wire directly but kept for
 	// parity with the outcome-audit entry below, which does carry it.
@@ -481,23 +468,24 @@ func (h *handlers) resolveActionInvokeRevision(ctx context.Context, id string, r
 // dispatch seam its own integration already uses. auditExempt is
 // threaded into the FPP branch's own NeverWithholdOnAuditFailure so
 // dispatchFPPCommand's independent internal audit check agrees with this
-// handler's own outer decision. requestedRevision is threaded into the
-// FPP branch's own child command row, so the nested dispatch
-// carries the SAME pinned revision the outer invocation resolved against.
+// handler's own outer decision. callerIntent (store.CallerIntentRevision-
+// tagged) is threaded into the FPP branch's own child command row, so the
+// nested dispatch carries the SAME pinned revision the outer invocation
+// resolved against.
 //
 // outcomeState is empty for FPP and Resolume (the caller derives a
 // pkg/observation-vocabulary fallback from outcome itself, unchanged) and
 // carries DispatchMQTTAction's own mqttActionState* vocabulary for MQTT —
 // macro/vocab.go's identical split, applied here instead of re-deriving a
 // second classification for the same dispatch.
-func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID, requestedRevision string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
+func (h *handlers) dispatchActionTarget(ctx context.Context, payload config.ShowActionPayload, cmdID, callerIntent string, ac authContext, clientAddr string, auditExempt bool) (outcome, outcomeState, outcomeReason string, dispatchedAt *time.Time, resolvedAt time.Time) {
 	target := payload.Target
 	switch target.Integration {
 	case config.ShowActionIntegrationFPP:
 		in := FPPCommandInput{
 			InstanceID: target.InstanceID, Action: target.Primitive, Params: target.Params,
-			IdempotencyKey:    actionInvokeFPPChildIdempotencyKeyPrefix + cmdID,
-			RequestedRevision: requestedRevision,
+			IdempotencyKey: actionInvokeFPPChildIdempotencyKeyPrefix + cmdID,
+			CallerIntent:   callerIntent,
 			Issuer: FPPCommandIssuer{
 				PrincipalID: ac.result.Principal.ID, PrincipalName: ac.result.Principal.Name,
 				Form: ac.result.Form, CredentialID: ac.result.CredentialID, ClientAddr: clientAddr,
@@ -589,7 +577,13 @@ func (h *handlers) resolveActionInvokeReplay(ctx context.Context, now time.Time,
 	var payload actionInvokeResultPayload
 	_ = json.Unmarshal([]byte(existing.ResultJSON), &payload)
 
-	revision, _ := strconv.ParseInt(existing.RequestedRevision, 10, 64)
+	// existing.TargetKind is already checked above, so this row's
+	// caller_intent can only be this endpoint's own revision family:
+	// [store.CallerIntentPayload] strips the store.CallerIntentRevision
+	// tag when present and falls back to the raw value for a row written
+	// before this tagging scheme existed.
+	revisionPayload, _ := store.CallerIntentPayload(store.CallerIntentRevision, existing.CallerIntent)
+	revision, _ := strconv.ParseInt(revisionPayload, 10, 64)
 
 	state := actionInvokeStatePending
 	var outcomePtr *string

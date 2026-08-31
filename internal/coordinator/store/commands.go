@@ -27,6 +27,15 @@ import (
 // telemetry. OutcomeState uses pkg/observation's state vocabulary,
 // matching audit_log.outcome_state (schemaV5): an unresolved command
 // carries a state and a reason, never a null that renders as blank.
+//
+// CallerIntent (schemaV26, renamed from RequestedRevision) is not always
+// a revision: it holds one of several unrelated
+// shapes depending on which family dispatched the command (a plain
+// show.action revision, a macro run's pinned reference, a render or
+// cue-catalog request's caller-identity JSON, or nothing at all). See
+// [FormatCallerIntent] and [ParseCallerIntent] for the discriminator that
+// tells them apart, and [CallerIntentKind]'s doc comment for why an
+// untagged value must never be guessed at rather than treated as unknown.
 type CommandRecord struct {
 	ID                  string
 	IdempotencyKey      string
@@ -36,7 +45,7 @@ type CommandRecord struct {
 	ParamsJSON          string
 	IssuerPrincipalID   string
 	IssuerPrincipalName string
-	RequestedRevision   string
+	CallerIntent        string
 	ConfirmationMethod  string
 	DeadlineAt          *time.Time
 	CreatedAt           time.Time
@@ -100,7 +109,7 @@ func (e *DuplicateCommandError) Unwrap() error { return ErrCommandIdempotencyKey
 
 const commandColumns = `
 	id, idempotency_key, action, target_kind, target_id, params_json,
-	issuer_principal_id, issuer_principal_name, requested_revision, confirmation_method,
+	issuer_principal_id, issuer_principal_name, caller_intent, confirmation_method,
 	deadline_at, created_at, dispatched_at, resolved_at, state, result_json,
 	outcome_state, outcome_reason
 `
@@ -113,7 +122,7 @@ func scanCommand(row interface{ Scan(dest ...any) error }) (CommandRecord, error
 	)
 	if err := row.Scan(
 		&rec.ID, &rec.IdempotencyKey, &rec.Action, &rec.TargetKind, &rec.TargetID, &rec.ParamsJSON,
-		&rec.IssuerPrincipalID, &rec.IssuerPrincipalName, &rec.RequestedRevision, &rec.ConfirmationMethod,
+		&rec.IssuerPrincipalID, &rec.IssuerPrincipalName, &rec.CallerIntent, &rec.ConfirmationMethod,
 		&deadlineAt, &createdAt, &dispatchedAt, &resolvedAt, &rec.State, &rec.ResultJSON,
 		&rec.OutcomeState, &rec.OutcomeReason,
 	); err != nil {
@@ -162,13 +171,13 @@ func insertCommand(ctx context.Context, q querier, s *Store, rec CommandRecord, 
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO commands (
 			id, idempotency_key, action, target_kind, target_id, params_json,
-			issuer_principal_id, issuer_principal_name, requested_revision, confirmation_method,
+			issuer_principal_id, issuer_principal_name, caller_intent, confirmation_method,
 			deadline_at, created_at, dispatched_at, resolved_at, state, result_json,
 			outcome_state, outcome_reason
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
 	`,
 		rec.ID, rec.IdempotencyKey, rec.Action, rec.TargetKind, rec.TargetID, rec.ParamsJSON,
-		rec.IssuerPrincipalID, rec.IssuerPrincipalName, rec.RequestedRevision, rec.ConfirmationMethod,
+		rec.IssuerPrincipalID, rec.IssuerPrincipalName, rec.CallerIntent, rec.ConfirmationMethod,
 		timePtrToDB(rec.DeadlineAt), timeToDB(rec.CreatedAt), rec.State, rec.ResultJSON,
 		rec.OutcomeState, rec.OutcomeReason,
 	)

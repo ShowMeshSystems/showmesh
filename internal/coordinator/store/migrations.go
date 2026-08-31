@@ -63,11 +63,34 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
-	// v21-v23 are reserved for other, not-yet-merged branches
-	// (docs/build/IDENTIFIER-REGISTER.md): this migration takes v24, the
-	// next free number, rather than the lowest one, to avoid colliding
-	// with them when they land.
+	// v21, v22, and v23 are dead numbers: each sits at or below this
+	// migration's own shipped maximum (24), so migrate()'s own
+	// current == target short-circuit means a migration entry at any of
+	// them can never run for a store some other binary already stamped
+	// at 24 or higher, exactly the failure the v25 entry below this one
+	// exists to fix. Whatever work docs/build/IDENTIFIER-REGISTER.md
+	// currently shows reserved at v21 or v22 will need a fresh number
+	// above the shipped maximum when it actually lands, for the
+	// identical reason v23 was renumbered to v25. This migration itself
+	// took the next free number (24) rather than the lowest one (21)
+	// specifically to avoid colliding with those two reservations when
+	// they land; that choice is left as it shipped rather than rewritten
+	// here, even though a number below the maximum is unusable regardless
+	// of which branch reaches it first.
 	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
+	// v25 is Track J's J1 (ADR-048, TRACK-J-fpp-fallback.md J1): the next
+	// free number after v24 landed on main first. Nothing at or below the
+	// shipped maximum is ever reserved for future work again after this
+	// point: a reservation below the stamp is a migration that can never
+	// run, which is the exact mechanism this renumbering and v21/v22's
+	// own now-dead reservations both demonstrate.
+	{version: 25, sql: schemaV25},
+	// v26 (owner ruling 2026-08-19): renaming commands.requested_revision
+	// to commands.caller_intent and formalizing its per-family
+	// discriminator. Renumbered from v22, itself renumbered from v13, for
+	// the identical reason v25 was renumbered from v23: a reservation at
+	// or below the shipped maximum can never run.
+	{version: 26, fn: migrateV26RenameRequestedRevisionToCallerIntent},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1346,6 +1369,127 @@ const schemaV18 = `
 ALTER TABLE fpp_playlist_entry_observations
     ADD COLUMN entry_occurrence_sequence INTEGER NOT NULL DEFAULT 0;
 `
+
+// schemaV25 is Track J's J1 own migration (ADR-048,
+// TRACK-J-fpp-fallback.md J1): the coordinator-side store for a
+// compiled, signed fallback program and its per-FPP-host
+// acknowledgement, one row per fpp_instance_uuid in each table, on
+// node_cue_catalog_ack's exact upsert shape (schemaV17) next door:
+// "the fact this host was last given/acknowledged," never re-derived
+// from the coordinator's current state.
+//
+// fallback_programs holds the LAST PUBLISHED package for a host, not a
+// history: publication is a wholesale replacement (ADR-048 decision 1,
+// "It is a complete replacement, not a patch"), so a fresh compile
+// upserts this row rather than appending one. program_json is the
+// signed program's [fallbackprogram.SignedProgram], marshaled whole, so
+// a re-fetch (a plugin re-polling GET) always reproduces exactly the
+// bytes that were signed. A second, independent re-serialization at
+// read time could not be guaranteed byte-identical to the signed
+// payload the way replaying the stored bytes can.
+//
+// fallback_program_acknowledgements holds the host's own evidence of
+// what it verified and installed, reported separately from
+// fallback_programs for the identical reason node_cue_catalog_ack is
+// its own table rather than a column on the resolved catalog: an
+// acknowledgement is a report of a past fact from the other side, and
+// the comparison against "what the coordinator has published now"
+// happens at read time, never at write time.
+//
+// Both CREATE TABLE statements use IF NOT EXISTS, unlike every other
+// bare CREATE TABLE in this file: internal/coordinator/audioconfigpush's
+// own tests deliberately stamp PRAGMA user_version back to 18 or 19 and
+// reopen the store to force migrations 19 and 20 (Go functions that
+// rewrite payloads, safe to replay) to run again. schemaV25 is the first
+// SQL migration to sit above that rewind point, so replaying it against
+// a database that already has these tables must tolerate finding them
+// present rather than fail. The other 31 CREATE TABLEs in this file
+// have never sat above a rewind point a test actually exercises.
+const schemaV25 = `
+CREATE TABLE IF NOT EXISTS fallback_programs (
+    fpp_instance_uuid TEXT PRIMARY KEY,
+    package_id        TEXT NOT NULL,
+    revision          TEXT NOT NULL,
+    show_id           TEXT NOT NULL,
+    generation        INTEGER NOT NULL,
+    program_json      TEXT NOT NULL,
+    signature_b64     TEXT NOT NULL,
+    expires_at        TEXT NOT NULL,
+    compiled_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fallback_program_acknowledgements (
+    fpp_instance_uuid    TEXT PRIMARY KEY,
+    package_id           TEXT NOT NULL,
+    revision             TEXT NOT NULL,
+    verification_result  TEXT NOT NULL,
+    installed_at         TEXT NOT NULL,
+    acknowledged_at      TEXT NOT NULL
+);
+`
+
+// migrateV26RenameRequestedRevisionToCallerIntent renames
+// commands.requested_revision to commands.caller_intent (owner ruling
+// 2026-08-19): the column has held four unrelated writer shapes since
+// Step 9. Two are genuinely revision-shaped (a show.action invocation's
+// plain revision, and a macro run's own "macro:" tagged reference, which
+// embeds one); the other two are not revisions at all, but two
+// DIFFERENTLY SHAPED caller-identity JSON structs, one per dispatch route
+// (render, cue-catalog deploy), each carrying no revision at their own
+// top level. A name built around "revision" was never true for those
+// last two writers. The rename itself is metadata-only (SQLite 3.25+,
+// bundled by this project's modernc.org/sqlite): every existing value,
+// tagged or not, is preserved byte-for-byte, and no backfill runs. See
+// [ParseCallerIntent] (caller_intent.go) for the discriminator this
+// rename exists to make possible, and its own doc comment for why an
+// untagged pre-v26 row is never reinterpreted as one of the tagged kinds,
+// including between these two structurally similar JSON shapes.
+//
+// A Go function rather than bare SQL, unlike every other rename in this
+// file, because this one has to tolerate being replayed against a
+// database that already ran it: internal/coordinator/audioconfigpush's
+// own tests rewind PRAGMA user_version to 18 (see schemaV25's own doc
+// comment for the identical precedent with migrations 19 and 20) and
+// reopen the store to force later migrations to run again. A bare
+// ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent
+// fails outright on that second pass, because the column it names no
+// longer exists under that name; checking first and no-opping when it is
+// already renamed is what makes replay safe, the same property CREATE
+// TABLE IF NOT EXISTS gives schemaV25's own tables.
+//
+// Checking only "does requested_revision still exist" is not enough: that
+// is also 0 if the commands table itself is missing or malformed, which
+// is a genuine problem this migration must surface, not swallow. So this
+// checks BOTH column names and only tolerates the one combination replay
+// can actually produce (caller_intent already there, requested_revision
+// gone); any other combination, including a real failure from the rename
+// itself, is returned as an error rather than treated as "nothing to do".
+func migrateV26RenameRequestedRevisionToCallerIntent(ctx context.Context, tx *sql.Tx) error {
+	var hasOldName, hasNewName int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name = 'requested_revision'`,
+	).Scan(&hasOldName); err != nil {
+		return fmt.Errorf("check commands.requested_revision exists: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('commands') WHERE name = 'caller_intent'`,
+	).Scan(&hasNewName); err != nil {
+		return fmt.Errorf("check commands.caller_intent exists: %w", err)
+	}
+	switch {
+	case hasOldName == 1 && hasNewName == 0:
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent`); err != nil {
+			return fmt.Errorf("rename commands.requested_revision to caller_intent: %w", err)
+		}
+		return nil
+	case hasOldName == 0 && hasNewName == 1:
+		// Already renamed: the one replay shape this function exists to
+		// tolerate.
+		return nil
+	default:
+		return fmt.Errorf("commands table is in an unexpected state for the caller_intent rename: requested_revision present=%v, caller_intent present=%v", hasOldName == 1, hasNewName == 1)
+	}
+}
 
 // maxMigrationVersion is the maximum [migration.version] across
 // [migrations] — [migrate]'s own target. A maximum, not len(migrations):

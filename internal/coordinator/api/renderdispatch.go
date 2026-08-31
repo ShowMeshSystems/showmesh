@@ -421,13 +421,14 @@ func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surface
 // Omitting fseqFilename/fseqContentHash entirely (never sending them
 // empty) is what makes this a valid render.surface.apply request at all:
 // [renderApplyKnownKeys]' own doc comment (internal/agent/renderops.go)
-// already states "an assignment with no FSEQ information is still a valid
-// request," and buildFSEQAssignment's ok==false branch is exactly the
-// "declared, no content yet" state this half needed and did not have to
-// invent — the agent falls back to its own test-pattern pipeline with no
-// frame writer, which is what draws render.settings.idleOutput until the
-// first activateSurfaceRender (internal/agent/cueactivationrender.go)
-// swaps a real FSEQ onto it.
+// already states an assignment with no FSEQ content is a valid request,
+// and buildFSEQAssignment's ok==false branch is exactly the "declared, no
+// content yet" state this half needed and did not have to invent: the
+// agent starts a [pipeline.NewIdleFrameWriter] with no sequence, which
+// actually draws (and reports, through surface.output.mode/idleMode) this
+// surface's configured render.settings.idleOutput until the first
+// activateSurfaceRender (internal/agent/cueactivationrender.go) swaps a
+// real FSEQ onto it.
 type renderEstablishParamsPayload struct {
 	SurfaceID       string                         `json:"surfaceId"`
 	Show            string                         `json:"show"`
@@ -646,8 +647,8 @@ type renderDispatchInput struct {
 }
 
 // renderRequestIdentity is the caller's own unresolved request shape,
-// stored in commands.requested_revision — never in the mutable params_json
-// a resolution produces.
+// stored in commands.caller_intent tagged store.CallerIntentRenderRequest,
+// never in the mutable params_json a resolution produces.
 type renderRequestIdentity struct {
 	Action     string `json:"action"`
 	NodeID     string `json:"node"`
@@ -691,7 +692,7 @@ func (h *handlers) executeRenderDispatch(ctx context.Context, now time.Time, in 
 		ID: commandID, IdempotencyKey: in.IdempotencyKey, Action: in.Action,
 		TargetKind: "node", TargetID: in.NodeID, ParamsJSON: paramsJSON,
 		IssuerPrincipalID: in.IssuerID, IssuerPrincipalName: in.IssuerName,
-		RequestedRevision:  string(identityJSON),
+		CallerIntent:       store.FormatCallerIntent(store.CallerIntentRenderRequest, string(identityJSON)),
 		ConfirmationMethod: "evidence", State: "pending",
 	}
 	inserted, err := h.deps.Commands.InsertCommand(ctx, rec)
@@ -1151,8 +1152,13 @@ func (h *handlers) resolveRenderCommandReplay(ctx context.Context, now time.Time
 	want := renderRequestIdentityFor(in)
 	var got renderRequestIdentity
 	matched := false
-	if existing.RequestedRevision != "" {
-		if err := json.Unmarshal([]byte(existing.RequestedRevision), &got); err == nil {
+	// existing.Action/TargetID are already checked above, so this row's
+	// caller_intent can only be this route's own render-request family:
+	// [store.CallerIntentPayload] strips the store.CallerIntentRenderRequest
+	// tag when present and falls back to the raw value for a row written
+	// before this tagging scheme existed.
+	if payload, _ := store.CallerIntentPayload(store.CallerIntentRenderRequest, existing.CallerIntent); payload != "" {
+		if err := json.Unmarshal([]byte(payload), &got); err == nil {
 			matched = got == want
 		}
 	}

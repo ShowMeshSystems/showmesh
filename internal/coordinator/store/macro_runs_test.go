@@ -1073,11 +1073,11 @@ func TestResolveMacroRunStepCommandDistinguishesNoneAvailableAndNotRetained(t *t
 	}
 }
 
-// TestFormatParseMacroRunRequestedRevisionRoundTrip proves
-// [FormatMacroRunRequestedRevision]/[ParseMacroRunRequestedRevision] round
-// trip exactly, including a macroObjectID that itself contains "@": the
-// case that proves parsing splits on the LAST "@", not the first.
-func TestFormatParseMacroRunRequestedRevisionRoundTrip(t *testing.T) {
+// TestFormatParseMacroRunCallerIntentRoundTrip proves
+// [FormatMacroRunCallerIntent]/[ParseMacroRunCallerIntent] round trip
+// exactly, including a macroObjectID that itself contains "@": the case
+// that proves parsing splits on the LAST "@", not the first.
+func TestFormatParseMacroRunCallerIntentRoundTrip(t *testing.T) {
 	cases := []struct {
 		macroObjectID string
 		revision      int64
@@ -1087,27 +1087,27 @@ func TestFormatParseMacroRunRequestedRevisionRoundTrip(t *testing.T) {
 		{"weird@object@id", 7},
 	}
 	for _, c := range cases {
-		formatted := FormatMacroRunRequestedRevision(c.macroObjectID, c.revision)
-		gotID, gotRev, ok := ParseMacroRunRequestedRevision(formatted)
+		formatted := FormatMacroRunCallerIntent(c.macroObjectID, c.revision)
+		gotID, gotRev, ok := ParseMacroRunCallerIntent(formatted)
 		if !ok {
-			t.Fatalf("ParseMacroRunRequestedRevision(%q) ok = false, want true", formatted)
+			t.Fatalf("ParseMacroRunCallerIntent(%q) ok = false, want true", formatted)
 		}
 		if gotID != c.macroObjectID || gotRev != c.revision {
-			t.Errorf("ParseMacroRunRequestedRevision(%q) = (%q, %d), want (%q, %d)",
+			t.Errorf("ParseMacroRunCallerIntent(%q) = (%q, %d), want (%q, %d)",
 				formatted, gotID, gotRev, c.macroObjectID, c.revision)
 		}
 	}
 }
 
-// TestParseMacroRunRequestedRevisionRejectsNonMacroValues proves the
+// TestParseMacroRunCallerIntentRejectsNonMacroValues proves the
 // distinguishability STEP-9-SPEC.md §6.1 actually asks for: an
 // operator-issued command's untouched default ("") and any value a macro
 // dispatch never produced must both report ok == false, never a
 // misleadingly "parsed" zero-valued macro id and revision.
-func TestParseMacroRunRequestedRevisionRejectsNonMacroValues(t *testing.T) {
+func TestParseMacroRunCallerIntentRejectsNonMacroValues(t *testing.T) {
 	for _, s := range []string{"", "7", "not-a-macro-revision", "macro:no-at-sign"} {
-		if _, _, ok := ParseMacroRunRequestedRevision(s); ok {
-			t.Errorf("ParseMacroRunRequestedRevision(%q) ok = true, want false (not a macro-issued value)", s)
+		if _, _, ok := ParseMacroRunCallerIntent(s); ok {
+			t.Errorf("ParseMacroRunCallerIntent(%q) ok = true, want false (not a macro-issued value)", s)
 		}
 	}
 }

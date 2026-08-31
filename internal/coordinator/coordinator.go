@@ -26,6 +26,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/noderender"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/fallbackreconcile"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/fppconnectpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/httpapi"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
@@ -121,6 +122,13 @@ func Run() int {
 		return 1
 	}
 	logger.Info("coordinator signing key ready", "public_key", base64.StdEncoding.EncodeToString(signingMgr.PublicKey()))
+
+	// fallbackReconcile is Track J's J1 own background loop (ADR-048
+	// decision 1): while healthy, it compiles, signs, and publishes each
+	// participating FPP host's fallback program on change and on a fixed
+	// interval. Constructed here, beside signingMgr, because it is the
+	// only other thing this service needs besides st and identitySvc.
+	fallbackReconcile := fallbackreconcile.NewService(st, signingMgr, identitySvc, logger, fallbackreconcile.DefaultInterval)
 
 	// Step 7 seam A (RES-008 D1): the SHOWMESH_FPP_ENDPOINTS -> store
 	// migration and the owner's 2026-08-12 disagreement rule, run BEFORE
@@ -638,6 +646,10 @@ func Run() int {
 		// interface (see that field's own doc comment for why), wired the
 		// same *st already used for Config/Assets/Commands/Discovery above.
 		AssetManifests: st,
+		// FallbackPrograms is Track J's J1 own dependency: the SAME
+		// *st fallbackReconcile above publishes into, wired the same
+		// AssetManifests/Config/Assets/Commands/Discovery already are.
+		FallbackPrograms: st,
 		// FPPReconciliation wraps the SAME *st: api.StoreFPPReconciliation
 		// is the adapter api.FPPReconciliationStore's own doc comment
 		// describes, needed only so that field can carry a nil-safe
@@ -1068,6 +1080,13 @@ func Run() int {
 	// cleanly like every other background loop here.
 	spawnBackground(func() {
 		resolumeCompositionWire.Run(ctx)
+	})
+	// fallbackReconcile.Run owns Track J's J1 own periodic
+	// compile-sign-publish loop (fallbackreconcile/reconcile.go), joined
+	// via the identical backgroundWG so shutdown waits for it cleanly
+	// like every other background loop here.
+	spawnBackground(func() {
+		fallbackReconcile.Run(ctx)
 	})
 	// watchUnclaimedBootstrap is ADR-024 decision 9's "loud and
 	// persistent" unclaimed-bootstrap signal's other half — the log side,

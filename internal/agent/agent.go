@@ -72,6 +72,22 @@ func Run() int {
 		"capability_count", len(cfg.Capabilities),
 	)
 
+	// The FPP Connect HTTP listener (below, cfg.FPPConnectListenAddr)
+	// binds unconditionally on every node: any node can be an xLights
+	// upload target, regardless of whether an operator ever intended it
+	// to be. Registering an uploaded sequence (fppconnectregister.go's
+	// POST /api/v1/assets) is gated by asset:write, a WRITE unrelated to
+	// the coordinator's own read policy — so a node can have reads wide
+	// open and still fail every registration. Logged once, at startup,
+	// rather than only surfacing after the first upload fails: an
+	// operator who never watches this log until something breaks still
+	// gets it on every restart, including the one right after they fix
+	// SHOWMESH_AGENT_API_TOKEN (config is read once, so that fix always
+	// requires a restart, and this line confirms it took).
+	if cfg.AgentAPIToken == "" {
+		logger.Warn("no SHOWMESH_AGENT_API_TOKEN configured: this node's FPP Connect HTTP listener will accept, assemble, and bind every upload it receives, then fail to register each one; registration retries indefinitely, but only succeeds once a credential carrying asset:write is set and this agent is restarted (see deploy/node/agent.env.example)")
+	}
+
 	// connCtx bounds the MQTT connection manager's lifetime and is
 	// DELIBERATELY NOT sigCtx (below), even though sigCtx is what tells this
 	// function to start shutting down. autopaho's connection manager treats
@@ -346,6 +362,11 @@ func Run() int {
 
 	audioMgr := audio.NewManager(audioEngine, audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
 	audioRebuilder := newAudioEngineRebuilder(sigCtx, cfg.AssetDir, audioEngine, audioMgr, logger)
+	// audioEngineHeldNode (audiocapabilities.go) is wired to the SAME
+	// rebuilder so a post-bind capability detection can tell "the engine
+	// actively holds this route" from "a fresh probe of it," and trust
+	// the former over a busy result from the latter.
+	audioEngineHeldNode = audioRebuilder.HeldNode
 	audioBind := newAudioBinding(audioRebuilder.rebuild, func(p audioSettingsConfig) {
 		audioMgr.SetSettings(audioSettingsFromWire(p))
 	})
@@ -391,7 +412,19 @@ func Run() int {
 	// mqtt.go's registerCommandHandling.
 	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, fppConnect, time.Now, logger)
 
-	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
+	// connectAndInstallCapabilityRepublish is the single call site for
+	// both constructing this node's MQTT connection and wiring
+	// installAudioCapabilityRepublish onto it (which needs a live
+	// Publisher, so it cannot happen at audioRebuilder's own construction
+	// above). Extracted so a test can exercise this EXACT statement
+	// sequence (the real dial below swapped for a fake) rather than a
+	// hand-copy that could silently drift from what Run actually calls;
+	// a prior version of this wiring lived as bare statements here with
+	// no test able to observe either one.
+	connect := func() (Conn, error) {
+		return newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
+	}
+	conn, err := connectAndInstallCapabilityRepublish(connect, audioRebuilder, sigCtx, cfg, bootID, startedAt, logger)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		return 1

@@ -482,6 +482,38 @@ func TestNightRunCue_UnconfirmableActionRefusedAsFirstCue(t *testing.T) {
 	}
 }
 
+// TestNightRunCue_DeclaredIdempotentActionAllowedAsFirstCue is the
+// positive counterpart to TestNightRunCue_UnconfirmableActionRefusedAsFirstCue:
+// the SAME unconfirmable mqtt shape (no expect block) commits and
+// dispatches as the first outward-facing cue once the action declares
+// idempotent true. Mutation-checked: reverting
+// nightCueAllowedAsFirstOutwardCue to nightCueConfirmable alone fails this
+// (errNightCueNotConfirmableForFirst would return instead of committing).
+func TestNightRunCue_DeclaredIdempotentActionAllowedAsFirstCue(t *testing.T) {
+	h, st := nightCueTestHandlers(t)
+	h.deps.MQTTBrokers = &fakeMQTTBrokerRegistry{}
+	idempotent := true
+	putNightAction(t, st, "act-mqtt", config.ShowActionPayload{
+		Show: "halloween", Label: "Notify", SafetyClass: config.ShowSafetyClassNone,
+		Target: config.ShowActionTarget{
+			Integration: config.ShowActionIntegrationMQTT, Broker: "home",
+			Publish: &config.ShowActionMQTTPublish{Topic: "showmesh/notify", Payload: "go"},
+			Expect:  &config.ShowActionMQTTExpect{Kind: config.MQTTExpectKindNone},
+		},
+		Idempotent: &idempotent,
+	})
+	rec := mustCreateTransitionToShowSession(t, st, "sess-1", 1, testNow)
+	cue := config.NightSessionCue{Name: "notify", Role: config.NightSessionCueRoleAnnouncement, Action: "act-mqtt", OnFailure: config.NightSessionCueOnFailureContinue}
+
+	_, err := h.nightRunCue(context.Background(), testNow, rec, nightPhaseEnterShow, cue, testIssuer, true)
+	if err != nil {
+		t.Fatalf("nightRunCue: %v, want it to commit (the action declares idempotent true)", err)
+	}
+	if got, err := st.GetNightSession(context.Background(), rec.ID); err != nil || !got.ShowCommitted {
+		t.Fatalf("ShowCommitted = %v (err %v), want true: a declared-idempotent action may be the commit boundary", got.ShowCommitted, err)
+	}
+}
+
 // --- review round 2 findings ---
 
 // TestNightDispatchCueResolume_ErrorResolvesFailedNeverStuckDispatched

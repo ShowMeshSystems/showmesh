@@ -749,6 +749,20 @@ func TestRenderDispatchReplayReturnsExistingOutcomeWithoutRepublishing(t *testin
 	if n := countRenderAuditReplayEntries(t, setup.svc, result.Command.CommandID); n != 1 {
 		t.Fatalf("AuditReplay entries for command %s = %d, want 1", result.Command.CommandID, n)
 	}
+
+	// The stored value must carry store.CallerIntentRenderRequest's own
+	// tag, not the bare identity JSON: an untagged pair of writer and
+	// replay-reader round-trips fine on its own and would not catch a
+	// future writer silently dropping the tag, which is exactly the
+	// ambiguity this column's rename exists to close.
+	rec, err := setup.st.GetCommand(context.Background(), result.Command.CommandID)
+	if err != nil {
+		t.Fatalf("get command: %v", err)
+	}
+	const wantCallerIntent = `render-request:{"action":"render.surface.clear","node":"media-01","surface":"wall-1","sequenceId":""}`
+	if rec.CallerIntent != wantCallerIntent {
+		t.Errorf("commands.caller_intent = %q, want %q", rec.CallerIntent, wantCallerIntent)
+	}
 }
 
 // countRenderAuditReplayEntries counts identity.AuditReplay entries

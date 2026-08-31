@@ -142,6 +142,24 @@ for every other variable this agent reads
 (`internal/agent/config/config.go` is the source of truth if this ever
 drifts).
 
+**If this node will ever be an xLights FPP Connect upload target** (its
+HTTP compatibility listener binds unconditionally, so any node can be —
+see `agent.env.example`'s own comment on `SHOWMESH_AGENT_API_TOKEN`), also
+provision that token now, from the coordinator:
+
+```sh
+showmeshctl principal create --label "<node-id> agent" ...
+showmeshctl token issue <principalId>
+```
+
+Only the admin role carries `asset:write` this season, so the printed
+token is a full administrative credential; paste it as
+`SHOWMESH_AGENT_API_TOKEN` in `/etc/showmesh/agent.env`. Skipping this is
+not fatal — `install.sh` and `preflight.sh` both warn rather than refuse —
+but every FPP Connect upload this node ever receives will otherwise
+accept, assemble, and bind correctly, then fail to register, permanently
+retried, with no visible error at upload time.
+
 ```sh
 sudo systemctl start showmesh-agent
 sudo systemctl status showmesh-agent
@@ -158,7 +176,10 @@ journalctl -u showmesh-agent -n 50
 
 A healthy agent logs its hello publish and does not crash-loop. If it logs
 `mqtt broker rejected connection: not authorized`, the credential in
-`agent.env` does not match what `add-agent-credential.sh` provisioned.
+`agent.env` does not match what `add-agent-credential.sh` provisioned. If
+`preflight.sh` or the agent's own startup log warns about a missing
+`SHOWMESH_AGENT_API_TOKEN`, see step 5's FPP Connect paragraph above —
+uploads will otherwise fail to register with no other symptom.
 
 ## What this install flow does NOT verify
 

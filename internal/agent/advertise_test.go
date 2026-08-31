@@ -113,6 +113,40 @@ func resetCapabilityCacheForTest(t *testing.T) {
 	t.Cleanup(detectedCapabilityCache.reset)
 }
 
+// resetCapabilityGateForTest resets capabilityGate to its zero value
+// before and after t, matching resetCapabilityCacheForTest's own
+// convention: this gate is process-lifetime state shared across every
+// test in this package.
+func resetCapabilityGateForTest(t *testing.T) {
+	t.Helper()
+	capabilityGate.reset()
+	t.Cleanup(capabilityGate.reset)
+}
+
+// waitForCapabilityGateIdle blocks until capabilityGate has no run in
+// flight, or fails t after timeout. scheduleCapabilityDetection now
+// always triggers the gate rather than running synchronously (see
+// capabilityDetectionGate's own doc comment), so a test asserting on its
+// result must wait for the triggered goroutine to actually finish
+// instead of reading state the instant scheduleCapabilityDetection
+// returns.
+func waitForCapabilityGateIdle(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		capabilityGate.mu.Lock()
+		idle := !capabilityGate.running
+		capabilityGate.mu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("capabilityGate did not return to idle before the test timeout")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // TestCapabilitiesForImmediateHelloPrefersOverride proves the override
 // half of the precedence publishHello itself used to own: a non-empty
 // Config.Capabilities (the SHOWMESH_NODE_CAPABILITIES override) wins
@@ -170,6 +204,7 @@ func TestCapabilitiesForImmediateHelloEmptyBeforeFirstDetection(t *testing.T) {
 // probed for.
 func TestScheduleCapabilityDetectionSkipsWhenOverrideConfigured(t *testing.T) {
 	resetCapabilityCacheForTest(t)
+	resetCapabilityGateForTest(t)
 	prev := capabilityDetector
 	capabilityDetector = func(context.Context) capability.Set {
 		t.Fatal("capabilityDetector called despite a configured override")
@@ -195,12 +230,14 @@ func TestScheduleCapabilityDetectionSkipsWhenOverrideConfigured(t *testing.T) {
 // detection, cache the result, and publish a fresh hello carrying it.
 func TestScheduleCapabilityDetectionStoresAndRepublishes(t *testing.T) {
 	resetCapabilityCacheForTest(t)
+	resetCapabilityGateForTest(t)
 	withStubCapabilityDetector(t, capability.Set{{ID: "transport.ndi.send", Version: 1}})
 
 	pub := newFakePublisher()
 	cfg := agentconfig.Config{NodeID: "media-03"}
 
 	scheduleCapabilityDetection(context.Background(), pub, cfg, "boot-1", time.Now(), discardLogger())
+	waitForCapabilityGateIdle(t, 2*time.Second)
 
 	cached, have := detectedCapabilityCache.snapshot()
 	if !have || len(cached) != 1 || cached[0].ID != "transport.ndi.send" {

@@ -118,9 +118,14 @@ func TestOpenAPINightLifecycleResponsesMatchRealResponses(t *testing.T) {
 	assertMatchesSchema(t, c, "NightCommandResponse", endSessionBody)
 }
 
-// TestOpenAPINightAuditUnavailableResponseMatchesRealResponse proves the
-// 503 fail-closed response (finding 9) against a real fail-audit trigger,
-// following openapi_fppcommand_test.go's own precedent for this shape.
+// TestOpenAPINightAuditUnavailableResponseMatchesRealResponse proved the
+// 503 fail-closed response (finding 9) against a real fail-audit trigger
+// until ADR-024 decision 11 was amended 2026-08-26 (owner ruling): this
+// endpoint no longer refuses on an audit-store failure, so this now
+// proves the replacement behavior's response still matches
+// NightCommandResponse (a normal `202`, not a `Problem`), with
+// attributionDegraded true, following openapi_fppcommand_test.go's own
+// precedent for this shape.
 func TestOpenAPINightAuditUnavailableResponseMatchesRealResponse(t *testing.T) {
 	c := newOpenAPICompiler(t)
 	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
@@ -141,10 +146,17 @@ func TestOpenAPINightAuditUnavailableResponseMatchesRealResponse(t *testing.T) {
 
 	req := newJSONRequest(t, http.MethodPost, "/api/v1/night/commands/prepare-site", `{}`, map[string]string{"Authorization": "Bearer " + opToken})
 	resp, body := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("prepare-site with a failing audit write: status = %d, want 503; body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prepare-site with a failing audit write: status = %d, want 202 (ADR-024 decision 11 amended "+
+			"2026-08-26: audit unavailability never blocks a night command); body: %s", resp.StatusCode, body)
 	}
-	assertMatchesSchema(t, c, "Problem", body)
+	assertMatchesSchema(t, c, "NightCommandResponse", body)
+
+	m := decodeMap(t, body)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["attributionDegraded"] != true {
+		t.Errorf("command.attributionDegraded = %v, want true", cmd["attributionDegraded"])
+	}
 }
 
 // TestOpenAPINightCueResponseMatchesRealResponse drives a real

@@ -553,14 +553,22 @@ func TestAudioSessionDispatchPauseMergesRatherThanErasesDesiredState(t *testing.
 	}
 }
 
-// TestAudioSessionDispatchAuditWriteFailureRefusesDispatch proves the
-// ADR-024 fail-closed default for a NON-exempt action: when the audit
-// store cannot be written, nothing is recorded and nothing is
-// dispatched. pause carries no ADR-024 decision 11 safety-class
-// exemption - see TestAudioSessionSafetyExemptActionsDispatchDegraded
-// for stop/clear/output.mute, which do.
-func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
+// TestAudioSessionDispatchAuditWriteFailureRunsWithDegradedAttribution
+// proves ADR-024 decision 11's amendment (owner ruling, 2026-08-26):
+// a NON-exempt action (pause carries no ADR-024 decision 11
+// safety-class exemption) still dispatches, with AttributionDegraded
+// true, when the audit store cannot be written - never refused. See
+// TestAudioSessionSafetyExemptActionsDispatchDegraded for stop/clear/
+// output.mute, whose own exemption predates this amendment and is
+// unchanged by it.
+func TestAudioSessionDispatchAuditWriteFailureRunsWithDegradedAttribution(t *testing.T) {
 	setup := newAudioDispatchTestSetup(t, fixedClock(testNow))
+	setup.pub.result = mqttproto.ResultPayload{
+		Outcome: mqttproto.OutcomeConfirmed,
+		Evidence: &mqttproto.ResultEvidence{
+			Value: map[string]any{"outcome": "paused", "reason": ""},
+		},
+	}
 	op := mustCreatePrincipal(t, setup.svc, "operator-1", identity.RoleOperator)
 	token := mustIssueToken(t, setup.svc, op.ID)
 	api := New(setup.deps(), Options{Clock: fixedClock(testNow), Logger: testLogger()})
@@ -569,11 +577,22 @@ func TestAudioSessionDispatchAuditWriteFailureRefusesDispatch(t *testing.T) {
 
 	req := newAudioRequest(t, http.MethodPost, "/api/v1/nodes/node-a/audio/sessions/night-session/pause", `{"revision":1}`, token)
 	resp, body := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (dispatched with degraded attribution, never refused); body: %s", resp.StatusCode, body)
 	}
-	if setup.pub.count() != 0 {
-		t.Fatalf("publish count = %d, want 0 - an audit-write failure must dispatch nothing", setup.pub.count())
+	if setup.pub.count() != 1 {
+		t.Fatalf("publish count = %d, want 1 - an audit-write failure must not stop dispatch", setup.pub.count())
+	}
+	var decoded struct {
+		Command struct {
+			AttributionDegraded bool `json:"attributionDegraded"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode response: %v; body: %s", err, body)
+	}
+	if !decoded.Command.AttributionDegraded {
+		t.Errorf("attributionDegraded = false, want true (the audit store is failing)")
 	}
 }
 

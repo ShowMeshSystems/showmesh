@@ -273,6 +273,41 @@ func TestLoadTimeoutIsWrappedWithDistinctSentinel(t *testing.T) {
 	}
 }
 
+// observeAdvancingPosition polls Observe for up to budget, counting
+// successive strictly-increasing position samples rather than checking
+// whether position has reached some target duration. fakesink's sync=true
+// paces this pipeline to the real system clock (see this file's package
+// comment), so requiring a specific position within a specific wall-clock
+// window bakes in an assumption about how fast this runner keeps up with
+// real time. Whether position moves forward at all does not: a working
+// pipeline shows repeated increases no matter how slowly the runner
+// schedules it, while a genuinely stuck one shows none no matter how long
+// budget allows.
+func observeAdvancingPosition(t *testing.T, e *Engine, handle string, budget time.Duration) (pkgaudio.State, int) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	var last time.Duration
+	var state pkgaudio.State
+	advances := 0
+	first := true
+	for time.Now().Before(deadline) && advances < 2 {
+		obs, err := e.Observe(context.Background(), agentaudio.EngineHandle(handle))
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		state = obs.State
+		if first {
+			last = obs.Position
+			first = false
+		} else if obs.Position > last {
+			advances++
+			last = obs.Position
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return state, advances
+}
+
 func TestLoadStartObservesAdvancingPosition(t *testing.T) {
 	e := newTestEngine(t)
 	dir := t.TempDir()
@@ -298,7 +333,10 @@ func TestLoadStartObservesAdvancingPosition(t *testing.T) {
 		t.Fatalf("after Start: state = %q, want playing", obs.State)
 	}
 
-	state := waitForPosition(t, e, "h1", 200*time.Millisecond, 5*time.Second)
+	state, advances := observeAdvancingPosition(t, e, "h1", 5*time.Second)
+	if advances < 2 {
+		t.Fatalf("position advanced only %d time(s) within 5s: want at least 2 successive increases, proving the pipeline is genuinely progressing rather than reporting a single stray update", advances)
+	}
 	if state != pkgaudio.StatePlaying {
 		t.Fatalf("state while position was advancing = %q, want playing", state)
 	}

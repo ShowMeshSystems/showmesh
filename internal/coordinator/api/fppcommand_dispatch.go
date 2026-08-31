@@ -113,39 +113,45 @@ type FPPCommandInput struct {
 	IdempotencyKey string
 	Issuer         FPPCommandIssuer
 
-	// RequestedRevision carries [command.Envelope.RequestedRevision]
-	// ("the configuration revision this command was issued against, when
-	// the command is revision-sensitive") into the dispatched command's
-	// own store.CommandRecord.RequestedRevision column. Empty for an
-	// ordinary HTTP-dispatched command, which names no revision. STEP-9-
-	// SPEC.md section 6.1 requires a macro step's dispatch to carry its
-	// run's pinned macro revision here, "formatted so a macro-issued
-	// command is distinguishable from an operator-issued one" - that
+	// CallerIntent carries [command.Envelope.RequestedRevision] ("the
+	// configuration revision this command was issued against, when the
+	// command is revision-sensitive") into the dispatched command's own
+	// store.CommandRecord.CallerIntent column (renamed from
+	// RequestedRevision on both this field and that column, since the
+	// value this field carries is not always a revision). Empty for an
+	// ordinary HTTP-dispatched command, which names no revision. A caller
+	// that pins an actual revision tags it
+	// with [store.FormatCallerIntent] and [store.CallerIntentRevision]
+	// before setting this field. STEP-9-SPEC.md section 6.1 requires a
+	// macro step's dispatch to carry its run's pinned macro revision here,
+	// "formatted so a macro-issued command is distinguishable from an
+	// operator-issued one" via [store.FormatMacroRunCallerIntent] - that
 	// formatting is Step 9's macro executor's own decision to make (it
 	// holds the run id and the pinned revision; this package does not),
 	// so this field is deliberately an opaque caller-supplied string
 	// rather than a structured type this package would have to guess the
 	// shape of.
-	RequestedRevision string
+	CallerIntent string
 
-	// NeverWithholdOnAuditFailure disables the ADR-024 decision 11
-	// fail-closed branch for THIS dispatch: when the audit store cannot be
-	// written, the command is dispatched anyway with degraded attribution
-	// rather than refused, whatever its safety class.
+	// NeverWithholdOnAuditFailure no longer changes whether this dispatch
+	// proceeds on an audit-write failure. ADR-024 decision 11, amended
+	// 2026-08-26 (owner ruling), removed the fail-closed branch this field
+	// used to disable: every dispatch now proceeds with degraded
+	// attribution regardless of safety class or caller. It still selects
+	// which justification [handlers.reportDegradedAttribution] reports
+	// (degradedAttributionReasonMacroRunNeverWithheld vs.
+	// degradedAttributionReasonAuditNeverBlocks), so a macro run's own
+	// audit record stays distinguishable from an ordinary single-command
+	// dispatch's.
 	//
-	// OWNER DECISION, 2026-08-14. Set by Step 9's macro executor on every
-	// step it dispatches, and by nothing else. The rule in the owner's own
-	// words: "the run needs to always RUN all steps, no matter what. If
-	// something doesn't confirm, or we can't record it, that doesn't
-	// matter. it should still send the command. we cannot risk the show
-	// because a logging or audit system is down, that's not how show
-	// critical infrastructure works."
-	//
-	// Decision 11's closed list of three exempt actions (blackout, stop,
-	// power-off) survives for the ordinary single-command HTTP path, where
-	// an operator is present, sees the 503, and can retry deliberately.
-	// It does not survive inside a macro run, where nobody is watching and
-	// a refused step is a hole in a show.
+	// OWNER DECISION, 2026-08-14, predating and superseded in effect (but
+	// not in attribution) by the 2026-08-26 amendment above. Set by Step
+	// 9's macro executor on every step it dispatches, and by nothing else.
+	// The rule in the owner's own words: "the run needs to always RUN all
+	// steps, no matter what. If something doesn't confirm, or we can't
+	// record it, that doesn't matter. it should still send the command. we
+	// cannot risk the show because a logging or audit system is down,
+	// that's not how show critical infrastructure works."
 	NeverWithholdOnAuditFailure bool
 }
 
@@ -571,7 +577,7 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		Params:             in.Params,
 		Issuer:             command.Issuer{PrincipalID: in.Issuer.PrincipalID, PrincipalName: in.Issuer.PrincipalName},
 		ConfirmationMethod: command.ConfirmationEvidence,
-		RequestedRevision:  in.RequestedRevision,
+		RequestedRevision:  in.CallerIntent,
 	}
 	deadline := now.Add(primitive.ConfirmDeadline(h.fppCommandConfirmDeadline))
 	env.Deadline = &deadline
@@ -602,21 +608,14 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		outcome, problem := h.resolveFPPCommandReplay(ctx, now, in.Issuer, dup.Existing, in.InstanceID, env.Action, paramsJSON)
 		return outcome, problem, nil
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if primitive.SafetyClass != fppSafetyClassExempt && !in.NeverWithholdOnAuditFailure {
-			// Fail closed: the transaction above already rolled back in
-			// full, so nothing is re-inserted and nothing is dispatched.
-			// See [FPPCommandInput.NeverWithholdOnAuditFailure] for the one
-			// caller that turns this branch off and the owner decision
-			// behind it.
-			p := fppCommandAuditUnavailableProblem(primitive.WireAction, auditErr)
-			return FPPCommandOutcome{}, &p, nil
-		}
-		// Safety-class exemption (ADR-024 decision 11): redo the insert
-		// and desired-state writes through the plain, non-transactional
-		// store methods, and proceed with degraded attribution. Still on
-		// ctx (not bgCtx — that detachment does not exist yet at this
-		// point in the sequence, matching fppcommand_handler.go's own
-		// pre-refactor ordering exactly).
+		// ADR-024 decision 11, amended 2026-08-26 (owner ruling): an
+		// audit-store outage never blocks a command dispatch, for any
+		// primitive, not only the blackout/stop/power-off safety class.
+		// Redo the insert and desired-state writes through the plain,
+		// non-transactional store methods, and proceed with degraded
+		// attribution. Still on ctx, not bgCtx (that detachment does not
+		// exist yet at this point in the sequence), matching
+		// fppcommand_handler.go's own pre-refactor ordering exactly.
 		rec, err := h.deps.Commands.InsertCommand(ctx, fppCommandRecordFor(env, paramsJSON))
 		if errors.As(err, &dup) {
 			outcome, problem := h.resolveFPPCommandReplay(ctx, now, in.Issuer, dup.Existing, in.InstanceID, env.Action, paramsJSON)
@@ -627,10 +626,11 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		}
 		_ = rec
 		h.setFPPCommandDesiredStateNonTx(ctx, primitive, env, now, in.Params)
-		degradedReason := degradedAttributionReasonSafetyClassExemption
-		if primitive.SafetyClass != fppSafetyClassExempt {
-			// Reached only via NeverWithholdOnAuditFailure: this step's own
-			// safety class would have failed closed on its own.
+		degradedReason := degradedAttributionReasonAuditNeverBlocks
+		switch {
+		case primitive.SafetyClass == fppSafetyClassExempt:
+			degradedReason = degradedAttributionReasonSafetyClassExemption
+		case in.NeverWithholdOnAuditFailure:
 			degradedReason = degradedAttributionReasonMacroRunNeverWithheld
 		}
 		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedReason)

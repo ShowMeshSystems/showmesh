@@ -1689,6 +1689,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/show.emergencystop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The three emergency-stop levels' own optional follow-up action lists
+         * @description Requires `config:write`, on `fpp.endpoints`/`show.action`'s own majority precedent (not `show.mode`'s open-read exception, which rests on ADR-033 decision 3's persistent-visibility requirement - nothing establishes that for this kind). Never `404`s: the payload has a well-defined default (every level configured with no follow-up actions), reported with `revision` `0` and `source` `"default"` when nothing has ever been written.
+         */
+        get: operations["getEmergencyStopConfig"];
+        /**
+         * Set the three emergency-stop levels' own optional follow-up action lists
+         * @description Requires `config:write` (admin only). A full replacement: `stop`, `stopPowerDown` and `hardStop` are all required, each with its own required (possibly empty) `actions` array of existing `show.action` ids - an absent level key, or an absent/null `actions` key inside one, is refused by name rather than silently defaulted; an empty array is how "no follow-up actions" is deliberately configured for a level. Every referenced `show.action` id must already exist, of ANY show - this kind is installation-wide and is never scoped to one show's own namespace. The SAME action id may appear in more than one level's own list; the same id twice within ONE level's own list is refused. On success, appends a new immutable revision and activates it in the SAME transaction as its audit log entry (ADR-024 decision 11). A cookie-authenticated request additionally requires `Sec-Fetch-Site: same-origin` (ADR-024 decision 6); a bearer-token-authenticated request is exempt.
+         */
+        put: operations["putEmergencyStopConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/config/show.emergencystop/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * show.emergencystop revision history, newest first
+         * @description Requires `config:write`. Metadata only, mirroring `GET /config/show.mode/revisions`.
+         */
+        get: operations["getEmergencyStopConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 1: stop playout immediately
+         * @description Behind `show:emergencystop:invoke` - umbrella authority over the underlying FPP stop dispatch and every configured follow-up action, the identical shape `show:action:invoke` already has over its own dispatch (see that scope's own doc comment, `internal/coordinator/identity/types.go`). Dispatches FPP's "Stop Now" to every configured FPP instance CONCURRENTLY, then invokes this level's own configured `show.emergencystop.stop.actions` best-effort, in order. A follow-up action's own failure is reported per-action in `result.followUps` and NEVER changes `result.stopOutcomes` or this response's own success: the operator pressed the button to stop the show, and a follow-up that failed must never read as "the stop did not happen". NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read the configured FPP instance list is reported as one `failed` entry in `result.stopOutcomes` (never a silent empty array; see `result.noInstancesConfigured` for the actual zero-instance signal), and a failure to read this level's own follow-up configuration degrades to no follow-ups (see `result.followUpConfigError`) rather than aborting the stop. No night-session interaction of any kind - see `/emergency-stop/stop-power-down` for level 2.
+         */
+        post: operations["emergencyStop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/stop-power-down": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 2: stop immediately, then force the standard graceful shutdown now
+         * @description Behind `show:emergencystop:invoke`. Everything `POST /emergency-stop/stop` does, PLUS: if a night session is currently active, forces it into the SAME graceful-shutdown sequence an ordinary `power-down-presentation` night command already runs (RESTING-MODE.md section 4.7), immediately - bypassing both the ordinary live-show deferral and interlock evaluation entirely, on RESTING-MODE.md's own words ("Only an explicitly configured and invoked emergency/force operation may interrupt playback or remove power immediately") and `end-session`'s existing precedent. `result.nightSession.present` is `false`, with no error, when no night session was active - a real, valid outcome, not a failure. This still WAITS on the night loop's own fresh idle evidence before that sequence itself reaches `stopped` (RESTING-MODE.md section 4.6/4.7) - see `/emergency-stop/hard-stop/fire` for the level with no wait at all. A failure in this step (a night-session store read or write that does not succeed) is reported in `result.nightSession.error` rather than aborting the stop: the stop dispatch above has already run regardless. Then invokes this level's own configured `show.emergencystop.stopPowerDown.actions` best-effort, in order, on the identical never-fails-the-stop rule `POST /emergency-stop/stop` states in full.
+         */
+        post: operations["emergencyStopPowerDown"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/hard-stop/arm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 3's deliberate-intent gate, call 1 of 2: arm
+         * @description Behind `show:emergencystop:invoke`. THE DELIBERATE-INTENT GATE for level 3 ("the big red button") lives here, in the API, not the UI alone: operator capabilities are API-first with `showmeshctl` at practical parity, so a UI-only gate would let `showmeshctl` hard-stop the show with one command and no gate at all. Mints a single-use, opaque token, valid for a short server-side window (currently 10s), that `POST /emergency-stop/hard-stop/fire` must present to actually fire. Arming has NO side effect on the show by itself and is freely retryable. At most one live token per principal: arming again before a principal's own previous token is consumed or expires invalidates that previous token immediately - arming is evidence of a RECENT deliberate act, and several live tokens per principal would let a caller fire on an act that is no longer recent. This is NOT a confirmation dialog (ruled out by the product owner); the UI is free to present arm+fire as a single double-press gesture with no modal at all, and `showmeshctl` exposes arm and fire as two SEPARATE subcommands that are never chained by one command, carrying the identical gate on the CLI.
+         */
+        post: operations["armEmergencyStopHardStop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/emergency-stop/hard-stop/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop, level 3's deliberate-intent gate, call 2 of 2: fire
+         * @description Behind `show:emergencystop:invoke`. Requires `armToken` from a prior `POST /emergency-stop/hard-stop/arm` for the SAME principal, presented while it is still valid, unexpired, and unconsumed. Consuming the token is an atomic compare-and-swap: two concurrent fire requests presenting the identical token can never both succeed. That compare-and-swap is the ONLY guard against firing this level twice; there is no separate request-level `idempotencyKey` replay cache on `fire` itself, so the same already-consumed token presented again is refused with `409` rather than replayed. The token is consumed only once the request is otherwise valid (idempotencyKey and armToken well-formed), and every step after that point - the stop dispatch, the night-session step, and reading this level's own follow-up configuration - degrades and is reported rather than aborting, so a consumed token is never wasted on a request that then fails for an unrelated reason. Downstream, the per-instance FPP dispatch and each follow-up action's own dispatch are independently protected against a REDELIVERED COMMAND (not a redelivered `fire` request) by the existing per-command idempotency-key layer keyed off this request's own `idempotencyKey`; the night-session step consults no key at all and relies solely on the arm/fire gate above. On success, dispatches FPP's "Stop Now" to every configured instance CONCURRENTLY (an unreadable instance list is reported as a `failed` entry in `stopOutcomes`, never a silent empty array), abandons the active night session straight to `stopped` with NO WAIT for idle evidence (reusing the existing `end-session` night command unchanged - RESTING-MODE.md's own "no wait time" requirement for this level; a failure in this step is reported inside `nightSession.error` rather than aborting the stop), then invokes this level's own configured `show.emergencystop.hardStop.actions` best-effort, in order, on the identical never-fails-the-stop rule `POST /emergency-stop/stop` states in full.
+         */
+        post: operations["fireEmergencyStopHardStop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/macros/{id}/runs": {
         parameters: {
             query?: never;
@@ -2540,6 +2664,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fallback-programs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every FPP host's last published fallback program, metadata only (ADR-048, Track J's J1)
+         * @description Behind `observation:read`. Metadata only - package id, revision, show, generation, and timestamps - never the signed payload itself, matching `GET /integrations/fpp/playlist-definitions`'s identical list-metadata/read-full-by-id split. Use `GET /fallback-programs/{fppInstanceId}` for one host's full signed program.
+         */
+        get: operations["listFallbackPrograms"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fallback-programs/{fppInstanceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One FPP host's current signed fallback program (ADR-048, Track J's J1)
+         * @description Behind `fpp:fallback`: the installed FPP plugin fetching the program it must verify and install before it may take over on confirmed coordinator loss. Never recomputed on request - this route only ever returns what `internal/coordinator/fallbackreconcile`'s own background loop already compiled, signed, and stored, so two fetches against an unchanged coordinator state return byte-identical signed material.
+         *
+         *     `published` is `false`, with `program` and `signatureBase64` both absent, exactly when this coordinator has never successfully compiled and published a program for this host - the honest-absence case, never a fabricated empty program that could be mistaken for a real grant.
+         */
+        get: operations["getFallbackProgram"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fallback-programs/{fppInstanceId}/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * An FPP host reports the package it verified and installed (ADR-048, Track J's J1)
+         * @description Behind `fpp:fallback`: the installed FPP plugin reporting the package id, revision, verification result, and installed time of the program it now holds locally - the plugin's own evidence, never re-derived from the coordinator's current state. A missing, stale, mismatched, or unacknowledged package is a readiness failure before showtime (ADR-048 decision 1).
+         */
+        post: operations["postFallbackProgramAcknowledge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3247,7 +3433,18 @@ export interface components {
             macroRuns: components["schemas"]["MacroRunSummary"][];
             /** @description Every configured Resolume instance, rendered exactly as GET /resolume/instances renders it. Never null: an unconfigured coordinator reports an empty array. */
             resolume: components["schemas"]["ResolumeInstance"][];
+            auditStore: components["schemas"]["AuditStoreStatus"];
             audioConfigPush: components["schemas"]["AudioConfigPushStatus"];
+        };
+        /** @description Whether this coordinator can currently write to its audit store, computed FRESH on every request via a real probe write to audit_log (always rolled back, never committed), not cached from past traffic. ADR-024 decision 11's amendment (owner ruling, 2026-08-26) removed the fail-closed refusal that used to make an audit-write failure directly visible on the five request paths it protected (direct action invoke, audio session commands, FPP commands, Resolume actions, and the night-session admission-opening commands): those now run regardless, so this field is the standing surface an operator reads to learn the audit store is down without having invoked an action themselves. */
+        AuditStoreStatus: {
+            /**
+             * @description "usable": the probe write just now succeeded. "unusable": it failed, and reason names why.
+             * @enum {string}
+             */
+            state: "usable" | "unusable";
+            /** @description Set whenever state is not "usable", null otherwise. */
+            reason: string | null;
         };
         /** @description Whether the coordinator can decode its stored, engine-wide audio.settings revision right now. Coordinator-wide, not per-node or per-collector: audio.settings is a singleton (ADR-039), so there is exactly one current revision to decode. Computed fresh from the same decode a real push performs on that revision, so this always reflects the revision currently active. Deliberately narrow: this reports only whether the audio.settings singleton itself decodes, never whether any one node's own separate audio.node binding does or whether that node is reachable — a node can still be stranded by a broken audio.node revision, or by being unreachable, while this reads "usable". */
         AudioConfigPushStatus: {
@@ -3571,7 +3768,7 @@ export interface components {
             /** Format: date-time */
             serverTime: string;
             /** @enum {string} */
-            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings";
+            kind: "fpp.endpoints" | "show.action" | "show.macro" | "show" | "show.surface" | "show.active" | "show.mode" | "show.cue" | "show.playlist" | "night.session" | "night.session.active" | "resolume.recovery" | "render.settings" | "resolume.instances" | "fpp.mqtt" | "assets.settings" | "audio.settings" | "audio.node" | "fppconnect.settings" | "show.emergencystop";
             revisions: components["schemas"]["ConfigRevisionMeta"][];
         };
         /** @description The Resolume Arena build that wrote a stored composition file (Track D seam D-2a, ADR-032). The .avc format is undocumented, so this is recorded specifically because a future parse that looks wrong should check this first. */
@@ -3976,6 +4173,100 @@ export interface components {
             /** @description What the CURRENT mode does to the only behaviour that reads the mode in this build: the Resolume WebSocket footprint switch (ADR-033 decision 2), held open in `program` and closed in `show`. Names the mode as the reason, which is ADR-033 decision 3's requirement that a behaviour caused by the mode says so where the operator can see it. Always non-empty. */
             resolumeWebSocketEffect: string;
         };
+        /** @description One emergency-stop level's own optional, ordered follow-up action list - show.action ids, invoked best-effort, in this order, after that level's own immediate stop. */
+        ConfigEmergencyStopLevelPayload: {
+            /** @description Existing show.action ids, of ANY show. Never null - an empty array is how "no follow-up actions" is deliberately configured for this level. The same id may repeat across DIFFERENT levels' own lists, but not twice within one level's own list. */
+            actions: string[];
+        };
+        /** @description The "show.emergencystop" configuration kind's decoded payload: the body PUT /config/show.emergencystop accepts (a full replacement - all three level keys required, each with its own required actions array), and the "payload" member of GET /config/show.emergencystop's response. Field names match the wire level names ("stop", "stopPowerDown", "hardStop") used in /emergency-stop/* paths and this build's own audit action strings exactly, so a reader correlating a PUT body against an audit entry never has to translate between three vocabularies for one level. */
+        ConfigEmergencyStopPayload: {
+            stop: components["schemas"]["ConfigEmergencyStopLevelPayload"];
+            stopPowerDown: components["schemas"]["ConfigEmergencyStopLevelPayload"];
+            hardStop: components["schemas"]["ConfigEmergencyStopLevelPayload"];
+        };
+        /** @description The body of GET and PUT /config/show.emergencystop. Never `404`s: the payload has a well-defined default (every level empty), reported with `revision` `0` and `source` `"default"` when nothing has ever been written. */
+        EmergencyStopConfigResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            kind: string;
+            revision: number;
+            payload: components["schemas"]["ConfigEmergencyStopPayload"];
+            /** Format: date-time */
+            updatedAt: string;
+            createdByPrincipalId: string | null;
+            createdByPrincipalName: string | null;
+            source: string;
+        };
+        /** @description The body of POST /emergency-stop/stop and POST /emergency-stop/stop-power-down. */
+        EmergencyStopRequest: {
+            idempotencyKey: string;
+        };
+        /** @description One configured FPP instance's own stop dispatch outcome. */
+        EmergencyStopInstanceOutcome: {
+            instanceId: string;
+            /** @enum {string} */
+            outcome: "confirmed" | "unconfirmed" | "refused" | "failed";
+            outcomeReason: string;
+            /** Format: date-time */
+            dispatchedAt: string | null;
+            /** @description True when this instance's own idempotency key was already dispatched; nothing was re-sent. */
+            replay: boolean;
+        };
+        /** @description One configured follow-up show.action's own best-effort invocation outcome. This NEVER affects the response's own success or `stopOutcomes` - a follow-up action's own failure must never read as "the stop did not happen". */
+        EmergencyStopFollowUpResult: {
+            actionId: string;
+            label?: string;
+            /**
+             * @description Absent when the action id itself could not even be resolved - outcomeReason always explains why.
+             * @enum {string}
+             */
+            outcome?: "confirmed" | "unconfirmed" | "unconfirmable" | "refused" | "failed";
+            outcomeReason: string;
+        };
+        /** @description What, if anything, happened to the active night session as level stop-power-down's or hard-stop's own night-session component. present is false when no night session was active - a real, valid outcome, not an error. error is non-empty exactly when this component could not be attempted or did not complete; the stop itself still proceeded regardless (this build's own degrade-safely rule, applied to every component that supports the stop, not only to follow-up actions). When error is set, outcome carries whatever partial information is known and may be absent. */
+        EmergencyStopNightSessionOutcome: {
+            present: boolean;
+            sessionId?: string;
+            outcome?: string;
+            error?: string;
+        };
+        /** @description The shared result shape every trigger route (stop, stop-power-down, and hard-stop's own fire) answers with. stopOutcomes and followUps are two SEPARATE arrays, deliberately with no combined success flag: a caller's exit code is driven by stopOutcomes alone. NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK THE STOP: reading the configured FPP instance list, the night-session step, and reading this level's own follow-up configuration each degrade independently and are reported here rather than turning a stop that could otherwise proceed into a failed response. */
+        EmergencyStopResult: {
+            /** @enum {string} */
+            level: "stop" | "stop-power-down" | "hard-stop";
+            idempotencyKey: string;
+            /** @description NEVER null and never silently empty on a failure to read the configured instance list, which is instead reported as one "failed" entry here. Empty if and only if noInstancesConfigured is true. */
+            stopOutcomes: components["schemas"]["EmergencyStopInstanceOutcome"][];
+            /** @description The POSITIVE signal that zero FPP instances are configured, distinct from a failure to read the configured instance list. A caller must read this field rather than infer "nothing to stop" from an empty stopOutcomes array. */
+            noInstancesConfigured: boolean;
+            nightSession?: components["schemas"]["EmergencyStopNightSessionOutcome"];
+            followUps: components["schemas"]["EmergencyStopFollowUpResult"][];
+            /** @description Non-empty exactly when this level's own show.emergencystop configuration could not be read or decoded, in which case followUps is empty (no follow-up actions were attempted) but stopOutcomes still reflects a real dispatch attempt: the stop does not need this configuration to proceed. */
+            followUpConfigError?: string;
+        };
+        /** @description The body of POST /emergency-stop/stop, POST /emergency-stop/stop-power-down, and POST /emergency-stop/hard-stop/fire. */
+        EmergencyStopResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            result: components["schemas"]["EmergencyStopResult"];
+        };
+        /** @description The body of POST /emergency-stop/hard-stop/arm. Arming has no side effect on the show itself. */
+        EmergencyStopArmRequest: {
+            idempotencyKey: string;
+        };
+        /** @description Carries the single-use token POST /emergency-stop/hard-stop/fire must present within expiresAt. Arming again before that deadline invalidates THIS token immediately - at most one live token per principal. */
+        EmergencyStopArmResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            armToken: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        /** @description The body of POST /emergency-stop/hard-stop/fire. */
+        EmergencyStopFireRequest: {
+            idempotencyKey: string;
+            armToken: string;
+        };
         /** @description The "audio.settings" configuration kind's decoded payload (ADR-039): the body PUT /config/audio.settings accepts (a full replacement - every field required and non-null), and the "payload" member of GET /config/audio.settings' response. `driftIgnoreThresholdMs` has never been measured against real playback; its default is a starting point, not a tuned value. `defaultFadeCurve` must be a member of the audio engine's own closed fade-curve vocabulary (only "linear" ships today). `defaultMaxBackgroundGainDb` is in DECIBELS - `0` is unity gain, `+12` is the most accepted - applied as the default ceiling on a background bed. `duckTargetGainDb` is how far a node lowers a session while a higher-priority session ducks it (an announcement over a resting background bed), also in decibels: it must be negative and at least `-60`, where `-60` is full silence, and `0` or louder is refused because it would not duck anything. Both are converted to the engine's linear amplitude multiplier once, at the coordinator's own boundary, before anything reaches a node. The pre-decibel `defaultMaxBackgroundGain` and `duckTargetGain` are refused by name, each naming its replacement, because the two units share a number range. THE SHIPPED VALUE IS PROVISIONAL: it has never been heard on the installation's speakers, and the owner picks the real one by ear (RES-007). A muted session is unaffected; mute silences unconditionally. `duckFadeDurationMs`/`duckRestoreFadeDurationMs` are how long a session takes to fade DOWN into a duck and back UP once its last ducker releases it, instead of stepping instantly: the restore is deliberately the slower of the two (broadcast "fast attack, slow release"), since an announcement is already talking over the bed by the time the duck starts, but nothing is once it ends. `ltcFrameRate` is the closed vocabulary Resolume's timecode input supports; this ships non-drop-frame at every rate because Resolume's drop-frame expectation at 29.97 is unresearched (RES-001 §9) - an explicit ruling, not a silent default. `ltcDefaultStartOffset` (HH:MM:SS:FF) is a session's LTC start point when its own audio.session.apply carries no override. */
         ConfigAudioSettingsPayload: {
             driftIgnoreThresholdMs: number;
@@ -4063,14 +4354,14 @@ export interface components {
          *
          *     Step 9 (STEP-9-SPEC.md) adds fifteen more, in two groups. Twelve are internal/coordinator/config's ValidationError.Code values, mapped mechanically onto their own "show-config-*" type by internal/coordinator/api's mapValidationError (showconfig.go) - a client that must tell two refusals on a show.action/show.macro write apart branches on type, never on detail's prose. Three are the macro run surface's own conflicts (ADR-031 decisions 2 and 6, STEP-9-SPEC.md section 6.2): "macro-run-already-in-flight" (a second run of a macro already running, 409, naming the in-flight run in detail), "macro-run-idempotency-macro-conflict" (the same idempotency key reused for a different macro, 409), and "macro-run-idempotency-revision-conflict" (the same key reused for the same macro at a different pinned revision - the macro was edited between two submissions under one key, 409) - minted by internal/coordinator/macro (which imports this package; see macro_seam.go), never by this package itself.
          *
-         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Three are Step 8's own additions, all scoped to `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable" (ADR-024 decision 11's fail-closed default for a non-safety-class primitive, `503`, when the pre-dispatch audit write could not be made), "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as three DISTINCT `409`/`503` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "mint a fresh key" (idempotency conflict), "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are three different remedies, and a review finding caught that the busy/evidence-not-current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). One is Track D seam D-3/B's own addition: "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, mirroring "fpp-command-refused-audit-unavailable" exactly, for a second vendor's command surface). One is Track E seam E7-1's own addition: "action-invoke-refused-audit-unavailable" (POST /actions/{id}/invocations' own ADR-024 decision 11 fail-closed default for an action whose stored safetyClass is "none"). Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (a non-empty ltcRoute naming a DIFFERENT device route from programRoute: program and LTC leave through one interface in one clock domain, ADR-018, so the two must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
+         *     Four of the fifteen are ADR-024: "forbidden" (401 means no valid credential, this means authenticated but missing a scope - the detail text names the missing scope), "csrf-rejected" (a cookie-authenticated write with no `Sec-Fetch-Site: same-origin` header, decision 6), "too-many-requests" (decision 8's login concurrency bound, paired with a `Retry-After` response header), and "credential-in-url" (decision 1: a request whose query string carried a credential). One is "conflict": the request is valid but this coordinator's current state makes it unsafe or meaningless to act on right now - shared by `PUT /config/fpp.endpoints` (Step 7 seam A, refused because `SHOWMESH_FPP_ENDPOINTS` is still set in the coordinator's own environment, RES-008 D1), `POST /discovery/runs` (Step 7 seam B, refused while a run is already in progress), and a `commands` idempotency key reused against a different action, target, or (as of Step 8) normalized params (Step 7 seam C, extended by Step 8) - `detail` names which. Two are Step 8's own additions, both scoped to `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current" (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the evidence it would need to decide whether a different playlist is running is not itself current, `409`), and "fpp-start-playlist-busy" (that same guard refusing because a DIFFERENT playlist IS confirmed currently playing, `409`) - kept as two DISTINCT `409` types (not sharing "conflict", and not sharing each other) specifically so a client branches on `type` rather than parsing `detail` prose: "resend with ifBusy: replace" (busy), and "retry once evidence is current, or resend with ifBusy: replace if interrupting is intended" (evidence not current) are two different remedies, and a review finding caught that the busy/evidence-not- current split had left "busy" still sharing a type with the idempotency case even after the evidence-not-current case was split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11 amended):** an unavailable audit store no longer blocks a command dispatch on ANY request path this coordinator has - the amendment covers every one of them, not a named subset - so `POST /fpp/{instanceId}/commands` no longer produces "fpp-command-refused-audit-unavailable"; the command still runs and degraded attribution is recorded and surfaced instead of a `503`. One is Track D seam D-2a's own addition: "payload-too-large" (413, POST /config/resolume/composition refusing an uploaded file larger than this coordinator's own upload bound, before buffering it whole; reused verbatim, not duplicated, by POST /resolume/actions for a request body over its own much smaller limit - Review fix 5, 2026-08-15 - because both refusals share the identical remedy, "shrink the request", unlike the busy/evidence-not-current split above where the type had to fork because the remedies differ). Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable" (POST /resolume/actions' own former ADR-024 decision 11 fail-closed default for a non-exempt action - every action except `blackout` and `clearLayer` - `503`, for a second vendor's command surface), is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing in this coordinator's audit-write posture treats Resolume actions differently from FPP commands, so this type is no longer produced either. **REMOVED 2026-08-26:** POST /actions/{id}/invocations no longer produces "action-invoke-refused-audit-unavailable" for the identical reason - an action whose stored safetyClass is "none" used to fail closed here and now runs with degraded attribution instead. Three are Track C's own additions, all scoped to PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a channel index reused within programChannels, or repeated within ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a channel already claimed by programChannels), and "audio-node-route-mismatch" (a non-empty ltcRoute naming a DIFFERENT device route from programRoute: program and LTC leave through one interface in one clock domain, ADR-018, so the two must name the same route or ltcRoute must be absent). Two are this contract's own additions, both scoped to `POST /integrations/fpp/playlist-entry-observations`: "unsupported-observation-schema-version" (`schemaVersion` is not `1`, `400`) and "observation-entry-key-mismatch" (the coordinator re-derived `entryKey` from the submitted identity fields and it disagreed with what was sent, `400`) - kept distinct from "invalid-parameter" because both name a specific, differently remediable disagreement rather than an ordinary malformed field.
          */
         Problem: {
             /**
              * Format: uri
              * @enum {string}
              */
-            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-command-refused-audit-unavailable" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/resolume-action-refused-audit-unavailable" | "https://showmesh.dev/problems/action-invoke-refused-audit-unavailable" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/night-command-refused-audit-unavailable" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch";
+            type: "https://showmesh.dev/problems/unsupported-api-version" | "https://showmesh.dev/problems/resource-not-found" | "https://showmesh.dev/problems/invalid-parameter" | "https://showmesh.dev/problems/unauthorized" | "https://showmesh.dev/problems/method-not-allowed" | "https://showmesh.dev/problems/internal-error" | "https://showmesh.dev/problems/forbidden" | "https://showmesh.dev/problems/csrf-rejected" | "https://showmesh.dev/problems/too-many-requests" | "https://showmesh.dev/problems/credential-in-url" | "https://showmesh.dev/problems/conflict" | "https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current" | "https://showmesh.dev/problems/fpp-start-playlist-busy" | "https://showmesh.dev/problems/show-config-body-invalid" | "https://showmesh.dev/problems/show-config-field-required" | "https://showmesh.dev/problems/show-config-field-null" | "https://showmesh.dev/problems/show-config-field-empty" | "https://showmesh.dev/problems/show-config-field-invalid" | "https://showmesh.dev/problems/show-config-field-unknown-reference" | "https://showmesh.dev/problems/show-config-safety-class-mismatch" | "https://showmesh.dev/problems/show-config-local-fallback-reduced" | "https://showmesh.dev/problems/show-config-steps-empty" | "https://showmesh.dev/problems/show-config-steps-too-many" | "https://showmesh.dev/problems/show-config-step-id-duplicate" | "https://showmesh.dev/problems/show-config-field-unknown-key" | "https://showmesh.dev/problems/show-config-calendar-field-rejected" | "https://showmesh.dev/problems/show-config-duplicate-rest-duration" | "https://showmesh.dev/problems/show-config-not-implemented" | "https://showmesh.dev/problems/show-config-background-audio-items-empty" | "https://showmesh.dev/problems/show-config-item-id-duplicate" | "https://showmesh.dev/problems/show-config-cue-name-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/show-config-interlock-name-duplicate" | "https://showmesh.dev/problems/show-config-interlock-signal-not-confirmable" | "https://showmesh.dev/problems/show-config-power-domain-refused" | "https://showmesh.dev/problems/show-config-domain-provenance-refused" | "https://showmesh.dev/problems/show-config-prerequisites-empty" | "https://showmesh.dev/problems/show-config-power-off-prerequisite-cycle" | "https://showmesh.dev/problems/interlock-shutdown-phase-requires-override" | "https://showmesh.dev/problems/interlock-signal-no-false-answer" | "https://showmesh.dev/problems/macro-run-already-in-flight" | "https://showmesh.dev/problems/macro-run-idempotency-macro-conflict" | "https://showmesh.dev/problems/macro-run-idempotency-revision-conflict" | "https://showmesh.dev/problems/payload-too-large" | "https://showmesh.dev/problems/storage-full" | "https://showmesh.dev/problems/asset-target-required" | "https://showmesh.dev/problems/night-not-ready" | "https://showmesh.dev/problems/night-state-rejected" | "https://showmesh.dev/problems/night-ambiguous" | "https://showmesh.dev/problems/audio-node-channel-duplicate" | "https://showmesh.dev/problems/audio-node-channel-overlap" | "https://showmesh.dev/problems/audio-node-route-mismatch" | "https://showmesh.dev/problems/show-config-entries-empty" | "https://showmesh.dev/problems/show-config-entry-position-duplicate" | "https://showmesh.dev/problems/show-config-cross-show-reference" | "https://showmesh.dev/problems/unsupported-observation-schema-version" | "https://showmesh.dev/problems/observation-entry-key-mismatch" | "https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed";
             title: string;
             status: number;
             detail: string;
@@ -4222,7 +4513,7 @@ export interface components {
             audioSessionId?: string;
             audioAction?: string;
         };
-        /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. */
+        /** @description The STORED/READ shape of the "show.action" configuration kind's decoded payload (STEP-9-SPEC.md section 5.3), returned by GET and by a successful PUT. description is always the resolved value here (empty string if none was ever set), never absent - a stored revision states its own content outright. To submit an action, use ConfigShowActionWrite instead, which allows description to be absent. idempotent is null when the action has never declared whether repeating its effect is safe - a real, distinct state from a declared false, always present rather than omitted. Only a night.session binding that uses this action as the first outward-facing enterShow cue requires a non-null value; an ordinary action may stay undeclared indefinitely. */
         ConfigShowAction: {
             show: string;
             label: string;
@@ -4230,8 +4521,9 @@ export interface components {
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             target: components["schemas"]["ConfigShowActionTarget"];
+            idempotent: boolean | null;
         };
-        /** @description The WRITE shape of the "show.action" configuration kind's payload: the body PUT /config/show.action/{id} accepts. Identical to ConfigShowAction except that description is not required (an absent key takes its documented default of empty, i.e. no description; a present `null` is rejected as invalid) and target is ConfigShowActionTargetWrite, which allows target.publish.retain to be absent under the same rule. The response to a successful write stores and returns the resolved ConfigShowAction shape, never this one. */
+        /** @description The WRITE shape of the "show.action" configuration kind's payload: the body PUT /config/show.action/{id} accepts. Identical to ConfigShowAction except that description is not required (an absent key takes its documented default of empty, i.e. no description; a present `null` is rejected as invalid) and target is ConfigShowActionTargetWrite, which allows target.publish.retain to be absent under the same rule. idempotent is not required here: absent OR an explicit `null` both mean "leave it undeclared" (unlike every other field on this payload) - the one deliberate exception, so that PUTting an unmodified GET body back (which always carries `idempotent` explicitly, per ConfigShowAction) never fails only because that field round-tripped as `null` rather than being omitted. The response to a successful write stores and returns the resolved ConfigShowAction shape, never this one. */
         ConfigShowActionWrite: {
             show: string;
             label: string;
@@ -4239,6 +4531,7 @@ export interface components {
             /** @enum {string} */
             safetyClass: "none" | "blackout" | "stop" | "powerOff";
             target: components["schemas"]["ConfigShowActionTargetWrite"];
+            idempotent?: boolean | null;
         };
         /** @description The body of GET and PUT /config/show.action/{id}. */
         ShowActionConfigResponse: {
@@ -5134,7 +5427,10 @@ export interface components {
             /** @enum {string} */
             source: "api";
         };
-        /** @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed. */
+        /**
+         * @description One named signal run-readiness evaluated. This build checks `fpp.reachable` for the session's referenced FPP instances (`name` `fpp:<instanceId>:reachable`), the pinned resting FSEQ asset's own parseable non-zero duration (`resting:asset-duration`), the resting playlist's idle-read shape - exactly one FSEQ-only item, no FPP audio item (`resting:playlist-shape:<playlist>`) - the show playlist's presence (`show:playlist-present:<playlist>`), and whether the exact deployed FSEQ variant on the FPP host can be confirmed (`resting:asset-exact-variant:<playlist>`). When `resting.endOfNightPlaylist` names a different playlist from `resting.playlist`, it gets its own shape and exact-variant checks under the `resting-end-of-night:` prefix; when the two are the same playlist, which is the default, it is not checked twice. That last check's `state` is PERMANENTLY `not_verifiable`: FPP exposes no content hash, only a filename, so this coordinator can never independently confirm the live host is running the pinned asset's exact bytes, and this is stated rather than folded into the passing shape check or defaulted to a pass - but a check that can never be anything but not_verifiable is excluded from the aggregate `outcome` (it is still always listed), so `outcome` can still read `"ready"` once every checkable check passes. Each check's own `reason` states exactly what it verified and what it could not. A healthy result on one check is never evidence any other check passed.
+         *     When `resting.backgroundAudio` is configured, this also checks the configured output's declared capabilities (`resting:background-audio-output-capabilities:<node>`) and its requested item-transition ability (`resting:background-audio-item-transition`). Both can report `not_verifiable` for an output that has never published a capability advertisement at all (an agent built before that signal existed makes no claim either way), `failed` for a currently-confirmed output whose advertisement genuinely omits what is needed, and `healthy` once it declares everything needed. Both also report `unknown` for an output this coordinator cannot currently confirm is online. Only `resting:background-audio-output-capabilities:<node>` additionally reports `unknown`, rather than `failed`, for an output that is online but has not finished reporting since it connected: it cross-checks a second, independent signal (`node.audio.engine.state`) before concluding a missing capability is genuinely absent rather than merely not yet advertised, since post-connect capability detection can take up to two minutes. `resting:background-audio-item-transition` has no second signal to cross-check against, so once an output is online, a missing item-transition capability reads `failed` immediately, even during that same post-connect window.
+         */
         NightReadinessCheck: {
             name: string;
             /**
@@ -5531,6 +5827,113 @@ export interface components {
             /** Format: date-time */
             resolvedAt?: string | null;
         };
+        /** @description One node target's render activation within a fallback program (ADR-048, Track J's J1). filename is the runtime filename a node must open (and verify against assetHashes) to render it; sequence is a logical identity only. */
+        FallbackProgramRenderActivation: {
+            sequence: string;
+            filename: string;
+            assetHashes: string[];
+        };
+        /** @description One node target's audio activation within a fallback program. */
+        FallbackProgramAudioActivation: {
+            asset: string;
+            filename: string;
+            startOffsetMillis: number;
+            assetHashes: string[];
+            /** @description Present only when the Cue also declares an LTC output for this node - derived from this same audio asset, never a second file. */
+            ltcStartOffsetMillis?: number;
+        };
+        /** @description One named node target and the exact output activation it may perform (ADR-048 decision 1). At least one of render/audio is always present. */
+        FallbackProgramTarget: {
+            nodeId: string;
+            render?: components["schemas"]["FallbackProgramRenderActivation"];
+            audio?: components["schemas"]["FallbackProgramAudioActivation"];
+        };
+        /** @description One deterministic playlist-entry key and its resolved Cue identity and node targets (ADR-048 decision 1). */
+        FallbackProgramEntry: {
+            entryKey: string;
+            cueId: string;
+            cueRevision: number;
+            targets: components["schemas"]["FallbackProgramTarget"][];
+        };
+        /** @description The fallback start, rest/hold, local-shutdown, and recovery-boundary rules (ADR-048 decisions 1 and 4). Every program this coordinator compiles carries the identical fixed values - Track J's J1 reserves no configuration kind for a per-show override of any of them. */
+        FallbackProgramRules: {
+            fallbackBoundary: string;
+            restHold: string;
+            localShutdown: string;
+            recoveryBoundary: string;
+        };
+        /** @description The signed fallback program itself, served verbatim as the coordinator stored it. A verifier checks FallbackProgramResponse.signatureBase64 (a SIBLING field, never nested here) against exactly the canonicalized fields present in this object. */
+        FallbackProgramBody: {
+            schemaVersion: number;
+            packageId: string;
+            revision: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            compiledAt: string;
+            fppInstanceUuid: string;
+            show: string;
+            generation: number;
+            /** @description Every fpp-runner show.playlist object id this program drew entries from, mapped to its compiled config revision. */
+            playlistRevisions: {
+                [key: string]: number;
+            };
+            /** @description Every node target's resolved Cue-catalog revision at compile time, keyed by node id. */
+            catalogRevisions: {
+                [key: string]: string;
+            };
+            entries: components["schemas"]["FallbackProgramEntry"][];
+            rules: components["schemas"]["FallbackProgramRules"];
+        };
+        /** @description The body of GET /fallback-programs/{fppInstanceId} (ADR-048, Track J's J1). published is false, with program and signatureBase64 both absent, exactly when this coordinator has never successfully compiled and published a program for this host. signatureBase64 is the coordinator's Ed25519 signature over program's own canonical bytes, base64-encoded, deliberately a sibling of program rather than nested inside it: the signature is computed over program's bytes and can never be part of what it signs. acknowledgedPackageId and acknowledgedAt are both absent exactly when acknowledgedStatus is "fallback-program-unacknowledged". */
+        FallbackProgramResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            fppInstanceUuid: string;
+            published: boolean;
+            program?: components["schemas"]["FallbackProgramBody"];
+            signatureBase64?: string;
+            /** @enum {string} */
+            acknowledgedStatus: "fallback-program-current" | "fallback-program-stale" | "fallback-program-rejected" | "fallback-program-unacknowledged";
+            acknowledgedPackageId?: string;
+            /** Format: date-time */
+            acknowledgedAt?: string;
+        };
+        /** @description One row of GET /fallback-programs - metadata only, never the signed payload. */
+        FallbackProgramListEntry: {
+            fppInstanceUuid: string;
+            packageId: string;
+            revision: string;
+            show: string;
+            generation: number;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            compiledAt: string;
+        };
+        /** @description The body of GET /fallback-programs. */
+        FallbackProgramListResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            programs: components["schemas"]["FallbackProgramListEntry"][];
+        };
+        /** @description The body of POST /fallback-programs/{fppInstanceId}/acknowledge (ADR-048 decision 1). age is not a field: it is derived from installedAt at read time. */
+        FallbackProgramAcknowledgeRequest: {
+            packageId: string;
+            revision: string;
+            /** @enum {string} */
+            verificationResult: "verified" | "signature-invalid" | "mismatched-program";
+            /** Format: date-time */
+            installedAt: string;
+        };
+        /** @description The response body of POST /fallback-programs/{fppInstanceId}/acknowledge. */
+        FallbackProgramAcknowledgeResponse: {
+            /** Format: date-time */
+            serverTime: string;
+            fppInstanceUuid: string;
+            /** Format: date-time */
+            acknowledgedAt: string;
+        };
     };
     responses: {
         /** @description The request named an API version (in the `ShowMesh-API-Version` header, or in the path as `/api/vN/...`) that this coordinator does not serve. */
@@ -5641,16 +6044,6 @@ export interface components {
         };
         /** @description The coordinator failed to answer this request for a reason that has nothing to do with whether the requested resource exists or the request was well formed - an internal dependency (e.g. the store) failed. `detail` never carries the underlying error; it is logged coordinator-side only. */
         InternalError: {
-            headers: {
-                "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
-        /** @description The pre-dispatch write that must durably record this command before it is dispatched could not be appended to this coordinator's audit store. Nothing was recorded and nothing was dispatched to the node; retry once the audit store is writable again. */
-        AudioCommandAuditUnavailable: {
             headers: {
                 "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
                 [name: string]: unknown;
@@ -6196,7 +6589,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionPrepare: {
@@ -6240,7 +6632,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionStart: {
@@ -6284,7 +6675,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionPause: {
@@ -6328,7 +6718,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionResume: {
@@ -6372,7 +6761,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionSeek: {
@@ -6416,7 +6804,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionAdvance: {
@@ -6460,7 +6847,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionStop: {
@@ -6504,7 +6890,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioSessionClear: {
@@ -6548,7 +6933,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioGainSet: {
@@ -6592,7 +6976,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioGainFade: {
@@ -6636,7 +7019,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioOutputMute: {
@@ -6680,7 +7062,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchAudioOutputUnmute: {
@@ -6724,7 +7105,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            503: components["responses"]["AudioCommandAuditUnavailable"];
         };
     };
     dispatchFPPCommand: {
@@ -6769,16 +7149,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description ADR-024 decision 11's fail-closed default: this action is not a member of decision 11's blackout/stop/power-off safety class, and the pre-dispatch write that must durably record a command before it is dispatched could not be appended to this coordinator's audit store. `type` `fpp-command-refused-audit-unavailable`. Nothing was recorded and nothing was dispatched to FPP; retry once the audit store is writable again. */
-            503: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
         };
     };
     listObservations: {
@@ -8470,16 +8840,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description ADR-024 decision 11's fail-closed default: this action is not exempt (not `blackout` or `clearLayer`), and the pre-dispatch write that must durably record it before dispatch could not be appended to this coordinator's audit store. `type` `resolume-action-refused-audit-unavailable`. Nothing was recorded and nothing was dispatched to Resolume; retry once the audit store is writable again. */
-            503: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
         };
     };
     getResolumeRecovery: {
@@ -8933,8 +9293,60 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description ADR-024 decision 11's fail-closed default: this action's own safetyClass is "none", and the pre-dispatch write that must durably record it before dispatch could not be appended to this coordinator's audit store. `type` `action-invoke-refused-audit-unavailable`. Nothing was recorded and nothing was dispatched; retry once the audit store is writable again. */
-            503: {
+        };
+    };
+    getEmergencyStopConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopConfigResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    putEmergencyStopConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigEmergencyStopPayload"];
+            };
+        };
+        responses: {
+            /** @description OK. The newly activated revision. */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopConfigResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Either the principal does not hold `config:write` (`forbidden`), or a cookie-authenticated write was missing `Sec-Fetch-Site: same-origin` (`csrf-rejected`). */
+            403: {
                 headers: {
                     "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
                     [name: string]: unknown;
@@ -8943,6 +9355,163 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getEmergencyStopConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigRevisionsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    emergencyStop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    emergencyStopPowerDown: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    armEmergencyStopHardStop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopArmRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopArmResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    fireEmergencyStopHardStop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmergencyStopFireRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmergencyStopResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            /** @description Either the arm token is unknown/never armed/expired (`type` `emergency-stop-hard-stop-not-armed`, remedy "arm again, then fire promptly"), or it was already consumed by an earlier fire request (`type` `conflict`, remedy "check whether the hard stop already happened before arming again"). */
+            409: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            500: components["responses"]["InternalError"];
         };
     };
     submitMacroRun: {
@@ -9904,16 +10473,6 @@ export interface operations {
                 };
             };
             500: components["responses"]["InternalError"];
-            /** @description `prepare-site`, `run-readiness`, `start-preshow`, or `start-night` only: its audit entry could not be written, so the whole command was refused rather than applied without one (`night-command-refused-audit-unavailable`). Nothing was dispatched and nothing was recorded. */
-            503: {
-                headers: {
-                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
         };
     };
     listFPPPlaylistEntryObservations: {
@@ -10584,6 +11143,92 @@ export interface operations {
             404: components["responses"]["ResourceNotFound"];
             405: components["responses"]["MethodNotAllowed"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listFallbackPrograms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FallbackProgramListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getFallbackProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The FPP instance UUID (`instanceUuid`, contracts section 1.2). */
+                fppInstanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FallbackProgramResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    postFallbackProgramAcknowledge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The FPP instance UUID (`instanceUuid`, contracts section 1.2). */
+                fppInstanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FallbackProgramAcknowledgeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "ShowMesh-API-Version": components["headers"]["ShowMesh-API-Version"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FallbackProgramAcknowledgeResponse"];
+                };
+            };
+            400: components["responses"]["InvalidParameter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            405: components["responses"]["MethodNotAllowed"];
             500: components["responses"]["InternalError"];
         };
     };

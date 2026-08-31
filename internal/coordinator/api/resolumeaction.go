@@ -133,32 +133,6 @@ const resolumeActionMaxDispatchDuration = 40 * time.Second
 // package, and its own importgraph_test.go forbids the reverse).
 const resolumeActionHTTPWriteDeadline = resolumeActionMaxDispatchDuration + 2*resolumeActionBookkeepingBudget + resolumeActionWriteDeadlineMargin
 
-// ProblemTypeResolumeActionRefusedAuditUnavailable is this seam's own
-// ADR-024 decision 11 fail-closed refusal — the Resolume-action sibling of
-// [ProblemTypeFPPCommandRefusedAuditUnavailable]: a non-exempt action's
-// pre-dispatch audit write failed, the whole transaction rolled back, and
-// nothing was recorded or dispatched.
-const ProblemTypeResolumeActionRefusedAuditUnavailable = problemBaseURI + "resolume-action-refused-audit-unavailable"
-
-// resolumeActionAuditUnavailableProblem is
-// [ProblemTypeResolumeActionRefusedAuditUnavailable]'s own constructor,
-// mirroring fppCommandAuditUnavailableProblem's identical reasoning
-// (problem.go) including its 503 status: this names a specific, transient
-// dependency condition (the audit store could not be appended to right
-// now), not an unspecified internal defect.
-func resolumeActionAuditUnavailableProblem(action string, cause error) v1.Problem {
-	return v1.Problem{
-		Type:   ProblemTypeResolumeActionRefusedAuditUnavailable,
-		Title:  "Action refused: it could not be durably recorded",
-		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf(
-			"%q was refused before anything was sent to Resolume: it must be durably recorded before dispatch, and "+
-				"this coordinator's audit store is currently unavailable (%v). Nothing was recorded and nothing was "+
-				"dispatched; retry once the audit store is writable again.",
-			action, cause),
-	}
-}
-
 // resolumeActionReplayConflictProblem mirrors
 // fppCommandReplayConflictProblem's identical reasoning (problem.go), for
 // an idempotency key reused against a DIFFERENT action than it was first
@@ -640,19 +614,12 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 		jsonWrite(w, v1.ResolumeActionResponse{ServerTime: formatTime(h.now()), Result: result})
 		return
 	case errors.Is(auditErr, identity.ErrAuditWrite):
-		if !desc.AuditExempt {
-			// Fail closed: the transaction above already rolled back in
-			// full, so nothing is re-inserted and nothing is dispatched —
-			// TRACK-D-D3-SPEC.md section 5.2's default rule for every
-			// action except blackout and clearLayer.
-			p := resolumeActionAuditUnavailableProblem(action, auditErr)
-			writeProblem(w, h.logger, now, p)
-			return
-		}
-		// Safety-class exemption: redo the insert through the plain,
-		// non-transactional store method and proceed with degraded
-		// attribution — mirroring dispatchFPPCommand's identical fallback
-		// (fppcommand_dispatch.go).
+		// ADR-024 decision 11, amended 2026-08-26 (owner ruling): an
+		// audit-store outage never blocks a command dispatch, for any
+		// Resolume action, not only blackout/clearLayer. Redo the insert
+		// through the plain, non-transactional store method and proceed
+		// with degraded attribution, mirroring dispatchFPPCommand's
+		// identical fallback (fppcommand_dispatch.go).
 		if _, err := h.deps.Commands.InsertCommand(ctx, rec); err != nil {
 			if errors.As(err, &dup) {
 				result, problem := h.resolveResolumeActionReplay(ctx, now, ac, dup.Existing, action, auditAction, paramsJSON)
@@ -666,7 +633,11 @@ func (h *handlers) handleDispatchResolumeAction(w http.ResponseWriter, r *http.R
 			h.writeInternalError(w, now, "insert resolume action command", err)
 			return
 		}
-		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedAttributionReasonSafetyClassExemption)
+		degradedReason := degradedAttributionReasonAuditNeverBlocks
+		if desc.AuditExempt {
+			degradedReason = degradedAttributionReasonSafetyClassExemption
+		}
+		h.reportDegradedAttribution(now, dispatchEntry, auditErr, degradedReason)
 		dispatchDegraded = true
 	case auditErr != nil:
 		h.writeInternalError(w, now, "insert resolume action command", auditErr)

@@ -136,6 +136,9 @@ export function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     // Required on every snapshot, same defaulting pattern as `macroRuns`
     // above.
     resolume: [],
+    // ADR-024 decision 11's amendment (owner ruling, 2026-08-26): required
+    // on every snapshot, same defaulting pattern as `resolume` above.
+    auditStore: { state: 'usable', reason: null },
     // Required on every snapshot, same defaulting pattern as `resolume`
     // above.
     audioConfigPush: { state: 'usable', reason: null },
@@ -224,6 +227,7 @@ export function makeConfigShowAction(overrides: Partial<ConfigShowAction> = {}):
       primitive: 'startPlaylist',
       params: { playlist: 'Halloween Main', repeat: false, ifBusy: 'refuse' },
     },
+    idempotent: null,
     ...overrides,
   }
 }

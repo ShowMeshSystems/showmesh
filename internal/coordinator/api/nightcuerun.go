@@ -58,9 +58,10 @@ func (h *handlers) hookAfterDispatch(cueName string) bool {
 }
 
 // errNightCueNotConfirmableForFirst is returned when a cue configured as
-// the first outward-facing cue resolves to an action [nightCueConfirmable]
-// rejects. Readiness (nightcue_readiness.go) is the primary gate; this is
-// defense in depth.
+// the first outward-facing cue resolves to an action
+// [nightCueAllowedAsFirstOutwardCue] rejects: neither confirmable by its
+// own adapter nor declared idempotent true. Readiness
+// (nightcue_readiness.go) is the primary gate; this is defense in depth.
 var errNightCueNotConfirmableForFirst = errors.New("api: this cue's action is not confirmable and cannot be the first outward-facing cue")
 
 // errNightCueSessionMoved is returned when the atomic first-cue commit
@@ -229,7 +230,7 @@ func (h *handlers) nightRunCue(ctx context.Context, now time.Time, rec store.Nig
 	if err != nil {
 		return store.NightCueOutboxRecord{}, err
 	}
-	if isFirstOutwardCue && !nightCueConfirmable(action.Target) {
+	if isFirstOutwardCue && !nightCueAllowedAsFirstOutwardCue(action) {
 		return store.NightCueOutboxRecord{}, errNightCueNotConfirmableForFirst
 	}
 

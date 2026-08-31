@@ -163,6 +163,15 @@ func (noIdentityService) OldestAuditID(context.Context) (int64, bool, error) {
 	return 0, false, nil
 }
 
+// AuditWriteStatus reports "usable", matching WriteAudit's own trivial
+// success above: this stub has no real audit_log to probe or fail
+// against, so "usable" is the same "nothing here can fail" answer this
+// type gives everywhere else, not a claim about a real dependency's
+// health.
+func (noIdentityService) AuditWriteStatus(context.Context) (state, reason string) {
+	return "usable", ""
+}
+
 // sessionCookieName is the HttpOnly cookie ADR-024 decision 5 mints.
 const sessionCookieName = "showmesh_session"
 
