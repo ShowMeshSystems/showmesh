@@ -94,13 +94,19 @@ type showActionTarget struct {
 
 // showAction is the "show.action" configuration kind's decoded payload
 // (STEP-9-SPEC.md section 5.3): the "payload" member of GET
-// /config/show.action/{id}'s response.
+// /config/show.action/{id}'s response. Idempotent is TRI-STATE -- true,
+// false, or nil for "never declared" -- matching api/openapi.yaml's
+// ConfigShowAction.idempotent doc comment exactly: nil is a real, distinct
+// state from a declared false, not this program's zero value standing in
+// for an absent server claim. A plain bool would silently turn "not
+// declared" into "declared false" on decode.
 type showAction struct {
 	Show        string           `json:"show"`
 	Label       string           `json:"label"`
 	Description string           `json:"description"`
 	SafetyClass string           `json:"safetyClass"`
 	Target      showActionTarget `json:"target"`
+	Idempotent  *bool            `json:"idempotent"`
 }
 
 // showActionConfigResponse is the body of GET /config/show.action/{id}.
