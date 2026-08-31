@@ -241,10 +241,11 @@ func (e *Executor) GetRun(ctx context.Context, runID string) (api.MacroRunResult
 // already narrows by macro id, rather than adding a third store method for
 // this wave: see this builder's own report for whether a store-level
 // filter is warranted once a real caller (Wave 3's clients) exercises this
-// at scale. limit is applied AFTER the in-memory filtering, matching what
-// a caller asking for "the last N finished runs of this show" actually
-// wants — applying it before would silently return fewer than N once any
-// non-matching row is filtered out.
+// at scale. limit is applied AFTER the in-memory filtering, and the filter
+// input itself is capped at store.MaxMacroRunPageSize rows — so a narrow
+// state or show filter over a long history can still return fewer than
+// limit, including zero, when the matching runs are older than the
+// fetched page.
 func (e *Executor) ListRuns(ctx context.Context, f api.MacroRunFilter) ([]store.MacroRunRecord, error) {
 	limit := f.Limit
 	if limit <= 0 {

@@ -51,7 +51,7 @@ Reads require show:macro:run OR config:write.
 
 Subcommands:
   show <runId>   show one run, including every step's outcome
-  list           list runs, most recent first (filterable by macro id/state)
+  list           list runs, most recent first (filterable by macro id/state/show)
 
 Run "showmeshctl run <subcommand> --help" for flags specific to one
 subcommand.
