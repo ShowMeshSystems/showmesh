@@ -113,9 +113,13 @@ state. It does not lint the PR body, run tests, or perform a review.
 ### Required checks before merge
 
 Merges to `main` require these checks from the CI workflow to pass, matched
-by exact job name: `lint`, `vuln`, `ui`, `docker`, `test (1.25.0)`, and
-`test (1.26.6)`. They are deterministic: the same commit produces the same
-result, which is what makes it safe to block merges on them.
+by exact job name: `lint`, `vuln`, `ui`, `docker`, and `test-gate`.
+`test-gate` needs the whole `test` go-version matrix and fails unless every
+leg succeeded; its own name stays stable across a matrix version bump, so
+bumping `test`'s Go versions cannot silently rename the required check the
+way requiring `test (1.25.0)` and `test (1.26.6)` directly would have. These
+are deterministic: the same commit produces the same result, which is what
+makes it safe to block merges on them.
 
 The CI workflow's `integration`, `integration-fppmqtt`, and
 `integration-broker` jobs, plus `test-integration-fpp` from the separate
@@ -129,6 +133,9 @@ The CI workflow's `fpp-plugin-release` job is not on the required list.
 A repository administrator may bypass a required check, but only as a
 deliberate, recorded exception, never a routine override. Record what was
 bypassed and why in the pull request before merging.
+
+Branch protection enforcing this list is Eric's to apply; as of this
+writing it is pending, not live.
 
 ## Scope notes
 
