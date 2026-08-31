@@ -23,10 +23,8 @@ export function SettingsAudioDefaults() {
   const [fadeDurationMs, setFadeDurationMs] = useState('')
   const [maxBackgroundGainDb, setMaxBackgroundGainDb] = useState('')
   const [duckTargetGainDb, setDuckTargetGainDb] = useState('')
-  // Not yet a form control (unplaced by the rebuild); round-tripped so saving
-  // this screen never resets an operator's tuned duck fade timing.
-  const [duckFadeDurationMs, setDuckFadeDurationMs] = useState(0)
-  const [duckRestoreFadeDurationMs, setDuckRestoreFadeDurationMs] = useState(0)
+  const [duckFadeDurationMs, setDuckFadeDurationMs] = useState('')
+  const [duckRestoreFadeDurationMs, setDuckRestoreFadeDurationMs] = useState('')
   const [driftIgnoreThresholdMs, setDriftIgnoreThresholdMs] = useState('')
   const [ltcFrameRate, setLtcFrameRate] = useState<(typeof LTC_FRAME_RATES)[number]>('30')
   const [ltcDefaultStartOffset, setLtcDefaultStartOffset] = useState('')
@@ -45,8 +43,8 @@ export function SettingsAudioDefaults() {
         setFadeDurationMs(String(response.payload.defaultFadeDurationMs))
         setMaxBackgroundGainDb(String(response.payload.defaultMaxBackgroundGainDb))
         setDuckTargetGainDb(String(response.payload.duckTargetGainDb))
-        setDuckFadeDurationMs(response.payload.duckFadeDurationMs)
-        setDuckRestoreFadeDurationMs(response.payload.duckRestoreFadeDurationMs)
+        setDuckFadeDurationMs(String(response.payload.duckFadeDurationMs))
+        setDuckRestoreFadeDurationMs(String(response.payload.duckRestoreFadeDurationMs))
         setDriftIgnoreThresholdMs(String(response.payload.driftIgnoreThresholdMs))
         setLtcFrameRate(response.payload.ltcFrameRate)
         setLtcDefaultStartOffset(response.payload.ltcDefaultStartOffset)
@@ -65,8 +63,8 @@ export function SettingsAudioDefaults() {
     setFadeDurationMs(String(state.response.payload.defaultFadeDurationMs))
     setMaxBackgroundGainDb(String(state.response.payload.defaultMaxBackgroundGainDb))
     setDuckTargetGainDb(String(state.response.payload.duckTargetGainDb))
-    setDuckFadeDurationMs(state.response.payload.duckFadeDurationMs)
-    setDuckRestoreFadeDurationMs(state.response.payload.duckRestoreFadeDurationMs)
+    setDuckFadeDurationMs(String(state.response.payload.duckFadeDurationMs))
+    setDuckRestoreFadeDurationMs(String(state.response.payload.duckRestoreFadeDurationMs))
     setDriftIgnoreThresholdMs(String(state.response.payload.driftIgnoreThresholdMs))
     setLtcFrameRate(state.response.payload.ltcFrameRate)
     setLtcDefaultStartOffset(state.response.payload.ltcDefaultStartOffset)
@@ -79,6 +77,8 @@ export function SettingsAudioDefaults() {
     const fadeMs = Number(fadeDurationMs)
     const maxGain = Number(maxBackgroundGainDb)
     const duckGain = Number(duckTargetGainDb)
+    const duckFadeMs = Number(duckFadeDurationMs)
+    const duckRestoreFadeMs = Number(duckRestoreFadeDurationMs)
     const driftMs = Number(driftIgnoreThresholdMs)
     if (!Number.isFinite(fadeMs) || fadeMs < 0) {
       setSaveError('Default fade duration must be a non-negative number of milliseconds.')
@@ -90,6 +90,14 @@ export function SettingsAudioDefaults() {
     }
     if (!Number.isFinite(duckGain) || duckGain >= 0) {
       setSaveError('Duck target gain must be negative.')
+      return
+    }
+    if (!Number.isInteger(duckFadeMs) || duckFadeMs <= 0) {
+      setSaveError('Duck fade duration must be a whole number of milliseconds, greater than zero.')
+      return
+    }
+    if (!Number.isInteger(duckRestoreFadeMs) || duckRestoreFadeMs <= 0) {
+      setSaveError('Duck restore fade duration must be a whole number of milliseconds, greater than zero.')
       return
     }
     if (!Number.isFinite(driftMs) || driftMs < 0) {
@@ -112,8 +120,8 @@ export function SettingsAudioDefaults() {
           defaultFadeDurationMs: fadeMs,
           defaultMaxBackgroundGainDb: maxGain,
           duckTargetGainDb: duckGain,
-          duckFadeDurationMs,
-          duckRestoreFadeDurationMs,
+          duckFadeDurationMs: duckFadeMs,
+          duckRestoreFadeDurationMs: duckRestoreFadeMs,
           driftIgnoreThresholdMs: driftMs,
           ltcFrameRate,
           ltcDefaultStartOffset,
@@ -192,6 +200,37 @@ export function SettingsAudioDefaults() {
                     value={duckTargetGainDb}
                     onChange={(e) => {
                       setDuckTargetGainDb(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field label="Duck fade duration (ms)" help="How long a bed takes to fade down into a duck once a higher-priority session starts ducking it.">
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={1}
+                    value={duckFadeDurationMs}
+                    onChange={(e) => {
+                      setDuckFadeDurationMs(e.target.value)
+                      setDirty(true)
+                    }}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Duck restore fade duration (ms)"
+                help="How long a bed takes to fade back up once its last ducker releases it. Deliberately longer than the duck fade duration by default: fast down, slower back up."
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={1}
+                    value={duckRestoreFadeDurationMs}
+                    onChange={(e) => {
+                      setDuckRestoreFadeDurationMs(e.target.value)
                       setDirty(true)
                     }}
                   />

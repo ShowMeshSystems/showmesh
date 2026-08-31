@@ -272,6 +272,56 @@ describe('Settings › Audio defaults', () => {
     await waitFor(() => expect(screen.getByText('linear')).toBeInTheDocument())
     expect(screen.queryByRole('combobox', { name: /fade curve/i })).not.toBeInTheDocument()
   })
+
+  function audioSettingsConfig(overrides: Partial<{ duckFadeDurationMs: number; duckRestoreFadeDurationMs: number }> = {}) {
+    return {
+      serverTime: '2026-08-30T21:00:00Z',
+      kind: 'audio.settings',
+      revision: 1,
+      payload: {
+        driftIgnoreThresholdMs: 40,
+        defaultFadeCurve: 'linear',
+        defaultFadeDurationMs: 1500,
+        defaultMaxBackgroundGainDb: -6,
+        duckTargetGainDb: -18,
+        duckFadeDurationMs: overrides.duckFadeDurationMs ?? 250,
+        duckRestoreFadeDurationMs: overrides.duckRestoreFadeDurationMs ?? 1200,
+        ltcFrameRate: '30',
+        ltcDefaultStartOffset: '00:00:00:00',
+      },
+      updatedAt: '2026-08-30T18:00:00Z',
+      createdByPrincipalId: 'p1',
+      createdByPrincipalName: 'erbartos',
+      source: 'api',
+    }
+  }
+
+  it('renders duck fade and restore fade as labelled controls, validates them as positive integers, saves them, and discards back to the loaded value', async () => {
+    stubs.getAudioSettingsConfig = () => Promise.resolve(audioSettingsConfig())
+    const put = vi.fn(() => Promise.resolve(audioSettingsConfig({ duckFadeDurationMs: 400 })))
+    stubs.putAudioSettingsConfig = put
+
+    renderAt('/settings/audio-defaults')
+
+    const duckFadeInput = (await screen.findByLabelText('Duck fade duration (ms)')) as HTMLInputElement
+    const duckRestoreInput = screen.getByLabelText('Duck restore fade duration (ms)') as HTMLInputElement
+    expect(duckFadeInput.value).toBe('250')
+    expect(duckRestoreInput.value).toBe('1200')
+
+    fireEvent.change(duckFadeInput, { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }))
+    expect(await screen.findByText(/Duck fade duration must be a whole number of milliseconds, greater than zero\./)).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+
+    fireEvent.change(duckFadeInput, { target: { value: '400' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith(expect.objectContaining({ duckFadeDurationMs: 400, duckRestoreFadeDurationMs: 1200 })))
+
+    fireEvent.change(duckFadeInput, { target: { value: '999' } })
+    expect(screen.getByRole('button', { name: 'Discard changes' })).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }))
+    expect(duckFadeInput.value).toBe('400')
+  })
 })
 
 describe('Settings › Node routing', () => {
