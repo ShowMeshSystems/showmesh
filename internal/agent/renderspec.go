@@ -51,9 +51,9 @@ type outputSinkOutcome struct {
 // applyOutputSink swaps base's "sink" stage for the one named by
 // params.output.transport, leaving every other stage (including build
 // contract ruling 5's queue-before-sink) untouched. base is whichever
-// pipeline the caller already built — [pipeline.FSEQSourceSpec], real
+// pipeline the caller already built: [pipeline.FSEQSourceSpec], real
 // content or (renderops.go's buildAssignedSpec) an idle
-// [pipeline.NewIdleFrameWriter] source with no sequence — so a real
+// [pipeline.NewIdleFrameWriter] source with no sequence, so a real
 // assignment's output choice and a content-less assignment's go through
 // this one path.
 //

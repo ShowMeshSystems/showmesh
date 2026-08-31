@@ -423,12 +423,12 @@ func (o *renderOperations) releaseTimelineStepTimeIfOwner(surfaceID string) {
 // coordinator's establish-on-deploy path and a resolved render.surface.apply
 // dispatch alike) always sends a surface's complete geometry, and a
 // bare or partial-geometry request is refused outright here rather than
-// silently accepted — there is no longer a "not yet consumed" partial
+// silently accepted: there is no longer a "not yet consumed" partial
 // acceptance for these fields (see buildAssignedSpec's own doc comment for
 // why: this seam now builds a real, idle-output-drawing pipeline for the
 // no-content case, which needs real geometry to size itself).
 //
-// ok is false when fseqFilename is absent — this is not an error: an
+// ok is false when fseqFilename is absent; this is not an error: an
 // established assignment with no FSEQ content resolved yet is a valid
 // request, matching renderApplyKnownKeys' "accepted, validated where
 // practical" posture for the FSEQ-specific pair alone.
@@ -582,7 +582,7 @@ func requireInt(action string, params map[string]any, key, label string) (int, e
 
 // buildAssignedSpec builds this surface's real (or, absent FSEQ
 // information, idle) pipeline spec and, for the real case, its
-// [pipeline.FrameWriter] source — not yet started. assetDir-relative
+// [pipeline.FrameWriter] source, not yet started. assetDir-relative
 // resolution of fseqFilename and content-hash verification both happen
 // here: ADR-028 requires a node never resolve an asset by filename alone
 // trusting the coordinator's say-so blindly, so a content-hash mismatch
@@ -592,8 +592,8 @@ func requireInt(action string, params map[string]any, key, label string) (int, e
 // fseqAssignment (geometry, pixel format, frame rate, idle output): the
 // caller (applySurface/ResumeAssignment's startFrameWriter call) reads a
 // nil file as "start this surface's [pipeline.NewIdleFrameWriter] instead
-// of a real one" and therefore must always call startFrameWriter now, real
-// content or not — this must draw and report its own configured idle
+// of a real one" and therefore must always call startFrameWriter now,
+// content or not: this must draw and report its own configured idle
 // output honestly, never a content-free pipeline with no frame writer and
 // no output.mode/output.failure evidence at all.
 func buildAssignedSpec(action, assetDir, surfaceID string, params map[string]any, logger pipeline.Logger) (pipeline.Spec, *fseq.File, fseqAssignment, outputSinkOutcome, error) {
@@ -786,7 +786,7 @@ func (o *renderOperations) applySurface(ctx context.Context, params map[string]a
 // startFrameWriter builds and launches surfaceID's [pipeline.FrameWriter],
 // wiring it to o.sup and o.timeline. f is the already-open fseq file for a
 // real assignment, or nil for one with no FSEQ content resolved yet
-// (buildAssignedSpec's own doc comment) — this function ALWAYS starts a
+// (buildAssignedSpec's own doc comment): this function ALWAYS starts a
 // writer either way, real or idle, so a surface with nothing to draw still
 // reports its own configured idle output honestly rather than going dark
 // with no draw-state evidence at all. The caller keeps ownership of a

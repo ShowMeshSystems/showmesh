@@ -105,7 +105,7 @@ func TestCmdCueCatalogGetReportsAcknowledgement(t *testing.T) {
 }
 
 // cueCatalogGetRenderResponseBody carries a render output with both
-// sequence and filename populated (a real, resolved asset) — the entry
+// sequence and filename populated (a real, resolved asset): the entry
 // shape TestCmdCueCatalogGetReportsRenderFilename decodes.
 const cueCatalogGetRenderResponseBody = `{
 	"serverTime":"2026-08-16T21:00:00Z",
@@ -130,8 +130,8 @@ const cueCatalogGetRenderResponseBody = `{
 // survives BOTH output modes, not merely the text line. Against the
 // struct before this fix, cueCatalogRenderOutputRecord declared no
 // Filename field at all, so json.Unmarshal silently dropped it on decode
-// and -output json — which re-marshals the CLI's own decoded struct,
-// never the raw response body — printed a render object with no filename
+// and -output json (which re-marshals the CLI's own decoded struct,
+// never the raw response body) printed a render object with no filename
 // key at all, exactly where an operator reaching for the whole truth
 // would look for it.
 func TestCmdCueCatalogGetReportsRenderFilename(t *testing.T) {
@@ -171,7 +171,7 @@ func TestCmdCueCatalogGetReportsRenderFilename(t *testing.T) {
 }
 
 // cueCatalogGetEmptyRenderFilenameResponseBody carries a render output
-// whose sequence is populated but whose filename is empty — the coordinator
+// whose sequence is populated but whose filename is empty: the coordinator
 // resolves this exact shape whenever no asset has been uploaded for that
 // sequence (assetsync.resolveAssetFor). This is the one state that made
 // the underlying defect hard to notice: the sequence alone reads as

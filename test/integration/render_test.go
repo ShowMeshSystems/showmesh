@@ -56,7 +56,7 @@ func TestRenderReportReachesObservationsAndNodeAPI(t *testing.T) {
 	// This test plays the coordinator's own dispatcher role (this file's
 	// own doc comment), and every real dispatch sends a surface's complete
 	// geometry regardless of whether a sequence is assigned yet
-	// (internal/coordinator/api/renderdispatch.go) — buildFSEQAssignment
+	// (internal/coordinator/api/renderdispatch.go); buildFSEQAssignment
 	// now refuses a bare or partial-geometry apply outright rather than
 	// silently accepting the "not yet consumed" shape this hand-rolled
 	// payload used to send.

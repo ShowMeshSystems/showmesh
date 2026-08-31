@@ -360,7 +360,7 @@ func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, 
 // assignment carries no usable FSEQ content (internal/agent/renderops.go's
 // buildFSEQAssignment "ok" doc comment: an established assignment with no
 // content resolved yet). Its shape mirrors [NewDiagnosticFrameWriter]
-// exactly — [emptyFrameSource], [unknownTimeline], no assignment — for the
+// exactly ([emptyFrameSource], [unknownTimeline], no assignment), for the
 // identical reason: there is no sequence to extract a frame from, so this
 // writer must be permanently idle, every tick, and say so honestly through
 // [Snapshot.Drawing]/IdleMode rather than a silent content-free pipeline
@@ -368,7 +368,7 @@ func NewDiagnosticFrameWriter(sup *Supervisor, surfaceID string, width, height, 
 //
 // Unlike the fixed-rgb, fixed-diagnostic-pattern standalone diagnostic
 // surface, a real show surface may be rgb or rgbw and carries its own
-// operator-configured idle output (black, hold, or diagnostic) — so this
+// operator-configured idle output (black, hold, or diagnostic), so this
 // constructor takes pixelFormat and idleOutput directly rather than a
 // pre-computed bytesPerPixel and a hardcoded pattern.
 func NewIdleFrameWriter(sup *Supervisor, surfaceID string, width, height int, pixelFormat string, frameRate int, idleOutput string, logger Logger) (*FrameWriter, error) {

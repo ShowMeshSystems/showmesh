@@ -423,7 +423,7 @@ func (h *handlers) resolveRenderSurfaceBase(ctx context.Context, nodeID, surface
 // [renderApplyKnownKeys]' own doc comment (internal/agent/renderops.go)
 // already states an assignment with no FSEQ content is a valid request,
 // and buildFSEQAssignment's ok==false branch is exactly the "declared, no
-// content yet" state this half needed and did not have to invent — the
+// content yet" state this half needed and did not have to invent: the
 // agent starts a [pipeline.NewIdleFrameWriter] with no sequence, which
 // actually draws (and reports, through surface.output.mode/idleMode) this
 // surface's configured render.settings.idleOutput until the first
