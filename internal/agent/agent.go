@@ -362,6 +362,11 @@ func Run() int {
 
 	audioMgr := audio.NewManager(audioEngine, audio.NewFileSessionStore(cfg.AssetDir), cfg.AssetDir, audio.RealDecoder{}, time.Now, logger)
 	audioRebuilder := newAudioEngineRebuilder(sigCtx, cfg.AssetDir, audioEngine, audioMgr, logger)
+	// audioEngineHeldNode (audiocapabilities.go) is wired to the SAME
+	// rebuilder so a post-bind capability detection can tell "the engine
+	// actively holds this route" from "a fresh probe of it," and trust
+	// the former over a busy result from the latter.
+	audioEngineHeldNode = audioRebuilder.HeldNode
 	audioBind := newAudioBinding(audioRebuilder.rebuild, func(p audioSettingsConfig) {
 		audioMgr.SetSettings(audioSettingsFromWire(p))
 	})
@@ -407,7 +412,19 @@ func Run() int {
 	// mqtt.go's registerCommandHandling.
 	cmdHandler := newCommandHandler(cfg.NodeID, cfg.AssetDir, cfg.AgentAPIToken, assetFetchTrigger, renderOps, renderTrigger, audioMgr, audioBind, catalogStore, fppConnect, time.Now, logger)
 
-	conn, err := newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
+	// connectAndInstallCapabilityRepublish is the single call site for
+	// both constructing this node's MQTT connection and wiring
+	// installAudioCapabilityRepublish onto it (which needs a live
+	// Publisher, so it cannot happen at audioRebuilder's own construction
+	// above). Extracted so a test can exercise this EXACT statement
+	// sequence (the real dial below swapped for a fake) rather than a
+	// hand-copy that could silently drift from what Run actually calls;
+	// a prior version of this wiring lived as bare statements here with
+	// no test able to observe either one.
+	connect := func() (Conn, error) {
+		return newMQTTConn(connCtx, cfg, bootID, startedAt, heartbeatConnected, cmdHandler, showMode, logger)
+	}
+	conn, err := connectAndInstallCapabilityRepublish(connect, audioRebuilder, sigCtx, cfg, bootID, startedAt, logger)
 	if err != nil {
 		logger.Error("failed to start mqtt connection manager", "error", err)
 		return 1

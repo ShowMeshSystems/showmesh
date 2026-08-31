@@ -1359,8 +1359,8 @@ func (h *handlers) nightComputeReadinessChecks(ctx context.Context, now time.Tim
 	// MODE.md §13), only when it is configured at all.
 	if ba := payload.Resting.BackgroundAudio; ba != nil {
 		checks = append(checks, h.nightCheckBackgroundAudioAssets(ctx, payload.Show, ba))
-		checks = append(checks, nightCheckBackgroundAudioItemTransition(ba))
-		checks = append(checks, nightCheckAudioOutputCapabilities(ba.OutputNodeID()))
+		checks = append(checks, h.nightCheckBackgroundAudioItemTransition(ctx, now, ba))
+		checks = append(checks, h.nightCheckAudioOutputCapabilities(ctx, now, ba))
 	}
 	allCues := append(append([]config.NightSessionCue{}, payload.EnterShow.Cues...), payload.EnterResting.Cues...)
 	checks = append(checks, nightCheckAnnouncementAssets(allCues))

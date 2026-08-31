@@ -10,7 +10,9 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/audioconfigpush"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
+	"github.com/showmeshsystems/showmesh/pkg/capability"
 )
 
 // This file is the HTTP surface for the "audio.node" collection
@@ -65,6 +67,78 @@ func audioNodeRouteEvidence(ctx context.Context, nodes NodeLister, now time.Time
 		break
 	}
 	return programRoutes, ltcRoutes, nil
+}
+
+// audioNodeCapabilityEvidence is what a granular capability lookup needs
+// from one node's current inventory row, distinguishing genuine "the node
+// declared X" evidence from every case that is not that: never seen,
+// never advertised a Hello, or advertised one this coordinator can no
+// longer confirm is current. api/openapi.yaml's own NightReadinessCheck
+// description states the rule this exists to honour: missing evidence is
+// always "unknown", never "failed" ("failed" is reserved for a node
+// that DID advertise and genuinely lacks an ability).
+type audioNodeCapabilityEvidence struct {
+	// Capabilities is nv.Hello.Capabilities verbatim, or nil when this
+	// node has never advertised one. Only meaningful when Live is true;
+	// a caller must not treat a non-nil Capabilities here as current
+	// evidence on its own; Live is the guard.
+	Capabilities capability.Set
+	// NeverPublished is true when this node has never appeared in
+	// inventory at all, or has appeared but has never sent a Hello. An
+	// agent that predates this capability signal (or one this
+	// coordinator simply has never heard from) makes NO CLAIM about
+	// these capabilities at all, which is a different fact from a
+	// current agent whose Hello declares an empty or incomplete set: a
+	// caller must report that as not_verifiable, never as failed or
+	// unknown - reading silence as a negative claim is the same
+	// dishonesty this evidence struct exists to remove, pointed the
+	// other way. Never true at the same time as Live.
+	NeverPublished bool
+	// Live is true only when this node appeared in inventory with a
+	// Hello AND [inventory.NodeView.Liveness] reports
+	// [inventory.LivenessOnline]. A node this coordinator cannot
+	// currently confirm is online (offline, or simply never observed
+	// enough to say) still keeps its last retained Hello indefinitely
+	// (inventory never deletes a row), so Capabilities being non-nil is
+	// not, on its own, current evidence of what that node declares right
+	// now.
+	Live bool
+	// NotLiveReason explains why Live is false when NeverPublished is
+	// also false (a Hello exists but is not currently trustworthy):
+	// empty when Live is true or NeverPublished is true.
+	NotLiveReason string
+}
+
+// audioNodeCapabilitySet reads nodeID's complete, current Hello capability
+// evidence live from [Dependencies.Nodes], the same evidence source as
+// [audioNodeRouteEvidence], generalized past the two literal IDs that
+// function reads so a caller (item-transition confirmation, the
+// resting:background-audio-output-capabilities readiness check) can look
+// up any granular audio.playback/audio.mix/audio.transition ID against
+// it, and told plainly whether that evidence is trustworthy as current
+// (see [audioNodeCapabilityEvidence]'s own doc comment).
+func audioNodeCapabilitySet(ctx context.Context, nodes NodeLister, now time.Time, nodeID string) (audioNodeCapabilityEvidence, error) {
+	views, err := nodes.Snapshot(ctx, now)
+	if err != nil {
+		return audioNodeCapabilityEvidence{}, fmt.Errorf("api: snapshot nodes for audio.node capability evidence: %w", err)
+	}
+	for _, nv := range views {
+		if nv.NodeID != nodeID {
+			continue
+		}
+		if nv.Hello == nil {
+			return audioNodeCapabilityEvidence{NeverPublished: true}, nil
+		}
+		if nv.Liveness != inventory.LivenessOnline {
+			return audioNodeCapabilityEvidence{
+				Capabilities: nv.Hello.Capabilities,
+				NotLiveReason: fmt.Sprintf("this coordinator cannot currently confirm this audio.node is online (liveness %q: %s), so its retained capability advertisement cannot be trusted as current",
+					nv.Liveness, nv.LivenessReason),
+			}, nil
+		}
+		return audioNodeCapabilityEvidence{Capabilities: nv.Hello.Capabilities, Live: true}, nil
+	}
+	return audioNodeCapabilityEvidence{NeverPublished: true}, nil
 }
 
 // capabilityRoutesAttribute reads a capability's "routes" attribute as a

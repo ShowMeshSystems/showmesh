@@ -35,7 +35,7 @@ func nightBackgroundAudioTestHandlers(t *testing.T) (*handlers, *store.Store, *f
 	deps := Dependencies{
 		NightSessions: st, Config: st, Commands: st, Identity: svc,
 		AudioPublisher: pub, AudioSessions: st, Assets: st, Observations: obsLister,
-		ResolumeActions: &fakeResolumeActionDispatcher{},
+		ResolumeActions: &fakeResolumeActionDispatcher{}, Nodes: &fakeNodeLister{}, Audio: &fakeNodeAudioLister{},
 	}.withDefaults()
 	return &handlers{deps: deps, clock: fixedClock(testNow), logger: testLogger()}, st, pub, obsLister
 }
