@@ -72,23 +72,45 @@ type EmergencyStopFollowUpResult struct {
 }
 
 // EmergencyStopNightSessionOutcome reports what, if anything, happened to
-// the active night session as level stop-power-down's own "standard
-// graceful shutdown" component. Present is false when no night session
-// was active: a real, valid, non-degraded outcome, not an error.
+// the active night session as level stop-power-down's or hard-stop's own
+// night-session component. Present is false when no night session was
+// active: a real, valid, non-degraded outcome, not an error. Error is
+// non-empty exactly when this component could not be attempted or did not
+// complete; the stop itself still proceeded regardless (this build's own
+// degrade-safely rule, applied to every component that supports the stop,
+// not only to follow-up actions). When Error is set, Outcome carries
+// whatever partial information is known and may be empty.
 type EmergencyStopNightSessionOutcome struct {
 	Present   bool   `json:"present"`
 	SessionID string `json:"sessionId,omitempty"`
 	Outcome   string `json:"outcome,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // EmergencyStopResult is the shared result shape every trigger route
 // (stop, stop-power-down, and hard-stop's own fire) answers with.
+//
+// NoInstancesConfigured is the POSITIVE signal that zero FPP instances are
+// configured, distinct from a failure to read the configured instance
+// list: StopOutcomes is a required array and is NEVER null and never
+// silently empty on a failure, so a caller must read
+// NoInstancesConfigured rather than infer "nothing to stop" from an empty
+// StopOutcomes array. A failure to read the instance list is instead
+// reported as one "failed" entry inside StopOutcomes.
+//
+// FollowUpConfigError is non-empty exactly when this level's own
+// show.emergencystop configuration could not be read or decoded, in which
+// case FollowUps is empty (no follow-up actions were attempted) but
+// StopOutcomes still reflects a real dispatch attempt: the stop does not
+// need this configuration to proceed.
 type EmergencyStopResult struct {
-	Level          string                            `json:"level"`
-	IdempotencyKey string                            `json:"idempotencyKey"`
-	StopOutcomes   []EmergencyStopInstanceOutcome    `json:"stopOutcomes"`
-	NightSession   *EmergencyStopNightSessionOutcome `json:"nightSession,omitempty"`
-	FollowUps      []EmergencyStopFollowUpResult     `json:"followUps"`
+	Level                 string                            `json:"level"`
+	IdempotencyKey        string                            `json:"idempotencyKey"`
+	StopOutcomes          []EmergencyStopInstanceOutcome    `json:"stopOutcomes"`
+	NoInstancesConfigured bool                              `json:"noInstancesConfigured"`
+	NightSession          *EmergencyStopNightSessionOutcome `json:"nightSession,omitempty"`
+	FollowUps             []EmergencyStopFollowUpResult     `json:"followUps"`
+	FollowUpConfigError   string                            `json:"followUpConfigError,omitempty"`
 }
 
 // EmergencyStopResponse is the body of POST .../emergency-stop/stop,

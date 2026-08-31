@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -27,6 +28,7 @@ var errFakeResolumeDispatch = errors.New("emergencystop_test: injected resolume 
 type emergencyStopFixture struct {
 	api         *API
 	st          *store.Store
+	svc         identity.Service
 	adminToken  string
 	viewer      identity.Principal
 	viewerToken string
@@ -43,6 +45,29 @@ func (f *emergencyStopFixture) sentCommands() []string {
 }
 
 func newEmergencyStopFixture(t *testing.T, now time.Time) *emergencyStopFixture {
+	t.Helper()
+	return newEmergencyStopFixtureWithDeps(t, now, nil, nil, "player-01")
+}
+
+// newEmergencyStopFixtureWithInstances builds count configured FPP
+// instances, all pointing at the SAME fake server, for exercising the
+// concurrent dispatch path in emergencyStopAllInstances.
+func newEmergencyStopFixtureWithInstances(t *testing.T, now time.Time, count int) *emergencyStopFixture {
+	t.Helper()
+	ids := make([]string, count)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("player-%02d", i+1)
+	}
+	return newEmergencyStopFixtureWithDeps(t, now, nil, nil, ids...)
+}
+
+// newEmergencyStopFixtureWithDeps builds the fixture with caller-supplied
+// FPPLister/NightSessionStore overrides (e.g. one that errors, for this
+// file's own blocking-1/blocking-2 coverage), or, when either is nil, the
+// default: a fake FPP pointing at a fresh httptest server with one
+// FPPInstanceView per id in instanceIDs, and the real store for night
+// sessions.
+func newEmergencyStopFixtureWithDeps(t *testing.T, now time.Time, fpp FPPLister, nightSessions NightSessionStore, instanceIDs ...string) *emergencyStopFixture {
 	t.Helper()
 	f := &emergencyStopFixture{}
 
@@ -65,11 +90,43 @@ func newEmergencyStopFixture(t *testing.T, now time.Time) *emergencyStopFixture 
 		"blackout": {Outcome: ResolumeOutcomeConfirmed, Reason: "went dark"},
 	}}
 
+	workingFPP := &fakeFPPLister{}
+	if len(instanceIDs) > 0 {
+		views := make([]FPPInstanceView, len(instanceIDs))
+		for i, id := range instanceIDs {
+			views[i] = FPPInstanceView{InstanceID: id, Endpoint: srv.URL}
+		}
+		workingFPP.views = views
+	}
+	if fpp == nil {
+		fpp = workingFPP
+	}
+	if nightSessions == nil {
+		nightSessions = st
+	}
+
+	// Setup (creating the show and its own follow-up action) runs against
+	// a SEPARATE handlers instance with a known-working FPP lister,
+	// sharing the SAME store: show.action's own PUT validates any
+	// action's instanceId against the configured FPP endpoint list
+	// regardless of that action's own integration, so an intentionally
+	// erroring fpp/nightSessions override for the test under study must
+	// never be on the path setup itself depends on.
+	setupAPI := New(Dependencies{
+		Nodes: &fakeNodeLister{}, Observations: &fakeObservationLister{},
+		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
+		FPP:      workingFPP,
+		Identity: svc, Config: st, Commands: st, NightSessions: st,
+		Macros: &fakeMacroRunner{}, ResolumeActions: f.resolume,
+	}.withDefaults(), Options{Clock: fixedClock(now), Logger: testLogger()})
+	mustPutShow(t, setupAPI, f.adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutAction(t, setupAPI, f.adminToken, "worklights-on", validShowActionResolumeBlackoutBody)
+
 	deps := Dependencies{
 		Nodes: &fakeNodeLister{}, Observations: &fakeObservationLister{},
 		Events: &fakeEventReader{}, Collectors: &fakeCollectorStatusLister{},
-		FPP:      &fakeFPPLister{views: []FPPInstanceView{{InstanceID: "player-01", Endpoint: srv.URL}}},
-		Identity: svc, Config: st, Commands: st, NightSessions: st,
+		FPP:      fpp,
+		Identity: svc, Config: st, Commands: st, NightSessions: nightSessions,
 		Macros: &fakeMacroRunner{}, ResolumeActions: f.resolume,
 	}.withDefaults()
 
@@ -79,9 +136,22 @@ func newEmergencyStopFixture(t *testing.T, now time.Time) *emergencyStopFixture 
 	})
 
 	f.st = st
-	mustPutShow(t, f.api, f.adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
-	mustPutAction(t, f.api, f.adminToken, "worklights-on", validShowActionResolumeBlackoutBody)
+	f.svc = svc
 	return f
+}
+
+// erroringNightSessionStore embeds a real *store.Store and overrides ONLY
+// GetCurrentNightSession, so every OTHER NightSessionStore method (InTx
+// included) still works exactly as the real store would: this file's own
+// blocking-2 coverage needs a failing READ, not a fake reimplementing the
+// whole interface.
+type erroringNightSessionStore struct {
+	*store.Store
+	err error
+}
+
+func (e *erroringNightSessionStore) GetCurrentNightSession(ctx context.Context) (store.NightSessionRecord, bool, error) {
+	return store.NightSessionRecord{}, false, e.err
 }
 
 func (f *emergencyStopFixture) putConfig(t *testing.T, body string) {
@@ -194,8 +264,11 @@ func TestEmergencyStopRequiresScope(t *testing.T) {
 	f := newEmergencyStopFixture(t, now)
 	f.putConfig(t, emergencyStopEmptyLevelsBody())
 
-	for _, path := range []string{"/api/v1/emergency-stop/stop", "/api/v1/emergency-stop/stop-power-down", "/api/v1/emergency-stop/hard-stop/arm"} {
-		req := newJSONRequest(t, http.MethodPost, path, `{"idempotencyKey":"key-viewer"}`,
+	for _, path := range []string{
+		"/api/v1/emergency-stop/stop", "/api/v1/emergency-stop/stop-power-down",
+		"/api/v1/emergency-stop/hard-stop/arm", "/api/v1/emergency-stop/hard-stop/fire",
+	} {
+		req := newJSONRequest(t, http.MethodPost, path, `{"idempotencyKey":"key-viewer","armToken":"whatever"}`,
 			map[string]string{"Authorization": "Bearer " + f.viewerToken})
 		resp, body := doRawRequest(t, f.api.Handler, req)
 		if resp.StatusCode != http.StatusForbidden {

@@ -105,14 +105,17 @@ type emergencyStopNightSessionOutcome struct {
 	Present   bool   `json:"present"`
 	SessionID string `json:"sessionId"`
 	Outcome   string `json:"outcome"`
+	Error     string `json:"error"`
 }
 
 type emergencyStopResult struct {
-	Level          string                            `json:"level"`
-	IdempotencyKey string                            `json:"idempotencyKey"`
-	StopOutcomes   []emergencyStopInstanceOutcome    `json:"stopOutcomes"`
-	NightSession   *emergencyStopNightSessionOutcome `json:"nightSession"`
-	FollowUps      []emergencyStopFollowUpResult     `json:"followUps"`
+	Level                 string                            `json:"level"`
+	IdempotencyKey        string                            `json:"idempotencyKey"`
+	StopOutcomes          []emergencyStopInstanceOutcome    `json:"stopOutcomes"`
+	NoInstancesConfigured bool                              `json:"noInstancesConfigured"`
+	NightSession          *emergencyStopNightSessionOutcome `json:"nightSession"`
+	FollowUps             []emergencyStopFollowUpResult     `json:"followUps"`
+	FollowUpConfigError   string                            `json:"followUpConfigError"`
 }
 
 type emergencyStopResponse struct {
@@ -310,18 +313,28 @@ func cmdEmergencyStopHardStopFire(args []string, stdout, stderr io.Writer, clock
 // outcome if present, and every follow-up, then returns the exit code
 // StopOutcomes alone determines (exitCodeForEmergencyStopResult).
 func reportEmergencyStopResult(stdout io.Writer, cmdLabel string, result emergencyStopResult) int {
-	if len(result.StopOutcomes) == 0 {
+	// result.NoInstancesConfigured is the ONLY honest "nothing to stop"
+	// signal, never inferred from an empty StopOutcomes array, which a
+	// failure to read the configured instance list also leaves non-empty
+	// (one "failed" entry), never empty.
+	if result.NoInstancesConfigured {
 		_, _ = fmt.Fprintf(stdout, "%s: no FPP instances are configured; nothing to stop\n", result.Level)
 	}
 	for _, o := range result.StopOutcomes {
 		_, _ = fmt.Fprintf(stdout, "%s: %s: %s\n", o.Outcome, o.InstanceID, o.OutcomeReason)
 	}
 	if result.NightSession != nil {
-		if result.NightSession.Present {
+		switch {
+		case result.NightSession.Error != "":
+			_, _ = fmt.Fprintf(stdout, "night session: DEGRADED (the stop still proceeded): %s\n", result.NightSession.Error)
+		case result.NightSession.Present:
 			_, _ = fmt.Fprintf(stdout, "night session %s: %s\n", result.NightSession.SessionID, result.NightSession.Outcome)
-		} else {
+		default:
 			_, _ = fmt.Fprintln(stdout, "night session: none active")
 		}
+	}
+	if result.FollowUpConfigError != "" {
+		_, _ = fmt.Fprintf(stdout, "follow-up configuration: DEGRADED (the stop still proceeded, no follow-ups were attempted): %s\n", result.FollowUpConfigError)
 	}
 	for _, f := range result.FollowUps {
 		label := f.Label

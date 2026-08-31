@@ -61,6 +61,25 @@ var scopeShowEmergencyStopInvoke = identity.ScopeShowEmergencyStopInvoke
 
 const maxEmergencyStopRequestBodyBytes = 1024
 
+// maxEmergencyStopIdempotencyKeyLength bounds the ACCEPTED top-level
+// idempotencyKey, strictly tighter than command.MaxIdempotencyKeyLength
+// (200): every per-instance and per-action key derived below prefixes and
+// suffixes this value ("emergencystop:"+key+":fpp:"+instanceID or
+// ":action:"+actionID), roughly 22 bytes of fixed overhead before the
+// instance or action id itself. A caller-supplied key long enough to push
+// a derived key over 200 bytes must be refused here, at the boundary,
+// rather than silently reported as a per-instance "refused" once dispatch
+// already re-validates it. 64 leaves well over 100 bytes of margin for
+// the longest realistic instance or action id; showmeshctl's own 36-byte
+// UUID fits with room to spare.
+const maxEmergencyStopIdempotencyKeyLength = 64
+
+// emergencyStopInstanceListUnavailableID is the synthetic instanceId used
+// for the ONE outcome entry [handlers.emergencyStopAllInstances] returns
+// when the configured FPP instance list itself could not be read: never a
+// real instance id, and never mistaken for one.
+const emergencyStopInstanceListUnavailableID = "(fpp-instance-list)"
+
 // The three level names on the wire, in URL paths, and in this build's own
 // three minted audit action strings, deliberately the SAME spelling in
 // all three places (config/emergencystop.go's own doc comment states the
@@ -85,10 +104,12 @@ const (
 // (both are 409s) because the remedy differs: arm again and fire promptly,
 // vs. someone else already consumed THIS token and the operator should
 // check whether the hard stop already happened before retrying blindly.
-// cmd_emergency_stop.go maps this type to exitActionRefused directly
-// (orchestrator ruling: "a refused arm is an action refusal"); the
-// compare-and-swap race case below reuses the ordinary, already-wired
-// [ProblemTypeConflict] -> exitConflict path and mints nothing new for it.
+// cmd/showmeshctl/problem.go's own exitCodeForProblem maps this type to
+// exitActionRefused, on the Night* problem types' own precedent one
+// section above it (orchestrator ruling: "a refused arm is an action
+// refusal"). The compare-and-swap race case below reuses the ordinary,
+// already-wired [ProblemTypeConflict] -> exitConflict path and mints
+// nothing new for it.
 const ProblemTypeEmergencyStopHardStopNotArmed = problemBaseURI + "emergency-stop-hard-stop-not-armed"
 
 func emergencyStopHardStopNotArmedProblem(detail string) v1.Problem {
@@ -216,11 +237,26 @@ func decodeEmergencyStopIdempotencyKeyBody(r *http.Request, maxBytes int64) (ide
 	if raw, ok := top["idempotencyKey"]; ok {
 		_ = json.Unmarshal(raw, &idempotencyKey)
 	}
-	if err := command.ValidateIdempotencyKey(idempotencyKey); err != nil {
+	if err := emergencyStopValidateIdempotencyKey(idempotencyKey); err != nil {
 		p := invalidParameterProblem("idempotencyKey: " + err.Error())
 		return "", &p
 	}
 	return idempotencyKey, nil
+}
+
+// emergencyStopValidateIdempotencyKey applies command.ValidateIdempotencyKey
+// first (the general contract every write in this API shares), then this
+// endpoint's own tighter [maxEmergencyStopIdempotencyKeyLength] bound, so
+// every derived per-instance/per-action key built from it stays within
+// dispatchFPPCommand's/dispatchActionTarget's own 200-byte limit.
+func emergencyStopValidateIdempotencyKey(idempotencyKey string) error {
+	if err := command.ValidateIdempotencyKey(idempotencyKey); err != nil {
+		return err
+	}
+	if len(idempotencyKey) > maxEmergencyStopIdempotencyKeyLength {
+		return fmt.Errorf("got %d bytes, want at most %d for this endpoint", len(idempotencyKey), maxEmergencyStopIdempotencyKeyLength)
+	}
+	return nil
 }
 
 // --- dispatching the immediate stop across every configured FPP instance ---
@@ -235,14 +271,26 @@ func decodeEmergencyStopIdempotencyKeyBody(r *http.Request, maxBytes int64) (ide
 // dispatchFPPCommand's own existing replay handling instead of dispatching
 // a second stop, the identical protection a broker redelivery gets for
 // free from the SAME mechanism.
-func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) []v1.EmergencyStopInstanceOutcome {
+//
+// noInstancesConfigured is the ONLY honest source of "nothing to stop": a
+// failure to READ the configured instance list is a different fact from
+// a confirmed empty list, and the two must never be wire-identical. A read
+// failure returns ONE synthetic "failed" outcome entry instead (never a
+// nil or empty slice), so the returned slice is empty if and only if
+// noInstancesConfigured is true - satisfying [v1.EmergencyStopResult]'s
+// own required, never-null stopOutcomes array either way.
+func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time, idempotencyKey string, ac authContext, clientAddr string) (outcomes []v1.EmergencyStopInstanceOutcome, noInstancesConfigured bool) {
 	endpoints, err := currentFPPEndpoints(ctx, h.deps.FPP)
 	if err != nil {
-		h.logWarn("emergency stop: failed to list configured FPP instances", "error", err)
-		return nil
+		h.logWarn("emergency stop: failed to list configured FPP instances; no stop could be dispatched", "error", err)
+		return []v1.EmergencyStopInstanceOutcome{{
+			InstanceID:    emergencyStopInstanceListUnavailableID,
+			Outcome:       "failed",
+			OutcomeReason: fmt.Sprintf("could not list configured FPP instances, so no stop could be dispatched to any of them: %v", err),
+		}}, false
 	}
 	if len(endpoints) == 0 {
-		return []v1.EmergencyStopInstanceOutcome{}
+		return []v1.EmergencyStopInstanceOutcome{}, true
 	}
 
 	out := make([]v1.EmergencyStopInstanceOutcome, len(endpoints))
@@ -274,7 +322,7 @@ func (h *handlers) emergencyStopAllInstances(ctx context.Context, now time.Time,
 		}(i, ep.ID)
 	}
 	wg.Wait()
-	return out
+	return out, false
 }
 
 func emergencyStopInstanceIdempotencyKey(idempotencyKey, instanceID string) string {
@@ -343,15 +391,21 @@ func emergencyStopFollowUpCommandID(idempotencyKey, actionID string) string {
 // appears in the audit log as "night.power-down-presentation" exactly
 // like an operator calling that command directly would.
 //
-// Returns present=false, with no error, when no night session is active:
-// a real, valid, non-degraded outcome, not a failure to report.
-func (h *handlers) nightEmergencyPowerDown(ctx context.Context, now time.Time, issuer identity.AuditEntry) (v1.EmergencyStopNightSessionOutcome, error) {
+// Returns present=false when no night session is active: a real, valid,
+// non-degraded outcome, not a failure to report. THIS COMPONENT NEVER
+// ABORTS THE STOP: a store read failure, a transaction failure, or an
+// unexpected internal refusal is logged and folded into the returned
+// outcome's own Error field rather than propagated as an error this
+// method's caller would have to decide whether to abort on. The stop
+// itself does not need this component to have succeeded.
+func (h *handlers) nightEmergencyPowerDown(ctx context.Context, now time.Time, issuer identity.AuditEntry) v1.EmergencyStopNightSessionOutcome {
 	current, hasCurrent, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
 	if err != nil {
-		return v1.EmergencyStopNightSessionOutcome{}, err
+		h.logWarn("emergency stop: could not read the current night session; the stop still proceeded", "error", err)
+		return v1.EmergencyStopNightSessionOutcome{Error: "could not read the current night session: " + err.Error()}
 	}
 	if !hasCurrent {
-		return v1.EmergencyStopNightSessionOutcome{Present: false}, nil
+		return v1.EmergencyStopNightSessionOutcome{Present: false}
 	}
 
 	var attributionDegraded bool
@@ -359,15 +413,17 @@ func (h *handlers) nightEmergencyPowerDown(ctx context.Context, now time.Time, i
 		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, nightShutdownForced)
 	})
 	if err != nil {
-		return v1.EmergencyStopNightSessionOutcome{}, err
+		h.logWarn("emergency stop: night session power-down step failed; the stop still proceeded", "sessionId", current.ID, "error", err)
+		return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Error: "power-down step failed: " + err.Error()}
 	}
 	if problem != nil {
 		// nightPowerDownPresentationApply is gate-free and never returns a
 		// problem; a non-nil problem here would be this package's own
 		// internal-contract violation, not a caller-facing refusal.
-		return v1.EmergencyStopNightSessionOutcome{}, fmt.Errorf("api: emergency power-down: unexpected refusal: %s", problem.Detail)
+		h.logWarn("emergency stop: unexpected refusal forcing night session power-down; the stop still proceeded", "sessionId", current.ID, "detail", problem.Detail)
+		return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Error: "unexpected refusal: " + problem.Detail}
 	}
-	return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Outcome: out.outcome}, nil
+	return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Outcome: out.outcome}
 }
 
 // nightEmergencyEndSession is level hard-stop's own "no wait time" night-
@@ -381,13 +437,19 @@ func (h *handlers) nightEmergencyPowerDown(ctx context.Context, now time.Time, i
 // waits on the night loop's own fading-out tick and its fresh idle
 // evidence (RESTING-MODE.md §4.6/§4.7). Mints no new audit action: this
 // reuses nightCommandEndSession, appearing as "night.end-session".
-func (h *handlers) nightEmergencyEndSession(ctx context.Context, now time.Time, issuer identity.AuditEntry) (v1.EmergencyStopNightSessionOutcome, error) {
+// THIS COMPONENT NEVER ABORTS THE STOP, on the identical reasoning
+// [handlers.nightEmergencyPowerDown]'s own doc comment states in full: a
+// failure here is logged and folded into the returned outcome's own Error
+// field, never propagated as an error the caller would have to decide
+// whether to abort on.
+func (h *handlers) nightEmergencyEndSession(ctx context.Context, now time.Time, issuer identity.AuditEntry) v1.EmergencyStopNightSessionOutcome {
 	current, hasCurrent, err := h.deps.NightSessions.GetCurrentNightSession(ctx)
 	if err != nil {
-		return v1.EmergencyStopNightSessionOutcome{}, err
+		h.logWarn("emergency stop: could not read the current night session; the stop still proceeded", "error", err)
+		return v1.EmergencyStopNightSessionOutcome{Error: "could not read the current night session: " + err.Error()}
 	}
 	if !hasCurrent {
-		return v1.EmergencyStopNightSessionOutcome{Present: false}, nil
+		return v1.EmergencyStopNightSessionOutcome{Present: false}
 	}
 
 	var attributionDegraded bool
@@ -395,12 +457,14 @@ func (h *handlers) nightEmergencyEndSession(ctx context.Context, now time.Time, 
 		return h.nightEndSessionDecide(now, cur), nil, nil
 	})
 	if err != nil {
-		return v1.EmergencyStopNightSessionOutcome{}, err
+		h.logWarn("emergency stop: night session end-session step failed; the stop still proceeded", "sessionId", current.ID, "error", err)
+		return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Error: "end-session step failed: " + err.Error()}
 	}
 	if problem != nil {
-		return v1.EmergencyStopNightSessionOutcome{}, fmt.Errorf("api: emergency end-session: unexpected refusal: %s", problem.Detail)
+		h.logWarn("emergency stop: unexpected refusal forcing night session end-session; the stop still proceeded", "sessionId", current.ID, "detail", problem.Detail)
+		return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Error: "unexpected refusal: " + problem.Detail}
 	}
-	return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Outcome: out.outcome}, nil
+	return v1.EmergencyStopNightSessionOutcome{Present: true, SessionID: current.ID, Outcome: out.outcome}
 }
 
 // --- resolving this kind's own configured follow-up lists ---
@@ -430,6 +494,23 @@ func (h *handlers) resolveEmergencyStopPayload(ctx context.Context) (config.Emer
 	return payload, nil
 }
 
+// resolveEmergencyStopPayloadDegrading wraps resolveEmergencyStopPayload
+// for every trigger route: THE STOP DOES NOT NEED THIS CONFIGURATION. An
+// unreadable config object, an unreadable revision, or an undecodable
+// stored row (the shape a downgrade or a forward-compatible writer can
+// leave behind) degrades to [config.EmergencyStopDefaultPayload] (no
+// follow-up actions for any level) rather than aborting the stop the
+// operator is waiting on. configErr is non-empty exactly when this
+// degraded, for the caller to report alongside the result.
+func (h *handlers) resolveEmergencyStopPayloadDegrading(ctx context.Context) (payload config.EmergencyStopPayload, configErr string) {
+	payload, err := h.resolveEmergencyStopPayload(ctx)
+	if err != nil {
+		h.logWarn("emergency stop: could not resolve show.emergencystop config; proceeding with no follow-up actions for this dispatch", "error", err)
+		return config.EmergencyStopDefaultPayload, "follow-up actions could not be read: " + err.Error()
+	}
+	return payload, ""
+}
+
 // --- the four trigger routes ---
 
 func (h *handlers) emergencyStopIssuer(now time.Time, ac authContext, clientAddr string) identity.AuditEntry {
@@ -441,7 +522,10 @@ func (h *handlers) emergencyStopIssuer(now time.Time, ac authContext, clientAddr
 
 // handleEmergencyStop serves POST .../emergency-stop/stop (level 1):
 // immediate stop, plus its own configured follow-ups. No night-session
-// interaction of any kind.
+// interaction of any kind. NOTHING BELOW THE IDEMPOTENCY-KEY CHECK MAY
+// ABORT: the FPP instance list, and this level's own follow-up
+// configuration, each degrade and are reported alongside the stop rather
+// than turning a stop that could otherwise proceed into a 500.
 func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := context.WithoutCancel(r.Context())
@@ -453,27 +537,27 @@ func (h *handlers) handleEmergencyStop(w http.ResponseWriter, r *http.Request) {
 	ac := authFromContext(r.Context())
 	clientAddr := h.clientAddr(r)
 
-	payload, err := h.resolveEmergencyStopPayload(ctx)
-	if err != nil {
-		h.writeInternalError(w, now, "resolve show.emergencystop config", err)
-		return
-	}
-
-	stopOutcomes := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
+	stopOutcomes, noInstancesConfigured := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
+	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.Stop.Actions, ac, clientAddr)
 
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, emergencyStopAuditEntry(
-		h.emergencyStopIssuer(now, ac, clientAddr), auditActionEmergencyStop, idempotencyKey, emergencyStopLevelStop, stopOutcomes, followUps))
+		h.emergencyStopIssuer(now, ac, clientAddr), auditActionEmergencyStop, idempotencyKey, emergencyStopLevelStop, stopOutcomes, followUps, nil, configErr))
 
 	jsonWrite(w, v1.EmergencyStopResponse{ServerTime: formatTime(now), Result: v1.EmergencyStopResult{
-		Level: emergencyStopLevelStop, IdempotencyKey: idempotencyKey, StopOutcomes: stopOutcomes, FollowUps: followUps,
+		Level: emergencyStopLevelStop, IdempotencyKey: idempotencyKey, StopOutcomes: stopOutcomes,
+		NoInstancesConfigured: noInstancesConfigured, FollowUps: followUps, FollowUpConfigError: configErr,
 	}})
 }
 
 // handleEmergencyStopPowerDown serves POST .../emergency-stop/stop-power-down
 // (level 2): immediate stop, forcing the active night session's own
 // existing graceful-shutdown sequence to start now (nightEmergencyPowerDown),
-// plus its own configured follow-ups.
+// plus its own configured follow-ups. NOTHING BELOW THE IDEMPOTENCY-KEY
+// CHECK MAY ABORT: the FPP instance list, the night-session step, and this
+// level's own follow-up configuration, each degrade and are reported
+// alongside the stop rather than turning a stop that could otherwise
+// proceed into a 500.
 func (h *handlers) handleEmergencyStopPowerDown(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	ctx := context.WithoutCancel(r.Context())
@@ -486,26 +570,17 @@ func (h *handlers) handleEmergencyStopPowerDown(w http.ResponseWriter, r *http.R
 	clientAddr := h.clientAddr(r)
 	issuer := h.emergencyStopIssuer(now, ac, clientAddr)
 
-	payload, err := h.resolveEmergencyStopPayload(ctx)
-	if err != nil {
-		h.writeInternalError(w, now, "resolve show.emergencystop config", err)
-		return
-	}
-
-	stopOutcomes := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
-	nightOutcome, err := h.nightEmergencyPowerDown(ctx, now, issuer)
-	if err != nil {
-		h.writeInternalError(w, now, "force night session power-down for emergency stop", err)
-		return
-	}
+	stopOutcomes, noInstancesConfigured := h.emergencyStopAllInstances(ctx, now, idempotencyKey, ac, clientAddr)
+	nightOutcome := h.nightEmergencyPowerDown(ctx, now, issuer)
+	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, idempotencyKey, payload.StopPowerDown.Actions, ac, clientAddr)
 
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, emergencyStopAuditEntry(
-		issuer, auditActionEmergencyStopPowerDown, idempotencyKey, emergencyStopLevelStopPowerDown, stopOutcomes, followUps))
+		issuer, auditActionEmergencyStopPowerDown, idempotencyKey, emergencyStopLevelStopPowerDown, stopOutcomes, followUps, &nightOutcome, configErr))
 
 	jsonWrite(w, v1.EmergencyStopResponse{ServerTime: formatTime(now), Result: v1.EmergencyStopResult{
 		Level: emergencyStopLevelStopPowerDown, IdempotencyKey: idempotencyKey, StopOutcomes: stopOutcomes,
-		NightSession: &nightOutcome, FollowUps: followUps,
+		NoInstancesConfigured: noInstancesConfigured, NightSession: &nightOutcome, FollowUps: followUps, FollowUpConfigError: configErr,
 	}})
 }
 
@@ -531,6 +606,20 @@ func (h *handlers) handleEmergencyStopArm(w http.ResponseWriter, r *http.Request
 // (level 3): the deliberate-intent gate's second call, then immediate
 // stop, abandoning the active night session straight to stopped with no
 // wait (nightEmergencyEndSession), plus its own configured follow-ups.
+//
+// THE ARM TOKEN IS CONSUMED ONLY ONCE THE REQUEST IS PROVEN EXECUTABLE:
+// every check that can refuse the request outright (body decode, the
+// idempotency-key contract) runs BEFORE consume, and every step AFTER
+// consume (the stop dispatch, the night-session step, resolving this
+// level's own follow-up configuration) is a component that degrades and
+// reports rather than aborting - so once consume succeeds, this handler
+// is guaranteed to reach a 200 response. Moving consume later than the
+// arm/fire gate's very first version does NOT weaken the gate itself: the
+// compare-and-swap inside consume is still what decides which of two
+// concurrent fires wins, this only moves what runs BEFORE that decision.
+// A caller whose fire keeps failing this validation never even reaches
+// consume, so it can never be locked out by burning tokens on a request
+// that was never going to execute.
 func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Request) {
 	now := h.now()
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxEmergencyStopRequestBodyBytes+1))
@@ -548,7 +637,7 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	if err := command.ValidateIdempotencyKey(top.IdempotencyKey); err != nil {
+	if err := emergencyStopValidateIdempotencyKey(top.IdempotencyKey); err != nil {
 		writeProblem(w, h.logger, now, invalidParameterProblem("idempotencyKey: "+err.Error()))
 		return
 	}
@@ -572,39 +661,43 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Past this point nothing may refuse the request: the token is spent,
+	// and every remaining step degrades rather than aborting.
 	ctx := context.WithoutCancel(r.Context())
-	payload, err := h.resolveEmergencyStopPayload(ctx)
-	if err != nil {
-		h.writeInternalError(w, now, "resolve show.emergencystop config", err)
-		return
-	}
-
-	stopOutcomes := h.emergencyStopAllInstances(ctx, now, top.IdempotencyKey, ac, clientAddr)
-	nightOutcome, err := h.nightEmergencyEndSession(ctx, now, issuer)
-	if err != nil {
-		h.writeInternalError(w, now, "force night session end-session for emergency hard stop", err)
-		return
-	}
+	stopOutcomes, noInstancesConfigured := h.emergencyStopAllInstances(ctx, now, top.IdempotencyKey, ac, clientAddr)
+	nightOutcome := h.nightEmergencyEndSession(ctx, now, issuer)
+	payload, configErr := h.resolveEmergencyStopPayloadDegrading(ctx)
 	followUps := h.emergencyStopRunFollowUps(ctx, top.IdempotencyKey, payload.HardStop.Actions, ac, clientAddr)
 
 	h.writeBestEffortAuditBounded(ctx, now, degradedAttributionReasonPostDispatch, emergencyStopAuditEntry(
-		issuer, auditActionEmergencyStopHardStop, top.IdempotencyKey, emergencyStopLevelHardStop, stopOutcomes, followUps))
+		issuer, auditActionEmergencyStopHardStop, top.IdempotencyKey, emergencyStopLevelHardStop, stopOutcomes, followUps, &nightOutcome, configErr))
 
 	jsonWrite(w, v1.EmergencyStopResponse{ServerTime: formatTime(now), Result: v1.EmergencyStopResult{
 		Level: emergencyStopLevelHardStop, IdempotencyKey: top.IdempotencyKey, StopOutcomes: stopOutcomes,
-		NightSession: &nightOutcome, FollowUps: followUps,
+		NoInstancesConfigured: noInstancesConfigured, NightSession: &nightOutcome, FollowUps: followUps, FollowUpConfigError: configErr,
 	}})
 }
 
-func emergencyStopAuditEntry(issuer identity.AuditEntry, action, idempotencyKey, level string, stopOutcomes []v1.EmergencyStopInstanceOutcome, followUps []v1.EmergencyStopFollowUpResult) identity.AuditEntry {
+// emergencyStopAuditEntry records every degraded component alongside the
+// stop it never blocked: nightOutcome and configErr are included in Params
+// exactly when they carry something worth an operator reading the audit
+// log later, never only "it worked".
+func emergencyStopAuditEntry(issuer identity.AuditEntry, action, idempotencyKey, level string, stopOutcomes []v1.EmergencyStopInstanceOutcome, followUps []v1.EmergencyStopFollowUpResult, nightOutcome *v1.EmergencyStopNightSessionOutcome, configErr string) identity.AuditEntry {
 	issuer.Action = action
 	issuer.Target = level
 	issuer.IdempotencyKey = idempotencyKey
 	issuer.Kind = identity.AuditOutcome
-	issuer.Params = map[string]any{
+	params := map[string]any{
 		"level":         level,
 		"stopInstances": len(stopOutcomes),
 		"followUps":     followUps,
 	}
+	if nightOutcome != nil && nightOutcome.Error != "" {
+		params["nightSessionError"] = nightOutcome.Error
+	}
+	if configErr != "" {
+		params["followUpConfigError"] = configErr
+	}
+	issuer.Params = params
 	return issuer
 }

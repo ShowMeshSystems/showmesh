@@ -193,3 +193,40 @@ func TestCmdEmergencyStopHardStopFireRequiresToken(t *testing.T) {
 		t.Fatalf("fire endpoint called %d times, want 0: a missing --arm-token must never reach the server", fireCalls)
 	}
 }
+
+// The two 409 refusals on fire must map to TWO DIFFERENT exit codes: the
+// whole reason problemEmergencyStopHardStopNotArmed was minted separate
+// from problemConflict is "arm again, then fire promptly" versus "check
+// whether the hard stop already happened before retrying blindly", and a
+// script cannot act on that distinction if both collapse to one code.
+func TestCmdEmergencyStopHardStopFireNotArmedAndAlreadyConsumedMapToDifferentExitCodes(t *testing.T) {
+	notArmedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/emergency-stop-hard-stop-not-armed","title":"Hard stop is not armed","status":409,"detail":"no valid, unexpired armed hard-stop token for this principal","serverTime":"2026-08-14T22:00:00Z"}`)
+	}))
+	defer notArmedSrv.Close()
+
+	var stdout1, stderr1 bytes.Buffer
+	code1 := cmdEmergencyStop([]string{"hard-stop", "fire", "--arm-token", "tok-1", "--server", notArmedSrv.URL}, &stdout1, &stderr1, func() time.Time { return time.Now() })
+	if code1 != exitActionRefused {
+		t.Fatalf("not-armed: exit code = %d, want exitActionRefused (%d); stderr=%s", code1, exitActionRefused, stderr1.String())
+	}
+
+	alreadyConsumedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = fmt.Fprint(w, `{"type":"https://showmesh.dev/problems/conflict","title":"Hard stop already fired","status":409,"detail":"this arm token was already consumed by an earlier fire request","serverTime":"2026-08-14T22:00:00Z"}`)
+	}))
+	defer alreadyConsumedSrv.Close()
+
+	var stdout2, stderr2 bytes.Buffer
+	code2 := cmdEmergencyStop([]string{"hard-stop", "fire", "--arm-token", "tok-1", "--server", alreadyConsumedSrv.URL}, &stdout2, &stderr2, func() time.Time { return time.Now() })
+	if code2 != exitConflict {
+		t.Fatalf("already-consumed: exit code = %d, want exitConflict (%d); stderr=%s", code2, exitConflict, stderr2.String())
+	}
+
+	if code1 == code2 {
+		t.Fatalf("not-armed and already-consumed both mapped to exit code %d; a script cannot tell them apart", code1)
+	}
+}

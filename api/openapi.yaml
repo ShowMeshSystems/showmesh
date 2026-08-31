@@ -4955,9 +4955,16 @@ paths:
         per-action in `result.followUps` and NEVER changes
         `result.stopOutcomes` or this response's own success: the operator
         pressed the button to stop the show, and a follow-up that failed
-        must never read as "the stop did not happen". No night-session
-        interaction of any kind - see `/emergency-stop/stop-power-down`
-        for level 2.
+        must never read as "the stop did not happen". NOTHING THAT
+        SUPPORTS THE STOP MAY ABORT OR MASK IT: a failure to read the
+        configured FPP instance list is reported as one `failed` entry in
+        `result.stopOutcomes` (never a silent empty array; see
+        `result.noInstancesConfigured` for the actual zero-instance
+        signal), and a failure to read this level's own follow-up
+        configuration degrades to no follow-ups (see
+        `result.followUpConfigError`) rather than aborting the stop. No
+        night-session interaction of any kind - see
+        `/emergency-stop/stop-power-down` for level 2.
       requestBody:
         required: true
         content:
@@ -5004,7 +5011,10 @@ paths:
         evidence before that sequence itself reaches `stopped`
         (RESTING-MODE.md section 4.6/4.7) - see
         `/emergency-stop/hard-stop/fire` for the level with no wait at all.
-        Then invokes this level's own configured
+        A failure in this step (a night-session store read or write that
+        does not succeed) is reported in `result.nightSession.error`
+        rather than aborting the stop: the stop dispatch above has already
+        run regardless. Then invokes this level's own configured
         `show.emergencystop.stopPowerDown.actions` best-effort, in order,
         on the identical never-fails-the-stop rule
         `POST /emergency-stop/stop` states in full.
@@ -5093,16 +5103,32 @@ paths:
         presented while it is still valid, unexpired, and unconsumed.
         Consuming the token is an atomic compare-and-swap: two concurrent
         fire requests presenting the identical token can never both
-        succeed, and `fire`'s own request-level `idempotencyKey` makes a
-        redelivered fire request replay its cached result instead of
-        re-executing - together these mean neither an accidental retry nor
-        a redelivered command can ever fire this level twice. On success,
-        dispatches FPP's "Stop Now" to every configured instance
-        CONCURRENTLY, abandons the active night session straight to
-        `stopped` with NO WAIT for idle evidence (reusing the existing
-        `end-session` night command unchanged - RESTING-MODE.md's own "no
-        wait time" requirement for this level), then invokes this level's
-        own configured `show.emergencystop.hardStop.actions` best-effort,
+        succeed. That compare-and-swap is the ONLY guard against firing
+        this level twice; there is no separate request-level
+        `idempotencyKey` replay cache on `fire` itself, so the same
+        already-consumed token presented again is refused with `409`
+        rather than replayed. The token is consumed only once the request
+        is otherwise valid (idempotencyKey and armToken well-formed), and
+        every step after that point - the stop dispatch, the night-session
+        step, and reading this level's own follow-up configuration -
+        degrades and is reported rather than aborting, so a consumed token
+        is never wasted on a request that then fails for an unrelated
+        reason. Downstream, the per-instance FPP dispatch and each
+        follow-up action's own dispatch are independently protected
+        against a REDELIVERED COMMAND (not a redelivered `fire` request)
+        by the existing per-command idempotency-key layer keyed off this
+        request's own `idempotencyKey`; the night-session step consults no
+        key at all and relies solely on the arm/fire gate above. On
+        success, dispatches FPP's "Stop Now" to every configured instance
+        CONCURRENTLY (an unreadable instance list is reported as a
+        `failed` entry in `stopOutcomes`, never a silent empty array),
+        abandons the active night session straight to `stopped` with NO
+        WAIT for idle evidence (reusing the existing `end-session` night
+        command unchanged - RESTING-MODE.md's own "no wait time"
+        requirement for this level; a failure in this step is reported
+        inside `nightSession.error` rather than aborting the stop), then
+        invokes this level's own configured
+        `show.emergencystop.hardStop.actions` best-effort,
         in order, on the identical never-fails-the-stop rule
         `POST /emergency-stop/stop` states in full.
       requestBody:
@@ -11508,7 +11534,12 @@ components:
         What, if anything, happened to the active night session as level
         stop-power-down's or hard-stop's own night-session component.
         present is false when no night session was active - a real, valid
-        outcome, not an error.
+        outcome, not an error. error is non-empty exactly when this
+        component could not be attempted or did not complete; the stop
+        itself still proceeded regardless (this build's own degrade-safely
+        rule, applied to every component that supports the stop, not only
+        to follow-up actions). When error is set, outcome carries whatever
+        partial information is known and may be absent.
       required: [present]
       properties:
         present:
@@ -11517,6 +11548,8 @@ components:
           type: string
         outcome:
           type: string
+        error:
+          type: string
     EmergencyStopResult:
       type: object
       description: >-
@@ -11524,7 +11557,12 @@ components:
         and hard-stop's own fire) answers with. stopOutcomes and followUps
         are two SEPARATE arrays, deliberately with no combined success
         flag: a caller's exit code is driven by stopOutcomes alone.
-      required: [level, idempotencyKey, stopOutcomes, followUps]
+        NOTHING THAT SUPPORTS THE STOP MAY ABORT OR MASK THE STOP: reading
+        the configured FPP instance list, the night-session step, and
+        reading this level's own follow-up configuration each degrade
+        independently and are reported here rather than turning a stop
+        that could otherwise proceed into a failed response.
+      required: [level, idempotencyKey, stopOutcomes, noInstancesConfigured, followUps]
       properties:
         level:
           type: string
@@ -11535,12 +11573,32 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EmergencyStopInstanceOutcome"
+          description: >-
+            NEVER null and never silently empty on a failure to read the
+            configured instance list, which is instead reported as one
+            "failed" entry here. Empty if and only if
+            noInstancesConfigured is true.
+        noInstancesConfigured:
+          type: boolean
+          description: >-
+            The POSITIVE signal that zero FPP instances are configured,
+            distinct from a failure to read the configured instance list.
+            A caller must read this field rather than infer "nothing to
+            stop" from an empty stopOutcomes array.
         nightSession:
           $ref: "#/components/schemas/EmergencyStopNightSessionOutcome"
         followUps:
           type: array
           items:
             $ref: "#/components/schemas/EmergencyStopFollowUpResult"
+        followUpConfigError:
+          type: string
+          description: >-
+            Non-empty exactly when this level's own show.emergencystop
+            configuration could not be read or decoded, in which case
+            followUps is empty (no follow-up actions were attempted) but
+            stopOutcomes still reflects a real dispatch attempt: the stop
+            does not need this configuration to proceed.
     EmergencyStopResponse:
       type: object
       description: >-
