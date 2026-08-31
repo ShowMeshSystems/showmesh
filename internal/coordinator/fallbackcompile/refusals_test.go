@@ -196,6 +196,96 @@ func TestCompileRefusesUnsupportedOutput(t *testing.T) {
 	}
 }
 
+// TestCompileRefusesMissingPlaylistDefinition covers ADR-048's own
+// "never a silently smaller program" rule for a case
+// OutcomeUnresolvableTarget also covers: a playlist has authored FPP
+// entries, but the coordinator has never received the stored FPP
+// playlist definition those entries need to derive entry keys from. A
+// buggy compiler could silently contribute zero entries from this
+// playlist instead; this test proves it refuses the whole compile
+// instead.
+func TestCompileRefusesMissingPlaylistDefinition(t *testing.T) {
+	st := openTestStore(t)
+	now := testNow()
+	showID, nodeID := "halloween", "render-01"
+
+	putShow(t, st, showID, "Halloween")
+	declareNode(t, st, nodeID)
+	putSurface(t, st, "garage", showID, nodeID)
+	createAsset(t, st, showID, "thriller", strings.Repeat("a", 64), "thriller.fseq")
+	putCue(t, st, "thriller", showID, config.ShowCuePayload{
+		Name:    "Thriller",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "thriller"}},
+	})
+	putPlaylist(t, st, "main", config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		FPP: &config.ShowPlaylistFPPBinding{
+			InstanceUUID: testInstanceUUID, PlaylistName: "Main", PlaylistHash: testPlaylistHash,
+		},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-0", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+		},
+	})
+	// Deliberately no putDefinition call: the playlist has an authored
+	// entry, but the coordinator has never stored a definition for it.
+	putActiveShow(t, st, showID)
+
+	result, err := Compile(context.Background(), st, fakeSigner{}, testInstanceUUID, now)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if result.Outcome != OutcomeUnresolvableTarget {
+		t.Fatalf("Compile outcome = %q, want %q; reason: %s", result.Outcome, OutcomeUnresolvableTarget, result.Reason)
+	}
+	if result.Program != nil {
+		t.Fatalf("a refused compile must never carry a Program")
+	}
+}
+
+// TestCompileRefusesWhenNoEntryResolvesToAnyTarget covers the same
+// "never a silently smaller program" rule for the other path to an empty
+// program: every authored entry resolves to zero node targets (the
+// referenced Cue declares no output any declared node can render or
+// play). A buggy compiler could publish a validly signed, empty
+// program; this test proves it refuses instead.
+func TestCompileRefusesWhenNoEntryResolvesToAnyTarget(t *testing.T) {
+	st := openTestStore(t)
+	now := testNow()
+	showID, nodeID := "halloween", "render-01"
+
+	putShow(t, st, showID, "Halloween")
+	declareNode(t, st, nodeID)
+	// Deliberately no putSurface and no putAudioNode: render-01 holds no
+	// surface and no audio.node, so the Cue below resolves to no output
+	// for it, and no other node is declared at all.
+	putCue(t, st, "thriller", showID, config.ShowCuePayload{
+		Name:    "Thriller",
+		Outputs: config.ShowCueOutputs{Render: &config.ShowCueRenderOutput{Sequence: "thriller"}},
+	})
+	putPlaylist(t, st, "main", config.ShowPlaylistPayload{
+		Show: showID, Name: "Main", Runner: config.ShowPlaylistRunnerFPP,
+		FPP: &config.ShowPlaylistFPPBinding{
+			InstanceUUID: testInstanceUUID, PlaylistName: "Main", PlaylistHash: testPlaylistHash,
+		},
+		Entries: []config.ShowPlaylistEntry{
+			{ID: "entry-0", Cue: "thriller", FPP: &config.ShowPlaylistEntryFPP{Section: "mainPlaylist", Position: 0}},
+		},
+	})
+	putDefinition(t, st, testInstanceUUID, testPlaylistHash, "thriller.fseq")
+	putActiveShow(t, st, showID)
+
+	result, err := Compile(context.Background(), st, fakeSigner{}, testInstanceUUID, now)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if result.Outcome != OutcomeUnresolvableTarget {
+		t.Fatalf("Compile outcome = %q, want %q; reason: %s", result.Outcome, OutcomeUnresolvableTarget, result.Reason)
+	}
+	if result.Program != nil {
+		t.Fatalf("a refused compile must never carry a Program")
+	}
+}
+
 // TestCompileRefusesUnsignedResult covers the sixth named refusal: every
 // other check passes, but the coordinator's own signing step fails.
 func TestCompileRefusesUnsignedResult(t *testing.T) {

@@ -2,9 +2,9 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -13,7 +13,6 @@ import (
 	v1 "github.com/showmeshsystems/showmesh/internal/coordinator/api/v1"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/identity"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
-	"github.com/showmeshsystems/showmesh/pkg/fallbackprogram"
 )
 
 // This file is Track J's J1 own HTTP surface (ADR-048,
@@ -98,7 +97,7 @@ func (h *handlers) handleGetFallbackProgram(w http.ResponseWriter, r *http.Reque
 
 	rec, err := h.deps.FallbackPrograms.GetFallbackProgram(ctx, instanceUUID)
 	if errors.Is(err, store.ErrFallbackProgramNotFound) {
-		ackStatus, ackPackage, ackAt, ackErr := h.resolveFallbackProgramAckFields(ctx, instanceUUID, "")
+		ackStatus, ackPackage, ackAt, ackErr := h.resolveFallbackProgramAckFields(ctx, instanceUUID, "", "")
 		if ackErr != nil {
 			h.writeInternalError(w, now, "get fallback program acknowledgement", ackErr)
 			return
@@ -114,13 +113,13 @@ func (h *handlers) handleGetFallbackProgram(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var signed fallbackprogram.SignedProgram
-	if err := json.Unmarshal([]byte(rec.ProgramJSON), &signed); err != nil {
-		h.writeInternalError(w, now, "decode stored fallback program", err)
+	programBytes, err := extractStoredProgramBytes(rec.ProgramJSON)
+	if err != nil {
+		h.writeInternalError(w, now, "extract stored fallback program bytes", err)
 		return
 	}
 
-	ackStatus, ackPackage, ackAt, err := h.resolveFallbackProgramAckFields(ctx, instanceUUID, rec.PackageID)
+	ackStatus, ackPackage, ackAt, err := h.resolveFallbackProgramAckFields(ctx, instanceUUID, rec.PackageID, rec.Revision)
 	if err != nil {
 		h.writeInternalError(w, now, "get fallback program acknowledgement", err)
 		return
@@ -128,20 +127,47 @@ func (h *handlers) handleGetFallbackProgram(w http.ResponseWriter, r *http.Reque
 
 	jsonWrite(w, v1.FallbackProgramResponse{
 		ServerTime: formatTime(now), FPPInstanceUUID: instanceUUID, Published: true,
-		Program:            mapFallbackProgramBody(signed),
+		Program: programBytes, SignatureBase64: rec.SignatureB64,
 		AcknowledgedStatus: ackStatus, AcknowledgedPackage: ackPackage, AcknowledgedAt: ackAt,
 	})
 }
 
+// extractStoredProgramBytes returns the exact "program" sub-object bytes
+// out of programJSON (the stored [fallbackprogram.SignedProgram],
+// marshaled whole by internal/coordinator/fallbackreconcile) via
+// json.RawMessage, which slices the original bytes out verbatim rather
+// than decoding into a Go type and re-marshaling one. See
+// v1.FallbackProgramBody's own doc comment for why any re-derivation,
+// however faithful it looks, risks producing a byte sequence that no
+// longer canonicalizes identically to what was actually signed.
+func extractStoredProgramBytes(programJSON string) (json.RawMessage, error) {
+	var envelope struct {
+		Program json.RawMessage `json:"program"`
+	}
+	if err := json.Unmarshal([]byte(programJSON), &envelope); err != nil {
+		return nil, fmt.Errorf("decode stored signed program envelope: %w", err)
+	}
+	if len(envelope.Program) == 0 {
+		return nil, fmt.Errorf("stored signed program has no program field")
+	}
+	return envelope.Program, nil
+}
+
 // resolveFallbackProgramAckFields turns the stored acknowledgement (if
-// any) into FallbackProgramResponse's three-way verdict, on
+// any) into FallbackProgramResponse's four-way verdict, on
 // [(*handlers).resolveCueCatalogAcknowledgedFields]'s identical shape
 // next door: AcknowledgedPackage/AcknowledgedAt are both nil exactly when
 // the status is [v1.FallbackProgramStatusNeverAcknowledged].
-// currentPackageID empty (no program published, or the caller has not
-// resolved one yet) means there is no "current" for any acknowledgement
-// to match, so the status is never Current in that case.
-func (h *handlers) resolveFallbackProgramAckFields(ctx context.Context, instanceUUID, currentPackageID string) (status string, pkg, ackAt *string, err error) {
+// currentPackageID/currentRevision both empty (no program published, or
+// the caller has not resolved one yet) means there is no "current" for
+// any acknowledgement to match, so the status is never Current in that
+// case. A host reporting anything other than
+// [v1.FallbackProgramVerificationVerified] is [v1.FallbackProgramStatusRejected]
+// unconditionally, checked BEFORE the package/revision comparison: a
+// host that explicitly said it did not trust what it received must never
+// read back as current merely because the packageId or revision happens
+// to match.
+func (h *handlers) resolveFallbackProgramAckFields(ctx context.Context, instanceUUID, currentPackageID, currentRevision string) (status string, pkg, ackAt *string, err error) {
 	ack, err := h.deps.FallbackPrograms.GetFallbackProgramAck(ctx, instanceUUID)
 	if errors.Is(err, store.ErrFallbackProgramAckNotFound) {
 		return v1.FallbackProgramStatusNeverAcknowledged, nil, nil, nil
@@ -149,51 +175,16 @@ func (h *handlers) resolveFallbackProgramAckFields(ctx context.Context, instance
 	if err != nil {
 		return "", nil, nil, err
 	}
-	status = v1.FallbackProgramStatusStale
-	if currentPackageID != "" && ack.PackageID == currentPackageID {
-		status = v1.FallbackProgramStatusCurrent
-	}
 	p := ack.PackageID
 	at := formatTime(ack.AcknowledgedAt)
+	if ack.VerificationResult != v1.FallbackProgramVerificationVerified {
+		return v1.FallbackProgramStatusRejected, &p, &at, nil
+	}
+	status = v1.FallbackProgramStatusStale
+	if currentPackageID != "" && ack.PackageID == currentPackageID && ack.Revision == currentRevision {
+		status = v1.FallbackProgramStatusCurrent
+	}
 	return status, &p, &at, nil
-}
-
-func mapFallbackProgramBody(signed fallbackprogram.SignedProgram) *v1.FallbackProgramBody {
-	p := signed.Program
-	entries := make([]v1.FallbackProgramEntry, 0, len(p.Entries))
-	for _, e := range p.Entries {
-		targets := make([]v1.FallbackProgramTarget, 0, len(e.Targets))
-		for _, t := range e.Targets {
-			target := v1.FallbackProgramTarget{NodeID: t.NodeID}
-			if t.Render != nil {
-				target.Render = &v1.FallbackProgramRenderActivation{
-					Sequence: t.Render.Sequence, Filename: t.Render.Filename, AssetHashes: emptyIfNil(t.Render.AssetHashes),
-				}
-			}
-			if t.Audio != nil {
-				target.Audio = &v1.FallbackProgramAudioActivation{
-					Asset: t.Audio.Asset, Filename: t.Audio.Filename, StartOffsetMillis: t.Audio.StartOffsetMillis,
-					AssetHashes: emptyIfNil(t.Audio.AssetHashes), LTCStartOffsetMillis: t.Audio.LTCStartOffsetMillis,
-				}
-			}
-			targets = append(targets, target)
-		}
-		entries = append(entries, v1.FallbackProgramEntry{
-			EntryKey: e.EntryKey, CueID: e.CueID, CueRevision: e.CueRevision, Targets: targets,
-		})
-	}
-	return &v1.FallbackProgramBody{
-		SchemaVersion: p.SchemaVersion, PackageID: p.PackageID, Revision: p.Revision,
-		ExpiresAt: formatTime(p.ExpiresAt), CompiledAt: formatTime(p.CompiledAt),
-		FPPInstanceUUID: p.FPPInstanceUUID, Show: p.Show, Generation: p.Generation,
-		PlaylistRevisions: p.PlaylistRevisions, CatalogRevisions: p.CatalogRevisions,
-		Entries: entries,
-		Rules: v1.FallbackProgramRules{
-			FallbackBoundary: p.Rules.FallbackBoundary, RestHold: p.Rules.RestHold,
-			LocalShutdown: p.Rules.LocalShutdown, RecoveryBoundary: p.Rules.RecoveryBoundary,
-		},
-		SignatureBase64: base64.StdEncoding.EncodeToString(signed.Signature),
-	}
 }
 
 // --- POST /fallback-programs/{fppInstanceId}/acknowledge ---

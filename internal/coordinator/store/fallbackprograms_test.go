@@ -15,13 +15,19 @@ func TestFallbackProgramRoundTrip(t *testing.T) {
 		t.Fatalf("GetFallbackProgram before any publish: got %v, want ErrFallbackProgramNotFound", err)
 	}
 
+	// Deliberately irregular whitespace and a non-alphabetical key order,
+	// so a byte-for-byte comparison actually proves the stored TEXT round
+	// trips unchanged rather than merely proving something JSON-equivalent
+	// came back: a re-serialization anywhere in the path would normalize
+	// both away.
+	const programJSON = `{  "signature":"c2ln","program":{"fppInstanceUuid":"M4-1",   "schemaVersion":1}}`
 	rec := FallbackProgramRecord{
 		FPPInstanceUUID: "M4-1",
 		PackageID:       "pkg-1",
 		Revision:        "rev-1",
 		ShowID:          "halloween",
 		Generation:      2,
-		ProgramJSON:     `{"schemaVersion":1}`,
+		ProgramJSON:     programJSON,
 		SignatureB64:    "c2ln",
 		ExpiresAt:       time.Unix(2000, 0).UTC(),
 		CompiledAt:      time.Unix(1000, 0).UTC(),
@@ -39,6 +45,17 @@ func TestFallbackProgramRoundTrip(t *testing.T) {
 	}
 	if !got.ExpiresAt.Equal(rec.ExpiresAt) || !got.CompiledAt.Equal(rec.CompiledAt) {
 		t.Fatalf("GetFallbackProgram times = %+v, want %+v", got, rec)
+	}
+	// ProgramJSON and SignatureB64 must round trip byte-for-byte: this is
+	// the exact text a GET route later hands back verbatim (schemaV23's
+	// own doc comment), so a store bug that mangled either column on the
+	// way through must be caught here, not discovered downstream in an
+	// API test.
+	if got.ProgramJSON != programJSON {
+		t.Fatalf("GetFallbackProgram ProgramJSON = %q, want %q (byte-for-byte)", got.ProgramJSON, programJSON)
+	}
+	if got.SignatureB64 != "c2ln" {
+		t.Fatalf("GetFallbackProgram SignatureB64 = %q, want %q", got.SignatureB64, "c2ln")
 	}
 
 	// A second publish upserts, wholesale, never merges.
@@ -90,5 +107,8 @@ func TestFallbackProgramAckRoundTrip(t *testing.T) {
 	}
 	if got.PackageID != rec.PackageID || got.Revision != rec.Revision || got.VerificationResult != rec.VerificationResult {
 		t.Fatalf("GetFallbackProgramAck = %+v, want %+v", got, rec)
+	}
+	if !got.InstalledAt.Equal(rec.InstalledAt) || !got.AcknowledgedAt.Equal(rec.AcknowledgedAt) {
+		t.Fatalf("GetFallbackProgramAck times = %+v, want InstalledAt %v AcknowledgedAt %v", got, rec.InstalledAt, rec.AcknowledgedAt)
 	}
 }

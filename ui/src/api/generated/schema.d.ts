@@ -5396,7 +5396,7 @@ export interface components {
             localShutdown: string;
             recoveryBoundary: string;
         };
-        /** @description The signed fallback program itself. A verifier checks signatureBase64 against exactly the canonicalized fields present here. */
+        /** @description The signed fallback program itself, served verbatim as the coordinator stored it. A verifier checks FallbackProgramResponse.signatureBase64 (a SIBLING field, never nested here) against exactly the canonicalized fields present in this object. */
         FallbackProgramBody: {
             schemaVersion: number;
             packageId: string;
@@ -5418,18 +5418,17 @@ export interface components {
             };
             entries: components["schemas"]["FallbackProgramEntry"][];
             rules: components["schemas"]["FallbackProgramRules"];
-            /** @description The coordinator's Ed25519 signature over this program's canonical bytes, base64-encoded. */
-            signatureBase64: string;
         };
-        /** @description The body of GET /fallback-programs/{fppInstanceId} (ADR-048, Track J's J1). published is false, with program absent, exactly when this coordinator has never successfully compiled and published a program for this host. acknowledgedPackageId and acknowledgedAt are both absent exactly when acknowledgedStatus is "fallback-program-unacknowledged". */
+        /** @description The body of GET /fallback-programs/{fppInstanceId} (ADR-048, Track J's J1). published is false, with program and signatureBase64 both absent, exactly when this coordinator has never successfully compiled and published a program for this host. signatureBase64 is the coordinator's Ed25519 signature over program's own canonical bytes, base64-encoded, deliberately a sibling of program rather than nested inside it: the signature is computed over program's bytes and can never be part of what it signs. acknowledgedPackageId and acknowledgedAt are both absent exactly when acknowledgedStatus is "fallback-program-unacknowledged". */
         FallbackProgramResponse: {
             /** Format: date-time */
             serverTime: string;
             fppInstanceUuid: string;
             published: boolean;
             program?: components["schemas"]["FallbackProgramBody"];
+            signatureBase64?: string;
             /** @enum {string} */
-            acknowledgedStatus: "fallback-program-current" | "fallback-program-stale" | "fallback-program-unacknowledged";
+            acknowledgedStatus: "fallback-program-current" | "fallback-program-stale" | "fallback-program-rejected" | "fallback-program-unacknowledged";
             acknowledgedPackageId?: string;
             /** Format: date-time */
             acknowledgedAt?: string;

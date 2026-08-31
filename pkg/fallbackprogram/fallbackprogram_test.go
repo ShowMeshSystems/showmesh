@@ -53,31 +53,63 @@ func TestComputeRevisionIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestComputeRevisionChangesWithContent proves EACH field of RevisionInput
+// individually contributes to the hash, one subtest per field, on
+// MGR-J's own instruction that a single case could pass by accident: a
+// mutation that stopped any ONE field (Entries in particular: retagging
+// RevisionInput.Entries as `json:"-"` is the specific mutation this
+// table was rewritten to catch) from reaching the hash would leave every
+// OTHER subtest green and only that field's own subtest red.
 func TestComputeRevisionChangesWithContent(t *testing.T) {
 	base, err := ComputeRevision(sampleRevisionInput())
 	if err != nil {
 		t.Fatalf("ComputeRevision: %v", err)
 	}
-	changed := sampleRevisionInput()
-	changed.Generation = 4
-	other, err := ComputeRevision(changed)
-	if err != nil {
-		t.Fatalf("ComputeRevision: %v", err)
+
+	cases := []struct {
+		name   string
+		mutate func(*RevisionInput)
+	}{
+		{"FPPInstanceUUID", func(in *RevisionInput) { in.FPPInstanceUUID = "M4-other" }},
+		{"Show", func(in *RevisionInput) { in.Show = "christmas" }},
+		{"Generation", func(in *RevisionInput) { in.Generation = 4 }},
+		{"PlaylistRevisions", func(in *RevisionInput) { in.PlaylistRevisions["main-playlist"] = 3 }},
+		{"CatalogRevisions", func(in *RevisionInput) { in.CatalogRevisions["node-a"] = "catalog-rev-b" }},
+		{"Entries", func(in *RevisionInput) { in.Entries[0].EntryKey = "entry-key-2" }},
 	}
-	if base == other {
-		t.Fatalf("ComputeRevision did not change when Generation changed")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := sampleRevisionInput()
+			tc.mutate(&changed)
+			other, err := ComputeRevision(changed)
+			if err != nil {
+				t.Fatalf("ComputeRevision: %v", err)
+			}
+			if base == other {
+				t.Fatalf("ComputeRevision did not change when %s alone changed", tc.name)
+			}
+		})
 	}
 }
 
+// TestComputeRevisionExcludesPublishMetadata proves Revision depends
+// only on RevisionInput's own content, never on a Program's separate
+// PackageID/ExpiresAt/CompiledAt fields (publish metadata, not content:
+// see RevisionInput's own doc comment). It calls ComputeRevision TWICE,
+// independently, rather than reusing one call's result for both Program
+// values under comparison: a version that reused a single call (or that
+// replaced ComputeRevision with a function returning a hard-coded
+// constant) would still pass a same-value comparison built from a copy,
+// which is exactly the gap this rewrite closes.
 func TestComputeRevisionExcludesPublishMetadata(t *testing.T) {
-	// A Program built from the identical RevisionInput but with different
-	// PackageID/ExpiresAt/CompiledAt must still report the identical
-	// Revision: those fields are publish metadata, not content (see
-	// RevisionInput's own doc comment).
 	in := sampleRevisionInput()
 	r1, err := ComputeRevision(in)
 	if err != nil {
-		t.Fatalf("ComputeRevision: %v", err)
+		t.Fatalf("ComputeRevision (first call): %v", err)
+	}
+	r2, err := ComputeRevision(sampleRevisionInput())
+	if err != nil {
+		t.Fatalf("ComputeRevision (second, independent call): %v", err)
 	}
 
 	p1 := Program{
@@ -87,13 +119,30 @@ func TestComputeRevisionExcludesPublishMetadata(t *testing.T) {
 		PlaylistRevisions: in.PlaylistRevisions, CatalogRevisions: in.CatalogRevisions,
 		Entries: in.Entries, Rules: FixedRules,
 	}
-	p2 := p1
-	p2.PackageID = "pkg-2"
-	p2.ExpiresAt = time.Unix(2000, 0)
-	p2.CompiledAt = time.Unix(1500, 0)
+	p2 := Program{
+		SchemaVersion: SchemaVersion, PackageID: "pkg-2", Revision: r2,
+		ExpiresAt: time.Unix(2000, 0), CompiledAt: time.Unix(1500, 0),
+		FPPInstanceUUID: in.FPPInstanceUUID, Show: in.Show, Generation: in.Generation,
+		PlaylistRevisions: in.PlaylistRevisions, CatalogRevisions: in.CatalogRevisions,
+		Entries: in.Entries, Rules: FixedRules,
+	}
 
 	if p1.Revision != p2.Revision {
-		t.Fatalf("Revision must be independent of PackageID/ExpiresAt/CompiledAt")
+		t.Fatalf("two independently computed revisions of the identical content differ (%q vs %q) merely because PackageID/ExpiresAt/CompiledAt differ between the two Programs built from them",
+			p1.Revision, p2.Revision)
+	}
+	// Distinguish this from TestComputeRevisionChangesWithContent's own
+	// coverage: prove the two calls above were not BOTH silently
+	// returning the same hard-coded constant regardless of input, by
+	// confirming a THIRD, genuinely different input still changes it.
+	differentContent := sampleRevisionInput()
+	differentContent.Generation = 99
+	r3, err := ComputeRevision(differentContent)
+	if err != nil {
+		t.Fatalf("ComputeRevision (third call, different content): %v", err)
+	}
+	if r3 == r1 {
+		t.Fatalf("ComputeRevision returned the same revision for genuinely different content; a constant-returning implementation would also pass the metadata-exclusion check above for the wrong reason")
 	}
 }
 

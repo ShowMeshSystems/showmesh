@@ -80,10 +80,18 @@ const (
 	// authority the node's own normal-path authorization never granted.
 	OutcomeMissingCatalogAcknowledgement Outcome = "missing-node-catalog-acknowledgement"
 
-	// OutcomeUnresolvableTarget: a Cue's resolved output for a node names
-	// an asset with no resolvable runtime filename (nothing uploaded for
-	// that logical sequence yet). There is nothing for the fallback
-	// activation to point at.
+	// OutcomeUnresolvableTarget: either a Cue's resolved output for a node
+	// names an asset with no resolvable runtime filename (nothing
+	// uploaded for that logical sequence yet), or nothing at all could be
+	// resolved for this host: a participating playlist has no stored FPP
+	// playlist definition to enumerate entries from, or every entry this
+	// host's playlists could match resolved to zero node targets. Either
+	// way, this is never published as a signed program with fewer
+	// entries than the inputs actually contain; a compiler that cannot
+	// resolve what belongs in the program refuses it entirely rather
+	// than quietly signing a smaller one. TRACK-J-fpp-fallback.md J1: "A
+	// refusal is a visible, reported condition, never a silently smaller
+	// program."
 	OutcomeUnresolvableTarget Outcome = "unresolvable-target"
 
 	// OutcomeUnsupportedOutput: a Cue reachable from this host's
@@ -215,13 +223,20 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 
 		def, err := st.GetFPPPlaylistDefinition(ctx, fppInstanceUUID, p.payload.FPP.PlaylistHash)
 		if errors.Is(err, store.ErrFPPPlaylistDefinitionNotFound) {
-			// No stored definition for this playlist revision yet: this
-			// playlist contributes no entries, exactly as
-			// FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3's own framing
-			// ("not fatal to matching ... fatal to readiness") treats it
-			// elsewhere in this codebase. It is not one of this
-			// compiler's six named refusals.
-			continue
+			// Unlike FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 3's own
+			// "not fatal to matching ... fatal to readiness" framing for
+			// live observation reconciliation, a missing definition here
+			// is fatal to compiling THIS host's program: this playlist has
+			// authored entries the compiler cannot resolve without the
+			// definition it derives entry keys from, and silently
+			// contributing zero entries from it would sign a program that
+			// looks complete but is missing content the coordinator simply
+			// has not received yet. Refuse rather than publish a program
+			// smaller than what this playlist's own authoring actually
+			// promises.
+			return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
+				"playlist %q has authored FPP entries but no stored playlist definition for hash %q; the compiler cannot resolve its entry keys",
+				p.objectID, p.payload.FPP.PlaylistHash), nil
 		}
 		if err != nil {
 			return Result{}, fmt.Errorf("fallbackcompile: get fpp playlist definition for %q/%q: %w", fppInstanceUUID, p.payload.FPP.PlaylistHash, err)
@@ -285,9 +300,11 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 						return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
 							"cue %q's render output for node %q has no resolvable asset (sequence %q)", authored.Cue, n.NodeID, outputs.Render.Sequence), nil
 					}
+					renderHashes := append([]string(nil), outputs.Render.AssetHashes...)
+					sort.Strings(renderHashes) // defensive: pkg/cuecatalog's own RevisionInput doc comment only promises its CALLER sorts these; sort again here rather than depend on that upstream promise holding.
 					target.Render = &fallbackprogram.RenderActivation{
 						Sequence: outputs.Render.Sequence, Filename: outputs.Render.Filename,
-						AssetHashes: append([]string(nil), outputs.Render.AssetHashes...),
+						AssetHashes: renderHashes,
 					}
 				}
 				if outputs.Audio != nil {
@@ -295,10 +312,12 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 						return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
 							"cue %q's audio output for node %q has no resolvable asset (asset %q)", authored.Cue, n.NodeID, outputs.Audio.Asset), nil
 					}
+					audioHashes := append([]string(nil), outputs.Audio.AssetHashes...)
+					sort.Strings(audioHashes) // defensive, see renderHashes's own comment above.
 					audio := &fallbackprogram.AudioActivation{
 						Asset: outputs.Audio.Asset, Filename: outputs.Audio.Filename,
 						StartOffsetMillis: outputs.Audio.StartOffsetMillis,
-						AssetHashes:       append([]string(nil), outputs.Audio.AssetHashes...),
+						AssetHashes:       audioHashes,
 					}
 					if outputs.LTC != nil {
 						offset := outputs.LTC.StartOffsetMillis
@@ -333,6 +352,11 @@ func Compile(ctx context.Context, st *store.Store, signer Signer, fppInstanceUUI
 				EntryKey: entryKey, CueID: authored.Cue, CueRevision: cueRevision, Targets: targets,
 			})
 		}
+	}
+
+	if len(entries) == 0 {
+		return refuse(fppInstanceUUID, OutcomeUnresolvableTarget,
+			"no entry of this host's participating playlists resolved to any node target; a signed program with zero entries would be a silently smaller program than what the inputs actually authorize"), nil
 	}
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].EntryKey < entries[j].EntryKey })

@@ -1,5 +1,7 @@
 package v1
 
+import "encoding/json"
+
 // This file is Track J's J1 own wire shapes under
 // /api/v1/fallback-programs (ADR-048): a listing, a per-FPP-host current
 // program read, and an acknowledgement write. It holds no compilation or
@@ -51,11 +53,26 @@ type FallbackProgramRules struct {
 	RecoveryBoundary string `json:"recoveryBoundary"`
 }
 
-// FallbackProgramBody is the signed program itself, as delivered on the
-// wire: the same shape
-// [github.com/showmeshsystems/showmesh/pkg/fallbackprogram.SignedProgram]
-// carries, so an FPP host can verify SignatureBase64 against exactly the
-// canonicalized Program fields present here.
+// FallbackProgramBody documents the shape of FallbackProgramResponse's
+// "program" member for API consumers (openapi.yaml's $ref target); it is
+// never itself constructed or marshaled by this codebase's own HTTP
+// handler. handleGetFallbackProgram serves the coordinator's STORED
+// program bytes verbatim, extracted as raw JSON from what
+// internal/coordinator/fallbackreconcile wrote, rather than decoding
+// into a Go struct and re-marshaling one. Re-deriving a byte sequence
+// through any Go type, including this one, would risk producing bytes
+// that no longer canonicalize identically to what was actually signed
+// (Go's encoding/json distinguishes a nil slice, marshaled as `null`,
+// from an empty one, marshaled as `[]`, two different JSON values that
+// canonicalize to two different byte sequences), which would defeat the
+// signature at the last hop: a receiver that re-canonicalizes what it
+// was served must get back exactly the bytes
+// [github.com/showmeshsystems/showmesh/pkg/fallbackprogram.Program.CanonicalBytes]
+// produced when the coordinator signed it. SignatureBase64 is
+// deliberately NOT a member of this type: the signature is computed over
+// the program's own canonical bytes and can never be part of what it
+// signs, so it travels as FallbackProgramResponse's own sibling field,
+// never nested inside this shape.
 type FallbackProgramBody struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	PackageID     string `json:"packageId"`
@@ -71,31 +88,44 @@ type FallbackProgramBody struct {
 	CatalogRevisions  map[string]string      `json:"catalogRevisions"`
 	Entries           []FallbackProgramEntry `json:"entries"`
 	Rules             FallbackProgramRules   `json:"rules"`
-
-	SignatureBase64 string `json:"signatureBase64"`
 }
 
 // FallbackProgramResponse is GET
 // /fallback-programs/{fppInstanceId}'s body. Published is false exactly
 // when this coordinator has never successfully compiled and published a
 // program for this host, the honest-absence case, matching
-// CueCatalogResponse.Configured's identical posture next door.
+// CueCatalogResponse.Configured's identical posture next door. Program
+// and SignatureBase64 are both present, or both absent, together: see
+// [FallbackProgramBody]'s own doc comment for why Program carries the
+// coordinator's stored bytes verbatim rather than a re-derived DTO, and
+// why the signature is this type's own sibling field rather than nested
+// inside Program.
 type FallbackProgramResponse struct {
-	ServerTime      string               `json:"serverTime"`
-	FPPInstanceUUID string               `json:"fppInstanceUuid"`
-	Published       bool                 `json:"published"`
-	Program         *FallbackProgramBody `json:"program,omitempty"`
+	ServerTime      string          `json:"serverTime"`
+	FPPInstanceUUID string          `json:"fppInstanceUuid"`
+	Published       bool            `json:"published"`
+	Program         json.RawMessage `json:"program,omitempty"`
+	SignatureBase64 string          `json:"signatureBase64,omitempty"`
 
 	AcknowledgedStatus  string  `json:"acknowledgedStatus"`
 	AcknowledgedPackage *string `json:"acknowledgedPackageId,omitempty"`
 	AcknowledgedAt      *string `json:"acknowledgedAt,omitempty"`
 }
 
-// The members of FallbackProgramResponse.AcknowledgedStatus, on
-// CueCatalogStatus's identical three-way vocabulary.
+// The members of FallbackProgramResponse.AcknowledgedStatus.
+// FallbackProgramStatusCurrent/Stale/NeverAcknowledged are on
+// CueCatalogStatus's identical three-way vocabulary; ADR-048 decision 1
+// adds a fourth member that vocabulary has no equivalent for: a host can
+// actively REJECT a package (report verificationResult other than
+// "verified"), which is a fact about the host's own evidence, never
+// collapsed into "current" merely because the acknowledged packageId
+// happens to match. A missing, stale, mismatched, or unacknowledged
+// package is a readiness failure per ADR-048; reporting a rejected
+// package as current would be dishonest evidence.
 const (
 	FallbackProgramStatusCurrent           = "fallback-program-current"
 	FallbackProgramStatusStale             = "fallback-program-stale"
+	FallbackProgramStatusRejected          = "fallback-program-rejected"
 	FallbackProgramStatusNeverAcknowledged = "fallback-program-unacknowledged"
 )
 

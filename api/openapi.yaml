@@ -14860,14 +14860,16 @@ components:
     FallbackProgramBody:
       type: object
       description: >-
-        The signed fallback program itself. A verifier checks
-        signatureBase64 against exactly the canonicalized fields present
-        here.
+        The signed fallback program itself, served verbatim as the
+        coordinator stored it. A verifier checks
+        FallbackProgramResponse.signatureBase64 (a SIBLING field, never
+        nested here) against exactly the canonicalized fields present in
+        this object.
       additionalProperties: false
       required:
         [schemaVersion, packageId, revision, expiresAt, compiledAt,
          fppInstanceUuid, show, generation, playlistRevisions,
-         catalogRevisions, entries, rules, signatureBase64]
+         catalogRevisions, entries, rules]
       properties:
         schemaVersion:
           type: integer
@@ -14903,18 +14905,19 @@ components:
             $ref: "#/components/schemas/FallbackProgramEntry"
         rules:
           $ref: "#/components/schemas/FallbackProgramRules"
-        signatureBase64:
-          type: string
-          description: The coordinator's Ed25519 signature over this program's canonical bytes, base64-encoded.
     FallbackProgramResponse:
       type: object
       description: >-
         The body of GET /fallback-programs/{fppInstanceId} (ADR-048,
-        Track J's J1). published is false, with program absent,
-        exactly when this coordinator has never successfully compiled and
-        published a program for this host. acknowledgedPackageId and
-        acknowledgedAt are both absent exactly when acknowledgedStatus is
-        "fallback-program-unacknowledged".
+        Track J's J1). published is false, with program and
+        signatureBase64 both absent, exactly when this coordinator has
+        never successfully compiled and published a program for this
+        host. signatureBase64 is the coordinator's Ed25519 signature over
+        program's own canonical bytes, base64-encoded, deliberately a
+        sibling of program rather than nested inside it: the signature is
+        computed over program's bytes and can never be part of what it
+        signs. acknowledgedPackageId and acknowledgedAt are both absent
+        exactly when acknowledgedStatus is "fallback-program-unacknowledged".
       additionalProperties: false
       required: [serverTime, fppInstanceUuid, published, acknowledgedStatus]
       properties:
@@ -14927,9 +14930,11 @@ components:
           type: boolean
         program:
           $ref: "#/components/schemas/FallbackProgramBody"
+        signatureBase64:
+          type: string
         acknowledgedStatus:
           type: string
-          enum: [fallback-program-current, fallback-program-stale, fallback-program-unacknowledged]
+          enum: [fallback-program-current, fallback-program-stale, fallback-program-rejected, fallback-program-unacknowledged]
         acknowledgedPackageId:
           type: string
         acknowledgedAt:

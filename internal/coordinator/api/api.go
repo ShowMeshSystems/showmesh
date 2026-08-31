@@ -1937,7 +1937,13 @@ func New(deps Dependencies, opts Options) *API {
 	// (IDENTIFIER-REGISTER.md's own reservation): the installed FPP
 	// plugin principal, never a general operator read scope.
 	mux.HandleFunc("GET /api/v1/fallback-programs", h.readGuard(identity.ScopeObservationRead, h.handleListFallbackPrograms))
-	mux.HandleFunc("GET /api/v1/fallback-programs/{fppInstanceId}", h.readGuard(identity.ScopeFPPFallback, h.handleGetFallbackProgram))
+	// GET on the per-host path is deliberately requireScope, never
+	// readGuard: readGuard is a no-op unless CloseReads is set
+	// (auth.go's own posture), and this route serves the actual signed
+	// program bytes, not observation metadata. requireScope enforces
+	// fpp:fallback unconditionally, the same always-on guard GET
+	// /api/v1/audit uses for equivalently sensitive material.
+	mux.HandleFunc("GET /api/v1/fallback-programs/{fppInstanceId}", h.requireScope(identity.ScopeFPPFallback, h.handleGetFallbackProgram))
 	mux.HandleFunc("POST /api/v1/fallback-programs/{fppInstanceId}/acknowledge", h.writeGuard(&scopeFPPFallback, h.handlePostFallbackProgramAcknowledge))
 	// Build item 2's own coordinator-side push (cuecatalogdeploy.go):
 	// resolve, dispatch cuecatalog.deploy, and record the node's own

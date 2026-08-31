@@ -64,6 +64,18 @@ type AuditWriter interface {
 // (CONTRIBUTING.md's evidence ladder), not a measured value.
 const DefaultInterval = 2 * time.Minute
 
+// RefreshWindow is how close to a published program's ExpiresAt
+// [Service.publishIfChanged] republishes it even though its Revision has
+// not changed: half of [fallbackcompile.ProgramTTL], comfortably larger
+// than [DefaultInterval] so a periodic tick catches the refresh well
+// before the stored program actually expires. Content identity (the
+// Revision equality check) and time (this window) are deliberately two
+// separate conditions that never pollute each other: an unchanged show
+// still gets a fresh ExpiresAt on the SAME Revision, and a changed show
+// still republishes immediately regardless of how much of its old
+// window remains.
+const RefreshWindow = fallbackcompile.ProgramTTL / 2
+
 // Signer is [fallbackcompile.Signer], re-exported so a caller wiring this
 // package needs only one import for both.
 type Signer = fallbackcompile.Signer
@@ -167,7 +179,7 @@ func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) {
 		return
 	}
 
-	changed, err := s.publishIfChanged(ctx, result.Program)
+	changed, err := s.publishIfChanged(ctx, result.Program, now)
 	if err != nil {
 		s.logger.Warn("fallback reconcile: publish failed", "fppInstanceUuid", instanceUUID, "error", err)
 		return
@@ -184,17 +196,23 @@ func (s *Service) reconcileHost(ctx context.Context, instanceUUID string) {
 }
 
 // publishIfChanged stores signed as instanceUUID's current fallback
-// program only when its revision differs from what is already stored (or
-// nothing is stored yet), a healthy coordinator's periodic
-// reconciliation against unchanged inputs must stay a no-op, never a
-// republish-with-a-new-PackageID storm every [DefaultInterval].
-func (s *Service) publishIfChanged(ctx context.Context, signed *fallbackprogram.SignedProgram) (bool, error) {
+// program when EITHER of two independent conditions holds: its revision
+// differs from what is already stored (or nothing is stored yet), or the
+// stored program's own ExpiresAt is inside [RefreshWindow]. Content
+// identity drives the first arm and time drives the second; a healthy
+// coordinator's periodic reconciliation against unchanged content stays
+// a no-op only while BOTH conditions say so, which is what keeps an
+// unchanging show's published program from silently expiring: without
+// the second arm, a revision-equality check alone freezes ExpiresAt at
+// whatever it was on the last real content change, forever, the moment
+// content stops changing.
+func (s *Service) publishIfChanged(ctx context.Context, signed *fallbackprogram.SignedProgram, now time.Time) (bool, error) {
 	instanceUUID := signed.Program.FPPInstanceUUID
 	existing, err := s.st.GetFallbackProgram(ctx, instanceUUID)
 	if err != nil && !errors.Is(err, store.ErrFallbackProgramNotFound) {
 		return false, err
 	}
-	if err == nil && existing.Revision == signed.Program.Revision {
+	if err == nil && existing.Revision == signed.Program.Revision && now.Add(RefreshWindow).Before(existing.ExpiresAt) {
 		return false, nil
 	}
 
