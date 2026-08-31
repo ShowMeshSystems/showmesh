@@ -145,7 +145,7 @@ func (h *handlers) handleGetNightLifecycle(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		rec = nightSyntheticInactiveSession(now)
 	}
-	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge)})
+	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge, true)})
 }
 
 func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +160,11 @@ func (h *handlers) handleGetNightLifecycleByID(w http.ResponseWriter, r *http.Re
 		h.writeInternalError(w, now, "get night session", err)
 		return
 	}
-	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge)})
+	// current=false: this record may not be the currently active session
+	// (RESTING-MODE.md's own "look up any past session by id" surface),
+	// so pinnedMaxGainDb is never gated to a running state here - see
+	// [mapNightSessionState]'s own doc comment.
+	jsonWrite(w, v1.NightSessionResponse{ServerTime: formatTime(now), Session: mapNightSessionState(r.Context(), h.deps, rec, now, h.nightReadinessMaxAge, false)})
 }
 
 const maxNightCommandRequestBodyBytes = 4 << 10
@@ -296,7 +300,7 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge)
+	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge, true)
 	state.AttributionDegraded = attributionDegraded
 
 	// 202: the command is accepted, never confirmed by anything downstream
@@ -1441,7 +1445,16 @@ func (h *handlers) resolveActiveNightSessionConfigTx(ctx context.Context, tx *st
 
 // --- wire mapping ---
 
-func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, maxAge time.Duration) v1.NightSessionState {
+// current distinguishes the "current session" call sites (GET
+// /night/session, the SSE hub's nightSession.changed frame, and a night
+// command's own response) from GET /night/sessions/{id}: only the former
+// gate pinnedMaxGainDb to a running state. The by-id endpoint's whole
+// purpose is looking at a past night, so it reports that record's own
+// pinned ceiling regardless of state (owner ruling 2026-08-30) - the
+// dishonesty the gate prevents (a dead session's ceiling read back as if
+// it were live) cannot happen there, because the value is already scoped
+// to the specific record the caller asked for.
+func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, now time.Time, maxAge time.Duration, current bool) v1.NightSessionState {
 	out := v1.NightSessionState{
 		ID: rec.ID, ConfigObjectID: rec.ConfigObjectID, ConfigRevision: rec.ConfigRevision,
 		State: rec.State, StateEnteredAt: formatTime(rec.StateEnteredAt), Cycle: rec.Cycle,
@@ -1461,8 +1474,29 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 	out.PowerPhase = mapNightPowerPhase(rec)
 	out.Readiness = mapNightReadiness(ctx, deps, rec, now, maxAge)
 	out.Cues = mapNightCues(ctx, deps, rec)
-	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec)
+	out.BackgroundAudio = mapNightBackgroundAudio(ctx, deps, rec, current)
 	return out
+}
+
+// nightSessionIsRunning reports whether rec.State is one where the night
+// session is actually presenting, as opposed to "inactive" (no session),
+// "preparing" (site prep, before the session presents anything to an
+// audience), or "stopped" (the night has already ended). pinnedMaxGainDb
+// is gated on this only when current is true (mapNightBackgroundAudio):
+// the owner ruling (2026-08-28, refined 2026-08-30) is that the CURRENT-
+// session views never read back a stale ceiling as live once the night
+// has ended or before it has begun; GET /night/sessions/{id} has no such
+// gate, because that value is already scoped to the specific historical
+// record requested.
+func nightSessionIsRunning(state string) bool {
+	switch state {
+	case nightStatePreshow, nightStateTransitionToShow, nightStateLive,
+		nightStateTransitionToResting, nightStateRestingIntershow,
+		nightStateEndOfNightResting, nightStateFadingOut:
+		return true
+	default:
+		return false
+	}
 }
 
 // mapNightBackgroundAudio is RESTING-MODE.md section 14's own surface for
@@ -1472,7 +1506,19 @@ func mapNightSessionState(ctx context.Context, deps Dependencies, rec store.Nigh
 // already follows. Empty Steps with State Recorded is a legitimate
 // reading (backgroundAudio not configured, or never started this
 // cycle), distinct from a read failure.
-func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) v1.NightBackgroundAudio {
+//
+// pinnedMaxGainDb is a strictly additive field on top of that step log: a
+// failure reading it (or, when current, the session simply not being in a
+// running state) must never hide the step log an operator needs to see a
+// stuck or refused announcement clear - so unlike the two step-log reads
+// above, a pinnedMaxGainDb read failure stays State Recorded with the
+// steps already read, nil PinnedMaxGainDb, and its own Reason (found by
+// review: an earlier version flipped the whole block to Unknown on this
+// failure, which drops the entire step log an operator needs from an
+// unrelated config-read hiccup). current selects which of the two
+// endpoint behaviors applies to pinnedMaxGainDb - see
+// [mapNightSessionState]'s own doc comment.
+func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.NightSessionRecord, current bool) v1.NightBackgroundAudio {
 	if rec.ID == "" {
 		return v1.NightBackgroundAudio{State: v1.NightEvidenceUnknown, Reason: "no session", Steps: []v1.NightBackgroundAudioStep{}}
 	}
@@ -1506,7 +1552,36 @@ func mapNightBackgroundAudio(ctx context.Context, deps Dependencies, rec store.N
 		}
 		out = append(out, nightMapAudioStep(row, v1.NightAudioSequenceAnnouncement, kind))
 	}
-	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+
+	if current && !nightSessionIsRunning(rec.State) {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Steps: out}
+	}
+
+	pinnedMaxGainDb, reason, err := nightPinnedBackgroundMaxGainDb(ctx, deps, rec)
+	if err != nil {
+		return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: "pinnedMaxGainDb unavailable: " + err.Error(), Steps: out}
+	}
+	return v1.NightBackgroundAudio{State: v1.NightEvidenceRecorded, Reason: reason, Steps: out, PinnedMaxGainDb: pinnedMaxGainDb}
+}
+
+// nightPinnedBackgroundMaxGainDb reads rec's own pinned night.session
+// revision's resting.backgroundAudio.maxGainDb; it makes no judgment on
+// whether rec was ever the running session, so the caller decides that.
+// A nil gain with a non-empty reason and a nil error means the pinned
+// revision configures no background audio at all - not a read failure.
+func nightPinnedBackgroundMaxGainDb(ctx context.Context, deps Dependencies, rec store.NightSessionRecord) (gain *float64, reason string, err error) {
+	if rec.ConfigObjectID == "" {
+		return nil, "", nil
+	}
+	payload, err := nightPinnedNightSessionPayload(ctx, deps, rec)
+	if err != nil {
+		return nil, "", err
+	}
+	if payload.Resting.BackgroundAudio == nil {
+		return nil, "resting.backgroundAudio is not configured on this session's pinned night.session revision", nil
+	}
+	g := payload.Resting.BackgroundAudio.MaxGainDb
+	return &g, "", nil
 }
 
 // mapNightCues fills RESTING-MODE.md §14's per-cue outcome. A read

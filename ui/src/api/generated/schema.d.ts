@@ -2132,6 +2132,8 @@ export interface paths {
          * @description Never gated by any scope - reads stay open by default (ADR-024 constraint 23): a credential problem must never cost the operator sight of the lifecycle state. Distinct from `/config/night.session/{id}` (the AUTHORED definition a session pins): this is the RUNNING controller's own persisted state, a dedicated closed state machine, never observed evidence and never a general workflow.
          *
          *     If no session has ever been created (the coordinator has never seen `prepare-site`), this still answers `200` with `session.state` = `"inactive"` and every identity field empty, rather than `404` - "no session yet" is itself a real, renderable state.
+         *
+         *     `backgroundAudio.pinnedMaxGainDb` is populated only while `session.state` is a running state (owner ruling 2026-08-30); it is null once the night has ended or before it has begun, so this route never reports a past night's ceiling as if it were live. `/night/sessions/{id}` below reports that value unconditionally instead, since it is a historical, by-id lookup.
          */
         get: operations["getCurrentNightSession"];
         put?: never;
@@ -2152,6 +2154,8 @@ export interface paths {
         /**
          * One specific night session by its own id (Track F seam F2)
          * @description Same open-read posture as `/night/session`. Every session that has ever been created remains reachable by id (a new `prepare-site` after `stopped` creates a NEW session/epoch; this is how a prior night's own record stays inspectable).
+         *
+         *     Unlike `/night/session`, `backgroundAudio.pinnedMaxGainDb` here is populated regardless of `session.state` (owner ruling 2026-08-30): the value is already scoped to the specific record this route was asked for, so a stopped or never-started session still reports the ceiling its own pinned revision held.
          */
         get: operations["getNightSessionByID"];
         put?: never;
@@ -2989,14 +2993,128 @@ export interface components {
              */
             idleOutput: "black" | "hold" | "diagnostic" | "";
         };
-        /** @description The body of every POST /nodes/{nodeId}/audio/sessions/{sessionId}/{op} endpoint. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
-        AudioSessionCommandRequest: {
+        /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/apply. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioSessionApplyRequest: {
             /** Format: int64 */
             revision: number;
             /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
             idempotencyKey?: string;
-            /** @description Operation-specific fields the node validates, not this coordinator: apply's sourceRole/media/playlist/outputs/ mixPolicy, seek's positionMs. Opaque here by design - see this operation's own description for what it accepts. */
+            params?: components["schemas"]["AudioSessionApplyParams"];
+        };
+        /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/seek. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioSessionSeekRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            idempotencyKey?: string;
+            params: components["schemas"]["AudioSessionSeekParams"];
+        };
+        /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioGainSetRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            idempotencyKey?: string;
+            params: components["schemas"]["AudioSessionGainParams"];
+        };
+        /** @description The body of POST /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade (two path segments after {sessionId}: "gain" then "fade"). revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioGainFadeRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            idempotencyKey?: string;
+            params: components["schemas"]["AudioSessionGainFadeParams"];
+        };
+        /** @description The body of the nine audio session dispatch endpoints that take no operation-specific params: the seven single-segment endpoints (prepare, start, pause, resume, advance, stop, clear) plus the two two-segment endpoints (output/mute, output/unmute), all under POST /nodes/{nodeId}/audio/sessions/{sessionId}/. revision goes through the node's own per-session revision ledger: a value not strictly greater than the session's current desired revision is refused, never silently applied out of order. */
+        AudioSessionNoParamsRequest: {
+            /** Format: int64 */
+            revision: number;
+            /** @description Optional; a fresh key is minted server-side when omitted. A replayed key (same action, same params) dispatches nothing and returns the original command's own result, flagged `replay: true` - see the `409` response for what happens when the SAME key is reused with a DIFFERENT action or params. */
+            idempotencyKey?: string;
+            /** @description Optional. Neither the node nor this coordinator actually validates params for these nine operations: each is silently accepted and ignored, whatever it contains. This schema states the useful contract instead of that unconditional tolerance, matching AudioSessionSeekParams' and AudioSessionGainParams' own stricter-than-the-node posture. */
             params?: Record<string, never>;
+        };
+        /** @description Every field is independently optional: params with no fields at all is syntactically valid and merges nothing new onto the session's already-applied state. `media` and `playlist` are mutually exclusive; neither is required, since an apply that only changes e.g. `outputs` or `mixPolicy` on an already-applied session is valid. `gain`, `ceiling`, `fade`, and `bookmark` are never accepted here: gain and its ceiling and fade are set through the separate audio.gain.* commands, and a bookmark is state the session records for itself, never supplied by a caller. */
+        AudioSessionApplyParams: {
+            /**
+             * @description This session's source type. An unrecognized value is refused.
+             * @enum {string}
+             */
+            sourceRole?: "show" | "background" | "announcement" | "manual";
+            /** @description A single pinned media item. Mutually exclusive with `playlist`. Unlike `playlist` and this object's own siblings, an unrecognized key here is silently ignored rather than refused. */
+            media?: {
+                assetId: string;
+                contentHash: string;
+                /** @description A bare filename: no path separator (`/` or `\`), and not exactly `.` or `..`. The node re-checks this same rule against its own asset directory before this value is ever used to name a file on disk, so a schema-valid value naming an actual traversal attempt is still refused there. */
+                filename: string;
+                /** @description Optional; when present must be at least 1. */
+                sizeBytes?: number;
+            } & {
+                [key: string]: unknown;
+            };
+            /** @description A pinned playlist. Mutually exclusive with `media`. */
+            playlist?: {
+                ownerKind: string;
+                ownerId: string;
+                /** @description Optional; defaults to 0 when absent. */
+                ownerRevision?: number;
+                /**
+                 * @description Optional; defaults to "none" when absent.
+                 * @enum {string}
+                 */
+                repeat?: "none" | "item" | "playlist";
+                /**
+                 * @description Optional; defaults to "restart" when absent.
+                 * @enum {string}
+                 */
+                resume?: "resume" | "restart";
+                /**
+                 * @description Optional; defaults to "sequential" when absent.
+                 * @enum {string}
+                 */
+                requestedTransition?: "sequential" | "gapless" | "crossfade";
+                items: {
+                    /** @description Optional; defaults to assetId when absent. */
+                    itemId?: string;
+                    /** @description Optional; defaults to this item's own array position when absent. */
+                    index?: number;
+                    assetId: string;
+                    contentHash: string;
+                    /** @description A bare filename: no path separator (`/` or `\`), and not exactly `.` or `..`. The node re-checks this same rule before this value is ever used to name a file on disk. */
+                    filename: string;
+                    /** @description Optional; when present must be at least 1. */
+                    sizeBytes?: number;
+                }[];
+            };
+            outputs?: string[];
+            /** @description HH:MM:SS:FF, non-drop-frame - this session's LTC start point, overriding ConfigAudioSettingsPayload.ltcDefaultStartOffset for this apply only. The node re-checks each field's own natural range (hours 0-23, minutes/seconds 0-59) beyond what this pattern expresses, and refuses a schema-valid value whose fields are out of range. */
+            ltcStartOffset?: string;
+            /**
+             * @description How this session's audio combines with a lower- or higher-priority session's own audio. "unsupported" is a fourth member of this vocabulary, but it names a capability an adapter can report, never a policy a caller may request: the node unconditionally refuses it here.
+             * @enum {string}
+             */
+            mixPolicy?: "mix" | "duck" | "interrupt";
+        };
+        /** @description This schema is stricter than the node: an unrecognized key here is refused, where the node itself silently ignores one instead. */
+        AudioSessionSeekParams: {
+            /** @description Milliseconds. A negative value is refused. */
+            positionMs: number;
+        };
+        /** @description `gainDb` is in decibels; the coordinator converts it to the linear amplitude multiplier the node itself works in before this reaches the node, so a caller sending a pre-converted linear value is refused by name (the two units overlap numerically). This schema is stricter than the node: an unrecognized key here is refused, where the node itself silently ignores one instead. */
+        AudioSessionGainParams: {
+            /** @description 0 dB is unity; -60 dB and below is silence; no lower bound is enforced, a more negative value is simply clamped to silence. +12 dB is the refused ceiling, a typo guard rather than a tuned headroom figure. */
+            gainDb: number;
+        };
+        /** @description `targetGainDb` shares its decibel boundary and bounds with AudioSessionGainParams.gainDb, see that field's own description. */
+        AudioSessionGainFadeParams: {
+            targetGainDb: number;
+            /** @description Optional; when absent, defaults to this node's own configured fade duration. A value at or below 0 is refused. */
+            durationMs?: number;
+            /**
+             * @description Optional; when absent, defaults to this node's own configured fade curve. "linear" is the only member this vocabulary reserves today.
+             * @enum {string}
+             */
+            curve?: "linear";
         };
         /** @description The body of a successful (200) response from any of the nine audio.session.* dispatch endpoints. */
         AudioSessionCommandResponse: {
@@ -5065,8 +5183,11 @@ export interface components {
         NightBackgroundAudio: {
             /** @enum {string} */
             state: "recorded" | "unknown" | "not_configured" | "not_available";
+            /** @description Usually only meaningful when state is not "recorded". The one exception: reason may be non-empty while state is "recorded", in which case it describes pinnedMaxGainDb alone (why that one field is null) and says nothing about steps, which are unaffected and reported as read. */
             reason: string;
             steps: components["schemas"]["NightBackgroundAudioStep"][];
+            /** @description The background-audio ceiling the session pinned when it started (resting.backgroundAudio.maxGainDb on the session's own pinned configRevision), never the value night.session's config currently holds, which can differ across a later revision (owner ruling 2026-08-28). Null when the pinned revision configures no background audio at all, in which case `reason` says so. Never a fallback to the currently configured value. This schema is shared by two endpoints that populate it differently (owner ruling 2026-08-30): on GET /night/session (the current-session views, including the SSE nightSession.changed frame and a night command's own response), it is the ceiling the RUNNING session pinned, so it is populated ONLY while the top-level state is one of preshow, transition-to-show, live, transition-to-resting, resting-intershow, end-of-night-resting, or fading-out, and is otherwise null (including inactive, preparing, and stopped, so a past night's ceiling is never reported as live). On GET /night/sessions/{id}, it is that record's own pinned ceiling, historical by construction, so it is populated regardless of state, including preparing and stopped. */
+            pinnedMaxGainDb?: number | null;
         };
         /** @description The night-session lifecycle controller's own persisted state - a dedicated closed state machine, never observed evidence. `id` is "" and `state` is "inactive" when no session has ever been created. */
         NightSessionState: {
@@ -6078,7 +6199,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionApplyRequest"];
             };
         };
         responses: {
@@ -6122,7 +6243,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6166,7 +6287,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6210,7 +6331,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6254,7 +6375,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6298,7 +6419,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionSeekRequest"];
             };
         };
         responses: {
@@ -6342,7 +6463,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6386,7 +6507,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6430,7 +6551,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6474,7 +6595,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioGainSetRequest"];
             };
         };
         responses: {
@@ -6518,7 +6639,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioGainFadeRequest"];
             };
         };
         responses: {
@@ -6562,7 +6683,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
@@ -6606,7 +6727,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AudioSessionCommandRequest"];
+                "application/json": components["schemas"]["AudioSessionNoParamsRequest"];
             };
         };
         responses: {
