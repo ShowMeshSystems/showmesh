@@ -126,9 +126,9 @@ describe('Live Control', () => {
     ])
   })
 
-  it('states that no installation-wide emergency stop is advertised', () => {
+  it('distinguishes player stop from the separately gated installation-wide emergency workflow', () => {
     renderScreen({})
-    expect(screen.getByText(/no installation-wide emergency stop/)).toBeInTheDocument()
+    expect(screen.getByText(/separate, deliberately gated API workflow/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /emergency/i })).not.toBeInTheDocument()
   })
 

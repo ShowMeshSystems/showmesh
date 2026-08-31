@@ -302,9 +302,9 @@ export function LiveControl() {
           </>
         )}
         <Callout>
-          This coordinator advertises no installation-wide emergency stop, so there is no control for one here.
           <strong> Stop now</strong> halts this player only; projection and audio hold their last state until their own
-          cues run.
+          cues run. Installation-wide emergency stop is now a separate, deliberately gated API workflow; it is not
+          represented by this transport control.
         </Callout>
       </Section>
 
