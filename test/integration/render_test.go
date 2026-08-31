@@ -25,9 +25,10 @@ import (
 // dispatcher's role itself: a raw MQTT client publishes
 // "render.surface.apply" directly to the agent's own cmd topic, exactly
 // the mechanism agent_command_test.go already uses for "agent.echo". The
-// agent runs a REAL gst-launch-1.0 test-pattern pipeline (B2a); this
-// environment has GStreamer 1.28.6 installed, so this test proves the
-// pipeline actually reaches "running", not merely that a report was
+// agent runs a REAL gst-launch-1.0 pipeline drawing its own idle output (no
+// FSEQ content is assigned); this environment has GStreamer 1.28.6
+// installed, so this test proves the pipeline actually reaches "running",
+// not merely that a report was
 // fabricated.
 
 func TestRenderReportReachesObservationsAndNodeAPI(t *testing.T) {
@@ -52,7 +53,19 @@ func TestRenderReportReachesObservationsAndNodeAPI(t *testing.T) {
 
 	applyCmd := echoCmd(nodeID, "cmd-render-apply-1", "idem-render-apply-1", "")
 	applyCmd.Action = "render.surface.apply"
-	applyCmd.Params = map[string]any{"surfaceId": "garage"}
+	// This test plays the coordinator's own dispatcher role (this file's
+	// own doc comment), and every real dispatch sends a surface's complete
+	// geometry regardless of whether a sequence is assigned yet
+	// (internal/coordinator/api/renderdispatch.go) — buildFSEQAssignment
+	// now refuses a bare or partial-geometry apply outright rather than
+	// silently accepting the "not yet consumed" shape this hand-rolled
+	// payload used to send.
+	applyCmd.Params = map[string]any{
+		"surfaceId":    "garage",
+		"channelRange": map[string]any{"startChannel": 1, "channelCount": 12},
+		"geometry":     map[string]any{"width": 2, "height": 2, "pixelFormat": "rgb"},
+		"frameRate":    40,
+	}
 	dispatchCmd(t, cli, nodeID, applyCmd)
 
 	result := waitForResult(t, w, applyCmd.CommandID, 15*time.Second)
