@@ -324,13 +324,15 @@ func (r *fppConnectRegistrar) startLoop(rec fppConnectHeldRecord) {
 // backoff (woken early by Wake) for as long as r.ctx is alive, and
 // returning without a further attempt once the record reaches a terminal
 // state (registered, skipped, or failed; ADR-030 decision 5 applied to
-// failed: a 400 or 403 will not change on their own, so this loop never
-// spends another request on one). Every iteration re-reads the record's
-// CURRENT state via fppConnectHeldStore.RecordFor rather than trust the
-// rec argument (which can be stale the moment this goroutine actually
-// starts running, and staler still after a long backoff wait, review
-// round 1 finding 3): a concurrent rebind, or a fresher upload of the same
-// (dir, name) replacing these bytes entirely, is picked up before the next
+// failed: a 400, 403, 405, or 413 will not change on their own, so this
+// loop never spends another request on one; 401 is deliberately excluded
+// from that set, see fppConnectRegisterTerminalStatuses). Every iteration
+// re-reads the record's CURRENT state via fppConnectHeldStore.RecordFor
+// rather than trust the rec argument (which can be stale the moment this
+// goroutine actually starts running, and staler still after a long
+// backoff wait, review round 1 finding 3): a concurrent rebind, or a
+// fresher upload of the same (dir, name) replacing these bytes entirely,
+// is picked up before the next
 // attempt rather than acted on with what this loop last knew. The
 // fresher-upload case is also independently guarded by
 // fppConnectHeldStore.setRegistrationLocked's own content-hash and
@@ -640,15 +642,34 @@ func fppConnectRegisterFields(rec fppConnectHeldRecord, mediaType, nodeID string
 // never change on their own (ADR-030 decision 5's "an interrupted upload
 // registers nothing" extended to a refusal this lane could spend forever
 // retrying for no benefit): a malformed field (400), a credential that
-// does not carry asset:write (401, 403), a method this coordinator does
-// not accept on this route (405), or a file over the coordinator's own
-// upload size bound (413). api/openapi.yaml's uploadAsset operation
-// documents exactly these five plus 500 and 507, both retried below: a
-// coordinator can recover from being out of memory or disk, and neither
-// names a defect this node's own request could ever repeat forever.
+// authenticates but does not carry asset:write (403), a method this
+// coordinator does not accept on this route (405), or a file over the
+// coordinator's own upload size bound (413). None of those changes without
+// a human editing the request itself (a different file, a different show)
+// or the principal's own role — nothing this same node will ever do on a
+// future attempt against the identical held bytes.
+//
+// 401 is deliberately NOT in this map. A shipped node install had no way
+// to provision SHOWMESH_AGENT_API_TOKEN, so every upload such a node ever
+// received drew a 401 that this map used to classify as permanent, and
+// fixing the credential afterwards could never recover it — only a fresh
+// re-upload could. Unlike 403, a 401 means "no valid credential was
+// presented at all," which an operator fixes from OUTSIDE this request
+// (minting a token, editing agent.env, restarting the agent) with no need
+// to touch the held file or re-upload it. Classifying it "pending" instead
+// lets exactly that recovery happen: the record keeps its retry schedule
+// (see registerLoop), and the very next attempt succeeds once the
+// corrected token is in place — see fppConnectRegistrationTerminal and
+// registerLoop's own retry loop, which re-reads r.token fresh on every
+// attempt.
+//
+// api/openapi.yaml's uploadAsset operation documents 400/401/403/405/413
+// plus 500 and 507; 401, and both 500 and 507, are retried below: a
+// coordinator can recover from being out of memory or disk, or a node can
+// have its credential corrected, and none of those name a defect this
+// node's own request could ever repeat forever.
 var fppConnectRegisterTerminalStatuses = map[int]bool{
 	http.StatusBadRequest:            true,
-	http.StatusUnauthorized:          true,
 	http.StatusForbidden:             true,
 	http.StatusMethodNotAllowed:      true,
 	http.StatusRequestEntityTooLarge: true,

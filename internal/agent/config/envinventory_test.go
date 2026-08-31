@@ -43,9 +43,11 @@ var agentConfigEnvVars = map[string]string{
 	"SHOWMESH_LOG_LEVEL": "one of debug/info/warn/error, read once at LoadConfig; Config.LogLevel",
 	"SHOWMESH_ASSET_DIR": "the node-local directory show assets are downloaded into and played from; " +
 		"Config.AssetDir's doc comment notes this agent has no other persistent state-directory concept yet",
-	"SHOWMESH_AGENT_API_TOKEN": "bearer credential asset.fetch sends the coordinator's read API; deliberately " +
-		"not named SHOWMESH_API_TOKEN so copying an agent env line into a coordinator .env file cannot trigger " +
-		"ADR-024 decision 2's coordinator startup refusal (see the envAgentAPIToken doc comment in config.go)",
+	"SHOWMESH_AGENT_API_TOKEN": "bearer credential this agent sends the coordinator, required (with asset:write) " +
+		"for FPP Connect registration and, separately, for asset.fetch's read whenever the coordinator has closed " +
+		"anonymous reads; deliberately not named SHOWMESH_API_TOKEN so copying an agent env line into a " +
+		"coordinator .env file cannot trigger ADR-024 decision 2's coordinator startup refusal (see the " +
+		"envAgentAPIToken doc comment in config.go)",
 	"SHOWMESH_ASSET_INVENTORY_INTERVAL": "asset inventory report cadence with a default, documented on " +
 		"Config.AssetInventoryInterval",
 	"SHOWMESH_RENDER_REPORT_INTERVAL": "render pipeline health report cadence with a default, documented on " +
