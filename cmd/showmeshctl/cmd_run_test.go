@@ -118,11 +118,11 @@ func TestCmdRunListAppliesQueryFilters(t *testing.T) {
 	defer ts.Close()
 
 	var stdout, stderr bytes.Buffer
-	code := cmdRun([]string{"list", "--server", ts.URL, "--macro", "begin-set", "--state", "finished", "--limit", "10"}, &stdout, &stderr, time.Now)
+	code := cmdRun([]string{"list", "--server", ts.URL, "--macro", "begin-set", "--show", "halloween-2026", "--state", "finished", "--limit", "10"}, &stdout, &stderr, time.Now)
 	if code != exitOK {
 		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"macroId=begin-set", "state=finished", "limit=10"} {
+	for _, want := range []string{"macroId=begin-set", "show=halloween-2026", "state=finished", "limit=10"} {
 		if !strings.Contains(gotQuery, want) {
 			t.Errorf("query = %q, want it to contain %q", gotQuery, want)
 		}

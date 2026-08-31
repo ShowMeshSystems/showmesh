@@ -235,15 +235,16 @@ func (e *Executor) GetRun(ctx context.Context, runID string) (api.MacroRunResult
 // ListRuns implements [api.MacroRunner.ListRuns].
 //
 // [store.Store.ListMacroRuns] takes only a macro id and a limit, with no
-// state filter — [store.Store.ListRunningMacroRuns] covers "running"
-// alone. This method filters "finished" (and re-filters "running") in
-// memory over whichever of the two store calls already narrows by macro
-// id, rather than adding a third store method for this wave: see this
-// builder's own report for whether a store-level filter is warranted once
-// a real caller (Wave 3's clients) exercises this at scale. limit is
-// applied AFTER the in-memory state filter, matching what a caller asking
-// for "the last N finished runs" actually wants — applying it before would
-// silently return fewer than N once any running row is filtered out.
+// state or show filter — [store.Store.ListRunningMacroRuns] covers
+// "running" alone. This method filters "finished" (and re-filters
+// "running") and Show in memory over whichever of the two store calls
+// already narrows by macro id, rather than adding a third store method for
+// this wave: see this builder's own report for whether a store-level
+// filter is warranted once a real caller (Wave 3's clients) exercises this
+// at scale. limit is applied AFTER the in-memory filtering, matching what
+// a caller asking for "the last N finished runs of this show" actually
+// wants — applying it before would silently return fewer than N once any
+// non-matching row is filtered out.
 func (e *Executor) ListRuns(ctx context.Context, f api.MacroRunFilter) ([]store.MacroRunRecord, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -251,7 +252,7 @@ func (e *Executor) ListRuns(ctx context.Context, f api.MacroRunFilter) ([]store.
 	}
 
 	if f.State == "running" {
-		runs, err := e.listRunningRuns(ctx, f.MacroObjectID)
+		runs, err := e.listRunningRuns(ctx, f.MacroObjectID, f.Show)
 		if err != nil {
 			return nil, err
 		}
@@ -263,41 +264,49 @@ func (e *Executor) ListRuns(ctx context.Context, f api.MacroRunFilter) ([]store.
 	// in-memory. store.MaxMacroRunPageSize bounds a single read the same
 	// way it already bounds every other ListMacroRuns caller.
 	fetchLimit := limit
-	if f.State != "" && fetchLimit < store.MaxMacroRunPageSize {
-		// Over-fetch so a state filter does not silently return fewer
-		// than limit rows just because some fetched rows were the wrong
-		// state — bounded at MaxMacroRunPageSize either way.
+	if (f.State != "" || f.Show != "") && fetchLimit < store.MaxMacroRunPageSize {
+		// Over-fetch so a state or show filter does not silently return
+		// fewer than limit rows just because some fetched rows did not
+		// match — bounded at MaxMacroRunPageSize either way.
 		fetchLimit = store.MaxMacroRunPageSize
 	}
 	runs, err := e.store.ListMacroRuns(ctx, f.MacroObjectID, fetchLimit)
 	if err != nil {
 		return nil, err
 	}
-	if f.State == "" {
+	if f.State == "" && f.Show == "" {
 		return capMacroRuns(runs, limit), nil
 	}
 	out := make([]store.MacroRunRecord, 0, len(runs))
 	for _, r := range runs {
-		if r.State == f.State {
-			out = append(out, r)
+		if f.State != "" && r.State != f.State {
+			continue
 		}
+		if f.Show != "" && r.Show != f.Show {
+			continue
+		}
+		out = append(out, r)
 	}
 	return capMacroRuns(out, limit), nil
 }
 
-func (e *Executor) listRunningRuns(ctx context.Context, macroObjectID string) ([]store.MacroRunRecord, error) {
+func (e *Executor) listRunningRuns(ctx context.Context, macroObjectID, show string) ([]store.MacroRunRecord, error) {
 	all, err := e.store.ListRunningMacroRuns(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if macroObjectID == "" {
+	if macroObjectID == "" && show == "" {
 		return all, nil
 	}
 	out := make([]store.MacroRunRecord, 0, len(all))
 	for _, r := range all {
-		if r.MacroObjectID == macroObjectID {
-			out = append(out, r)
+		if macroObjectID != "" && r.MacroObjectID != macroObjectID {
+			continue
 		}
+		if show != "" && r.Show != show {
+			continue
+		}
+		out = append(out, r)
 	}
 	return out, nil
 }
