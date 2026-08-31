@@ -10,6 +10,7 @@ import {
   getNightSessionConfigRevisions,
   getNightSessionActiveConfig,
   getNightSessionActiveConfigRevisions,
+  getShowAction,
   listAssets,
   listConfigObjects,
   listFPPPlaylistDefinitions,
@@ -18,6 +19,7 @@ import {
   randomUUIDv4,
   type ConfigObjectSummary,
   type ConfigNightSessionWrite,
+  type ShowActionConfigResponse,
   type Asset,
   type FPPPlaylistDefinitionMetadata,
   type NightCommandName,
@@ -30,10 +32,12 @@ import {
   BlankingPlate,
   Button,
   ButtonRow,
+  Choice,
   DefinitionStrip,
   Field,
   FieldGrid,
   Input,
+  Panes,
   RevisionHistory,
   RuledStrip,
   Section,
@@ -41,6 +45,7 @@ import {
   StatusPair,
   Table,
   TableWrap,
+  Textarea,
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
@@ -745,7 +750,17 @@ function NightSessionActivation() {
   )
 }
 
-type CueDraft = { name: string; role: 'lighting' | 'projection' | 'audio' | 'announcement' | 'other'; action: string; offsetMs: string }
+type CueDraft = {
+  name: string
+  role: 'lighting' | 'projection' | 'audio' | 'announcement' | 'other'
+  action: string
+  offsetMs: string
+  fadeDurationMs: string
+  barrier: boolean
+  onFailure: 'continue' | 'abort'
+  announcementPolicy: '' | 'duck' | 'mix' | 'interrupt'
+}
+type BackgroundItemDraft = { itemId: string; show: string; sequence: string; target: string }
 type DefinitionDraft = {
   id: string
   show: string
@@ -754,27 +769,66 @@ type DefinitionDraft = {
   showPlaylist: string
   restingFpp: string
   restingPlaylist: string
+  endOfNightPlaylist: string
+  endOfNightRepeat: boolean
   timelineShow: string
   timelineSequence: string
   timelineTarget: string
   enterShow: CueDraft[]
   enterResting: CueDraft[]
+  blackoutHoldMs: string
+  blackoutAfterShowMs: string
+  announcementDefaultPolicy: 'duck' | 'mix' | 'interrupt'
+  backgroundEnabled: boolean
+  backgroundItems: BackgroundItemDraft[]
+  backgroundRepeat: 'none' | 'item' | 'playlist'
+  backgroundResume: 'resume' | 'restart'
+  backgroundTransition: 'sequential' | 'gapless' | 'crossfade'
+  backgroundCrossfadeMs: string
+  backgroundMaxGainDb: string
+  siteControlJson: string
+  interlocksJson: string
   base: ConfigNightSessionWrite | null
 }
 
-const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0' })
-const blankDefinition = (show = ''): DefinitionDraft => ({ id: '', show, label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '', timelineShow: show, timelineSequence: '', timelineTarget: '', enterShow: [], enterResting: [], base: null })
+const blankCue = (): CueDraft => ({ name: '', role: 'lighting', action: '', offsetMs: '0', fadeDurationMs: '', barrier: false, onFailure: 'continue', announcementPolicy: '' })
+const blankBackgroundItem = (show = ''): BackgroundItemDraft => ({ itemId: '', show, sequence: '', target: '' })
+const blankDefinition = (show = ''): DefinitionDraft => ({
+  id: '', show, label: '', showFpp: '', showPlaylist: '', restingFpp: '', restingPlaylist: '', endOfNightPlaylist: '', endOfNightRepeat: false,
+  timelineShow: show, timelineSequence: '', timelineTarget: '', enterShow: [], enterResting: [], blackoutHoldMs: '0', blackoutAfterShowMs: '0',
+  announcementDefaultPolicy: 'duck', backgroundEnabled: false, backgroundItems: [], backgroundRepeat: 'none', backgroundResume: 'resume',
+  backgroundTransition: 'sequential', backgroundCrossfadeMs: '', backgroundMaxGainDb: '0', siteControlJson: '', interlocksJson: '', base: null,
+})
 
 function draftFromDefinition(response: NightSessionConfigResponse): DefinitionDraft {
   const { payload } = response
-  const cue = (item: (typeof payload.enterShow.cues)[number]): CueDraft => ({ name: item.name, role: item.role, action: item.action, offsetMs: String(item.offsetMs) })
+  const cue = (item: (typeof payload.enterShow.cues)[number]): CueDraft => ({
+    name: item.name, role: item.role, action: item.action, offsetMs: String(item.offsetMs), fadeDurationMs: item.fadeDurationMs === undefined ? '' : String(item.fadeDurationMs),
+    barrier: item.barrier, onFailure: item.onFailure, announcementPolicy: item.announcementPolicy ?? '',
+  })
+  const background = payload.resting.backgroundAudio
   return {
     id: response.id, show: payload.show, label: payload.label,
     showFpp: payload.showPlaylist.fppInstanceId, showPlaylist: payload.showPlaylist.playlist,
-    restingFpp: payload.resting.fppInstanceId, restingPlaylist: payload.resting.playlist,
+    restingFpp: payload.resting.fppInstanceId, restingPlaylist: payload.resting.playlist, endOfNightPlaylist: payload.resting.endOfNightPlaylist, endOfNightRepeat: payload.resting.endOfNightRepeat,
     timelineShow: payload.resting.timelineAsset.show, timelineSequence: payload.resting.timelineAsset.sequence, timelineTarget: payload.resting.timelineAsset.target,
-    enterShow: payload.enterShow.cues.map(cue), enterResting: payload.enterResting.cues.map(cue), base: payload,
+    enterShow: payload.enterShow.cues.map(cue), enterResting: payload.enterResting.cues.map(cue), blackoutHoldMs: String(payload.enterShow.blackoutHoldMs), blackoutAfterShowMs: String(payload.enterResting.blackoutAfterShowMs),
+    announcementDefaultPolicy: payload.announcementDefaultPolicy, backgroundEnabled: background !== undefined, backgroundItems: background?.items.map((item) => ({ ...item })) ?? [],
+    backgroundRepeat: background?.repeat ?? 'none', backgroundResume: background?.resume ?? 'resume', backgroundTransition: background?.itemTransition ?? 'sequential',
+    backgroundCrossfadeMs: background?.crossfadeMs === undefined ? '' : String(background.crossfadeMs), backgroundMaxGainDb: String(background?.maxGainDb ?? 0),
+    siteControlJson: payload.siteControl === undefined ? '' : JSON.stringify(payload.siteControl, null, 2), interlocksJson: payload.interlocks === undefined ? '' : JSON.stringify(payload.interlocks, null, 2), base: payload,
   }
+}
+
+function integer(value: string, label: string, minimum?: number): number | { error: string } {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || (minimum !== undefined && parsed < minimum)) return { error: `${label} must be a whole number${minimum === undefined ? '' : ` of at least ${minimum}`}.` }
+  return parsed
+}
+
+function optionalJson<T>(value: string, label: string): T | undefined | { error: string } {
+  if (value.trim() === '') return undefined
+  try { return JSON.parse(value) as T } catch { return { error: `${label} must be valid JSON.` } }
 }
 
 function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { error: string } {
@@ -788,8 +842,10 @@ function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { 
     const result: ConfigNightSessionWrite['enterShow']['cues'] = []
     for (const [index, item] of items.entries()) {
       const offset = Number(item.offsetMs)
+      const fade = item.fadeDurationMs === '' ? undefined : Number(item.fadeDurationMs)
       if (item.name.trim() === '' || item.action.trim() === '' || !Number.isInteger(offset)) return { ok: false, error: `${phase} transition step ${index + 1} needs a name, action, and whole-millisecond offset.` }
-      result.push({ name: item.name.trim(), role: item.role, action: item.action.trim(), offsetMs: offset })
+      if (fade !== undefined && (!Number.isInteger(fade) || fade < 0)) return { ok: false, error: `${phase} transition step ${index + 1} fade must be a non-negative whole number.` }
+      result.push({ name: item.name.trim(), role: item.role, action: item.action.trim(), offsetMs: offset, ...(fade === undefined ? {} : { fadeDurationMs: fade }), barrier: item.barrier, onFailure: item.onFailure, ...(item.role === 'announcement' && item.announcementPolicy !== '' ? { announcementPolicy: item.announcementPolicy } : {}) })
     }
     return { ok: true, cues: result }
   }
@@ -797,23 +853,45 @@ function definitionPayload(draft: DefinitionDraft): ConfigNightSessionWrite | { 
   if (!enteringShow.ok) return { error: enteringShow.error }
   const enteringResting = buildCues(draft.enterResting, 'Enter-resting')
   if (!enteringResting.ok) return { error: enteringResting.error }
+  const blackoutHoldMs = integer(draft.blackoutHoldMs, 'Blackout hold', 0); if (typeof blackoutHoldMs !== 'number') return blackoutHoldMs
+  const blackoutAfterShowMs = integer(draft.blackoutAfterShowMs, 'Blackout after show', 0); if (typeof blackoutAfterShowMs !== 'number') return blackoutAfterShowMs
+  const siteControl = optionalJson<NonNullable<ConfigNightSessionWrite['siteControl']>>(draft.siteControlJson, 'Site control'); if (siteControl !== undefined && 'error' in siteControl) return siteControl
+  const interlocks = optionalJson<NonNullable<ConfigNightSessionWrite['interlocks']>>(draft.interlocksJson, 'Interlocks'); if (interlocks !== undefined && 'error' in interlocks) return interlocks
+  let backgroundAudio: ConfigNightSessionWrite['resting']['backgroundAudio'] | undefined
+  if (draft.backgroundEnabled) {
+    const maxGainDb = Number(draft.backgroundMaxGainDb)
+    if (!Number.isFinite(maxGainDb) || maxGainDb > 0) return { error: 'Background maximum gain must be a number at or below 0 dB.' }
+    if (draft.backgroundItems.length === 0) return { error: 'Background audio needs at least one item.' }
+    if (draft.backgroundItems.some((item) => item.itemId.trim() === '' || item.sequence.trim() === '' || item.target.trim() === '')) return { error: 'Every background audio item needs an id, sequence, and target.' }
+    const ids = draft.backgroundItems.map((item) => item.itemId.trim())
+    if (new Set(ids).size !== ids.length) return { error: 'Background audio item ids must be unique.' }
+    const crossfadeMs = draft.backgroundTransition === 'crossfade' ? integer(draft.backgroundCrossfadeMs, 'Background crossfade', 0) : undefined
+    if (crossfadeMs !== undefined && typeof crossfadeMs !== 'number') return crossfadeMs
+    backgroundAudio = { items: draft.backgroundItems.map((item) => ({ itemId: item.itemId.trim(), show: item.show.trim(), sequence: item.sequence.trim(), target: item.target.trim() })), repeat: draft.backgroundRepeat, resume: draft.backgroundResume, itemTransition: draft.backgroundTransition, ...(typeof crossfadeMs === 'number' ? { crossfadeMs } : {}), maxGainDb }
+  }
   const base = draft.base
+  const { backgroundAudio: _previousBackgroundAudio, ...baseResting } = base?.resting ?? {}
+  const { siteControl: _previousSiteControl, interlocks: _previousInterlocks, ...basePayload } = base ?? {}
   return {
-    ...(base ?? {}), show: draft.show.trim(), label: draft.label.trim(),
+    ...basePayload, show: draft.show.trim(), label: draft.label.trim(),
     showPlaylist: { ...(base?.showPlaylist ?? {}), fppInstanceId: draft.showFpp.trim(), playlist: draft.showPlaylist.trim() },
     resting: {
-      ...(base?.resting ?? {}), fppInstanceId: draft.restingFpp.trim(), playlist: draft.restingPlaylist.trim(),
+      ...baseResting, fppInstanceId: draft.restingFpp.trim(), playlist: draft.restingPlaylist.trim(), endOfNightPlaylist: draft.endOfNightPlaylist.trim() || draft.restingPlaylist.trim(), endOfNightRepeat: draft.endOfNightRepeat,
       timelineAsset: { ...(base?.resting?.timelineAsset ?? {}), show: draft.timelineShow.trim(), sequence: draft.timelineSequence.trim(), target: draft.timelineTarget.trim() },
+      ...(backgroundAudio === undefined ? {} : { backgroundAudio }),
     },
-    enterShow: { ...(base?.enterShow ?? {}), blackoutHoldMs: base?.enterShow?.blackoutHoldMs ?? 0, cues: enteringShow.cues },
-    enterResting: { ...(base?.enterResting ?? {}), blackoutAfterShowMs: base?.enterResting?.blackoutAfterShowMs ?? 0, cues: enteringResting.cues },
+    enterShow: { ...(base?.enterShow ?? {}), blackoutHoldMs, cues: enteringShow.cues },
+    enterResting: { ...(base?.enterResting ?? {}), blackoutAfterShowMs, cues: enteringResting.cues }, announcementDefaultPolicy: draft.announcementDefaultPolicy,
+    ...(siteControl === undefined ? {} : { siteControl }), ...(interlocks === undefined ? {} : { interlocks }),
   }
 }
 
 export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
-  const [objects, setObjects] = useState<ConfigObjectSummary[] | null>(null)
+  const [objects, setObjects] = useState<NightSessionConfigResponse[] | null>(null)
+  const [activeId, setActiveId] = useState('')
+  const [actions, setActions] = useState<ShowActionConfigResponse[]>([])
   const [playlistDefinitions, setPlaylistDefinitions] = useState<FPPPlaylistDefinitionMetadata[]>([])
   const [assets, setAssets] = useState<Asset[]>([])
   const [selected, setSelected] = useState('')
@@ -828,16 +906,22 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
     let cancelled = false
     Promise.all([
       listConfigObjects('night.session'),
+      showId === undefined ? Promise.resolve({ objects: [] as ConfigObjectSummary[], serverTime: '' }) : listConfigObjects('show.action', showId),
       listFPPPlaylistDefinitions().catch(() => ({ definitions: [], serverTime: '' })),
       showId === undefined ? Promise.resolve({ assets: [], serverTime: '' }) : listAssets({ show: showId }).catch(() => ({ assets: [], serverTime: '' })),
     ])
-      .then(([response, definitions, assetResponse]) => {
+      .then(async ([response, actionObjects, definitions, assetResponse]) => {
         if (cancelled) return
-        setObjects(showId === undefined ? response.objects : response.objects.filter((object) => object.show === showId))
+        const summaries = showId === undefined ? response.objects : response.objects.filter((object) => object.show === showId)
+        const [full, fullActions] = await Promise.all([Promise.all(summaries.map((object) => getNightSessionConfig(object.id))), Promise.all(actionObjects.objects.map((object) => getShowAction(object.id)))])
+        if (cancelled) return
+        setObjects(full)
+        setActions(fullActions)
         setPlaylistDefinitions(definitions.definitions)
         setAssets(assetResponse.assets)
       })
       .catch((err: unknown) => { if (!cancelled) setError(describeApiError(err)) })
+    getNightSessionActiveConfig().then((active) => { if (!cancelled) setActiveId(active.payload.session) }).catch(() => undefined)
     return () => { cancelled = true }
   }, [reloadKey, showId])
 
@@ -869,6 +953,7 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
     return Array.from(new Set([...(retained === '' ? [] : [retained]), ...reported])).sort()
   }
   const timelineAssets = assets.filter((asset) => asset.current && asset.mediaType === 'fseq' && asset.targetKind === 'node')
+  const audioAssets = assets.filter((asset) => asset.current && asset.mediaType === 'audio' && asset.targetKind === 'node')
   const timelineSequences = Array.from(new Set([...(draft.timelineSequence === '' ? [] : [draft.timelineSequence]), ...timelineAssets.map((asset) => asset.sequence)])).sort()
   const timelineTargets = Array.from(new Set([
     ...(draft.timelineTarget === '' ? [] : [draft.timelineTarget]),
@@ -876,90 +961,42 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   ])).sort()
   const fppIds = (retained: string) => Array.from(new Set([...(retained === '' ? [] : [retained]), ...fppInstances.map((instance) => instance.instanceId)])).sort()
 
-  return (
-    <div id="sn-definitions" className="sm-night-definition-editor">
-      <div className="sm-night-definition-head">
-        <div>
-          <p className="sm-eyebrow">{loaded === null ? 'New definition' : 'Editing definition'}</p>
-          <h2 className="sm-section__title">{loaded === null ? 'Night session definitions' : draft.label}</h2>
-          <p className="sm-small sm-muted">
-            {loaded === null ? 'Create a definition for this Show.' : <><span className="sm-data">{loaded.id}</span> · revision <span className="sm-data">{loaded.revision}</span></>}
-            {' '}· changes apply to the next armed night, never the one running now
-          </p>
-        </div>
-      </div>
+  const closeInspector = () => { setSelected(''); setLoaded(null); setDraft(blankDefinition(showId)); setRevision(null); setError(null) }
+  const updateBackgroundItem = (index: number, patch: Partial<BackgroundItemDraft>) => setDraft((current) => ({ ...current, backgroundItems: current.backgroundItems.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
 
-      <nav className="sm-night-definition-links" aria-label="Night session definition sections">
-        <a href="#ns-identity">Identity &amp; show playlist</a>
-        <a href="#ns-resting">Resting</a>
-        <a href="#ns-enter-show">Enter show</a>
-        <a href="#ns-enter-resting">Enter resting</a>
-      </nav>
-
-      {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : (
-        <>
-          <section id="ns-identity" className="sm-night-definition-section" aria-labelledby="ns-identity-title">
-            <h3 id="ns-identity-title" className="sm-subsection__title">Identity &amp; show playlist</h3>
-            <div className="sm-night-definition-form">
-              <Field label="Definition">
-                {(field) => <Select {...field} value={selected} onChange={(event) => selectDefinition(event.target.value)}><option value="">New definition</option>{objects.map((object) => <option key={object.id} value={object.id}>Edit {object.label} · {object.id}</option>)}</Select>}
-              </Field>
-              <Field label="Definition id" help={loaded === null ? 'Used to create this new definition.' : 'Definition ids are stable.'}>
-                {(field) => <Input {...field} className="sm-data" value={draft.id} disabled={loaded !== null} onChange={(event) => setDraft((current) => ({ ...current, id: event.target.value }))} />}
-              </Field>
-              <Field label="Label">{(field) => <Input {...field} value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} />}</Field>
-              <Field label="Show">{(field) => <Input {...field} className="sm-data" value={draft.show} disabled={showId !== undefined} onChange={(event) => setDraft((current) => ({ ...current, show: event.target.value, timelineShow: current.timelineShow === '' ? event.target.value : current.timelineShow }))} />}</Field>
-              <Field label="Show playlist — FPP instance" help={fppInstances.length === 0 ? 'No configured FPP instances are currently reported.' : undefined}>
-                {(field) => <Select {...field} className="sm-data" value={draft.showFpp} onChange={(event) => setDraft((current) => ({ ...current, showFpp: event.target.value, showPlaylist: '' }))}><option value="">Select an instance</option>{fppIds(draft.showFpp).map((id) => <option key={id} value={id}>{id}</option>)}</Select>}
-              </Field>
-              <Field label="Show playlist" help={playlistNames(draft.showFpp, draft.showPlaylist).length === 0 ? 'No playlist definitions have been received for this instance.' : 'Referenced, never created here — FPP owns this playlist.'}>
-                {(field) => <Select {...field} className="sm-data" value={draft.showPlaylist} onChange={(event) => setDraft((current) => ({ ...current, showPlaylist: event.target.value }))}><option value="">Select a playlist</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
-              </Field>
-            </div>
-          </section>
-
-          <section id="ns-resting" className="sm-night-definition-section" aria-labelledby="ns-resting-title">
-            <h3 id="ns-resting-title" className="sm-subsection__title">Resting</h3>
-            <p className="sm-small sm-muted">The loop that runs between cycles. Its own sequence decides how long a rest lasts.</p>
-            <div className="sm-night-definition-form">
-              <Field label="Resting FPP instance" help={fppInstances.length === 0 ? 'No configured FPP instances are currently reported.' : undefined}>
-                {(field) => <Select {...field} className="sm-data" value={draft.restingFpp} onChange={(event) => setDraft((current) => ({ ...current, restingFpp: event.target.value, restingPlaylist: '' }))}><option value="">Select an instance</option>{fppIds(draft.restingFpp).map((id) => <option key={id} value={id}>{id}</option>)}</Select>}
-              </Field>
-              <Field label="Resting playlist" help={playlistNames(draft.restingFpp, draft.restingPlaylist).length === 0 ? 'No playlist definitions have been received for this instance.' : undefined}>
-                {(field) => <Select {...field} className="sm-data" value={draft.restingPlaylist} onChange={(event) => setDraft((current) => ({ ...current, restingPlaylist: event.target.value }))}><option value="">Select a playlist</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
-              </Field>
-            </div>
-
-            <div className="sm-night-definition-asset">
-              <div>
-                <p className="sm-flat">Resting timeline asset</p>
-                <p className="sm-small sm-muted">One current FSEQ asset, named by Show, sequence, and target node.</p>
-              </div>
-              <div className="sm-night-definition-asset__fields">
-                <Field label="Show">{(field) => <Input {...field} className="sm-data" value={draft.timelineShow} disabled />}</Field>
-                <Field label="Sequence" help={timelineSequences.length === 0 ? 'No current node-targeted FSEQ assets exist for this Show.' : undefined}>
-                  {(field) => <Select {...field} className="sm-data" value={draft.timelineSequence} onChange={(event) => setDraft((current) => ({ ...current, timelineSequence: event.target.value }))}><option value="">Select a sequence</option>{timelineSequences.map((sequence) => <option key={sequence} value={sequence}>{sequence}</option>)}</Select>}
-                </Field>
-                <Field label="Target node" help={timelineTargets.length === 0 ? 'No current node target exists for this sequence.' : undefined}>
-                  {(field) => <Select {...field} className="sm-data" value={draft.timelineTarget} onChange={(event) => setDraft((current) => ({ ...current, timelineTarget: event.target.value }))}><option value="">Select a target</option>{timelineTargets.map((target) => <option key={target} value={target}>{target}</option>)}</Select>}
-                </Field>
-              </div>
-            </div>
-          </section>
-
-          <TransitionStepEditor id="ns-enter-show" title="Enter show" steps={draft.enterShow} onChange={(index, patch) => updateCues('enterShow', index, patch)} onAdd={() => addCue('enterShow')} onRemove={(index) => setDraft((current) => ({ ...current, enterShow: current.enterShow.filter((_, itemIndex) => itemIndex !== index) }))} />
-          <TransitionStepEditor id="ns-enter-resting" title="Enter resting" steps={draft.enterResting} onChange={(index, patch) => updateCues('enterResting', index, patch)} onAdd={() => addCue('enterResting')} onRemove={(index) => setDraft((current) => ({ ...current, enterResting: current.enterResting.filter((_, itemIndex) => itemIndex !== index) }))} />
-
-          <div className="sm-night-definition-actions"><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></div>
-          {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
-          {revision !== null && <DefinitionStrip items={[{ term: 'Viewing revision', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }, { term: 'Show playlist', value: <span className="sm-data">{revision.payload.showPlaylist.playlist}</span> }]} />}
-        </>
-      )}
-      {error !== null && <RuledStrip absence="failed" label="Definition failed" fact={error} />}
+  return <div id="sn-definitions" className="sm-night-session-workspace">
+    <div className="sm-night-session-heading">
+      <div><h2 className="sm-section__title">Night session definitions</h2><p className="sm-small sm-muted">A definition says how the night enters the show and returns to resting. Editing creates a new revision; a running night is unchanged.</p></div>
+      <Button variant="primary" onClick={() => { setSelected('__new__'); setLoaded(null); setDraft(blankDefinition(showId)); setError(null) }}>New definition</Button>
     </div>
-  )
+    <Panes>
+      <div className="sm-night-session-list">
+        <p className="sm-eyebrow">Definitions · {objects?.length ?? 0}</p>
+        {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : objects.length === 0 ? <RuledStrip absence="empty" label="No definitions" fact="Create the first night-session definition for this Show." /> : <TableWrap label="Night session definitions"><Table><thead><tr><th>Definition</th><th>Show playlist</th><th>Resting playlist</th><th>Revision</th><th>State</th></tr></thead><tbody>{objects.map((object) => <tr key={object.id} className={selected === object.id ? 'sm-table__row--selected' : undefined}><td><button className="sm-night-session-row-button" type="button" onClick={() => selectDefinition(object.id)}><strong>{object.payload.label}</strong><span className="sm-data sm-small">{object.id}</span></button></td><td><span className="sm-data">{object.payload.showPlaylist.fppInstanceId}</span><br />{object.payload.showPlaylist.playlist}</td><td><span className="sm-data">{object.payload.resting.fppInstanceId}</span><br />{object.payload.resting.playlist}</td><td className="sm-data">{object.revision}</td><td><span className={activeId === object.id ? 'sm-meta-status sm-meta-status--live' : 'sm-meta-status'}>{activeId === object.id ? 'Active' : 'Inactive'}</span></td></tr>)}</tbody></Table></TableWrap>}
+        <p className="sm-small sm-muted sm-night-session-list__note">Definitions belong to this Show. Activation remains an operational action on Show Night.</p>
+      </div>
+      <aside>
+        {selected === '' ? <div className="sm-inspector sm-night-session-empty"><p className="sm-eyebrow">Definition inspector</p><h3 className="sm-inspector__title">Select a definition</h3><p className="sm-small sm-muted">Choose a row to edit it, or create a new definition.</p></div> : <div className="sm-inspector sm-night-session-inspector">
+          <p className="sm-eyebrow sm-eyebrow--accent">{loaded === null ? 'Draft · new definition' : `Editing · revision ${loaded.revision}`}</p>
+          <h3 className="sm-inspector__title">{loaded === null ? 'New night session' : draft.label}</h3>
+          <div className="sm-inspector__group"><Field label="Label">{(p) => <Input {...p} value={draft.label} onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))} />}</Field><Field label="Definition id" help={loaded === null ? 'Stable after creation.' : 'Definition ids do not change.'}>{(p) => <Input {...p} className="sm-data" disabled={loaded !== null} value={draft.id} onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))} />}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Show playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.showFpp} onChange={(e) => setDraft((d) => ({ ...d, showFpp: e.target.value, showPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.showFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Show playlist">{(p) => <Select {...p} value={draft.showPlaylist} onChange={(e) => setDraft((d) => ({ ...d, showPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Resting playback</h4><Field label="FPP instance">{(p) => <Select {...p} value={draft.restingFpp} onChange={(e) => setDraft((d) => ({ ...d, restingFpp: e.target.value, restingPlaylist: '', endOfNightPlaylist: '' }))}><option value="">Select an instance…</option>{fppIds(draft.restingFpp).map((id) => <option key={id}>{id}</option>)}</Select>}</Field><Field label="Resting playlist">{(p) => <Select {...p} value={draft.restingPlaylist} onChange={(e) => setDraft((d) => ({ ...d, restingPlaylist: e.target.value }))}><option value="">Select a playlist…</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Field label="End-of-night playlist">{(p) => <Select {...p} value={draft.endOfNightPlaylist} onChange={(e) => setDraft((d) => ({ ...d, endOfNightPlaylist: e.target.value }))}><option value="">Same as resting playlist</option>{playlistNames(draft.restingFpp, draft.endOfNightPlaylist).map((name) => <option key={name}>{name}</option>)}</Select>}</Field><Choice type="checkbox" checked={draft.endOfNightRepeat} onChange={(e) => setDraft((d) => ({ ...d, endOfNightRepeat: e.target.checked }))} label="Repeat the end-of-night playlist" /><Field label="Resting sequence">{(p) => <Select {...p} value={draft.timelineSequence} onChange={(e) => setDraft((d) => ({ ...d, timelineSequence: e.target.value, timelineTarget: '' }))}><option value="">Select a sequence…</option>{timelineSequences.map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Resting target">{(p) => <Select {...p} value={draft.timelineTarget} onChange={(e) => setDraft((d) => ({ ...d, timelineTarget: e.target.value }))}><option value="">Select a target…</option>{timelineTargets.map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Transition timing</h4><Field label="Blackout hold (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutHoldMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutHoldMs: e.target.value }))} />}</Field><Field label="Blackout after show (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={draft.blackoutAfterShowMs} onChange={(e) => setDraft((d) => ({ ...d, blackoutAfterShowMs: e.target.value }))} />}</Field><Field label="Default announcement policy">{(p) => <Select {...p} value={draft.announcementDefaultPolicy} onChange={(e) => setDraft((d) => ({ ...d, announcementDefaultPolicy: e.target.value as DefinitionDraft['announcementDefaultPolicy'] }))}>{['duck', 'mix', 'interrupt'].map((v) => <option key={v}>{v}</option>)}</Select>}</Field></div>
+          <TransitionStepEditor title="Enter show" steps={draft.enterShow} actions={actions} onChange={(i, p) => updateCues('enterShow', i, p)} onAdd={() => addCue('enterShow')} onRemove={(i) => setDraft((d) => ({ ...d, enterShow: d.enterShow.filter((_, n) => n !== i) }))} />
+          <TransitionStepEditor title="Enter resting" steps={draft.enterResting} actions={actions} onChange={(i, p) => updateCues('enterResting', i, p)} onAdd={() => addCue('enterResting')} onRemove={(i) => setDraft((d) => ({ ...d, enterResting: d.enterResting.filter((_, n) => n !== i) }))} />
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Background audio</h4><Choice type="checkbox" checked={draft.backgroundEnabled} onChange={(e) => setDraft((d) => ({ ...d, backgroundEnabled: e.target.checked, backgroundItems: e.target.checked && d.backgroundItems.length === 0 ? [blankBackgroundItem(d.show)] : d.backgroundItems }))} label="Enable background audio while resting" />{draft.backgroundEnabled && <><div className="sm-night-session-compact-grid"><Field label="Repeat">{(p) => <Select {...p} value={draft.backgroundRepeat} onChange={(e) => setDraft((d) => ({ ...d, backgroundRepeat: e.target.value as DefinitionDraft['backgroundRepeat'] }))}>{['none', 'item', 'playlist'].map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Resume">{(p) => <Select {...p} value={draft.backgroundResume} onChange={(e) => setDraft((d) => ({ ...d, backgroundResume: e.target.value as DefinitionDraft['backgroundResume'] }))}><option>resume</option><option>restart</option></Select>}</Field><Field label="Between items">{(p) => <Select {...p} value={draft.backgroundTransition} onChange={(e) => setDraft((d) => ({ ...d, backgroundTransition: e.target.value as DefinitionDraft['backgroundTransition'] }))}>{['sequential', 'gapless', 'crossfade'].map((v) => <option key={v}>{v}</option>)}</Select>}</Field>{draft.backgroundTransition === 'crossfade' && <Field label="Crossfade (ms)">{(p) => <Input {...p} type="number" min="0" value={draft.backgroundCrossfadeMs} onChange={(e) => setDraft((d) => ({ ...d, backgroundCrossfadeMs: e.target.value }))} />}</Field>}<Field label="Maximum gain (dB)">{(p) => <Input {...p} type="number" max="0" step="0.1" value={draft.backgroundMaxGainDb} onChange={(e) => setDraft((d) => ({ ...d, backgroundMaxGainDb: e.target.value }))} />}</Field></div>{draft.backgroundItems.map((item, i) => <div className="sm-night-session-item" key={`${i}:${item.itemId}`}><Field label="Item id">{(p) => <Input {...p} value={item.itemId} onChange={(e) => updateBackgroundItem(i, { itemId: e.target.value })} />}</Field><Field label="Audio asset">{(p) => <Select {...p} value={`${item.sequence}\u0000${item.target}`} onChange={(e) => { const [selectedSequence = '', selectedTarget = ''] = e.target.value.split('\u0000'); updateBackgroundItem(i, { show: draft.show, sequence: selectedSequence, target: selectedTarget, itemId: item.itemId || selectedSequence }) }}><option value="\u0000">Select an audio asset…</option>{audioAssets.map((asset) => <option key={asset.id} value={`${asset.sequence}\u0000${asset.target}`}>{asset.sequence} · {asset.target}</option>)}</Select>}</Field><Button variant="quiet" onClick={() => setDraft((d) => ({ ...d, backgroundItems: d.backgroundItems.filter((_, n) => n !== i) }))}>Remove</Button></div>)}<Button onClick={() => setDraft((d) => ({ ...d, backgroundItems: [...d.backgroundItems, blankBackgroundItem(d.show)] }))}>Add audio item</Button></>}</div>
+          <div className="sm-inspector__group"><h4 className="sm-subsection__title">Site control and interlocks</h4><p className="sm-small sm-muted">Optional advanced configuration. These objects use the coordinator schema exactly; blank means not configured.</p><Field label="Site control (JSON)">{(p) => <Textarea {...p} rows={5} className="sm-data" value={draft.siteControlJson} onChange={(e) => setDraft((d) => ({ ...d, siteControlJson: e.target.value }))} />}</Field><Field label="Interlocks (JSON array)">{(p) => <Textarea {...p} rows={5} className="sm-data" value={draft.interlocksJson} onChange={(e) => setDraft((d) => ({ ...d, interlocksJson: e.target.value }))} />}</Field></div>
+          {error !== null && <RuledStrip absence="failed" label="Definition failed" fact={error} />}
+          {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
+          {revision !== null && <DefinitionStrip items={[{ term: 'Viewing revision', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }]} />}
+          <div className="sm-inspector__actions"><span className="sm-small sm-muted">{loaded === null ? 'Creates revision 1' : `Creates revision ${loaded.revision + 1}`}</span><div className="sm-btn-row"><Button variant="quiet" onClick={closeInspector}>Cancel</Button><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></div></div>
+        </div>}
+      </aside>
+    </Panes>
+  </div>
 }
 
-function TransitionStepEditor({ id, title, steps, onChange, onAdd, onRemove }: { id: string; title: string; steps: CueDraft[]; onChange: (index: number, patch: Partial<CueDraft>) => void; onAdd: () => void; onRemove: (index: number) => void }) {
-  return <section id={id} className="sm-night-definition-section" aria-label={title}><div className="sm-night-definition-section__head"><h3 className="sm-subsection__title">{title} <span>· {steps.length} {steps.length === 1 ? 'step' : 'steps'}</span></h3><Button onClick={onAdd}>Add transition step</Button></div><div className="sm-night-transition-card">{steps.length === 0 && <p className="sm-small sm-muted">No transition steps configured.</p>}{steps.map((step, index) => <div className="sm-night-transition-step" key={`${index}:${step.name}`}><Field label="Name">{(field) => <Input {...field} value={step.name} onChange={(event) => onChange(index, { name: event.target.value })} />}</Field><Field label="Role">{(field) => <Select {...field} value={step.role} onChange={(event) => onChange(index, { role: event.target.value as CueDraft['role'] })}>{['lighting', 'projection', 'audio', 'announcement', 'other'].map((role) => <option key={role} value={role}>{role}</option>)}</Select>}</Field><Field label="Action">{(field) => <Input {...field} className="sm-data" value={step.action} onChange={(event) => onChange(index, { action: event.target.value })} />}</Field><Field label="Offset (ms)">{(field) => <Input {...field} className="sm-data" type="number" step="1" value={step.offsetMs} onChange={(event) => onChange(index, { offsetMs: event.target.value })} />}</Field><Button variant="quiet" onClick={() => onRemove(index)}>Remove</Button></div>)}</div></section>
+function TransitionStepEditor({ title, steps, actions, onChange, onAdd, onRemove }: { title: string; steps: CueDraft[]; actions: ShowActionConfigResponse[]; onChange: (index: number, patch: Partial<CueDraft>) => void; onAdd: () => void; onRemove: (index: number) => void }) {
+  return <div className="sm-inspector__group"><div className="sm-night-session-group-head"><div><h4 className="sm-subsection__title">{title}</h4><p className="sm-small sm-muted">{steps.length} {steps.length === 1 ? 'step' : 'steps'}</p></div><Button onClick={onAdd}>Add step</Button></div>{steps.map((step, index) => <div className="sm-night-session-item" key={index}><Field label="Name">{(p) => <Input {...p} value={step.name} onChange={(e) => onChange(index, { name: e.target.value })} />}</Field><div className="sm-night-session-compact-grid"><Field label="Role">{(p) => <Select {...p} value={step.role} onChange={(e) => onChange(index, { role: e.target.value as CueDraft['role'] })}>{['lighting', 'projection', 'audio', 'announcement', 'other'].map((v) => <option key={v}>{v}</option>)}</Select>}</Field><Field label="Action">{(p) => <Select {...p} value={step.action} onChange={(e) => onChange(index, { action: e.target.value })}><option value="">Select an action…</option>{actions.map((action) => <option key={action.id} value={action.id}>{action.payload.label} · {action.id}</option>)}</Select>}</Field><Field label="Offset (ms)">{(p) => <Input {...p} type="number" step="1" value={step.offsetMs} onChange={(e) => onChange(index, { offsetMs: e.target.value })} />}</Field><Field label="Fade (ms)">{(p) => <Input {...p} type="number" min="0" step="1" value={step.fadeDurationMs} onChange={(e) => onChange(index, { fadeDurationMs: e.target.value })} />}</Field><Field label="On failure">{(p) => <Select {...p} value={step.onFailure} onChange={(e) => onChange(index, { onFailure: e.target.value as CueDraft['onFailure'] })}><option>continue</option><option>abort</option></Select>}</Field>{step.role === 'announcement' && <Field label="Announcement policy">{(p) => <Select {...p} value={step.announcementPolicy} onChange={(e) => onChange(index, { announcementPolicy: e.target.value as CueDraft['announcementPolicy'] })}><option value="">Use default</option><option>duck</option><option>mix</option><option>interrupt</option></Select>}</Field>}</div><Choice type="checkbox" checked={step.barrier} onChange={(e) => onChange(index, { barrier: e.target.checked })} label="Wait for this action before continuing" /><Button variant="quiet" onClick={() => onRemove(index)}>Remove step</Button></div>)}</div>
 }

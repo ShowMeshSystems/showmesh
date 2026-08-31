@@ -1346,6 +1346,122 @@ a.sm-tile:hover {
   border-top: 1px solid var(--border);
 }
 
+.sm-night-session-workspace {
+  min-width: 0;
+}
+
+.sm-night-session-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--s-5);
+  margin-bottom: var(--s-5);
+}
+
+.sm-night-session-heading .sm-section__title {
+  margin-bottom: var(--s-2);
+}
+
+.sm-night-session-list {
+  min-width: 0;
+}
+
+.sm-night-session-list > .sm-eyebrow {
+  margin-bottom: var(--s-3);
+}
+
+.sm-night-session-list__note {
+  max-width: 76ch;
+  margin-top: var(--s-3);
+}
+
+.sm-night-session-row-button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sm-night-session-row-button strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sm-night-session-row-button span {
+  color: var(--text-muted);
+}
+
+.sm-night-session-list tbody tr {
+  cursor: pointer;
+}
+
+.sm-night-session-list tbody tr:hover,
+.sm-night-session-list .sm-table__row--selected {
+  background: var(--raised);
+}
+
+.sm-night-session-inspector {
+  border-color: var(--accent-border);
+}
+
+.sm-night-session-empty {
+  background: var(--sunken);
+}
+
+.sm-night-session-group-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.sm-night-session-group-head p {
+  margin: 3px 0 0;
+}
+
+.sm-night-session-compact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-3);
+}
+
+.sm-night-session-item {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--sunken);
+}
+
+.sm-night-session-item + .sm-night-session-item {
+  margin-top: var(--s-3);
+}
+
+.sm-night-session-item > .sm-btn {
+  justify-self: start;
+}
+
+@media (max-width: 720px) {
+  .sm-night-session-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sm-night-session-heading > .sm-btn {
+    align-self: start;
+  }
+
+  .sm-night-session-compact-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* A refusal: headline plus explanation, bordered so it reads as different
    from `.sm-callout`'s quiet accent rail. */
 .sm-notice {

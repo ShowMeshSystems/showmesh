@@ -13,6 +13,7 @@ const stubs = vi.hoisted(() => ({
   getFPPPlaylistDefinitionEntries: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listFPPPlaylistDefinitions: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getFPPPlaylistReadiness: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  getShowAction: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -26,6 +27,7 @@ vi.mock('../api', async () => {
     getFPPPlaylistDefinitionEntries: (...args: never[]) => stubs.getFPPPlaylistDefinitionEntries(...args),
     listFPPPlaylistDefinitions: (...args: never[]) => stubs.listFPPPlaylistDefinitions(...args),
     getFPPPlaylistReadiness: (...args: never[]) => stubs.getFPPPlaylistReadiness(...args),
+    getShowAction: (...args: never[]) => stubs.getShowAction(...args),
   }
 })
 
@@ -140,16 +142,17 @@ describe('Shows workspace shell', () => {
     expect(screen.getByText(/erbartos/)).toBeInTheDocument()
   })
 
-  it('renders Night session definitions inside the current Show workspace and fixes the Show field to that Show', async () => {
+  it('renders Night session definitions as a list with a creation inspector', async () => {
     stubs.getShow = showHead
     stubs.listConfigObjects = (...args: never[]) => Promise.resolve({ serverTime: '', kind: args[0], objects: [] })
     stubs.listAssets = assetsEmpty
     stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '', definitions: [] })
     renderWorkspace({}, '/shows/winter-ridge-2026/night-session')
     expect(await screen.findByRole('heading', { name: 'Night session definitions' })).toBeInTheDocument()
-    const showField = (await screen.findAllByLabelText('Show'))[0]
-    expect(showField).toHaveValue('winter-ridge-2026')
-    expect(showField).toBeDisabled()
+    expect(await screen.findByText('No definitions')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
+    expect(screen.getByRole('heading', { name: 'New night session' })).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Night session definition sections' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Night session' })).toHaveAttribute('aria-current', 'page')
   })
 
@@ -166,12 +169,38 @@ describe('Shows workspace shell', () => {
     })
     renderWorkspace({ fpp: [{ instanceId: 'barn-player', instanceUuid: 'uuid-1' } as never] }, '/shows/winter-ridge-2026/night-session')
 
-    const showInstance = await screen.findByRole('combobox', { name: 'Show playlist — FPP instance' })
+    await screen.findByText('No definitions')
+    fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
+    const showInstance = (await screen.findAllByRole('combobox', { name: 'FPP instance' }))[0]!
     expect(within(showInstance).getByRole('option', { name: 'barn-player' })).toBeInTheDocument()
     fireEvent.change(showInstance, { target: { value: 'barn-player' } })
     expect(within(screen.getByRole('combobox', { name: 'Show playlist' })).getByRole('option', { name: 'WR26 Main Show' })).toBeInTheDocument()
-    expect(within(screen.getByRole('combobox', { name: 'Sequence' })).getByRole('option', { name: 'resting-loop' })).toBeInTheDocument()
-    expect(within(screen.getByRole('combobox', { name: 'Target node' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Resting sequence' })).getByRole('option', { name: 'resting-loop' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Resting target' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
+  })
+
+  it('authors the complete transition and background-audio controls from real Show inventory', async () => {
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (...args: never[]) => Promise.resolve({
+      serverTime: '', kind: args[0], objects: args[0] === 'show.action' ? [summary({ id: 'lights-up', label: 'Lights up' })] : [],
+    })
+    stubs.getShowAction = () => Promise.resolve({
+      serverTime: '', kind: 'show.action', id: 'lights-up', revision: 2,
+      payload: { show: 'winter-ridge-2026', label: 'Lights up', description: '', safetyClass: 'none', target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'command' }, idempotent: true },
+      updatedAt: '', createdByPrincipalId: null, createdByPrincipalName: null, source: 'api',
+    })
+    stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '', definitions: [] })
+    stubs.listAssets = () => Promise.resolve({ serverTime: '', assets: [{ id: 'audio-1', show: 'winter-ridge-2026', sequence: 'arrival-bed', targetKind: 'node', target: 'audio-front', mediaType: 'audio', contentHash: 'sha256:x', runtimeFilename: 'arrival.mp3', sizeBytes: 1, createdAt: '', createdByPrincipalId: null, createdByPrincipalName: null, supersededAt: null, current: true }] })
+    renderWorkspace({}, '/shows/winter-ridge-2026/night-session')
+    await screen.findByText('No definitions')
+    fireEvent.click(screen.getByRole('button', { name: 'New definition' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add step' })[0]!)
+    expect(within(screen.getByRole('combobox', { name: 'Action' })).getByRole('option', { name: 'Lights up · lights-up' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Blackout hold (ms)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Blackout after show (ms)')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Enable background audio while resting'))
+    expect(within(screen.getByRole('combobox', { name: 'Audio asset' })).getByRole('option', { name: 'arrival-bed · audio-front' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Maximum gain (dB)')).toBeInTheDocument()
   })
 })
 
