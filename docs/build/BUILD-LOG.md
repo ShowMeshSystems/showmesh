@@ -38,7 +38,8 @@ The **Current state** block at the top of this file is overwritten each session:
 > (`ccd83b7`), Track I's research and reservations (`9157e26`, `ff56233`), and
 > Lane 21's FPP Connect fold. **`dev/fpp-connect` is now on `main`**; one
 > integration branch is still deliberately off it, `dev/multi-audio` (Lane 20's
-> ADR-045 and schema v20).
+> ADR-045 and its `audio_sessions` re-key, which renumbers from v20 to v21 when
+> that branch takes `main`).
 >
 > **CI on `main` at `629754e` is red, on two known pre-existing failures, neither
 > caused by these merges.** `test (1.26.6)` failed on the audio engine's
@@ -91,10 +92,16 @@ The **Current state** block at the top of this file is overwritten each session:
 > hardware evidence in the node-install path. The Pi needs reinstalling from
 > `main` to pick up all three.
 >
-> **Schema versions on `main` run to v19; v20 is reserved for Lane 20 and lands
-> with `dev/multi-audio`.** [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is
-> the register. **Builders never edit it**, a rule three builders broke in one
-> lane; nothing enforces it yet.
+> **Schema versions on `main` run to v20, and v20 is not the version the
+> register reserved it for.** #185 minted v20 for the `audio.settings` backfill
+> while the register held v20 for the `dev/multi-audio` `audio_sessions` re-key,
+> which had already shipped under that number on its own branch. The register now
+> records #185's migration as v20 and reserves v21 for the re-key; the branch
+> renumbers when it takes `main`.
+> [IDENTIFIER-REGISTER.md](IDENTIFIER-REGISTER.md) is the register. **Builders
+> never edit it**, a rule three builders broke in one lane, and **nothing
+> enforces the reservation either**: this collision reached `main` with both
+> sides green.
 >
 > **The repository hygiene sweep covers private references in shipped source.**
 > `TestNoLinearIssueReferencesInShippedSource` matches the tracker key, a tracker
@@ -129,6 +136,33 @@ The **Current state** block at the top of this file is overwritten each session:
 > **Track E phase 2, FPP Connect, is on `main`.** Seams FC0, FC1a, FC1b, FC2 and FC3 merged onto `dev/fpp-connect` on 2026-08-26 as `9292931` (#118), `e445e24` (#127), `8e79e15` (#126), `31165fc` (#136) and `5e57e9f` (#144), followed by SM-294's channel-range visibility fix at `23ae13d` (#159). Each was gated by `showmesh-check` on the `showmesh-dev-01` build VM and by GitHub checks, and reviewed by Hermes and by an independent Opus reviewer. Lane 21 folded the branch onto `main` on 2026-08-28 as pull request #178; the 2026-08-28 entry below is that record and the 2026-08-26 entry is the branch's own. **Nothing has run against a real xLights or a real FPP, and no node has run it on hardware**, so FC4, the owner's bench, is still the acceptance gate and none of RES-003 §9's conclusions have moved above L1.
 >
 > **A local test stack is deployed on the development laptop** (2026-08-16): the `deploy/` bundle (coordinator on :8080, UI on :8081, authenticated Mosquitto on :1883, fresh volumes), the bench `fppd` container as `bench-fpp` via `host.docker.internal:8090`, and a native `dev-node-01` agent from `~/showmesh-dev-node/`. The previous `deploy/.env` pointed at the LIVE FLEET from a read-only run and is preserved as `deploy/.env.live-fleet-run.bak`; **it must never be combined with a write-capable stack.**
+
+---
+
+## 2026-08-30 (the schema-version register catches up with `main`: v20 was minted twice)
+
+**Goal:** make the schema-version register match what `main` and
+`dev/multi-audio` actually contain, before the multi-audio branch takes `main`.
+
+**Two different migrations shipped as v20.** #185 (`822a286`) added
+`migrateV20AudioSettingsBackfillMissingRequiredFields` to `main` on 2026-08-28.
+The register had held v20 since #157 for the `audio_sessions` re-key, which had
+already merged to `dev/multi-audio` under that number as #161 (`b5149d8`) on
+2026-08-26. Both sides were green; nothing checks a reservation against the
+migration table, so the collision only becomes visible when the branch merges.
+
+**What this entry changes:** the register's v20 row now records #185's backfill
+as shipped, v21 is reserved for the `audio_sessions` re-key, and the current-state
+block no longer claims `main` runs to v19 or that v20 is free for the multi-audio
+branch. The 2026-08-26 Lane 20 entry below is left as written: it was true when
+it was written, and the register, not a dated entry, is the authority.
+
+**Deferred:** the renumber itself, from v20 to v21 on `dev/multi-audio`, lands
+with that branch's merge of `main`, along with the six other conflicts that merge
+carries.
+
+**Verification gates:** documentation-only. No code, tests, generated output or
+`api/openapi.yaml` changed.
 
 ---
 

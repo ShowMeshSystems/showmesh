@@ -29,6 +29,8 @@ type configAudioSettingsPayload struct {
 	DefaultFadeDurationMs      int     `json:"defaultFadeDurationMs"`
 	DefaultMaxBackgroundGainDb float64 `json:"defaultMaxBackgroundGainDb"`
 	DuckTargetGainDb           float64 `json:"duckTargetGainDb"`
+	DuckFadeDurationMs         int     `json:"duckFadeDurationMs"`
+	DuckRestoreFadeDurationMs  int     `json:"duckRestoreFadeDurationMs"`
 	LTCFrameRate               string  `json:"ltcFrameRate"`
 	LTCDefaultStartOffset      string  `json:"ltcDefaultStartOffset"`
 }
@@ -164,6 +166,11 @@ duckTargetGainDb (how far a bed drops under an announcement, also in
 decibels: must be negative and at least -60 dB, where -60 dB is silence.
 The shipped value is PROVISIONAL and has never been heard on real
 speakers),
+duckFadeDurationMs (how long, in milliseconds, a bed takes to fade DOWN
+into a duck; must be positive),
+duckRestoreFadeDurationMs (how long a bed takes to fade back UP once its
+last ducker releases it; must be positive, and is deliberately longer
+than duckFadeDurationMs by default: fast down, slower back up),
 ltcFrameRate (one of 24, 25, 29.97, 30 — non-drop-frame at every rate),
 and ltcDefaultStartOffset (HH:MM:SS:FF, a session's own audio.session.apply
 ltcStartOffset overrides this).
@@ -660,6 +667,8 @@ func printAudioSettingsConfig(w io.Writer, resp audioSettingsConfigResponse) {
 	_, _ = fmt.Fprintf(w, "  defaultFadeDurationMs:      %d\n", resp.Payload.DefaultFadeDurationMs)
 	_, _ = fmt.Fprintf(w, "  defaultMaxBackgroundGainDb: %v dB\n", resp.Payload.DefaultMaxBackgroundGainDb)
 	_, _ = fmt.Fprintf(w, "  duckTargetGainDb:           %v dB\n", resp.Payload.DuckTargetGainDb)
+	_, _ = fmt.Fprintf(w, "  duckFadeDurationMs:         %d\n", resp.Payload.DuckFadeDurationMs)
+	_, _ = fmt.Fprintf(w, "  duckRestoreFadeDurationMs:  %d\n", resp.Payload.DuckRestoreFadeDurationMs)
 	_, _ = fmt.Fprintf(w, "  ltcFrameRate:               %s\n", resp.Payload.LTCFrameRate)
 	_, _ = fmt.Fprintf(w, "  ltcDefaultStartOffset:      %s\n", resp.Payload.LTCDefaultStartOffset)
 }

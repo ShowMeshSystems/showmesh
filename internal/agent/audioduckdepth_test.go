@@ -11,14 +11,16 @@ import (
 // exactly one of them.
 func validAudioSettingsParams() map[string]any {
 	return map[string]any{
-		"driftIgnoreThresholdMs":   float64(50),
-		"defaultFadeCurve":         "linear",
-		"defaultFadeDurationMs":    float64(500),
-		"defaultMaxBackgroundGain": 0.8,
-		"duckTargetGain":           0.2,
-		"ltcFrameRate":             "30",
-		"ltcDefaultStartOffset":    "00:00:00:00",
-		"revision":                 float64(7),
+		"driftIgnoreThresholdMs":    float64(50),
+		"defaultFadeCurve":          "linear",
+		"defaultFadeDurationMs":     float64(500),
+		"defaultMaxBackgroundGain":  0.8,
+		"duckTargetGain":            0.2,
+		"duckFadeDurationMs":        float64(150),
+		"duckRestoreFadeDurationMs": float64(700),
+		"ltcFrameRate":              "30",
+		"ltcDefaultStartOffset":     "00:00:00:00",
+		"revision":                  float64(7),
 	}
 }
 

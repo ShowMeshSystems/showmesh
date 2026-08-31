@@ -6,6 +6,7 @@ package coordinator
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -31,6 +32,7 @@ import (
 	"github.com/showmeshsystems/showmesh/internal/coordinator/inventory"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/macro"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/readiness"
+	"github.com/showmeshsystems/showmesh/internal/coordinator/signingkey"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/store"
 	"github.com/showmeshsystems/showmesh/internal/version"
 	"github.com/showmeshsystems/showmesh/pkg/mqttproto"
@@ -107,6 +109,18 @@ func Run() int {
 	// where the bootstrap file lives (ADR-024 decision 9), the same
 	// directory the SQLite database above already lives in.
 	identitySvc := identity.NewService(st, time.Now, cfg.DataDir, identity.WithLogger(logger))
+
+	// signingMgr is ADR-025 decisions 1 and 2's coordinator signing
+	// authority (internal/coordinator/signingkey): an Ed25519 keypair
+	// generated once per deployment, on first run, and persisted under
+	// cfg.DataDir. It never leaves this data volume.
+	signingMgr, err := signingkey.LoadOrGenerate(cfg.DataDir, signingkey.WithLogger(logger))
+	if err != nil {
+		logger.Error("failed to load or generate the coordinator signing key", "error", err)
+		_ = st.Close()
+		return 1
+	}
+	logger.Info("coordinator signing key ready", "public_key", base64.StdEncoding.EncodeToString(signingMgr.PublicKey()))
 
 	// Step 7 seam A (RES-008 D1): the SHOWMESH_FPP_ENDPOINTS -> store
 	// migration and the owner's 2026-08-12 disagreement rule, run BEFORE

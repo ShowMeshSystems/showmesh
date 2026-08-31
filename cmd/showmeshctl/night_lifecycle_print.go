@@ -95,6 +95,16 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 		return
 	}
 
+	// Printed once, ahead of either step section: it describes the
+	// SESSION, not one sequence's step log. Only ever present while
+	// running here because this command only ever hits GET
+	// /night/session, which has no by-id command yet.
+	if s.BackgroundAudio.PinnedMaxGainDb != nil {
+		_, _ = fmt.Fprintf(w, "\nPinned max gain: %.1f dB\n", *s.BackgroundAudio.PinnedMaxGainDb)
+	} else if s.BackgroundAudio.Reason != "" {
+		_, _ = fmt.Fprintf(w, "\nPinned max gain: none (%s)\n", s.BackgroundAudio.Reason)
+	}
+
 	// The two audio sequences print under their own headings. An
 	// announcement's clear and start arrive in the same step list as the
 	// bed's own steps, and a failure in one says something quite
@@ -105,7 +115,16 @@ func printNightSessionStateDetail(w io.Writer, s nightSessionStateWire) {
 	announcement := nightAudioStepsForSequence(s.BackgroundAudio.Steps, "announcement")
 
 	if len(background) == 0 {
-		_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+		// A non-nil PinnedMaxGainDb is proof the pinned revision DOES
+		// configure background audio (found by review: printing "not
+		// configured, or never started" right under a real pinned ceiling
+		// offered a false reading), so narrow the header to the one
+		// reading that is still possible.
+		if s.BackgroundAudio.PinnedMaxGainDb != nil {
+			_, _ = fmt.Fprintf(w, "\nBackground audio: never started this cycle\n")
+		} else {
+			_, _ = fmt.Fprintf(w, "\nBackground audio: not configured, or never started this cycle\n")
+		}
 	} else {
 		_, _ = fmt.Fprintf(w, "\nBackground audio:\n")
 		printNightAudioSteps(w, background)

@@ -294,6 +294,83 @@ func TestCmdNightStatusPrintsBackgroundAudioDetail(t *testing.T) {
 	}
 }
 
+// TestCmdNightStatusPrintsPinnedMaxGainConfiguredButNotStarted proves
+// finding 4's reconciliation directly: a non-nil pinnedMaxGainDb is proof
+// the pinned revision DOES configure background audio, so the "not
+// configured, or never started this cycle" header (which reads as
+// possibly-not-configured) must not print alongside it - only "never
+// started this cycle" is still a possible reading once a pinned ceiling
+// is on the screen.
+func TestCmdNightStatusPrintsPinnedMaxGainConfiguredButNotStarted(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z",
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"resting-intershow",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"no readiness result recorded","sameEpoch":false,"fresh":false,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},
+			"transition":{"state":"unknown","reason":""},
+			"cues":{"state":"recorded","reason":"","cues":[]},
+			"backgroundAudio":{"state":"recorded","reason":"","steps":[],"pinnedMaxGainDb":-10},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"status", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Pinned max gain: -10.0 dB") {
+		t.Errorf("stdout does not contain the pinned max gain line; stdout=%s", out)
+	}
+	if !strings.Contains(out, "Background audio: never started this cycle") {
+		t.Errorf("stdout does not contain the narrowed never-started header; stdout=%s", out)
+	}
+	if strings.Contains(out, "not configured") {
+		t.Errorf("stdout still offers the possibly-not-configured reading alongside a real pinned ceiling; stdout=%s", out)
+	}
+}
+
+// TestCmdNightStatusPrintsPinnedMaxGainNoneWithReason proves the none
+// case prints its own reason rather than staying silent: an operator
+// reading a printed session with no pinnedMaxGainDb needs to see WHY,
+// same as every other evidence block on this screen.
+func TestCmdNightStatusPrintsPinnedMaxGainNoneWithReason(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ShowMesh-API-Version", "1")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"serverTime":"2026-08-18T22:00:00Z",
+			"session":{"id":"s1","configObjectId":"halloween-main","configRevision":1,"state":"resting-intershow",
+			"stateEnteredAt":"2026-08-18T22:00:00Z","cycle":1,"finalShowRequested":false,"finalShowRequestedAt":null,
+			"admissionClosed":false,"admissionClosedAt":null,"shutdownIntent":"","armedShowId":"","showCommitted":false,
+			"readiness":{"state":"unknown","reason":"no readiness result recorded","sameEpoch":false,"fresh":false,"checks":[]},
+			"powerPhase":{"state":"unknown","reason":""},
+			"transition":{"state":"unknown","reason":""},
+			"cues":{"state":"recorded","reason":"","cues":[]},
+			"backgroundAudio":{"state":"recorded",
+				"reason":"resting.backgroundAudio is not configured on this session's pinned night.session revision",
+				"steps":[]},
+			"degraded":false,"updatedAt":"2026-08-18T22:00:00Z"}}`)
+	}))
+	defer ts.Close()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNight([]string{"status", "--server", ts.URL}, &stdout, &stderr, time.Now)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want exitOK; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Pinned max gain: none (resting.backgroundAudio is not configured on this session's pinned night.session revision)") {
+		t.Errorf("stdout does not contain the none-with-reason line; stdout=%s", out)
+	}
+}
+
 // TestCmdNightStartWithOverrideSendsInterlockOverrides proves --override
 // RULE=REASON is translated into the request body's own
 // interlockOverrides array, which the coordinator's start-night gate

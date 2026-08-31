@@ -658,7 +658,7 @@ func (h *Hub) render(ctx context.Context) {
 		h.logger.Warn("stream hub: get current night session failed", "error", err)
 	} else if ok {
 		const key = "nightsession:current"
-		state := mapNightSessionState(ctx, h.deps, rec, now, h.nightReadinessMaxAge)
+		state := mapNightSessionState(ctx, h.deps, rec, now, h.nightReadinessMaxAge, true)
 		if h.updateRendered(key, state) {
 			pending = append(pending, pendingFrame{event: "nightSession.changed", serverTime: formatTime(now), nightSession: &v1.NightSessionChangedEvent{Session: state}})
 		}

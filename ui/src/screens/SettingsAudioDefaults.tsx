@@ -23,6 +23,10 @@ export function SettingsAudioDefaults() {
   const [fadeDurationMs, setFadeDurationMs] = useState('')
   const [maxBackgroundGainDb, setMaxBackgroundGainDb] = useState('')
   const [duckTargetGainDb, setDuckTargetGainDb] = useState('')
+  // Not yet a form control (unplaced by the rebuild); round-tripped so saving
+  // this screen never resets an operator's tuned duck fade timing.
+  const [duckFadeDurationMs, setDuckFadeDurationMs] = useState(0)
+  const [duckRestoreFadeDurationMs, setDuckRestoreFadeDurationMs] = useState(0)
   const [driftIgnoreThresholdMs, setDriftIgnoreThresholdMs] = useState('')
   const [ltcFrameRate, setLtcFrameRate] = useState<(typeof LTC_FRAME_RATES)[number]>('30')
   const [ltcDefaultStartOffset, setLtcDefaultStartOffset] = useState('')
@@ -41,6 +45,8 @@ export function SettingsAudioDefaults() {
         setFadeDurationMs(String(response.payload.defaultFadeDurationMs))
         setMaxBackgroundGainDb(String(response.payload.defaultMaxBackgroundGainDb))
         setDuckTargetGainDb(String(response.payload.duckTargetGainDb))
+        setDuckFadeDurationMs(response.payload.duckFadeDurationMs)
+        setDuckRestoreFadeDurationMs(response.payload.duckRestoreFadeDurationMs)
         setDriftIgnoreThresholdMs(String(response.payload.driftIgnoreThresholdMs))
         setLtcFrameRate(response.payload.ltcFrameRate)
         setLtcDefaultStartOffset(response.payload.ltcDefaultStartOffset)
@@ -59,6 +65,8 @@ export function SettingsAudioDefaults() {
     setFadeDurationMs(String(state.response.payload.defaultFadeDurationMs))
     setMaxBackgroundGainDb(String(state.response.payload.defaultMaxBackgroundGainDb))
     setDuckTargetGainDb(String(state.response.payload.duckTargetGainDb))
+    setDuckFadeDurationMs(state.response.payload.duckFadeDurationMs)
+    setDuckRestoreFadeDurationMs(state.response.payload.duckRestoreFadeDurationMs)
     setDriftIgnoreThresholdMs(String(state.response.payload.driftIgnoreThresholdMs))
     setLtcFrameRate(state.response.payload.ltcFrameRate)
     setLtcDefaultStartOffset(state.response.payload.ltcDefaultStartOffset)
@@ -104,6 +112,8 @@ export function SettingsAudioDefaults() {
           defaultFadeDurationMs: fadeMs,
           defaultMaxBackgroundGainDb: maxGain,
           duckTargetGainDb: duckGain,
+          duckFadeDurationMs,
+          duckRestoreFadeDurationMs,
           driftIgnoreThresholdMs: driftMs,
           ltcFrameRate,
           ltcDefaultStartOffset,

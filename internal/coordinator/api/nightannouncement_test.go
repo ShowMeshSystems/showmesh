@@ -610,7 +610,7 @@ func TestNightAnnouncement_StepsAreOnTheOperatorSurface(t *testing.T) {
 
 	h.nightAdvanceCueList(ctx, testNow, rec, testNow, nightPhaseEnterResting, []config.NightSessionCue{cue}, payload)
 
-	surface := mapNightBackgroundAudio(ctx, h.deps, rec)
+	surface := mapNightBackgroundAudio(ctx, h.deps, rec, true)
 	if surface.State != v1.NightEvidenceRecorded {
 		t.Fatalf("background-audio surface state = %q, want recorded", surface.State)
 	}

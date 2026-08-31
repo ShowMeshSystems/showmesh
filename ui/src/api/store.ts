@@ -156,7 +156,20 @@ type SchemaRenderApplyRequest = components['schemas']['RenderApplyRequest']
 type SchemaRenderSurfaceRequest = components['schemas']['RenderSurfaceRequest']
 // First audio-dispatch slice: pause/resume/stop/output.mute/output.unmute.
 type SchemaAudioSessionCommandResponse = components['schemas']['AudioSessionCommandResponse']
-type SchemaAudioSessionCommandRequest = components['schemas']['AudioSessionCommandRequest']
+// Each of the thirteen audio session dispatch endpoints has its own
+// request schema now (api/openapi.yaml review finding 2: a shared
+// AudioSessionCommandRequest with a params union let any operation's
+// body validate against any other operation's own shape). The envelope
+// (revision/idempotencyKey/params) is identical across all five; this
+// alias reconstructs it locally, typed against the union of the real
+// per-operation params shapes, rather than importing a combined
+// "AudioSessionCommandParams" schema type that no longer exists.
+type SchemaAudioSessionParams =
+  | components['schemas']['AudioSessionApplyParams']
+  | components['schemas']['AudioSessionSeekParams']
+  | components['schemas']['AudioSessionGainParams']
+  | components['schemas']['AudioSessionGainFadeParams']
+  | components['schemas']['AudioSessionNoParamsRequest']['params']
 // BUILD-PLAN Step 7 seam B (RES-008 D2/D6).
 type SchemaDiscoveryRunResponse = components['schemas']['DiscoveryRunResponse']
 type SchemaNodeDeclarationResponse = components['schemas']['NodeDeclarationResponse']
@@ -1322,11 +1335,12 @@ export class ApiStore {
   //
   // -- Second slice: prepare/start/advance/clear (no params) plus
   // seek/gain/gain.fade (each carrying operation-specific params the
-  // node itself validates -- AudioSessionCommandRequest.params is opaque
-  // to this coordinator by design). apply is the same shape as
-  // seek/gain: this coordinator passes params through verbatim without
-  // validating it, exactly as showmeshctl's own "params-json is passed
-  // through verbatim" positional argument does (cmd_audio_session.go).
+  // node itself validates -- each operation's own request schema's
+  // params is opaque to this coordinator by design). apply is the same
+  // shape as seek/gain: this coordinator passes params through verbatim
+  // without validating it, exactly as showmeshctl's own "params-json is
+  // passed through verbatim" positional argument does
+  // (cmd_audio_session.go).
 
   private async dispatchAudioSessionCommand(
     nodeId: string,
@@ -1337,7 +1351,10 @@ export class ApiStore {
   ): Promise<AudioSessionCommandResult> {
     const controller = this.beginSideCall()
     try {
-      const body: SchemaAudioSessionCommandRequest = { revision, idempotencyKey: randomUUIDv4() }
+      const body: { revision: number; idempotencyKey: string; params?: SchemaAudioSessionParams } = {
+        revision,
+        idempotencyKey: randomUUIDv4(),
+      }
       if (params !== undefined) {
         body.params = params as Record<string, never>
       }

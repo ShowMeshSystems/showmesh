@@ -110,9 +110,9 @@ Directories: `sequences` for FSEQ, `effects` for `.eseq`, `music` for audio, `vi
 
 ### 9.6 Model and playlist upload are opt-in and default-off
 
-**Narrowed by section 10.6.** The playlist endpoints remain optional in xLights, but ShowMesh serves them deliberately: the playlist dropdown is how an operator names the ShowMesh show an upload belongs to. The models and universe-output endpoints stay deferred as stated here.
+**Narrowed by section 10.6, and by section 9.7c below.** The playlist endpoints remain optional in xLights, but ShowMesh serves them deliberately: the playlist dropdown is how an operator names the ShowMesh show an upload belongs to. `POST /api/models` and the universe-output endpoints stay deferred as stated here. **`GET /api/models` no longer belongs in this deferred set**: section 9.7c records a direct observation, made 2026-08-30 against a real xLights, that it is called unprompted during an ordinary upload and is not, in practice, optional for "select target, upload FSEQ."
 
-`POST /api/models`, `POST /api/playlist/{name}`, and the universe-output endpoints all exist, and all three are per-target dropdowns **defaulting to "None"** in the FPP Connect dialog. None is required for "select target, upload FSEQ". They serve FPP-as-pixel-controller deployments, not a render node that receives an FSEQ and plays it under ShowMesh's control.
+`POST /api/models`, `POST /api/playlist/{name}`, and the universe-output endpoints all exist, and all three are per-target dropdowns **defaulting to "None"** in the FPP Connect dialog. None of the three `POST`s is required for "select target, upload FSEQ". They serve FPP-as-pixel-controller deployments, not a render node that receives an FSEQ and plays it under ShowMesh's control. This paragraph's own source-reading conclusion was never about `GET /api/models`: see section 9.7c for what changed there.
 
 ### 9.7 Smallest viable surface, in build order
 
@@ -188,6 +188,18 @@ Three traps in that exchange, all facts:
 - Whether the other `Upload*` functions check their POST status the way `UploadModels()` demonstrably does not.
 - Whether absent keys in a model entry degrade cleanly or throw on FPP's side. The code path was read but not run.
 - Which FPP version introduced the POST-wrapper versus GET-bare-array asymmetry.
+
+### 9.7c `GET /api/models` is called unprompted during an ordinary upload (L2, direct observation, 2026-08-30)
+
+**Fact, and it is a direct client observation, not a source-reading inference: promoted straight to L2 per this record's evidence ladder, the same way a real bench run promotes any other finding here.** During the first real FPP Connect upload runs against a live ShowMesh render node (2026-08-30), xLights called `GET /api/models` on its own, before any file transfer, and logged:
+
+```
+ERROR - Error on GET "http://192.168.130.244/api/models"    Response Code: 404
+```
+
+**This narrows section 9.6's source-reading conclusion.** That conclusion, read from `FPP::SetOutputs()` and the dialog's dropdown wiring, was that the models push is opt-in and defaults to "None" — true of the `POST`, and still true of it. It did not anticipate xLights issuing an unconditional `GET` as part of the ordinary upload flow regardless of that dropdown's state. The two facts do not contradict each other; the second was simply never traced, because nothing in section 9's or 9.7b's call-graph reading followed the `GET` side of the models exchange at all.
+
+**Consequence for this listener.** `GET /api/models` must be served (a bare JSON array, `[]` for a node with no configured surface, `200` always), or every otherwise-successful upload reports a red error to the operator. `POST /api/models` remains exactly as deferred as section 9.6 and TRACK-E-FPP-CONNECT.md's explicitly-deferred list state: nothing about this observation touches the `/config.php` identity gate or the upstream vendor-listing question, since xLights' `GET` never reaches `AuthenticateAndUpdateVersions()`.
 
 ### 9.8 What this research could not determine
 

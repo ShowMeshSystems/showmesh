@@ -82,8 +82,11 @@ func TestRunAudioRestoreRetryTickResolvesOnceTheDeviceEnumerates(t *testing.T) {
 	}
 
 	currentNode := func() (audioNodeConfig, bool) { return node, true }
+	// availableFakeEngine, not a bare FakeEngine: resolution now also
+	// requires the engine to report available, and FakeEngine always
+	// reports false by design.
 	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
-		return audio.NewFakeEngine(time.Now), nil
+		return availableFakeEngine{audio.NewFakeEngine(time.Now)}, nil
 	}
 
 	var retry audioRestoreRetryer
@@ -92,7 +95,7 @@ func TestRunAudioRestoreRetryTickResolvesOnceTheDeviceEnumerates(t *testing.T) {
 
 	// Tick 1: still no probe evidence — an attempt runs (the driver
 	// re-probes on every attempt) and refuses again.
-	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, nowFn, now, &retry, nil)
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
 	if retry.attempts != 1 {
 		t.Fatalf("attempts after tick 1 = %d, want 1", retry.attempts)
 	}
@@ -106,7 +109,7 @@ func TestRunAudioRestoreRetryTickResolvesOnceTheDeviceEnumerates(t *testing.T) {
 
 	// Tick 2, before the backoff delay has elapsed: no attempt.
 	now = now.Add(2 * time.Second)
-	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, nowFn, now, &retry, nil)
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
 	if retry.attempts != 1 {
 		t.Fatalf("attempts after the too-early tick = %d, want 1 (backoff not yet elapsed)", retry.attempts)
 	}
@@ -120,7 +123,7 @@ func TestRunAudioRestoreRetryTickResolvesOnceTheDeviceEnumerates(t *testing.T) {
 		}}}
 	}
 	now = now.Add(5 * time.Second)
-	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, nowFn, now, &retry, nil)
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
 
 	if got := m2.PendingRestoreCount(); got != 0 {
 		t.Fatalf("PendingRestoreCount after the device enumerated = %d, want 0 (the automatic retry must resolve it with no binding redelivery)", got)
@@ -247,7 +250,7 @@ func TestRunAudioRestoreRetryTickNeverTearsDownAnEngineAConcurrentBindJustFixed(
 	// read availability until it holds r.mu -- by the time it checks,
 	// currentNode has already triggered the race and the engine
 	// genuinely is available, so it must decline to act.
-	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, nowFn, now, &retry, nil)
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
 
 	if !raced {
 		t.Fatalf("test setup failed: currentNode's race injection never ran")
@@ -334,7 +337,7 @@ func TestRunAudioRestoreRetryTickCountsNothingWhenRebuildReportsSkipped(t *testi
 
 	var retry audioRestoreRetryer
 	now := time.Unix(1_700_000_000, 0)
-	runAudioRestoreRetryTick(m2, currentNode, rebuild, func() time.Time { return now }, now, &retry, nil)
+	runAudioRestoreRetryTick(m2, currentNode, rebuild, switchable.Available, func() time.Time { return now }, now, &retry, nil)
 
 	if calls != 1 {
 		t.Fatalf("rebuild was called %d times, want exactly 1 (the driver must still call it -- the skip decision lives inside rebuild, not before it)", calls)
@@ -391,7 +394,7 @@ func TestRunAudioRestoreRetryTickBoundsAutomaticAttempts(t *testing.T) {
 	// Drive one tick per scheduled delay, always landing exactly on (or
 	// past) the due time, until the schedule is exhausted.
 	for i, delay := range audioRestoreRetryDelays {
-		runAudioRestoreRetryTick(m2, currentNode, rebuild, nowFn, now, &retry, nil)
+		runAudioRestoreRetryTick(m2, currentNode, rebuild, switchable.Available, nowFn, now, &retry, nil)
 		if calls != i+1 {
 			t.Fatalf("calls after scheduled attempt %d = %d, want %d", i+1, calls, i+1)
 		}
@@ -417,7 +420,7 @@ func TestRunAudioRestoreRetryTickBoundsAutomaticAttempts(t *testing.T) {
 	callsAtBound := calls
 	for i := 0; i < 3; i++ {
 		now = now.Add(10 * time.Minute)
-		runAudioRestoreRetryTick(m2, currentNode, rebuild, nowFn, now, &retry, nil)
+		runAudioRestoreRetryTick(m2, currentNode, rebuild, switchable.Available, nowFn, now, &retry, nil)
 	}
 	if calls != callsAtBound {
 		t.Fatalf("rebuild was called %d more time(s) after the bounded schedule was exhausted, want 0 more", calls-callsAtBound)
@@ -425,5 +428,230 @@ func TestRunAudioRestoreRetryTickBoundsAutomaticAttempts(t *testing.T) {
 	attempts, next, _ = m2.RestoreRetryStatus(id, now)
 	if attempts != len(audioRestoreRetryDelays) || next != 0 {
 		t.Fatalf("RestoreRetryStatus after further idle ticks past exhaustion = (attempts=%d next=%v), want unchanged (%d, 0)", attempts, next, len(audioRestoreRetryDelays))
+	}
+}
+
+// TestRunAudioRestoreRetryTickRebuildsAnUnavailableEngineWithNoPendingRestore
+// proves a node with a delivered binding but no persisted session (so
+// PendingRestoreCount stays 0) still gets an unavailable engine rebuilt:
+// only the widened engine-availability trigger can drive this case.
+func TestRunAudioRestoreRetryTickRebuildsAnUnavailableEngineWithNoPendingRestore(t *testing.T) {
+	origDiscoverer := audioDiscoverer
+	origNewEngine := newGstEngine
+	t.Cleanup(func() {
+		audioDiscoverer = origDiscoverer
+		newGstEngine = origNewEngine
+	})
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		return audio.Discovery{}
+	}
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	switchable := audio.NewSwitchableEngine()
+	m2 := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, fakeAssetDecoder{}, time.Now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	if m2.PendingRestoreCount() != 0 {
+		t.Fatalf("PendingRestoreCount with no persisted session = %d, want 0", m2.PendingRestoreCount())
+	}
+	if ok, _ := switchable.Available(); ok {
+		t.Fatalf("precondition: switchable engine already available before any binding, test would prove nothing")
+	}
+
+	r := newAudioEngineRebuilder(ctx, dir, switchable, m2, nil)
+	node := audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1}
+	currentNode := func() (audioNodeConfig, bool) { return node, true }
+
+	var retry audioRestoreRetryer
+	now := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time { return now }
+
+	// Tick 1: no pending restore, but the engine is unavailable -- the
+	// widened trigger must still run an attempt. No probe evidence yet,
+	// so the attempt refuses again.
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
+	if retry.attempts != 1 {
+		t.Fatalf("attempts after tick 1 = %d, want 1 (zero pending restores must not stop this driver when the engine is unavailable)", retry.attempts)
+	}
+	if ok, _ := switchable.Available(); ok {
+		t.Fatalf("engine reports available after tick 1, want still unavailable (no probe evidence yet)")
+	}
+
+	// The device enumerates: discovery now has probe evidence, and the
+	// rebuild will bind a genuinely available engine.
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		return audio.Discovery{Routes: []audio.RouteEvidence{{
+			Device:      "hw:1,0",
+			ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100},
+		}}}
+	}
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		return availableFakeEngine{audio.NewFakeEngine(time.Now)}, nil
+	}
+	now = now.Add(5 * time.Second)
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
+
+	if ok, _ := switchable.Available(); !ok {
+		t.Fatalf("engine reports unavailable after the device enumerated, want available")
+	}
+	if retry.attempts != 0 {
+		t.Fatalf("attempts after resolution = %d, want 0 (reset)", retry.attempts)
+	}
+}
+
+// TestRunAudioRestoreRetryTickDoesNothingOnAHealthyNode proves a node
+// with an available engine and no pending restore never counts an
+// attempt.
+func TestRunAudioRestoreRetryTickDoesNothingOnAHealthyNode(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	m2 := audio.NewManager(audio.NewFakeEngine(time.Now), audio.NewFileSessionStore(dir), dir, fakeAssetDecoder{}, time.Now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	if m2.PendingRestoreCount() != 0 {
+		t.Fatalf("PendingRestoreCount on a fresh node = %d, want 0", m2.PendingRestoreCount())
+	}
+
+	calls := 0
+	rebuild := func(audioNodeConfig) audioRebuildOutcome {
+		calls++
+		return audioRebuildOutcome{Skipped: true}
+	}
+	currentNode := func() (audioNodeConfig, bool) {
+		return audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1}, true
+	}
+	engineAvailable := func() (bool, string) { return true, "" }
+
+	var retry audioRestoreRetryer
+	now := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		runAudioRestoreRetryTick(m2, currentNode, rebuild, engineAvailable, nowFn, now, &retry, nil)
+		now = now.Add(10 * time.Minute)
+	}
+
+	if calls != 0 {
+		t.Fatalf("rebuild was called %d time(s) on a healthy node, want 0", calls)
+	}
+	if retry.attempts != 0 {
+		t.Fatalf("attempts on a healthy node = %d, want 0", retry.attempts)
+	}
+}
+
+// TestRunAudioRestoreRetryTickIdleNodeNeverCountsAnAttempt proves the
+// "no binding yet" guard still stops this driver even though an unbound
+// [audio.SwitchableEngine] reports unavailable on every idle node.
+func TestRunAudioRestoreRetryTickIdleNodeNeverCountsAnAttempt(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	switchable := audio.NewSwitchableEngine()
+	m2 := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, fakeAssetDecoder{}, time.Now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+	if ok, _ := switchable.Available(); ok {
+		t.Fatalf("precondition: switchable engine reports available with no binding, test would prove nothing")
+	}
+
+	calls := 0
+	rebuild := func(audioNodeConfig) audioRebuildOutcome {
+		calls++
+		return audioRebuildOutcome{}
+	}
+	currentNode := func() (audioNodeConfig, bool) { return audioNodeConfig{}, false }
+
+	var retry audioRestoreRetryer
+	now := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		runAudioRestoreRetryTick(m2, currentNode, rebuild, switchable.Available, nowFn, now, &retry, nil)
+		now = now.Add(10 * time.Minute)
+	}
+
+	if calls != 0 {
+		t.Fatalf("rebuild was called %d time(s) with no binding accepted, want 0", calls)
+	}
+	if retry.attempts != 0 {
+		t.Fatalf("attempts with no binding accepted = %d, want 0", retry.attempts)
+	}
+}
+
+// TestRunAudioRestoreRetryTickRecoversAnEngineThatBreaksMidShow proves the
+// widened trigger also drives recovery when an engine that WAS available
+// goes unavailable later with nothing pending, not only at boot.
+func TestRunAudioRestoreRetryTickRecoversAnEngineThatBreaksMidShow(t *testing.T) {
+	origDiscoverer := audioDiscoverer
+	origNewEngine := newGstEngine
+	t.Cleanup(func() {
+		audioDiscoverer = origDiscoverer
+		newGstEngine = origNewEngine
+	})
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		return audio.Discovery{}
+	}
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	switchable := audio.NewSwitchableEngine()
+	m2 := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, fakeAssetDecoder{}, time.Now, nil)
+	if err := m2.RestoreAll(ctx); err != nil {
+		t.Fatalf("RestoreAll: %v", err)
+	}
+
+	// Healthy mid-show: the bound engine reports available.
+	switchable.Set(availableFakeEngine{audio.NewFakeEngine(time.Now)})
+	if ok, _ := switchable.Available(); !ok {
+		t.Fatalf("precondition: engine not available before it breaks, test would prove nothing")
+	}
+
+	// The pipeline dies: Available() flips to false and stays false, with
+	// nothing pending to signal it. A bare FakeEngine always reports
+	// unavailable, so setting it stands in for that flip.
+	switchable.Set(audio.NewFakeEngine(time.Now))
+	if m2.PendingRestoreCount() != 0 {
+		t.Fatalf("PendingRestoreCount with no session at all = %d, want 0", m2.PendingRestoreCount())
+	}
+	if ok, _ := switchable.Available(); ok {
+		t.Fatalf("precondition: engine already available after it broke, test would prove nothing")
+	}
+
+	r := newAudioEngineRebuilder(ctx, dir, switchable, m2, nil)
+	node := audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1}
+	currentNode := func() (audioNodeConfig, bool) { return node, true }
+
+	var retry audioRestoreRetryer
+	now := time.Unix(1_700_000_000, 0)
+	nowFn := func() time.Time { return now }
+
+	// Tick 1: nothing pending, but the engine is unavailable -- the
+	// widened trigger must still run an attempt. No probe evidence yet,
+	// so the attempt refuses again.
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
+	if retry.attempts != 1 {
+		t.Fatalf("attempts after tick 1 = %d, want 1 (an engine that broke mid-show must still be retried)", retry.attempts)
+	}
+
+	// The device enumerates again: discovery now has probe evidence, and
+	// the rebuild will bind a genuinely available engine.
+	audioDiscoverer = func(context.Context, audio.Enumerator) audio.Discovery {
+		return audio.Discovery{Routes: []audio.RouteEvidence{{
+			Device:      "hw:1,0",
+			ProbeResult: audio.ProbeResult{Available: true, Channels: 2, Rate: 44100},
+		}}}
+	}
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		return availableFakeEngine{audio.NewFakeEngine(time.Now)}, nil
+	}
+	now = now.Add(5 * time.Second)
+	runAudioRestoreRetryTick(m2, currentNode, r.rebuildIfUnavailable, switchable.Available, nowFn, now, &retry, nil)
+
+	if ok, _ := switchable.Available(); !ok {
+		t.Fatalf("engine reports unavailable after the rebuild, want available")
+	}
+	if retry.attempts != 0 {
+		t.Fatalf("attempts after resolution = %d, want 0 (reset)", retry.attempts)
 	}
 }
