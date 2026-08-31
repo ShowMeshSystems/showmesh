@@ -1,3 +1,4 @@
+import { PROBLEM_TYPE } from '../api'
 import type { CurrentRun, Evidence, FPPCommandResult, FPPInstance, Model, Node } from '../api'
 import type { Tone } from '../kit'
 import { EVIDENCE_TONE } from '../domain/evidence'
@@ -59,6 +60,21 @@ export type CommandOutcome = {
   tone: Tone
   label: string
   detail: string
+}
+
+/**
+ * `startPlaylist`'s `ifBusy: "refuse"` guard (the default) produces two
+ * distinct 409 `type`s (api/openapi.yaml's own StartPlaylistCommandRequest):
+ * a different playlist confirmed playing, or the evidence needed to tell
+ * that not being current. Branch on the wire `type`, never on `detail`
+ * prose, so an unrecognized 409 never gets mislabeled as either case.
+ */
+export type StartPlaylistConflictReason = 'differentPlaylistPlaying' | 'evidenceNotCurrent' | 'unknown'
+
+export function classifyStartPlaylistConflict(problemType: string | undefined): StartPlaylistConflictReason {
+  if (problemType === PROBLEM_TYPE.fppStartPlaylistEvidenceNotCurrent) return 'evidenceNotCurrent'
+  if (problemType === PROBLEM_TYPE.fppStartPlaylistBusy) return 'differentPlaylistPlaying'
+  return 'unknown'
 }
 
 export function describeFPPOutcome(result: FPPCommandResult, action: string): CommandOutcome {

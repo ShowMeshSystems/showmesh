@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
+  ApiError,
   dispatchNightCommand,
   invokeAction,
   getShowCue,
@@ -11,6 +12,7 @@ import {
   prevFPPPlaylistItem,
   resumeFPPPlaylist,
   setFPPVolume,
+  startFPPPlaylist,
   stopFPPPlaylist,
   stopFPPPlaylistGracefully,
   submitMacroRun,
@@ -23,6 +25,7 @@ import {
   ButtonRow,
   ButtonRule,
   Callout,
+  Choice,
   Field,
   Input,
   NotWired,
@@ -39,12 +42,19 @@ import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
 import {
   audioRows,
+  classifyStartPlaylistConflict,
   describeFPPOutcome,
   formatPosition,
   outputRows,
   transportState,
   type CommandOutcome,
+  type StartPlaylistConflictReason,
 } from './liveControlModel'
+
+/** Kept apart from the generic Refused outcome: the busy guard needs a distinct render and its own "start anyway" CTA. */
+type StartPlaylistState =
+  | { kind: 'idle' }
+  | { kind: 'busy'; message: string; reason: Exclude<StartPlaylistConflictReason, 'unknown'>; playlist: string; repeat: boolean }
 
 function useActiveShow(): string | null {
   const model = useModelContext()
@@ -100,6 +110,9 @@ export function LiveControl() {
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null)
   const [nightOutcome, setNightOutcome] = useState<CommandOutcome | null>(null)
   const [volume, setVolume] = useState('')
+  const [startPlaylistName, setStartPlaylistName] = useState('')
+  const [startRepeat, setStartRepeat] = useState(false)
+  const [startState, setStartState] = useState<StartPlaylistState>({ kind: 'idle' })
 
   const macros = useConfigList('show.macro', show)
   const actions = useConfigList('show.action', show)
@@ -109,6 +122,31 @@ export function LiveControl() {
       .then((result) => setOutcome(describeFPPOutcome(result, action)))
       .catch((err: unknown) => setOutcome({ tone: 'bad', label: 'Refused', detail: `${action}: ${describeApiError(err)}` }))
   }, [])
+
+  // The ifBusy="refuse" guard's two conflict types get their own state and
+  // CTA, distinguishable from a generic Refused outcome; every other 409 and
+  // every non-409 failure falls through to the same Refused path `run` uses.
+  const dispatchStartPlaylist = useCallback(
+    (instanceId: string, playlist: string, repeat: boolean, ifBusy: 'refuse' | 'replace') => {
+      startFPPPlaylist(instanceId, playlist, repeat, ifBusy)
+        .then((result) => {
+          setStartState({ kind: 'idle' })
+          setOutcome(describeFPPOutcome(result, 'Start playlist'))
+        })
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 409) {
+            const reason = classifyStartPlaylistConflict(err.problemType)
+            if (reason !== 'unknown') {
+              setStartState({ kind: 'busy', message: describeApiError(err), reason, playlist, repeat })
+              return
+            }
+          }
+          setStartState({ kind: 'idle' })
+          setOutcome({ tone: 'bad', label: 'Refused', detail: `Start playlist: ${describeApiError(err)}` })
+        })
+    },
+    [],
+  )
 
   const night = useCallback((command: NightCommandName) => {
     dispatchNightCommand(command)
@@ -170,6 +208,50 @@ export function LiveControl() {
               {state.elapsedSeconds !== null && ` · ${formatPosition(state.elapsedSeconds) ?? ''}`}
               {state.totalSeconds !== null && ` / ${formatPosition(state.totalSeconds) ?? ''}`}
             </p>
+            <div className="sm-volume">
+              <Field label="Playlist name" help="FPP's own catalog is not exposed here; type the exact name.">
+                {(field) => (
+                  <Input
+                    {...field}
+                    value={startPlaylistName}
+                    onChange={(event) => setStartPlaylistName(event.target.value)}
+                    placeholder="e.g. Standard Show"
+                  />
+                )}
+              </Field>
+              <Choice
+                type="checkbox"
+                checked={startRepeat}
+                onChange={(event) => setStartRepeat(event.target.checked)}
+                label="Repeat"
+              />
+              <Button
+                variant="primary"
+                disabled={!commandGate.allowed || startPlaylistName.trim() === ''}
+                title={commandGate.allowed ? undefined : commandGate.reason}
+                onClick={() => dispatchStartPlaylist(instance.instanceId, startPlaylistName.trim(), startRepeat, 'refuse')}
+              >
+                Start playlist
+              </Button>
+            </div>
+            {startState.kind === 'busy' && (
+              <div className="sm-outcome" role="alert">
+                <StatusPair tone="warn" label="Busy" />
+                <p className="sm-outcome__detail">{startState.message}</p>
+                <ButtonRow>
+                  <Button
+                    variant="danger"
+                    disabled={!commandGate.allowed}
+                    title={commandGate.allowed ? undefined : commandGate.reason}
+                    onClick={() => dispatchStartPlaylist(instance.instanceId, startState.playlist, startState.repeat, 'replace')}
+                  >
+                    {startState.reason === 'differentPlaylistPlaying'
+                      ? 'Start anyway (replace what is currently playing)'
+                      : 'Start anyway (override the busy check)'}
+                  </Button>
+                </ButtonRow>
+              </div>
+            )}
             <ButtonRow>
               <Button size="gloved" disabled={!commandGate.allowed} title={commandGate.allowed ? undefined : commandGate.reason} onClick={() => run('Previous item', () => prevFPPPlaylistItem(instance.instanceId))}>
                 <span aria-hidden="true">⏮ </span>Previous item

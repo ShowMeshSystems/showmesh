@@ -1,6 +1,8 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api'
+import { PROBLEM_TYPE } from '../api/problem'
 import type { FPPCommandResult, Model, Node } from '../api'
 import { initialModel } from '../api/domain'
 import { ModelContext } from '../app/ModelContext'
@@ -11,6 +13,7 @@ const stubs = vi.hoisted(() => ({
   listConfigObjects: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   getShowCue: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
   listAssets: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
+  startFPPPlaylist: (() => new Promise(() => {})) as (...args: never[]) => Promise<unknown>,
 }))
 
 vi.mock('../api', async () => {
@@ -20,6 +23,7 @@ vi.mock('../api', async () => {
     listConfigObjects: (...args: never[]) => stubs.listConfigObjects(...args),
     getShowCue: (...args: never[]) => stubs.getShowCue(...args),
     listAssets: (...args: never[]) => stubs.listAssets(...args),
+    startFPPPlaylist: (...args: never[]) => stubs.startFPPPlaylist(...args),
   }
 })
 
@@ -88,7 +92,27 @@ describe('Live Control', () => {
     stubs.listConfigObjects = () => new Promise(() => {})
     stubs.getShowCue = () => new Promise(() => {})
     stubs.listAssets = () => new Promise(() => {})
+    stubs.startFPPPlaylist = () => new Promise(() => {})
   })
+
+  const fppInstance = (playerState = 'stopped') =>
+    ({
+      instanceId: 'main-player',
+      health: 'healthy',
+      observations: [observation('fpp.status.player_state', playerState, 'current', 'fpp', 'main-player')],
+      instanceUuidChange: null,
+    }) as never
+
+  const commandAllowedSession = {
+    serverTime: '2026-08-28T21:07:00Z',
+    authenticated: true,
+    principal: { id: 'p', name: 'op', role: 'operator', disabled: false },
+    session: null,
+    credentialForm: 'session',
+    scopes: ['fpp:command'],
+    scopesState: 'current',
+    bootstrapRequired: false,
+  } as never
 
   it('renders the mock’s six blocks, in order', () => {
     renderScreen({})
@@ -209,5 +233,70 @@ describe('Live Control', () => {
     expect(state.playlist).toBe('WinterRidge_Main')
     expect(state.playerState).toBe('playing')
     expect(formatPosition(state.elapsedSeconds)).toBe('1:42')
+  })
+
+  it('dispatches startFPPPlaylist with the typed name, repeat, and ifBusy refuse', async () => {
+    let received: unknown[] = []
+    stubs.startFPPPlaylist = (...args: unknown[]) => {
+      received = args
+      return Promise.resolve({
+        outcome: 'confirmed',
+        outcomeReason: 'Observed playhead moved.',
+        dispatchedAt: '2026-08-28T21:05:42Z',
+        resolvedAt: '2026-08-28T21:05:44Z',
+      } as unknown as FPPCommandResult)
+    }
+    renderScreen({ fpp: [fppInstance()], session: commandAllowedSession })
+
+    fireEvent.change(screen.getByLabelText('Playlist name'), { target: { value: 'Standard Show' } })
+    fireEvent.click(screen.getByLabelText('Repeat'))
+    fireEvent.click(screen.getByRole('button', { name: 'Start playlist' }))
+
+    expect(received).toEqual(['main-player', 'Standard Show', true, 'refuse'])
+    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+  })
+
+  it('renders a start-playlist busy conflict distinguishably from a generic Refused outcome, and its own CTA resends ifBusy: replace', async () => {
+    const calls: unknown[][] = []
+    stubs.startFPPPlaylist = (...args: unknown[]) => {
+      calls.push(args)
+      if (args[3] === 'refuse') {
+        return Promise.reject(
+          new ApiError('instance "main-player" is currently playing "Other Show"', 409, PROBLEM_TYPE.fppStartPlaylistBusy),
+        )
+      }
+      return Promise.resolve({
+        outcome: 'confirmed',
+        outcomeReason: 'Observed playhead moved.',
+        dispatchedAt: '2026-08-28T21:05:42Z',
+        resolvedAt: '2026-08-28T21:05:44Z',
+      } as unknown as FPPCommandResult)
+    }
+    renderScreen({ fpp: [fppInstance()], session: commandAllowedSession })
+
+    fireEvent.change(screen.getByLabelText('Playlist name'), { target: { value: 'Standard Show' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start playlist' }))
+
+    const busyAlert = await screen.findByRole('alert')
+    expect(busyAlert).toHaveTextContent('Busy')
+    expect(busyAlert).toHaveTextContent('currently playing "Other Show"')
+    // A generic Refused outcome never renders inside role="alert" here (Outcome has no role), so this is distinguishable.
+    expect(screen.queryByText('Refused')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start anyway (replace what is currently playing)' }))
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toEqual(['main-player', 'Standard Show', false, 'replace'])
+    expect(await screen.findByText(/confirmed by observed evidence/)).toBeInTheDocument()
+  })
+
+  it('falls back to the generic Refused outcome for a non-conflict start-playlist failure', async () => {
+    stubs.startFPPPlaylist = () => Promise.reject(new Error('no route to host'))
+    renderScreen({ fpp: [fppInstance()], session: commandAllowedSession })
+
+    fireEvent.change(screen.getByLabelText('Playlist name'), { target: { value: 'Standard Show' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start playlist' }))
+
+    expect(await screen.findByText('Refused')).toBeInTheDocument()
+    expect(screen.getByText(/no route to host/)).toBeInTheDocument()
   })
 })
