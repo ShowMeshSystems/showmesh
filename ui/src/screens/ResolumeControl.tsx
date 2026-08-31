@@ -1,148 +1,47 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  ApiError,
-  blackoutResolume,
-  clearResolumeLayer,
-  getResolumeComposition,
-  launchResolumeClip,
-  launchResolumeColumn,
-  selectResolumeDeck,
-  setResolumeLayerBypass,
-  setResolumeLayerMaster,
-  type ResolumeActionResult,
-  type ResolumeCompositionResponse,
-} from '../api'
-import { Button, ButtonRow, Field, Input, RuledStrip, Section, StatusPair, Table, TableWrap } from '../kit'
+import { ApiError, blackoutResolume, clearResolumeLayer, getResolumeComposition, launchResolumeClip, launchResolumeColumn, selectResolumeDeck, setResolumeLayerBypass, setResolumeLayerMaster, type ResolumeActionResult, type ResolumeCompositionResponse } from '../api'
+import { Button, ButtonRow, Input, RuledStrip, StatusPair, Table, TableWrap } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { effectiveServerTimeIso } from '../domain/time'
 import { findSignal, lastAnswerAgeMs, RESOLUME_HEALTH_LABEL, RESOLUME_HEALTH_TONE } from './resolumeModel'
 
-type CompositionState =
-  | { kind: 'loading' }
-  | { kind: 'none' }
-  | { kind: 'failed'; reason: string }
-  | { kind: 'loaded'; response: ResolumeCompositionResponse }
+type Composition = { kind: 'loading' } | { kind: 'none' } | { kind: 'failed'; reason: string } | { kind: 'loaded'; value: ResolumeCompositionResponse }
+const text = (value: boolean | string | number | null | undefined) => value === null || value === undefined || value === '' ? 'Not reported' : String(value)
+const resultTone = (result: ResolumeActionResult): 'good' | 'warn' | 'bad' | 'unknown' => result.outcome === 'confirmed' ? 'good' : result.outcome === 'unconfirmed' || result.outcome === 'unconfirmable' ? 'warn' : result.outcome === 'refused' || result.outcome === 'failed' ? 'bad' : 'unknown'
+const resultLabel = (result: ResolumeActionResult) => result.outcome === '' ? (result.replay ? 'Replay pending' : 'Outcome pending') : result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)
 
-function outcomeTone(result: ResolumeActionResult): 'good' | 'warn' | 'bad' | 'unknown' {
-  if (result.outcome === 'confirmed') return 'good'
-  if (result.outcome === 'unconfirmed' || result.outcome === 'unconfirmable') return 'warn'
-  if (result.outcome === 'refused' || result.outcome === 'failed') return 'bad'
-  return 'unknown'
-}
-
-function outcomeLabel(result: ResolumeActionResult): string {
-  if (result.outcome === '') return result.replay ? 'Replay pending' : 'Outcome pending'
-  return result.outcome.charAt(0).toUpperCase() + result.outcome.slice(1)
-}
-
-function observationValue(value: boolean | string | number | null | undefined): string {
-  if (value === null || value === undefined || value === '') return 'Not reported'
-  return String(value)
-}
-
-/** The wide, named-object control surface. Arena ids never leave the stored composition map. */
 export function ResolumeControl() {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'resolume:action')
   const instance = model.resolume[0]
-  const nowIso = effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now())
-  const [composition, setComposition] = useState<CompositionState>({ kind: 'loading' })
-  const [selectedDeck, setSelectedDeck] = useState('')
-  const [master, setMaster] = useState<Record<string, string>>({})
-  const [outcomes, setOutcomes] = useState<ResolumeActionResult[]>([])
+  const [composition, setComposition] = useState<Composition>({ kind: 'loading' })
+  const [chosenDeck, setChosenDeck] = useState('')
+  const [masters, setMasters] = useState<Record<string, string>>({})
+  const [results, setResults] = useState<ResolumeActionResult[]>([])
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    getResolumeComposition()
-      .then((response) => {
-        if (!cancelled) setComposition({ kind: 'loaded', response })
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        if (err instanceof ApiError && err.status === 404) setComposition({ kind: 'none' })
-        else setComposition({ kind: 'failed', reason: describeApiError(err) })
-      })
-    return () => { cancelled = true }
-  }, [])
-
-  const data = composition.kind === 'loaded' ? composition.response : null
+  useEffect(() => { let cancelled = false; getResolumeComposition().then((value) => !cancelled && setComposition({ kind: 'loaded', value })).catch((err: unknown) => !cancelled && setComposition(err instanceof ApiError && err.status === 404 ? { kind: 'none' } : { kind: 'failed', reason: describeApiError(err) })); return () => { cancelled = true } }, [])
+  const data = composition.kind === 'loaded' ? composition.value : null
   const reportedDeck = instance === undefined ? undefined : findSignal(instance, 'resolume.composition.selected_deck')
-  const activeDeck = selectedDeck || (typeof reportedDeck?.value === 'string' ? reportedDeck.value : '') || data?.decks[0]?.name || ''
-  const selected = data?.decks.find((deck) => deck.name === activeDeck)
-  const columns = useMemo(() => data?.columns.filter((column) => column.deckId === selected?.id) ?? [], [data, selected?.id])
-  const clips = useMemo(() => data?.clips.filter((clip) => clip.deckId === selected?.id) ?? [], [data, selected?.id])
-
-  const run = useCallback((call: () => Promise<ResolumeActionResult>) => {
-    setError(null)
-    call()
-      .then((result) => setOutcomes((current) => [result, ...current].slice(0, 12)))
-      .catch((err: unknown) => setError(describeApiError(err)))
-  }, [])
-
-  const blockedTitle = gate.allowed ? undefined : gate.reason
-  const canAddress = gate.allowed && data !== null
-  const activeClip = (layerName: string) => instance === undefined ? undefined : findSignal(instance, `resolume.layer.${layerName}.active_clip`)
-  const readiness = (layerName: string) => instance === undefined ? undefined : findSignal(instance, `resolume.layer.${layerName}.ready`)
-  const bypassed = (layerName: string) => instance === undefined ? undefined : findSignal(instance, `resolume.layer.${layerName}.bypassed`)
-
-  return (
-    <>
-      <p className="sm-small sm-faint"><Link to="/control">Live Control</Link> <span aria-hidden="true">/</span> Resolume</p>
-      <h1 className="sm-page__title">Resolume Control</h1>
-      <p className="sm-page__lede">Driving the wall by hand, outside any cue or macro. Everything here is named, never an id, and each dispatch reports its own evidence outcome.</p>
-
-      <Section id="resolume-target" title={instance?.instanceId ?? 'Resolume'} aside={<Button variant="danger" size="gloved" disabled={!gate.allowed} title={blockedTitle} onClick={() => run(blackoutResolume)}>Blackout</Button>}>
-        {instance === undefined ? (
-          <RuledStrip absence="empty" label="None configured" fact="No Resolume instance is configured on this coordinator." detail="Settings › Connections is where an endpoint is added." />
-        ) : (
-          <p className="sm-small sm-muted"><StatusPair tone={RESOLUME_HEALTH_TONE[instance.health]} label={RESOLUME_HEALTH_LABEL[instance.health]} /> · answered {lastAnswerAgeMs(instance, nowIso) === null ? 'at an unrecorded time' : `${Math.round(lastAnswerAgeMs(instance, nowIso) ?? 0) / 1000} s ago`}. {instance.composition === null ? 'No composition identity reported.' : <>Composition <span className="sm-data">{instance.composition.name}</span>. <Link to={`/settings/resolume/${encodeURIComponent(instance.instanceId)}`}>Stored composition and recovery →</Link></>}</p>
-        )}
-      </Section>
-
-      {composition.kind === 'loading' ? <RuledStrip absence="loading" label="Reading" fact="Reading the stored Resolume composition." /> : null}
-      {composition.kind === 'failed' ? <RuledStrip absence="failed" label="Read failed" fact={composition.reason} detail="Blackout remains available because it addresses no composition object." /> : null}
-      {composition.kind === 'none' ? <RuledStrip absence="unavailable" label="No composition" fact="No stored composition names are available for direct clip or layer controls." detail="Upload one in Settings › Resolume. Blackout still works because it addresses no composition object." /> : null}
-
-      {data !== null && (
-        <>
-          <Section id="resolume-decks" title="Deck" aside={<span className="sm-data">selectDeck</span>}>
-            <ButtonRow>
-              {data.decks.map((deck) => <Button key={deck.id} variant={deck.name === activeDeck ? 'primary' : 'secondary'} aria-pressed={deck.name === activeDeck} disabled={!canAddress} title={blockedTitle} onClick={() => { setSelectedDeck(deck.name); run(() => selectResolumeDeck(deck.name)) }}>{deck.name}</Button>)}
-            </ButtonRow>
-            <p className="sm-small sm-muted">The grid below is this deck’s. Select a deck before launching one of its clips; ShowMesh will not silently switch decks.</p>
-          </Section>
-
-          <Section id="resolume-grid" title={activeDeck || 'Composition'} aside={<span className="sm-data">launchClip · launchColumn</span>}>
-            {selected === undefined ? <RuledStrip absence="unavailable" label="Deck unavailable" fact="The selected deck is not in the stored composition." /> : (
-              <TableWrap label={`${selected.name} clip grid, scrollable`}>
-                <Table>
-                  <thead><tr><th scope="col">Layer</th>{columns.map((column) => <th key={column.id} scope="col"><Button size="compact" disabled={!canAddress} title={blockedTitle} onClick={() => run(() => launchResolumeColumn(column.name, selected.name))}>{column.name}</Button></th>)}</tr></thead>
-                  <tbody>{data.layers.map((layer) => <tr key={layer.id}><td><span className="sm-data">{layer.name}</span><br /><span className="sm-small sm-faint">{observationValue(activeClip(layer.name)?.value)}</span></td>{columns.map((column) => {
-                    const clip = clips.find((candidate) => candidate.layerIndex === layer.index && candidate.columnIndex === column.index)
-                    if (clip === undefined) return <td key={column.id} className="sm-faint">—</td>
-                    return <td key={column.id}><Button size="compact" variant={activeClip(layer.name)?.value === clip.name ? 'primary' : 'secondary'} disabled={!canAddress || clip.ambiguous} title={clip.ambiguous ? 'This clip cannot be addressed by name because another clip shares its deck, layer, and name.' : blockedTitle} onClick={() => run(() => launchResolumeClip({ clip: clip.name, deck: selected.name, layer: layer.name }))}>{clip.name}</Button>{clip.ambiguous && <p className="sm-small sm-muted">Ambiguous name</p>}</td>
-                  })}</tr>)}</tbody>
-                </Table>
-              </TableWrap>
-            )}
-          </Section>
-
-          <Section id="resolume-layers" title="Layers" aside={<span className="sm-data">clearLayer · setLayerMaster · setLayerBypass</span>}>
-            <TableWrap label="Resolume layers, scrollable"><Table><thead><tr><th scope="col">Layer</th><th scope="col">Ready</th><th scope="col">Active clip</th><th scope="col">Master</th><th scope="col">Actions</th></tr></thead><tbody>
-              {data.layers.map((layer) => { const isBypassed = bypassed(layer.name)?.value === true; return <tr key={layer.id}><td><span className="sm-data">{layer.name}</span></td><td>{observationValue(readiness(layer.name)?.value)}</td><td>{observationValue(activeClip(layer.name)?.value)}</td><td><Field label={`Master for ${layer.name}`}>{(field) => <Input {...field} type="number" step="any" value={master[layer.name] ?? ''} onChange={(event) => setMaster((current) => ({ ...current, [layer.name]: event.target.value }))} />}</Field></td><td><ButtonRow><Button size="compact" disabled={!canAddress || !Number.isFinite(Number(master[layer.name])) || (master[layer.name] ?? '').trim() === ''} title={blockedTitle} onClick={() => run(() => setResolumeLayerMaster(layer.name, Number(master[layer.name])))}>Set master</Button><Button size="compact" disabled={!canAddress} title={blockedTitle} onClick={() => run(() => setResolumeLayerBypass(layer.name, !isBypassed))}>{isBypassed ? 'Restore' : 'Bypass'}</Button><Button size="compact" variant="danger" disabled={!canAddress} title={blockedTitle} onClick={() => run(() => clearResolumeLayer(layer.name))}>Clear</Button></ButtonRow></td></tr> })}
-            </tbody></Table></TableWrap>
-            <p className="sm-section__footnote">A layer that is not reporting can still be commanded. The result below says what happened; it never treats dispatch as proof.</p>
-          </Section>
-        </>
-      )}
-
-      {(outcomes.length > 0 || error !== null) && <Section id="resolume-results" title="What each dispatch did" aside={<span className="sm-data">this session only</span>}>
-        {error !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={error} />}
-        <div className="sm-stack-3">{outcomes.map((result, index) => <div key={`${result.outcome}-${index}`} className="sm-outcome"><StatusPair tone={outcomeTone(result)} label={outcomeLabel(result)} /><p className="sm-outcome__detail">{result.outcomeReason || 'The prior dispatch is still resolving.'}{result.replay ? ' This response reuses the original dispatch.' : ''}{result.attributionDegraded ? ' Attribution is degraded because the audit record could not be written.' : ''}</p></div>)}</div>
-      </Section>}
-    </>
-  )
+  const deckName = chosenDeck || (typeof reportedDeck?.value === 'string' ? reportedDeck.value : '') || data?.decks[0]?.name || ''
+  const deck = data?.decks.find((item) => item.name === deckName)
+  const columns = useMemo(() => data?.columns.filter((item) => item.deckId === deck?.id) ?? [], [data, deck?.id])
+  const clips = useMemo(() => data?.clips.filter((item) => item.deckId === deck?.id) ?? [], [data, deck?.id])
+  const run = useCallback((call: () => Promise<ResolumeActionResult>) => { setError(null); call().then((result) => setResults((all) => [result, ...all].slice(0, 12))).catch((err: unknown) => setError(describeApiError(err))) }, [])
+  const canAct = gate.allowed && data !== null
+  const signal = (layer: string, suffix: string) => instance === undefined ? undefined : findSignal(instance, `resolume.layer.${layer}.${suffix}`)
+  const age = instance === undefined ? null : lastAnswerAgeMs(instance, effectiveServerTimeIso(model.serverTime, model.serverTimeReceivedAt, Date.now()))
+  const blocked = gate.allowed ? undefined : gate.reason
+  return <>
+    <p className="sm-rc-breadcrumb"><Link to="/control">Live Control</Link><span aria-hidden="true">/</span>Resolume</p>
+    <h1 className="sm-page__title">Resolume Control</h1><p className="sm-page__lede sm-rc-lede">Driving the wall by hand, outside any cue or macro. Everything here is named, never an id, and every name is resolved against the composition ShowMesh has stored. Each dispatch waits for evidence and reports what actually happened.</p>
+    <section className="sm-rc-target" aria-label="Resolume target"><div>{instance === undefined ? <><h2 className="sm-rc-target__name">No Resolume instance</h2><p className="sm-small sm-muted">Settings › Connections is where an endpoint is added.</p></> : <><div className="sm-rc-target__heading"><h2 className="sm-rc-target__name">{instance.instanceId}</h2><StatusPair tone={RESOLUME_HEALTH_TONE[instance.health]} label={`${RESOLUME_HEALTH_LABEL[instance.health]} · answered ${age === null ? 'at an unrecorded time' : `${Math.round(age / 100) / 10} s ago`}`} /></div><p className="sm-small sm-muted">{instance.composition === null ? 'No composition identity reported.' : <>Composition <span className="sm-data">{instance.composition.name}</span>. <Link to={`/settings/resolume/${encodeURIComponent(instance.instanceId)}`}>Stored composition and recovery →</Link></>}</p></>}</div><div className="sm-rc-target__blackout"><Button variant="danger" size="gloved" disabled={!gate.allowed} title={blocked} onClick={() => run(blackoutResolume)}>Blackout</Button><p>Every layer dark. This safety action remains available even if audit attribution is degraded.</p></div></section>
+    {composition.kind === 'loading' && <RuledStrip absence="loading" label="Reading" fact="Reading the stored Resolume composition." />}{composition.kind === 'failed' && <RuledStrip absence="failed" label="Read failed" fact={composition.reason} detail="Blackout remains available because it addresses no composition object." />}{composition.kind === 'none' && <RuledStrip absence="unavailable" label="No composition" fact="No stored composition names are available for direct clip or layer controls." detail="Upload one in Settings › Resolume. Blackout still works because it addresses no composition object." />}
+    {data !== null && <><section className="sm-section" aria-labelledby="rc-deck"><div className="sm-rc-section-head"><h2 id="rc-deck">Deck</h2><span>selectDeck</span></div><div className="sm-rc-decks">{data.decks.map((item) => <Button key={item.id} variant={item.name === deckName ? 'primary' : 'secondary'} aria-pressed={item.name === deckName} disabled={!canAct} title={blocked} onClick={() => { setChosenDeck(item.name); run(() => selectResolumeDeck(item.name)) }}>{item.name}</Button>)}<p>The grid below is this deck’s. Launching a clip on another deck is refused rather than silently switching decks — select the deck first.</p></div></section>
+      <section className="sm-section" aria-labelledby="rc-grid"><div className="sm-rc-section-head"><h2 id="rc-grid">{deckName || 'Composition'}</h2><span>launchClip · launchColumn</span></div>{deck === undefined ? <RuledStrip absence="unavailable" label="Deck unavailable" fact="The selected deck is not in the stored composition." /> : <><div className="sm-rc-grid-wrap" role="region" aria-label={`${deck.name} clip grid`} tabIndex={0}><div className="sm-rc-grid" style={{ gridTemplateColumns: `170px repeat(${columns.length}, minmax(140px, 1fr))` }}><div className="sm-rc-grid__corner">Layer</div>{columns.map((column) => <button key={column.id} className="sm-rc-grid__column" disabled={!canAct} title={blocked} onClick={() => run(() => launchResolumeColumn(column.name, deck.name))}>{column.name}<span>Launch column</span></button>)}{data.layers.flatMap((layer) => { const active = signal(layer.name, 'active_clip')?.value; return [<div key={`${layer.id}-layer`} className="sm-rc-grid__layer"><strong>{layer.name}</strong><span>{active === null || active === undefined || active === '' ? 'dark' : 'playing'}</span></div>, ...columns.map((column) => { const clip = clips.find((item) => item.layerIndex === layer.index && item.columnIndex === column.index); if (clip === undefined) return <div key={`${layer.id}-${column.id}`} className="sm-rc-grid__empty" />; if (clip.ambiguous) return <div key={clip.id} className="sm-rc-grid__ambiguous" title="This name addresses more than one clip."><strong>{clip.name}</strong><span>Ambiguous name</span></div>; const onAir = active === clip.name; return <button key={clip.id} className={`sm-rc-grid__clip${onAir ? ' sm-rc-grid__clip--onair' : ''}`} disabled={!canAct} title={blocked} onClick={() => run(() => launchResolumeClip({ clip: clip.name, deck: deck.name, layer: layer.name }))}><strong>{clip.name}</strong>{onAir && <span>On air</span>}</button> })] })}</div></div><div className="sm-rc-legend"><span><i className="sm-rc-legend__onair" />On air</span><span><i className="sm-rc-legend__empty" />No clip in this slot</span><span><i className="sm-rc-legend__ambiguous" />Cannot be addressed by name</span></div></>}</section>
+      {data.persistentClips.length > 0 && <section className="sm-section" aria-labelledby="rc-persistent"><div className="sm-rc-section-head"><h2 id="rc-persistent">Persistent clips</h2><span>launchClip · persistent</span></div><p className="sm-small sm-muted">Outside every deck, so these launch whichever deck is selected.</p><ButtonRow>{data.persistentClips.map((clip) => <Button key={clip.id} disabled={!canAct || clip.ambiguous} title={clip.ambiguous ? 'This name addresses more than one persistent clip.' : blocked} onClick={() => { const layer = data.layers.find((entry) => entry.index === clip.layerIndex)?.name; run(() => launchResolumeClip({ clip: clip.name, persistent: true, ...(layer === undefined ? {} : { layer }) })) }}>{clip.name}</Button>)}</ButtonRow></section>}
+      <section className="sm-section" aria-labelledby="rc-layers"><div className="sm-rc-section-head"><h2 id="rc-layers">Layers</h2><span>clearLayer · setLayerBypass · setLayerMaster</span></div><p className="sm-small sm-muted">Layers are the same on every deck. Ready is the word the layer itself reports — it is a state, not a yes or no.</p><TableWrap label="Resolume layers, scrollable"><Table><thead><tr><th>Layer</th><th>Ready</th><th>Active clip</th><th>Master</th><th /></tr></thead><tbody>{data.layers.map((layer) => { const bypass = signal(layer.name, 'bypassed')?.value === true; const value = masters[layer.name] ?? ''; return <tr key={layer.id}><td><strong>{layer.name}</strong></td><td className="sm-data">{text(signal(layer.name, 'ready')?.value)}</td><td className="sm-data">{text(signal(layer.name, 'active_clip')?.value)}</td><td><div className="sm-rc-master"><Input aria-label={`Master for ${layer.name}`} type="number" step="any" value={value} onChange={(event) => setMasters((all) => ({ ...all, [layer.name]: event.target.value }))} /><Button size="compact" disabled={!canAct || value.trim() === '' || !Number.isFinite(Number(value))} title={blocked} onClick={() => run(() => setResolumeLayerMaster(layer.name, Number(value)))}>Set</Button></div></td><td><ButtonRow><Button size="compact" variant={bypass ? 'primary' : 'secondary'} disabled={!canAct} title={blocked} onClick={() => run(() => setResolumeLayerBypass(layer.name, !bypass))}>{bypass ? 'Bypassed' : 'Bypass'}</Button><Button size="compact" disabled={!canAct} title={blocked} onClick={() => run(() => clearResolumeLayer(layer.name))}>Clear</Button></ButtonRow></td></tr> })}</tbody></Table></TableWrap><p className="sm-section__footnote">A layer that is not reporting can still be commanded; the result says what happened.</p></section></>}
+    {(results.length > 0 || error !== null) && <section className="sm-section" aria-labelledby="rc-results"><div className="sm-rc-section-head"><h2 id="rc-results">What each dispatch did</h2><span>this session only</span></div><p className="sm-small sm-muted">Sent is not done. Every dispatch resolves to an evidence outcome and says why.</p>{error !== null && <RuledStrip absence="failed" label="Dispatch failed" fact={error} />}<div className="sm-rc-results">{results.map((result, index) => <div key={`${result.outcome}-${index}`} className={`sm-rc-result sm-rc-result--${resultTone(result)}`}><StatusPair tone={resultTone(result)} label={resultLabel(result)} /><p>{result.outcomeReason || 'The prior dispatch is still resolving.'}{result.replay ? ' This response reuses the original dispatch.' : ''}{result.attributionDegraded ? ' Attribution is degraded because the audit record could not be written.' : ''}</p></div>)}</div></section>}
+  </>
 }
