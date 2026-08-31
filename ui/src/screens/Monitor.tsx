@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, NavLink, useSearchParams } from 'react-router-dom'
 import {
   AttentionRow,
@@ -16,7 +16,7 @@ import {
 } from '../kit'
 import { useModelContext } from '../app/ModelContext'
 import { effectiveServerTimeIso } from '../domain/time'
-import { acknowledgeFPPInstanceUUIDChange, deleteFPPPlaylistEntryObservation, type FPPInstance, type Model } from '../api'
+import { acknowledgeFPPInstanceUUIDChange, deleteFPPPlaylistEntryObservation, getFPPPlaylistEntryReconciliation, type FPPInstance, type Model } from '../api'
 import { describeApiError, evaluateScope } from '../domain/session'
 import { attentionItems, fleetCounts, fppDetail, nodesDetail } from './dashboardModel'
 import {
@@ -318,6 +318,14 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
   const [ackError, setAckError] = useState<string | null>(null)
   const [clearingObservation, setClearingObservation] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
+  const [reconciliation, setReconciliation] = useState<{ outcome: string; reason: string } | null>(null)
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null)
+  useEffect(() => {
+    if (instance.instanceUuid === null) { setReconciliation(null); return }
+    let cancelled = false
+    getFPPPlaylistEntryReconciliation(instance.instanceUuid).then((response) => { if (!cancelled) setReconciliation(response) }).catch((err: unknown) => { if (!cancelled) setReconciliationError(describeApiError(err)) })
+    return () => { cancelled = true }
+  }, [instance.instanceUuid])
   const acknowledge = () => {
     setAcknowledging(true)
     setAckError(null)
@@ -370,6 +378,8 @@ function FppInspector({ instance, nowIso }: { instance: FPPInstance; nowIso: str
       </div>
       {ackError !== null && <RuledStrip absence="failed" label="Acknowledgement refused" fact={ackError} />}
       {clearError !== null && <RuledStrip absence="failed" label="Observation reset refused" fact={clearError} />}
+      {reconciliation !== null && <div className="sm-outcome"><StatusPair tone={reconciliation.outcome === 'resolved' ? 'good' : 'warn'} label={reconciliation.outcome.replaceAll('-', ' ')} /><p className="sm-outcome__detail">{reconciliation.reason}</p></div>}
+      {reconciliationError !== null && <RuledStrip absence="failed" label="Reconciliation unavailable" fact={reconciliationError} />}
     </div>
   )
 }
