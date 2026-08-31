@@ -86,6 +86,22 @@ const ScopeNodeObserve Scope = "node:observe"
 // Admin-only for now, for [ScopeNodeObserve]'s identical reason.
 const ScopeCueCatalogDeploy Scope = "cuecatalog:deploy"
 
+// ScopeFPPFallback gates GET/POST under /api/v1/fallback-programs
+// (ADR-048, Track J's J1): an FPP host fetching its current signed
+// fallback program and posting its own acknowledgement, the identical
+// "the plugin reporting evidence about itself" relationship
+// [ScopeFPPObserve] and [ScopeNodeObserve] already hold to their own
+// routes, granted to [RoleScheduler] for the identical reason
+// [ScopeFPPObserve] is: the installed FPP plugin principal is the only
+// caller this route exists for. Deliberately not folded into
+// [ScopeFPPObserve] itself: that scope's own doc comment already
+// exists to keep exactly one route's authority from silently widening
+// into another's, and a fallback program is signed, higher-stakes
+// material an observation-only credential should not automatically gain
+// read/acknowledge access to merely because both happen to originate
+// from the same plugin binary.
+const ScopeFPPFallback Scope = "fpp:fallback"
+
 // Write scopes. Step 6 adds no endpoint that consumes ScopeShowMacroRun,
 // ScopeDevicePower, or ScopeFPPCommand — they exist so the vocabulary is
 // fixed by the record that decided it (ADR-024) rather than invented by
@@ -208,7 +224,7 @@ var operatorActionScopes = []Scope{ScopeShowMacroRun, ScopeDevicePower, ScopeFPP
 // ScopeNightOverride sits here, not in operatorActionScopes, per its own
 // doc comment: bypassing a blocking interlock is deliberately not implied
 // by holding [ScopeNightCommand].
-var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy}
+var adminOnlyScopes = []Scope{ScopeConfigWrite, ScopePrincipalWrite, ScopeAuditRead, ScopeAssetWrite, ScopePrincipalRead, ScopeFPPObserve, ScopeNightOverride, ScopeNodeObserve, ScopeCueCatalogDeploy, ScopeFPPFallback}
 
 // Scopes returns role's fixed scope bundle, per the table in ADR-024
 // decision 4. The returned slice is a fresh copy on every call, so a
@@ -230,8 +246,11 @@ func (r Role) Scopes() []Scope {
 		// that exists for exactly that. the plugin observation contract grows this bundle by
 		// exactly one scope: scheduler is also the installed plugin
 		// principal that reports playlist-entry observations (ADR-038,
-		// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.1).
-		return []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve}
+		// FPP-PLUGIN-COORDINATOR-CONTRACTS.md §1.1). ScopeFPPFallback
+		// grows this bundle by one more, for the identical reason: the
+		// same installed plugin principal is the one caller ADR-048's
+		// fallback-program routes exist for.
+		return []Scope{ScopeShowMacroRun, ScopeNightCommand, ScopeFPPObserve, ScopeFPPFallback}
 	case RoleRecovery:
 		return []Scope{ScopeResolumeAction}
 	default:
