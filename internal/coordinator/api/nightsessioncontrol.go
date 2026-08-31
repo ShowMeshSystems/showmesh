@@ -106,6 +106,16 @@ const nightDegradedGuidance = "night session is degraded (%s). " +
 // distinguishing that from a genuine store/internal error.
 var errNightCommandRefused = errors.New("api: night command refused")
 
+// nightShutdownOrdinary and nightShutdownForced are
+// [applyNightShutdownEffect]'s and [handlers.nightPowerDownPresentationApply]'s
+// own force argument, named at every call site rather than passed as a bare
+// true/false literal — see applyNightShutdownEffect's own doc comment for
+// why.
+const (
+	nightShutdownOrdinary = false // the normal path: defer a live/committed show, evaluate interlocks
+	nightShutdownForced   = true  // an operator's own explicit emergency command: never defer, never interlock
+)
+
 // nightShutdownIntentRank orders the two shutdown intents: power-down is
 // the stronger, terminal intent (invariant 1) and a later fade-out-night
 // must never downgrade it.
@@ -883,6 +893,14 @@ func (h *handlers) nightRequestFinalShow(now time.Time, current *store.NightSess
 // operator's own explicit emergency command is what ADR-038 reserves the
 // exception for, and playout has already been stopped immediately by the
 // caller before this ever runs.
+//
+// Every call site passes [nightShutdownOrdinary] or [nightShutdownForced],
+// never a bare true/false literal — this repo's own established pattern for
+// a bool this shape (see callerHasOverrideScope, threaded through roughly
+// ten signatures in this same file and nightinterlock.go): a bare bool
+// TYPE, never a named bool type (none exists anywhere in this repo), but
+// always a named value at the call site, so a reader never has to look up
+// what a literal true or false means here.
 func applyNightShutdownEffect(now time.Time, rec store.NightSessionRecord, intent string, force bool) (store.NightSessionRecord, bool) {
 	changed := false
 	if !rec.AdmissionClosed {
@@ -961,7 +979,7 @@ func (h *handlers) nightFadeOutNightCommand(ctx context.Context, now time.Time, 
 		})
 	}
 
-	_, changed := applyNightShutdownEffect(now, current, "fade-out", false)
+	_, changed := applyNightShutdownEffect(now, current, "fade-out", nightShutdownOrdinary)
 	var overrideAuditParams []map[string]any
 	if changed {
 		payload, err := h.getPinnedNightSessionPayload(ctx, current)
@@ -1006,7 +1024,7 @@ func (h *handlers) nightFadeOutNightApply(current *store.NightSessionRecord, now
 	if current == nil {
 		return nightCommandOutcome{result: nightSyntheticInactiveSession(now), outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
-	next, changed := applyNightShutdownEffect(now, *current, "fade-out", false)
+	next, changed := applyNightShutdownEffect(now, *current, "fade-out", nightShutdownOrdinary)
 	if !changed {
 		return nightCommandOutcome{result: *current, outcome: nightOutcomeIdempotentNoOp}, nil, nil
 	}
@@ -1051,16 +1069,16 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 	}
 	if !hasCurrent {
 		return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, false)
+			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, nightShutdownOrdinary)
 		})
 	}
 	if current.State == nightStateStopped && current.PowerPhase != "" {
 		return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, false)
+			return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, nightShutdownOrdinary)
 		})
 	}
 
-	_, shutdownChanged := applyNightShutdownEffect(now, current, "power-down", false)
+	_, shutdownChanged := applyNightShutdownEffect(now, current, "power-down", nightShutdownOrdinary)
 	var overrideAuditParams []map[string]any
 	if shutdownChanged {
 		payload, err := h.getPinnedNightSessionPayload(ctx, current)
@@ -1086,7 +1104,7 @@ func (h *handlers) nightPowerDownPresentationCommand(ctx context.Context, now ti
 	// nightPowerDownPresentationApply already recomputes fresh from
 	// whatever that state actually is.
 	return h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, overrideAuditParams, false)
+		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, overrideAuditParams, nightShutdownOrdinary)
 	})
 }
 

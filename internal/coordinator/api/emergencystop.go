@@ -356,7 +356,7 @@ func (h *handlers) nightEmergencyPowerDown(ctx context.Context, now time.Time, i
 
 	var attributionDegraded bool
 	out, problem, err := h.nightRunExempt(ctx, now, nightCommandPowerDownPresentation, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, cur *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
-		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, true)
+		return h.nightPowerDownPresentationApply(ctx, tx, cur, now, nil, nightShutdownForced)
 	})
 	if err != nil {
 		return v1.EmergencyStopNightSessionOutcome{}, err
