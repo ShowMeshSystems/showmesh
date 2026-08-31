@@ -65,6 +65,10 @@ func newManagerTestEngine(t *testing.T, assetDir string) *Engine {
 		t.Skipf("skipping: gstengine unavailable in this environment: %s", reason)
 	}
 	t.Cleanup(func() {
+		if e.pipeline == nil {
+			// Already released by the test's own Close.
+			return
+		}
 		// Bounded, not a bare SetState: a test that deliberately abandons a
 		// state change leaves a goroutine inside gst_element_set_state
 		// holding that element's state lock, and this bin-level transition
