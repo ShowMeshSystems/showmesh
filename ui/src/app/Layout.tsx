@@ -1,4 +1,5 @@
-import { Outlet } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, Outlet } from 'react-router-dom'
 import {
   ChromeBar,
   ChromeProgress,
@@ -11,7 +12,7 @@ import {
   ShellBody,
   type Connection,
 } from '../kit'
-import type { ConnectionState, Model } from '../api'
+import { getShowModeConfig, type ConnectionState, type ConfigShowModePayload, type Model } from '../api'
 import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
 import { describeSignInState, type SignInState } from '../domain/session'
 import { useModelContext } from './ModelContext'
@@ -85,6 +86,33 @@ function NowPlaying({ model, signInKind }: { model: Model; signInKind: SignInSta
   )
 }
 
+function ShellMode() {
+  const [mode, setMode] = useState<ConfigShowModePayload['mode'] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getShowModeConfig()
+      .then((response) => {
+        if (!cancelled) setMode(response.payload.mode)
+      })
+      .catch(() => {
+        // The mode is a fact only after the coordinator has reported it.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (mode === null) return null
+  return <Link className={`sm-mode-badge sm-mode-badge--${mode}`} to="/settings#show-mode">{mode}</Link>
+}
+
+function ShowPicker({ model }: { model: Model }) {
+  const active = model.currentRuns?.activeShow
+  if (active?.configured !== true || active.show === null) return null
+  return <Link className="sm-showpicker" to={`/shows/${encodeURIComponent(active.show)}`}>{active.show}</Link>
+}
+
 export function Layout() {
   const model = useModelContext()
   const signIn = describeSignInState(model.session)
@@ -94,8 +122,8 @@ export function Layout() {
   return (
     <div className="sm-shell">
       <ChromeBar
-        showPicker={null}
-        mode={null}
+        showPicker={<ShowPicker model={model} />}
+        mode={<ShellMode />}
         nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
         connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
         principal={
