@@ -17,16 +17,6 @@ describe('AuditStoreBanner', () => {
     expect(container.querySelector('.audit-store-banner')).toBeNull()
   })
 
-  // ADR-024 decision 11's amendment: "unknown" (no audit write attempted
-  // yet since startup) is the ordinary state of a freshly started
-  // coordinator, not evidence of a problem, so it must not render an
-  // alert either.
-  it('renders nothing when unknown', () => {
-    const auditStore: AuditStoreStatus = { state: 'unknown', reason: null }
-    const { container } = render(<AuditStoreBanner auditStore={auditStore} />)
-    expect(container.querySelector('.audit-store-banner')).toBeNull()
-  })
-
   it('renders a loud alert naming the reason when unusable', () => {
     const auditStore: AuditStoreStatus = {
       state: 'unusable',

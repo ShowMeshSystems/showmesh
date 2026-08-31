@@ -9,13 +9,8 @@ import type { AuditStoreStatus } from '../app/types'
 // flag only answers "was this one action unaudited", never "is audit down
 // right now").
 //
-// Only `state === 'unusable'` renders. `'unknown'` (no audit_log append
-// attempted yet since this coordinator started) is deliberately silent
-// here: it is the ordinary state of a coordinator that has not yet made a
-// write, not evidence of a problem, and rendering a banner for it would
-// make every fresh coordinator start look like an incident. `'usable'`
-// renders nothing, matching ConnectionBanner's own "no banner when
-// healthy" posture.
+// Only `state === 'unusable'` renders. `'usable'` renders nothing,
+// matching ConnectionBanner's own "no banner when healthy" posture.
 export interface AuditStoreBannerProps {
   auditStore: AuditStoreStatus | null
 }
