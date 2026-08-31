@@ -13784,6 +13784,20 @@ components:
         check's own `reason` states exactly what it verified and what it
         could not. A healthy result on one check is never evidence any
         other check passed.
+
+        When `resting.backgroundAudio` is configured, this also checks
+        the configured output's declared capabilities
+        (`resting:background-audio-output-capabilities:<node>`) and its
+        requested item-transition ability
+        (`resting:background-audio-item-transition`). Both can report
+        `not_verifiable` for an output that has never published a
+        capability advertisement at all (an agent built before that
+        signal existed makes no claim either way), `unknown` for one this
+        coordinator cannot currently confirm is online, or is online but
+        has not finished reporting since it connected, `failed` for a
+        currently-confirmed output whose advertisement genuinely omits
+        what is needed, and `healthy` once it declares everything
+        needed.
       required: [name, state, reason]
       properties:
         name:

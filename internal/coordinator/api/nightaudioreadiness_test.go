@@ -99,16 +99,19 @@ func TestNightCheckBackgroundAudioItemTransition_SequentialAlwaysPasses(t *testi
 }
 
 // TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade defends
-// the rule across all three reachable states, proving the check reads
-// real evidence rather than a hardcoded refusal: unknown when this
-// coordinator has no current evidence for the output at all (it has
-// never appeared in inventory - api/openapi.yaml's own NightReadinessCheck
-// rule that missing evidence is never "failed"), failed when a LIVE
-// node's own advertisement genuinely omits the matching
-// audio.transition.* ID, and healthy once it declares one. Also proves a
-// node whose retained hello DOES name the ability but whose liveness is
-// not currently online reports unknown, never healthy: stale evidence is
-// not current evidence.
+// the rule across every reachable state, proving the check reads real
+// evidence rather than a hardcoded refusal: not_verifiable when this
+// coordinator has no evidence for the output at all (it has never
+// appeared in inventory - this is a NO CLAIM state, distinct from a live
+// node's own negative advertisement, and stays excluded from the
+// aggregate outcome exactly as it did before this build ever had a
+// capability signal to check), failed when a LIVE node's own
+// advertisement genuinely omits the matching audio.transition.* ID, and
+// healthy once it declares one. Also proves a node whose retained hello
+// DOES name the ability but whose liveness is not currently online
+// reports unknown, never healthy: stale evidence is not current
+// evidence, and not_verifiable is reserved for "never published,"
+// distinct from "published but not trustworthy right now."
 func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) {
 	cases := []struct {
 		transition   string
@@ -126,8 +129,8 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 			}
 
 			check := h.nightCheckBackgroundAudioItemTransition(context.Background(), testNow, ba)
-			if check.health != nightHealthUnknown() {
-				t.Fatalf("output never seen in inventory: check = %+v, want unknown", check)
+			if check.health != nightCheckStateNotVerifiable {
+				t.Fatalf("output never seen in inventory: check = %+v, want not_verifiable", check)
 			}
 
 			h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
@@ -158,14 +161,16 @@ func TestNightCheckBackgroundAudioItemTransition_GaplessCrossfade(t *testing.T) 
 }
 
 // TestNightCheckAudioOutputCapabilities defends this check's real
-// behavior: unknown when this coordinator has never seen the output node
-// at all (missing evidence is never "failed"), failed naming the missing
-// IDs once a LIVE node's own advertisement is evaluated and genuinely
-// omits some of them, and healthy once it declares every one this
-// configured session requires (background/playlist/gain always, loop
-// only because Repeat is configured here). Also proves a node that WOULD
-// satisfy every requirement but is not currently online still reports
-// unknown, not healthy.
+// behavior: not_verifiable when this coordinator has never seen the
+// output node at all (a no-claim state, excluded from the aggregate
+// outcome, never "failed" - missing evidence is never a negative
+// claim), failed naming the missing IDs once a LIVE node's own
+// advertisement is evaluated and genuinely omits some of them, and
+// healthy once it declares every one this configured session requires
+// (background/playlist/gain always, loop only because Repeat is
+// configured here). Also proves a node that WOULD satisfy every
+// requirement but is not currently online still reports unknown, not
+// healthy.
 func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
 	ba := &config.NightSessionBackgroundAudio{
@@ -174,16 +179,26 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	}
 
 	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
-	if check.health != nightHealthUnknown() {
-		t.Fatalf("node never seen in inventory: check = %+v, want unknown", check)
+	if check.health != nightCheckStateNotVerifiable {
+		t.Fatalf("node never seen in inventory: check = %+v, want not_verifiable", check)
 	}
 
 	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 		nodeViewWithGenericCapabilities("node-a"),
 	})
+	// Every required ID is missing here, so this needs
+	// node.audio.engine.state to POSITIVELY confirm the engine
+	// unavailable to legitimately reach failed rather than unknown (a
+	// "declares nothing yet" node is only distinguishable from "still
+	// probing" by that independent evidence) - see
+	// TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown for
+	// that distinction proven directly.
+	h.deps.Audio.(*fakeNodeAudioLister).setObservations("node-a", []observation.Observation{
+		nodeAudioEngineStateObservation("node-a", nodeaudio.StateUnavailable, testNow),
+	})
 	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
 	if check.health != nightHealthFailed() {
-		t.Fatalf("live node declaring nothing: check = %+v, want failed", check)
+		t.Fatalf("live node declaring nothing, engine confirmed unavailable: check = %+v, want failed", check)
 	}
 	if !containsAllSubstrings(check.reason, "audio.playback.background", "audio.playback.playlist", "audio.playback.gain", "audio.playback.loop") {
 		t.Fatalf("reason does not name every missing capability; reason: %s", check.reason)
@@ -214,6 +229,36 @@ func TestNightCheckAudioOutputCapabilities(t *testing.T) {
 	check = h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
 	if check.health != nightHealthHealthy() {
 		t.Fatalf("every required capability declared by a live node: check = %+v, want healthy", check)
+	}
+}
+
+// TestNightCheckAudioOutputCapabilities_OldAgentNeverPublishedIsNotVerifiable
+// is the mixed-fleet distinction directly: a node this coordinator KNOWS
+// about (it is in inventory, e.g. from an MQTT hello envelope predating
+// this capability signal, or from LWT/health evidence alone) but that
+// has never published ANY Hello.Capabilities is an old agent making NO
+// CLAIM about these abilities, not a live agent that claims to declare
+// nothing. Collapsing the two into failed infers a claim the old node
+// never made, the identical dishonesty this whole change exists to
+// remove, aimed the other way; it must stay not_verifiable, excluded
+// from the aggregate outcome, exactly like a node never seen at all.
+func TestNightCheckAudioOutputCapabilities_OldAgentNeverPublishedIsNotVerifiable(t *testing.T) {
+	h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+	ba := &config.NightSessionBackgroundAudio{
+		Items:  []config.NightSessionBackgroundAudioItem{{Asset: config.NightSessionAssetRef{Target: "node-a"}}},
+		Repeat: config.NightSessionBackgroundRepeatPlaylist,
+	}
+	// In inventory (known to this coordinator, e.g. via LWT/health), but
+	// Hello is nil: this node has never published a capability
+	// advertisement at all, distinct from a Hello that exists and
+	// declares an empty set.
+	h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+		{NodeID: "node-a", Liveness: inventory.LivenessOnline},
+	})
+
+	check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+	if check.health != nightCheckStateNotVerifiable {
+		t.Fatalf("node in inventory with Hello == nil: check = %+v, want not_verifiable", check)
 	}
 }
 
@@ -251,16 +296,19 @@ func nodeAudioEngineStateObservation(nodeID, value string, observedAt time.Time)
 
 // TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown proves
 // finding C/4's fix: a live node whose Hello capability set is entirely
-// empty reads unknown, not failed, when independent evidence
-// (node.audio.engine.state, a much faster, separate signal than the
-// Hello capability cycle) confirms its session engine is usable right
-// now (the shape of a node that has connected and started its
-// post-connect capability detection but has not finished it yet). Once
-// that independent evidence says the engine is NOT usable (or is simply
-// absent), the identical empty Hello capability set goes back to
-// reading failed: an empty set is only excused as "still probing" when
-// there is real corroborating evidence for that specific story, never
-// merely because the set happens to be empty.
+// empty reads unknown, not failed, in the two cases this coordinator
+// cannot rule out "still probing": independent evidence
+// (node.audio.engine.state, collected on the agent's own audioreport
+// cycle, entirely separate from the Hello capability cycle) confirms the
+// engine is usable right now, OR that independent evidence does not
+// exist yet at all (a real node's first audioreport can land 60-90s
+// after connect; evidence that cannot exist yet is not evidence of
+// absence). Only when that independent evidence POSITIVELY AND
+// CURRENTLY confirms the engine unavailable does the identical empty
+// Hello capability set read failed: an empty set is only ever excused as
+// "still probing" or read as a genuine failure when there is real
+// corroborating evidence for that specific story, never merely because
+// the set happens to be empty.
 func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T) {
 	ba := &config.NightSessionBackgroundAudio{
 		Items:  []config.NightSessionBackgroundAudioItem{{Asset: config.NightSessionAssetRef{Target: "node-a"}}},
@@ -297,18 +345,35 @@ func TestNightCheckAudioOutputCapabilities_StillProbingReadsUnknown(t *testing.T
 		}
 	})
 
-	t.Run("no node.audio.engine.state evidence at all, hello empty: failed", func(t *testing.T) {
+	t.Run("no node.audio.engine.state evidence at all, hello empty: unknown", func(t *testing.T) {
 		h, _, _, _ := nightBackgroundAudioTestHandlers(t)
 		h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
 			nodeViewWithGenericCapabilities("node-a"),
 		})
 		// fakeNodeAudioLister returns nil for a node with no observations
 		// set at all - matches a coordinator that has never received an
-		// audioreport for this node.
+		// audioreport for this node (a real node's first can land 60-90s
+		// after connect). Evidence that cannot exist yet is not evidence
+		// of absence, so this must read unknown, not failed.
 
 		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
-		if check.health != nightHealthFailed() {
-			t.Fatalf("no independent engine-state evidence at all: check = %+v, want failed", check)
+		if check.health != nightHealthUnknown() {
+			t.Fatalf("no independent engine-state evidence at all: check = %+v, want unknown", check)
+		}
+	})
+
+	t.Run("stale node.audio.engine.state evidence, hello empty: unknown", func(t *testing.T) {
+		h, _, _, _ := nightBackgroundAudioTestHandlers(t)
+		h.deps.Nodes.(*fakeNodeLister).setViews([]inventory.NodeView{
+			nodeViewWithGenericCapabilities("node-a"),
+		})
+		stale := nodeAudioEngineStateObservation("node-a", nodeaudio.StateUnavailable, testNow.Add(-time.Hour))
+		stale.ValidFor = 45 * time.Second // nodeaudio.DefaultValidFor
+		h.deps.Audio.(*fakeNodeAudioLister).setObservations("node-a", []observation.Observation{stale})
+
+		check := h.nightCheckAudioOutputCapabilities(context.Background(), testNow, ba)
+		if check.health != nightHealthUnknown() {
+			t.Fatalf("stale (aged past ValidFor) engine-state evidence, even reading unavailable: check = %+v, want unknown, not failed", check)
 		}
 	})
 }

@@ -372,26 +372,65 @@ abilities a night session needs. Twelve of the fourteen ship: a node
 advertises them alongside `audio.engine` whenever its bound session engine
 reports itself available (`internal/agent/audiocapabilities.go`), and
 `internal/coordinator/api/nightaudioreadiness.go` reports
-`resting:background-audio-output-capabilities:<node>` as `healthy`,
-`failed`, or `unknown` against that real advertisement, narrowed to what
-a configured `resting.backgroundAudio` session concretely needs on its
-own output node (`audio.playback.background`/`playlist`/`gain` always,
-`loop` only when a repeat mode is configured): `unknown` when there is
-no current evidence for the output at all (never seen, never
-advertised, or advertised but not currently confirmed online), `failed`
-naming whichever abilities a currently-confirmed node's own live
-advertisement genuinely omits, `healthy` once it declares every one; it
-no longer reports `not_verifiable` for a configured output. `audio.transition.gapless` and
+`resting:background-audio-output-capabilities:<node>` as `not_verifiable`,
+`unknown`, `failed`, or `healthy` against that real advertisement,
+narrowed to what a configured `resting.backgroundAudio` session
+concretely needs on its own output node
+(`audio.playback.background`/`playlist`/`gain` always, `loop` only when
+a repeat mode is configured). `not_verifiable` (excluded from the
+aggregate outcome, same as before this PR) is for a node that has never
+published a Hello at all, or never appeared in inventory: an agent built
+before this signal existed makes no claim either way, and reading that
+as a negative claim would be the identical dishonesty this whole change
+exists to remove, aimed the other way. `unknown` covers every other case
+this coordinator cannot currently confirm: a node whose Hello exists but
+is not currently online, AND a node that is online with an empty
+capability set but this coordinator's own independent
+`node.audio.engine.state` observation (`internal/coordinator/collector/
+nodeaudio`) either confirms the session engine usable right now (still
+probing: the Hello capability cycle can take up to 120s to catch up
+after a binding change) or offers no current evidence either way yet
+(this node's own audioreport can land 60-90s after connect on real
+hardware, and evidence that cannot exist yet is not evidence of
+absence). `failed` names whichever abilities a currently-confirmed
+node's own live advertisement genuinely omits, or, for the empty-set
+case above, only fires when `node.audio.engine.state` POSITIVELY,
+CURRENTLY confirms the engine unavailable. `healthy` once a live node
+declares every one. `audio.transition.gapless` and
 `audio.transition.crossfade` remain reserved and unshipped: no engine
 this repository binds ever eliminates the inter-item gap
 `Session.advanceLocked` measures, so no node can honestly confirm
 either, and `resting:background-audio-item-transition` (the separate,
 pre-existing check for the requested item-transition ability) reports
-`unknown` for an output this coordinator has no current evidence for,
-and `failed` for one whose live advertisement genuinely omits the
-requested ability, never a blanket refusal. `audio.mix.concurrent` is
+`not_verifiable` for an output that has never published a Hello at all,
+`unknown` for one whose Hello exists but is not currently confirmed
+online, and `failed` for a currently-confirmed live output whose
+advertisement genuinely omits the requested ability, never a blanket
+refusal (this check does not consult `node.audio.engine.state`: neither
+`audio.transition.gapless` nor `audio.transition.crossfade` ever ships
+regardless of engine availability, so there is no "still probing" story
+for it to distinguish). `audio.mix.concurrent` is
 the section's bare "mix": whether the output can carry more than one
 session at once, which is a different statement from `audio.mix.duck`.
+
+**`audio.mix.concurrent` ships identically to the other eleven shipped
+rows above, but rests on a different kind of evidence, and that
+difference is not visible from the table alone.** The other eleven are
+Manager-level behavior (`internal/agent/audio`'s session/mix/engine code)
+implemented once against the `Engine` interface, true for any bound
+engine. `audio.mix.concurrent` is a claim about one specific Engine
+implementation, `internal/agent/audio/gstengine` (concurrent sessions
+mixed onto one physical sink by a single audiomixer, per that package's
+own doc comment), asserted whenever ANY engine reports itself available,
+because `agent.go`'s own real wiring only ever binds `newGstEngine` to
+that one implementation. Nothing in code enforces that: no type or
+runtime check ties "available" to gstengine specifically, and a test
+double reporting itself available gets this identifier too, proven
+directly by a test in this codebase
+(`TestInstallAudioCapabilityRepublishRepublishesOnRebuild`,
+`internal/agent/audioengine_test.go`). This is a build-time assumption a
+second real `Engine` implementation would require re-examining before
+`audio.mix.concurrent` keeps shipping unconditionally.
 
 **They are split across three namespaces deliberately.** `audio.playback.*`
 is what one session can be asked to do, `audio.mix.*` is what happens when

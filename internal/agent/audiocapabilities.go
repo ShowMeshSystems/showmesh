@@ -27,6 +27,23 @@ var audioEnumerator audio.Enumerator = audio.AlsaEnumerator{}
 // engine's own Available method.
 var audioEngineAvailable = func() (bool, string) { return false, "no playback engine is wired on this node" }
 
+// audioEngineHeldNode reports the audioNodeConfig the currently bound
+// real engine was built from, and true only when that engine genuinely
+// reports itself available right now, wired to the same
+// audioEngineRebuilder instance audioEngineAvailable is (agent.go). See
+// [detectAudioCapabilities]'s own use of this: a post-bind capability
+// detection must never re-probe a route the engine it just bound
+// actively holds open (real ALSA hardware reports EBUSY for a second,
+// concurrent open of the same device), so it substitutes this
+// already-genuine evidence (the accepted binding an actively playing
+// engine was built from) for that route instead of a fresh probe. The
+// default always reports (audioNodeConfig{}, false), matching
+// audioEngineAvailable's own "no engine wired yet" default, so a node
+// with no audioEngineRebuilder ever wired (impossible in production,
+// agent.go always wires both together, but still the honest zero value)
+// never claims to hold anything.
+var audioEngineHeldNode = func() (audioNodeConfig, bool) { return audioNodeConfig{}, false }
+
 // minLTCChannels mirrors [audio.MinLTCChannels]: the channel count both
 // detectAudioCapabilities and buildAudioPayload use to decide whether a
 // route is LTC-capable. Kept as this package's own name (matching every
@@ -49,13 +66,27 @@ const minLTCChannels = audio.MinLTCChannels
 // per-ID: an available engine provides all of them.
 //
 // "audio.mix.concurrent" (more than one session audible on this output
-// at once) is real for the one production engine this repository binds
-// (internal/agent/audio/gstengine, cgo-built): its own doc comment states
-// concurrent sessions are branches mixed by a single audiomixer onto one
-// physical sink. It is included here rather than probed separately
-// because no other Engine implementation in this repository is ever
-// wired as "the real engine" behind [audioEngineAvailable] (see
-// TestFakeAudioEngineNeverAdvertisesPlaybackCapability).
+// at once) is DIFFERENT from the other eleven, and this is worth
+// stating plainly rather than overclaiming a guarantee that does not
+// exist: it is real for internal/agent/audio/gstengine, the one
+// production Engine agent.go's own real wiring ever binds newGstEngine
+// to (its own doc comment states concurrent sessions are branches mixed
+// by a single audiomixer onto one physical sink), but NOTHING IN THIS
+// CODEBASE ENFORCES THAT. audioEngineAvailable and this whole
+// audioSessionCapabilityIDs list are wired against whatever the
+// [audio.Engine] interface's own Available() reports, with no type-level
+// or runtime check tying "available" specifically to gstengine, and
+// TestFakeAudioEngineNeverAdvertisesPlaybackCapability does NOT rule
+// this out either: it withholds the whole list only because
+// audio.FakeEngine.Available() is hardcoded false, so its assertion
+// would pass identically whether "audio.mix.concurrent" were removed,
+// renamed, or replaced by any other string. This PR's own
+// TestInstallAudioCapabilityRepublishRepublishesOnRebuild wires an
+// AVAILABLE non-gstengine engine double and gets "audio.mix.concurrent"
+// advertised for it, proving the point directly. This is a build-time
+// assumption (agent.go's own newGstEngine wiring, readable but not
+// asserted anywhere) that would need re-examining the day a second real
+// Engine implementation is ever wired in.
 //
 // "audio.transition.gapless" and "audio.transition.crossfade" are
 // deliberately NOT in this list, and ship nowhere in this build:
@@ -117,7 +148,8 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 		}
 	}
 
-	usable, ltc := splitUsableRoutes(d.Routes)
+	heldNode, heldOK := audioEngineHeldNode()
+	usable, ltc := splitUsableRoutes(withHeldRouteTrusted(d.Routes, heldNode, heldOK))
 
 	if len(usable) > 0 {
 		set = append(set, capability.Capability{
@@ -133,6 +165,64 @@ func detectAudioCapabilities(ctx context.Context) capability.Set {
 	}
 
 	return set
+}
+
+// withHeldRouteTrusted returns routes with any entry matching heldNode's
+// ProgramRoute/LTCRoute (when heldOK) REPLACED by evidence built from
+// heldNode itself, regardless of what this run's own probe against that
+// device found (including a busy failure, or no entry at all if the
+// route was dropped or never enumerated this pass). detectAudioCapabilities
+// runs on every real availability transition (this repository's own
+// installAudioCapabilityRepublish, agent.go), including immediately
+// after a successful bind, at which point gstengine has already opened
+// heldNode.ProgramRoute (and heldNode.LTCRoute, if distinct) and is
+// actively playing through it; a second, concurrent probe of that SAME
+// device observes ALSA EBUSY on real hardware
+// (internal/agent/audio/probe.go's own ProbeResult.Busy), which
+// splitUsableRoutes would otherwise read as "this route stopped
+// working," dropping audio.output.local/audio.output.ltc for the one
+// route that is demonstrably fine, on every single successful bind.
+//
+// The substituted evidence is never guessed: Channels is the highest
+// program/LTC channel index heldNode itself declares
+// (audioNodeChannelCount), the exact floor buildGstEngineConfig already
+// used to build the engine that is now actually running, real evidence
+// from the accepted binding, not a probe fabrication. LTCChannels is set
+// to that same count only for the device matching heldNode.LTCRoute,
+// and only when heldNode.LTCChannel is actually set (a program-only
+// binding claims no LTC capability here either).
+func withHeldRouteTrusted(routes []audio.RouteEvidence, heldNode audioNodeConfig, heldOK bool) []audio.RouteEvidence {
+	if !heldOK || (heldNode.ProgramRoute == "" && heldNode.LTCRoute == "") {
+		return routes
+	}
+	trusted := func(device string) audio.RouteEvidence {
+		ev := audio.RouteEvidence{
+			Device:      device,
+			ProbeResult: audio.ProbeResult{Available: true, Channels: audioNodeChannelCount(heldNode)},
+		}
+		if heldNode.LTCChannel > 0 && device == heldNode.LTCRoute {
+			ev.LTCChannels = audioNodeChannelCount(heldNode)
+		}
+		return ev
+	}
+
+	out := make([]audio.RouteEvidence, 0, len(routes)+1)
+	seen := map[string]bool{}
+	for _, r := range routes {
+		if r.Device == heldNode.ProgramRoute || (heldNode.LTCRoute != "" && r.Device == heldNode.LTCRoute) {
+			out = append(out, trusted(r.Device))
+			seen[r.Device] = true
+			continue
+		}
+		out = append(out, r)
+	}
+	for _, dev := range []string{heldNode.ProgramRoute, heldNode.LTCRoute} {
+		if dev != "" && !seen[dev] {
+			out = append(out, trusted(dev))
+			seen[dev] = true
+		}
+	}
+	return out
 }
 
 // splitUsableRoutes partitions d.Routes into routes that achieved at least

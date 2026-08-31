@@ -145,3 +145,94 @@ loop:
 		t.Fatalf("maxActive = %d, want 1: two run bodies executed concurrently", maxActive)
 	}
 }
+
+// TestCapabilityDetectionGateCoalescedFollowUpUsesTheLatestClosure is
+// the context-reuse fix's own proof: this gate has two real callers
+// (publishAdvertisement, passing connCtx, and the rebuild hook, passing
+// sigCtx) with two different closures and two different lifetimes, so a
+// coalesced follow-up must run whichever trigger's closure arrived LAST,
+// never the closure that happened to start the loop. Two distinct
+// closures (tagged "first" and "second") prove this directly: trigger
+// "first", then while it is blocked in flight trigger "second", and
+// assert the coalesced follow-up executes "second"'s own closure, not
+// "first"'s repeated.
+func TestCapabilityDetectionGateCoalescedFollowUpUsesTheLatestClosure(t *testing.T) {
+	gate := &capabilityDetectionGate{}
+
+	started := make(chan string, 8)
+	release := make(chan struct{})
+
+	closureFor := func(label string) func(gen uint64) {
+		return func(gen uint64) {
+			started <- label
+			<-release
+		}
+	}
+
+	mustReceiveLabel := func(t *testing.T, want string) {
+		t.Helper()
+		select {
+		case got := <-started:
+			if got != want {
+				t.Fatalf("run started with closure %q, want %q", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for closure %q to start", want)
+		}
+	}
+
+	gate.trigger(closureFor("first"))
+	mustReceiveLabel(t, "first")
+
+	// "second" arrives while "first" is still blocked in flight: coalesces
+	// rather than running concurrently.
+	gate.trigger(closureFor("second"))
+
+	release <- struct{}{} // let "first" finish
+	mustReceiveLabel(t, "second")
+	release <- struct{}{} // let "second" finish
+
+	select {
+	case label := <-started:
+		t.Fatalf("a third run started (closure %q); only two triggers were sent", label)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestCapabilityDetectionGateRecoversAPanicAndStaysUsable proves the
+// panic-recovery fix: a run that panics must not crash the test process
+// (which a bare, unrecovered panic on runLoop's own goroutine would),
+// and the gate must return to a clean, usable state afterward rather
+// than staying wedged (running stuck true, every later trigger only
+// ever setting pending and nothing ever running again).
+func TestCapabilityDetectionGateRecoversAPanicAndStaysUsable(t *testing.T) {
+	gate := &capabilityDetectionGate{}
+
+	gate.trigger(func(gen uint64) { panic("simulated detection panic") })
+
+	// Give the panicking goroutine a moment to run and recover; if
+	// recovery failed, the whole test process would already be gone by
+	// now rather than reaching this poll.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		gate.mu.Lock()
+		idle := !gate.running
+		gate.mu.Unlock()
+		if idle {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("gate never returned to idle after a panicking run; it is permanently wedged")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// The gate must still accept and run a normal trigger afterward.
+	done := make(chan struct{})
+	gate.trigger(func(gen uint64) { close(done) })
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gate did not run a normal trigger after recovering an earlier panic")
+	}
+}

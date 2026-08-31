@@ -184,6 +184,17 @@ type audioEngineRebuilder struct {
 	mu            sync.Mutex
 	haveBuilt     bool
 	builtRevision int64
+
+	// heldNode is the audioNodeConfig the currently bound real engine was
+	// built from, valid only when heldNodeOK is true (set ONLY on
+	// rebuildLocked's truly successful branch, engine.Available() == true
+	// after a real build; cleared to false on every other outcome). See
+	// [audioEngineRebuilder.HeldNode]: this is what lets a post-bind
+	// capability detection avoid re-probing a device the engine it just
+	// bound is actively playing through, which real ALSA hardware
+	// reports EBUSY for a second, concurrent open.
+	heldNode   audioNodeConfig
+	heldNodeOK bool
 }
 
 func newAudioEngineRebuilder(ctx context.Context, assetDir string, switchable *audio.SwitchableEngine, mgr *audio.Manager, logger *slog.Logger) *audioEngineRebuilder {
@@ -218,28 +229,50 @@ func (r *audioEngineRebuilder) SetAvailabilityChangeCallback(f func()) {
 	f()
 }
 
-// installAudioCapabilityRepublish is agent.go's Run own single call site
-// for wiring rebuilder's availability-change hook to
-// scheduleCapabilityDetection: a binding arriving, failing to build, or
-// later recovering all change what audioEngineAvailable() (and so the
-// reserved audio playback/mix/transition capability set alongside
+// installAudioCapabilityRepublish wires rebuilder's availability-change
+// hook to scheduleCapabilityDetection: a binding arriving, failing to
+// build, or later recovering all change what audioEngineAvailable() (and
+// so the reserved audio playback/mix/transition capability set alongside
 // "audio.engine") would now report; without this, the retained hello
 // only reflects that evidence as of the last MQTT (re)connect, so a
 // binding delivered after connect ships no capability signal at all
 // until the next reconnect, and a binding lost after connect leaves a
 // stale positive standing indefinitely.
 //
-// Pulled out of Run into its own named function specifically so it can
-// be exercised directly against a real audioEngineRebuilder and a fake
-// Publisher (TestInstallAudioCapabilityRepublishRepublishesOnRebuild),
-// without dialing MQTT: a review round found this wiring completely
-// unverified when it lived as bare statements inline in Run, since
-// go test ./internal/agent/ still passed with the callback-install call
-// deleted outright.
+// Called only from [connectAndInstallCapabilityRepublish]; see that
+// function's own doc comment for why the call lives there rather than as
+// a bare statement in Run: extracting this function alone, and testing
+// only it directly, does NOT exercise Run's own call site at all, which
+// a review round confirmed by deleting that call site outright and
+// finding go test ./internal/agent/ still green.
 func installAudioCapabilityRepublish(rebuilder *audioEngineRebuilder, ctx context.Context, pub Publisher, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger) {
 	rebuilder.SetAvailabilityChangeCallback(func() {
 		scheduleCapabilityDetection(ctx, pub, cfg, bootID, startedAt, logger)
 	})
+}
+
+// connectAndInstallCapabilityRepublish is Run's own single call site for
+// both constructing this node's MQTT connection and wiring
+// installAudioCapabilityRepublish onto the result (the two cannot be
+// separated, since that wiring needs a live Publisher connect alone
+// produces). connect is Run's real newMQTTConn dial, injected so a test
+// can call this SAME function (not a hand-copy of it) with a fake
+// connector instead, exercising the actual production statement
+// sequence, installAudioCapabilityRepublish's call included, without
+// dialing a real broker: see
+// TestConnectAndInstallCapabilityRepublishWiresTheRealCallSite, which is
+// mutation-checked against exactly this function's own body (delete the
+// installAudioCapabilityRepublish call here and that test fails; the
+// narrower TestInstallAudioCapabilityRepublishRepublishesOnRebuild below
+// does not, since it calls installAudioCapabilityRepublish directly and
+// so cannot see whether Run's own call site still exists).
+func connectAndInstallCapabilityRepublish(connect func() (Conn, error), rebuilder *audioEngineRebuilder, ctx context.Context, cfg config.Config, bootID string, startedAt time.Time, logger *slog.Logger) (Conn, error) {
+	conn, err := connect()
+	if err != nil {
+		return nil, err
+	}
+	installAudioCapabilityRepublish(rebuilder, ctx, conn, cfg, bootID, startedAt, logger)
+	return conn, nil
 }
 
 // validationSampleRate is a placeholder used only to satisfy
@@ -368,6 +401,7 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 		if r.logger != nil {
 			r.logger.Error("refused to build the real audio engine against a route with no probe evidence", "revision", node.Revision, "program_route", node.ProgramRoute, "reason", reason)
 		}
+		r.heldNodeOK = false
 		r.bind(gstengine.NewUnavailable(reason))
 		r.builtRevision = node.Revision
 		r.haveBuilt = true
@@ -386,6 +420,7 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 		if r.logger != nil {
 			r.logger.Error("failed to build the real audio engine after releasing the outgoing one; this node has no audio engine until the next audio.node.configure", "revision", node.Revision, "error", err)
 		}
+		r.heldNodeOK = false
 		r.bind(gstengine.NewUnavailable(err.Error()))
 		r.builtRevision = node.Revision
 		r.haveBuilt = true
@@ -399,12 +434,28 @@ func (r *audioEngineRebuilder) rebuildLocked(node audioNodeConfig) audioRebuildO
 			"channel_count", cfg.ChannelCount, "channel_count_source", channelCountSource,
 			"available", ok, "unavailable_reason", reason)
 	}
+	r.heldNode, r.heldNodeOK = node, ok
 	r.bind(engine)
 	// Advanced only on a revision whose engine is actually bound, so the
 	// guard above never drops a revision on the strength of a failed build.
 	r.builtRevision = node.Revision
 	r.haveBuilt = true
 	return audioRebuildOutcome{Attempted: true, Available: ok, Reason: reason}
+}
+
+// HeldNode reports the audioNodeConfig the currently bound real engine
+// was built from, and true only when that engine genuinely reports
+// itself available right now. A second, concurrent probe of ok's
+// ProgramRoute or LTCRoute must not be attempted: on real ALSA hardware
+// it would observe snd_pcm_open EBUSY against the device the engine
+// itself is successfully playing through, and a caller must never let
+// that busy result overwrite the far stronger evidence an actively
+// bound engine already is (probe.go's own ProbeResult.Busy doc
+// comment states this exact rule). Safe for concurrent use.
+func (r *audioEngineRebuilder) HeldNode() (node audioNodeConfig, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.heldNode, r.heldNodeOK
 }
 
 // bind installs engine as this node's current engine through

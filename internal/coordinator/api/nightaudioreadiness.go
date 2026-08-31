@@ -5,11 +5,32 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/showmeshsystems/showmesh/internal/coordinator/collector/nodeaudio"
 	"github.com/showmeshsystems/showmesh/internal/coordinator/config"
 	pkgaudio "github.com/showmeshsystems/showmesh/pkg/audio"
 	"github.com/showmeshsystems/showmesh/pkg/capability"
 	"github.com/showmeshsystems/showmesh/pkg/observation"
+)
+
+// audioEngineStateSignalID, audioEngineStateUsable, and
+// audioEngineStateUnavailableMirror are this file's own copy of
+// internal/coordinator/collector/nodeaudio's
+// SignalEngineState/StateUsable/StateUnavailable literals. This package
+// must never import internal/coordinator/collector/... at all
+// (TestPackageNeverImportsACollector, resolumeinstances_test.go): api
+// holds no client capable of reaching a live device or transport, and it
+// must stay that way structurally, not by convention. h.deps.Audio
+// (NodeAudioLister, declared in this package's own interfaces.go) is the
+// observation-store-shaped dependency this package already reads
+// through; its production implementation lives in the collector package
+// and is wired in from outside (cmd/showmesh-coordinator), so using it
+// needs no import here. Reading these three literal values needs one, so
+// they are copied rather than imported, matching audionode.go's own
+// audioOutputLocalCapabilityID/audioOutputLTCCapabilityID convention one
+// file over.
+const (
+	audioEngineStateSignalID          observation.SignalID = "node.audio.engine.state"
+	audioEngineStateUsable                                 = "usable"
+	audioEngineStateUnavailableMirror                      = "unavailable"
 )
 
 // Track F seam F5's own readiness checks (RESTING-MODE.md §13), added to
@@ -132,6 +153,10 @@ func (h *handlers) nightCheckBackgroundAudioItemTransition(ctx context.Context, 
 		return nightReadinessCheck{name: name, health: nightHealthHealthy(), reason: "sequential requires no output confirmation"}
 	}
 	id, _ := transitionCapabilityID(t)
+	if evidence.NeverPublished {
+		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: fmt.Sprintf(
+			"audio.node %q has never published a capability advertisement; this coordinator has no signal to check whether it declares %q against (an agent built before this capability signal existed makes no claim either way)", nodeID, id)}
+	}
 	if !evidence.Live {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
 			"cannot confirm whether output %q declares %q: %s", nodeID, id, evidence.NotLiveReason)}
@@ -169,43 +194,68 @@ func audioOutputCapabilityIDsForBackgroundAudio(ba *config.NightSessionBackgroun
 	return ids
 }
 
-// audioNodeEngineConfirmedUsableNow reports whether nodeID's most recent
-// node.audio.engine.state observation (internal/coordinator/collector/
-// nodeaudio) is CURRENT and reads nodeaudio.StateUsable: independent,
-// fast-cadence evidence (the agent's own audioreport tick,
-// nodeaudio.DefaultPollInterval, five seconds) that this node's session
-// engine is genuinely bound and working RIGHT NOW, entirely apart from
-// the Hello capability advertisement's own much slower cycle (up to
-// capabilityDetectionTimeout, 120s in this build, after a binding
-// change). Consulted ONLY to distinguish "the engine is confirmed
-// usable but its Hello capability set has not caught up to that yet"
-// (still probing) from "the engine is genuinely unavailable" when a
-// live node's Hello capability set declares none of what a check needs;
-// never used to invent a capability the Hello envelope itself never
-// declared, and never a timestamp-derived guess (deliberately not
-// StartedAt-based), since an inferred window is wrong across a restart,
-// wrong under clock skew, and wrong whenever detection outruns whatever
-// window was picked.
+// audioNodeEngineStateNow reads nodeID's most recent node.audio.engine.state
+// observation and reports what it currently says: usable=true when it is
+// CURRENT and reads "usable"; unavailable=true when it is CURRENT and
+// reads "unavailable" (real negative evidence). Neither is true when this
+// coordinator holds no reliable evidence either way right now: the
+// observation is absent (no audioreport has ever landed for this node -
+// runAudioReport's own discovery phase runs synchronously before its
+// first tick, so a real node's first report can land 60-90s after
+// connect, not on some fast independent cadence a caller could assume),
+// or present but not current (aged past its own ValidFor, or of unknown
+// age). Absence is NOT evidence of unavailability: evidence that cannot
+// exist yet says nothing about what it would eventually say, so a caller
+// must not treat "neither" the same as "unavailable".
+//
+// This is independent of the Hello capability advertisement's own cycle
+// (up to capabilityDetectionTimeout, 120s in this build, after a binding
+// change), not necessarily faster (a real node's first audioreport can
+// itself land 60-90s after connect, see the "neither" case above).
+// Consulted ONLY to distinguish "the engine is confirmed usable but its
+// Hello capability set has not caught up to that yet" (still probing)
+// from "the engine is confirmed genuinely unavailable" when a live
+// node's Hello capability set declares none of what a check needs;
+// never used to invent a
+// capability the Hello envelope itself never declared, and never a
+// timestamp-derived guess (deliberately not StartedAt-based), since an
+// inferred window is wrong across a restart, wrong under clock skew, and
+// wrong whenever detection outruns whatever window was picked.
 //
 // This reads node.audio.engine.state's two EXISTING values as a new
 // corroborating consumer, rather than adding a third value to that
 // signal's own vocabulary: its own doc comment
-// (nodeaudio.StateUsable/StateUnavailable) already states the
-// "not known yet" case belongs to [observation.StateNotCollected] on
+// (nodeaudio.StateUsable/StateUnavailable in
+// internal/coordinator/collector/nodeaudio/signals.go) already states
+// the "not known yet" case belongs to [observation.StateNotCollected] on
 // Absence, not a third state string, so a "probing" member there would
-// contradict that signal's own documented shape. See this repository's
-// PR history for the consumer survey that confirmed no reader anywhere
-// switches on this signal's string value at all (only its presence is
+// contradict that signal's own documented shape. A repository-wide
+// search for every reader of this signal (this package must never
+// import the collector package that produces it -
+// TestPackageNeverImportsACollector, resolumeinstances_test.go) found
+// none that switches on its string value at all (only its presence is
 // checked in one UI test fixture), so introducing this reader risks no
 // existing default-branch misread.
-func audioNodeEngineConfirmedUsableNow(audio NodeAudioLister, nodeID string, now time.Time) bool {
+func audioNodeEngineStateNow(audio NodeAudioLister, nodeID string, now time.Time) (usable, unavailable bool) {
 	for _, o := range audio.NodeAudioObservations(nodeID) {
-		if o.Signal != nodeaudio.SignalEngineState {
+		if o.Signal != audioEngineStateSignalID {
 			continue
 		}
-		return o.StateAt(now) == observation.StateCurrent && o.Value == nodeaudio.StateUsable
+		if o.StateAt(now) != observation.StateCurrent {
+			return false, false
+		}
+		switch o.Value {
+		case audioEngineStateUsable:
+			return true, false
+		case audioEngineStateUnavailableMirror:
+			return false, true
+		default:
+			// An unrecognized value is exactly as reliable as no
+			// evidence at all: report neither rather than guessing.
+			return false, false
+		}
 	}
-	return false
+	return false, false
 }
 
 // nightCheckAudioOutputCapabilities is §13's own bullet, narrowed to what
@@ -227,6 +277,18 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
 			"could not read audio.node %q's capability advertisement: %s", nodeID, err.Error())}
 	}
+	// A node that has never published a Hello at all (or never appeared
+	// in inventory) makes no claim about these capabilities, the same
+	// way an agent built before this signal existed never will: reading
+	// that as failed infers a claim it never made, the identical
+	// dishonesty this check exists to remove, aimed the other way. Stays
+	// not_verifiable, excluded from the aggregate outcome, exactly as
+	// this check behaved before this build had any signal to check
+	// against at all.
+	if evidence.NeverPublished {
+		return nightReadinessCheck{name: name, health: nightCheckStateNotVerifiable, reason: fmt.Sprintf(
+			"audio.node %q has never published a capability advertisement; this coordinator has no signal to check against (an agent built before this capability signal existed makes no claim either way)", nodeID)}
+	}
 	if !evidence.Live {
 		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
 			"cannot confirm which capabilities audio.node %q declares: %s", nodeID, evidence.NotLiveReason)}
@@ -238,10 +300,27 @@ func (h *handlers) nightCheckAudioOutputCapabilities(ctx context.Context, now ti
 			missing = append(missing, string(id))
 		}
 	}
-	if len(missing) == len(needed) && audioNodeEngineConfirmedUsableNow(h.deps.Audio, nodeID, now) {
-		return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
-			"audio.node %q's node.audio.engine.state confirms its session engine is usable right now, but its Hello capability advertisement declares none of %v yet; this node has likely not finished its post-connect capability detection, which can take up to %s",
-			nodeID, needed, capabilityDetectionTimeoutMirror)}
+	if len(missing) == len(needed) {
+		usable, unavailable := audioNodeEngineStateNow(h.deps.Audio, nodeID, now)
+		switch {
+		case usable:
+			return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+				"audio.node %q's node.audio.engine.state confirms its session engine is usable right now, but its Hello capability advertisement declares none of %v yet; this node has likely not finished its post-connect capability detection, which can take up to %s",
+				nodeID, needed, capabilityDetectionTimeoutMirror)}
+		case !unavailable:
+			// Neither usable nor unavailable: no reliable
+			// node.audio.engine.state evidence exists yet either
+			// (runAudioReport's own discovery phase runs before its
+			// first tick, so a real node's first report can land 60-90s
+			// after connect). Evidence that cannot exist yet is not
+			// evidence of absence, so this reads unknown, not failed,
+			// exactly like the usable case above.
+			return nightReadinessCheck{name: name, health: nightHealthUnknown(), reason: fmt.Sprintf(
+				"audio.node %q's Hello capability advertisement declares none of %v, and this coordinator has no current node.audio.engine.state evidence yet to confirm whether that is because the engine is genuinely unavailable or because this node has not finished reporting since it connected",
+				nodeID, needed)}
+		}
+		// unavailable == true: real negative evidence. Falls through to
+		// the ordinary missing-capabilities failure below.
 	}
 	if len(missing) > 0 {
 		return nightReadinessCheck{name: name, health: nightHealthFailed(), reason: fmt.Sprintf(

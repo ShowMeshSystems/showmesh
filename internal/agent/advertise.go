@@ -192,9 +192,7 @@ func runCapabilityDetection(ctx context.Context, pub Publisher, cfg config.Confi
 	caps := capabilityDetector(detectCtx)
 
 	if !capabilityGate.isCurrent(gen) {
-		if logger != nil {
-			logger.Info("dropped a superseded capability detection result", "node_id", cfg.NodeID, "generation", gen)
-		}
+		logger.Info("dropped a superseded capability detection result", "node_id", cfg.NodeID, "generation", gen)
 		return
 	}
 	detectedCapabilityCache.store(caps)

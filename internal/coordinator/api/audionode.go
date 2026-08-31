@@ -83,6 +83,17 @@ type audioNodeCapabilityEvidence struct {
 	// a caller must not treat a non-nil Capabilities here as current
 	// evidence on its own; Live is the guard.
 	Capabilities capability.Set
+	// NeverPublished is true when this node has never appeared in
+	// inventory at all, or has appeared but has never sent a Hello. An
+	// agent that predates this capability signal (or one this
+	// coordinator simply has never heard from) makes NO CLAIM about
+	// these capabilities at all, which is a different fact from a
+	// current agent whose Hello declares an empty or incomplete set: a
+	// caller must report that as not_verifiable, never as failed or
+	// unknown - reading silence as a negative claim is the same
+	// dishonesty this evidence struct exists to remove, pointed the
+	// other way. Never true at the same time as Live.
+	NeverPublished bool
 	// Live is true only when this node appeared in inventory with a
 	// Hello AND [inventory.NodeView.Liveness] reports
 	// [inventory.LivenessOnline]. A node this coordinator cannot
@@ -92,7 +103,9 @@ type audioNodeCapabilityEvidence struct {
 	// not, on its own, current evidence of what that node declares right
 	// now.
 	Live bool
-	// NotLiveReason explains why Live is false: empty when Live is true.
+	// NotLiveReason explains why Live is false when NeverPublished is
+	// also false (a Hello exists but is not currently trustworthy):
+	// empty when Live is true or NeverPublished is true.
 	NotLiveReason string
 }
 
@@ -114,7 +127,7 @@ func audioNodeCapabilitySet(ctx context.Context, nodes NodeLister, now time.Time
 			continue
 		}
 		if nv.Hello == nil {
-			return audioNodeCapabilityEvidence{NotLiveReason: "this audio.node has never published a capability advertisement (no hello has ever been recorded for it)"}, nil
+			return audioNodeCapabilityEvidence{NeverPublished: true}, nil
 		}
 		if nv.Liveness != inventory.LivenessOnline {
 			return audioNodeCapabilityEvidence{
@@ -125,7 +138,7 @@ func audioNodeCapabilitySet(ctx context.Context, nodes NodeLister, now time.Time
 		}
 		return audioNodeCapabilityEvidence{Capabilities: nv.Hello.Capabilities, Live: true}, nil
 	}
-	return audioNodeCapabilityEvidence{NotLiveReason: "this audio.node has never appeared in this coordinator's inventory"}, nil
+	return audioNodeCapabilityEvidence{NeverPublished: true}, nil
 }
 
 // capabilityRoutesAttribute reads a capability's "routes" attribute as a

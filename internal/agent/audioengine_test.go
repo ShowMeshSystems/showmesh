@@ -469,6 +469,51 @@ func TestAudioEngineRebuilderBindReleasesTheEngineItReplaces(t *testing.T) {
 	}
 }
 
+// TestAudioEngineRebuilderHeldNode proves HeldNode only reports a node
+// after a rebuild that genuinely bound an available engine, and reports
+// nothing (ok=false) after every other outcome: a "no probe evidence"
+// refusal, and a structurally invalid binding that never reaches bind at
+// all. This is what withHeldRouteTrusted relies on to distinguish "the
+// engine actively holds this route" from "nothing is confirmed usable
+// right now."
+func TestAudioEngineRebuilderHeldNode(t *testing.T) {
+	origNewEngine := newGstEngine
+	t.Cleanup(func() { newGstEngine = origNewEngine })
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	r := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+
+	if _, ok := r.HeldNode(); ok {
+		t.Fatal("HeldNode reports ok=true before any rebuild has ever happened")
+	}
+
+	// A successful rebuild: HeldNode must report the bound node.
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		return availableFakeEngine{audio.NewFakeEngine(time.Now)}, nil
+	}
+	node := audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1}
+	r.rebuild(node)
+	got, ok := r.HeldNode()
+	if !ok || got.ProgramRoute != node.ProgramRoute || got.Revision != node.Revision {
+		t.Fatalf("HeldNode() = (%+v, %v), want (%+v, true) after a successful rebuild", got, ok, node)
+	}
+
+	// A newer binding that fails with no probe evidence (real sink,
+	// discoverer stubbed to find nothing): HeldNode must clear, not keep
+	// reporting the now-superseded, no-longer-actively-held route.
+	origDiscoverer := audioDiscoverer
+	t.Cleanup(func() { audioDiscoverer = origDiscoverer })
+	audioDiscoverer = func(ctx context.Context, enum audio.Enumerator) audio.Discovery { return audio.Discovery{} }
+	t.Setenv(envGstAudioSinkOverride, "")
+	r.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 2})
+	if _, ok := r.HeldNode(); ok {
+		t.Fatal("HeldNode still reports ok=true after a rebuild that bound an explicitly unavailable engine (no probe evidence)")
+	}
+}
+
 // TestSetAvailabilityChangeCallbackFiresImmediately proves the residual
 // cold-boot race's fix directly: installing the callback runs it once,
 // synchronously, before returning, regardless of whether any rebuild has
@@ -796,25 +841,27 @@ func TestRebuildDropsAnOlderRevisionThatLostTheLockRace(t *testing.T) {
 	}
 }
 
-// TestInstallAudioCapabilityRepublishRepublishesOnRebuild is the wiring
-// test a review round found completely missing: nothing previously
-// proved installAudioCapabilityRepublish's callback (agent.go's own
-// audioRebuilder.SetAvailabilityChangeCallback call, formerly inline at
-// lines 410-412) ever actually leads to a republished hello, and
-// go test ./internal/agent/ passed with that call deleted outright.
+// TestInstallAudioCapabilityRepublishRepublishesOnRebuild proves
+// installAudioCapabilityRepublish's own callback behavior in isolation:
+// installed against a real audioEngineRebuilder, a genuine rebuild that
+// binds an available engine actually leads to a republished hello
+// carrying the resulting capabilities. It calls
+// installAudioCapabilityRepublish DIRECTLY, so it does NOT exercise
+// Run's own call site to that function (or to
+// connectAndInstallCapabilityRepublish, which is what Run actually
+// calls); see
+// TestConnectAndInstallCapabilityRepublishWiresTheRealCallSite below for
+// the test that does, and that function's own doc comment for why a
+// review round found this distinction matters: an earlier version of
+// this PR reported deleting installAudioCapabilityRepublish's internal
+// call as satisfying "delete Run's own callback-install statement and
+// watch a test fail," which is not the same mutation and did not catch
+// Run's real call site being removed.
 //
-// This drives the real production path end to end with real objects,
-// only substituting the Publisher (a fakePublisher) and the underlying
-// engine build (newGstEngine stubbed to an availableFakeEngine, so no
-// real GStreamer device is touched): install the callback against a
-// real audioEngineRebuilder wired to a real audio.SwitchableEngine, run
-// a genuine rebuild that binds an available engine, and assert a hello
-// carrying the resulting capabilities was actually published.
-//
-// Mutation-checked directly (see this PR's own report): commenting out
-// installAudioCapabilityRepublish's SetAvailabilityChangeCallback call
-// makes this test fail (no second publish ever arrives); restoring it
-// makes this test pass again.
+// This drives installAudioCapabilityRepublish's own logic end to end
+// with real objects, only substituting the Publisher (a fakePublisher)
+// and the underlying engine build (newGstEngine stubbed to an
+// availableFakeEngine, so no real GStreamer device is touched).
 func TestInstallAudioCapabilityRepublishRepublishesOnRebuild(t *testing.T) {
 	resetCapabilityCacheForTest(t)
 	resetCapabilityGateForTest(t)
@@ -878,5 +925,80 @@ func TestInstallAudioCapabilityRepublishRepublishesOnRebuild(t *testing.T) {
 	}
 	if _, ok := hello.Capabilities.Lookup("audio.playback.background"); !ok {
 		t.Fatalf("republished hello after a rebuild that bound an available engine does not declare audio.playback.background; capabilities = %v", hello.Capabilities)
+	}
+}
+
+// TestConnectAndInstallCapabilityRepublishWiresTheRealCallSite is the
+// test that actually exercises Run's own statement sequence: it calls
+// connectAndInstallCapabilityRepublish, the exact function Run calls,
+// with a fake connect closure standing in for the real newMQTTConn dial,
+// then drives a genuine rebuild and asserts a hello carrying the
+// resulting capabilities was republished through the connection that
+// function returned. Deleting the installAudioCapabilityRepublish call
+// FROM connectAndInstallCapabilityRepublish's own body (which is Run's
+// real call site, not a hand-copy of it) must make this test fail.
+func TestConnectAndInstallCapabilityRepublishWiresTheRealCallSite(t *testing.T) {
+	resetCapabilityCacheForTest(t)
+	resetCapabilityGateForTest(t)
+	withAudioDiscoverer(t, audio.Discovery{EngineUsable: true})
+	t.Setenv(envGstAudioSinkOverride, "fakesink")
+
+	origDetector := capabilityDetector
+	capabilityDetector = func(ctx context.Context) capability.Set { return detectAudioCapabilities(ctx) }
+	t.Cleanup(func() { capabilityDetector = origDetector })
+
+	origAvailable := audioEngineAvailable
+	t.Cleanup(func() { audioEngineAvailable = origAvailable })
+
+	origNewEngine := newGstEngine
+	t.Cleanup(func() { newGstEngine = origNewEngine })
+	newGstEngine = func(cfg gstengine.Config) (audio.Engine, error) {
+		return availableFakeEngine{audio.NewFakeEngine(time.Now)}, nil
+	}
+
+	dir := t.TempDir()
+	switchable := audio.NewSwitchableEngine()
+	audioEngineAvailable = switchable.Available
+	mgr := audio.NewManager(switchable, audio.NewFileSessionStore(dir), dir, audio.RealDecoder{}, time.Now, nil)
+	rebuilder := newAudioEngineRebuilder(context.Background(), dir, switchable, mgr, nil)
+
+	fake := newFakeConn()
+	connect := func() (Conn, error) { return fake, nil }
+	cfg := agentconfig.Config{NodeID: "media-03"}
+
+	conn, err := connectAndInstallCapabilityRepublish(connect, rebuilder, context.Background(), cfg, "boot-1", time.Now(), discardLogger())
+	if err != nil {
+		t.Fatalf("connectAndInstallCapabilityRepublish: %v", err)
+	}
+	if conn != Conn(fake) {
+		t.Fatal("connectAndInstallCapabilityRepublish did not return the connection connect produced")
+	}
+
+	// The immediate catch-up call from SetAvailabilityChangeCallback,
+	// exactly as in TestInstallAudioCapabilityRepublishRepublishesOnRebuild.
+	select {
+	case <-fake.notify:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no bootstrap publish; connectAndInstallCapabilityRepublish did not wire the callback (installAudioCapabilityRepublish's call may have been removed)")
+	}
+	if calls := fake.snapshot(); len(calls) != 1 {
+		t.Fatalf("publishes after connect = %d, want 1 (the bootstrap catch-up)", len(calls))
+	}
+
+	rebuilder.rebuild(audioNodeConfig{ProgramRoute: "hw:1,0", ProgramChannels: []int{1, 2}, Revision: 1})
+
+	select {
+	case <-fake.notify:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no publish followed the rebuild through connectAndInstallCapabilityRepublish's own wiring")
+	}
+
+	calls := fake.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("publishes after rebuild = %d, want 2 (the bootstrap catch-up, then the rebuild's own republish)", len(calls))
+	}
+	_, hello := decodeHello(t, calls[1].payload)
+	if _, ok := hello.Capabilities.Lookup("audio.engine"); !ok {
+		t.Fatalf("republished hello does not declare audio.engine; capabilities = %v", hello.Capabilities)
 	}
 }

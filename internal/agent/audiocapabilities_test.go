@@ -31,6 +31,20 @@ func withAudioEngineAvailable(t *testing.T, ok bool, reason string) {
 	t.Cleanup(func() { audioEngineAvailable = orig })
 }
 
+// withAudioEngineHeldNode drives [audioEngineHeldNode] deterministically,
+// matching withAudioEngineAvailable's own injection convention. Every
+// test in this file that predates the busy-device fix calls this with
+// ok=false (the zero value's own default), so it need not call this
+// helper explicitly; TestWithHeldRouteTrusted and
+// TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe are what
+// actually exercise it.
+func withAudioEngineHeldNode(t *testing.T, node audioNodeConfig, ok bool) {
+	t.Helper()
+	orig := audioEngineHeldNode
+	audioEngineHeldNode = func() (audioNodeConfig, bool) { return node, ok }
+	t.Cleanup(func() { audioEngineHeldNode = orig })
+}
+
 // TestDetectAudioCapabilitiesNoEngineReturnsNil proves a node with no
 // usable audio engine (every render node, the development laptop)
 // advertises no audio capability at all.
@@ -308,5 +322,80 @@ func TestDetectAudioCapabilitiesEngineGatedOnAvailability(t *testing.T) {
 		if _, ok := available.Lookup(id); !ok {
 			t.Errorf("%s not advertised while audioEngineAvailable() == true, want present", id)
 		}
+	}
+}
+
+// TestWithHeldRouteTrusted proves the busy-device fix directly: a route
+// matching the held node's ProgramRoute is reported Available regardless
+// of what this run's own probe found for it (including Busy, or absence
+// entirely), using the held node's own declared channel count rather
+// than a guess, while an UNRELATED route's genuine result passes through
+// untouched. With no held node, every route passes through unchanged.
+func TestWithHeldRouteTrusted(t *testing.T) {
+	held := audioNodeConfig{ProgramRoute: "hw:0,0", LTCRoute: "hw:0,0", ProgramChannels: []int{1, 2}, LTCChannel: 3}
+
+	t.Run("busy held route overridden, unrelated route untouched", func(t *testing.T) {
+		routes := []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+			{Device: "hw:1,0", ProbeResult: audio.ProbeResult{Available: false, Reason: "could not open audio device"}},
+		}
+		out := withHeldRouteTrusted(routes, held, true)
+		var got0, got1 *audio.RouteEvidence
+		for i := range out {
+			switch out[i].Device {
+			case "hw:0,0":
+				got0 = &out[i]
+			case "hw:1,0":
+				got1 = &out[i]
+			}
+		}
+		if got0 == nil || !got0.Available || got0.Channels != 3 || got0.LTCChannels != 3 {
+			t.Fatalf("held route hw:0,0 = %+v, want Available=true Channels=3 LTCChannels=3 (from the held node's own declared channels, not a guess)", got0)
+		}
+		if got1 == nil || got1.Available {
+			t.Fatalf("unrelated route hw:1,0 = %+v, want its own genuine (unavailable) result untouched", got1)
+		}
+	})
+
+	t.Run("held route absent from this pass is still added", func(t *testing.T) {
+		out := withHeldRouteTrusted(nil, held, true)
+		if len(out) != 1 || out[0].Device != "hw:0,0" || !out[0].Available {
+			t.Fatalf("out = %+v, want one trusted entry for the held route even though this pass enumerated nothing", out)
+		}
+	})
+
+	t.Run("no held node: routes pass through unchanged", func(t *testing.T) {
+		routes := []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true}},
+		}
+		out := withHeldRouteTrusted(routes, audioNodeConfig{}, false)
+		if len(out) != 1 || out[0].Available {
+			t.Fatalf("out = %+v, want the original busy result untouched when heldOK is false", out)
+		}
+	})
+}
+
+// TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe proves the
+// fix end to end through detectAudioCapabilities itself: a route this
+// run's own probe reports busy still ships as audio.output.local when it
+// matches the node an actively-available engine was built from.
+func TestDetectAudioCapabilitiesTrustsAHeldRouteOverABusyProbe(t *testing.T) {
+	held := audioNodeConfig{ProgramRoute: "hw:0,0", ProgramChannels: []int{1, 2}}
+	withAudioEngineAvailable(t, true, "")
+	withAudioEngineHeldNode(t, held, true)
+	withAudioDiscoverer(t, audio.Discovery{
+		EngineUsable: true, HasHardwareCards: true,
+		Routes: []audio.RouteEvidence{
+			{Device: "hw:0,0", ProbeResult: audio.ProbeResult{Available: false, Busy: true, Reason: "device or resource busy"}},
+		},
+	})
+
+	set := detectAudioCapabilities(context.Background())
+	local, ok := set.Lookup("audio.output.local")
+	if !ok {
+		t.Fatal("audio.output.local not advertised for a busy route the engine actively holds, want present")
+	}
+	if local.Attributes["outputCount"] != 1 {
+		t.Errorf("outputCount = %v, want 1", local.Attributes["outputCount"])
 	}
 }
