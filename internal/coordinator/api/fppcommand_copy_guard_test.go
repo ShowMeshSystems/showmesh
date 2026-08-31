@@ -131,6 +131,12 @@ var copyGuardExemptions = []copyGuardExemption{
 	// decision deliberately so whoever reads that log line can find what
 	// made this branch reachable.
 	{"fppcommand_handler.go", `"this dispatch belongs to a macro run, which never withholds a command for an audit failure (owner decision 2026-08-14, superseding ADR-024 decision 11's fail-closed default inside a run)"`},
+	// Fourth entry, added with ADR-024 decision 11's 2026-08-26 amendment
+	// (audit-store unavailability never blocks an action). Same
+	// disposition as the three above, verified the same way: fed only
+	// into [handlers.reportDegradedAttribution], which writes to this
+	// process's own stderr and reaches no client.
+	{"fppcommand_handler.go", `"ADR-024 decision 11's audit-unavailability-never-blocks rule (owner ruling 2026-08-26): this action is not a member of the blackout/stop/power-off safety class and does not belong to a macro run, and still proceeds without a durable pre-dispatch audit entry"`},
 }
 
 func copyGuardExemptionSet() map[copyGuardExemption]bool {

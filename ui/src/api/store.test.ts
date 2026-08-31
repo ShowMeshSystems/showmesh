@@ -31,6 +31,7 @@ import {
 import type { components } from './generated/schema'
 
 type Evidence = components['schemas']['Evidence']
+type AuditStoreStatus = components['schemas']['AuditStoreStatus']
 
 // A fast backoff schedule for tests only (spec section 5.4 allows this:
 // it is a timing knob on our own client, not a mock of the transport —
@@ -1408,6 +1409,106 @@ describe('ApiStore: stream idle timeout (D2)', () => {
 
     expect(streamAttempt).toBe(1)
     expect(store.getSnapshot().connection.kind).toBe('live')
+  })
+})
+
+describe('ApiStore: auditStore stays live on an open connection (ADR-024 decision 11 amendment)', () => {
+  it('re-fetches the snapshot on its own poll interval and updates only auditStore', async () => {
+    // auditStore carries no change-stream event of its own (store.ts's
+    // own AUDIT_STORE_POLL_INTERVAL_MS doc comment), so a dashboard left
+    // open on one long-lived connection would otherwise show whatever
+    // value was current at connect time, indefinitely - this is the
+    // proof that a client-side poll keeps it live instead.
+    let snapshotAttempt = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        snapshotAttempt += 1
+        // The FIRST snapshot (stream.start's own reloadSnapshot) reports
+        // usable; the poll's own re-fetch reports unusable - the model
+        // must show the LATER value, proving the poll actually landed,
+        // not merely that a fetch happened.
+        const auditStore: AuditStoreStatus =
+          snapshotAttempt === 1 ? { state: 'usable', reason: null } : { state: 'unusable', reason: 'disk full' }
+        respondJson(res, 200, makeSnapshot({ auditStore }))
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    // A FakeClock (test-support/fake-clock.ts): the poll interval is a
+    // virtual deadline this test advances itself, exactly like D2's own
+    // idle-timeout tests above, so this cannot flake on real scheduling
+    // delay.
+    const clock = new FakeClock()
+    const store = makeStore(s.baseUrl, { clock, auditStorePollIntervalMs: 30 })
+    store.connect()
+
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+    expect(store.getSnapshot().auditStore).toEqual({ state: 'usable', reason: null })
+
+    clock.advance(30)
+
+    await waitFor(() => store.getSnapshot().auditStore?.state === 'unusable', {
+      message: 'the audit-store poll never landed its own re-fetch',
+    })
+    expect(store.getSnapshot().auditStore).toEqual({ state: 'unusable', reason: 'disk full' })
+    // Nothing else on the model moved: the poll must fold in ONLY
+    // auditStore, never re-run the full applySnapshot merge.
+    expect(snapshotAttempt).toBe(2)
+  })
+
+  it('stops polling once the store is disposed', async () => {
+    let snapshotAttempt = 0
+    const s = await server((req, res) => {
+      if (req.url?.startsWith('/stream')) {
+        openSSE(res)
+        writeSSEFrame(res, 'stream.start', {
+          streamId: 's1',
+          apiVersion: 1,
+          serverTime: new Date().toISOString(),
+          snapshotRequired: true,
+        })
+        return
+      }
+      if (req.url === '/snapshot') {
+        snapshotAttempt += 1
+        respondJson(res, 200, makeSnapshot())
+        return
+      }
+      if (req.url?.startsWith('/events')) {
+        respondJson(res, 200, makeEventsResponse())
+        return
+      }
+      res.writeHead(404).end()
+    })
+
+    const clock = new FakeClock()
+    const store = makeStore(s.baseUrl, { clock, auditStorePollIntervalMs: 30 })
+    store.connect()
+    await waitFor(() => store.getSnapshot().connection.kind === 'live')
+
+    const attemptsBeforeDispose = snapshotAttempt
+    store.dispose()
+    clock.advance(30)
+    // No waitFor to satisfy here on purpose: this proves an ABSENCE (no
+    // further fetch), so this test asserts on a settled state rather than
+    // racing a condition that is never expected to become true.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(snapshotAttempt).toBe(attemptsBeforeDispose)
   })
 })
 

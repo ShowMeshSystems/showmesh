@@ -179,6 +179,27 @@
   padding: var(--space-2) var(--space-4);
 }
 
+/* An audit-store outage is a coordinator-state fact, not a browser
+   connectivity one, so it uses the status-warn/status-bad token pair
+   (evidence--tone-warn/bad above), never connection-problem's. */
+.audit-store-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  border-bottom: 3px solid var(--status-warn-fg);
+  font-weight: 600;
+}
+
+.audit-store-banner__detail {
+  font-weight: 400;
+  font-size: var(--font-size-sm);
+}
+
 .token-form {
   display: flex;
   gap: var(--space-2);

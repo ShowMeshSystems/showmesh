@@ -795,9 +795,13 @@ func TestFinding8_CommittedTransitionToShowDefersRatherThanCancels(t *testing.T)
 	}
 }
 
-// --- finding 9: fail-closed for the four admission-opening commands ---
+// --- finding 9: ADR-024 decision 11 amended 2026-08-26 (owner ruling) -
+// the four admission-opening commands (prepare-site, run-readiness,
+// start-preshow, start-night) no longer fail closed on an audit-write
+// failure either; start-night refused for a full audit disk is the
+// literal show-stopper the ruling exists to prevent. ---
 
-func TestFinding9_PrepareSiteRefusedWhenAuditWriteFails(t *testing.T) {
+func TestFinding9_PrepareSiteRunsDegradedWhenAuditWriteFails(t *testing.T) {
 	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
 	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
 	adminToken := mustIssueToken(t, svc, admin.ID)
@@ -815,17 +819,92 @@ func TestFinding9_PrepareSiteRefusedWhenAuditWriteFails(t *testing.T) {
 
 	installFailAuditTrigger(t, storeDir)
 
-	status, p := nightCommandProblem(t, api, opToken, "prepare-site")
-	if status != http.StatusServiceUnavailable || p.Type != ProblemTypeNightAuditUnavailable {
-		t.Fatalf("prepare-site with a failing audit write: status=%d type=%q, want 503/%s", status, p.Type, ProblemTypeNightAuditUnavailable)
+	out := mustNightCommand(t, api, opToken, "prepare-site")
+	if !out.Command.AttributionDegraded {
+		t.Fatalf("command.attributionDegraded = false, want true (the audit write failed and prepare-site must still run)")
+	}
+	if !out.Session.AttributionDegraded {
+		t.Fatalf("session.attributionDegraded = false, want true")
 	}
 	_, ok, err := st.GetCurrentNightSession(context.Background())
 	if err != nil {
 		t.Fatalf("get current night session: %v", err)
 	}
-	if ok {
-		t.Fatalf("prepare-site refused for want of audit still created a session; the whole transaction must have rolled back")
+	if !ok {
+		t.Fatalf("prepare-site with a failing audit write created no session; ADR-024 decision 11's amendment requires it to still run")
 	}
+}
+
+// TestRunReadinessDegradedNeverLeavesADanglingReadinessID is review round
+// 5's own named requirement (finding 1): before this fix, nightRunGated's
+// audit-failure fallback replayed only out.persist (the night_sessions
+// write), never nightRunReadinessCommand's own tx.CreateNightReadiness -
+// which the failed transaction had already rolled back. The session
+// still ended up with a readiness_id pointing at a row that was never
+// recreated, and there is no FK on that column to catch it: a false
+// "applied" outcome, worse than the 503 refusal it replaced, exactly the
+// "you cannot see" failure ADR-024 decision 11 is written against. This
+// proves the fix: run-readiness under a failing audit store still
+// creates a readable readiness row, and a later start-night (which reads
+// it by that exact ID) is never refused for want of one.
+func TestRunReadinessDegradedNeverLeavesADanglingReadinessID(t *testing.T) {
+	svc, st, storeDir := newTestIdentityServiceWithStore(t, fixedClock(testNow))
+	admin := mustCreatePrincipal(t, svc, "admin-1", identity.RoleAdmin)
+	adminToken := mustIssueToken(t, svc, admin.ID)
+	operator := mustCreatePrincipal(t, svc, "operator-1", identity.RoleOperator)
+	opToken := mustIssueToken(t, svc, operator.ID)
+
+	deps, obs := nightControlTestDeps(svc, st)
+	deps.FPP = nightWireFPPForReadiness(t)
+	backend := nightTestAssetBackend(t)
+	deps.AssetBackend = backend
+
+	api := New(deps, Options{Clock: fixedClock(testNow), Logger: testLogger(), NightReadinessMaxAge: time.Hour})
+
+	mustPutShow(t, api, adminToken, "halloween-2026", `{"name":"halloween-2026"}`)
+	mustPutShowAction(t, api, adminToken, "lighting-fade-out", validShowActionFPPBody)
+	mustCreateNightSessionFSEQAsset(t, st, backend, "halloween-2026", "resting-loop", "player-01")
+	mustPutNightSession(t, api, adminToken, "halloween-main", validNightSessionBody)
+	mustActivateNightSession(t, api, adminToken, "halloween-main")
+	setHealthyFPPReachable(obs, testNow)
+
+	mustNightCommand(t, api, opToken, "prepare-site")
+
+	installFailAuditTrigger(t, storeDir)
+
+	out := mustNightCommand(t, api, opToken, "run-readiness")
+	if !out.Command.AttributionDegraded {
+		t.Fatalf("command.attributionDegraded = false, want true (the audit write failed and run-readiness must still run)")
+	}
+	if !out.Session.AttributionDegraded {
+		t.Fatalf("session.attributionDegraded = false, want true")
+	}
+
+	rec, ok, err := st.GetCurrentNightSession(context.Background())
+	if err != nil {
+		t.Fatalf("get current night session: %v", err)
+	}
+	if !ok {
+		t.Fatalf("run-readiness with a failing audit write left no session")
+	}
+	if rec.ReadinessID == "" {
+		t.Fatalf("session.ReadinessID = empty after run-readiness, want a readiness row referenced")
+	}
+	readiness, err := st.GetLatestNightReadiness(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatalf("GetLatestNightReadiness for the session run-readiness just degraded on: %v (a dangling readiness_id with no matching row is the exact defect this test guards)", err)
+	}
+	if readiness.ID != rec.ReadinessID {
+		t.Fatalf("readiness row ID = %q, session.ReadinessID = %q, want them to match", readiness.ID, rec.ReadinessID)
+	}
+
+	// The practical consequence, not just the row: start-preshow then
+	// start-night must not be refused for want of a readiness result -
+	// mustNightCommand itself t.Fatalf's on anything but 202, so a
+	// regression here fails loudly with the exact "no readiness result
+	// recorded" problem detail this defect used to produce.
+	mustNightCommand(t, api, opToken, "start-preshow")
+	mustNightCommand(t, api, opToken, "start-night")
 }
 
 func TestFinding9_AttributionDegradedIsPopulatedOnTheExemptPath(t *testing.T) {

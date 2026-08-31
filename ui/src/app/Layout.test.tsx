@@ -82,6 +82,7 @@ function model(
     collectors: [],
     macroRuns: [],
     resolume: [],
+    auditStore: { state: 'usable', reason: null },
     nightSession: null,
     fppPlaylistEntryObservations: [],
     events: [],

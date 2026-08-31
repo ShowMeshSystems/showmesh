@@ -358,18 +358,21 @@ func TestFPPCommandDecision11ClassForAction(t *testing.T) {
 	}
 }
 
-// TestNonExemptPrimitiveRefusedWhenAuditUnavailable proves the ADR-024
-// decision 11 fail-closed refusal that SURVIVES ADR-035: a single
-// non-exempt primitive (startPlaylist) dispatched while the audit_log is
-// genuinely unwritable ([installFailAuditTrigger]) is refused with the
-// fpp-command-refused-audit-unavailable 503, checked against the
-// package's own constructor so the wire refusal and the constructor
-// cannot drift apart. Only a macro RUN never refuses on this condition
-// (ADR-035); the per-primitive refusal here is unchanged by it.
-func TestNonExemptPrimitiveRefusedWhenAuditUnavailable(t *testing.T) {
-	srv := newFailIfHitFPPCommandServer(t)
+// TestNonExemptPrimitiveDispatchesDegradedWhenAuditUnavailable proves
+// ADR-024 decision 11's amendment (owner ruling, 2026-08-26,
+// superseding the fail-closed refusal ADR-035 used to narrow): a single
+// non-exempt primitive (startPlaylist) dispatched in-process while the
+// audit_log is genuinely unwritable ([installFailAuditTrigger]) now runs
+// with degraded attribution, exactly like the ordinary HTTP path proved
+// in fppcommand_handler_test.go's
+// TestFPPCommandNonSafetyClassPrimitiveRunsWithAuditFailing. This test
+// covers the SAME rule through [FPPCommandDispatcher.Dispatch], the
+// in-process call path a macro run also uses, so both callers of
+// dispatchFPPCommand are proven, not only the HTTP one.
+func TestNonExemptPrimitiveDispatchesDegradedWhenAuditUnavailable(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
-	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: srv.URL}}
+	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
 	setup.obs.setObs([]observation.Observation{fppStatusObs("bench-fpp", "idle", testNow, testNow)})
 
 	installFailAuditTrigger(t, setup.storeDir)
@@ -379,7 +382,7 @@ func TestNonExemptPrimitiveRefusedWhenAuditUnavailable(t *testing.T) {
 		FPPCommandConfirmDeadline: 200 * time.Millisecond, FPPCommandPollInterval: 10 * time.Millisecond,
 	})
 
-	_, problem, err := dispatcher.Dispatch(context.Background(), FPPCommandInput{
+	outcome, problem, err := dispatcher.Dispatch(context.Background(), FPPCommandInput{
 		InstanceID: "bench-fpp",
 		Action:     "startPlaylist",
 		// ifBusy is required here even though it is optional on the wire:
@@ -397,15 +400,14 @@ func TestNonExemptPrimitiveRefusedWhenAuditUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected internal error: %v", err)
 	}
-	if problem == nil {
-		t.Fatal("Dispatch did not refuse a non-exempt primitive with the audit store failing")
+	if problem != nil {
+		t.Fatalf("Dispatch refused a non-exempt primitive with the audit store failing: %+v (ADR-024 decision 11 was "+
+			"amended 2026-08-26 so this never refuses)", problem)
 	}
-
-	want := fppCommandAuditUnavailableProblem("begin-set", identity.ErrAuditWrite)
-	if problem.Type != want.Type {
-		t.Errorf("problem.Type = %q, want %q (the constructor's own type)", problem.Type, want.Type)
+	if !outcome.AttributionDegraded {
+		t.Errorf("AttributionDegraded = false, want true (the pre-dispatch audit write failed)")
 	}
-	if problem.Status != want.Status {
-		t.Errorf("problem.Status = %d, want %d", problem.Status, want.Status)
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1 (the command must actually dispatch)", srv.hitCount())
 	}
 }

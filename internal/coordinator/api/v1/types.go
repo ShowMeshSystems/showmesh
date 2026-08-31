@@ -674,6 +674,20 @@ type Snapshot struct {
 	// matching MacroRuns' own "fatal to omit" reasoning.
 	Resolume []ResolumeInstance `json:"resolume"`
 
+	// AuditStore is the coordinator-level standing signal for whether this
+	// coordinator can currently write to its audit store, computed FRESH
+	// on every request via a real probe write to audit_log (always
+	// rolled back), never from a per-action response. ADR-024 decision
+	// 11's amendment (owner ruling, 2026-08-26) removed the fail-closed
+	// refusal that used to make an audit-write failure directly visible
+	// on the five request paths it protected; this field exists so the
+	// condition stays visible on a surface an operator reads WITHOUT
+	// invoking an action, since an unaudited command's own
+	// attributionDegraded flag only answers "was this one action
+	// unaudited", never "is audit down right now". Fatal to omit, matching
+	// MacroRuns/Resolume/AudioConfigPush's own reasoning.
+	AuditStore AuditStoreStatus `json:"auditStore"`
+
 	// AudioConfigPush is the coordinator-level signal for whether this
 	// coordinator can decode its stored, engine-wide audio.settings
 	// revision right now. It reports ONLY that: it says nothing about
@@ -702,6 +716,19 @@ type Snapshot struct {
 // and always nil otherwise, mirroring [CollectorStatus.Reason]'s own
 // convention.
 type AudioConfigPushStatus struct {
+	State  string  `json:"state"`
+	Reason *string `json:"reason"`
+}
+
+// AuditStoreStatus is GET /api/v1/snapshot's "auditStore" member
+// (coordinator.audit.store.state / coordinator.audit.store.reason in
+// IDENTIFIER-REGISTER.md), mirroring [AudioConfigPushStatus]'s shape one
+// field up, but computed fresh on every request rather than from cached
+// traffic (see [identity.Service.AuditWriteStatus]'s own doc comment).
+// State is "usable" or "unusable"; Reason is set whenever State is not
+// "usable" and always nil otherwise, matching AudioConfigPushStatus's
+// identical convention.
+type AuditStoreStatus struct {
 	State  string  `json:"state"`
 	Reason *string `json:"reason"`
 }

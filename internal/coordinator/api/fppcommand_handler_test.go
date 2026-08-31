@@ -895,17 +895,22 @@ func TestFPPCommandSucceedsWithAuditStoreFailing(t *testing.T) {
 	}
 }
 
-// --- ADR-024 decision 11's fail-closed default, corrected: Step 8 had
-// inherited Step 7's ONE safety-class exemption (stopPlaylist) onto all
-// eight primitives with no review, so an audit-write failure let
-// startPlaylist — which makes the show DO something — proceed with an
-// unaccountable actor exactly like a genuine stop. startPlaylist is not a
-// member of [fppSafetyClass]'s exempt set (see fppcommand_primitives.go),
-// so it must now fail CLOSED: refused, nothing dispatched, no commands
-// row, no desired_state row. ---
+// --- ADR-024 decision 11, amended 2026-08-26 (owner ruling): an
+// audit-store outage never blocks a command dispatch, for ANY primitive,
+// not only the blackout/stop/power-off safety class. Step 8 had inherited
+// Step 7's ONE safety-class exemption (stopPlaylist) onto all eight
+// primitives with no review, which the amendment above SUPERSEDES rather
+// than the fail-closed correction that followed it: startPlaylist (which
+// makes the show DO something) now proceeds with degraded attribution,
+// exactly like a genuine stop, on the owner's own word that "it should NOT
+// stop the show or any actions from running." The command still
+// dispatches, still creates a commands row and a desired_state row, and
+// the response still reports the outcome that dispatch produced; only the
+// pre-dispatch audit entry is missing, and that is what
+// attributionDegraded reports. ---
 
-func TestFPPCommandNonSafetyClassPrimitiveFailsClosedWithAuditFailing(t *testing.T) {
-	fppSrv := newFailIfHitFPPCommandServer(t)
+func TestFPPCommandNonSafetyClassPrimitiveRunsWithAuditFailing(t *testing.T) {
+	fppSrv, srv := newFakeFPPCommandServer(t, http.StatusOK, "Playlist Starting")
 	setup := newFPPCommandTestSetup(t, fixedClock(testNow))
 	setup.fppLister.views = []FPPInstanceView{{InstanceID: "bench-fpp", Endpoint: fppSrv.URL}}
 	// Idle at request time: startPlaylist's own PreDispatchCheck (ifBusy's
@@ -932,34 +937,63 @@ func TestFPPCommandNonSafetyClassPrimitiveFailsClosedWithAuditFailing(t *testing
 	body := fppCommandBody("startPlaylist", "key-1", `{"playlist":"showmesh-test"}`)
 	req := newFPPCommandRequest(t, "bench-fpp", body, token)
 	resp, respBody := doRawRequest(t, api.Handler, req)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (ADR-024 decision 11's fail-closed default: startPlaylist is not a member of "+
-			"the blackout/stop/power-off safety class); body: %s", resp.StatusCode, respBody)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (ADR-024 decision 11, amended 2026-08-26: an audit-store outage never "+
+			"blocks a command dispatch, including a non-safety-class primitive like startPlaylist); body: %s",
+			resp.StatusCode, respBody)
+	}
+	if srv.hitCount() != 1 {
+		t.Errorf("FPP received %d requests, want exactly 1 (the command must actually dispatch, not merely appear to)", srv.hitCount())
 	}
 	m := decodeMap(t, respBody)
-	detail, _ := m["detail"].(string)
-	if !strings.Contains(strings.ToLower(detail), "audit") {
-		t.Errorf("problem detail = %q, want it to name the audit store as the refusal's cause", detail)
-	}
-	if !strings.Contains(detail, "startPlaylist") {
-		t.Errorf("problem detail = %q, want it to name the refused action (startPlaylist)", detail)
+	cmd, _ := m["command"].(map[string]any)
+	if cmd["attributionDegraded"] != true {
+		t.Errorf("attributionDegraded = %v, want true (the pre-dispatch audit write failed)", cmd["attributionDegraded"])
 	}
 
 	rows, err := setup.st.ListCommands(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("list commands: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Errorf("commands rows = %d, want 0 — a fail-closed refusal must not create a commands row (the whole "+
-			"transaction already rolled back per identity.ErrAuditWrite's own guarantee)", len(rows))
+	if len(rows) != 1 {
+		t.Errorf("commands rows = %d, want 1 (the command still runs and is still recorded in the commands "+
+			"table; only the audit log write degrades, not the command's own bookkeeping)", len(rows))
 	}
 
 	desired, err := setup.st.ListDesiredState(context.Background(), store.DesiredStateFilter{ResourceID: "bench-fpp"})
 	if err != nil {
 		t.Fatalf("list desired state: %v", err)
 	}
-	if len(desired) != 0 {
-		t.Errorf("desired_state rows = %d, want 0 — a fail-closed refusal must not record desired state either", len(desired))
+	if len(desired) == 0 {
+		t.Errorf("desired_state rows = %d, want > 0 (desired state is still recorded despite the degraded attribution)", len(desired))
+	}
+
+	entries, err := setup.svc.ListAudit(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	for _, e := range entries {
+		if e.CommandID == cmd["id"] {
+			t.Errorf("found an audit_log entry for command %v despite the fail_audit trigger being installed: %+v", cmd["id"], e)
+		}
+	}
+
+	// The standing signal: an operator reading GET /api/v1/snapshot learns
+	// the audit store is down WITHOUT having invoked this (or any) action
+	// themselves. A per-command attributionDegraded flag alone answers a
+	// narrower question ("was this one action unaudited"), never "is audit
+	// down right now".
+	snapResp, snapRespBody := doRequest(t, api.Handler, "GET", "/api/v1/snapshot", nil)
+	if snapResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/snapshot: status = %d, want 200; body: %s", snapResp.StatusCode, snapRespBody)
+	}
+	snap := decodeMap(t, snapRespBody)
+	auditStore, _ := snap["auditStore"].(map[string]any)
+	if auditStore["state"] != "unusable" {
+		t.Errorf("snapshot auditStore.state = %v, want \"unusable\"", auditStore["state"])
+	}
+	if reason, _ := auditStore["reason"].(string); reason == "" {
+		t.Error("snapshot auditStore.reason is empty, want a non-empty explanation")
 	}
 }
 

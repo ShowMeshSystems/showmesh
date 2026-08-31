@@ -257,6 +257,10 @@
       "composition": null
     }
   ],
+  "auditStore": {
+    "state": "usable",
+    "reason": null
+  },
   "audioConfigPush": {
     "state": "usable",
     "reason": null
