@@ -85,6 +85,13 @@ var migrations = []migration{
 	// run, which is the exact mechanism this renumbering and v21/v22's
 	// own now-dead reservations both demonstrate.
 	{version: 25, sql: schemaV25},
+	// v26 is Lane 17a SM-111 (owner ruling 2026-08-19): renaming
+	// commands.requested_revision to commands.caller_intent and
+	// formalizing its per-family discriminator. Renumbered from v22,
+	// itself renumbered from v13, for the identical reason v25 was
+	// renumbered from v23: a reservation at or below the shipped maximum
+	// can never run.
+	{version: 26, sql: schemaV26},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1420,6 +1427,26 @@ CREATE TABLE IF NOT EXISTS fallback_program_acknowledgements (
     installed_at         TEXT NOT NULL,
     acknowledged_at      TEXT NOT NULL
 );
+`
+
+// schemaV26 renames commands.requested_revision to commands.caller_intent
+// (Lane 17a SM-111, owner ruling 2026-08-19): the column has held four
+// unrelated writer shapes since Step 9. Two are genuinely revision-shaped
+// (a show.action invocation's plain revision, and a macro run's own
+// "macro:" tagged reference, which embeds one); the other two are not
+// revisions at all, but two DIFFERENTLY SHAPED caller-identity JSON
+// structs, one per dispatch route (render, cue-catalog deploy), each
+// carrying no revision at their own top level. A name built around
+// "revision" was never true for those last two writers. RENAME COLUMN is
+// metadata-only (SQLite 3.25+, bundled by this project's
+// modernc.org/sqlite): every existing value, tagged or not, is preserved
+// byte-for-byte, and no backfill runs. See [ParseCallerIntent]
+// (caller_intent.go) for the discriminator this rename exists to make
+// possible, and its own doc comment for why an untagged pre-v26 row is
+// never reinterpreted as one of the tagged kinds, including between these
+// two structurally similar JSON shapes.
+const schemaV26 = `
+ALTER TABLE commands RENAME COLUMN requested_revision TO caller_intent;
 `
 
 // maxMigrationVersion is the maximum [migration.version] across

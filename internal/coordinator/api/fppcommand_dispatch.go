@@ -113,20 +113,25 @@ type FPPCommandInput struct {
 	IdempotencyKey string
 	Issuer         FPPCommandIssuer
 
-	// RequestedRevision carries [command.Envelope.RequestedRevision]
-	// ("the configuration revision this command was issued against, when
-	// the command is revision-sensitive") into the dispatched command's
-	// own store.CommandRecord.RequestedRevision column. Empty for an
-	// ordinary HTTP-dispatched command, which names no revision. STEP-9-
-	// SPEC.md section 6.1 requires a macro step's dispatch to carry its
-	// run's pinned macro revision here, "formatted so a macro-issued
-	// command is distinguishable from an operator-issued one" - that
+	// CallerIntent carries [command.Envelope.RequestedRevision] ("the
+	// configuration revision this command was issued against, when the
+	// command is revision-sensitive") into the dispatched command's own
+	// store.CommandRecord.CallerIntent column (renamed from
+	// RequestedRevision on both this field and that column by Lane 17a
+	// SM-111, since the value this field carries is not always a
+	// revision). Empty for an ordinary HTTP-dispatched command, which
+	// names no revision. A caller that pins an actual revision tags it
+	// with [store.FormatCallerIntent] and [store.CallerIntentRevision]
+	// before setting this field. STEP-9-SPEC.md section 6.1 requires a
+	// macro step's dispatch to carry its run's pinned macro revision here,
+	// "formatted so a macro-issued command is distinguishable from an
+	// operator-issued one" via [store.FormatMacroRunCallerIntent] - that
 	// formatting is Step 9's macro executor's own decision to make (it
 	// holds the run id and the pinned revision; this package does not),
 	// so this field is deliberately an opaque caller-supplied string
 	// rather than a structured type this package would have to guess the
 	// shape of.
-	RequestedRevision string
+	CallerIntent string
 
 	// NeverWithholdOnAuditFailure no longer changes whether this dispatch
 	// proceeds on an audit-write failure. ADR-024 decision 11, amended
@@ -572,7 +577,7 @@ func (h *handlers) dispatchFPPCommand(ctx context.Context, now time.Time, in FPP
 		Params:             in.Params,
 		Issuer:             command.Issuer{PrincipalID: in.Issuer.PrincipalID, PrincipalName: in.Issuer.PrincipalName},
 		ConfirmationMethod: command.ConfirmationEvidence,
-		RequestedRevision:  in.RequestedRevision,
+		RequestedRevision:  in.CallerIntent,
 	}
 	deadline := now.Add(primitive.ConfirmDeadline(h.fppCommandConfirmDeadline))
 	env.Deadline = &deadline

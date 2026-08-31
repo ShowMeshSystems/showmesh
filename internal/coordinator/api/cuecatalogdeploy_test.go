@@ -244,7 +244,7 @@ func TestCueCatalogDeployReplayOfAnInFlightCommandReportsAbsentOutcome(t *testin
 		ID: "cmd-inflight", IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
 		TargetKind: "node", TargetID: "render-01", ParamsJSON: "{}",
 		IssuerPrincipalID: "admin-1", IssuerPrincipalName: "admin-1",
-		RequestedRevision:  `{"node":"render-01","show":"halloween-2026","generation":1}`,
+		CallerIntent:       `{"node":"render-01","show":"halloween-2026","generation":1}`,
 		ConfirmationMethod: "evidence", State: "pending",
 	})
 	if err != nil {

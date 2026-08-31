@@ -212,7 +212,7 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 		ID: commandID, IdempotencyKey: idempotencyKey, Action: auditActionCueCatalogDeploy,
 		TargetKind: "node", TargetID: nodeID, ParamsJSON: paramsJSON,
 		IssuerPrincipalID: issuerID, IssuerPrincipalName: issuerName,
-		RequestedRevision:  string(identityJSON),
+		CallerIntent:       store.FormatCallerIntent(store.CallerIntentCueCatalogDeploy, string(identityJSON)),
 		ConfirmationMethod: "evidence", State: "pending",
 	}
 	_, err = h.deps.Commands.InsertCommand(ctx, rec)
@@ -391,7 +391,8 @@ func (h *handlers) handlePostNodeCueCatalogDeploy(w http.ResponseWriter, r *http
 }
 
 // cueCatalogDeployRequestIdentity is the caller's own unresolved request
-// shape, stored in commands.requested_revision — mirrors
+// shape, stored in commands.caller_intent tagged
+// store.CallerIntentCueCatalogDeploy (Lane 17a SM-111): mirrors
 // renderRequestIdentity's identical role and reasoning one file over,
 // narrowed to what a replay of THIS action needs to compare.
 type cueCatalogDeployRequestIdentity struct {
@@ -450,8 +451,14 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 	if existing.DispatchedAt != nil {
 		dispatchedAt = strPtr(formatTime(*existing.DispatchedAt))
 	}
+	// existing.Action is already checked above, so this row's caller_intent
+	// can only be this route's own identity family: [store.CallerIntentPayload]
+	// strips the store.CallerIntentCueCatalogDeploy tag when present and
+	// falls back to the raw value for a row written before Lane 17a
+	// SM-111's tagging scheme existed.
 	var reqID cueCatalogDeployRequestIdentity
-	_ = json.Unmarshal([]byte(existing.RequestedRevision), &reqID)
+	payload, _ := store.CallerIntentPayload(store.CallerIntentCueCatalogDeploy, existing.CallerIntent)
+	_ = json.Unmarshal([]byte(payload), &reqID)
 	return v1.CueCatalogDeployResult{
 		CommandID: existing.ID, IdempotencyKey: existing.IdempotencyKey, Node: nodeID, Replay: true,
 		Show: reqID.Show, Generation: reqID.Generation, Revision: reqID.Revision,

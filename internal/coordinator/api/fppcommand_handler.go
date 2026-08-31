@@ -138,7 +138,7 @@ func fppCommandRecordFor(env command.Envelope, paramsJSON string) store.CommandR
 		ParamsJSON:          paramsJSON,
 		IssuerPrincipalID:   env.Issuer.PrincipalID,
 		IssuerPrincipalName: env.Issuer.PrincipalName,
-		RequestedRevision:   env.RequestedRevision,
+		CallerIntent:        env.RequestedRevision,
 		ConfirmationMethod:  string(env.ConfirmationMethod),
 		DeadlineAt:          env.Deadline,
 		State:               "pending",

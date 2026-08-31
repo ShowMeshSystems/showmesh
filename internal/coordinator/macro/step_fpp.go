@@ -36,12 +36,12 @@ func (e *Executor) dispatchFPPStep(ctx context.Context, run store.MacroRunRecord
 	target := action.Payload.Target
 
 	in := api.FPPCommandInput{
-		InstanceID:        target.InstanceID,
-		Action:            target.Primitive,
-		Params:            target.Params,
-		IdempotencyKey:    stepIdempotencyKey(run.ID, step.StepIndex),
-		Issuer:            issuer,
-		RequestedRevision: store.FormatMacroRunRequestedRevision(run.MacroObjectID, run.MacroRevision),
+		InstanceID:     target.InstanceID,
+		Action:         target.Primitive,
+		Params:         target.Params,
+		IdempotencyKey: stepIdempotencyKey(run.ID, step.StepIndex),
+		Issuer:         issuer,
+		CallerIntent:   store.FormatMacroRunCallerIntent(run.MacroObjectID, run.MacroRevision),
 
 		// OWNER DECISION, 2026-08-14: a macro run never withholds a command
 		// because the audit store is down, whatever this step's safety

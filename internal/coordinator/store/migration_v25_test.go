@@ -22,9 +22,16 @@ import (
 // the already-shipped maximum, is what makes this migration reachable
 // again; this test proves it, rather than only asserting it in a comment.
 //
-// The database is stamped at user_version 24 directly through a raw
-// connection, never via [Open]/[migrate]: calling Open first would
-// satisfy both assertions below through that open, before any rewind.
+// The database is built up to v24 and stamped at user_version 24 directly
+// through a raw connection, never via [Open]/[migrate]: calling Open first
+// would satisfy both assertions below through that open, before any
+// rewind. Every migration through v24 is applied for real (rather than
+// only stamping the version, as this test did before Lane 17a SM-111's
+// v26 landed) because v26's RENAME COLUMN, unlike v25's CREATE TABLE IF
+// NOT EXISTS, depends on a table an earlier migration creates: a stamp
+// with no schema behind it was never a state a real coordinator could
+// reach, only a shortcut that happened to work while every migration
+// above the stamp was self-contained.
 func TestV25AppliesAfterStoreStampedAtV24Only(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -33,6 +40,27 @@ func TestV25AppliesAfterStoreStampedAtV24Only(t *testing.T) {
 	raw, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open raw sqlite file: %v", err)
+	}
+	tx, err := raw.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	for _, m := range migrations {
+		if m.version > 24 {
+			continue
+		}
+		if m.fn != nil {
+			if err := m.fn(ctx, tx); err != nil {
+				t.Fatalf("apply migration %d: %v", m.version, err)
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, m.sql); err != nil {
+			t.Fatalf("apply migration %d: %v", m.version, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit schema through v24: %v", err)
 	}
 	if _, err := raw.ExecContext(ctx, `PRAGMA user_version = 24`); err != nil {
 		t.Fatalf("stamp user_version to 24: %v", err)
