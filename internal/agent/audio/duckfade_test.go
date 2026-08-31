@@ -373,3 +373,67 @@ func TestDuckReleaseFadesOnClearAndNaturalCompletionToo(t *testing.T) {
 		}
 	})
 }
+
+// TestDuckArrivingMidOperatorFadeResolvesTheSupersededInvocation is trap
+// 3: [Session.checkFadeCompletionLocked]'s exactly-once resolution is
+// keyed on s.fadeInvocation, and a duck's own fade dispatch overwrites
+// that field to track its own (invocation-less) ramp instead of the
+// operator fade it just replaced in the engine. Without a fix, an
+// operator's audio.gain.fade invocation caught mid-flight by a duck is
+// never resolved: its cached result stays whatever GainFade returned at
+// dispatch time ("fade dispatched, not yet complete") forever, because
+// the invocation that would need resolving has already been cleared by
+// the time anything goes looking for it. A client that replays the same
+// invocation to learn its outcome, the documented way to observe an
+// async fade's eventual result, would see it reported as still in
+// flight indefinitely, even long after the duck settled.
+func TestDuckArrivingMidOperatorFadeResolvesTheSupersededInvocation(t *testing.T) {
+	c := newClock(time.Now())
+	dir := t.TempDir()
+	// availableFakeEngine (defined in mix_test.go): gateAvailability
+	// passes outcomes through unchanged only when the engine reports
+	// itself available, which the shipped FakeEngine never does. Needed
+	// here so the cached result text this test inspects is the real
+	// terminal outcome, not gateAvailability's generic unavailable-engine
+	// substitute.
+	m := NewManager(availableFakeEngine{NewFakeEngine(c.now)}, NewFileSessionStore(dir), dir, staticDecoder{duration: 2 * time.Second}, c.now, nil)
+	ctx := context.Background()
+
+	bgRef := writeTestAsset(t, m.assetDir, "bg.wav", "asset-bg", []byte("bg"))
+	startPlaying(t, m, ctx, "bg", bgRef, pkgaudio.SourceRoleBackground, pkgaudio.MixPolicyMix)
+	m.GainSet(ctx, "bg", "inv-bg-gain", 3, pkgaudio.Gain(0.9))
+
+	bg, _ := m.get("bg")
+
+	// An operator-invoked fade, slow enough that the duck below lands
+	// while it is still ramping.
+	fadeInvocation := pkgaudio.InvocationID("inv-op-fade")
+	m.GainFade(ctx, "bg", fadeInvocation, 4, pkgaudio.FadeCurveLinear, 2*time.Second, pkgaudio.Gain(0.5))
+
+	c.advance(200 * time.Millisecond) // partway through the 2s operator fade
+
+	annRef := writeTestAsset(t, m.assetDir, "ann.wav", "asset-ann", []byte("ann"))
+	startPlaying(t, m, ctx, "ann", annRef, pkgaudio.SourceRoleAnnouncement, pkgaudio.MixPolicyDuck)
+
+	// Let the duck's own (faster, default 200ms) fade run to completion
+	// and give watchTick a chance to resolve whatever it is still
+	// tracking.
+	c.advance(300 * time.Millisecond)
+	m.watchTick(ctx)
+
+	bg.mu.Lock()
+	result, ok := bg.executedResults[fadeInvocation]
+	bg.mu.Unlock()
+	if !ok {
+		t.Fatal("operator fade invocation's cached result was never recorded at all")
+	}
+	if result.Outcome == pkgaudio.OutcomeGain && result.Reason == "fade dispatched, not yet complete" {
+		t.Fatalf("operator fade invocation %q still reports %+v after being superseded by a duck; it must resolve to a terminal outcome instead of staying stuck at its initial dispatch result forever", fadeInvocation, result)
+	}
+	if result.Outcome != pkgaudio.OutcomeUnconfirmable {
+		t.Fatalf("superseded operator fade invocation outcome = %+v, want Unconfirmable", result)
+	}
+	if !strings.Contains(result.Reason, "duck") {
+		t.Fatalf("superseded operator fade invocation reason = %q, want it to explain that a duck superseded it", result.Reason)
+	}
+}
