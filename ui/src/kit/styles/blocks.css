@@ -1031,6 +1031,142 @@ a.sm-tile:hover {
   border-bottom: none;
 }
 
+/* Show workspace · Night session. The approved editor is a quiet, linear
+   document: narrow forms, strong section rhythm, and bordered surfaces only
+   where one asset or one ordered transition group needs containment. */
+.sm-night-definition-editor {
+  max-width: 1012px;
+  padding-top: 22px;
+}
+
+.sm-night-definition-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.sm-night-definition-head .sm-section__title {
+  margin-top: 6px;
+}
+
+.sm-night-definition-head .sm-small {
+  margin: 5px 0 0;
+}
+
+.sm-night-definition-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  margin-top: 12px;
+  font: var(--t-small);
+}
+
+.sm-night-definition-section {
+  margin-top: 30px;
+  scroll-margin-top: 96px;
+}
+
+.sm-night-definition-section > .sm-small {
+  max-width: 74ch;
+  margin: 6px 0 0;
+}
+
+.sm-night-definition-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s-4);
+  max-width: 760px;
+  margin-top: 12px;
+}
+
+.sm-night-definition-asset {
+  max-width: 760px;
+  margin-top: var(--s-4);
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.sm-night-definition-asset p {
+  margin: 0;
+}
+
+.sm-night-definition-asset p + p {
+  margin-top: 5px;
+}
+
+.sm-night-definition-asset__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.sm-night-definition-section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.sm-night-definition-section__head .sm-subsection__title span {
+  color: var(--text-muted);
+}
+
+.sm-night-transition-card {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.sm-night-transition-card > .sm-small {
+  margin: 0;
+  padding: 14px;
+}
+
+.sm-night-transition-step {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 132px minmax(190px, 1.3fr) 120px auto;
+  gap: 12px;
+  align-items: end;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sm-night-transition-step:last-child {
+  border-bottom: 0;
+}
+
+.sm-night-definition-actions {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 760px;
+  margin-top: 30px;
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--border-strong);
+}
+
+@media (max-width: 900px) {
+  .sm-night-transition-step {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .sm-night-definition-form,
+  .sm-night-definition-asset__fields,
+  .sm-night-transition-step {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Facet tabs. The count is inventory, never attention. */
 .sm-facets {
   display: flex;

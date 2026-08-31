@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigObjectSummary, ConfigShowPlaylist, Model } from '../api'
@@ -144,12 +144,34 @@ describe('Shows workspace shell', () => {
     stubs.getShow = showHead
     stubs.listConfigObjects = (...args: never[]) => Promise.resolve({ serverTime: '', kind: args[0], objects: [] })
     stubs.listAssets = assetsEmpty
+    stubs.listFPPPlaylistDefinitions = () => Promise.resolve({ serverTime: '', definitions: [] })
     renderWorkspace({}, '/shows/winter-ridge-2026/night-session')
     expect(await screen.findByRole('heading', { name: 'Night session definitions' })).toBeInTheDocument()
-    const showField = await screen.findByLabelText('Show')
+    const showField = (await screen.findAllByLabelText('Show'))[0]
     expect(showField).toHaveValue('winter-ridge-2026')
     expect(showField).toBeDisabled()
     expect(screen.getByRole('link', { name: 'Night session' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('populates FPP and timeline dropdowns from reported inventory without inventing options', async () => {
+    stubs.getShow = showHead
+    stubs.listConfigObjects = (...args: never[]) => Promise.resolve({ serverTime: '', kind: args[0], objects: [] })
+    stubs.listFPPPlaylistDefinitions = () => Promise.resolve({
+      serverTime: '',
+      definitions: [{ instanceUuid: 'uuid-1', playlistName: 'WR26 Main Show', playlistHash: 'a'.repeat(64), capturedAt: '', receivedAt: '', entryCount: 1, referenced: false }],
+    })
+    stubs.listAssets = () => Promise.resolve({
+      serverTime: '',
+      assets: [{ id: 'a1', show: 'winter-ridge-2026', sequence: 'resting-loop', targetKind: 'node', target: 'media-front', mediaType: 'fseq', contentHash: `sha256:${'a'.repeat(64)}`, runtimeFilename: 'resting.fseq', sizeBytes: 1, createdAt: '', createdByPrincipalId: null, createdByPrincipalName: null, supersededAt: null, current: true }],
+    })
+    renderWorkspace({ fpp: [{ instanceId: 'barn-player', instanceUuid: 'uuid-1' } as never] }, '/shows/winter-ridge-2026/night-session')
+
+    const showInstance = await screen.findByRole('combobox', { name: 'Show playlist — FPP instance' })
+    expect(within(showInstance).getByRole('option', { name: 'barn-player' })).toBeInTheDocument()
+    fireEvent.change(showInstance, { target: { value: 'barn-player' } })
+    expect(within(screen.getByRole('combobox', { name: 'Show playlist' })).getByRole('option', { name: 'WR26 Main Show' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Sequence' })).getByRole('option', { name: 'resting-loop' })).toBeInTheDocument()
+    expect(within(screen.getByRole('combobox', { name: 'Target node' })).getByRole('option', { name: 'media-front' })).toBeInTheDocument()
   })
 })
 

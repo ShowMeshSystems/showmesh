@@ -10,12 +10,16 @@ import {
   getNightSessionConfigRevisions,
   getNightSessionActiveConfig,
   getNightSessionActiveConfigRevisions,
+  listAssets,
   listConfigObjects,
+  listFPPPlaylistDefinitions,
   putNightSessionActiveConfig,
   putNightSessionConfig,
   randomUUIDv4,
   type ConfigObjectSummary,
   type ConfigNightSessionWrite,
+  type Asset,
+  type FPPPlaylistDefinitionMetadata,
   type NightCommandName,
   type NightInterlockOverride,
   type NightSessionActiveConfigResponse,
@@ -810,6 +814,8 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   const model = useModelContext()
   const gate = evaluateScope(model.session, model.sessionFetchFailed, 'config:write')
   const [objects, setObjects] = useState<ConfigObjectSummary[] | null>(null)
+  const [playlistDefinitions, setPlaylistDefinitions] = useState<FPPPlaylistDefinitionMetadata[]>([])
+  const [assets, setAssets] = useState<Asset[]>([])
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<DefinitionDraft>(() => blankDefinition(showId))
   const [loaded, setLoaded] = useState<NightSessionConfigResponse | null>(null)
@@ -820,8 +826,17 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
 
   useEffect(() => {
     let cancelled = false
-    listConfigObjects('night.session')
-      .then((response) => { if (!cancelled) setObjects(showId === undefined ? response.objects : response.objects.filter((object) => object.show === showId)) })
+    Promise.all([
+      listConfigObjects('night.session'),
+      listFPPPlaylistDefinitions().catch(() => ({ definitions: [], serverTime: '' })),
+      showId === undefined ? Promise.resolve({ assets: [], serverTime: '' }) : listAssets({ show: showId }).catch(() => ({ assets: [], serverTime: '' })),
+    ])
+      .then(([response, definitions, assetResponse]) => {
+        if (cancelled) return
+        setObjects(showId === undefined ? response.objects : response.objects.filter((object) => object.show === showId))
+        setPlaylistDefinitions(definitions.definitions)
+        setAssets(assetResponse.assets)
+      })
       .catch((err: unknown) => { if (!cancelled) setError(describeApiError(err)) })
     return () => { cancelled = true }
   }, [reloadKey, showId])
@@ -845,38 +860,106 @@ export function NightSessionDefinitions({ showId }: { showId?: string }) {
   }
   const addCue = (which: 'enterShow' | 'enterResting') => setDraft((current) => ({ ...current, [which]: [...current[which], blankCue()] }))
 
+  const fppInstances = model.fpp
+  const playlistNames = (instanceId: string, retained: string) => {
+    const uuid = fppInstances.find((instance) => instance.instanceId === instanceId)?.instanceUuid
+    const reported = uuid === null || uuid === undefined
+      ? []
+      : playlistDefinitions.filter((definition) => definition.instanceUuid === uuid).map((definition) => definition.playlistName)
+    return Array.from(new Set([...(retained === '' ? [] : [retained]), ...reported])).sort()
+  }
+  const timelineAssets = assets.filter((asset) => asset.current && asset.mediaType === 'fseq' && asset.targetKind === 'node')
+  const timelineSequences = Array.from(new Set([...(draft.timelineSequence === '' ? [] : [draft.timelineSequence]), ...timelineAssets.map((asset) => asset.sequence)])).sort()
+  const timelineTargets = Array.from(new Set([
+    ...(draft.timelineTarget === '' ? [] : [draft.timelineTarget]),
+    ...timelineAssets.filter((asset) => draft.timelineSequence === '' || asset.sequence === draft.timelineSequence).map((asset) => asset.target),
+  ])).sort()
+  const fppIds = (retained: string) => Array.from(new Set([...(retained === '' ? [] : [retained]), ...fppInstances.map((instance) => instance.instanceId)])).sort()
+
   return (
-    <Section id="sn-definitions" title="Night session definitions" aside={<span className="sm-small sm-muted">Definitions change the next armed night, never the one running now</span>}>
+    <div id="sn-definitions" className="sm-night-definition-editor">
+      <div className="sm-night-definition-head">
+        <div>
+          <p className="sm-eyebrow">{loaded === null ? 'New definition' : 'Editing definition'}</p>
+          <h2 className="sm-section__title">{loaded === null ? 'Night session definitions' : draft.label}</h2>
+          <p className="sm-small sm-muted">
+            {loaded === null ? 'Create a definition for this Show.' : <><span className="sm-data">{loaded.id}</span> · revision <span className="sm-data">{loaded.revision}</span></>}
+            {' '}· changes apply to the next armed night, never the one running now
+          </p>
+        </div>
+      </div>
+
+      <nav className="sm-night-definition-links" aria-label="Night session definition sections">
+        <a href="#ns-identity">Identity &amp; show playlist</a>
+        <a href="#ns-resting">Resting</a>
+        <a href="#ns-enter-show">Enter show</a>
+        <a href="#ns-enter-resting">Enter resting</a>
+      </nav>
+
       {objects === null ? <RuledStrip absence="loading" label="Reading" fact="Reading night-session definitions." /> : (
         <>
-          <FieldGrid>
-            <Field label="Definition">
-              {(field) => <Select {...field} value={selected} onChange={(event) => selectDefinition(event.target.value)}><option value="">New definition</option>{objects.map((object) => <option key={object.id} value={object.id}>Edit {object.id}</option>)}</Select>}
-            </Field>
-            <Field label="Definition id" help={loaded === null ? 'Used to create this new definition.' : 'Definition ids are stable; editing this field creates a separate definition.'}>
-              {(field) => <Input {...field} value={draft.id} disabled={loaded !== null} onChange={(event) => setDraft((current) => ({ ...current, id: event.target.value }))} />}
-            </Field>
-            <Field label="Show">{(field) => <Input {...field} value={draft.show} disabled={showId !== undefined} onChange={(event) => setDraft((current) => ({ ...current, show: event.target.value, timelineShow: current.timelineShow === '' ? event.target.value : current.timelineShow }))} />}</Field>
-            <Field label="Label">{(field) => <Input {...field} value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} />}</Field>
-            <Field label="Show playlist FPP instance">{(field) => <Input {...field} value={draft.showFpp} onChange={(event) => setDraft((current) => ({ ...current, showFpp: event.target.value }))} />}</Field>
-            <Field label="Show playlist">{(field) => <Input {...field} value={draft.showPlaylist} onChange={(event) => setDraft((current) => ({ ...current, showPlaylist: event.target.value }))} />}</Field>
-            <Field label="Resting FPP instance">{(field) => <Input {...field} value={draft.restingFpp} onChange={(event) => setDraft((current) => ({ ...current, restingFpp: event.target.value }))} />}</Field>
-            <Field label="Resting playlist">{(field) => <Input {...field} value={draft.restingPlaylist} onChange={(event) => setDraft((current) => ({ ...current, restingPlaylist: event.target.value }))} />}</Field>
-            <Field label="Resting timeline sequence">{(field) => <Input {...field} value={draft.timelineSequence} onChange={(event) => setDraft((current) => ({ ...current, timelineSequence: event.target.value }))} />}</Field>
-            <Field label="Resting timeline target">{(field) => <Input {...field} value={draft.timelineTarget} onChange={(event) => setDraft((current) => ({ ...current, timelineTarget: event.target.value }))} />}</Field>
-          </FieldGrid>
-          <TransitionStepEditor title="Enter-show transition steps" steps={draft.enterShow} onChange={(index, patch) => updateCues('enterShow', index, patch)} onAdd={() => addCue('enterShow')} onRemove={(index) => setDraft((current) => ({ ...current, enterShow: current.enterShow.filter((_, itemIndex) => itemIndex !== index) }))} />
-          <TransitionStepEditor title="Enter-resting transition steps" steps={draft.enterResting} onChange={(index, patch) => updateCues('enterResting', index, patch)} onAdd={() => addCue('enterResting')} onRemove={(index) => setDraft((current) => ({ ...current, enterResting: current.enterResting.filter((_, itemIndex) => itemIndex !== index) }))} />
-          <ButtonRow><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></ButtonRow>
+          <section id="ns-identity" className="sm-night-definition-section" aria-labelledby="ns-identity-title">
+            <h3 id="ns-identity-title" className="sm-subsection__title">Identity &amp; show playlist</h3>
+            <div className="sm-night-definition-form">
+              <Field label="Definition">
+                {(field) => <Select {...field} value={selected} onChange={(event) => selectDefinition(event.target.value)}><option value="">New definition</option>{objects.map((object) => <option key={object.id} value={object.id}>Edit {object.label} · {object.id}</option>)}</Select>}
+              </Field>
+              <Field label="Definition id" help={loaded === null ? 'Used to create this new definition.' : 'Definition ids are stable.'}>
+                {(field) => <Input {...field} className="sm-data" value={draft.id} disabled={loaded !== null} onChange={(event) => setDraft((current) => ({ ...current, id: event.target.value }))} />}
+              </Field>
+              <Field label="Label">{(field) => <Input {...field} value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} />}</Field>
+              <Field label="Show">{(field) => <Input {...field} className="sm-data" value={draft.show} disabled={showId !== undefined} onChange={(event) => setDraft((current) => ({ ...current, show: event.target.value, timelineShow: current.timelineShow === '' ? event.target.value : current.timelineShow }))} />}</Field>
+              <Field label="Show playlist — FPP instance" help={fppInstances.length === 0 ? 'No configured FPP instances are currently reported.' : undefined}>
+                {(field) => <Select {...field} className="sm-data" value={draft.showFpp} onChange={(event) => setDraft((current) => ({ ...current, showFpp: event.target.value, showPlaylist: '' }))}><option value="">Select an instance</option>{fppIds(draft.showFpp).map((id) => <option key={id} value={id}>{id}</option>)}</Select>}
+              </Field>
+              <Field label="Show playlist" help={playlistNames(draft.showFpp, draft.showPlaylist).length === 0 ? 'No playlist definitions have been received for this instance.' : 'Referenced, never created here — FPP owns this playlist.'}>
+                {(field) => <Select {...field} className="sm-data" value={draft.showPlaylist} onChange={(event) => setDraft((current) => ({ ...current, showPlaylist: event.target.value }))}><option value="">Select a playlist</option>{playlistNames(draft.showFpp, draft.showPlaylist).map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
+              </Field>
+            </div>
+          </section>
+
+          <section id="ns-resting" className="sm-night-definition-section" aria-labelledby="ns-resting-title">
+            <h3 id="ns-resting-title" className="sm-subsection__title">Resting</h3>
+            <p className="sm-small sm-muted">The loop that runs between cycles. Its own sequence decides how long a rest lasts.</p>
+            <div className="sm-night-definition-form">
+              <Field label="Resting FPP instance" help={fppInstances.length === 0 ? 'No configured FPP instances are currently reported.' : undefined}>
+                {(field) => <Select {...field} className="sm-data" value={draft.restingFpp} onChange={(event) => setDraft((current) => ({ ...current, restingFpp: event.target.value, restingPlaylist: '' }))}><option value="">Select an instance</option>{fppIds(draft.restingFpp).map((id) => <option key={id} value={id}>{id}</option>)}</Select>}
+              </Field>
+              <Field label="Resting playlist" help={playlistNames(draft.restingFpp, draft.restingPlaylist).length === 0 ? 'No playlist definitions have been received for this instance.' : undefined}>
+                {(field) => <Select {...field} className="sm-data" value={draft.restingPlaylist} onChange={(event) => setDraft((current) => ({ ...current, restingPlaylist: event.target.value }))}><option value="">Select a playlist</option>{playlistNames(draft.restingFpp, draft.restingPlaylist).map((name) => <option key={name} value={name}>{name}</option>)}</Select>}
+              </Field>
+            </div>
+
+            <div className="sm-night-definition-asset">
+              <div>
+                <p className="sm-flat">Resting timeline asset</p>
+                <p className="sm-small sm-muted">One current FSEQ asset, named by Show, sequence, and target node.</p>
+              </div>
+              <div className="sm-night-definition-asset__fields">
+                <Field label="Show">{(field) => <Input {...field} className="sm-data" value={draft.timelineShow} disabled />}</Field>
+                <Field label="Sequence" help={timelineSequences.length === 0 ? 'No current node-targeted FSEQ assets exist for this Show.' : undefined}>
+                  {(field) => <Select {...field} className="sm-data" value={draft.timelineSequence} onChange={(event) => setDraft((current) => ({ ...current, timelineSequence: event.target.value }))}><option value="">Select a sequence</option>{timelineSequences.map((sequence) => <option key={sequence} value={sequence}>{sequence}</option>)}</Select>}
+                </Field>
+                <Field label="Target node" help={timelineTargets.length === 0 ? 'No current node target exists for this sequence.' : undefined}>
+                  {(field) => <Select {...field} className="sm-data" value={draft.timelineTarget} onChange={(event) => setDraft((current) => ({ ...current, timelineTarget: event.target.value }))}><option value="">Select a target</option>{timelineTargets.map((target) => <option key={target} value={target}>{target}</option>)}</Select>}
+                </Field>
+              </div>
+            </div>
+          </section>
+
+          <TransitionStepEditor id="ns-enter-show" title="Enter show" steps={draft.enterShow} onChange={(index, patch) => updateCues('enterShow', index, patch)} onAdd={() => addCue('enterShow')} onRemove={(index) => setDraft((current) => ({ ...current, enterShow: current.enterShow.filter((_, itemIndex) => itemIndex !== index) }))} />
+          <TransitionStepEditor id="ns-enter-resting" title="Enter resting" steps={draft.enterResting} onChange={(index, patch) => updateCues('enterResting', index, patch)} onAdd={() => addCue('enterResting')} onRemove={(index) => setDraft((current) => ({ ...current, enterResting: current.enterResting.filter((_, itemIndex) => itemIndex !== index) }))} />
+
+          <div className="sm-night-definition-actions"><Button variant="primary" disabled={!gate.allowed || saving} title={gate.allowed ? undefined : gate.reason} onClick={save}>{saving ? 'Saving…' : loaded === null ? 'Create definition' : 'Save definition'}</Button></div>
           {loaded !== null && <RevisionHistory mode="list" id="sn-definition-revisions" fetch={() => getNightSessionConfigRevisions(loaded.id)} reloadKey={reloadKey} onSelect={(item) => getNightSessionConfigRevision(loaded.id, item.revision).then(setRevision).catch((err: unknown) => setError(describeApiError(err)))} />}
           {revision !== null && <DefinitionStrip items={[{ term: 'Viewing revision', value: <span className="sm-data">{revision.revision}</span> }, { term: 'Label', value: revision.payload.label }, { term: 'Show playlist', value: <span className="sm-data">{revision.payload.showPlaylist.playlist}</span> }]} />}
         </>
       )}
       {error !== null && <RuledStrip absence="failed" label="Definition failed" fact={error} />}
-    </Section>
+    </div>
   )
 }
 
-function TransitionStepEditor({ title, steps, onChange, onAdd, onRemove }: { title: string; steps: CueDraft[]; onChange: (index: number, patch: Partial<CueDraft>) => void; onAdd: () => void; onRemove: (index: number) => void }) {
-  return <section className="sm-subsection" aria-label={title}><h3 className="sm-subsection__title">{title}</h3>{steps.map((step, index) => <div className="sm-field-grid sm-stack-2" key={`${index}:${step.name}`}><Field label="Name">{(field) => <Input {...field} value={step.name} onChange={(event) => onChange(index, { name: event.target.value })} />}</Field><Field label="Role">{(field) => <Select {...field} value={step.role} onChange={(event) => onChange(index, { role: event.target.value as CueDraft['role'] })}>{['lighting', 'projection', 'audio', 'announcement', 'other'].map((role) => <option key={role} value={role}>{role}</option>)}</Select>}</Field><Field label="Action">{(field) => <Input {...field} value={step.action} onChange={(event) => onChange(index, { action: event.target.value })} />}</Field><Field label="Offset (ms)">{(field) => <Input {...field} type="number" step="1" value={step.offsetMs} onChange={(event) => onChange(index, { offsetMs: event.target.value })} />}</Field><Button variant="quiet" onClick={() => onRemove(index)}>Remove step</Button></div>)}<Button variant="quiet" onClick={onAdd}>Add transition step</Button></section>
+function TransitionStepEditor({ id, title, steps, onChange, onAdd, onRemove }: { id: string; title: string; steps: CueDraft[]; onChange: (index: number, patch: Partial<CueDraft>) => void; onAdd: () => void; onRemove: (index: number) => void }) {
+  return <section id={id} className="sm-night-definition-section" aria-label={title}><div className="sm-night-definition-section__head"><h3 className="sm-subsection__title">{title} <span>· {steps.length} {steps.length === 1 ? 'step' : 'steps'}</span></h3><Button variant="quiet" onClick={onAdd}>Add transition step</Button></div><div className="sm-night-transition-card">{steps.length === 0 && <p className="sm-small sm-muted">No transition steps configured.</p>}{steps.map((step, index) => <div className="sm-night-transition-step" key={`${index}:${step.name}`}><Field label="Name">{(field) => <Input {...field} value={step.name} onChange={(event) => onChange(index, { name: event.target.value })} />}</Field><Field label="Role">{(field) => <Select {...field} value={step.role} onChange={(event) => onChange(index, { role: event.target.value as CueDraft['role'] })}>{['lighting', 'projection', 'audio', 'announcement', 'other'].map((role) => <option key={role} value={role}>{role}</option>)}</Select>}</Field><Field label="Action">{(field) => <Input {...field} className="sm-data" value={step.action} onChange={(event) => onChange(index, { action: event.target.value })} />}</Field><Field label="Offset (ms)">{(field) => <Input {...field} className="sm-data" type="number" step="1" value={step.offsetMs} onChange={(event) => onChange(index, { offsetMs: event.target.value })} />}</Field><Button variant="quiet" onClick={() => onRemove(index)}>Remove</Button></div>)}</div></section>
 }
