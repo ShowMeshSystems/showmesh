@@ -109,7 +109,7 @@ showmeshctl show active
 Manual channel ranges are a **permanent first-class path** under ADR-027, not a placeholder for name-based mapping — use one here regardless of whether your render node's target model has xLights metadata available.
 
 ```
-showmeshctl surface set <surface-id> \
+showmeshctl surface set \
   -show <show-id> \
   -name "<surface name>" \
   -node <node-id> \
@@ -120,7 +120,8 @@ showmeshctl surface set <surface-id> \
   -pixel-format rgb \
   -frame-rate 40 \
   -transport ndi \
-  -ndi-source-name "<the name this node's NDI sender will advertise>"
+  -ndi-source-name "<the name this node's NDI sender will advertise>" \
+  <surface-id>
 ```
 
 `width * height * channelsPerPixel(pixel-format)` must equal `-channel-count` exactly or the coordinator refuses the write — if you get a rejection here, that is the arithmetic check working, not a bug. Use the canvas dimensions you actually intend to project; this is the number that step 5 measures against.
