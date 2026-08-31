@@ -50,6 +50,13 @@ jobs:
     # every job below also treats a missing/empty output as false (see
     # their own `if: always()` comments) so a broken detector fails toward
     # running the full suite, never toward silently skipping it.
+    #
+    # No documentation link checker or Markdown linter exists in this
+    # workflow or the Makefile today, so a docs-only PR loses no check it
+    # would otherwise have had. If one is ever added, it must run outside
+    # this short-circuit (its own job, or exempted from the `docs_only`
+    # condition below) or a docs-only PR would skip the one check that
+    # actually covers its content.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
