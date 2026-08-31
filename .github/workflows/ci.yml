@@ -110,7 +110,7 @@ jobs:
     # variance. internal/coordinator/api alone costs about 8 minutes under
     # the race detector. Raise the ceiling rather than let a timeout keep
     # reading as a test failure; making that package cheaper is separate work.
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       # Both matrix legs run to completion. With the default fail-fast, a
       # failure on one Go version cancels the other, so a run reports one
@@ -221,7 +221,7 @@ jobs:
             exit 1
           fi
           # shellcheck disable=SC2086
-          go test -race $rest
+          go test -race -timeout=20m $rest
 
       - name: Build with cgo (ADR-042 real agent backend)
         if: needs.changed-files.outputs.docs_only != 'true'
