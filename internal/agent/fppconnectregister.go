@@ -656,12 +656,15 @@ func fppConnectRegisterFields(rec fppConnectHeldRecord, mediaType, nodeID string
 // re-upload could. Unlike 403, a 401 means "no valid credential was
 // presented at all," which an operator fixes from OUTSIDE this request
 // (minting a token, editing agent.env, restarting the agent) with no need
-// to touch the held file or re-upload it. Classifying it "pending" instead
-// lets exactly that recovery happen: the record keeps its retry schedule
-// (see registerLoop), and the very next attempt succeeds once the
-// corrected token is in place — see fppConnectRegistrationTerminal and
-// registerLoop's own retry loop, which re-reads r.token fresh on every
-// attempt.
+// to touch the held file or re-upload it. r.token itself is fixed for this
+// registrar's whole process lifetime (set once in newFPPConnectRegistrar,
+// never re-read from the environment), so every retry within that same
+// process still sends the same, uncorrected token — only the restart the
+// sentence above already names actually changes it. What classifying 401
+// as "pending" buys is not in-process recovery: it is that the RECORD
+// survives with its retry schedule intact (see registerLoop), so the
+// first attempt made by the NEXT process, after that restart, finds the
+// corrected token already in place and succeeds — no re-upload required.
 //
 // api/openapi.yaml's uploadAsset operation documents 400/401/403/405/413
 // plus 500 and 507; 401, and both 500 and 507, are retried below: a
