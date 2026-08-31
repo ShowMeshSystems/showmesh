@@ -575,7 +575,7 @@ describe('RevisionHistory, shared across editors', () => {
     }
   }
 
-  it('renders author and timestamp for each revision, on Content delivery', async () => {
+  it('renders the compact active-revision summary, not a list heading, on Content delivery', async () => {
     stubs.getAssetsSettingsConfig = () => Promise.resolve(assetsSettingsConfig())
     stubs.listAssets = () => Promise.resolve({ assets: [] })
     stubs.getAssetsSettingsConfigRevisions = () =>
@@ -590,11 +590,13 @@ describe('RevisionHistory, shared across editors', () => {
 
     renderAt('/settings/delivery')
 
-    expect(await screen.findByText('Active · 2')).toBeInTheDocument()
-    expect(screen.getByText(/raised max upload size/)).toBeInTheDocument()
-    const revisionsSection = screen.getByRole('heading', { level: 2, name: 'Revisions' }).closest('section') as HTMLElement
-    expect(within(revisionsSection).getAllByText(/erbartos/).length).toBeGreaterThan(0)
-    expect(within(revisionsSection).getByText('1')).toBeInTheDocument()
+    const summary = await screen.findByText(/Active revision/, { selector: 'p' })
+    expect(summary).toBeInTheDocument()
+    expect(within(summary).getByText('2')).toBeInTheDocument()
+    expect(within(summary).getByText(/erbartos/)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Active · 2')).not.toBeInTheDocument()
+    expect(screen.queryByText(/raised max upload size/)).not.toBeInTheDocument()
   })
 
   it('renders an empty history as a settled fact, not a read failure, on Audio defaults', async () => {
@@ -606,9 +608,21 @@ describe('RevisionHistory, shared across editors', () => {
 
     await waitFor(() => expect(screen.getByText('linear')).toBeInTheDocument())
     expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
+    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
   })
 
-  it('leaves the editor around it intact when the revisions read fails, on Content delivery', async () => {
+  it('does not claim a read failure while the revisions fetch is still pending, on Content delivery', async () => {
+    stubs.getAssetsSettingsConfig = () => Promise.resolve(assetsSettingsConfig())
+    stubs.listAssets = () => Promise.resolve({ assets: [] })
+    stubs.getAssetsSettingsConfigRevisions = () => new Promise(() => {})
+
+    renderAt('/settings/delivery')
+
+    await waitFor(() => expect(screen.getByDisplayValue('900')).toBeInTheDocument())
+    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+  })
+
+  it('leaves the editor around it intact and reports the failure honestly when the revisions read is rejected, on Content delivery', async () => {
     stubs.getAssetsSettingsConfig = () => Promise.resolve(assetsSettingsConfig())
     stubs.listAssets = () => Promise.resolve({ assets: [] })
     stubs.getAssetsSettingsConfigRevisions = () => Promise.reject(new Error('network error'))
@@ -631,7 +645,7 @@ describe('RevisionHistory, shared across editors', () => {
       })
 
     const delivery = renderAt('/settings/delivery')
-    expect(await screen.findByRole('heading', { level: 2, name: 'Revisions' })).toBeInTheDocument()
+    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
     delivery.unmount()
     cleanup()
 
@@ -644,6 +658,38 @@ describe('RevisionHistory, shared across editors', () => {
       })
 
     renderAt('/settings/audio-defaults')
+    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
+  })
+
+  it('keeps the expandable revision list on Node routing, matching its own mock', async () => {
+    stubs.listConfigObjects = () =>
+      Promise.resolve({ serverTime: '2026-08-30T21:00:00Z', kind: 'audio.node', objects: [{ id: 'audio-node-01', label: 'hw:CARD=USB,DEV=0', show: '', currentRevision: 4, updatedAt: '2026-08-30T18:00:00Z' }] })
+    stubs.getAudioNode = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'audio.node',
+        id: 'audio-node-01',
+        revision: 4,
+        payload: { programRoute: 'hw:CARD=USB,DEV=0', programChannels: [1, 2], clockDomain: 'usb-audio-0', clockDomainProvenance: 'single interface' },
+        updatedAt: '2026-08-30T18:00:00Z',
+        createdByPrincipalId: 'p1',
+        createdByPrincipalName: 'erbartos',
+        source: 'api',
+      })
+    stubs.getAudioNodeConfigRevisions = () =>
+      Promise.resolve({
+        serverTime: '2026-08-30T21:00:00Z',
+        kind: 'audio.node',
+        revisions: [
+          { revision: 4, createdAt: '2026-08-22T19:04:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: 'LTC moved to channel 3', active: true },
+          { revision: 3, createdAt: '2026-08-18T14:51:00Z', createdByPrincipalId: 'p1', createdByPrincipalName: 'erbartos', source: 'api', note: '', active: false },
+        ],
+      })
+
+    renderAt('/settings/node-routing', { nodes: [] })
+
     expect(await screen.findByRole('heading', { level: 2, name: 'Revisions' })).toBeInTheDocument()
+    expect(await screen.findByText('Active · 4')).toBeInTheDocument()
+    expect(screen.getByText(/LTC moved to channel 3/)).toBeInTheDocument()
   })
 })

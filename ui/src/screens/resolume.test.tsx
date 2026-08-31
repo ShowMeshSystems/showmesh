@@ -220,10 +220,10 @@ describe('Resolume config', () => {
 
     await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument())
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Stored composition', 'Clips that cannot be named', 'Recovery', 'Revisions', 'What Arena is reporting'])
+    expect(headings).toEqual(['Stored composition', 'Clips that cannot be named', 'Recovery', 'What Arena is reporting'])
   })
 
-  it('renders the recovery config’s revision history, author and timestamp included', async () => {
+  it('renders the compact active-revision summary for the recovery config, not a list heading', async () => {
     stubs.getResolumeComposition = () => Promise.resolve(composition())
     stubs.getResolumeRecovery = () => Promise.resolve(recovery())
     stubs.getResolumeRecoveryConfig = () => Promise.resolve(recoveryConfig())
@@ -239,7 +239,34 @@ describe('Resolume config', () => {
 
     renderScreen([instance()])
 
-    expect(await screen.findByText('Active · 3')).toBeInTheDocument()
+    expect(await screen.findAllByText(/Active revision/)).not.toHaveLength(0)
+    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
+  })
+
+  it('does not claim a read failure while the recovery config’s revisions fetch is still pending', async () => {
+    stubs.getResolumeComposition = () => Promise.resolve(composition())
+    stubs.getResolumeRecovery = () => Promise.resolve(recovery())
+    stubs.getResolumeRecoveryConfig = () => Promise.resolve(recoveryConfig())
+    stubs.getResolumeInstancesConfig = () => Promise.resolve(instancesConfig())
+    stubs.getResolumeRecoveryConfigRevisions = () => new Promise(() => {})
+
+    renderScreen([instance()])
+
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Recovery' })).toBeInTheDocument())
+    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+  })
+
+  it('reports the read failure honestly when the recovery config’s revisions fetch is rejected', async () => {
+    stubs.getResolumeComposition = () => Promise.resolve(composition())
+    stubs.getResolumeRecovery = () => Promise.resolve(recovery())
+    stubs.getResolumeRecoveryConfig = () => Promise.resolve(recoveryConfig())
+    stubs.getResolumeInstancesConfig = () => Promise.resolve(instancesConfig())
+    stubs.getResolumeRecoveryConfigRevisions = () => Promise.reject(new Error('network down'))
+
+    renderScreen([instance()])
+
+    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
 
   it('lists only the ambiguous clips, reads N of the reported total', async () => {

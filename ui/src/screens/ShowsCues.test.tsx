@@ -212,7 +212,7 @@ describe('Shows · Cues tab', () => {
     expect(putSpy).not.toHaveBeenCalled()
   })
 
-  it('renders the cue’s own revision history, author and timestamp included', async () => {
+  it('renders the compact active-revision summary for the cue, not a list heading', async () => {
     stubs.getShowCueRevisions = () =>
       Promise.resolve({
         serverTime: '2026-08-30T21:00:00Z',
@@ -224,7 +224,26 @@ describe('Shows · Cues tab', () => {
     setup()
     const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
     fireEvent.click(row)
-    expect(await screen.findByText('Active · 1')).toBeInTheDocument()
+    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Active · 1')).not.toBeInTheDocument()
+  })
+
+  it('does not claim a read failure while the cue’s revisions fetch is still pending', async () => {
+    stubs.getShowCueRevisions = () => new Promise(() => {})
+    setup()
+    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    fireEvent.click(row)
+    await screen.findByRole('button', { name: 'Save cue' })
+    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+  })
+
+  it('reports the read failure honestly when the cue’s revisions fetch is rejected', async () => {
+    stubs.getShowCueRevisions = () => Promise.reject(new Error('network down'))
+    setup()
+    const row = await screen.findByRole('button', { name: 'House Preshow Loop' })
+    fireEvent.click(row)
+    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
 
   it('a stale cue save is refused, writes nothing, and names the changed fields', async () => {

@@ -111,7 +111,6 @@ describe('Show Night', () => {
       'Run of Show',
       'Evidence',
       'Night session activation',
-      'Revisions',
     ])
   })
 
@@ -591,7 +590,7 @@ describe('Show Night', () => {
     expect(screen.getByRole('option', { name: 'Winter Ridge Backup (winter-ridge-backup)' })).toBeInTheDocument()
   })
 
-  it('renders the activation pointer’s revision history, author and timestamp included', async () => {
+  it('renders the compact active-revision summary for the activation pointer, not a list heading', async () => {
     stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
     stubs.getNightSessionActiveConfigRevisions = () =>
       Promise.resolve({
@@ -602,7 +601,24 @@ describe('Show Night', () => {
         ],
       })
     renderScreen({ nightSession: session() })
-    expect(await screen.findByText('Active · 3')).toBeInTheDocument()
+    expect(await screen.findByText(/Active revision/)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Active · 3')).not.toBeInTheDocument()
+  })
+
+  it('does not claim a read failure while the activation pointer’s revisions fetch is still pending', async () => {
+    stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
+    stubs.getNightSessionActiveConfigRevisions = () => new Promise(() => {})
+    renderScreen({ nightSession: session() })
+    await screen.findByText('winter-ridge-2026')
+    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+  })
+
+  it('reports the read failure honestly when the activation pointer’s revisions fetch is rejected', async () => {
+    stubs.getNightSessionActiveConfig = () => Promise.resolve(activeConfigResponse('winter-ridge-2026'))
+    stubs.getNightSessionActiveConfigRevisions = () => Promise.reject(new Error('network down'))
+    renderScreen({ nightSession: session() })
+    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
 
   it('activates a different night session definition', async () => {

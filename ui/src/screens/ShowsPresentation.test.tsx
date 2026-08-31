@@ -246,7 +246,7 @@ describe('Shows · Presentation tab', () => {
     await waitFor(() => expect(within(region).getByText(/40 fps/)).toBeInTheDocument())
   })
 
-  it('renders the surface’s own revision history, author and timestamp included', async () => {
+  it('renders the compact active-revision summary for the surface, not a list heading', async () => {
     stubs.getShowSurfaceRevisions = () =>
       Promise.resolve({
         serverTime: '2026-08-30T21:00:00Z',
@@ -258,7 +258,26 @@ describe('Shows · Presentation tab', () => {
     setup()
     const row = await screen.findByRole('button', { name: 'Garage door' })
     fireEvent.click(row)
-    expect(await screen.findByText('Active · 6')).toBeInTheDocument()
+    expect(await screen.findByText(/Active revision/, { selector: 'p' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Active · 6')).not.toBeInTheDocument()
+  })
+
+  it('does not claim a read failure while the surface’s revisions fetch is still pending', async () => {
+    stubs.getShowSurfaceRevisions = () => new Promise(() => {})
+    setup()
+    const row = await screen.findByRole('button', { name: 'Garage door' })
+    fireEvent.click(row)
+    await screen.findByRole('button', { name: 'Save surface' })
+    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+  })
+
+  it('reports the read failure honestly when the surface’s revisions fetch is rejected', async () => {
+    stubs.getShowSurfaceRevisions = () => Promise.reject(new Error('network down'))
+    setup()
+    const row = await screen.findByRole('button', { name: 'Garage door' })
+    fireEvent.click(row)
+    expect(await screen.findByText('Revision history could not be read just now.')).toBeInTheDocument()
   })
 
   it('save is disabled without config:write and is actually inert', async () => {

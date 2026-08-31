@@ -439,7 +439,7 @@ describe('Shows · Automation tab', () => {
       expect(usedByFact?.textContent).toContain('1')
     })
 
-    it('renders the action’s own revision history, author and timestamp included', async () => {
+    it('renders the compact active-revision summary for the action, not a list heading', async () => {
       stubs.getShowActionRevisions = () =>
         Promise.resolve({
           serverTime: '2026-08-30T21:00:00Z',
@@ -452,7 +452,28 @@ describe('Shows · Automation tab', () => {
       const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
       fireEvent.click(editButton)
       const aside = screen.getByRole('complementary')
-      expect(await within(aside).findByText('Active · 1')).toBeInTheDocument()
+      expect(await within(aside).findByText(/Active revision/)).toBeInTheDocument()
+      expect(within(aside).queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+      expect(within(aside).queryByText('Active · 1')).not.toBeInTheDocument()
+    })
+
+    it('does not claim a read failure while the action’s revisions fetch is still pending', async () => {
+      stubs.getShowActionRevisions = () => new Promise(() => {})
+      setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
+      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      fireEvent.click(editButton)
+      const aside = screen.getByRole('complementary')
+      await within(aside).findByText('Editing · Start Preshow Playlist')
+      expect(within(aside).queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+    })
+
+    it('reports the read failure honestly when the action’s revisions fetch is rejected', async () => {
+      stubs.getShowActionRevisions = () => Promise.reject(new Error('network down'))
+      setupWithAction({ target: { integration: 'fpp', instanceId: 'barn-player', primitive: 'stopPlaylist' }, safetyClass: 'stop' })
+      const editButton = await screen.findByRole('button', { name: 'Start Preshow Playlist' })
+      fireEvent.click(editButton)
+      const aside = screen.getByRole('complementary')
+      expect(await within(aside).findByText('Revision history could not be read just now.')).toBeInTheDocument()
     })
 
     it('a stale save is refused and writes nothing', async () => {

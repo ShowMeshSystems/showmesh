@@ -395,7 +395,7 @@ function NodeRoutingForm({ nodeId, saveGate }: { nodeId: string; saveGate: Scope
       )}
       {saveError !== null && <RuledStrip absence="failed" label="Save failed" fact={saveError} />}
 
-      <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} />
+      <RevisionHistory fetch={() => getAudioNodeConfigRevisions(nodeId)} reloadKey={`${nodeId}:${attempt}`} mode="list" />
     </>
   )
 }

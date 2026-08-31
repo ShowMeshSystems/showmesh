@@ -267,6 +267,16 @@ describe('Shows · activation', () => {
     expect(await screen.findByText('No prior revision recorded.')).toBeInTheDocument()
   })
 
+  it('does not claim a read failure while the activation-history fetch is still pending', async () => {
+    stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
+    stubs.listAssets = assetsEmpty
+    stubs.getShowActive = () => Promise.resolve(showActiveResponse('winter-ridge-2026'))
+    stubs.getShowActiveRevisions = () => new Promise(() => {})
+    renderShows()
+    await screen.findByText('winter-ridge-2026', { selector: '.sm-data' })
+    expect(screen.queryByText('Revision history could not be read just now.')).not.toBeInTheDocument()
+  })
+
   it('does not let a failed activation-history read break Show activation', async () => {
     stubs.listConfigObjects = (kind: string) => (kind === 'show' ? twoShows() : contentsEmpty())
     stubs.listAssets = assetsEmpty
@@ -387,7 +397,7 @@ describe('Shows · Identity', () => {
     expect(screen.getByText(/no endpoint to delete/)).toBeInTheDocument()
   })
 
-  it('renders the show object’s own revision history, author and timestamp included', async () => {
+  it('renders the compact active-revision summary, not a list heading, for the show object’s own revisions', async () => {
     stubs.getShow = showResponse
     stubs.listConfigObjects = () => contentsEmpty()
     stubs.listAssets = assetsEmpty
@@ -400,7 +410,9 @@ describe('Shows · Identity', () => {
         ],
       })
     renderDetail('winter-ridge-2026')
-    expect(await screen.findByText('Active · 47')).toBeInTheDocument()
-    expect(screen.getByText(/renamed/)).toBeInTheDocument()
+    expect(await screen.findAllByText(/Active revision/, { selector: 'p, span' })).not.toHaveLength(0)
+    expect(screen.queryByRole('heading', { name: 'Revisions' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Active · 47')).not.toBeInTheDocument()
+    expect(screen.queryByText(/renamed/)).not.toBeInTheDocument()
   })
 })
