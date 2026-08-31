@@ -322,6 +322,26 @@ const INITIAL_EVENTS_WINDOW = 100
  */
 const STREAM_IDLE_TIMEOUT_MS = 45_000
 
+/**
+ * ADR-024 decision 11's amendment (owner ruling, 2026-08-26): `Model.auditStore`
+ * is not part of the SSE snapshot/delta stream at all (no `Snapshot.auditStore`
+ * write ever triggers a change-stream event; the coordinator computes it
+ * fresh only when GET /api/v1/snapshot is actually called), so a dashboard
+ * left open across a whole show, on the SAME long-lived stream connection
+ * `applySnapshot` only ever runs against once, would otherwise show
+ * whatever `auditStore` value happened to be current at connect time,
+ * indefinitely. This client-side poll is what keeps it live instead:
+ * re-fetches GET /api/v1/snapshot on this interval and folds ONLY
+ * `auditStore` into the model, leaving every other field (nodes, fpp,
+ * macroRuns, ...) exactly as the delta stream already maintains them.
+ * UNMEASURED SHOWMESH HYPOTHESIS, picked the same way STREAM_IDLE_TIMEOUT_MS
+ * above was: frequent enough that an operator watching the dashboard
+ * learns of an audit-store outage within a show-relevant time, infrequent
+ * enough that it costs nothing next to the keepalive traffic already on
+ * this connection.
+ */
+const AUDIT_STORE_POLL_INTERVAL_MS = 30_000
+
 export interface ApiStoreOptions {
   /** Default '/api/v1' — same-origin per ADR-022. */
   baseUrl?: string
@@ -333,6 +353,8 @@ export interface ApiStoreOptions {
   streamIdleTimeoutMs?: number
   /** Override for tests only; production code relies on client.ts's DEFAULT_REQUEST_TIMEOUT_MS. */
   requestTimeoutMs?: number
+  /** Override for tests only; production code relies on AUDIT_STORE_POLL_INTERVAL_MS above. */
+  auditStorePollIntervalMs?: number
   /**
    * Override for tests only (see clock.ts). Drives BOTH the stream
    * idle-deadline below and, via the ApiClient this store constructs,
@@ -356,6 +378,7 @@ export class ApiStore {
   private readonly now: () => number
   private readonly backoffConfig: BackoffConfig
   private readonly streamIdleTimeoutMs: number
+  private readonly auditStorePollIntervalMs: number
   private readonly clock: Clock
 
   private model: Model = initialModel()
@@ -387,6 +410,7 @@ export class ApiStore {
     this.now = options.now ?? (() => Date.now())
     this.backoffConfig = options.backoff ?? DEFAULT_BACKOFF
     this.streamIdleTimeoutMs = options.streamIdleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS
+    this.auditStorePollIntervalMs = options.auditStorePollIntervalMs ?? AUDIT_STORE_POLL_INTERVAL_MS
   }
 
   // -- useSyncExternalStore surface ------------------------------------
@@ -3211,6 +3235,14 @@ export class ApiStore {
         // for stream.start it always was, and a stream.reset whose body
         // failed to parse must not be read as "no reset happened".
         await this.reloadSnapshot(gen, signal)
+        // ADR-024 decision 11's amendment: auditStore carries no
+        // change-stream event of its own (see AUDIT_STORE_POLL_INTERVAL_MS's
+        // own doc comment for why), so this generation's own poll loop is
+        // what keeps it live for the rest of this connection. One loop
+        // per generation: a fresh stream.start/stream.reset starts a new
+        // one, and the old one's own gen check stops it on its very next
+        // tick without needing to be cancelled explicitly.
+        void this.pollAuditStoreLoop(gen, signal)
         return
       }
       case 'node.changed': {
@@ -3348,6 +3380,42 @@ export class ApiStore {
     }
   }
 
+  /**
+   * Keeps `Model.auditStore` live for the rest of this generation's
+   * connection: see AUDIT_STORE_POLL_INTERVAL_MS's own doc comment for
+   * why this exists at all (no change-stream event carries this field).
+   * Sleeps first: `reloadSnapshot` just fetched a fresh value moments
+   * ago, so an immediate re-fetch would be redundant. Every fetch and
+   * every wake-up re-checks `gen`/`signal` before touching the model or
+   * scheduling the next tick, so a reconnect or dispose() started by
+   * another generation stops this loop within one interval, without this
+   * loop needing its own cancellation token.
+   */
+  private async pollAuditStoreLoop(gen: number, signal: AbortSignal): Promise<void> {
+    for (;;) {
+      await this.sleep(this.auditStorePollIntervalMs)
+      if (signal.aborted || gen !== this.generation) return
+      try {
+        const snapshot = await this.client.getJson<Pick<SchemaSnapshot, 'auditStore'>>('/snapshot', signal)
+        if (signal.aborted || gen !== this.generation) return
+        this.setModel({ ...this.model, auditStore: snapshot.auditStore })
+      } catch {
+        // Best-effort: a failed poll fetch leaves the model's own
+        // auditStore at its last-known value and simply retries next
+        // tick. A connection genuinely gone stale or dead is the read
+        // loop's own idle-timeout/reconnect concern, not this loop's;
+        // duplicating that handling here would only race it.
+      }
+    }
+  }
+
+  /** this.clock-driven so store.test.ts can advance it deterministically, matching every other timer in this file. */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.clock.setTimeout(resolve, ms)
+    })
+  }
+
   // -- model mutation -----------------------------------------------------
 
   private computeClockSkewMs(serverTimeIso: string, nowMs: number): number {
@@ -3390,6 +3458,11 @@ export class ApiStore {
       // coordinator's own authoritative current list, never a delta this
       // store needs to merge.
       resolume: snapshot.resolume,
+      // ADR-024 decision 11's amendment (owner ruling, 2026-08-26): a plain
+      // wholesale replace, exactly like `resolume` above -- `Snapshot.auditStore`
+      // is this coordinator's own live, current signal, never a delta this
+      // store needs to merge.
+      auditStore: snapshot.auditStore,
       // Review finding 9: `Snapshot` carries no `nightSession` field
       // (domain.ts's own comment on Model.nightSession), so unlike every
       // field above this one is not being refreshed here, it is being

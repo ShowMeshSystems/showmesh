@@ -797,8 +797,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/prepare:
     post:
       operationId: dispatchAudioSessionPrepare
@@ -864,8 +862,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/start:
     post:
       operationId: dispatchAudioSessionStart
@@ -931,8 +927,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/pause:
     post:
       operationId: dispatchAudioSessionPause
@@ -998,8 +992,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/resume:
     post:
       operationId: dispatchAudioSessionResume
@@ -1065,8 +1057,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/seek:
     post:
       operationId: dispatchAudioSessionSeek
@@ -1132,8 +1122,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/advance:
     post:
       operationId: dispatchAudioSessionAdvance
@@ -1199,8 +1187,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/stop:
     post:
       operationId: dispatchAudioSessionStop
@@ -1266,8 +1252,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/clear:
     post:
       operationId: dispatchAudioSessionClear
@@ -1333,8 +1317,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/gain:
     post:
       operationId: dispatchAudioGainSet
@@ -1416,8 +1398,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/gain/fade:
     post:
       operationId: dispatchAudioGainFade
@@ -1504,8 +1484,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/output/mute:
     post:
       operationId: dispatchAudioOutputMute
@@ -1577,8 +1555,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /nodes/{nodeId}/audio/sessions/{sessionId}/output/unmute:
     post:
       operationId: dispatchAudioOutputUnmute
@@ -1651,8 +1627,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          $ref: "#/components/responses/AudioCommandAuditUnavailable"
   /fpp/{instanceId}/commands:
     post:
       operationId: dispatchFPPCommand
@@ -1762,23 +1736,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          description: >-
-            ADR-024 decision 11's fail-closed default: this action is not
-            a member of decision 11's blackout/stop/power-off safety
-            class, and the pre-dispatch write that must durably record a
-            command before it is dispatched could not be appended to this
-            coordinator's audit store. `type`
-            `fpp-command-refused-audit-unavailable`. Nothing was recorded
-            and nothing was dispatched to FPP; retry once the audit store
-            is writable again.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
   /observations:
     get:
       operationId: listObservations
@@ -4257,22 +4214,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          description: >-
-            ADR-024 decision 11's fail-closed default: this action is not
-            exempt (not `blackout` or `clearLayer`), and the pre-dispatch
-            write that must durably record it before dispatch could not be
-            appended to this coordinator's audit store. `type`
-            `resolume-action-refused-audit-unavailable`. Nothing was
-            recorded and nothing was dispatched to Resolume; retry once
-            the audit store is writable again.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
   /resolume/recovery:
     get:
       operationId: getResolumeRecovery
@@ -4888,22 +4829,6 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
-        "503":
-          description: >-
-            ADR-024 decision 11's fail-closed default: this action's own
-            safetyClass is "none", and the pre-dispatch write that must
-            durably record it before dispatch could not be appended to
-            this coordinator's audit store. `type`
-            `action-invoke-refused-audit-unavailable`. Nothing was
-            recorded and nothing was dispatched; retry once the audit
-            store is writable again.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
   /macros/{id}/runs:
     post:
       operationId: submitMacroRun
@@ -6209,20 +6134,6 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-        "503":
-          description: >-
-            `prepare-site`, `run-readiness`, `start-preshow`, or
-            `start-night` only: its audit entry could not be written, so
-            the whole command was refused rather than applied without one
-            (`night-command-refused-audit-unavailable`). Nothing was
-            dispatched and nothing was recorded.
-          headers:
-            ShowMesh-API-Version:
-              $ref: "#/components/headers/ShowMesh-API-Version"
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/InternalError"
   /integrations/fpp/playlist-entry-observations:
@@ -7468,20 +7379,6 @@ components:
         the request was well formed - an internal dependency (e.g. the
         store) failed. `detail` never carries the underlying error; it is
         logged coordinator-side only.
-      headers:
-        ShowMesh-API-Version:
-          $ref: "#/components/headers/ShowMesh-API-Version"
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/Problem"
-    AudioCommandAuditUnavailable:
-      description: >-
-        The pre-dispatch write that must durably record this command
-        before it is dispatched could not be appended to this
-        coordinator's audit store. Nothing was recorded and nothing was
-        dispatched to the node; retry once the audit store is writable
-        again.
       headers:
         ShowMesh-API-Version:
           $ref: "#/components/headers/ShowMesh-API-Version"
@@ -9286,7 +9183,7 @@ components:
       type: object
       required:
         [serverTime, latestEventSeq, nodes, fpp, collectors, macroRuns,
-         resolume, audioConfigPush]
+         resolume, auditStore, audioConfigPush]
       properties:
         serverTime:
           type: string
@@ -9336,8 +9233,35 @@ components:
             coordinator reports an empty array.
           items:
             $ref: "#/components/schemas/ResolumeInstance"
+        auditStore:
+          $ref: "#/components/schemas/AuditStoreStatus"
         audioConfigPush:
           $ref: "#/components/schemas/AudioConfigPushStatus"
+    AuditStoreStatus:
+      type: object
+      description: >-
+        Whether this coordinator can currently write to its audit store,
+        computed FRESH on every request via a real probe write to
+        audit_log (always rolled back, never committed), not cached from
+        past traffic. ADR-024 decision 11's amendment (owner ruling,
+        2026-08-26) removed the fail-closed refusal that used to make an
+        audit-write failure directly visible on the five request paths it
+        protected (direct action invoke, audio session commands, FPP
+        commands, Resolume actions, and the night-session
+        admission-opening commands): those now run regardless, so this
+        field is the standing surface an operator reads to learn the
+        audit store is down without having invoked an action themselves.
+      required: [state, reason]
+      properties:
+        state:
+          type: string
+          enum: [usable, unusable]
+          description: >-
+            "usable": the probe write just now succeeded. "unusable": it
+            failed, and reason names why.
+        reason:
+          type: [string, "null"]
+          description: Set whenever state is not "usable", null otherwise.
     AudioConfigPushStatus:
       type: object
       description: >-
@@ -11454,25 +11378,29 @@ components:
         already in progress), and a `commands` idempotency key reused
         against a different action, target, or (as of Step 8) normalized
         params (Step 7 seam C, extended by Step 8) - `detail` names which.
-        Three are Step 8's own additions, all scoped to
-        `POST /fpp/{instanceId}/commands`: "fpp-command-refused-audit-unavailable"
-        (ADR-024 decision 11's fail-closed default for a non-safety-class
-        primitive, `503`, when the pre-dispatch audit write could not be
-        made), "fpp-start-playlist-evidence-not-current"
+        Two are Step 8's own additions, both scoped to
+        `POST /fpp/{instanceId}/commands`: "fpp-start-playlist-evidence-not-current"
         (`startPlaylist`'s own `ifBusy=refuse` guard refusing because the
         evidence it would need to decide whether a different playlist is
         running is not itself current, `409`), and "fpp-start-playlist-busy"
         (that same guard refusing because a DIFFERENT playlist IS
-        confirmed currently playing, `409`) - kept as three DISTINCT
-        `409`/`503` types (not sharing "conflict", and not sharing each
-        other) specifically so a client branches on `type` rather than
-        parsing `detail` prose: "mint a fresh key" (idempotency conflict),
-        "resend with ifBusy: replace" (busy), and "retry once evidence is
-        current, or resend with ifBusy: replace if interrupting is
-        intended" (evidence not current) are three different remedies, and
-        a review finding caught that the busy/evidence-not-current split
-        had left "busy" still sharing a type with the idempotency case even
-        after the evidence-not-current case was split out.
+        confirmed currently playing, `409`) - kept as two DISTINCT `409`
+        types (not sharing "conflict", and not sharing each other)
+        specifically so a client branches on `type` rather than parsing
+        `detail` prose: "resend with ifBusy: replace" (busy), and "retry
+        once evidence is current, or resend with ifBusy: replace if
+        interrupting is intended" (evidence not current) are two different
+        remedies, and a review finding caught that the busy/evidence-not-
+        current split had left "busy" still sharing a type with the
+        idempotency case even after the evidence-not-current case was
+        split out. **REMOVED 2026-08-26 (owner ruling; ADR-024 decision 11
+        amended):** an unavailable audit store no longer blocks a command
+        dispatch on ANY request path this coordinator has - the amendment
+        covers every one of them, not a named subset - so
+        `POST /fpp/{instanceId}/commands` no longer produces
+        "fpp-command-refused-audit-unavailable"; the command still runs
+        and degraded attribution is recorded and surfaced instead of a
+        `503`.
         One is Track D seam D-2a's own addition: "payload-too-large" (413,
         POST /config/resolume/composition refusing an uploaded file larger
         than this coordinator's own upload bound, before buffering it
@@ -11480,17 +11408,20 @@ components:
         for a request body over its own much smaller limit - Review fix 5,
         2026-08-15 - because both refusals share the identical remedy,
         "shrink the request", unlike the busy/evidence-not-current split
-        above where the type had to fork because the remedies differ). One
-        is Track D seam D-3/B's own addition:
-        "resolume-action-refused-audit-unavailable" (POST /resolume/actions'
-        own ADR-024 decision 11 fail-closed default for a non-exempt
-        action - every action except `blackout` and `clearLayer` - `503`,
-        mirroring "fpp-command-refused-audit-unavailable" exactly, for a
-        second vendor's command surface). One is Track E seam E7-1's own
-        addition: "action-invoke-refused-audit-unavailable"
-        (POST /actions/{id}/invocations' own ADR-024 decision 11
-        fail-closed default for an action whose stored safetyClass is
-        "none"). Three are Track C's own additions, all scoped to
+        above where the type had to fork because the remedies differ).
+        Track D seam D-3/B's own addition, "resolume-action-refused-audit-unavailable"
+        (POST /resolume/actions' own former ADR-024 decision 11 fail-closed
+        default for a non-exempt action - every action except `blackout`
+        and `clearLayer` - `503`, for a second vendor's command surface),
+        is **ALSO REMOVED 2026-08-26** by the identical amendment: nothing
+        in this coordinator's audit-write posture treats Resolume actions
+        differently from FPP commands, so this type is no longer produced
+        either. **REMOVED 2026-08-26:**
+        POST /actions/{id}/invocations no longer produces
+        "action-invoke-refused-audit-unavailable" for the identical reason
+        - an action whose stored safetyClass is "none" used to fail closed
+        here and now runs with degraded attribution instead. Three are
+        Track C's own additions, all scoped to
         PUT /config/audio.node/{id}: "audio-node-channel-duplicate" (a
         channel index reused within programChannels, or repeated within
         ltcChannel), "audio-node-channel-overlap" (ltcChannel naming a
@@ -11521,7 +11452,6 @@ components:
             - https://showmesh.dev/problems/too-many-requests
             - https://showmesh.dev/problems/credential-in-url
             - https://showmesh.dev/problems/conflict
-            - https://showmesh.dev/problems/fpp-command-refused-audit-unavailable
             - https://showmesh.dev/problems/fpp-start-playlist-evidence-not-current
             - https://showmesh.dev/problems/fpp-start-playlist-busy
             - https://showmesh.dev/problems/show-config-body-invalid
@@ -11555,14 +11485,11 @@ components:
             - https://showmesh.dev/problems/macro-run-idempotency-macro-conflict
             - https://showmesh.dev/problems/macro-run-idempotency-revision-conflict
             - https://showmesh.dev/problems/payload-too-large
-            - https://showmesh.dev/problems/resolume-action-refused-audit-unavailable
-            - https://showmesh.dev/problems/action-invoke-refused-audit-unavailable
             - https://showmesh.dev/problems/storage-full
             - https://showmesh.dev/problems/asset-target-required
             - https://showmesh.dev/problems/night-not-ready
             - https://showmesh.dev/problems/night-state-rejected
             - https://showmesh.dev/problems/night-ambiguous
-            - https://showmesh.dev/problems/night-command-refused-audit-unavailable
             - https://showmesh.dev/problems/audio-node-channel-duplicate
             - https://showmesh.dev/problems/audio-node-channel-overlap
             - https://showmesh.dev/problems/audio-node-route-mismatch

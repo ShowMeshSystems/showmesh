@@ -360,6 +360,10 @@ export function makeModel(overrides: Partial<Model> = {}): Model {
     // Track D seam D-4: required on Model — a test that cares about
     // Resolume overrides this.
     resolume: [],
+    // ADR-024 decision 11's amendment (owner ruling, 2026-08-26):
+    // defaults to healthy: a test that cares about the audit-store
+    // banner overrides this.
+    auditStore: { state: 'usable', reason: null },
     // Track F seam F2: required on Model — a test that cares about the
     // night session overrides this.
     nightSession: null,

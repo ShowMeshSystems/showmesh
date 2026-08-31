@@ -856,22 +856,24 @@ here so the choice does not also mint a spelling.
 If the builder takes the readiness-condition or API-refusal shape instead,
 both rows stay reserved and unshipped rather than being released.
 
-**Lane 17a reservation, 2026-08-30.** SM-86 makes audit-store unavailability
-stop refusing actions, which means the condition has to be legible somewhere
-other than the refusal it removes. The shape is the builder's call, on the
-Lane 18b `coordinator.audio.config.push.*` precedent above: a coordinator-level
-observation, a field on an existing response, or both. The pair is reserved
-here so the choice does not also mint a spelling.
+**Lane 17a reservation, 2026-08-30, shipped 2026-08-30.** SM-86 makes
+audit-store unavailability stop refusing actions, which means the condition
+has to be legible somewhere other than the refusal it removes. Shipped as a
+field on an existing response, not an observation: `GET /api/v1/snapshot`'s
+`auditStore.state`/`auditStore.reason`, live from
+`identity.Service.AuditWriteStatus()`, rendered by a new Operator UI banner.
 
 | Signal | Status | Owner |
 |---|---|---|
-| `coordinator.audit.store.state` | reserved | Lane 17a SM-86 (whether the coordinator can write to its audit store) |
-| `coordinator.audit.store.reason` | reserved | Lane 17a SM-86 (why it cannot; required whenever the state is not usable) |
+| `coordinator.audit.store.state` | shipped | Lane 17a SM-86 (whether the coordinator can write to its audit store; `GET /api/v1/snapshot`'s `auditStore.state`) |
+| `coordinator.audit.store.reason` | shipped | Lane 17a SM-86 (why it cannot; required whenever the state is not usable; `auditStore.reason`) |
 
-If the builder surfaces the condition without an observation, both rows stay
-reserved and unshipped rather than being released. SM-86 mints no audit action
-string, no exit code and no API path: it removes three refusals and records
-`attributionDegraded` the way safety-class actions already do.
+No new audit action string, no new exit code, no new API path (the field
+lives on the existing snapshot response): SM-86 removes the fail-closed
+refusal on every non-exempt request path ADR-024 decision 11 governed -
+direct action invoke, audio session commands, FPP commands, Resolume
+actions, and the four night-session admission commands - and records
+`attributionDegraded` the way safety-class actions already did.
 
 **`drift_ms` is reported, never acted on continuously.** ADR-017 makes
 audio's divergence from the MultiSync slew/jump model deliberate: the

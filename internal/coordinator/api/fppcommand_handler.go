@@ -72,14 +72,6 @@ const (
 	fppStatusValueIdle = "idle"
 )
 
-// ProblemTypeFPPCommandRefusedAuditUnavailable and its constructor
-// (fppCommandAuditUnavailableProblem) now live in problem.go alongside
-// this package's other problem constructors — moved there (and added to
-// api/openapi.yaml's Problem.type enum in the same change) once this
-// file's own seam boundary no longer forbade touching problem.go. Both
-// gaps were flagged by this comment's own earlier version, not discovered
-// later.
-
 // maxFPPCommandRequestBodyBytes bounds this endpoint's request body,
 // mirroring session.go's maxSessionRequestBodyBytes convention (a request
 // this small has no legitimate reason to be large; a caller sending more
@@ -441,11 +433,12 @@ func (h *handlers) updateCommandOutcomeBounded(parent context.Context, id string
 	return h.deps.Commands.UpdateCommandOutcome(ctx, id, upd)
 }
 
-// degradedAttributionReasonSafetyClassExemption and
-// degradedAttributionReasonPostDispatch are the two, and ONLY the two,
-// justifications [handlers.reportDegradedAttribution] may report for
+// degradedAttributionReasonSafetyClassExemption,
+// degradedAttributionReasonPostDispatch, degradedAttributionReasonMacroRunNeverWithheld,
+// and degradedAttributionReasonAuditNeverBlocks are the four, and ONLY the
+// four, justifications [handlers.reportDegradedAttribution] may report for
 // proceeding without a durable audit entry. They are deliberately
-// different strings: the two call sites that use them are not the same
+// different strings: no two call sites that use them are the same
 // decision wearing two names, and conflating them was this task's own
 // finding (the doc comment on the pre-fix writeSafetyClassAudit claimed
 // EVERY use of it was decision 11's safety class, which stopped being true
@@ -487,6 +480,28 @@ const (
 	// would make an audit record claim a justification that does not
 	// apply to it.
 	degradedAttributionReasonMacroRunNeverWithheld = "this dispatch belongs to a macro run, which never withholds a command for an audit failure (owner decision 2026-08-14, superseding ADR-024 decision 11's fail-closed default inside a run)"
+
+	// degradedAttributionReasonAuditNeverBlocks is the pre-dispatch
+	// fallback for a dispatch that reaches [handlers.dispatchFPPCommand],
+	// [handlers.executeAudioSessionDispatch], or [handlers.handleInvokeAction]'s
+	// own audit-write failure branch OUTSIDE both of the other two
+	// pre-dispatch cases above: not a member of decision 11's own named
+	// safety class, and not a macro run. Before 2026-08-26 this branch did
+	// not exist: the dispatch was refused with a 503 instead. OWNER
+	// RULING, 2026-08-26: "Audit log database becoming unavailable SHOULD
+	// NOT STOP ANY ACTIONS, rather than stopping it should be LOUD in the
+	// UI and non-audit logs about it. Audit logging is NOT a show stopping
+	// issue... it should NOT stop the show or any actions from running. If
+	// the audit log being down currently blocks actions, that must be
+	// corrected." Recorded as ADR-024 decision 11's own amendment, not as
+	// a fourth safety class: every command dispatch now proceeds
+	// regardless of SafetyClass, so this reason exists to keep an
+	// investigator able to tell "this ran because it is blackout/stop/
+	// power-off" and "this ran because a macro run never withholds" apart
+	// from "this ran because audit unavailability no longer blocks
+	// anything" (three different facts about the same command, not one
+	// fact reported three ways).
+	degradedAttributionReasonAuditNeverBlocks = "ADR-024 decision 11's audit-unavailability-never-blocks rule (owner ruling 2026-08-26): this action is not a member of the blackout/stop/power-off safety class and does not belong to a macro run, and still proceeds without a durable pre-dispatch audit entry"
 )
 
 // writeBestEffortAuditBounded is [handlers.writeBestEffortAudit] with its

@@ -102,21 +102,6 @@ const (
 	// to that file's owner — see this task's report.
 	ProblemTypeInternalError = problemBaseURI + "internal-error"
 
-	// ProblemTypeFPPCommandRefusedAuditUnavailable is Step 8's own
-	// fail-closed refusal (ADR-024 decision 11's default rule, applied to
-	// every primitive that is not a member of decision 11's own safety
-	// class — see [fppSafetyClass] in fppcommand_primitives.go): the
-	// pre-dispatch audit write failed, the whole transaction rolled back
-	// ([identity.ErrAuditWrite]'s own guarantee), and this primitive is
-	// not exempt, so nothing was inserted and nothing is dispatched to
-	// FPP. Originally defined in fppcommand_handler.go, the only file that
-	// seam was allowed to touch — moved here alongside its peers once that
-	// constraint no longer applied, and added to api/openapi.yaml's
-	// Problem.type enum in the same change: the author of that first
-	// version flagged both gaps in its own doc comment rather than leaving
-	// them to be discovered later.
-	ProblemTypeFPPCommandRefusedAuditUnavailable = problemBaseURI + "fpp-command-refused-audit-unavailable"
-
 	// ProblemTypeFPPStartPlaylistEvidenceNotCurrent is startPlaylist's own
 	// ifBusy "refuse" guard (docs/bench/fpp-command-vocabulary.md section
 	// 5) refusing because the evidence it would need to decide "is
@@ -698,42 +683,5 @@ func fppStartPlaylistBusyProblem(instanceID, currentlyPlaying string) v1.Problem
 			"Instance %q is currently playing %q, so this request is refused (ifBusy=%q, the default). Resend "+
 				"with ifBusy=%q to replace the running show, or wait for it to finish.",
 			instanceID, currentlyPlaying, fppIfBusyRefuse, fppIfBusyReplace),
-	}
-}
-
-// fppCommandAuditUnavailableProblem is
-// [ProblemTypeFPPCommandRefusedAuditUnavailable]'s own constructor.
-// Originally defined in fppcommand_handler.go because the seam that added
-// it was scoped to that file alone; moved here once that constraint no
-// longer applied, alongside every other problem constructor in this
-// package (see e.g. fppEndpointsEnvVarSetProblem, discoveryRunConflictProblem).
-// Status is 503, not 500: [identity.ErrAuditWrite] names a specific,
-// transient dependency condition (the audit store could not be appended to
-// right now), not an unspecified internal defect, and 503 is the honest
-// description of "the coordinator is currently unable to accept this
-// write" — a retry once the audit store recovers is the correct response,
-// which 500's "something is broken" does not convey. detail names the
-// audit store as the cause and states plainly that nothing was dispatched
-// and nothing was recorded, so an operator reading this does not have to
-// guess whether the command partially ran.
-func fppCommandAuditUnavailableProblem(wireAction string, cause error) v1.Problem {
-	return v1.Problem{
-		Type:  ProblemTypeFPPCommandRefusedAuditUnavailable,
-		Title: "Command refused: it could not be durably recorded",
-		// http.StatusServiceUnavailable (503): see this function's own doc
-		// comment for why this is not the generic 500 handlers.go's
-		// writeInternalError would otherwise produce.
-		Status: http.StatusServiceUnavailable,
-		// Detail deliberately does not explain WHY this action (as opposed
-		// to blackout/stop/power-off) fails closed rather than proceeding
-		// degraded — ADR-024 decision 11's safety-class boundary is
-		// architecture reasoning for this function's own doc comment, not
-		// a fact the operator needs mid-incident; what they need is
-		// stated: nothing happened, and when to retry.
-		Detail: fmt.Sprintf(
-			"%q was refused before anything was sent to FPP: it must be durably recorded before dispatch, and "+
-				"this coordinator's audit store is currently unavailable (%v). Nothing was recorded and nothing "+
-				"was dispatched; retry once the audit store is writable again.",
-			wireAction, cause),
 	}
 }

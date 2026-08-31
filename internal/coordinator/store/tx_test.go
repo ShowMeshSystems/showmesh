@@ -56,6 +56,44 @@ func TestInTxRollsBackOnError(t *testing.T) {
 	}
 }
 
+// TestInTxCommitFailureIsWrappedInErrCommitFailed proves the failure mode
+// a review finding on this task's own change named directly: every write
+// fn makes can succeed, and the transaction can still fail to become
+// durable at
+// COMMIT itself (e.g. a disk that fills between the last write and the
+// fsync COMMIT performs), a materially different failure from fn
+// returning its own error, and one the ADR-024 decision 11 audit-write
+// callers (identity.Service.AuditedWrite) must treat the same as an
+// append failure, not silently refuse on.
+//
+// Reproduced with a REAL SQLite failure, not a mock: PRAGMA
+// defer_foreign_keys=ON defers this transaction's own foreign-key
+// enforcement from each INSERT to COMMIT, so an INSERT into node_lwt
+// naming a node_id that does not exist in nodes succeeds inside fn, and
+// COMMIT itself then fails with a genuine FOREIGN KEY constraint
+// violation, exactly the "fn succeeded, COMMIT did not" shape a full
+// disk produces, without needing to actually fill one.
+func TestInTxCommitFailureIsWrappedInErrCommitFailed(t *testing.T) {
+	st := openTestStore(t, nil)
+	ctx := context.Background()
+
+	err := st.InTx(ctx, func(ctx context.Context, tx *Tx) error {
+		if _, err := tx.tx.ExecContext(ctx, "PRAGMA defer_foreign_keys=ON"); err != nil {
+			return err
+		}
+		if _, err := tx.tx.ExecContext(ctx,
+			"INSERT INTO node_lwt (node_id, online, provenance, updated_at) VALUES (?, ?, ?, ?)",
+			"no-such-node", 1, "test", "2026-01-01T00:00:00Z",
+		); err != nil {
+			t.Fatalf("INSERT into node_lwt failed immediately (want it deferred to COMMIT): %v", err)
+		}
+		return nil
+	})
+	if !errors.Is(err, ErrCommitFailed) {
+		t.Fatalf("InTx error = %v, want it to wrap ErrCommitFailed", err)
+	}
+}
+
 // TestInTxRollsBackOnPanic proves the panic half of InTx's contract: a
 // panic inside fn must not leave a partial write committed, and InTx must
 // re-panic rather than swallow it (recovered here only so the test itself

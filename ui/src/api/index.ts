@@ -108,6 +108,9 @@ export type {
   // `GET /` (getServiceDescriptor): the coordinator's own build metadata.
   ServiceDescriptor,
   CoordinatorInfo,
+  // ADR-024 decision 11's amendment (owner ruling, 2026-08-26): the
+  // standing coordinator-wide audit-store health signal.
+  AuditStoreStatus,
   // Step 9 (STEP-9-SPEC.md sections 5, 6): show.action / show.macro
   // configuration objects and the macro run surface.
   ConfigObjectSummary,

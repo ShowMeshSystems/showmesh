@@ -529,6 +529,16 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	// resolumeCompositionDegradeOnError's own precedent two calls above.
 	pushState, pushReason := audioConfigPushStatusDegradeOnError(ctx, h.deps.Config, h.logger, "snapshot")
 
+	// Computed fresh via a real probe write to audit_log (always rolled
+	// back), never cached: see [identity.Service.AuditWriteStatus]'s own
+	// doc comment for why a stale, traffic-fed latch alone was not
+	// answerable enough for this standing signal.
+	auditState, auditReasonStr := h.deps.Identity.AuditWriteStatus(ctx)
+	var auditReason *string
+	if auditReasonStr != "" {
+		auditReason = &auditReasonStr
+	}
+
 	jsonWrite(w, v1.Snapshot{
 		ServerTime:     formatTime(now),
 		LatestEventSeq: latestSeq,
@@ -537,6 +547,9 @@ func (h *handlers) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		Collectors:     collectors,
 		MacroRuns:      runs,
 		Resolume:       resolumeInstances,
+		AuditStore: v1.AuditStoreStatus{
+			State: auditState, Reason: auditReason,
+		},
 		AudioConfigPush: v1.AudioConfigPushStatus{
 			State: string(pushState), Reason: pushReason,
 		},

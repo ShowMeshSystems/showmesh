@@ -126,6 +126,19 @@ type nightCommandOutcome struct {
 	outcome string
 	persist string // "" | "create" | "update"
 
+	// readiness, when non-nil, is a night_readiness_results row decide
+	// wants created alongside persist. Review round 5, finding 1: decide
+	// used to call tx.CreateNightReadiness directly, invisibly to
+	// nightRunGated, so on an audit failure the fallback (which only
+	// knows about persist) redid the night_sessions write pointing at a
+	// readiness_id whose row had been rolled back with the failed
+	// transaction and never recreated - a false "applied" outcome with a
+	// dangling reference nothing errors on, worse than the refusal it
+	// replaced. nightRunGated now performs this write itself, in both the
+	// transactional path and the fallback path, so a decide function
+	// describes it as data here rather than issuing it directly.
+	readiness *store.NightReadinessRecord
+
 	// auditParams, when non-nil, is folded into this command's own audit
 	// entry (ADR-024's Params field). Track F seam F6's only user: an
 	// applied interlock override, which RESTING-MODE.md §10.1 requires the
@@ -299,6 +312,14 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, h.logger, now, *problem)
 		return
 	}
+	// nightRunGated (unlike nightRunExempt) has no *attributionDegraded
+	// pointer parameter to set directly, so its own degraded outcome
+	// arrives here on out.result.AttributionDegraded instead - fold it
+	// into the same local flag every response field below reads, rather
+	// than adding a second, parallel way to report the identical fact.
+	if out.result.AttributionDegraded {
+		attributionDegraded = true
+	}
 
 	state := mapNightSessionState(ctx, h.deps, out.result, now, h.nightReadinessMaxAge, true)
 	state.AttributionDegraded = attributionDegraded
@@ -378,6 +399,17 @@ func (h *handlers) nightRunExempt(ctx context.Context, now time.Time, cmd string
 		if problem != nil {
 			return nil
 		}
+		if out.readiness != nil {
+			// No exempt decide function sets this today. nightRunExempt has
+			// no ADR-024 decision 11 audit-failure fallback of its own to
+			// make performing this write here safe the way nightRunGated's
+			// own out.readiness handling is (this path's audit write is
+			// best-effort, after commit, never a reason to redo anything).
+			// Fail loudly rather than silently commit a session referencing
+			// a readiness row nobody wrote - the exact trap review round 5
+			// finding 1 fixed one function over.
+			return fmt.Errorf("api: night command %q's decide function set nightCommandOutcome.readiness, which nightRunExempt does not know how to persist", cmd)
+		}
 		switch out.persist {
 		case "create":
 			out.result.Issuer = nightIssuerFromAudit(issuer, cmd, now)
@@ -422,21 +454,18 @@ func (h *handlers) nightRunExempt(ctx context.Context, now time.Time, cmd string
 	return out, nil, nil
 }
 
-// nightAuditUnavailableProblem is the four fail-closed commands' own 503:
-// nothing was dispatched and nothing was recorded (ADR-024 decision 11's
-// non-exempt direction).
-func nightAuditUnavailableProblem(cmd string) v1.Problem {
-	return v1.Problem{
-		Type: ProblemTypeNightAuditUnavailable, Title: "Command refused: it could not be durably recorded",
-		Status: http.StatusServiceUnavailable,
-		Detail: fmt.Sprintf("%s was not applied: its audit entry could not be written, and this command is refused rather than proceeding without one", cmd),
-	}
-}
-
 // nightRunGated wraps decide and the resulting write in one atomic
 // transaction with the command's own audit entry (identity.Service.
-// AuditedWrite): an unwritable audit store here refuses the whole
-// command rather than proceeding degraded.
+// AuditedWrite). ADR-024 decision 11, amended 2026-08-26 (owner ruling):
+// an unwritable audit store no longer refuses the command. decide's own
+// decision (out, problem) was already computed from a consistent read
+// inside the now-rolled-back transaction (this store's own single
+// connection and _txlock=immediate mean nothing else could have written
+// underneath it), so on an audit failure this redoes ONLY the persist
+// step, through the plain non-transactional store methods, and proceeds
+// with degraded attribution, mirroring dispatchFPPCommand/
+// handleDispatchResolumeAction's identical fallback, never re-running
+// decide itself.
 func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string, issuer identity.AuditEntry,
 	decide func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error),
 ) (nightCommandOutcome, *v1.Problem, error) {
@@ -457,6 +486,11 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 		}
 		if problem != nil {
 			return identity.AuditEntry{}, errNightCommandRefused
+		}
+		if out.readiness != nil {
+			if err := tx.CreateNightReadiness(ctx, *out.readiness); err != nil {
+				return identity.AuditEntry{}, err
+			}
 		}
 		switch out.persist {
 		case "create":
@@ -486,8 +520,37 @@ func (h *handlers) nightRunGated(ctx context.Context, now time.Time, cmd string,
 			return nightCommandOutcome{}, problem, nil
 		}
 		if errors.Is(auditErr, identity.ErrAuditWrite) {
-			p := nightAuditUnavailableProblem(cmd)
-			return nightCommandOutcome{}, &p, nil
+			// ADR-024 decision 11, amended 2026-08-26 (owner ruling): redo
+			// every write the rolled-back transaction made non-
+			// transactionally (decide's own decision above is still valid;
+			// only the audit append failed), and proceed with degraded
+			// attribution. readiness is redone before persist: persist's
+			// own out.result can reference its ID (out.readiness's own doc
+			// comment on nightCommandOutcome explains why this can no
+			// longer be decide's own problem to remember).
+			if out.readiness != nil {
+				if err := h.deps.NightSessions.CreateNightReadiness(ctx, *out.readiness); err != nil {
+					return nightCommandOutcome{}, nil, err
+				}
+			}
+			switch out.persist {
+			case "create":
+				if err := h.deps.NightSessions.CreateNightSession(ctx, out.result, now); err != nil {
+					return nightCommandOutcome{}, nil, err
+				}
+			case "update":
+				if err := h.deps.NightSessions.UpdateNightSession(ctx, out.result, now); err != nil {
+					return nightCommandOutcome{}, nil, err
+				}
+			}
+			// nightRunGated is never called for a command in
+			// nightExemptFromDegradedGate (those route through
+			// nightRunExempt instead), so every command reaching here was
+			// previously fail-closed outright, never safety-class exempt:
+			// the only applicable reason is the general one.
+			h.reportDegradedAttribution(now, issuer, auditErr, degradedAttributionReasonAuditNeverBlocks)
+			out.result.AttributionDegraded = true
+			return out, nil, nil
 		}
 		return nightCommandOutcome{}, nil, auditErr
 	}
@@ -1184,12 +1247,9 @@ func (h *handlers) nightRunReadinessCommand(ctx context.Context, now time.Time, 
 			ID: uuid.NewString(), SessionID: curTx.ID, EpochID: curTx.ID,
 			CompletedAt: now, Outcome: outcome, ChecksJSON: string(checksJSON),
 		}
-		if err := tx.CreateNightReadiness(ctx, rec); err != nil {
-			return nightCommandOutcome{}, nil, err
-		}
 		next := *curTx
 		next.ReadinessID = rec.ID
-		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update"}
+		out := nightCommandOutcome{result: next, outcome: nightOutcomeApplied, persist: "update", readiness: &rec}
 		if len(overrideAuditParams) > 0 {
 			out.auditParams = map[string]any{"interlockOverrides": overrideAuditParams}
 		}
@@ -1742,10 +1802,9 @@ func mapNightReadiness(ctx context.Context, deps Dependencies, rec store.NightSe
 // --- problems ---
 
 const (
-	ProblemTypeNightNotReady         = problemBaseURI + "night-not-ready"
-	ProblemTypeNightStateRejected    = problemBaseURI + "night-state-rejected"
-	ProblemTypeNightAmbiguous        = problemBaseURI + "night-ambiguous"
-	ProblemTypeNightAuditUnavailable = problemBaseURI + "night-command-refused-audit-unavailable"
+	ProblemTypeNightNotReady      = problemBaseURI + "night-not-ready"
+	ProblemTypeNightStateRejected = problemBaseURI + "night-state-rejected"
+	ProblemTypeNightAmbiguous     = problemBaseURI + "night-ambiguous"
 )
 
 // nightNotReadyProblem is showmeshctl's exitNightNotReady (26).
