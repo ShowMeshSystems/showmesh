@@ -72,6 +72,22 @@ func Run() int {
 		"capability_count", len(cfg.Capabilities),
 	)
 
+	// The FPP Connect HTTP listener (below, cfg.FPPConnectListenAddr)
+	// binds unconditionally on every node: any node can be an xLights
+	// upload target, regardless of whether an operator ever intended it
+	// to be. Registering an uploaded sequence (fppconnectregister.go's
+	// POST /api/v1/assets) is gated by asset:write, a WRITE unrelated to
+	// the coordinator's own read policy — so a node can have reads wide
+	// open and still fail every registration. Logged once, at startup,
+	// rather than only surfacing after the first upload fails: an
+	// operator who never watches this log until something breaks still
+	// gets it on every restart, including the one right after they fix
+	// SHOWMESH_AGENT_API_TOKEN (config is read once, so that fix always
+	// requires a restart, and this line confirms it took).
+	if cfg.AgentAPIToken == "" {
+		logger.Warn("no SHOWMESH_AGENT_API_TOKEN configured: this node's FPP Connect HTTP listener will accept, assemble, and bind every upload it receives, then fail to register each one; registration retries indefinitely, but only succeeds once a credential carrying asset:write is set and this agent is restarted (see deploy/node/agent.env.example)")
+	}
+
 	// connCtx bounds the MQTT connection manager's lifetime and is
 	// DELIBERATELY NOT sigCtx (below), even though sigCtx is what tells this
 	// function to start shutting down. autopaho's connection manager treats

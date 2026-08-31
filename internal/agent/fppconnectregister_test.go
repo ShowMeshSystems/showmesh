@@ -448,14 +448,16 @@ func TestFPPConnectRegisterEmptyBaseURLPendingUntilConfigured(t *testing.T) {
 	waitForRegistrationState(t, held, "sequences", "NoURL.fseq", fppConnectRegistrationRegistered)
 }
 
-// TestFPPConnectRegister400And403AreTerminal proves a 400 or 403 is
-// recorded as a failure, verbatim, and never retried. Uses
+// TestFPPConnectRegisterTerminalStatusesAreNeverRetried proves a 400, 403,
+// 405, or 413 is recorded as a failure, verbatim, and never retried. Uses
 // fppConnectTestBackoff/fppConnectTestMaxBackoff on this test's own
 // registrar (review round 5 finding 5): the real 10s initial backoff made
 // the "never retried" assertion below pass regardless of whether the code
 // under test actually classified the status as terminal, since no retry
-// could fire within any sleep this test could afford either way.
-func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
+// could fire within any sleep this test could afford either way. 401 is
+// deliberately NOT in this table — see
+// TestFPPConnectRegister401IsRetryableAndRecovers below.
+func TestFPPConnectRegisterTerminalStatusesAreNeverRetried(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		status      int
@@ -463,7 +465,6 @@ func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
 		detail      string
 	}{
 		{"400", http.StatusBadRequest, "invalid-parameter", "sequence is required"},
-		{"401", http.StatusUnauthorized, "unauthorized", "no valid credential"},
 		{"403", http.StatusForbidden, "forbidden", "missing asset:write"},
 		{"405", http.StatusMethodNotAllowed, "method-not-allowed", "POST not accepted here"},
 		{"413", http.StatusRequestEntityTooLarge, "payload-too-large", "exceeds the coordinator's upload size bound"},
@@ -495,6 +496,82 @@ func TestFPPConnectRegister400And403AreTerminal(t *testing.T) {
 				t.Fatalf("registration requests = %d, want exactly 1 (a %d must never be retried)", got, tc.status)
 			}
 		})
+	}
+}
+
+// TestFPPConnectRegister401IsRetryableAndRecovers proves the fix for the
+// node-install defect this file's fppConnectRegisterTerminalStatuses doc
+// comment describes: a 401 (no valid credential presented) leaves the
+// record "pending," not "failed," retries on its own schedule, and
+// registers successfully once a valid credential is in place — with no
+// re-upload needed. The scenario is simulated exactly as it happens in
+// production: SHOWMESH_AGENT_API_TOKEN is read once at process start
+// (config.LoadConfig), so an operator who corrects it must restart the
+// agent, never just poke the running one. This test does the same —
+// canceling and joining the first (no-token) registrar before starting a
+// second (corrected-token) one over the SAME held store, whose BootWalk
+// (agent.go's own post-restart call) resumes the still-pending record —
+// rather than mutating a live registrar's token field, which would race
+// against that registrar's own retry loop reading it concurrently.
+func TestFPPConnectRegister401IsRetryableAndRecovers(t *testing.T) {
+	held, _ := newTestHeldStore(t)
+
+	data := bytes.Repeat([]byte("A"), 12)
+	wantHash := sha256Hex(data)
+
+	var requestCount int32
+	fakeSrv, requests := newFPPConnectRegisterFake(t, func(req fppConnectRegisterRequest) (int, string) {
+		atomic.AddInt32(&requestCount, 1)
+		if req.auth == "" {
+			return http.StatusUnauthorized, problemBody(t, "unauthorized", "this endpoint requires authentication")
+		}
+		return http.StatusOK, assetResponseBody(t, "asset-401-fixed", wantHash, false)
+	})
+	defer fakeSrv.Close()
+
+	// First "process": no token provisioned, matching the shipped install
+	// flow's gap.
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	state1 := newFPPConnectState()
+	state1.SetCoordinatorBaseURL(fakeSrv.URL)
+	reg1 := newFPPConnectRegistrar(ctx1, held, state1, "node-1", "", func() {}, time.Now, discardLogger())
+	reg1.initialBackoff = fppConnectTestBackoff
+	reg1.maxBackoff = fppConnectTestMaxBackoff
+	held.SetOnHeld(reg1.OnHeld)
+
+	uploadAndBind(t, held, "sequences", "NoToken.fseq", data)
+
+	pending := waitForRegistrationState(t, held, "sequences", "NoToken.fseq", fppConnectRegistrationPending)
+	if !strings.Contains(pending.RegistrationReason, "authentication") {
+		t.Fatalf("RegistrationReason = %q, want it to mention the missing authentication", pending.RegistrationReason)
+	}
+	if pending.RegistrationNextRetryAt.IsZero() {
+		t.Fatalf("RegistrationNextRetryAt is zero for a pending 401; a corrected credential could never be noticed by this loop's own retry schedule")
+	}
+	if before := atomic.LoadInt32(&requestCount); before < 1 {
+		t.Fatalf("registration requests = %d, want at least 1", before)
+	}
+
+	// Operator action: fix agent.env, restart the agent.
+	cancel1()
+	reg1.Wait()
+
+	reg2, _, _ := newTestFPPConnectRegistrar(t, held, fakeSrv.URL, "corrected-token")
+	reg2.initialBackoff = fppConnectTestBackoff
+	reg2.maxBackoff = fppConnectTestMaxBackoff
+	reg2.BootWalk()
+
+	registered := waitForRegistrationState(t, held, "sequences", "NoToken.fseq", fppConnectRegistrationRegistered)
+	if registered.RegistrationAssetID != "asset-401-fixed" {
+		t.Fatalf("RegistrationAssetID = %q, want %q", registered.RegistrationAssetID, "asset-401-fixed")
+	}
+
+	reqs := requests()
+	if len(reqs) < 2 {
+		t.Fatalf("registration requests = %d, want at least 2 (the original 401 plus a retry that succeeded)", len(reqs))
+	}
+	if got := reqs[len(reqs)-1].auth; got != "Bearer corrected-token" {
+		t.Fatalf("final request Authorization = %q, want %q", got, "Bearer corrected-token")
 	}
 }
 
