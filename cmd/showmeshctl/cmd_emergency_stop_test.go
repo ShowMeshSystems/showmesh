@@ -14,18 +14,19 @@ import (
 
 func TestExitCodeForEmergencyStopResultTakesTheWorstStopOutcome(t *testing.T) {
 	cases := []struct {
-		name     string
-		outcomes []string
-		want     int
+		name                  string
+		outcomes              []string
+		noInstancesConfigured bool
+		want                  int
 	}{
-		{"all confirmed", []string{"confirmed", "confirmed"}, exitOK},
-		{"no instances configured", nil, exitOK},
-		{"one unconfirmed", []string{"confirmed", "unconfirmed"}, exitCommandUnconfirmed},
-		{"one refused", []string{"confirmed", "refused"}, exitActionRefused},
-		{"one failed", []string{"confirmed", "failed"}, exitActionFailed},
-		{"failed outranks refused", []string{"refused", "failed"}, exitActionFailed},
-		{"failed outranks unconfirmed", []string{"unconfirmed", "failed"}, exitActionFailed},
-		{"refused outranks unconfirmed", []string{"unconfirmed", "refused"}, exitActionRefused},
+		{"all confirmed", []string{"confirmed", "confirmed"}, false, exitOK},
+		{"confirmed zero instances", nil, true, exitOK},
+		{"one unconfirmed", []string{"confirmed", "unconfirmed"}, false, exitCommandUnconfirmed},
+		{"one refused", []string{"confirmed", "refused"}, false, exitActionRefused},
+		{"one failed", []string{"confirmed", "failed"}, false, exitActionFailed},
+		{"failed outranks refused", []string{"refused", "failed"}, false, exitActionFailed},
+		{"failed outranks unconfirmed", []string{"unconfirmed", "failed"}, false, exitActionFailed},
+		{"refused outranks unconfirmed", []string{"unconfirmed", "refused"}, false, exitActionRefused},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -33,11 +34,92 @@ func TestExitCodeForEmergencyStopResultTakesTheWorstStopOutcome(t *testing.T) {
 			for _, o := range tc.outcomes {
 				outcomes = append(outcomes, emergencyStopInstanceOutcome{InstanceID: "i", Outcome: o})
 			}
-			got := exitCodeForEmergencyStopResult(emergencyStopResult{StopOutcomes: outcomes})
+			got := exitCodeForEmergencyStopResult(emergencyStopResult{StopOutcomes: outcomes, NoInstancesConfigured: tc.noInstancesConfigured})
 			if got != tc.want {
-				t.Errorf("exitCodeForEmergencyStopResult(%v) = %d, want %d", tc.outcomes, got, tc.want)
+				t.Errorf("exitCodeForEmergencyStopResult(%v, noInstancesConfigured=%v) = %d, want %d", tc.outcomes, tc.noInstancesConfigured, got, tc.want)
 			}
 		})
+	}
+}
+
+// An empty StopOutcomes array WITHOUT noInstancesConfigured set (a
+// coordinator that predates this field, or a malformed response) used to
+// read as a silent success: exit 0, nothing printed. That is the exact
+// silent-success shape this whole feature exists to prevent, relocated to
+// the client.
+func TestExitCodeForEmergencyStopResultTreatsUnexplainedEmptyOutcomesAsFailure(t *testing.T) {
+	got := exitCodeForEmergencyStopResult(emergencyStopResult{StopOutcomes: nil, NoInstancesConfigured: false})
+	if got != exitActionFailed {
+		t.Fatalf("exitCodeForEmergencyStopResult(empty, noInstancesConfigured=false) = %d, want exitActionFailed (%d)", got, exitActionFailed)
+	}
+}
+
+func TestReportEmergencyStopResultWarnsAndFailsOnUnexplainedEmptyOutcomes(t *testing.T) {
+	var stdout bytes.Buffer
+	code := reportEmergencyStopResult(&stdout, "showmeshctl emergency-stop stop", emergencyStopResult{Level: "stop"})
+	if code != exitActionFailed {
+		t.Fatalf("exit code = %d, want exitActionFailed (%d)", code, exitActionFailed)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("stdout is empty: an unexplained empty result must never print nothing, the exact silent-success shape this fixes")
+	}
+	if !strings.Contains(stdout.String(), "WARNING") {
+		t.Errorf("stdout = %q, want an explicit WARNING", stdout.String())
+	}
+}
+
+// round 3's own second defect: the night-session step is not a follow-up
+// action, and its own failure must move the exit code even when every FPP
+// stop instance confirmed.
+func TestExitCodeForEmergencyStopResultReflectsNightSessionFailure(t *testing.T) {
+	ns := emergencyStopNightSessionOutcome{Present: true, SessionID: "sess-1", Error: "power-down step failed: injected"}
+	result := emergencyStopResult{
+		StopOutcomes: []emergencyStopInstanceOutcome{{InstanceID: "player-01", Outcome: "confirmed"}},
+		NightSession: &ns,
+	}
+	if got := exitCodeForEmergencyStopResult(result); got != exitActionFailed {
+		t.Fatalf("exitCodeForEmergencyStopResult = %d, want exitActionFailed (%d): a night-session failure must not read as exitOK even when the stop itself confirmed", got, exitActionFailed)
+	}
+}
+
+func TestExitCodeForEmergencyStopResultReflectsFollowUpConfigError(t *testing.T) {
+	result := emergencyStopResult{
+		StopOutcomes:        []emergencyStopInstanceOutcome{{InstanceID: "player-01", Outcome: "confirmed"}},
+		FollowUpConfigError: "follow-up actions could not be read: injected",
+	}
+	if got := exitCodeForEmergencyStopResult(result); got != exitActionFailed {
+		t.Fatalf("exitCodeForEmergencyStopResult = %d, want exitActionFailed (%d)", got, exitActionFailed)
+	}
+}
+
+// The WORSE of the stop outcomes and the night-session failure always
+// wins. failed outranks refused in this file's own severity ranking
+// (emergencyStopOutcomeSeverity), NOT in raw exit-code number order (12
+// vs 13). That is the exact trap that function's own doc comment warns
+// against, so a night-session failure (ranked as "failed") correctly
+// overrides a milder "refused" stop outcome here.
+func TestExitCodeForEmergencyStopResultTakesTheWorseOfStopOutcomeAndNightSessionFailure(t *testing.T) {
+	ns := emergencyStopNightSessionOutcome{Present: true, Error: "injected"}
+	result := emergencyStopResult{
+		StopOutcomes: []emergencyStopInstanceOutcome{{InstanceID: "player-01", Outcome: "refused"}},
+		NightSession: &ns,
+	}
+	if got := exitCodeForEmergencyStopResult(result); got != exitActionFailed {
+		t.Fatalf("exitCodeForEmergencyStopResult = %d, want exitActionFailed (%d): night-session failure ranks as \"failed\", which outranks a \"refused\" stop outcome", got, exitActionFailed)
+	}
+}
+
+// A night-session failure must never SILENTLY DISAPPEAR behind an
+// already-failed stop outcome either: both map to the same top severity,
+// so the result stays exitActionFailed either way.
+func TestExitCodeForEmergencyStopResultBothFailedStaysFailed(t *testing.T) {
+	ns := emergencyStopNightSessionOutcome{Present: true, Error: "injected"}
+	result := emergencyStopResult{
+		StopOutcomes: []emergencyStopInstanceOutcome{{InstanceID: "player-01", Outcome: "failed"}},
+		NightSession: &ns,
+	}
+	if got := exitCodeForEmergencyStopResult(result); got != exitActionFailed {
+		t.Fatalf("exitCodeForEmergencyStopResult = %d, want exitActionFailed (%d)", got, exitActionFailed)
 	}
 }
 

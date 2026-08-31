@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -362,5 +363,71 @@ func TestEmergencyStopFireRefusesAnotherPrincipalsArmToken(t *testing.T) {
 	resp2, body2 := doRawRequest(t, f.api.Handler, fireAgainReq)
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("principal A firing its own still-valid token: status = %d, want 200; body: %s", resp2.StatusCode, body2)
+	}
+}
+
+// --- round 3 finding 3: an oversized fire body must say so, not report
+// the generic "not valid JSON" message a truncated body produces. ---
+
+func TestEmergencyStopFireOversizedBodySaysTooLargeAndDoesNotConsumeTheArmToken(t *testing.T) {
+	now := time.Now()
+	f := newEmergencyStopFixture(t, now)
+	f.putConfig(t, emergencyStopEmptyLevelsBody())
+
+	armReq := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/hard-stop/arm", `{"idempotencyKey":"arm-1"}`,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	_, armBody := doRawRequest(t, f.api.Handler, armReq)
+	armToken, _ := decodeMap(t, armBody)["armToken"].(string)
+
+	padding := make([]byte, maxEmergencyStopRequestBodyBytes+1)
+	for i := range padding {
+		padding[i] = ' '
+	}
+	oversized := `{"idempotencyKey":"fire-1","armToken":"` + armToken + `",` + string(padding) + `}`
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/hard-stop/fire", oversized,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	resp, body := doRawRequest(t, f.api.Handler, req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized fire body: status = %d, want 400; body: %s", resp.StatusCode, body)
+	}
+	m := decodeMap(t, body)
+	detail, _ := m["detail"].(string)
+	if !strings.Contains(detail, "too large") {
+		t.Fatalf("problem detail = %q, want it to say the body is too large, not report a generic JSON parse failure", detail)
+	}
+	if got := len(f.sentCommands()); got != 0 {
+		t.Fatalf("FPP commands sent = %d, want 0", got)
+	}
+
+	// The arm token must still be valid: the oversized, refused request
+	// must not have consumed it.
+	goodReq := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/hard-stop/fire",
+		`{"idempotencyKey":"fire-2","armToken":"`+armToken+`"}`,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	goodResp, goodBody := doRawRequest(t, f.api.Handler, goodReq)
+	if goodResp.StatusCode != http.StatusOK {
+		t.Fatalf("fire with the SAME token after the oversized request: status = %d, want 200 (the token must not have been burned); body: %s", goodResp.StatusCode, goodBody)
+	}
+}
+
+// Fire's own tolerance of an unrecognized key is INTENTIONAL (see
+// handleEmergencyStopFire's own doc comment), unlike every sibling route:
+// a stray field on the "big red button" route must never refuse the stop.
+func TestEmergencyStopFireToleratesUnknownKeys(t *testing.T) {
+	now := time.Now()
+	f := newEmergencyStopFixture(t, now)
+	f.putConfig(t, emergencyStopEmptyLevelsBody())
+
+	armReq := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/hard-stop/arm", `{"idempotencyKey":"arm-1"}`,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	_, armBody := doRawRequest(t, f.api.Handler, armReq)
+	armToken, _ := decodeMap(t, armBody)["armToken"].(string)
+
+	req := newJSONRequest(t, http.MethodPost, "/api/v1/emergency-stop/hard-stop/fire",
+		`{"idempotencyKey":"fire-1","armToken":"`+armToken+`","aFieldFromANewerClient":true}`,
+		map[string]string{"Authorization": "Bearer " + f.adminToken})
+	resp, body := doRawRequest(t, f.api.Handler, req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fire with an unrecognized key: status = %d, want 200 (this route tolerates it on purpose); body: %s", resp.StatusCode, body)
 	}
 }

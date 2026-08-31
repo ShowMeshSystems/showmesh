@@ -316,9 +316,20 @@ func reportEmergencyStopResult(stdout io.Writer, cmdLabel string, result emergen
 	// result.NoInstancesConfigured is the ONLY honest "nothing to stop"
 	// signal, never inferred from an empty StopOutcomes array, which a
 	// failure to read the configured instance list also leaves non-empty
-	// (one "failed" entry), never empty.
-	if result.NoInstancesConfigured {
+	// (one "failed" entry), never empty. An empty array WITHOUT that flag
+	// set is therefore an ANOMALY, not a quiet success: a coordinator that
+	// predates this field, a truncated response, or something else this
+	// program cannot name. Silence plus exit 0 here would be the exact
+	// defect this whole feature exists to prevent, relocated to the
+	// client, so this is printed loudly and never allowed to exit 0 (see
+	// exitCodeForEmergencyStopResult's own identical check).
+	switch {
+	case result.NoInstancesConfigured:
 		_, _ = fmt.Fprintf(stdout, "%s: no FPP instances are configured; nothing to stop\n", result.Level)
+	case len(result.StopOutcomes) == 0:
+		_, _ = fmt.Fprintf(stdout, "%s: WARNING: no stop outcomes were reported and noInstancesConfigured is not set; "+
+			"this coordinator may predate this field, or the response is otherwise malformed. Treating this as a "+
+			"failure to determine whether the stop happened, not as a success.\n", result.Level)
 	}
 	for _, o := range result.StopOutcomes {
 		_, _ = fmt.Fprintf(stdout, "%s: %s: %s\n", o.Outcome, o.InstanceID, o.OutcomeReason)
@@ -372,15 +383,38 @@ func emergencyStopOutcomeSeverity(outcome string) int {
 	}
 }
 
-// exitCodeForEmergencyStopResult is driven by StopOutcomes ALONE, taking
-// the worst outcome across every configured instance. FollowUps never
-// participate. See this file's own doc comment for why.
+// exitCodeForEmergencyStopResult takes the worst across StopOutcomes, the
+// night-session step's own failure (NightSession.Error), and a failure to
+// even read this level's own follow-up configuration
+// (FollowUpConfigError). The night-session step is deliberately NOT a
+// follow-up ACTION and does not get a follow-up action's own exemption:
+// for level stop-power-down it IS the "graceful shutdown" half of the
+// level, and for level hard-stop abandoning the session straight to
+// stopped is that level's own defining behavior, so its own failure moves
+// the exit code exactly like a stop instance's own failure would. A
+// FollowUps entry's own outcome (one configured action that itself
+// failed, refused, or could not be confirmed) never participates: that
+// exemption is unchanged and is the one this file's own doc comment
+// states in full.
+//
+// An empty StopOutcomes array without NoInstancesConfigured set is an
+// anomaly (see reportEmergencyStopResult's own identical check) and is
+// never exit 0.
 func exitCodeForEmergencyStopResult(result emergencyStopResult) int {
+	if len(result.StopOutcomes) == 0 && !result.NoInstancesConfigured {
+		return exitActionFailed
+	}
 	worst := "confirmed"
 	for _, o := range result.StopOutcomes {
 		if emergencyStopOutcomeSeverity(o.Outcome) > emergencyStopOutcomeSeverity(worst) {
 			worst = o.Outcome
 		}
+	}
+	if result.NightSession != nil && result.NightSession.Error != "" && emergencyStopOutcomeSeverity("failed") > emergencyStopOutcomeSeverity(worst) {
+		worst = "failed"
+	}
+	if result.FollowUpConfigError != "" && emergencyStopOutcomeSeverity("failed") > emergencyStopOutcomeSeverity(worst) {
+		worst = "failed"
 	}
 	switch worst {
 	case "confirmed":

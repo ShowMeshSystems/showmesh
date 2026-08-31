@@ -627,6 +627,22 @@ func (h *handlers) handleEmergencyStopFire(w http.ResponseWriter, r *http.Reques
 		writeProblem(w, h.logger, now, invalidParameterProblem(fmt.Sprintf("reading request body: %v", err)))
 		return
 	}
+	if len(body) > maxEmergencyStopRequestBodyBytes {
+		// Checked BEFORE json.Unmarshal, mirroring
+		// decodeEmergencyStopIdempotencyKeyBody's identical check: an
+		// oversized body reaching io.LimitReader's own cap arrives here
+		// truncated, which json.Unmarshal would otherwise reject with a
+		// generic "not valid JSON" error - "too large" is what actually
+		// happened, so it is what gets said.
+		writeProblem(w, h.logger, now, invalidParameterProblem("request body too large"))
+		return
+	}
+	// A typed struct, deliberately UNLIKE decodeEmergencyStopIdempotencyKeyBody's
+	// own explicit unknown-key sweep used by every sibling route: fire is
+	// the "big red button" route, and silently ignoring a stray field here
+	// is better than refusing an emergency stop over one. This tolerance
+	// is intentional, not an oversight this file's sibling routes simply
+	// forgot to apply.
 	var top struct {
 		IdempotencyKey string `json:"idempotencyKey"`
 		ArmToken       string `json:"armToken"`
