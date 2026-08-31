@@ -14,7 +14,7 @@ import type { ConnectionState, Model } from '../api'
 import { CLOCK_SKEW_WARNING_THRESHOLD_MS, formatDuration } from '../domain/time'
 import { describeSignInState, type SignInState } from '../domain/session'
 import { useModelContext } from './ModelContext'
-import { BootstrapBand, ConnectingBand, SignedOutBand } from './SessionBand'
+import { BootstrapBand, ConnectingBand, SignedOutBand, SignOutControl } from './SessionBand'
 
 const CONNECTION_LABEL: Record<Connection, string> = {
   live: 'Live',
@@ -97,7 +97,12 @@ export function Layout() {
         mode={null}
         nowPlaying={<NowPlaying model={model} signInKind={signIn.kind} />}
         connection={<ConnectionPill state={connection} label={CONNECTION_LABEL[connection]} />}
-        principal={<span className="sm-small sm-muted">{principal}</span>}
+        principal={
+          <>
+            <span className="sm-small sm-muted">{principal}</span>
+            {signIn.kind === 'signed_in' && <SignOutControl />}
+          </>
+        }
       />
       <ChromeProgress value={null} label="Position of the current item" />
       {model.clockSkewMs !== null && Math.abs(model.clockSkewMs) >= CLOCK_SKEW_WARNING_THRESHOLD_MS && (

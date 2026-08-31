@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { claimBootstrap, clearToken, getStoredToken, login, submitToken } from '../api'
+import { claimBootstrap, clearToken, getStoredToken, login, logout, submitToken } from '../api'
 import { describeApiError, describeSignInRefusal } from '../domain/session'
 import { BlankingPlate, Button, Field, Input, Notice } from '../kit'
 
@@ -172,6 +172,57 @@ export function SignedOutBand() {
         }
       />
     </section>
+  )
+}
+
+/**
+ * Sign out lives in the chrome bar next to the identity it signs out
+ * (the design mocks draw the identity there but never draw a sign-out
+ * control anywhere). It is a sharp control but a reversible one, unlike
+ * revoking a credential or removing a node: signing back in undoes it,
+ * so a plain arm-then-confirm click is proportionate; it does not ask
+ * for typed confirmation text the way Access.tsx and NodeDetail.tsx do
+ * for their harder-to-undo actions.
+ */
+export function SignOutControl({ sessionId }: { sessionId?: string }) {
+  const [confirming, setConfirming] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
+  const [err, setErr] = useState<unknown>(null)
+
+  const confirm = () => {
+    setSigningOut(true)
+    setErr(null)
+    logout(sessionId)
+      .catch((caught: unknown) => setErr(caught))
+      .finally(() => {
+        setSigningOut(false)
+        setConfirming(false)
+      })
+  }
+
+  if (!confirming) {
+    return (
+      <Button variant="quiet" size="compact" onClick={() => setConfirming(true)}>
+        Sign out
+      </Button>
+    )
+  }
+
+  return (
+    <span className="sm-signout-confirm">
+      <span className="sm-small sm-muted">Sign out of this device?</span>
+      <Button variant="danger" size="compact" disabled={signingOut} onClick={confirm}>
+        {signingOut ? 'Signing out…' : 'Confirm sign out'}
+      </Button>
+      <Button variant="quiet" size="compact" disabled={signingOut} onClick={() => setConfirming(false)}>
+        Cancel
+      </Button>
+      {err !== null && (
+        <span className="sm-small" role="alert">
+          {describeApiError(err)}
+        </span>
+      )}
+    </span>
   )
 }
 

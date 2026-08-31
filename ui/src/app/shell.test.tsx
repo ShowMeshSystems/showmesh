@@ -13,6 +13,7 @@ import { NotFound } from '../screens/NotFound'
 
 const loginMock = vi.fn()
 const claimBootstrapMock = vi.fn()
+const logoutMock = vi.fn()
 
 vi.mock('../api', async () => {
   const actual = await vi.importActual<typeof import('../api')>('../api')
@@ -20,6 +21,7 @@ vi.mock('../api', async () => {
     ...actual,
     login: (...args: unknown[]) => loginMock(...args),
     claimBootstrap: (...args: unknown[]) => claimBootstrapMock(...args),
+    logout: (...args: unknown[]) => logoutMock(...args),
   }
 })
 
@@ -62,6 +64,7 @@ describe('app shell', () => {
   beforeEach(() => {
     loginMock.mockReset().mockResolvedValue(undefined)
     claimBootstrapMock.mockReset().mockResolvedValue(undefined)
+    logoutMock.mockReset().mockResolvedValue(undefined)
     clearStoredToken()
   })
   afterEach(cleanup)
@@ -235,6 +238,57 @@ describe('app shell', () => {
     expect(screen.getByText('Session')).toBeInTheDocument()
     expect(screen.getByText('Live updates')).toBeInTheDocument()
     expect(screen.getByText(/Not connected\. Observations, run outcomes and now-playing/)).toBeInTheDocument()
+  })
+
+  it('offers Sign out only once signed in, never on a signed-out or bootstrap device', () => {
+    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    cleanup()
+
+    renderShell({ session: session({ authenticated: false }) })
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+    cleanup()
+
+    renderShell({ session: session({ authenticated: false, bootstrapRequired: true }) })
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+
+  it('does not call logout on the first click: it arms a confirm step first', () => {
+    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(logoutMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Confirm sign out' })).toBeInTheDocument()
+  })
+
+  it('cancels the sign-out confirm without calling logout', () => {
+    renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(logoutMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+  })
+
+  it('calls logout only on the confirm click, and lands on the signed-out band through the existing session state', async () => {
+    logoutMock.mockImplementation(() => Promise.resolve())
+    const { rerender } = renderShell({ session: session({ authenticated: true, principal: { id: 'p1', name: 'erbartos', kind: 'human', role: 'admin' } }) })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm sign out' }))
+    expect(logoutMock).toHaveBeenCalledExactlyOnceWith(undefined)
+
+    // logout() leaves model.session signed out (ADR-024); the shell must
+    // reflect that through the existing signed-out band, never a redirect.
+    rerender(
+      <ModelContext.Provider value={{ ...initialModel(), session: session({ authenticated: false }) }}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />}>
+              <Route path="*" element={<NotFound />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </ModelContext.Provider>,
+    )
+    expect(await screen.findByText('Signed out on this device')).toBeInTheDocument()
   })
 
   it('lists the not-found table’s old addresses, grouped as the mock draws them', () => {
