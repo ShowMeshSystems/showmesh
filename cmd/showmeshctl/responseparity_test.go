@@ -107,11 +107,6 @@ var getResponseFieldExemptions = map[string]string{
 		"this coordinator can currently write to its audit store, probed fresh on every request. The " +
 		"`snapshot` struct (types.go) has no AuditStore field. Known existing gap, found by this test; not " +
 		"fixed here.",
-	"showAction.idempotent": "ConfigShowAction.idempotent is required (api/openapi.yaml, added by commit " +
-		"9238f04, 'Let show.action declare whether it is idempotent (#247)'). That commit shipped the API " +
-		"surface and the Operator UI control but missed showmeshctl: the `showAction` struct " +
-		"(types_macro.go) still has no Idempotent field, so GET /config/show.action/{id} silently drops it. " +
-		"Known existing gap, found by this test; not fixed here -- being raised and fixed separately.",
 	"nightSessionStateWire.authorization": "NightSessionState.authorization is required (api/openapi.yaml's " +
 		"NightSessionState schema): who authorized this night session, for provenance across a coordinator " +
 		"restart. The `nightSessionStateWire` struct (types_night_lifecycle.go) has no Authorization field, " +
