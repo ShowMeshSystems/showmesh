@@ -272,7 +272,7 @@ bundles of these (ADR-024).
 | `night:command` | reserved | Track F seam F2: the ADR-038 lifecycle command vocabulary |
 | `night:override` | shipped | Track F seam F6: interlock override where a rule declares `authorized-operator` (force-power-off instead reuses `show:action:invoke`, see RESTING-MODE.md §10.4) |
 | `show:action:invoke` | reserved | Track E seam E7: dispatching one named logical action outside a macro run |
-| `fpp:fallback` | reserved | Track J seam J1: an FPP host fetches its current fallback program and posts its acknowledgement |
+| `fpp:fallback` | shipped | Track J seam J1: an FPP host fetches its current fallback program and posts its acknowledgement |
 
 **`night:override` is separate from `night:command` deliberately.** RESTING-MODE
 §10.1 accepts an override only when the rule itself declares
@@ -446,7 +446,7 @@ after shipping a breaking change to stored history.
 | `cuecatalog.deploy` | shipped | Track H seam H3: the coordinator pushing a resolved Cue catalog onto a node over the existing MQTT command path (build ruling: the agent has no configured coordinator base URL to fetch one from) |
 | `fppconnect.configure` | shipped | Track E phase 2 seam FC1a: the coordinator pushing the node's `channelRanges` string, active show, show name list and `fppconnect.settings` over the existing MQTT command path. Payload schema string `showmesh.node.fppconnect.config/v1` (ADR-044) |
 | `cue.activate` | shipped | Track H seam H4: a runner-neutral Cue activation envelope carried over the existing MQTT command path, authorized against the node's held Cue catalog and applied to rendering, audio, and LTC |
-| `fallback.program.deploy` | reserved, expected unused | Track J seam J1: pushing a signed fallback program to an FPP host. Reserved defensively only. The FPP plugin already reaches the coordinator over outbound HTTP (FPP-PLUGIN-COORDINATOR-CONTRACTS.md section 1), so J1 is expected to deliver the program over the HTTP paths named under "API paths" below and never to mint this operation. Release it if J1 lands without it |
+| `fallback.program.deploy` | released | Track J seam J1 landed WITHOUT it, which is the condition its own reservation named. The plugin fetches over the HTTP paths under `/api/v1/fallback-programs`; the coordinator never pushes. Free to reuse |
 
 **AUDIO-ENGINE §14's `select_media`, `select_playlist`, `set_loop`,
 `announce` and `duck` mint no operation of their own.** §14 permits combining
@@ -510,9 +510,9 @@ register entry comes from the code and never from a plan.
 | `fpp.observe_playlist_entry` | shipped | SM-150, RES-018 section 6.3: written on a REFUSED ingestion only |
 | `fpp.instance_uuid.acknowledge` | shipped | per-endpoint observed FPP instance uuid conflict acknowledgment |
 | `cuecatalog.acknowledge` | shipped | Track H seam H3: a node's cue-catalog acknowledgement |
-| `fallback.program.publish` | reserved | Track J seam J1: the coordinator building and signing a new fallback-program revision |
-| `fallback.program.refuse` | reserved | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
-| `fallback.program.acknowledge` | reserved | Track J seam J1: an FPP host acknowledging the installed package |
+| `fallback.program.publish` | shipped | Track J seam J1: the coordinator building and signing a new fallback-program revision |
+| `fallback.program.refuse` | shipped | Track J seam J1: the compiler refusing to publish, for an ambiguous entry key, a cross-show reference, a missing node catalog acknowledgement, an unresolvable target, an unsupported output, or an unsigned result |
+| `fallback.program.acknowledge` | shipped | Track J seam J1: an FPP host acknowledging the installed package |
 | `cue.activate` | shipped | Track H seam H4: the coordinator's own dispatch of, or independent `pkg/cueauth` refusal of, one node's cue.activate command — the same action string the Agent operation names table above already reserves, reused here for its audit entries (Kind distinguishes dispatch from refusal) |
 
 **Two naming conventions are in use and neither is being changed
@@ -547,7 +547,7 @@ dotted `SignalID` namespace that hangs off each one.
 | `audio_session` | `audio_session.*` | registered, unpopulated | Track C seam C1a; first signals in C2/C3 |
 | `node` | `node.clock.*` | reserved | Track I seam I1 (PTP media clock) |
 | `night_session` | `night_session.*` | reserved | Track F seam F2 |
-| `fallback_program` | `fallback_program.*` | reserved | Track J seam J1 |
+| `fallback_program` | `fallback_program.*` | shipped | Track J seam J1 |
 
 **`surface` is a new resource kind and that is deliberate.** A render node
 may host `N` surfaces (ADR-026 decision 3), so a signal keyed on the node id
@@ -1028,8 +1028,8 @@ Step 2; add rows here before minting one.
 | `showmesh/nodes/<id>/observed/render` (retained) | shipped | Track B seam B2 |
 | `showmesh/nodes/<id>/observed/audio` (retained) | shipped | Track C seam C1a |
 | `showmesh/nodes/<id>/observed/clock` (retained) | reserved | Track I seam I1 |
-| `showmesh/fpp/<instance-id>/fallback/program` (retained) | reserved, expected unused | Track J seam J1 |
-| `showmesh/fpp/<instance-id>/observed/fallback` (retained) | reserved, expected unused | Track J seam J1 |
+| `showmesh/fpp/<instance-id>/fallback/program` (retained) | released | Track J seam J1 landed without it. Free to reuse, and the `showmesh/fpp/` prefix is no longer claimed |
+| `showmesh/fpp/<instance-id>/observed/fallback` (retained) | released | Track J seam J1 landed without it. Free to reuse |
 
 **Corrected 2026-08-17.** Every row in this table was previously wrong in
 both halves: the prefix read `showmesh/node/` where `pkg/mqttproto/topic.go:14`
@@ -1048,19 +1048,49 @@ ingest switch (`internal/coordinator/inventory/inventory.go:315`) drops any
 subpath it has no `case` for, at Debug level, silently. `observed/agent/echo`
 is being dropped that way today.
 
-**Track J's two rows reserve a new top-level prefix, `showmesh/fpp/`.**
-Every topic above it lives under `showmesh/nodes/`, and an FPP host is not a
-node agent, so a fallback program addressed to one cannot use the node topic
-space. Both rows are reserved defensively and are expected to stay unused for
-the same reason `fallback.program.deploy` is: the plugin already reaches the
-coordinator over outbound HTTP, so J1 is expected to deliver and acknowledge
-the program there. Release both rows if J1 lands without them. If J1 does mint
-them, note that a new `observed/` subpath needs a matching `case` in the
-coordinator's ingest switch, per the paragraph above.
+**Track J's two rows are RELEASED and `showmesh/fpp/` is no longer claimed.**
+They were reserved defensively, on the expectation that the plugin's outbound
+HTTP would carry the program and its acknowledgement instead of a broker topic.
+J1 shipped on 2026-08-31 and did exactly that, so the condition the reservation
+itself named is met and both rows are free. The next work that needs a
+non-node top-level prefix may take `showmesh/fpp/`, and should note that an FPP
+host is not a node agent, which is why the node topic space did not fit here.
+
+**A defensive reservation is only worth keeping if someone actually releases
+it.** These two, and `fallback.program.deploy`, cost nothing to reserve and
+would have cost a rename across a whole branch to get wrong. What makes that
+trade honest is checking afterwards. All three were released by grepping merged
+`main` for each identifier and finding zero uses outside this file.
 
 **Never publish on `falcon/player/<host>/command/run` or any other
 `falcon/` topic against the live fleet.** FPP acts on it. This is a safety
 rule, not a naming convention, and it is in CLAUDE.md for the same reason.
+
+## Configuration field names
+
+**This section is deliberately narrow, and the scope statement comes before
+the rows because without it this becomes a mirror of every configuration
+struct and stops being read.** Record a settings field name here only when it
+meets one of two tests:
+
+1. a migration backfills it into stored revisions, so two branches adding
+   different fields under the same schema version collide; or
+2. a wire boundary requires it, so a field name disagreeing across the API,
+   the agent and the UI is a runtime failure rather than a compile error.
+
+Every other configuration field is an ordinary code identifier. It is not
+scarce, a collision in one is a merge conflict rather than a silent wrong
+value, and it does not belong here.
+
+| Field | Status | Owner and meaning |
+| --- | --- | --- |
+| `duckFadeDurationMs` | shipped | how long the duck ramp takes when an announcement bed starts. Backfilled into every stored `audio.settings` revision by schema v24, which is what puts it in scope for this section |
+| `duckRestoreFadeDurationMs` | shipped | how long the restore ramp takes when the bed ends. Backfilled by the same v24 migration |
+
+**Both rows are recorded after the fact, which is the exception and not the
+pattern.** v24 shipped before this section existed. Anything meeting the two
+tests above is reserved before the work begins, like every other identifier in
+this file.
 
 ## Schema versions
 
