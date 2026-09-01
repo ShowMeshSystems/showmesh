@@ -426,6 +426,32 @@ func cueCatalogDeployResultCorrelates(payload []byte, nodeID, commandID, idempot
 	return res.CommandID == commandID && res.IdempotencyKey == idempotencyKey && res.Action == auditActionCueCatalogDeploy
 }
 
+// cueCatalogDeployReplayUndecodableProblem mirrors
+// renderCommandReplayConflictProblem's shape and reasoning, for the case
+// that function does not cover: existing.ID's row matches this route's own
+// action and node, but its stored result or caller-intent content does not
+// decode as this route's own shapes. commands.caller_intent holds two
+// untagged JSON families sharing a "node" field (this route's own identity
+// and renderRequestIdentity, renderdispatch.go), so a row of the wrong
+// family can decode WITHOUT an error and silently produce a zero-valued
+// identity; a row that fails to decode at all is the same class of "cannot
+// be trusted" content. Either way the row must never be answered as a
+// confident, wrong reply: this is reported as a conflict, the same as an
+// action/node mismatch, because from the caller's side the remedy is
+// identical: mint a fresh idempotencyKey.
+func cueCatalogDeployReplayUndecodableProblem(existingID, nodeID string) v1.Problem {
+	return v1.Problem{
+		Type:   ProblemTypeConflict,
+		Title:  "Idempotency key already used for a record this route cannot replay",
+		Status: http.StatusConflict,
+		Detail: fmt.Sprintf(
+			"idempotencyKey was already used for command %s (node %q), but its stored record does not decode "+
+				"as a cue-catalog-deploy result or identity; it cannot be answered as a replay. Mint a fresh "+
+				"idempotencyKey for a genuinely new request.",
+			existingID, nodeID),
+	}
+}
+
 // resolveCueCatalogDeployReplay answers a replayed idempotency key against
 // existing's own stored row — mirrors resolveRenderCommandReplay's
 // identical shape, narrowed to this action's own single-action, single-
@@ -438,7 +464,10 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 		return v1.CueCatalogDeployResult{}, &p
 	}
 	var res cueCatalogDeployResultPayload
-	_ = json.Unmarshal([]byte(existing.ResultJSON), &res)
+	if err := json.Unmarshal([]byte(existing.ResultJSON), &res); err != nil {
+		p := cueCatalogDeployReplayUndecodableProblem(existing.ID, nodeID)
+		return v1.CueCatalogDeployResult{}, &p
+	}
 	// A blank Outcome and a nil DispatchedAt are the honest state of a
 	// command still in flight, or one whose publish failed before the
 	// wire: reported as-is, never substituted (ADR-020), matching
@@ -455,10 +484,16 @@ func resolveCueCatalogDeployReplay(existing store.CommandRecord, nodeID string) 
 	// can only be this route's own identity family: [store.CallerIntentPayload]
 	// strips the store.CallerIntentCueCatalogDeploy tag when present and
 	// falls back to the raw value for a row written before this tagging
-	// scheme existed.
+	// scheme existed. A decode failure here is either a genuinely corrupt
+	// row, or (commands.caller_intent's own known ambiguity for an untagged
+	// value) a different family's JSON that happens not to parse as this
+	// one's shape at all; see cueCatalogDeployReplayUndecodableProblem.
 	var reqID cueCatalogDeployRequestIdentity
 	payload, _ := store.CallerIntentPayload(store.CallerIntentCueCatalogDeploy, existing.CallerIntent)
-	_ = json.Unmarshal([]byte(payload), &reqID)
+	if err := json.Unmarshal([]byte(payload), &reqID); err != nil {
+		p := cueCatalogDeployReplayUndecodableProblem(existing.ID, nodeID)
+		return v1.CueCatalogDeployResult{}, &p
+	}
 	return v1.CueCatalogDeployResult{
 		CommandID: existing.ID, IdempotencyKey: existing.IdempotencyKey, Node: nodeID, Replay: true,
 		Show: reqID.Show, Generation: reqID.Generation, Revision: reqID.Revision,
