@@ -10,17 +10,56 @@ import (
 
 // This file renders the wire types in types.go as either a human-readable
 // text table (task spec §3: readable over SSH, safe to pipe, no colour as
-// the only signal) or JSON (a re-serialization of this program's own
-// decoded structs — see the report's note on why that is not the same
-// thing as echoing the coordinator's raw bytes back).
+// the only signal) or JSON.
+//
+// Two JSON strategies coexist in this package, and the difference is
+// deliberate, not partial migration debt. printJSON/printJSONCompact
+// below re-serialize this program's OWN decoded struct: for a command
+// whose JSON output was never meant to mirror the wire response 1:1 (a
+// computed verdict, a narrowed sub-field), that is correct and stays.
+// printJSONBody, by contrast, prints the coordinator's raw response bytes
+// verbatim: for a command whose JSON output IS meant to mirror the
+// response body, re-serializing a struct silently drops any field that
+// struct does not declare, which is the exact drift class the owner
+// ruling behind printJSONBody exists to make impossible. See each
+// command's own call site for which strategy it uses and why.
 
 // printJSON marshals v with a stable two-space indent so scripted
 // consumers get predictable output. Used everywhere this program prints
-// exactly one JSON value for one command invocation.
+// exactly one JSON value for one command invocation FROM ITS OWN DECODED
+// STRUCT (never for a passthrough command; see printJSONBody).
 func printJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// printJSONBody writes raw, the coordinator's own successful response
+// body, to w byte-for-byte: no re-indenting, no re-marshaling, no
+// round-trip through this package's structs. This IS the passthrough the
+// owner ruling requires -output json to give a scripted consumer: exactly
+// what the contract says, field-for-field, including any field this
+// package's own structs do not declare. A trailing newline is appended
+// only if raw does not already end in one (this package's own encoding
+// convention: printJSON/printJSONCompact both newline-terminate via
+// json.Encoder.Encode), never inserted mid-body. No re-indenting is
+// applied deliberately: every GET handler in this API writes
+// json.NewEncoder(w).Encode(v) with no SetIndent call anywhere in the
+// coordinator (confirmed by reading internal/coordinator/api and
+// internal/coordinator/httpapi), so the bytes this function receives are
+// already compact and single-line; re-indenting here would be this
+// program inventing formatting the coordinator never sent, which is
+// exactly the kind of transformation "unmodified" rules out.
+func printJSONBody(w io.Writer, raw []byte) error {
+	if _, err := w.Write(raw); err != nil {
+		return err
+	}
+	if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+		if _, err := w.Write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // printJSONCompact marshals v as one line with no indentation (still
