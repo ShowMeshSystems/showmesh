@@ -188,7 +188,7 @@ func (h *handlers) nightAnnouncementHistory(ctx context.Context, rec store.Night
 // revisions for one announcement cue. Both must strictly exceed the
 // coordinator's own persisted audio_sessions revision for this session
 // (store/audiosessions.go, read via
-// [handlers.nightAnnouncementPersistedRevision]) AND the apply's own
+// [handlers.nightAudioSessionPersistedRevision]) AND the apply's own
 // pinned config revision, since the apply lands between them.
 //
 // The floor is deliberately NOT derived from nightAnnouncementHistory:
@@ -228,16 +228,19 @@ func nightAnnouncementRevisions(persistedRevision, applyRevision int64) (clearRe
 	return floor + 1, floor + 2
 }
 
-// nightAnnouncementPersistedRevision reads sessionID's own durable
+// nightAudioSessionPersistedRevision reads sessionID's own durable
 // audio_sessions row and returns its revision, or 0 when no row exists
 // yet (a session this coordinator has never dispatched anything against).
-// This is [nightAnnouncementRevisions]'s floor input across night
-// sessions - see that function's own doc comment. A read error other
-// than "not found" costs only the chance to advance past a revision this
-// coordinator could not read this time: the apply's own pinned config
-// revision is still in the floor, so this can never cause a rewind, only
-// fail to include evidence it could not get.
-func (h *handlers) nightAnnouncementPersistedRevision(ctx context.Context, sessionID string) int64 {
+// Generic across every coordinator-driven audio session, not just
+// announcements: this is [nightAnnouncementRevisions]'s floor input
+// across night sessions (see that function's own doc comment), and
+// nightClearBackgroundAudioAtEndSession's identical floor for the bed
+// session's own end-of-session clear (nightbackgroundaudio.go). A read
+// error other than "not found" costs only the chance to advance past a
+// revision this coordinator could not read this time: the caller's own
+// other floor input is still there, so this can never cause a rewind,
+// only fail to include evidence it could not get.
+func (h *handlers) nightAudioSessionPersistedRevision(ctx context.Context, sessionID string) int64 {
 	rec, err := h.deps.AudioSessions.GetAudioSession(ctx, sessionID)
 	switch {
 	case err == nil:
@@ -245,7 +248,7 @@ func (h *handlers) nightAnnouncementPersistedRevision(ctx context.Context, sessi
 	case errors.Is(err, store.ErrAudioSessionNotFound):
 		return 0
 	default:
-		h.logWarn("night loop: announcement: failed to read persisted audio session revision; the floor may not include it", "sessionId", sessionID, "error", err)
+		h.logWarn("night loop: failed to read persisted audio session revision; the floor may not include it", "sessionId", sessionID, "error", err)
 		return 0
 	}
 }
@@ -286,7 +289,7 @@ func (h *handlers) nightAdvanceAnnouncementClear(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
 	clearRevision, _ := nightAnnouncementRevisions(persisted, applyRevision)
 	clear := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.clear", map[string]any{})
 	phase := nightPhaseAnnouncementClear + ":" + cuePhase
@@ -325,7 +328,7 @@ func (h *handlers) nightAdvanceAnnouncementStart(ctx context.Context, now time.T
 		h.logWarn("night loop: announcement: failed to read announcement-session history for start", "sessionId", rec.ID, "cue", cue.Name, "error", err)
 		return
 	}
-	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
 	_, startRevision := nightAnnouncementRevisions(persisted, applyRevision)
 	start := nightAudioTarget(target.AudioNodeID, target.AudioSessionID, "audio.session.start", map[string]any{})
 	phase := nightPhaseAnnouncementStart + ":" + cuePhase

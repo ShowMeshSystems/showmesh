@@ -17,6 +17,23 @@ import (
 // lifecycle (nightbackgroundaudio.go), distinct from the cue dispatch path
 // nightcue_audio_test.go already proves.
 
+// TestNightBackgroundAudioSessionID_SatisfiesAudioSessionIDPattern guards
+// against this class of defect recurring: nightBackgroundAudioSessionID
+// once minted "night-bg:" + rec.ID, and the colon does not match
+// audioSessionIDPattern (audiodispatch.go), the same pattern every
+// operator surface (showmeshctl, the API, the Operator UI) enforces
+// against sessionId - so a night session's own bed became a session no
+// operator could ever address again. Asserted against
+// audioSessionIDPattern ITSELF, never a copied regex, so the two can
+// never drift apart.
+func TestNightBackgroundAudioSessionID_SatisfiesAudioSessionIDPattern(t *testing.T) {
+	rec := store.NightSessionRecord{ID: "8047b0c8-9c1e-4b1a-8a3f-example-uuid"}
+	sessionID := nightBackgroundAudioSessionID(rec)
+	if !audioSessionIDPattern.MatchString(sessionID) {
+		t.Fatalf("nightBackgroundAudioSessionID(%q) = %q, which does not match audioSessionIDPattern %s; no operator surface could ever address this session", rec.ID, sessionID, audioSessionIDPattern.String())
+	}
+}
+
 // nightBackgroundAudioTestHandlers wires a real store, a real
 // identity.Service, and a fakeAudioPublisher, plus a real asset store
 // (background-audio items resolve through nightResolveCurrentAsset, same
@@ -608,6 +625,38 @@ func TestNightTick_LiveStopsBackgroundAudio(t *testing.T) {
 
 	if pub.lastAction != "audio.session.stop" {
 		t.Fatalf("dispatched action = %q, want audio.session.stop", pub.lastAction)
+	}
+}
+
+// TestNightClearBackgroundAudioAtEndSession_ClearsNotStops proves
+// end-session's own bed cleanup issues audio.session.clear, never
+// stop/pause: a stop or pause would leave the node's persisted session
+// record in place for the agent's own RestoreAll to resurrect the bed at
+// its next start, which end-session (a promise of no resume, ADR-038)
+// must never allow.
+func TestNightClearBackgroundAudioAtEndSession_ClearsNotStops(t *testing.T) {
+	h, st, pub, _ := nightBackgroundAudioTestHandlers(t)
+	putBackgroundAudioAsset(t, st, "halloween", "bg-1", "node-a", "asset-1")
+	putBackgroundAudioAsset(t, st, "halloween", "bg-2", "node-a", "asset-2")
+	ba := twoItemBackgroundAudioConfig("node-a", config.NightSessionBackgroundRepeatPlaylist, config.NightSessionBackgroundResumeRestart, config.NightSessionItemTransitionSequential)
+	rec := mustCreateRestingSessionWithBackgroundAudio(t, st, "sess-1", "node-a", ba, nightStateRestingIntershow)
+	playThroughApplyGainStart(t, h, pub, rec)
+
+	sessionID := nightBackgroundAudioSessionID(rec)
+	pub.result = confirmedResultForAction("clear", sessionID, "stopped")
+
+	rec.State = nightStateStopped
+	if err := st.UpdateNightSession(context.Background(), rec, testNow); err != nil {
+		t.Fatalf("UpdateNightSession: %v", err)
+	}
+
+	h.nightClearBackgroundAudioAtEndSession(context.Background(), testNow, rec)
+
+	if pub.lastAction != "audio.session.clear" {
+		t.Fatalf("dispatched action = %q, want audio.session.clear", pub.lastAction)
+	}
+	if pub.lastParams["sessionId"] != sessionID {
+		t.Fatalf("dispatched sessionId = %v, want %q", pub.lastParams["sessionId"], sessionID)
 	}
 }
 

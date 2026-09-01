@@ -159,6 +159,18 @@ func (h *handlers) nightTick(ctx context.Context, now time.Time) {
 		h.nightAdvanceBackgroundAudio(ctx, now, rec)
 	case nightStateTransitionToShow:
 		// Intentionally no action: see this switch's own comment above.
+	case nightStateStopped:
+		// Intentionally no action: stopped is terminal, and end-session -
+		// the only path that forces a session to stopped without this
+		// controller's own outbox already having converged its background
+		// audio to a confirmed suspend - clears the bed itself, directly
+		// and synchronously, the moment it commits
+		// (nightClearBackgroundAudioAtEndSession, called from
+		// handleNightCommand). That clear does not go through this
+		// controller's own outbox, so nightStopBackgroundAudioIfRunning
+		// reading stale history here would only mint a redundant
+		// stop/pause against a session the node no longer has, forever,
+		// for as long as this stopped record stays current.
 	default:
 		h.nightStopBackgroundAudioIfRunning(ctx, now, rec)
 	}

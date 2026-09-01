@@ -83,7 +83,7 @@ const nightPhaseRestingBackground = "restingBackground"
 // record, never reset per cycle, so the node's own RevisionState for it
 // persists exactly as long as this identity does.
 func nightBackgroundAudioSessionID(rec store.NightSessionRecord) string {
-	return "night-bg:" + rec.ID
+	return "night-bg-" + rec.ID
 }
 
 // The step kinds this controller's own state machine recognizes. Every
@@ -638,4 +638,85 @@ func (h *handlers) nightStopBackgroundAudioIfRunning(ctx context.Context, now ti
 	}
 	nodeID := payload.Resting.BackgroundAudio.OutputNodeID()
 	h.nightBackgroundAudioStop(ctx, now, rec, nodeID, sessionID, payload.Resting.BackgroundAudio.Resume, history)
+}
+
+// nightClearBackgroundAudioAtEndSession is end-session's own synchronous
+// bed cleanup, called directly from the end-session command handler
+// (nightsessioncontrol.go) right after the session record durably reaches
+// stopped - never left for a later tick, because nightTick's own Degraded
+// guard would otherwise never run it at all: end-session is documented as
+// the operator-recovery action for exactly a stuck/degraded session
+// (nightEndSessionDecide's own doc comment), and it deliberately leaves
+// Degraded unchanged, so a session recovered this way would sit at
+// State=stopped, Degraded=true forever - a state nightTick's top-level
+// guard only exempts for fading-out, never stopped.
+//
+// This ALWAYS clears, never pauses or stops: Manager.Clear
+// (internal/agent/audio, not touched by this change) releases the node's
+// own persisted session record along with its engine resources, while a
+// stop or pause leaves that record in place for the agent's own
+// RestoreAll to resurrect the bed at its next start. end-session promises
+// no resume of this session (ADR-038), so nothing here may leave anything
+// for a later agent restart to bring the bed back from.
+//
+// Dispatches directly via executeAudioSessionDispatch, mirroring
+// nightResetAnnouncementCueSessionOnce's identical direct-dispatch shape
+// (nightsessioncontrol.go) rather than the cue outbox's own retry
+// machinery: end-session is a one-shot, owner-invoked action with no
+// later tick that promises to retry it, unlike the ordinary per-cycle
+// advance nightBackgroundAudioStop feeds. The revision floor is this
+// session's own persisted audio_sessions.revision (every prior outbox
+// step's dispatch already keeps that row current via
+// persistAudioSessionDesiredState), so this can never be refused as
+// stale because of anything this coordinator itself previously sent.
+//
+// WARN AND PROCEED: nothing here is a reason to fail end-session itself -
+// the session record already reached stopped durably before this runs -
+// so every failure only logs a warning.
+//
+// OUT OF SCOPE, DELIBERATELY: this clears rec's OWN bed session only, at
+// its current [nightBackgroundAudioSessionID] ("night-bg-" + rec.ID). A
+// session minted under the previous colon-bearing scheme ("night-bg:" +
+// an older rec.ID) is a DIFFERENT id and is never reached by this path -
+// this coordinator cannot even ask an operator to address one, since the
+// scheme this fixes is exactly what made those ids unsafe. Any bed
+// session stranded on a node before this change ships is handled
+// separately, not by this function.
+func (h *handlers) nightClearBackgroundAudioAtEndSession(ctx context.Context, now time.Time, rec store.NightSessionRecord) {
+	if rec.ID == "" {
+		return
+	}
+	payload, err := h.getPinnedNightSessionPayload(ctx, rec)
+	if err != nil {
+		h.logWarn("night loop: end-session: failed to read pinned night.session payload; background audio session was not cleared", "sessionId", rec.ID, "error", err)
+		return
+	}
+	ba := payload.Resting.BackgroundAudio
+	if ba == nil {
+		return
+	}
+	nodeID := ba.OutputNodeID()
+	sessionID := nightBackgroundAudioSessionID(rec)
+
+	clearRevision := h.nightAudioSessionPersistedRevision(ctx, sessionID) + 1
+	idemKey := fmt.Sprintf("night-end-session-clear:%s", sessionID)
+	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
+		Action: "audio.session.clear", NodeID: nodeID, SessionID: sessionID,
+		Params: map[string]any{
+			"sessionId": sessionID, "invocationId": idemKey, "revision": uint64(clearRevision),
+		},
+		Revision: uint64(clearRevision), IdempotencyKey: idemKey,
+		IssuerID: "night-controller", IssuerName: "night controller",
+	})
+	if err != nil {
+		h.logWarn("night loop: end-session: background audio session clear was not acknowledged", "sessionId", sessionID, "nodeId", nodeID, "error", err)
+		return
+	}
+	if problem != nil {
+		h.logWarn("night loop: end-session: background audio session clear was refused", "sessionId", sessionID, "nodeId", nodeID, "reason", problem.Detail)
+		return
+	}
+	if nightAudioCueOutcome(result.Outcome) != nightCueOutcomeConfirmed {
+		h.logWarn("night loop: end-session: background audio session clear did not confirm", "sessionId", sessionID, "nodeId", nodeID, "outcome", result.Outcome, "reason", result.Reason)
+	}
 }

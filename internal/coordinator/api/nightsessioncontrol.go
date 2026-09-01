@@ -279,6 +279,14 @@ func (h *handlers) handleNightCommand(w http.ResponseWriter, r *http.Request) {
 		out, problem, opErr = h.nightRunExempt(ctx, now, cmd, issuer, &attributionDegraded, func(ctx context.Context, tx *store.Tx, current *store.NightSessionRecord) (nightCommandOutcome, *v1.Problem, error) {
 			return h.nightEndSessionDecide(now, current), nil, nil
 		})
+		// end-session must leave no background audio playing, independent
+		// of the tick loop's own Degraded guard - see
+		// [handlers.nightClearBackgroundAudioAtEndSession]'s own doc
+		// comment. Only after the session record has durably reached
+		// stopped; never a reason to fail end-session itself.
+		if opErr == nil && problem == nil {
+			h.nightClearBackgroundAudioAtEndSession(ctx, now, out.result)
+		}
 	case cmd == nightCommandRunReadiness:
 		// Runs its own FPP/asset work, and its own phase="run-readiness"
 		// interlock evidence, outside any transaction; see
@@ -805,7 +813,7 @@ func (h *handlers) nightResetAnnouncementCueSessionOnce(ctx context.Context, now
 		return 1
 	}
 
-	persisted := h.nightAnnouncementPersistedRevision(ctx, target.AudioSessionID)
+	persisted := h.nightAudioSessionPersistedRevision(ctx, target.AudioSessionID)
 	clearRevision, _ := nightAnnouncementRevisions(persisted, applyRevision)
 	idemKey := fmt.Sprintf("night-prepare-site-reset:%s:%s", rec.ID, target.AudioSessionID)
 	result, problem, err := h.executeAudioSessionDispatch(ctx, now, AudioDispatchInput{
