@@ -63,19 +63,16 @@ var migrations = []migration{
 	{version: 18, sql: schemaV18},
 	{version: 19, fn: migrateV19AudioSettingsGainToDb},
 	{version: 20, fn: migrateV20AudioSettingsBackfillMissingRequiredFields},
-	{version: 21, sql: schemaV21},
 	// v21, v22, and v23 are dead numbers: each sits at or below this
 	// migration's own shipped maximum (24), so migrate()'s own
 	// current == target short-circuit means a migration entry at any of
 	// them can never run for a store some other binary already stamped
 	// at 24 or higher, exactly the failure the v25 entry below this one
-	// exists to fix. Whatever work docs/build/IDENTIFIER-REGISTER.md
-	// currently shows reserved at v21 or v22 will need a fresh number
-	// above the shipped maximum when it actually lands, for the
-	// identical reason v23 was renumbered to v25. This migration itself
-	// took the next free number (24) rather than the lowest one (21)
-	// specifically to avoid colliding with those two reservations when
-	// they land; that choice is left as it shipped rather than rewritten
+	// exists to fix. The audio_sessions re-key that once reserved v21 is
+	// renumbered to v27, below, for the identical reason. This migration
+	// itself took the next free number (24) rather than the lowest one
+	// (21) specifically to avoid colliding with that reservation when it
+	// landed; that choice is left as it shipped rather than rewritten
 	// here, even though a number below the maximum is unusable regardless
 	// of which branch reaches it first.
 	{version: 24, fn: migrateV24AudioSettingsBackfillDuckFadeDurations},
@@ -92,6 +89,12 @@ var migrations = []migration{
 	// the identical reason v25 was renumbered from v23: a reservation at
 	// or below the shipped maximum can never run.
 	{version: 26, fn: migrateV26RenameRequestedRevisionToCallerIntent},
+	// v27: re-keys audio_sessions from `id TEXT PRIMARY KEY` to a
+	// composite `(node_id, id)` primary key (schemaV27's own doc
+	// comment). Renumbered from v21 for the identical reason v25 and v26
+	// were renumbered: a reservation at or below the shipped maximum can
+	// never run.
+	{version: 27, sql: schemaV27},
 }
 
 // schemaV1 creates the three tables the Step 2 round 2 store task
@@ -1112,8 +1115,8 @@ CREATE TABLE node_asset_reports (
 // what it last told a session to be, not a second engine.
 //
 // id alone is this table's PRIMARY KEY only up to this migration:
-// schemaV21 re-keys it to (node_id, id), because a session id is not
-// globally unique (see schemaV21's own doc comment) — do not copy this
+// schemaV27 re-keys it to (node_id, id), because a session id is not
+// globally unique (see schemaV27's own doc comment); do not copy this
 // table's shape for a new migration without reading that one first.
 const schemaV9 = `
 CREATE TABLE audio_sessions (
@@ -1497,8 +1500,12 @@ func migrateV26RenameRequestedRevisionToCallerIntent(ctx context.Context, tx *sq
 	}
 }
 
-// schemaV21 re-keys audio_sessions (schemaV9) from `id TEXT PRIMARY KEY`
-// to a composite `(node_id, id)` primary key. The defect it fixes is that
+// schemaV27 re-keys audio_sessions (schemaV9) from `id TEXT PRIMARY KEY`
+// to a composite `(node_id, id)` primary key. This migration is numbered
+// 27, not 21: migrate skips every version at or below a store's stamped
+// PRAGMA user_version, and 21 already sits at or below main's shipped
+// maximum, so a released binary would never run it under that number.
+// The defect it fixes is that
 // a session id is not globally unique — the cue and blackAndSilence
 // session ids are global constants (STEP-9-SPEC.md / TRACK-C-audio-node.md's
 // fixed session-id vocabulary), so two audio nodes each dispatching the
@@ -1522,8 +1529,8 @@ func migrateV26RenameRequestedRevisionToCallerIntent(ctx context.Context, tx *sq
 // serves every "WHERE node_id = ?" lookup ListAudioSessionsByNode issues,
 // so a separate single-column index on node_id would be redundant with
 // the key itself.
-const schemaV21 = `
-CREATE TABLE audio_sessions_v21 (
+const schemaV27 = `
+CREATE TABLE audio_sessions_v27 (
     node_id      TEXT NOT NULL,
     id           TEXT NOT NULL,
     desired_json TEXT NOT NULL,
@@ -1533,12 +1540,12 @@ CREATE TABLE audio_sessions_v21 (
     PRIMARY KEY (node_id, id)
 );
 
-INSERT INTO audio_sessions_v21 (node_id, id, desired_json, revision, created_at, updated_at)
+INSERT INTO audio_sessions_v27 (node_id, id, desired_json, revision, created_at, updated_at)
     SELECT node_id, id, desired_json, revision, created_at, updated_at FROM audio_sessions;
 
 DROP TABLE audio_sessions;
 
-ALTER TABLE audio_sessions_v21 RENAME TO audio_sessions;
+ALTER TABLE audio_sessions_v27 RENAME TO audio_sessions;
 `
 
 // maxMigrationVersion is the maximum [migration.version] across
